@@ -54,8 +54,11 @@ import messagesRoutes from './routes/messages.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
+import { multitenancyDb } from './database/multitenancy-db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
+import { tenantContext } from './middleware/tenant-context.js';
+import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -427,9 +430,17 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
     }
 });
 
-app.get('/api/projects', authenticateToken, async (req, res) => {
+app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
     try {
-        const projects = await getProjects(broadcastProgress);
+        const rows = multitenancyDb.workspaces.listVisibleWorkspaces({
+            tenantId: req.tenant.id,
+            userId: req.user.id,
+        });
+        const projects = mapWorkspaceRowsToProjects(rows, {
+            tenantId: req.tenant.id,
+            userId: req.user.id,
+            listSessions: multitenancyDb.sessions.listSessions,
+        });
         res.json(projects);
     } catch (error) {
         res.status(500).json({ error: error.message });

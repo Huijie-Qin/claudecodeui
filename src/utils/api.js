@@ -30,6 +30,15 @@ export const authenticatedFetch = (url, options = {}) => {
   });
 };
 
+const getCurrentTenantId = () => localStorage.getItem('currentTenantId');
+
+const withTenantParam = (url) => {
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}tenantId=${encodeURIComponent(tenantId)}`;
+};
+
 // API endpoints
 export const api = {
   // Auth endpoints (no token required)
@@ -51,7 +60,7 @@ export const api = {
 
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
-  projects: () => authenticatedFetch('/api/projects'),
+  projects: () => authenticatedFetch(withTenantParam('/api/projects')),
   sessions: (projectName, limit = 5, offset = 0) =>
     authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
   // Unified endpoint — all providers through one URL
@@ -105,7 +114,7 @@ export const api = {
     return `/api/search/conversations?${params.toString()}`;
   },
   createWorkspace: (workspaceData) =>
-    authenticatedFetch('/api/projects/create-workspace', {
+    authenticatedFetch(withTenantParam('/api/projects/create-workspace'), {
       method: 'POST',
       body: JSON.stringify(workspaceData),
     }),
@@ -214,6 +223,40 @@ export const api = {
     completeOnboarding: () =>
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
+      }),
+  },
+
+  tenants: {
+    mine: () => authenticatedFetch('/api/tenants/me'),
+    validate: (tenantId) => authenticatedFetch(`/api/tenants/${tenantId}/validate`),
+    requestJoin: (tenantId, message) =>
+      authenticatedFetch(`/api/tenants/${tenantId}/join-requests`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      }),
+  },
+
+  admin: {
+    tenants: () => authenticatedFetch('/api/admin/tenants'),
+    createTenant: (payload) =>
+      authenticatedFetch('/api/admin/tenants', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    users: () => authenticatedFetch('/api/admin/users'),
+    upsertTenantUser: (tenantId, userId, payload) =>
+      authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+  },
+
+  workspaceShare: {
+    get: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/share`)),
+    update: (workspaceId, entries) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/share`), {
+        method: 'PUT',
+        body: JSON.stringify({ entries }),
       }),
   },
 

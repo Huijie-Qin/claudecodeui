@@ -101,6 +101,11 @@ const buildCloneProgressQuery = ({
     query.set('token', authToken);
   }
 
+  const tenantId = localStorage.getItem('currentTenantId');
+  if (tenantId) {
+    query.set('tenantId', tenantId);
+  }
+
   return query.toString();
 };
 

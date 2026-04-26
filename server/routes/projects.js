@@ -4,6 +4,8 @@ import path from 'path';
 import { spawn } from 'child_process';
 import os from 'os';
 import { addProjectManually } from '../projects.js';
+import { multitenancyDb } from '../database/multitenancy-db.js';
+import { buildTenantWorkspacePath, slugifyWorkspaceName } from '../services/workspace-projects.js';
 
 const router = express.Router();
 
@@ -42,6 +44,19 @@ export const FORBIDDEN_PATHS = [
   'C:\\System Volume Information',
   'C:\\$Recycle.Bin'
 ];
+
+function createWorkspaceProject(workspace) {
+  return {
+    name: workspace.slug,
+    workspaceId: workspace.id,
+    tenantId: workspace.tenant_id,
+    ownerUserId: workspace.owner_user_id,
+    displayName: workspace.display_name,
+    fullPath: workspace.path,
+    path: workspace.path,
+    accessRole: 'owner',
+  };
+}
 
 /**
  * Validates that a path is safe for workspace operations
@@ -181,12 +196,39 @@ router.post('/create-workspace', async (req, res) => {
       return res.status(400).json({ error: 'workspaceType and path are required' });
     }
 
+    const tenantId = Number(req.query.tenantId || req.headers['x-tenant-id']);
+    if (!tenantId || !req.user?.id) {
+      return res.status(400).json({ error: 'tenantId is required' });
+    }
+
+    const membership = multitenancyDb.memberships.getActiveMembership(req.user.id, tenantId);
+    if (!membership) {
+      return res.status(403).json({ error: 'Tenant access denied' });
+    }
+    if (membership.permission !== 'edit') {
+      return res.status(403).json({ error: 'Tenant edit permission is required to create workspaces' });
+    }
+
     if (!['existing', 'new'].includes(workspaceType)) {
       return res.status(400).json({ error: 'workspaceType must be "existing" or "new"' });
     }
 
+    const requestedName = path.basename(path.resolve(workspacePath));
+    const workspaceSlug = slugifyWorkspaceName(requestedName);
+    if (!workspaceSlug) {
+      return res.status(400).json({ error: 'Workspace name must contain letters or numbers' });
+    }
+
+    const generatedWorkspacePath = buildTenantWorkspacePath({
+      workspacesRoot: WORKSPACES_ROOT,
+      tenantId,
+      userId: req.user.id,
+      requestedPath: workspacePath,
+    });
+    const targetWorkspacePath = workspaceType === 'new' ? generatedWorkspacePath : workspacePath;
+
     // Validate path safety before any operations
-    const validation = await validateWorkspacePath(workspacePath);
+    const validation = await validateWorkspacePath(targetWorkspacePath);
     if (!validation.valid) {
       return res.status(400).json({
         error: 'Invalid workspace path',
@@ -214,11 +256,17 @@ router.post('/create-workspace', async (req, res) => {
       }
 
       // Add the existing workspace to the project list
-      const project = await addProjectManually(absolutePath);
+      const workspace = multitenancyDb.workspaces.createWorkspace({
+        tenantId,
+        ownerUserId: req.user.id,
+        slug: workspaceSlug,
+        displayName: requestedName || workspaceSlug,
+        path: absolutePath,
+      });
 
       return res.json({
         success: true,
-        project,
+        project: createWorkspaceProject(workspace),
         message: 'Existing workspace added successfully'
       });
     }
@@ -279,21 +327,33 @@ router.post('/create-workspace', async (req, res) => {
         }
 
         // Add the cloned repo path to the project list
-        const project = await addProjectManually(clonePath);
+        const workspace = multitenancyDb.workspaces.createWorkspace({
+          tenantId,
+          ownerUserId: req.user.id,
+          slug: workspaceSlug,
+          displayName: requestedName || workspaceSlug,
+          path: clonePath,
+        });
 
         return res.json({
           success: true,
-          project,
+          project: createWorkspaceProject(workspace),
           message: 'New workspace created and repository cloned successfully'
         });
       }
 
       // Add the new workspace to the project list (no clone)
-      const project = await addProjectManually(absolutePath);
+      const workspace = multitenancyDb.workspaces.createWorkspace({
+        tenantId,
+        ownerUserId: req.user.id,
+        slug: workspaceSlug,
+        displayName: requestedName || workspaceSlug,
+        path: absolutePath,
+      });
 
       return res.json({
         success: true,
-        project,
+        project: createWorkspaceProject(workspace),
         message: 'New workspace created successfully'
       });
     }

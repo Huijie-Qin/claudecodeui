@@ -1,6 +1,16 @@
 export type LLMProvider = 'claude' | 'cursor' | 'codex' | 'gemini';
+export type TenantPermission = 'view' | 'edit';
+export type WorkspaceAccessRole = 'owner' | 'view' | 'edit';
 
 export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'preview' | `plugin:${string}`;
+
+export interface Tenant {
+  id: number;
+  code: string;
+  name: string;
+  permission: TenantPermission;
+  role?: string;
+}
 
 export interface ProjectSession {
   id: string;
@@ -35,6 +45,10 @@ export interface Project {
   displayName: string;
   fullPath: string;
   path?: string;
+  workspaceId?: number;
+  tenantId?: number;
+  ownerUserId?: number;
+  accessRole?: WorkspaceAccessRole;
   sessions?: ProjectSession[];
   cursorSessions?: ProjectSession[];
   codexSessions?: ProjectSession[];
