@@ -37,13 +37,18 @@ const INTERNAL_CONTENT_PREFIXES = [
   '<command-args>',
   '<local-command-stdout>',
   '<system-reminder>',
+  '<!-- ECC:SUMMARY:START -->',
+  '# Session:',
+  'Hook SessionStart:',
+  'Previous session summary:',
   'Caveat:',
   'This session is being continued from a previous',
   '[Request interrupted',
 ] as const;
 
 function isInternalContent(content: string): boolean {
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+  const normalizedContent = content.trimStart();
+  return INTERNAL_CONTENT_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix));
 }
 
 export class ClaudeSessionsProvider implements IProviderSessions {

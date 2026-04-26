@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
+import { applyEnvFileContents } from './utils/env-loader.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // Resolve the repo/app root via the nearest /server folder so this file keeps finding the
@@ -12,15 +13,7 @@ const APP_ROOT = findAppRoot(__dirname);
 try {
   const envPath = path.join(APP_ROOT, '.env');
   const envFile = fs.readFileSync(envPath, 'utf8');
-  envFile.split('\n').forEach(line => {
-    const trimmedLine = line.trim();
-    if (trimmedLine && !trimmedLine.startsWith('#')) {
-      const [key, ...valueParts] = trimmedLine.split('=');
-      if (key && valueParts.length > 0 && !process.env[key]) {
-        process.env[key] = valueParts.join('=').trim();
-      }
-    }
-  });
+  applyEnvFileContents(envFile);
 } catch (e) {
   console.log('No .env file found or error reading it:', e.message);
 }

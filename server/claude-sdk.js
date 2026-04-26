@@ -105,6 +105,11 @@ function resolveToolApproval(requestId, decision) {
   }
 }
 
+function resolveClaudeModel(options = {}) {
+  const envModel = process.env.ANTHROPIC_MODEL?.trim();
+  return envModel || options.model || CLAUDE_MODELS.DEFAULT;
+}
+
 // Match stored permission entries against a tool + input combo.
 // This only supports exact tool names and the Bash(command:*) shorthand
 // used by the UI; it intentionally does not implement full glob semantics,
@@ -203,9 +208,9 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
-  // Map model (default to sonnet)
-  // Valid models: sonnet, opus, haiku, opusplan, sonnet[1m]
-  sdkOptions.model = options.model || CLAUDE_MODELS.DEFAULT;
+  // ANTHROPIC_MODEL pins custom gateways to their configured model name.
+  // Without this, the UI model alias (e.g. opus) is forwarded to the gateway.
+  sdkOptions.model = resolveClaudeModel(options);
   // Model logged at query start below
 
   // Map system prompt configuration
@@ -827,6 +832,7 @@ export {
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   resolveToolApproval,
+  resolveClaudeModel,
   getPendingApprovalsForSession,
   reconnectSessionWriter
 };

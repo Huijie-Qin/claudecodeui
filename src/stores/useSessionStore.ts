@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
+import { computeMerged } from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -100,20 +101,6 @@ function createEmptySlot(): SessionSlot {
     offset: 0,
     tokenUsage: null,
   };
-}
-
-/**
- * Compute merged messages: server + realtime, deduped by id.
- * Server messages take priority (they're the persisted source of truth).
- * Realtime messages that aren't yet in server stay (in-flight streaming).
- */
-function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return server;
-  if (server.length === 0) return realtime;
-  const serverIds = new Set(server.map(m => m.id));
-  const extra = realtime.filter(m => !serverIds.has(m.id));
-  if (extra.length === 0) return server;
-  return [...server, ...extra];
 }
 
 /**
