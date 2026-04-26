@@ -10,6 +10,7 @@ import sessionManager from './sessionManager.js';
 import GeminiResponseHandler from './gemini-response-handler.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { recordProviderSession } from './services/session-ownership.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 let activeGeminiProcesses = new Map(); // Track active processes by session ID
@@ -17,6 +18,7 @@ let activeGeminiProcesses = new Map(); // Track active processes by session ID
 async function spawnGemini(command, options = {}, ws) {
     const { sessionId, projectPath, cwd, toolsSettings, permissionMode, images, sessionSummary } = options;
     let capturedSessionId = sessionId; // Track session ID throughout the process
+    recordProviderSession({ options, provider: 'gemini', providerSessionId: capturedSessionId, status: 'active' });
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let assistantBlocks = []; // Accumulate the full response blocks including tools
 
@@ -296,6 +298,7 @@ async function spawnGemini(command, options = {}, ws) {
             if (!sessionId && !sessionCreatedSent && !capturedSessionId) {
                 capturedSessionId = `gemini_${Date.now()}`;
                 sessionCreatedSent = true;
+                recordProviderSession({ options, provider: 'gemini', providerSessionId: capturedSessionId, status: 'active' });
 
                 // Create session in session manager
                 sessionManager.createSession(capturedSessionId, cwd || process.cwd());
@@ -359,6 +362,12 @@ async function spawnGemini(command, options = {}, ws) {
             // Clean up process reference
             const finalSessionId = capturedSessionId || sessionId || processKey;
             activeGeminiProcesses.delete(finalSessionId);
+            recordProviderSession({
+                options,
+                provider: 'gemini',
+                providerSessionId: finalSessionId,
+                status: code === 0 ? 'completed' : 'failed',
+            });
 
             // Save assistant response to session if we have one
             if (finalSessionId && assistantBlocks.length > 0) {
@@ -403,6 +412,7 @@ async function spawnGemini(command, options = {}, ws) {
             // Clean up process reference on error
             const finalSessionId = capturedSessionId || sessionId || processKey;
             activeGeminiProcesses.delete(finalSessionId);
+            recordProviderSession({ options, provider: 'gemini', providerSessionId: finalSessionId, status: 'failed' });
 
             // Check if Gemini CLI is installed for a clearer error message
             const installed = await providerAuthService.isProviderInstalled('gemini');

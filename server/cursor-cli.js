@@ -3,6 +3,7 @@ import crossSpawn from 'cross-spawn';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { recordProviderSession } from './services/session-ownership.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 // Use cross-spawn on Windows for better command execution
@@ -72,6 +73,7 @@ async function spawnCursor(command, options = {}, ws) {
 
     // Store process reference for potential abort
     const processKey = capturedSessionId || Date.now().toString();
+    recordProviderSession({ options, provider: 'cursor', providerSessionId: capturedSessionId, status: 'active' });
 
     const settleOnce = (callback) => {
       if (settled) {
@@ -160,6 +162,7 @@ async function spawnCursor(command, options = {}, ws) {
                 if (response.session_id && !capturedSessionId) {
                   capturedSessionId = response.session_id;
                   console.log('Captured session ID:', capturedSessionId);
+                  recordProviderSession({ options, provider: 'cursor', providerSessionId: capturedSessionId, status: 'active' });
 
                   // Update process key with captured session ID
                   if (processKey !== capturedSessionId) {
@@ -258,6 +261,12 @@ async function spawnCursor(command, options = {}, ws) {
 
         const finalSessionId = capturedSessionId || sessionId || processKey;
         activeCursorProcesses.delete(finalSessionId);
+        recordProviderSession({
+          options,
+          provider: 'cursor',
+          providerSessionId: finalSessionId,
+          status: code === 0 ? 'completed' : 'failed',
+        });
 
         // Flush any final unterminated stdout line before completion handling.
         if (stdoutLineBuffer.trim()) {
@@ -294,6 +303,7 @@ async function spawnCursor(command, options = {}, ws) {
         // Clean up process reference on error
         const finalSessionId = capturedSessionId || sessionId || processKey;
         activeCursorProcesses.delete(finalSessionId);
+        recordProviderSession({ options, provider: 'cursor', providerSessionId: finalSessionId, status: 'failed' });
 
         // Check if Cursor CLI is installed for a clearer error message
         const installed = await providerAuthService.isProviderInstalled('cursor');

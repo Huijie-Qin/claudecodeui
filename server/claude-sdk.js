@@ -26,6 +26,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { recordProviderSession } from './services/session-ownership.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -635,6 +636,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Track the query instance for abort capability
     if (capturedSessionId) {
       addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+      recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
 
     // Process streaming messages
@@ -645,6 +647,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         capturedSessionId = message.session_id;
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+        recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
@@ -694,6 +697,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
+    recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId || sessionId, status: 'completed' });
 
     // Send completion event
     ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
@@ -716,6 +720,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
+    recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId || sessionId, status: 'failed' });
 
     // Check if Claude CLI is installed for a clearer error message
     const installed = await providerAuthService.isProviderInstalled('claude');

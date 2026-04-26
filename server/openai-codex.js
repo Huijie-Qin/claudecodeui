@@ -17,6 +17,7 @@ import { Codex } from '@openai/codex-sdk';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { recordProviderSession } from './services/session-ownership.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 // Track active sessions
@@ -233,6 +234,7 @@ export async function queryCodex(command, options = {}, ws) {
 
     // Get the thread ID
     currentSessionId = thread.id || sessionId || `codex-${Date.now()}`;
+    recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'active' });
 
     // Track the session
     activeCodexSessions.set(currentSessionId, {
@@ -290,6 +292,7 @@ export async function queryCodex(command, options = {}, ws) {
 
     // Send completion event
     if (!terminalFailure) {
+      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'completed' });
       sendMessage(ws, createNormalizedMessage({ kind: 'complete', actualSessionId: thread.id, sessionId: currentSessionId, provider: 'codex' }));
       notifyRunStopped({
         userId: ws?.userId || null,
@@ -317,6 +320,7 @@ export async function queryCodex(command, options = {}, ws) {
         : error.message;
 
       sendMessage(ws, createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: currentSessionId, provider: 'codex' }));
+      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'failed' });
       if (!terminalFailure) {
         notifyRunFailed({
           userId: ws?.userId || null,

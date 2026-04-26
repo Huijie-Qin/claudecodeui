@@ -10,6 +10,7 @@
  */
 
 import express from 'express';
+import { multitenancyDb } from '../database/multitenancy-db.js';
 import { sessionsService } from '../modules/providers/services/sessions.service.js';
 
 const router = express.Router();
@@ -30,8 +31,8 @@ router.get('/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const provider = String(req.query.provider || 'claude').trim().toLowerCase();
-    const projectName = req.query.projectName || '';
-    const projectPath = req.query.projectPath || '';
+    const tenantId = Number(req.query.tenantId || req.headers['x-tenant-id']);
+    const userId = req.user?.id ?? req.user?.userId;
     const limitParam = req.query.limit;
     const limit = limitParam !== undefined && limitParam !== null && limitParam !== ''
       ? parseInt(limitParam, 10)
@@ -44,9 +45,24 @@ router.get('/:sessionId/messages', async (req, res) => {
       return res.status(400).json({ error: `Unknown provider: ${provider}. Available: ${available}` });
     }
 
+    if (!tenantId || !userId) {
+      return res.status(400).json({ error: 'tenantId is required' });
+    }
+
+    const ownedSession = multitenancyDb.sessions.findOwnedSession({
+      tenantId,
+      userId,
+      provider,
+      providerSessionId: sessionId,
+    });
+    if (!ownedSession) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
     const result = await sessionsService.fetchHistory(provider, sessionId, {
-      projectName,
-      projectPath,
+      projectName: ownedSession.workspace_slug || '',
+      projectPath: ownedSession.workspace_path || '',
+      workspaceId: ownedSession.workspace_id,
       limit,
       offset,
     });

@@ -384,13 +384,17 @@ export function createMultitenancyDb(database = db) {
 
       findOwnedSession: ({ tenantId, userId, provider, providerSessionId }) => {
         return database.prepare(`
-          SELECT *
-          FROM session_index
-          WHERE tenant_id = ?
-            AND user_id = ?
-            AND provider = ?
-            AND provider_session_id = ?
-            AND status != 'deleted'
+          SELECT
+            si.*,
+            w.slug AS workspace_slug,
+            w.path AS workspace_path
+          FROM session_index si
+          JOIN workspaces w ON w.id = si.workspace_id
+          WHERE si.tenant_id = ?
+            AND si.user_id = ?
+            AND si.provider = ?
+            AND si.provider_session_id = ?
+            AND si.status != 'deleted'
         `).get(
           requirePositiveInteger(tenantId, 'tenantId'),
           requirePositiveInteger(userId, 'userId'),
