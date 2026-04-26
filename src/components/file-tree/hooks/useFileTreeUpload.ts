@@ -6,6 +6,7 @@ type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
   onRefresh: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
+  isReadOnly?: boolean;
 };
 
 // Helper function to read all files from a directory entry recursively
@@ -61,6 +62,7 @@ export const useFileTreeUpload = ({
   selectedProject,
   onRefresh,
   showToast,
+  isReadOnly = false,
 }: UseFileTreeUploadOptions) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -70,8 +72,9 @@ export const useFileTreeUpload = ({
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isReadOnly) return;
     setIsDragOver(true);
-  }, []);
+  }, [isReadOnly]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -92,6 +95,9 @@ export const useFileTreeUpload = ({
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
+    if (isReadOnly || !selectedProject) {
+      return;
+    }
 
     const targetPath = dropTarget || '';
     setOperationLoading(true);
@@ -153,10 +159,7 @@ export const useFileTreeUpload = ({
       // Send relative paths as a JSON array
       formData.append('relativePaths', JSON.stringify(relativePaths));
 
-      const response = await api.post(
-        `/projects/${encodeURIComponent(selectedProject!.name)}/files/upload`,
-        formData
-      );
+      const response = await api.uploadFiles(selectedProject.name, formData, selectedProject.workspaceId);
 
       if (!response.ok) {
         const data = await response.json();
@@ -175,7 +178,7 @@ export const useFileTreeUpload = ({
       setOperationLoading(false);
       setDropTarget(null);
     }
-  }, [dropTarget, selectedProject, onRefresh, showToast]);
+  }, [dropTarget, selectedProject, isReadOnly, onRefresh, showToast]);
 
   const handleItemDragOver = useCallback((e: React.DragEvent, itemPath: string) => {
     e.preventDefault();

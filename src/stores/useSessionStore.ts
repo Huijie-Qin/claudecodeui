@@ -159,6 +159,7 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectName?: string;
       projectPath?: string;
+      workspaceId?: number;
       limit?: number | null;
       offset?: number;
     } = {},
@@ -172,6 +173,7 @@ export function useSessionStore() {
       if (opts.provider) params.append('provider', opts.provider);
       if (opts.projectName) params.append('projectName', opts.projectName);
       if (opts.projectPath) params.append('projectPath', opts.projectPath);
+      if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
       if (opts.limit !== null && opts.limit !== undefined) {
         params.append('limit', String(opts.limit));
         params.append('offset', String(opts.offset ?? 0));
@@ -218,6 +220,7 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectName?: string;
       projectPath?: string;
+      workspaceId?: number;
       limit?: number;
     } = {},
   ) => {
@@ -228,6 +231,7 @@ export function useSessionStore() {
     if (opts.provider) params.append('provider', opts.provider);
     if (opts.projectName) params.append('projectName', opts.projectName);
     if (opts.projectPath) params.append('projectPath', opts.projectPath);
+    if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
     const limit = opts.limit ?? 20;
     params.append('limit', String(limit));
     params.append('offset', String(slot.offset));
@@ -293,6 +297,7 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectName?: string;
       projectPath?: string;
+      workspaceId?: number;
     } = {},
   ) => {
     const slot = getSlot(sessionId);
@@ -301,6 +306,7 @@ export function useSessionStore() {
       if (opts.provider) params.append('provider', opts.provider);
       if (opts.projectName) params.append('projectName', opts.projectName);
       if (opts.projectPath) params.append('projectPath', opts.projectPath);
+      if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
 
       const qs = params.toString();
       const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;

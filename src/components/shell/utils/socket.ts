@@ -3,9 +3,16 @@ import type { ShellIncomingMessage, ShellOutgoingMessage } from '../types/types'
 
 export function getShellWebSocketUrl(): string | null {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const tenantId = localStorage.getItem('currentTenantId');
+  if (!tenantId) {
+    console.error('No tenant selected for Shell WebSocket connection');
+    return null;
+  }
+
+  const params = new URLSearchParams({ tenantId });
 
   if (IS_PLATFORM) {
-    return `${protocol}//${window.location.host}/shell`;
+    return `${protocol}//${window.location.host}/shell?${params.toString()}`;
   }
 
   const token = localStorage.getItem('auth-token');
@@ -14,7 +21,8 @@ export function getShellWebSocketUrl(): string | null {
     return null;
   }
 
-  return `${protocol}//${window.location.host}/shell?token=${encodeURIComponent(token)}`;
+  params.set('token', token);
+  return `${protocol}//${window.location.host}/shell?${params.toString()}`;
 }
 
 export function parseShellMessage(payload: string): ShellIncomingMessage | null {

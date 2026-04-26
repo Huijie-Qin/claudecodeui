@@ -8,6 +8,7 @@ export type CodeEditorFile = {
   name: string;
   path: string;
   projectName?: string;
+  workspaceId?: number;
   diffInfo?: CodeEditorDiffInfo | null;
   [key: string]: unknown;
 };

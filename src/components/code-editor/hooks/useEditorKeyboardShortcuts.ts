@@ -3,12 +3,14 @@ import { useEffect } from 'react';
 type UseEditorKeyboardShortcutsParams = {
   onSave: () => void;
   onClose: () => void;
+  disableSave?: boolean;
   dependency: string;
 };
 
 export const useEditorKeyboardShortcuts = ({
   onSave,
   onClose,
+  disableSave = false,
   dependency,
 }: UseEditorKeyboardShortcutsParams) => {
   useEffect(() => {
@@ -25,7 +27,9 @@ export const useEditorKeyboardShortcuts = ({
 
       if (event.key.toLowerCase() === 's') {
         event.preventDefault();
-        onSave();
+        if (!disableSave) {
+          onSave();
+        }
       }
     };
 
@@ -33,5 +37,5 @@ export const useEditorKeyboardShortcuts = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [dependency, onClose, onSave]);
+  }, [dependency, disableSave, onClose, onSave]);
 };

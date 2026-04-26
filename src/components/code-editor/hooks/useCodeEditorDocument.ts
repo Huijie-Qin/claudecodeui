@@ -6,6 +6,7 @@ import { isBinaryFile } from '../utils/binaryFile';
 type UseCodeEditorDocumentParams = {
   file: CodeEditorFile;
   projectPath?: string;
+  isReadOnly?: boolean;
 };
 
 const getErrorMessage = (error: unknown) => {
@@ -16,7 +17,7 @@ const getErrorMessage = (error: unknown) => {
   return String(error);
 };
 
-export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocumentParams) => {
+export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }: UseCodeEditorDocumentParams) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -53,7 +54,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
           throw new Error('Missing project identifier');
         }
 
-        const response = await api.readFile(fileProjectName, filePath);
+        const response = await api.readFile(fileProjectName, filePath, file.workspaceId);
         if (!response.ok) {
           throw new Error(`Failed to load file: ${response.status} ${response.statusText}`);
         }
@@ -70,18 +71,22 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     };
 
     loadFileContent();
-  }, [file.diffInfo, file.name, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName]);
+  }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
 
     try {
+      if (isReadOnly) {
+        throw new Error('Workspace is read-only');
+      }
+
       if (!fileProjectName) {
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectName, filePath, content);
+      const response = await api.saveFile(fileProjectName, filePath, content, file.workspaceId);
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');
@@ -106,7 +111,7 @@ export const useCodeEditorDocument = ({ file, projectPath }: UseCodeEditorDocume
     } finally {
       setSaving(false);
     }
-  }, [content, filePath, fileProjectName]);
+  }, [content, file.workspaceId, filePath, fileProjectName, isReadOnly]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([content], { type: 'text/plain' });

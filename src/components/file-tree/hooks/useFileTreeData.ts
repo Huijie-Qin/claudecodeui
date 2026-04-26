@@ -42,7 +42,11 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
         setLoading(true);
       }
       try {
-        const response = await api.getFiles(projectName, { signal: abortControllerRef.current!.signal });
+        const response = await api.getFiles(
+          projectName,
+          { signal: abortControllerRef.current!.signal },
+          selectedProject?.workspaceId,
+        );
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -79,7 +83,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       isActive = false;
       abortControllerRef.current?.abort();
     };
-  }, [selectedProject?.name, refreshKey]);
+  }, [selectedProject?.name, selectedProject?.workspaceId, refreshKey]);
 
   return {
     files,

@@ -10,6 +10,7 @@ type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   shouldShowTasksTab: boolean;
+  disabledTabs?: ReadonlySet<AppTab>;
 };
 
 type BuiltInTab = {
@@ -47,6 +48,7 @@ export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
   shouldShowTasksTab,
+  disabledTabs,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
@@ -69,13 +71,19 @@ export default function MainContentTabSwitcher({
     <PillBar>
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
+        const isDisabled = disabledTabs?.has(tab.id) ?? false;
         const displayLabel = tab.kind === 'builtin' ? t(tab.labelKey) : tab.label;
 
         return (
           <Tooltip key={tab.id} content={displayLabel} position="bottom">
             <Pill
               isActive={isActive}
-              onClick={() => setActiveTab(tab.id)}
+              disabled={isDisabled}
+              onClick={() => {
+                if (!isDisabled) {
+                  setActiveTab(tab.id);
+                }
+              }}
               className="px-2.5 py-[5px]"
             >
               {tab.kind === 'builtin' ? (

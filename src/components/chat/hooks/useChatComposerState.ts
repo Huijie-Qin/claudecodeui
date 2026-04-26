@@ -279,6 +279,7 @@ export function useChatComposerState({
         const context = {
           projectPath: selectedProject.fullPath || selectedProject.path,
           projectName: selectedProject.name,
+          workspaceId: selectedProject.workspaceId,
           sessionId: currentSessionId,
           provider,
           model: provider === 'cursor' ? cursorModel : provider === 'codex' ? codexModel : provider === 'gemini' ? geminiModel : claudeModel,
@@ -599,6 +600,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            workspaceId: selectedProject.workspaceId,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
             model: cursorModel,
@@ -615,6 +617,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            workspaceId: selectedProject.workspaceId,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
             model: codexModel,
@@ -630,6 +633,7 @@ export function useChatComposerState({
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
+            workspaceId: selectedProject.workspaceId,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
             model: geminiModel,
@@ -645,6 +649,7 @@ export function useChatComposerState({
           options: {
             projectPath: resolvedProjectPath,
             cwd: resolvedProjectPath,
+            workspaceId: selectedProject.workspaceId,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
             toolsSettings,

@@ -243,6 +243,7 @@ export function useChatSessionState({
           provider: sessionProvider as LLMProvider,
           projectName: selectedProject.name,
           projectPath: selectedProject.fullPath || selectedProject.path || '',
+          workspaceId: selectedProject.workspaceId,
           limit: MESSAGES_PER_PAGE,
         });
         if (!slot || slot.serverMessages.length === 0) return false;
@@ -325,7 +326,7 @@ export function useChatSessionState({
     }
 
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
-    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${provider}`;
+    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${selectedProject.workspaceId || 'legacy'}:${provider}`;
 
     // Skip if already loaded and fresh
     if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
@@ -377,6 +378,7 @@ export function useChatSessionState({
       provider: (selectedSession.__provider || provider) as LLMProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
+      workspaceId: selectedProject.workspaceId,
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
@@ -413,6 +415,7 @@ export function useChatSessionState({
             provider: (selectedSession.__provider || provider) as LLMProvider,
             projectName: selectedProject.name,
             projectPath: selectedProject.fullPath || selectedProject.path || '',
+            workspaceId: selectedProject.workspaceId,
           });
 
           if (Boolean(autoScrollToBottom) && isNearBottom()) {
@@ -471,6 +474,7 @@ export function useChatSessionState({
               provider: sessionProvider as LLMProvider,
               projectName: selectedProject.name,
               projectPath: selectedProject.fullPath || selectedProject.path || '',
+              workspaceId: selectedProject.workspaceId,
               limit: null,
               offset: 0,
             });

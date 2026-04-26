@@ -39,6 +39,15 @@ const withTenantParam = (url) => {
   return `${url}${separator}tenantId=${encodeURIComponent(tenantId)}`;
 };
 
+const withWorkspaceParam = (url, workspaceId) => {
+  if (!workspaceId) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}workspaceId=${encodeURIComponent(String(workspaceId))}`;
+};
+
+const withTenantAndWorkspaceParam = (url, workspaceId) =>
+  withTenantParam(withWorkspaceParam(url, workspaceId));
+
 // API endpoints
 export const api = {
   // Auth endpoints (no token required)
@@ -64,11 +73,12 @@ export const api = {
   sessions: (projectName, limit = 5, offset = 0) =>
     authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
   // Unified endpoint — all providers through one URL
-  unifiedSessionMessages: (sessionId, provider = 'claude', { projectName = '', projectPath = '', limit = null, offset = 0 } = {}) => {
+  unifiedSessionMessages: (sessionId, provider = 'claude', { projectName = '', projectPath = '', workspaceId, limit = null, offset = 0 } = {}) => {
     const params = new URLSearchParams();
     params.append('provider', provider);
     if (projectName) params.append('projectName', projectName);
     if (projectPath) params.append('projectPath', projectPath);
+    if (workspaceId) params.append('workspaceId', String(workspaceId));
     if (limit !== null) {
       params.append('limit', String(limit));
       params.append('offset', String(offset));
@@ -118,43 +128,47 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(workspaceData),
     }),
-  readFile: (projectName, filePath) =>
-    authenticatedFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
-  readFileBlob: (projectName, filePath) =>
-    authenticatedFetch(`/api/projects/${projectName}/files/content?path=${encodeURIComponent(filePath)}`),
-  saveFile: (projectName, filePath, content) =>
-    authenticatedFetch(`/api/projects/${projectName}/file`, {
+  readFile: (projectName, filePath, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId)),
+  readFileBlob: (projectName, filePath, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId)),
+  saveFile: (projectName, filePath, content, workspaceId) =>
+    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/file`), {
       method: 'PUT',
-      body: JSON.stringify({ filePath, content }),
+      body: JSON.stringify({ filePath, content, workspaceId }),
     }),
-  getFiles: (projectName, options = {}) =>
-    authenticatedFetch(`/api/projects/${projectName}/files`, options),
+  getFiles: (projectName, options = {}, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files`, workspaceId), options),
 
   // File operations
-  createFile: (projectName, { path, type, name }) =>
-    authenticatedFetch(`/api/projects/${projectName}/files/create`, {
+  createFile: (projectName, { path, type, name, workspaceId }) =>
+    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files/create`), {
       method: 'POST',
-      body: JSON.stringify({ path, type, name }),
+      body: JSON.stringify({ path, type, name, workspaceId }),
     }),
 
-  renameFile: (projectName, { oldPath, newName }) =>
-    authenticatedFetch(`/api/projects/${projectName}/files/rename`, {
+  renameFile: (projectName, { oldPath, newName, workspaceId }) =>
+    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files/rename`), {
       method: 'PUT',
-      body: JSON.stringify({ oldPath, newName }),
+      body: JSON.stringify({ oldPath, newName, workspaceId }),
     }),
 
-  deleteFile: (projectName, { path, type }) =>
-    authenticatedFetch(`/api/projects/${projectName}/files`, {
+  deleteFile: (projectName, { path, type, workspaceId }) =>
+    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files`), {
       method: 'DELETE',
-      body: JSON.stringify({ path, type }),
+      body: JSON.stringify({ path, type, workspaceId }),
     }),
 
-  uploadFiles: (projectName, formData) =>
-    authenticatedFetch(`/api/projects/${projectName}/files/upload`, {
+  uploadFiles: (projectName, formData, workspaceId) => {
+    if (workspaceId) {
+      formData.set('workspaceId', String(workspaceId));
+    }
+    return authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files/upload`), {
       method: 'POST',
       body: formData,
       headers: {}, // Let browser set Content-Type for FormData
-    }),
+    });
+  },
 
   // TaskMaster endpoints
   taskmaster: {

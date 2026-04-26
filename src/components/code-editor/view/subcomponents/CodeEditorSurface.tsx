@@ -6,6 +6,7 @@ import MarkdownPreview from './markdown/MarkdownPreview';
 type CodeEditorSurfaceProps = {
   content: string;
   onChange: (value: string) => void;
+  readOnly?: boolean;
   markdownPreview: boolean;
   isMarkdownFile: boolean;
   isDarkMode: boolean;
@@ -17,6 +18,7 @@ type CodeEditorSurfaceProps = {
 export default function CodeEditorSurface({
   content,
   onChange,
+  readOnly = false,
   markdownPreview,
   isMarkdownFile,
   isDarkMode,
@@ -38,6 +40,8 @@ export default function CodeEditorSurface({
     <CodeMirror
       value={content}
       onChange={onChange}
+      readOnly={readOnly}
+      editable={!readOnly}
       extensions={extensions}
       theme={isDarkMode ? oneDark : undefined}
       height="100%"

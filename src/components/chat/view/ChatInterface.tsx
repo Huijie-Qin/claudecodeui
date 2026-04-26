@@ -214,6 +214,7 @@ function ChatInterface({
       provider: (selectedSession.__provider || providerVal) as LLMProvider,
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
+      workspaceId: selectedProject.workspaceId,
     });
     setIsLoading(false);
     setCanAbortSession(false);

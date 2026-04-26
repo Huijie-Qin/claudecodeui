@@ -14,6 +14,7 @@ type EditorSidebarProps = {
   onCloseEditor: () => void;
   onToggleEditorExpand: () => void;
   projectPath?: string;
+  isReadOnly?: boolean;
   fillSpace?: boolean;
 };
 
@@ -33,6 +34,7 @@ export default function EditorSidebar({
   onCloseEditor,
   onToggleEditorExpand,
   projectPath,
+  isReadOnly = false,
   fillSpace,
 }: EditorSidebarProps) {
   const [poppedOut, setPoppedOut] = useState(false);
@@ -93,6 +95,7 @@ export default function EditorSidebar({
           onCloseEditor();
         }}
         projectPath={projectPath}
+        isReadOnly={isReadOnly}
         isSidebar={false}
       />
     );
@@ -122,6 +125,7 @@ export default function EditorSidebar({
           file={editingFile}
           onClose={onCloseEditor}
           projectPath={projectPath}
+          isReadOnly={isReadOnly}
           isSidebar
           isExpanded={editorExpanded}
           onToggleExpand={onToggleEditorExpand}

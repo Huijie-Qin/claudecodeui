@@ -23,6 +23,7 @@ export type UseFileTreeOperationsOptions = {
   selectedProject: Project | null;
   onRefresh: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
+  isReadOnly?: boolean;
 };
 
 export type UseFileTreeOperationsResult = {
@@ -65,6 +66,7 @@ export function useFileTreeOperations({
   selectedProject,
   onRefresh,
   showToast,
+  isReadOnly = false,
 }: UseFileTreeOperationsOptions): UseFileTreeOperationsResult {
   const { t } = useTranslation();
 
@@ -100,10 +102,11 @@ export function useFileTreeOperations({
 
   // Rename operations
   const handleStartRename = useCallback((item: FileTreeNode) => {
+    if (isReadOnly) return;
     setRenamingItem(item);
     setRenameValue(item.name);
     setIsCreating(false);
-  }, []);
+  }, [isReadOnly]);
 
   const handleCancelRename = useCallback(() => {
     setRenamingItem(null);
@@ -111,7 +114,7 @@ export function useFileTreeOperations({
   }, []);
 
   const handleConfirmRename = useCallback(async () => {
-    if (!renamingItem || !selectedProject) return;
+    if (!renamingItem || !selectedProject || isReadOnly) return;
 
     const error = validateFilename(renameValue);
     if (error) {
@@ -129,6 +132,7 @@ export function useFileTreeOperations({
       const response = await api.renameFile(selectedProject.name, {
         oldPath: renamingItem.path,
         newName: renameValue,
+        workspaceId: selectedProject.workspaceId,
       });
 
       if (!response.ok) {
@@ -144,12 +148,13 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [renamingItem, renameValue, selectedProject, validateFilename, showToast, t, onRefresh, handleCancelRename]);
+  }, [renamingItem, renameValue, selectedProject, isReadOnly, validateFilename, showToast, t, onRefresh, handleCancelRename]);
 
   // Delete operations
   const handleStartDelete = useCallback((item: FileTreeNode) => {
+    if (isReadOnly) return;
     setDeleteConfirmation({ isOpen: true, item });
-  }, []);
+  }, [isReadOnly]);
 
   const handleCancelDelete = useCallback(() => {
     setDeleteConfirmation({ isOpen: false, item: null });
@@ -157,13 +162,14 @@ export function useFileTreeOperations({
 
   const handleConfirmDelete = useCallback(async () => {
     const { item } = deleteConfirmation;
-    if (!item || !selectedProject) return;
+    if (!item || !selectedProject || isReadOnly) return;
 
     setOperationLoading(true);
     try {
       const response = await api.deleteFile(selectedProject.name, {
         path: item.path,
         type: item.type,
+        workspaceId: selectedProject.workspaceId,
       });
 
       if (!response.ok) {
@@ -184,16 +190,17 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [deleteConfirmation, selectedProject, showToast, t, onRefresh, handleCancelDelete]);
+  }, [deleteConfirmation, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelDelete]);
 
   // Create operations
   const handleStartCreate = useCallback((parentPath: string, type: 'file' | 'directory') => {
+    if (isReadOnly) return;
     setNewItemParent(parentPath || '');
     setNewItemType(type);
     setNewItemName(type === 'file' ? 'untitled.txt' : 'new-folder');
     setIsCreating(true);
     setRenamingItem(null);
-  }, []);
+  }, [isReadOnly]);
 
   const handleCancelCreate = useCallback(() => {
     setIsCreating(false);
@@ -202,7 +209,7 @@ export function useFileTreeOperations({
   }, []);
 
   const handleConfirmCreate = useCallback(async () => {
-    if (!selectedProject) return;
+    if (!selectedProject || isReadOnly) return;
 
     const error = validateFilename(newItemName);
     if (error) {
@@ -216,6 +223,7 @@ export function useFileTreeOperations({
         path: newItemParent,
         type: newItemType,
         name: newItemName,
+        workspaceId: selectedProject.workspaceId,
       });
 
       if (!response.ok) {
@@ -236,7 +244,7 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [selectedProject, newItemParent, newItemType, newItemName, validateFilename, showToast, t, onRefresh, handleCancelCreate]);
+  }, [selectedProject, isReadOnly, newItemParent, newItemType, newItemName, validateFilename, showToast, t, onRefresh, handleCancelCreate]);
 
   // Copy path to clipboard
   const handleCopyPath = useCallback((item: FileTreeNode) => {
@@ -287,7 +295,7 @@ export function useFileTreeOperations({
     if (!selectedProject) return;
 
     // Use the binary streaming endpoint so downloads preserve raw bytes.
-    const response = await api.readFileBlob(selectedProject.name, item.path);
+    const response = await api.readFileBlob(selectedProject.name, item.path, selectedProject.workspaceId);
 
     if (!response.ok) {
       throw new Error('Failed to download file');
@@ -308,7 +316,7 @@ export function useFileTreeOperations({
       const fullPath = currentPath ? `${currentPath}/${node.name}` : node.name;
 
       if (node.type === 'file') {
-        const response = await api.readFileBlob(selectedProject.name, node.path);
+        const response = await api.readFileBlob(selectedProject.name, node.path, selectedProject.workspaceId);
         if (!response.ok) {
           throw new Error(`Failed to download "${node.name}" for ZIP export`);
         }

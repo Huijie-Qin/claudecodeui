@@ -30,10 +30,11 @@ export const useEditorSidebar = ({
         name: fileName,
         path: filePath,
         projectName: selectedProject?.name,
+        workspaceId: selectedProject?.workspaceId,
         diffInfo,
       });
     },
-    [selectedProject?.name],
+    [selectedProject?.name, selectedProject?.workspaceId],
   );
 
   const handleCloseEditor = useCallback(() => {

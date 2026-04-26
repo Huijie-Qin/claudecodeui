@@ -9,6 +9,7 @@ type CodeEditorHeaderProps = {
   markdownPreview: boolean;
   saving: boolean;
   saveSuccess: boolean;
+  isReadOnly?: boolean;
   onToggleMarkdownPreview: () => void;
   onOpenSettings: () => void;
   onDownload: () => void;
@@ -38,6 +39,7 @@ export default function CodeEditorHeader({
   markdownPreview,
   saving,
   saveSuccess,
+  isReadOnly = false,
   onToggleMarkdownPreview,
   onOpenSettings,
   onDownload,
@@ -46,7 +48,7 @@ export default function CodeEditorHeader({
   onClose,
   labels,
 }: CodeEditorHeaderProps) {
-  const saveTitle = saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
+  const saveTitle = isReadOnly ? 'Read-only' : saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
 
   return (
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
@@ -103,7 +105,7 @@ export default function CodeEditorHeader({
         <button
           type="button"
           onClick={onSave}
-          disabled={saving}
+          disabled={saving || isReadOnly}
           className={`flex items-center justify-center rounded-md p-1.5 transition-colors disabled:opacity-50 ${
             saveSuccess
               ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'

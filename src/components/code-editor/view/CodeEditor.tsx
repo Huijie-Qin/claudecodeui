@@ -20,6 +20,7 @@ type CodeEditorProps = {
   file: CodeEditorFile;
   onClose: () => void;
   projectPath?: string;
+  isReadOnly?: boolean;
   isSidebar?: boolean;
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;
@@ -30,6 +31,7 @@ export default function CodeEditor({
   file,
   onClose,
   projectPath,
+  isReadOnly = false,
   isSidebar = false,
   isExpanded = false,
   onToggleExpand = null,
@@ -61,6 +63,7 @@ export default function CodeEditor({
   } = useCodeEditorDocument({
     file,
     projectPath,
+    isReadOnly,
   });
 
   const isMarkdownFile = useMemo(() => {
@@ -147,6 +150,7 @@ export default function CodeEditor({
   useEditorKeyboardShortcuts({
     onSave: handleSave,
     onClose,
+    disableSave: isReadOnly,
     dependency: content,
   });
 
@@ -202,6 +206,7 @@ export default function CodeEditor({
             onOpenSettings={() => window.openSettings?.('appearance')}
             onDownload={handleDownload}
             onSave={handleSave}
+            isReadOnly={isReadOnly}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
             onClose={onClose}
             labels={{
@@ -229,6 +234,7 @@ export default function CodeEditor({
             <CodeEditorSurface
               content={content}
               onChange={setContent}
+              readOnly={isReadOnly}
               markdownPreview={markdownPreview}
               isMarkdownFile={isMarkdownFile}
               isDarkMode={isDarkMode}

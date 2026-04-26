@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
@@ -15,6 +15,7 @@ import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -56,6 +57,11 @@ function MainContent({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
   const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
+  const disabledTabs = useMemo(
+    () => getWorkspaceDisabledTabs(selectedProject?.accessRole),
+    [selectedProject?.accessRole],
+  );
+  const isViewOnlyWorkspace = selectedProject?.accessRole === 'view';
 
   const {
     editingFile,
@@ -87,6 +93,13 @@ function MainContent({
     }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
 
+  useEffect(() => {
+    const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs);
+    if (allowedTab !== activeTab) {
+      setActiveTab(allowedTab);
+    }
+  }, [activeTab, disabledTabs, setActiveTab]);
+
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
@@ -103,6 +116,7 @@ function MainContent({
         selectedProject={selectedProject}
         selectedSession={selectedSession}
         shouldShowTasksTab={shouldShowTasksTab}
+        disabledTabs={disabledTabs}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
       />
@@ -140,7 +154,11 @@ function MainContent({
 
           {activeTab === 'files' && (
             <div className="h-full overflow-hidden">
-              <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              <FileTree
+                selectedProject={selectedProject}
+                onFileOpen={handleFileOpen}
+                isReadOnly={isViewOnlyWorkspace}
+              />
             </div>
           )}
 
@@ -187,6 +205,7 @@ function MainContent({
           onCloseEditor={handleCloseEditor}
           onToggleEditorExpand={handleToggleEditorExpand}
           projectPath={selectedProject.path}
+          isReadOnly={isViewOnlyWorkspace}
           fillSpace={activeTab === 'files'}
         />
       </div>

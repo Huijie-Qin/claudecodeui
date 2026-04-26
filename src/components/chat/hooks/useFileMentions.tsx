@@ -68,7 +68,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
 
 
       try {
-        const response = await api.getFiles(projectName, { signal: abortController.signal });
+        const response = await api.getFiles(projectName, { signal: abortController.signal }, selectedProject?.workspaceId);
         if (!response.ok) {
           return;
         }
@@ -88,7 +88,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     return () => {
       abortController.abort();
     };
-  }, [selectedProject?.name]);
+  }, [selectedProject?.name, selectedProject?.workspaceId]);
 
   useEffect(() => {
     const textBeforeCursor = input.slice(0, cursorPosition);

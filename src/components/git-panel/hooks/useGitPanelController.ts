@@ -40,6 +40,33 @@ async function readJson<T>(response: Response, signal?: AbortSignal): Promise<T>
   return data;
 }
 
+function buildGitQuery(
+  endpoint: string,
+  selectedProject: UseGitPanelControllerOptions['selectedProject'],
+  params: Record<string, string | number | null | undefined> = {},
+): string {
+  const query = new URLSearchParams();
+  if (selectedProject?.name) query.set('project', selectedProject.name);
+  if (selectedProject?.workspaceId) query.set('workspaceId', String(selectedProject.workspaceId));
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      query.set(key, String(value));
+    }
+  });
+  return `/api/git/${endpoint}?${query.toString()}`;
+}
+
+function buildGitBody(
+  selectedProject: UseGitPanelControllerOptions['selectedProject'],
+  body: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    project: selectedProject?.name,
+    workspaceId: selectedProject?.workspaceId,
+    ...body,
+  };
+}
+
 export function useGitPanelController({
   selectedProject,
   activeView,
@@ -78,18 +105,16 @@ export function useGitPanelController({
         return;
       }
 
-      const projectName = selectedProject.name;
-
       try {
         const response = await fetchWithAuth(
-          `/api/git/diff?project=${encodeURIComponent(projectName)}&file=${encodeURIComponent(filePath)}`,
+          buildGitQuery('diff', selectedProject, { file: filePath }),
           { signal },
         );
         const data = await readJson<GitDiffResponse>(response, signal);
 
         if (
           signal?.aborted ||
-          selectedProjectNameRef.current !== projectName
+          selectedProjectNameRef.current !== selectedProject.name
         ) {
           return;
         }
@@ -116,16 +141,14 @@ export function useGitPanelController({
       return;
     }
 
-    const projectName = selectedProject.name;
-
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth(`/api/git/status?project=${encodeURIComponent(projectName)}`, { signal });
+      const response = await fetchWithAuth(buildGitQuery('status', selectedProject), { signal });
       const data = await readJson<GitStatusResponse>(response, signal);
 
       if (
         signal?.aborted ||
-        selectedProjectNameRef.current !== projectName
+        selectedProjectNameRef.current !== selectedProject.name
       ) {
         return;
       }
@@ -150,7 +173,7 @@ export function useGitPanelController({
       }
 
       if (
-        selectedProjectNameRef.current !== projectName
+        selectedProjectNameRef.current !== selectedProject.name
       ) {
         return;
       }
@@ -169,7 +192,7 @@ export function useGitPanelController({
     }
 
     try {
-      const response = await fetchWithAuth(`/api/git/branches?project=${encodeURIComponent(selectedProject.name)}`);
+      const response = await fetchWithAuth(buildGitQuery('branches', selectedProject));
       const data = await readJson<GitBranchesResponse>(response);
 
       if (!data.error && data.branches) {
@@ -196,7 +219,7 @@ export function useGitPanelController({
     }
 
     try {
-      const response = await fetchWithAuth(`/api/git/remote-status?project=${encodeURIComponent(selectedProject.name)}`);
+      const response = await fetchWithAuth(buildGitQuery('remote-status', selectedProject));
       const data = await readJson<GitRemoteStatus | GitApiErrorResponse>(response);
 
       if (!data.error) {
@@ -221,10 +244,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            branch: branchName,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { branch: branchName })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -256,10 +276,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/create-branch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            branch: trimmedBranchName,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { branch: trimmedBranchName })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -290,7 +307,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/delete-branch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project: selectedProject.name, branch: branchName }),
+        body: JSON.stringify(buildGitBody(selectedProject, { branch: branchName })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -319,9 +336,7 @@ export function useGitPanelController({
       const response = await fetchWithAuth('/api/git/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: selectedProject.name,
-        }),
+        body: JSON.stringify(buildGitBody(selectedProject)),
       });
 
       const data = await readJson<GitOperationResponse>(response);
@@ -350,9 +365,7 @@ export function useGitPanelController({
       const response = await fetchWithAuth('/api/git/pull', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: selectedProject.name,
-        }),
+        body: JSON.stringify(buildGitBody(selectedProject)),
       });
 
       const data = await readJson<GitOperationResponse>(response);
@@ -380,9 +393,7 @@ export function useGitPanelController({
       const response = await fetchWithAuth('/api/git/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: selectedProject.name,
-        }),
+        body: JSON.stringify(buildGitBody(selectedProject)),
       });
 
       const data = await readJson<GitOperationResponse>(response);
@@ -410,10 +421,7 @@ export function useGitPanelController({
       const response = await fetchWithAuth('/api/git/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: selectedProject.name,
-          branch: currentBranch,
-        }),
+        body: JSON.stringify(buildGitBody(selectedProject, { branch: currentBranch })),
       });
 
       const data = await readJson<GitOperationResponse>(response);
@@ -441,10 +449,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/discard', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            file: filePath,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { file: filePath })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -471,10 +476,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/delete-untracked', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            file: filePath,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { file: filePath })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -498,7 +500,7 @@ export function useGitPanelController({
 
     try {
       const response = await fetchWithAuth(
-        `/api/git/commits?project=${encodeURIComponent(selectedProject.name)}&limit=${RECENT_COMMITS_LIMIT}`,
+        buildGitQuery('commits', selectedProject, { limit: RECENT_COMMITS_LIMIT }),
       );
       const data = await readJson<GitCommitsResponse>(response);
 
@@ -518,7 +520,7 @@ export function useGitPanelController({
 
       try {
         const response = await fetchWithAuth(
-          `/api/git/commit-diff?project=${encodeURIComponent(selectedProject.name)}&commit=${commitHash}`,
+          buildGitQuery('commit-diff', selectedProject, { commit: commitHash }),
         );
         const data = await readJson<GitDiffResponse>(response);
 
@@ -545,11 +547,7 @@ export function useGitPanelController({
         const response = await authenticatedFetch('/api/git/generate-commit-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            files,
-            provider,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { files, provider })),
         });
 
         const data = await readJson<GitGenerateMessageResponse>(response);
@@ -577,11 +575,7 @@ export function useGitPanelController({
         const response = await fetchWithAuth('/api/git/commit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project: selectedProject.name,
-            message,
-            files,
-          }),
+          body: JSON.stringify(buildGitBody(selectedProject, { message, files })),
         });
 
         const data = await readJson<GitOperationResponse>(response);
@@ -611,9 +605,7 @@ export function useGitPanelController({
       const response = await fetchWithAuth('/api/git/initial-commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: selectedProject.name,
-        }),
+          body: JSON.stringify(buildGitBody(selectedProject)),
       });
 
       const data = await readJson<GitOperationResponse>(response);
@@ -645,7 +637,7 @@ export function useGitPanelController({
 
       try {
         const response = await fetchWithAuth(
-          `/api/git/file-with-diff?project=${encodeURIComponent(selectedProject.name)}&file=${encodeURIComponent(filePath)}`,
+          buildGitQuery('file-with-diff', selectedProject, { file: filePath }),
         );
         const data = await readJson<GitFileWithDiffResponse>(response);
 
