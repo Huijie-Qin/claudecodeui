@@ -38,6 +38,8 @@ export type SidebarProps = {
   settingsInitialTab: string;
   onCloseSettings: () => void;
   isMobile: boolean;
+  showAdminEntry?: boolean;
+  onShowAdminPanel?: () => void;
 };
 
 export type SessionViewModel = {

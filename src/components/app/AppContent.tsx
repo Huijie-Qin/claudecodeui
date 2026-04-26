@@ -1,8 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
+import AdminPanel from '../admin/AdminPanel';
+import { isSystemAdminUser } from '../admin/adminPanelUtils';
+import { useAuth } from '../auth/context/AuthContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
@@ -13,8 +16,11 @@ export default function AppContent() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
+  const { user } = useAuth();
   const { ws, sendMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const isSystemAdmin = isSystemAdminUser(user);
 
   const {
     activeSessions,
@@ -146,7 +152,11 @@ export default function AppContent() {
     <div className="fixed inset-0 flex bg-background" style={{ bottom: 'var(--keyboard-height, 0px)' }}>
       {!isMobile ? (
         <div className="h-full flex-shrink-0 border-r border-border/50">
-          <Sidebar {...sidebarSharedProps} />
+          <Sidebar
+            {...sidebarSharedProps}
+            showAdminEntry={isSystemAdmin}
+            onShowAdminPanel={() => setShowAdminPanel(true)}
+          />
         </div>
       ) : (
         <div
@@ -172,7 +182,11 @@ export default function AppContent() {
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
           >
-            <Sidebar {...sidebarSharedProps} />
+            <Sidebar
+              {...sidebarSharedProps}
+              showAdminEntry={isSystemAdmin}
+              onShowAdminPanel={() => setShowAdminPanel(true)}
+            />
           </div>
         </div>
       )}
@@ -202,6 +216,7 @@ export default function AppContent() {
         />
       </div>
 
+      <AdminPanel open={showAdminPanel} onOpenChange={setShowAdminPanel} />
     </div>
   );
 }

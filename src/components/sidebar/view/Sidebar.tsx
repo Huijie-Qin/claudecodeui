@@ -35,6 +35,8 @@ function Sidebar({
   settingsInitialTab,
   onCloseSettings,
   isMobile,
+  showAdminEntry,
+  onShowAdminPanel,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -269,6 +271,8 @@ function Sidebar({
             currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
+            showAdminEntry={showAdminEntry}
+            onShowAdminPanel={onShowAdminPanel}
             projectListProps={projectListProps}
             t={t}
           />

@@ -59,6 +59,8 @@ type SidebarContentProps = {
   currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
+  showAdminEntry?: boolean;
+  onShowAdminPanel?: () => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
 };
@@ -87,6 +89,8 @@ export default function SidebarContent({
   currentVersion,
   onShowVersionModal,
   onShowSettings,
+  showAdminEntry,
+  onShowAdminPanel,
   projectListProps,
   t,
 }: SidebarContentProps) {
@@ -222,6 +226,8 @@ export default function SidebarContent({
         currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
+        showAdminEntry={showAdminEntry}
+        onShowAdminPanel={onShowAdminPanel}
         t={t}
       />
     </div>
