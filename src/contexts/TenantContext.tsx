@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 
 import { useAuth } from '../components/auth/context/AuthContext';
-import { chooseInitialTenant, CURRENT_TENANT_STORAGE_KEY } from '../components/tenant/tenantSelection';
+import { chooseInitialTenant, CURRENT_TENANT_STORAGE_KEY } from '../components/tenant/tenantSelectionHelper';
 import type { Tenant } from '../types/app';
 import { api } from '../utils/api';
 

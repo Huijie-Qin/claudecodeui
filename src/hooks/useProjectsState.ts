@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
+import { useTenant } from '../contexts/TenantContext';
 import { api } from '../utils/api';
 import type {
   AppSocketMessage,
@@ -137,6 +138,7 @@ export function useProjectsState({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
+  const { currentTenant } = useTenant();
 
   useEffect(() => {
     try {
@@ -158,6 +160,13 @@ export function useProjectsState({
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
+      if (!currentTenant) {
+        setProjects([]);
+        setSelectedProject(null);
+        setSelectedSession(null);
+        return;
+      }
+
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
@@ -180,7 +189,7 @@ export function useProjectsState({
         setIsLoadingProjects(false);
       }
     }
-  }, []);
+  }, [currentTenant]);
 
   const refreshProjectsSilently = useCallback(async () => {
     // Keep chat view stable while still syncing sidebar/session metadata in background.
@@ -193,8 +202,11 @@ export function useProjectsState({
   }, []);
 
   useEffect(() => {
+    setProjects([]);
+    setSelectedProject(null);
+    setSelectedSession(null);
     void fetchProjects();
-  }, [fetchProjects]);
+  }, [currentTenant?.id, fetchProjects]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {
@@ -448,6 +460,13 @@ export function useProjectsState({
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
+      if (!currentTenant) {
+        setProjects([]);
+        setSelectedProject(null);
+        setSelectedSession(null);
+        return;
+      }
+
       const response = await api.projects();
       const freshProjects = (await response.json()) as Project[];
 
@@ -490,7 +509,7 @@ export function useProjectsState({
     } catch (error) {
       console.error('Error refreshing sidebar:', error);
     }
-  }, [selectedProject, selectedSession]);
+  }, [currentTenant, selectedProject, selectedSession]);
 
   const handleProjectDelete = useCallback(
     (projectName: string) => {

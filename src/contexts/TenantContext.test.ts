@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { chooseInitialTenant } from '../components/tenant/tenantSelection';
+import { chooseInitialTenant } from '../components/tenant/tenantSelectionHelper';
 
 test('chooseInitialTenant keeps saved tenant when still visible', () => {
   const tenant = chooseInitialTenant('2', [
