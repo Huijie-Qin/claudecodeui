@@ -3,6 +3,10 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import {
+  scheduleProjectsRefresh,
+  shouldRefreshProjectsForRealtimeMessage,
+} from './chatRealtimeRefresh';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -240,6 +244,9 @@ export function useChatRealtimeHandlers({
           );
         }
         onNavigateToSession?.(newSessionId);
+        if (shouldRefreshProjectsForRealtimeMessage(msg)) {
+          scheduleProjectsRefresh(250);
+        }
         break;
       }
 
@@ -271,6 +278,10 @@ export function useChatRealtimeHandlers({
           break;
         }
 
+        if (shouldRefreshProjectsForRealtimeMessage({ ...msg, sessionId: sid || msg.sessionId })) {
+          scheduleProjectsRefresh(500);
+        }
+
         // Clear pending session
         const pendingSessionId = sessionStorage.getItem('pendingSessionId');
         if (pendingSessionId && !currentSessionId && msg.exitCode === 0) {
@@ -280,9 +291,6 @@ export function useChatRealtimeHandlers({
             onNavigateToSession?.(actualId);
           }
           sessionStorage.removeItem('pendingSessionId');
-          if (window.refreshProjects) {
-            setTimeout(() => window.refreshProjects?.(), 500);
-          }
         }
         break;
       }

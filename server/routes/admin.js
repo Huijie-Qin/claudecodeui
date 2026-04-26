@@ -10,6 +10,13 @@ function requireSystemAdmin(req, res, next) {
   return next();
 }
 
+function sendRouteError(res, error, fallbackMessage) {
+  const message = error instanceof Error ? error.message : fallbackMessage;
+  const isConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || error?.code === 'SQLITE_CONSTRAINT';
+  const statusCode = isConstraint ? 409 : 400;
+  return res.status(statusCode).json({ error: message || fallbackMessage });
+}
+
 export function createAdminRouter(multitenancy = multitenancyDb, users = userDb) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -19,12 +26,25 @@ export function createAdminRouter(multitenancy = multitenancyDb, users = userDb)
   });
 
   router.post('/tenants', (req, res) => {
-    const tenant = multitenancy.tenants.createTenant({
-      code: req.body?.code,
-      name: req.body?.name,
-      status: req.body?.status || 'active',
-    });
-    res.status(201).json({ tenant });
+    try {
+      const tenant = multitenancy.tenants.createTenant({
+        code: req.body?.code,
+        name: req.body?.name,
+        status: req.body?.status || 'active',
+      });
+
+      multitenancy.memberships?.upsertMembership?.({
+        tenantId: tenant.id,
+        userId: req.user.id,
+        role: 'system_admin',
+        permission: 'edit',
+        status: 'active',
+      });
+
+      res.status(201).json({ tenant });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to create tenant');
+    }
   });
 
   router.get('/users', (req, res) => {
@@ -33,14 +53,18 @@ export function createAdminRouter(multitenancy = multitenancyDb, users = userDb)
   });
 
   router.put('/tenants/:tenantId/users/:userId', (req, res) => {
-    const membership = multitenancy.memberships.upsertMembership({
-      tenantId: Number(req.params.tenantId),
-      userId: Number(req.params.userId),
-      role: req.body?.role || 'member',
-      permission: req.body?.permission || 'view',
-      status: req.body?.status || 'active',
-    });
-    res.json({ membership });
+    try {
+      const membership = multitenancy.memberships.upsertMembership({
+        tenantId: Number(req.params.tenantId),
+        userId: Number(req.params.userId),
+        role: req.body?.role || 'member',
+        permission: req.body?.permission || 'view',
+        status: req.body?.status || 'active',
+      });
+      res.json({ membership });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to update tenant access');
+    }
   });
 
   return router;

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildTenantMembershipPayload, isSystemAdminUser } from './adminPanelUtils';
+import {
+  buildTenantMembershipPayload,
+  normalizeTenantCode,
+  isSystemAdminUser,
+} from './adminPanelUtils';
 
 test('isSystemAdminUser accepts numeric and boolean admin flags', () => {
   assert.equal(isSystemAdminUser({ username: 'numeric-admin', is_system_admin: 1 }), true);
@@ -16,4 +20,10 @@ test('buildTenantMembershipPayload grants active member access with selected per
     permission: 'view',
     status: 'active',
   });
+});
+
+test('normalizeTenantCode creates lowercase hyphen tenant codes', () => {
+  assert.equal(normalizeTenantCode(' Acme Team 01 '), 'acme-team-01');
+  assert.equal(normalizeTenantCode('Foo_Bar!'), 'foo-bar');
+  assert.equal(normalizeTenantCode('--Default--'), 'default');
 });

@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import AdminPanel from '../admin/AdminPanel';
 import { isSystemAdminUser } from '../admin/adminPanelUtils';
 import { useAuth } from '../auth/context/AuthContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
+import { useTenant } from '../../contexts/TenantContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
+import type { Tenant } from '../../types/app';
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -17,6 +20,7 @@ export default function AppContent() {
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { user } = useAuth();
+  const { tenants, currentTenant, selectTenant } = useTenant();
   const { ws, sendMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
@@ -53,6 +57,15 @@ export default function AppContent() {
     isMobile,
     activeSessions,
   });
+
+  const handleTenantSwitch = useCallback((tenant: Tenant) => {
+    selectTenant(tenant);
+    navigate('/');
+
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, navigate, selectTenant, setSidebarOpen]);
 
   useEffect(() => {
     // Expose a non-blocking refresh for chat/session flows.
@@ -156,6 +169,9 @@ export default function AppContent() {
             {...sidebarSharedProps}
             showAdminEntry={isSystemAdmin}
             onShowAdminPanel={() => setShowAdminPanel(true)}
+            tenants={tenants}
+            currentTenant={currentTenant}
+            onTenantSwitch={handleTenantSwitch}
           />
         </div>
       ) : (
@@ -186,6 +202,9 @@ export default function AppContent() {
               {...sidebarSharedProps}
               showAdminEntry={isSystemAdmin}
               onShowAdminPanel={() => setShowAdminPanel(true)}
+              tenants={tenants}
+              currentTenant={currentTenant}
+              onTenantSwitch={handleTenantSwitch}
             />
           </div>
         </div>

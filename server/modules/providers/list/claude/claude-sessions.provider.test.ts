@@ -1,7 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ClaudeSessionsProvider } from './claude-sessions.provider.js';
+import {
+  ClaudeSessionsProvider,
+  resolveClaudeProjectStorageName,
+} from './claude-sessions.provider.js';
+
+test('resolveClaudeProjectStorageName prefers encoded workspace path for tenant workspaces', () => {
+  assert.equal(
+    resolveClaudeProjectStorageName({
+      projectName: 'cc-multitenant-default-02',
+      projectPath: '/Users/huijieqin/project/claude-code-ui/cc-multitenant-default-02',
+    }),
+    '-Users-huijieqin-project-claude-code-ui-cc-multitenant-default-02',
+  );
+});
+
+test('resolveClaudeProjectStorageName falls back to projectName for legacy project rows', () => {
+  assert.equal(
+    resolveClaudeProjectStorageName({ projectName: '-Users-demo-project' }),
+    '-Users-demo-project',
+  );
+});
 
 test('ClaudeSessionsProvider filters resume session summaries from user-visible messages', () => {
   const provider = new ClaudeSessionsProvider();

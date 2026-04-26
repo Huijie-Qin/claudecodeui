@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw, Shield } from 'lucide-react';
+
 import { api } from '../../utils/api';
+import { useTenant } from '../../contexts/TenantContext';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
-import { buildTenantMembershipPayload, type TenantPermission } from './adminPanelUtils';
+
+import { buildTenantMembershipPayload, normalizeTenantCode, type TenantPermission } from './adminPanelUtils';
 
 type AdminTenant = {
   id: number;
@@ -54,6 +57,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const { refreshTenants } = useTenant();
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -94,7 +98,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   }, [load, open]);
 
   const createTenant = async () => {
-    const code = tenantCode.trim();
+    const code = normalizeTenantCode(tenantCode);
     const name = tenantName.trim();
 
     setError(null);
@@ -114,6 +118,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       setTenantCode('');
       setTenantName('');
       await load();
+      await refreshTenants();
     } finally {
       setIsSaving(false);
     }
@@ -174,7 +179,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   <span className="text-xs text-muted-foreground">Code</span>
                   <Input
                     value={tenantCode}
-                    onChange={(event) => setTenantCode(event.target.value)}
+                    onChange={(event) => setTenantCode(normalizeTenantCode(event.target.value))}
                     placeholder="acme"
                     autoCapitalize="none"
                   />

@@ -39,6 +39,9 @@ function Sidebar({
   isMobile,
   showAdminEntry,
   onShowAdminPanel,
+  tenants,
+  currentTenant,
+  onTenantSwitch,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -296,6 +299,9 @@ function Sidebar({
             onShowSettings={onShowSettings}
             showAdminEntry={showAdminEntry}
             onShowAdminPanel={onShowAdminPanel}
+            tenants={tenants}
+            currentTenant={currentTenant}
+            onTenantSwitch={onTenantSwitch}
             projectListProps={projectListProps}
             t={t}
           />

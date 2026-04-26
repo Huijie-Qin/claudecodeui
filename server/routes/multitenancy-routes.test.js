@@ -98,6 +98,56 @@ test('admin router rejects non-admin users', async () => {
   assert.equal(response.status, 403);
 });
 
+test('admin router returns 400 for invalid tenant creation input', async () => {
+  const router = createAdminRouter({
+    tenants: {
+      createTenant: () => {
+        throw new Error('code must use lowercase letters, numbers, and hyphens');
+      },
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/tenants', {
+    method: 'POST',
+    body: { code: 'Bad Code', name: 'Bad Code' },
+    user: { id: 1, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'code must use lowercase letters, numbers, and hyphens');
+});
+
+test('admin router grants creator access to newly created tenant', async () => {
+  const seen = {};
+  const router = createAdminRouter({
+    tenants: {
+      createTenant: () => ({ id: 5, code: 'team', name: 'Team', status: 'active' }),
+    },
+    memberships: {
+      upsertMembership: (membership) => {
+        seen.membership = membership;
+        return membership;
+      },
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/tenants', {
+    method: 'POST',
+    body: { code: 'team', name: 'Team' },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(payload.tenant.id, 5);
+  assert.deepEqual(seen.membership, {
+    tenantId: 5,
+    userId: 7,
+    role: 'system_admin',
+    permission: 'edit',
+    status: 'active',
+  });
+});
+
 test('workspace share route lets owners replace ACL entries', async () => {
   const seen = {};
   const router = createWorkspacesRouter({

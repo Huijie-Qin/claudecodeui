@@ -2,7 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { useTenant } from './TenantContext';
-import { prepareWebSocketConnectionAttempt } from './webSocketLifecycle';
+import {
+  createWebSocketLifecycleState,
+  isCurrentWebSocketConnectionAttempt,
+  markWebSocketLifecycleClosed,
+  prepareWebSocketConnectionAttempt,
+  shouldAttemptTenantWebSocketConnection,
+} from './webSocketLifecycle';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -33,7 +39,7 @@ const buildWebSocketUrl = (token: string | null, tenantId: number | null) => {
 
 const useWebSocketProviderState = (): WebSocketContextType => {
   const wsRef = useRef<WebSocket | null>(null);
-  const unmountedRef = useRef(false); // Track if component is unmounted
+  const lifecycleRef = useRef(createWebSocketLifecycleState());
   const hasConnectedRef = useRef(false); // Track if we've ever connected (to detect reconnects)
   const [latestMessage, setLatestMessage] = useState<any>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -41,34 +47,26 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const { token } = useAuth();
   const { currentTenant } = useTenant();
 
-  useEffect(() => {
-    prepareWebSocketConnectionAttempt(unmountedRef);
-    connect();
-    
-    return () => {
-      unmountedRef.current = true;
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, [token, currentTenant?.id]); // everytime token or tenant changes, we reconnect
-
-  const connect = useCallback(() => {
-    if (unmountedRef.current) return; // Prevent connection if unmounted
+  const connect = useCallback((attemptGeneration: number) => {
+    if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
     try {
+      const tenantId = currentTenant?.id ?? null;
+      if (!shouldAttemptTenantWebSocketConnection(tenantId)) return;
+
       // Construct WebSocket URL
-      const wsUrl = buildWebSocketUrl(token, currentTenant?.id ?? null);
+      const wsUrl = buildWebSocketUrl(token, tenantId);
 
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
       
       const websocket = new WebSocket(wsUrl);
+      wsRef.current = websocket;
 
       websocket.onopen = () => {
+        if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) {
+          websocket.close();
+          return;
+        }
         setIsConnected(true);
-        wsRef.current = websocket;
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
           setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
@@ -77,6 +75,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onmessage = (event) => {
+        if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
         try {
           const data = JSON.parse(event.data);
           setLatestMessage(data);
@@ -86,17 +85,21 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       };
 
       websocket.onclose = () => {
+        if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
         setIsConnected(false);
-        wsRef.current = null;
+        if (wsRef.current === websocket) {
+          wsRef.current = null;
+        }
         
         // Attempt to reconnect after 3 seconds
         reconnectTimeoutRef.current = setTimeout(() => {
-          if (unmountedRef.current) return; // Prevent reconnection if unmounted
-          connect();
+          if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
+          connect(attemptGeneration);
         }, 3000);
       };
 
       websocket.onerror = (error) => {
+        if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
         console.error('WebSocket error:', error);
       };
 
@@ -104,6 +107,24 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       console.error('Error creating WebSocket connection:', error);
     }
   }, [currentTenant?.id, token]); // everytime token or tenant changes, we reconnect
+
+  useEffect(() => {
+    const attemptGeneration = prepareWebSocketConnectionAttempt(lifecycleRef);
+    connect(attemptGeneration);
+    
+    return () => {
+      markWebSocketLifecycleClosed(lifecycleRef);
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      const socket = wsRef.current;
+      wsRef.current = null;
+      if (socket) {
+        socket.close();
+      }
+    };
+  }, [connect]); // everytime token or tenant changes, we reconnect
 
   const sendMessage = useCallback((message: any) => {
     const socket = wsRef.current;

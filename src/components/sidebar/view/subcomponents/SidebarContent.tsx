@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
-import type { Project } from '../../../../types/app';
+import type { Project, Tenant } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import SidebarFooter from './SidebarFooter';
@@ -61,6 +61,9 @@ type SidebarContentProps = {
   onShowSettings: () => void;
   showAdminEntry?: boolean;
   onShowAdminPanel?: () => void;
+  tenants?: Tenant[];
+  currentTenant?: Tenant | null;
+  onTenantSwitch?: (tenant: Tenant) => void;
   projectListProps: SidebarProjectListProps;
   t: TFunction;
 };
@@ -91,6 +94,9 @@ export default function SidebarContent({
   onShowSettings,
   showAdminEntry,
   onShowAdminPanel,
+  tenants,
+  currentTenant,
+  onTenantSwitch,
   projectListProps,
   t,
 }: SidebarContentProps) {
@@ -228,6 +234,9 @@ export default function SidebarContent({
         onShowSettings={onShowSettings}
         showAdminEntry={showAdminEntry}
         onShowAdminPanel={onShowAdminPanel}
+        tenants={tenants}
+        currentTenant={currentTenant}
+        onTenantSwitch={onTenantSwitch}
         t={t}
       />
     </div>

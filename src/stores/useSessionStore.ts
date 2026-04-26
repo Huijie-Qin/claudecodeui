@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
+import { buildSessionMessagesUrl } from './sessionRequestUrl';
 import { computeMerged } from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
@@ -169,18 +170,7 @@ export function useSessionStore() {
     notify(sessionId);
 
     try {
-      const params = new URLSearchParams();
-      if (opts.provider) params.append('provider', opts.provider);
-      if (opts.projectName) params.append('projectName', opts.projectName);
-      if (opts.projectPath) params.append('projectPath', opts.projectPath);
-      if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
-      if (opts.limit !== null && opts.limit !== undefined) {
-        params.append('limit', String(opts.limit));
-        params.append('offset', String(opts.offset ?? 0));
-      }
-
-      const qs = params.toString();
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const url = buildSessionMessagesUrl(sessionId, opts);
       const response = await authenticatedFetch(url);
 
       if (!response.ok) {
@@ -227,17 +217,12 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     if (!slot.hasMore) return slot;
 
-    const params = new URLSearchParams();
-    if (opts.provider) params.append('provider', opts.provider);
-    if (opts.projectName) params.append('projectName', opts.projectName);
-    if (opts.projectPath) params.append('projectPath', opts.projectPath);
-    if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
     const limit = opts.limit ?? 20;
-    params.append('limit', String(limit));
-    params.append('offset', String(slot.offset));
-
-    const qs = params.toString();
-    const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
+    const url = buildSessionMessagesUrl(sessionId, {
+      ...opts,
+      limit,
+      offset: slot.offset,
+    });
 
     try {
       const response = await authenticatedFetch(url);
@@ -302,14 +287,7 @@ export function useSessionStore() {
   ) => {
     const slot = getSlot(sessionId);
     try {
-      const params = new URLSearchParams();
-      if (opts.provider) params.append('provider', opts.provider);
-      if (opts.projectName) params.append('projectName', opts.projectName);
-      if (opts.projectPath) params.append('projectPath', opts.projectPath);
-      if (opts.workspaceId) params.append('workspaceId', String(opts.workspaceId));
-
-      const qs = params.toString();
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const url = buildSessionMessagesUrl(sessionId, opts);
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

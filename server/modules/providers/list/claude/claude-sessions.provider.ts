@@ -27,6 +27,14 @@ const loadClaudeSessionMessages = getSessionMessages as unknown as (
   offset: number,
 ) => Promise<ClaudeHistoryResult>;
 
+export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOptions, 'projectName' | 'projectPath'>): string {
+  if (options.projectPath) {
+    return String(options.projectPath).replace(/[^a-zA-Z0-9-]/g, '-');
+  }
+
+  return options.projectName || '';
+}
+
 /**
  * Claude writes internal command and system reminder entries into history.
  * Those are useful for the CLI but should not appear in the user-facing chat.
@@ -243,14 +251,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     sessionId: string,
     options: FetchHistoryOptions = {},
   ): Promise<FetchHistoryResult> {
-    const { projectName, limit = null, offset = 0 } = options;
-    if (!projectName) {
+    const { limit = null, offset = 0 } = options;
+    const projectStorageName = resolveClaudeProjectStorageName(options);
+    if (!projectStorageName) {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
     let result: ClaudeHistoryResult;
     try {
-      result = await loadClaudeSessionMessages(projectName, sessionId, limit, offset);
+      result = await loadClaudeSessionMessages(projectStorageName, sessionId, limit, offset);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);

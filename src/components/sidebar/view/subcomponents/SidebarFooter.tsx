@@ -1,7 +1,10 @@
-import { Settings, ArrowUpCircle, Bug, Shield } from 'lucide-react';
+import { Settings, ArrowUpCircle, Bug, Shield, Building2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { IS_PLATFORM } from '../../../../constants/config';
+import type { Tenant } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
+import { resolveTenantSelection, shouldShowTenantSwitcher } from '../../../tenant/tenantSwitcherUtils';
 
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
 const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
@@ -25,6 +28,9 @@ type SidebarFooterProps = {
   onShowSettings: () => void;
   showAdminEntry?: boolean;
   onShowAdminPanel?: () => void;
+  tenants?: Tenant[];
+  currentTenant?: Tenant | null;
+  onTenantSwitch?: (tenant: Tenant) => void;
   t: TFunction;
 };
 
@@ -37,8 +43,19 @@ export default function SidebarFooter({
   onShowSettings,
   showAdminEntry,
   onShowAdminPanel,
+  tenants = [],
+  currentTenant,
+  onTenantSwitch,
   t,
 }: SidebarFooterProps) {
+  const showTenantSwitcher = shouldShowTenantSwitcher(tenants) && currentTenant && onTenantSwitch;
+  const handleTenantChange = (tenantId: string) => {
+    const tenant = resolveTenantSelection(tenants, tenantId);
+    if (tenant && tenant.id !== currentTenant?.id) {
+      onTenantSwitch?.(tenant);
+    }
+  };
+
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       {/* Update banner */}
@@ -91,6 +108,26 @@ export default function SidebarFooter({
 
       {/* Community + Settings */}
       <div className="nav-divider" />
+
+      {showTenantSwitcher && (
+        <div className="px-2 py-1.5">
+          <label className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground">
+            <Building2 className="h-3.5 w-3.5 flex-shrink-0" />
+            <span className="sr-only">Tenant</span>
+            <select
+              className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+              value={String(currentTenant.id)}
+              onChange={(event) => handleTenantChange(event.target.value)}
+            >
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
 
       {/* Desktop Report Issue */}
       <div className="hidden px-2 pt-1.5 md:block">

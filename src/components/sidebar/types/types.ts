@@ -1,4 +1,4 @@
-import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { LoadingProgress, Project, ProjectSession, LLMProvider, Tenant } from '../../../types/app';
 
 export type ProjectSortOrder = 'name' | 'date';
 
@@ -41,6 +41,9 @@ export type SidebarProps = {
   isMobile: boolean;
   showAdminEntry?: boolean;
   onShowAdminPanel?: () => void;
+  tenants?: Tenant[];
+  currentTenant?: Tenant | null;
+  onTenantSwitch?: (tenant: Tenant) => void;
 };
 
 export type SessionViewModel = {
