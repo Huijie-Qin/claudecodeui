@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
@@ -12,6 +12,7 @@ import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
+import WorkspaceShareDialog from '../../workspace-share/WorkspaceShareDialog';
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -23,6 +24,7 @@ function Sidebar({
   selectedProject,
   selectedSession,
   onProjectSelect,
+  onShareProject,
   onSessionSelect,
   onNewSession,
   onSessionDelete,
@@ -48,6 +50,7 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const [shareProject, setShareProject] = useState<Project | null>(null);
 
   const {
     isSidebarCollapsed,
@@ -134,6 +137,15 @@ function Sidebar({
     window.location.reload();
   };
 
+  const handleShareProject = (project: Project) => {
+    if (onShareProject) {
+      onShareProject(project);
+      return;
+    }
+
+    setShareProject(project);
+  };
+
   const projectListProps: SidebarProjectListProps = {
     projects,
     filteredProjects,
@@ -158,6 +170,7 @@ function Sidebar({
     onToggleProject: toggleProject,
     onProjectSelect: handleProjectSelect,
     onToggleStarProject: toggleStarProject,
+    onShareProject: handleShareProject,
     onStartEditingProject: startEditing,
     onCancelEditingProject: cancelEditing,
     onSaveProjectName: (projectName) => {
@@ -208,6 +221,16 @@ function Sidebar({
         latestVersion={latestVersion}
         installMode={installMode}
         t={t}
+      />
+
+      <WorkspaceShareDialog
+        project={shareProject}
+        open={Boolean(shareProject)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShareProject(null);
+          }
+        }}
       />
 
       {isSidebarCollapsed ? (
