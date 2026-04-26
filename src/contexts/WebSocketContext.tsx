@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
+import { useTenant } from './TenantContext';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -19,11 +20,14 @@ export const useWebSocket = () => {
   return context;
 };
 
-const buildWebSocketUrl = (token: string | null) => {
+const buildWebSocketUrl = (token: string | null, tenantId: number | null) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws`; // Platform mode: Use same domain as the page (goes through proxy)
+  const tenantPart = tenantId ? `tenantId=${encodeURIComponent(String(tenantId))}` : '';
+  if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws${tenantPart ? `?${tenantPart}` : ''}`; // Platform mode: Use same domain as the page (goes through proxy)
   if (!token) return null;
-  return `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`; // OSS mode: Use same host:port that served the page
+  const params = new URLSearchParams({ token });
+  if (tenantId) params.set('tenantId', String(tenantId));
+  return `${protocol}//${window.location.host}/ws?${params.toString()}`; // OSS mode: Use same host:port that served the page
 };
 
 const useWebSocketProviderState = (): WebSocketContextType => {
@@ -34,6 +38,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { token } = useAuth();
+  const { currentTenant } = useTenant();
 
   useEffect(() => {
     connect();
@@ -47,13 +52,13 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         wsRef.current.close();
       }
     };
-  }, [token]); // everytime token changes, we reconnect
+  }, [token, currentTenant?.id]); // everytime token or tenant changes, we reconnect
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return; // Prevent connection if unmounted
     try {
       // Construct WebSocket URL
-      const wsUrl = buildWebSocketUrl(token);
+      const wsUrl = buildWebSocketUrl(token, currentTenant?.id ?? null);
 
       if (!wsUrl) return console.warn('No authentication token found for WebSocket connection');
       
@@ -96,7 +101,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
     }
-  }, [token]); // everytime token changes, we reconnect
+  }, [currentTenant?.id, token]); // everytime token or tenant changes, we reconnect
 
   const sendMessage = useCallback((message: any) => {
     const socket = wsRef.current;

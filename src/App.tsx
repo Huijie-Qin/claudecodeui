@@ -4,6 +4,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, ProtectedRoute } from './components/auth';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
+import { TenantProvider } from './contexts/TenantContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { PluginsProvider } from './contexts/PluginsContext';
 import AppContent from './components/app/AppContent';
@@ -14,22 +15,24 @@ export default function App() {
     <I18nextProvider i18n={i18n}>
       <ThemeProvider>
         <AuthProvider>
-          <WebSocketProvider>
-            <PluginsProvider>
-              <TasksSettingsProvider>
-                <TaskMasterProvider>
-                <ProtectedRoute>
-                  <Router basename={window.__ROUTER_BASENAME__ || ''}>
-                    <Routes>
-                      <Route path="/" element={<AppContent />} />
-                      <Route path="/session/:sessionId" element={<AppContent />} />
-                    </Routes>
-                  </Router>
-                </ProtectedRoute>
-                </TaskMasterProvider>
-              </TasksSettingsProvider>
-            </PluginsProvider>
-          </WebSocketProvider>
+          <TenantProvider>
+            <WebSocketProvider>
+              <PluginsProvider>
+                <TasksSettingsProvider>
+                  <TaskMasterProvider>
+                    <ProtectedRoute>
+                      <Router basename={window.__ROUTER_BASENAME__ || ''}>
+                        <Routes>
+                          <Route path="/" element={<AppContent />} />
+                          <Route path="/session/:sessionId" element={<AppContent />} />
+                        </Routes>
+                      </Router>
+                    </ProtectedRoute>
+                  </TaskMasterProvider>
+                </TasksSettingsProvider>
+              </PluginsProvider>
+            </WebSocketProvider>
+          </TenantProvider>
         </AuthProvider>
       </ThemeProvider>
     </I18nextProvider>
