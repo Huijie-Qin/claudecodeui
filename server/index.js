@@ -36,6 +36,9 @@ import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGemini
 import sessionManager from './sessionManager.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
+import tenantsRoutes from './routes/tenants.js';
+import adminRoutes from './routes/admin.js';
+import workspacesRoutes from './routes/workspaces.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -279,6 +282,11 @@ app.use('/api', validateApiKey);
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
+
+// Multitenancy routes (protected)
+app.use('/api/tenants', authenticateToken, tenantsRoutes);
+app.use('/api/admin', authenticateToken, adminRoutes);
+app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectsRoutes);

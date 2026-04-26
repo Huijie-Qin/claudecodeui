@@ -201,6 +201,18 @@ const userDb = {
     }
   },
 
+  listUsers: () => {
+    try {
+      return db.prepare(`
+        SELECT id, username, created_at, last_login, is_active, is_system_admin
+        FROM users
+        ORDER BY username COLLATE NOCASE ASC
+      `).all();
+    } catch (err) {
+      throw err;
+    }
+  },
+
   updateGitConfig: (userId, gitName, gitEmail) => {
     try {
       const stmt = db.prepare('UPDATE users SET git_name = ?, git_email = ? WHERE id = ?');
