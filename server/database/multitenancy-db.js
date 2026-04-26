@@ -8,6 +8,7 @@ const MEMBERSHIP_STATUSES = new Set(['active', 'disabled', 'pending']);
 const WORKSPACE_STATUSES = new Set(['active', 'archived', 'deleted']);
 const JOIN_REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected']);
 const SESSION_STATUSES = new Set(['active', 'completed', 'aborted', 'failed', 'deleted']);
+const RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'deleted']);
 const PERMISSIONS = new Set(['view', 'edit']);
 const PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 
@@ -56,6 +57,53 @@ function serializeMetadata(metadata) {
   if (metadata == null) return null;
   if (typeof metadata === 'string') return metadata;
   return JSON.stringify(metadata);
+}
+
+function optionalNonEmptyString(value, name) {
+  if (value == null || value === '') return null;
+  return requireNonEmptyString(value, name);
+}
+
+function normalizeLimit(value) {
+  if (value == null) return null;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error('limit must be a non-negative integer or null');
+  }
+  return value;
+}
+
+function normalizeOffset(value) {
+  const offset = value == null ? 0 : value;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error('offset must be a non-negative integer');
+  }
+  return offset;
+}
+
+function parseNormalizedMessageRow(row) {
+  try {
+    return JSON.parse(row.normalized_json);
+  } catch (error) {
+    return {
+      id: row.message_id,
+      sessionId: row.provider_session_id,
+      timestamp: row.provider_timestamp,
+      provider: row.provider,
+      kind: row.kind,
+      role: row.role || undefined,
+      content: row.content_text || undefined,
+    };
+  }
+}
+
+function extractContentText(message) {
+  if (typeof message.content === 'string') return message.content;
+  if (typeof message.text === 'string') return message.text;
+  return null;
+}
+
+function normalizeMessageRole(role) {
+  return role === 'user' || role === 'assistant' ? role : null;
 }
 
 export function createMultitenancyDb(database = db) {
@@ -133,6 +181,114 @@ export function createMultitenancyDb(database = db) {
       tenantId: tenant.id,
       userId: normalizedUserId,
     }));
+  });
+
+  const upsertSessionMessagesTransaction = database.transaction(({
+    tenantId,
+    workspaceId,
+    userId,
+    runtimeId,
+    provider,
+    providerSessionId = null,
+    messages,
+  }) => {
+    const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+    const normalizedUserId = requirePositiveInteger(userId, 'userId');
+    const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+    const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+    const normalizedProviderSessionId = optionalNonEmptyString(providerSessionId, 'providerSessionId');
+
+    if (!Array.isArray(messages)) {
+      throw new Error('messages must be an array');
+    }
+
+    const runtime = database.prepare(`
+      SELECT tenant_id, workspace_id, user_id, provider
+      FROM agent_session_runtime
+      WHERE runtime_id = ?
+    `).get(normalizedRuntimeId);
+
+    if (!runtime) {
+      throw new Error('runtime not found');
+    }
+    if (
+      runtime.tenant_id !== normalizedTenantId ||
+      runtime.workspace_id !== normalizedWorkspaceId ||
+      runtime.user_id !== normalizedUserId ||
+      runtime.provider !== normalizedProvider
+    ) {
+      throw new Error('runtime does not belong to the supplied tenant workspace user');
+    }
+
+    let nextSequence = database.prepare(`
+      SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+      FROM agent_session_messages
+      WHERE runtime_id = ?
+    `).get(normalizedRuntimeId).next_sequence;
+
+    const insertMessage = database.prepare(`
+      INSERT INTO agent_session_messages (
+        tenant_id,
+        workspace_id,
+        user_id,
+        runtime_id,
+        provider,
+        provider_session_id,
+        message_id,
+        kind,
+        role,
+        content_text,
+        normalized_json,
+        provider_timestamp,
+        sequence
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(runtime_id, message_id)
+      DO UPDATE SET
+        provider_session_id = CASE
+          WHEN excluded.provider_session_id IS NOT NULL THEN excluded.provider_session_id
+          ELSE agent_session_messages.provider_session_id
+        END,
+        kind = excluded.kind,
+        role = excluded.role,
+        content_text = excluded.content_text,
+        normalized_json = excluded.normalized_json,
+        provider_timestamp = excluded.provider_timestamp,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+
+    let changed = 0;
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') {
+        continue;
+      }
+
+      const messageId = requireNonEmptyString(message.id || message.messageId, 'message.id');
+      const kind = requireNonEmptyString(message.kind, 'message.kind');
+      const sequence = Number.isInteger(message.sequence) && message.sequence > 0
+        ? message.sequence
+        : nextSequence++;
+
+      const result = insertMessage.run(
+        normalizedTenantId,
+        normalizedWorkspaceId,
+        normalizedUserId,
+        normalizedRuntimeId,
+        normalizedProvider,
+        normalizedProviderSessionId,
+        messageId,
+        kind,
+        normalizeMessageRole(message.role),
+        extractContentText(message),
+        JSON.stringify(message),
+        typeof message.timestamp === 'string' ? message.timestamp : null,
+        sequence,
+      );
+      changed += result.changes;
+    }
+
+    return changed;
   });
 
   return {
@@ -472,6 +628,241 @@ export function createMultitenancyDb(database = db) {
         );
 
         return result.changes > 0;
+      },
+    },
+
+    runtimes: {
+      createRuntime: ({
+        runtimeId,
+        tenantId,
+        workspaceId,
+        userId,
+        provider,
+        providerSessionId = null,
+        containerName,
+        image,
+        workspaceHostPath,
+        runtimeHomePath,
+        status = 'pending',
+      }) => {
+        const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+        const normalizedProviderSessionId = optionalNonEmptyString(providerSessionId, 'providerSessionId');
+        const normalizedContainerName = requireNonEmptyString(containerName, 'containerName');
+        const normalizedImage = requireNonEmptyString(image, 'image');
+        const normalizedWorkspaceHostPath = requireNonEmptyString(workspaceHostPath, 'workspaceHostPath');
+        const normalizedRuntimeHomePath = requireNonEmptyString(runtimeHomePath, 'runtimeHomePath');
+        const normalizedStatus = requireEnum(status, RUNTIME_STATUSES, 'status');
+
+        database.prepare(`
+          INSERT INTO agent_session_runtime (
+            runtime_id,
+            tenant_id,
+            workspace_id,
+            user_id,
+            provider,
+            provider_session_id,
+            container_name,
+            image,
+            workspace_host_path,
+            runtime_home_path,
+            status
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          normalizedRuntimeId,
+          normalizedTenantId,
+          normalizedWorkspaceId,
+          normalizedUserId,
+          normalizedProvider,
+          normalizedProviderSessionId,
+          normalizedContainerName,
+          normalizedImage,
+          normalizedWorkspaceHostPath,
+          normalizedRuntimeHomePath,
+          normalizedStatus,
+        );
+
+        return database.prepare('SELECT * FROM agent_session_runtime WHERE runtime_id = ?').get(normalizedRuntimeId);
+      },
+
+      findByRuntimeId: (runtimeId) => {
+        return database.prepare(`
+          SELECT *
+          FROM agent_session_runtime
+          WHERE runtime_id = ?
+            AND status != 'deleted'
+        `).get(requireNonEmptyString(runtimeId, 'runtimeId')) ?? null;
+      },
+
+      findByProviderSession: ({ tenantId, workspaceId, userId, provider, providerSessionId }) => {
+        return database.prepare(`
+          SELECT *
+          FROM agent_session_runtime
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            AND user_id = ?
+            AND provider = ?
+            AND provider_session_id = ?
+            AND status != 'deleted'
+        `).get(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(workspaceId, 'workspaceId'),
+          requirePositiveInteger(userId, 'userId'),
+          requireEnum(provider, PROVIDERS, 'provider'),
+          requireNonEmptyString(providerSessionId, 'providerSessionId'),
+        ) ?? null;
+      },
+
+      bindProviderSession: ({ runtimeId, providerSessionId }) => {
+        const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+        const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+
+        database.prepare(`
+          UPDATE agent_session_runtime
+          SET
+            provider_session_id = ?,
+            status = 'active',
+            last_used_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE runtime_id = ?
+            AND status != 'deleted'
+        `).run(normalizedProviderSessionId, normalizedRuntimeId);
+
+        return database.prepare('SELECT * FROM agent_session_runtime WHERE runtime_id = ?').get(normalizedRuntimeId) ?? null;
+      },
+
+      updateStatus: ({ runtimeId, status }) => {
+        const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+        const normalizedStatus = requireEnum(status, RUNTIME_STATUSES, 'status');
+
+        database.prepare(`
+          UPDATE agent_session_runtime
+          SET
+            status = ?,
+            last_used_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE runtime_id = ?
+        `).run(normalizedStatus, normalizedRuntimeId);
+
+        return database.prepare('SELECT * FROM agent_session_runtime WHERE runtime_id = ?').get(normalizedRuntimeId) ?? null;
+      },
+    },
+
+    sessionMessages: {
+      upsertMessages: (input) => upsertSessionMessagesTransaction(input),
+
+      bindProviderSession: ({ runtimeId, providerSessionId }) => {
+        const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+        const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+        const result = database.prepare(`
+          UPDATE agent_session_messages
+          SET
+            provider_session_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE runtime_id = ?
+            AND provider_session_id IS NULL
+        `).run(normalizedProviderSessionId, normalizedRuntimeId);
+
+        return result.changes;
+      },
+
+      listMessages: ({
+        tenantId,
+        workspaceId,
+        userId,
+        provider,
+        providerSessionId,
+        limit = null,
+        offset = 0,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+        const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+        const normalizedLimit = normalizeLimit(limit);
+        const normalizedOffset = normalizeOffset(offset);
+
+        const total = database.prepare(`
+          SELECT COUNT(*) AS total
+          FROM agent_session_messages
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            AND user_id = ?
+            AND provider = ?
+            AND provider_session_id = ?
+        `).get(
+          normalizedTenantId,
+          normalizedWorkspaceId,
+          normalizedUserId,
+          normalizedProvider,
+          normalizedProviderSessionId,
+        ).total;
+
+        if (total === 0 || (normalizedLimit !== null && normalizedOffset >= total)) {
+          return {
+            messages: [],
+            total,
+            hasMore: false,
+            offset: normalizedOffset,
+            limit: normalizedLimit,
+          };
+        }
+
+        let rows;
+        let hasMore = false;
+        if (normalizedLimit === null) {
+          rows = database.prepare(`
+            SELECT *
+            FROM agent_session_messages
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND user_id = ?
+              AND provider = ?
+              AND provider_session_id = ?
+            ORDER BY sequence ASC, id ASC
+          `).all(
+            normalizedTenantId,
+            normalizedWorkspaceId,
+            normalizedUserId,
+            normalizedProvider,
+            normalizedProviderSessionId,
+          );
+        } else {
+          const startIndex = Math.max(0, total - normalizedOffset - normalizedLimit);
+          hasMore = startIndex > 0;
+          rows = database.prepare(`
+            SELECT *
+            FROM agent_session_messages
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND user_id = ?
+              AND provider = ?
+              AND provider_session_id = ?
+            ORDER BY sequence ASC, id ASC
+            LIMIT ? OFFSET ?
+          `).all(
+            normalizedTenantId,
+            normalizedWorkspaceId,
+            normalizedUserId,
+            normalizedProvider,
+            normalizedProviderSessionId,
+            normalizedLimit,
+            startIndex,
+          );
+        }
+
+        return {
+          messages: rows.map(parseNormalizedMessageRow),
+          total,
+          hasMore,
+          offset: normalizedOffset,
+          limit: normalizedLimit,
+        };
       },
     },
 

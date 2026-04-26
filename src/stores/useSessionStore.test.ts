@@ -14,6 +14,16 @@ const makeUserText = (fields: Partial<NormalizedMessage>): NormalizedMessage => 
   content: fields.content || '你能联网查询当前的热点资讯吗',
 });
 
+const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessage => ({
+  id: fields.id || 'assistant-1',
+  sessionId: fields.sessionId || 'session-1',
+  timestamp: fields.timestamp || '2026-04-26T10:31:34.000Z',
+  provider: fields.provider || 'claude',
+  kind: 'text',
+  role: 'assistant',
+  content: fields.content || '可以。',
+});
+
 test('computeMerged drops local optimistic user message after the server copy arrives', () => {
   const serverMessage = makeUserText({
     id: 'server-user',
@@ -42,4 +52,46 @@ test('computeMerged keeps later repeated user text as a distinct message', () =>
   const merged = computeMerged([serverMessage], [laterRepeat]);
 
   assert.deepEqual(merged, [serverMessage, laterRepeat]);
+});
+
+test('computeMerged inserts optimistic user text before later server assistant messages', () => {
+  const localUser = makeUserText({
+    id: 'local_1777199493000_abc123',
+    timestamp: '2026-04-26T10:31:33.000Z',
+  });
+  const serverAssistant = makeAssistantText({
+    id: 'assistant-1',
+    timestamp: '2026-04-26T10:31:34.000Z',
+  });
+
+  const merged = computeMerged([serverAssistant], [localUser]);
+
+  assert.deepEqual(merged, [localUser, serverAssistant]);
+});
+
+test('computeMerged drops duplicate realtime messages by intrinsic id', () => {
+  const realtimeMessage = makeAssistantText({
+    id: 'assistant-duplicate',
+  });
+
+  const merged = computeMerged([], [realtimeMessage, realtimeMessage]);
+
+  assert.deepEqual(merged, [realtimeMessage]);
+});
+
+test('computeMerged drops duplicated optimistic user text for the same local timestamp', () => {
+  const firstLocalUser = makeUserText({
+    id: 'local_1777199493000_abc123',
+    timestamp: '2026-04-26T10:31:33.000Z',
+    content: 'hello',
+  });
+  const duplicatedLocalUser = makeUserText({
+    id: 'local_1777199493000_def456',
+    timestamp: '2026-04-26T10:31:33.000Z',
+    content: 'hello',
+  });
+
+  const merged = computeMerged([], [firstLocalUser, duplicatedLocalUser]);
+
+  assert.deepEqual(merged, [firstLocalUser]);
 });

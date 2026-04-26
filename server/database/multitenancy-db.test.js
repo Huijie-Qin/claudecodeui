@@ -141,3 +141,191 @@ test('session index keeps shared workspace sessions private per user', () => {
   assert.deepEqual(mt.sessions.listSessions({ tenantId: tenant.id, workspaceId: workspace.id, userId: editorId }).map((row) => row.provider_session_id), ['editor-session']);
   assert.equal(mt.sessions.findOwnedSession({ tenantId: tenant.id, userId: editorId, provider: 'claude', providerSessionId: 'owner-session' }), null);
 });
+
+test('agent session runtime binds provider session id for resume', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  const runtime = mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+  assert.equal(runtime.status, 'pending');
+  assert.equal(runtime.provider_session_id, null);
+
+  const bound = mt.runtimes.bindProviderSession({
+    runtimeId: 'runtime-1',
+    providerSessionId: 'claude-session-1',
+  });
+
+  assert.equal(bound.provider_session_id, 'claude-session-1');
+  assert.equal(bound.status, 'active');
+  assert.equal(
+    mt.runtimes.findByProviderSession({
+      tenantId: tenant.id,
+      userId,
+      workspaceId: workspace.id,
+      provider: 'claude',
+      providerSessionId: 'claude-session-1',
+    }).runtime_id,
+    'runtime-1',
+  );
+});
+
+test('agent session messages persist normalized history idempotently', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+
+  const messages = [
+    {
+      id: 'msg-1',
+      sessionId: 'claude-session-1',
+      timestamp: '2026-04-26T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'user',
+      content: 'hello',
+    },
+    {
+      id: 'msg-2',
+      sessionId: 'claude-session-1',
+      timestamp: '2026-04-26T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: 'hi',
+    },
+  ];
+
+  mt.sessionMessages.upsertMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    runtimeId: 'runtime-1',
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    messages,
+  });
+  mt.sessionMessages.upsertMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    runtimeId: 'runtime-1',
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    messages,
+  });
+
+  const history = mt.sessionMessages.listMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    limit: null,
+    offset: 0,
+  });
+
+  assert.equal(history.total, 2);
+  assert.equal(history.hasMore, false);
+  assert.deepEqual(history.messages.map((message) => message.id), ['msg-1', 'msg-2']);
+  assert.equal(history.messages[1].content, 'hi');
+});
+
+test('agent session message pagination returns recent messages in chronological order', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+
+  mt.sessionMessages.upsertMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    runtimeId: 'runtime-1',
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    messages: ['1', '2', '3', '4'].map((id) => ({
+      id: `msg-${id}`,
+      sessionId: 'claude-session-1',
+      timestamp: `2026-04-26T00:00:0${id}.000Z`,
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: `message ${id}`,
+    })),
+  });
+
+  const page = mt.sessionMessages.listMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    limit: 2,
+    offset: 1,
+  });
+
+  assert.equal(page.total, 4);
+  assert.equal(page.hasMore, true);
+  assert.deepEqual(page.messages.map((message) => message.id), ['msg-2', 'msg-3']);
+});

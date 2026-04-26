@@ -122,7 +122,19 @@ export const getAllSessions = (
     __provider: 'gemini' as const,
   }));
 
-  return [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions].sort(
+  const seenSessions = new Set<string>();
+  const dedupedSessions = [...claudeSessions, ...cursorSessions, ...codexSessions, ...geminiSessions]
+    .filter((session) => {
+      if (!session.id) return true;
+
+      const key = `${session.__provider}:${session.id}`;
+      if (seenSessions.has(key)) return false;
+
+      seenSessions.add(key);
+      return true;
+    });
+
+  return dedupedSessions.sort(
     (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
   );
 };

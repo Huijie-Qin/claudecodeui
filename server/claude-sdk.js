@@ -27,9 +27,16 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { recordProviderSession } from './services/session-ownership.js';
+import { agentSessionRuntimeManager } from './services/agent-session-runtime.js';
+import {
+  bindRuntimeMessagesToProviderSession,
+  persistNormalizedMessages,
+  persistUserPromptMessage,
+} from './services/session-message-history.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
+const abortedSessions = new Set();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
@@ -151,19 +158,27 @@ function matchesToolPermission(entry, toolName, input) {
  * @returns {Object} SDK-compatible options
  */
 function mapCliOptionsToSDK(options = {}) {
-  const { sessionId, cwd, toolsSettings, permissionMode } = options;
+  const {
+    sessionId,
+    cwd,
+    toolsSettings,
+    permissionMode,
+    pathToClaudeCodeExecutable,
+    executionEnv,
+    settingSources,
+  } = options;
 
   const sdkOptions = {};
 
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
-  sdkOptions.env = { ...process.env };
+  sdkOptions.env = executionEnv ? { ...executionEnv } : { ...process.env };
 
   // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
   // The SDK 0.2.113+ looks for a bundled native binary optional dep by default;
   // this fallback ensures users who installed via the official installer still work
   // even when npm prune --production has removed those optional deps.
-  sdkOptions.pathToClaudeCodeExecutable = process.env.CLAUDE_CLI_PATH || 'claude';
+  sdkOptions.pathToClaudeCodeExecutable = pathToClaudeCodeExecutable || process.env.CLAUDE_CLI_PATH || 'claude';
 
   // Map working directory
   if (cwd) {
@@ -222,7 +237,7 @@ function mapCliOptionsToSDK(options = {}) {
 
   // Map setting sources for CLAUDE.md loading
   // This loads CLAUDE.md from project, user (~/.config/claude/CLAUDE.md), and local directories
-  sdkOptions.settingSources = ['project', 'user', 'local'];
+  sdkOptions.settingSources = Array.isArray(settingSources) ? settingSources : ['project', 'user', 'local'];
 
   // Map resume session
   if (sessionId) {
@@ -239,14 +254,17 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null) {
+function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, runtimeOptions = {}) {
   activeSessions.set(sessionId, {
     instance: queryInstance,
     startTime: Date.now(),
     status: 'active',
     tempImagePaths,
     tempDir,
-    writer
+    writer,
+    runtimeId: runtimeOptions.runtimeId || null,
+    runtimeMode: runtimeOptions.runtimeMode || 'local',
+    runtimeOptions,
   });
 }
 
@@ -339,8 +357,9 @@ function extractTokenBudget(resultMessage) {
  * @param {string} cwd - Working directory for temp file creation
  * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
  */
-async function handleImages(command, images, cwd) {
+async function handleImages(command, images, cwd, promptCwd = cwd) {
   const tempImagePaths = [];
+  const promptImagePaths = [];
   let tempDir = null;
 
   if (!images || images.length === 0) {
@@ -350,7 +369,9 @@ async function handleImages(command, images, cwd) {
   try {
     // Create temp directory in the project directory
     const workingDir = cwd || process.cwd();
-    tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
+    const promptWorkingDir = promptCwd || workingDir;
+    const tempSubdir = path.join('.tmp', 'images', Date.now().toString());
+    tempDir = path.join(workingDir, tempSubdir);
     await fs.mkdir(tempDir, { recursive: true });
 
     // Save each image to a temp file
@@ -366,16 +387,18 @@ async function handleImages(command, images, cwd) {
       const extension = mimeType.split('/')[1] || 'png';
       const filename = `image_${index}.${extension}`;
       const filepath = path.join(tempDir, filename);
+      const promptPath = path.join(promptWorkingDir, tempSubdir, filename);
 
       // Write base64 data to file
       await fs.writeFile(filepath, Buffer.from(base64Data, 'base64'));
       tempImagePaths.push(filepath);
+      promptImagePaths.push(promptPath);
     }
 
     // Include the full image paths in the prompt
     let modifiedCommand = command;
-    if (tempImagePaths.length > 0 && command && command.trim()) {
-      const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+    if (promptImagePaths.length > 0 && command && command.trim()) {
+      const imageNote = `\n\n[Images provided at the following paths:]\n${promptImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
       modifiedCommand = command + imageNote;
     }
 
@@ -488,6 +511,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
+  let runtimeOptions = options;
+  let runtimeContext = null;
+  let runtimeBoundToProviderSession = Boolean(sessionId);
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -497,18 +523,58 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
   };
 
+  const bindRuntimeToProviderSession = (providerSessionId) => {
+    if (!runtimeOptions.runtimeId || !providerSessionId || runtimeBoundToProviderSession) {
+      return;
+    }
+    agentSessionRuntimeManager.bindProviderSession({
+      runtimeId: runtimeOptions.runtimeId,
+      providerSessionId,
+    });
+    bindRuntimeMessagesToProviderSession({
+      runtimeId: runtimeOptions.runtimeId,
+      providerSessionId,
+    });
+    runtimeBoundToProviderSession = true;
+  };
+
   try {
+    runtimeContext = await agentSessionRuntimeManager.prepareClaudeRuntime(options);
+    runtimeOptions = {
+      ...options,
+      cwd: runtimeContext.cwd || options.cwd,
+      projectPath: runtimeContext.projectPath || options.projectPath,
+      pathToClaudeCodeExecutable: runtimeContext.pathToClaudeCodeExecutable,
+      executionEnv: runtimeContext.executionEnv,
+      settingSources: runtimeContext.settingSources,
+      runtimeId: runtimeContext.runtimeId,
+      runtimeMode: runtimeContext.mode,
+    };
+
+    persistUserPromptMessage({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: capturedSessionId || sessionId || null,
+      runtimeId: runtimeOptions.runtimeId,
+      command,
+    });
+
     // Map CLI options to SDK format
-    const sdkOptions = mapCliOptionsToSDK(options);
+    const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
 
     // Load MCP configuration
-    const mcpServers = await loadMcpConfig(options.cwd);
+    const mcpServers = runtimeContext.disableHostMcpConfig ? null : await loadMcpConfig(runtimeOptions.cwd);
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
     }
 
     // Handle images - save to temp files and modify prompt
-    const imageResult = await handleImages(command, options.images, options.cwd);
+    const imageResult = await handleImages(
+      command,
+      options.images,
+      runtimeContext.hostWorkspacePath || options.cwd,
+      runtimeContext.containerCwd || runtimeOptions.cwd,
+    );
     const finalCommand = imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
@@ -635,8 +701,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
-      recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
+      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions);
+      bindRuntimeToProviderSession(capturedSessionId);
+      recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
 
     // Process streaming messages
@@ -646,8 +713,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
-        recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
+        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions);
+        bindRuntimeToProviderSession(capturedSessionId);
+        recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
@@ -669,6 +737,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
+      persistNormalizedMessages({
+        options: runtimeOptions,
+        provider: 'claude',
+        providerSessionId: sid,
+        runtimeId: runtimeOptions.runtimeId,
+        messages: normalized,
+      });
       for (const msg of normalized) {
         // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
@@ -690,46 +765,95 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
     }
 
+    const finalSessionId = capturedSessionId || sessionId || null;
+    const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+
     // Clean up session on completion
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
+    if (finalSessionId) {
+      removeSession(finalSessionId);
     }
 
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
-    recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId || sessionId, status: 'completed' });
+    agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
+    recordProviderSession({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: finalSessionId,
+      status: wasAborted ? 'aborted' : 'completed',
+    });
 
     // Send completion event
-    ws.send(createNormalizedMessage({ kind: 'complete', exitCode: 0, isNewSession: !sessionId && !!command, sessionId: capturedSessionId, provider: 'claude' }));
+    ws.send(createNormalizedMessage({
+      kind: 'complete',
+      exitCode: 0,
+      isNewSession: !sessionId && !!command,
+      sessionId: finalSessionId,
+      provider: 'claude',
+      aborted: wasAborted,
+      success: true,
+    }));
     notifyRunStopped({
       userId: ws?.userId || null,
       provider: 'claude',
-      sessionId: capturedSessionId || sessionId || null,
+      sessionId: finalSessionId,
       sessionName: sessionSummary,
-      stopReason: 'completed'
+      stopReason: wasAborted ? 'aborted' : 'completed'
     });
     // Complete
 
   } catch (error) {
     console.error('SDK query error:', error);
+    const finalSessionId = capturedSessionId || sessionId || null;
+    const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
 
     // Clean up session on error
-    if (capturedSessionId) {
-      removeSession(capturedSessionId);
+    if (finalSessionId) {
+      removeSession(finalSessionId);
     }
 
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
-    recordProviderSession({ options, provider: 'claude', providerSessionId: capturedSessionId || sessionId, status: 'failed' });
+
+    if (wasAborted) {
+      agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
+      recordProviderSession({
+        options: runtimeOptions,
+        provider: 'claude',
+        providerSessionId: finalSessionId,
+        status: 'aborted',
+      });
+      ws.send(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 0,
+        aborted: true,
+        success: true,
+        sessionId: finalSessionId,
+        provider: 'claude',
+      }));
+      notifyRunStopped({
+        userId: ws?.userId || null,
+        provider: 'claude',
+        sessionId: finalSessionId,
+        sessionName: sessionSummary,
+        stopReason: 'aborted',
+      });
+      return;
+    }
+
+    agentSessionRuntimeManager.markFailed(runtimeOptions.runtimeId);
+    recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: finalSessionId, status: 'failed' });
 
     // Check if Claude CLI is installed for a clearer error message
-    const installed = await providerAuthService.isProviderInstalled('claude');
+    const installed = runtimeOptions.runtimeMode === 'docker'
+      ? true
+      : await providerAuthService.isProviderInstalled('claude');
     const errorContent = !installed
       ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
       : error.message;
 
     // Send error to WebSocket
-    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: finalSessionId, provider: 'claude' }));
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',
@@ -756,11 +880,31 @@ async function abortClaudeSDKSession(sessionId) {
   try {
     console.log(`Aborting SDK session: ${sessionId}`);
 
-    // Call interrupt() on the query instance
-    await session.instance.interrupt();
-
-    // Update session status
+    // Docker-backed Claude runs inside a per-session container. Interrupting the
+    // SDK can leave the process inside docker exec alive, so stop that container too.
     session.status = 'aborted';
+    abortedSessions.add(sessionId);
+
+    const interruptPromise = Promise.resolve()
+      .then(() => session.instance.interrupt())
+      .catch((error) => {
+        console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
+      });
+
+    if (session.runtimeMode === 'docker' && session.runtimeId) {
+      await agentSessionRuntimeManager.stopRuntime(session.runtimeId);
+    } else {
+      await interruptPromise;
+    }
+
+    if (session.runtimeOptions) {
+      recordProviderSession({
+        options: session.runtimeOptions,
+        provider: 'claude',
+        providerSessionId: sessionId,
+        status: 'aborted',
+      });
+    }
 
     // Clean up temporary image files
     await cleanupTempFiles(session.tempImagePaths, session.tempDir);

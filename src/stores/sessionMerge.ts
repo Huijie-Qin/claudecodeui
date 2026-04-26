@@ -28,19 +28,78 @@ function isPersistedCopyOfOptimisticUserText(
   return Math.abs(serverTime - realtimeTime) <= OPTIMISTIC_USER_DEDUPE_WINDOW_MS;
 }
 
+function getMessageTime(message: NormalizedMessage): number | null {
+  const time = new Date(message.timestamp).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function insertByTimestamp(
+  messages: NormalizedMessage[],
+  message: NormalizedMessage,
+): NormalizedMessage[] {
+  const messageTime = getMessageTime(message);
+  if (messageTime === null) {
+    return [...messages, message];
+  }
+
+  const insertIndex = messages.findIndex((existing) => {
+    const existingTime = getMessageTime(existing);
+    return existingTime !== null && existingTime > messageTime;
+  });
+
+  if (insertIndex === -1) {
+    return [...messages, message];
+  }
+
+  return [
+    ...messages.slice(0, insertIndex),
+    message,
+    ...messages.slice(insertIndex),
+  ];
+}
+
+function getRealtimeDedupeKey(message: NormalizedMessage): string {
+  if (isLocalOptimisticUserText(message)) {
+    return [
+      'optimistic-user',
+      message.sessionId,
+      message.provider,
+      message.timestamp,
+      message.content?.trim(),
+    ].join(':');
+  }
+
+  return `id:${message.id}`;
+}
+
+function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const seen = new Set<string>();
+  const deduped: NormalizedMessage[] = [];
+
+  for (const message of messages) {
+    const key = getRealtimeDedupeKey(message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(message);
+  }
+
+  return deduped;
+}
+
 /**
  * Compute merged messages: server + realtime, deduped by id.
  * Server messages take priority (they're the persisted source of truth).
  * Realtime messages that aren't yet in server stay (in-flight streaming).
  */
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  if (realtime.length === 0) return server;
-  if (server.length === 0) return realtime;
+  const realtimeUnique = dedupeRealtimeMessages(realtime);
+  if (realtimeUnique.length === 0) return server;
+  if (server.length === 0) return realtimeUnique;
   const serverIds = new Set(server.map(m => m.id));
-  const extra = realtime.filter(m =>
+  const extra = realtimeUnique.filter(m =>
     !serverIds.has(m.id) &&
     !server.some(serverMessage => isPersistedCopyOfOptimisticUserText(serverMessage, m))
   );
   if (extra.length === 0) return server;
-  return [...server, ...extra];
+  return extra.reduce(insertByTimestamp, server);
 }

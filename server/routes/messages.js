@@ -12,8 +12,13 @@
 import express from 'express';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { sessionsService } from '../modules/providers/services/sessions.service.js';
+import { createSessionMessageHistoryService } from '../services/session-message-history.js';
 
 const router = express.Router();
+const sessionMessageHistoryService = createSessionMessageHistoryService({
+  multitenancy: multitenancyDb,
+  providerSessions: sessionsService,
+});
 
 /**
  * GET /api/sessions/:sessionId/messages
@@ -59,10 +64,12 @@ router.get('/:sessionId/messages', async (req, res) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    const result = await sessionsService.fetchHistory(provider, sessionId, {
-      projectName: ownedSession.workspace_slug || '',
-      projectPath: ownedSession.workspace_path || '',
-      workspaceId: ownedSession.workspace_id,
+    const result = await sessionMessageHistoryService.fetchHistory({
+      tenantId,
+      userId,
+      provider,
+      providerSessionId: sessionId,
+      ownedSession,
       limit,
       offset,
     });

@@ -95,4 +95,63 @@ CREATE TABLE IF NOT EXISTS session_index (
 
 CREATE INDEX IF NOT EXISTS idx_session_index_owner ON session_index(tenant_id, workspace_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_session_index_lookup ON session_index(provider, provider_session_id, user_id);
+
+CREATE TABLE IF NOT EXISTS agent_session_runtime (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runtime_id TEXT NOT NULL UNIQUE,
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'cursor', 'gemini')),
+  provider_session_id TEXT,
+  container_name TEXT NOT NULL,
+  image TEXT NOT NULL,
+  workspace_host_path TEXT NOT NULL,
+  runtime_home_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'idle', 'failed', 'deleted')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_runtime_provider_session
+  ON agent_session_runtime(tenant_id, user_id, workspace_id, provider, provider_session_id)
+  WHERE provider_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_session_runtime_owner
+  ON agent_session_runtime(tenant_id, user_id, workspace_id, provider, status);
+CREATE INDEX IF NOT EXISTS idx_agent_session_runtime_last_used
+  ON agent_session_runtime(last_used_at);
+
+CREATE TABLE IF NOT EXISTS agent_session_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  runtime_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'cursor', 'gemini')),
+  provider_session_id TEXT,
+  message_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  role TEXT,
+  content_text TEXT,
+  normalized_json TEXT NOT NULL,
+  provider_timestamp TEXT,
+  sequence INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (runtime_id, message_id),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (runtime_id) REFERENCES agent_session_runtime(runtime_id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_messages_provider_message
+  ON agent_session_messages(tenant_id, user_id, workspace_id, provider, provider_session_id, message_id)
+  WHERE provider_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_session_messages_history
+  ON agent_session_messages(tenant_id, user_id, workspace_id, provider, provider_session_id, sequence);
 `;
