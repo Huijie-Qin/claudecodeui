@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { useTenant } from './TenantContext';
+import { prepareWebSocketConnectionAttempt } from './webSocketLifecycle';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -41,6 +42,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const { currentTenant } = useTenant();
 
   useEffect(() => {
+    prepareWebSocketConnectionAttempt(unmountedRef);
     connect();
     
     return () => {
