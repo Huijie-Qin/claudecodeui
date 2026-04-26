@@ -2,12 +2,14 @@ import express from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { extractProjectDirectory } from '../projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
+import { workspaceAccess } from '../services/workspace-access.js';
+import { createWorkspaceRequestResolver, handleWorkspaceError } from '../services/workspace-request.js';
 
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
+const resolveWorkspaceForGitRequest = createWorkspaceRequestResolver(workspaceAccess);
 
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -101,16 +103,9 @@ function validateProjectPath(projectPath) {
   return resolved;
 }
 
-// Helper function to get the actual project path from the encoded project name
-async function getActualProjectPath(projectName) {
-  let projectPath;
-  try {
-    projectPath = await extractProjectDirectory(projectName);
-  } catch (error) {
-    console.error(`Error extracting project directory for ${projectName}:`, error);
-    throw new Error(`Unable to resolve project path for "${projectName}"`);
-  }
-  return validateProjectPath(projectPath);
+function resolveTenantWorkspace(req, { requireEdit = false } = {}) {
+  const { workspace } = resolveWorkspaceForGitRequest(req, { requireEdit });
+  return validateProjectPath(workspace.path);
 }
 
 // Helper function to strip git diff headers
@@ -296,7 +291,7 @@ router.get('/status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
 
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -339,6 +334,7 @@ router.get('/status', async (req, res) => {
     });
   } catch (error) {
     console.error('Git status error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({
       error: error.message.includes('not a git repository') || error.message.includes('Project directory is not a git repository')
         ? error.message
@@ -359,7 +355,7 @@ router.get('/diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
     
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -429,6 +425,7 @@ router.get('/diff', async (req, res) => {
     res.json({ diff });
   } catch (error) {
     console.error('Git diff error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -442,7 +439,7 @@ router.get('/file-with-diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
 
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -509,6 +506,7 @@ router.get('/file-with-diff', async (req, res) => {
     });
   } catch (error) {
     console.error('Git file-with-diff error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -522,7 +520,7 @@ router.post('/initial-commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
 
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -544,6 +542,7 @@ router.post('/initial-commit', async (req, res) => {
     res.json({ success: true, output: stdout, message: 'Initial commit created successfully' });
   } catch (error) {
     console.error('Git initial commit error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
 
     // Handle the case where there's nothing to commit
     if (error.message.includes('nothing to commit')) {
@@ -566,7 +565,7 @@ router.post('/commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -584,6 +583,7 @@ router.post('/commit', async (req, res) => {
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git commit error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -597,7 +597,7 @@ router.post('/revert-local-commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     try {
@@ -631,6 +631,7 @@ router.post('/revert-local-commit', async (req, res) => {
     });
   } catch (error) {
     console.error('Git revert local commit error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -644,7 +645,7 @@ router.get('/branches', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
     
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -675,6 +676,7 @@ router.get('/branches', async (req, res) => {
     res.json({ branches, localBranches, remoteBranches });
   } catch (error) {
     console.error('Git branches error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -688,7 +690,7 @@ router.post('/checkout', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     
     // Checkout the branch
     validateBranchName(branch);
@@ -697,6 +699,7 @@ router.post('/checkout', async (req, res) => {
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git checkout error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -710,7 +713,7 @@ router.post('/create-branch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     
     // Create and checkout new branch
     validateBranchName(branch);
@@ -719,6 +722,7 @@ router.post('/create-branch', async (req, res) => {
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git create branch error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -732,7 +736,7 @@ router.post('/delete-branch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     // Safety: cannot delete the currently checked-out branch
@@ -745,6 +749,7 @@ router.post('/delete-branch', async (req, res) => {
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git delete branch error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -758,7 +763,7 @@ router.get('/commits', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
     await validateGitRepository(projectPath);
     const parsedLimit = Number.parseInt(String(limit), 10);
     const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0
@@ -802,6 +807,7 @@ router.get('/commits', async (req, res) => {
     res.json({ commits });
   } catch (error) {
     console.error('Git commits error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -815,7 +821,7 @@ router.get('/commit-diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
 
     // Validate commit reference (defense-in-depth)
     validateCommitRef(commit);
@@ -834,6 +840,7 @@ router.get('/commit-diff', async (req, res) => {
     res.json({ diff, isTruncated });
   } catch (error) {
     console.error('Git commit diff error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -852,7 +859,7 @@ router.post('/generate-commit-message', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
     const repositoryRootPath = await getRepositoryRootPath(projectPath);
 
@@ -900,6 +907,7 @@ router.post('/generate-commit-message', async (req, res) => {
     res.json({ message });
   } catch (error) {
     console.error('Generate commit message error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1052,7 +1060,7 @@ router.get('/remote-status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: false });
     await validateGitRepository(projectPath);
 
     const branch = await getCurrentBranchName(projectPath);
@@ -1117,6 +1125,7 @@ router.get('/remote-status', async (req, res) => {
     });
   } catch (error) {
     console.error('Git remote status error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.json({ error: error.message });
   }
 });
@@ -1130,7 +1139,7 @@ router.post('/fetch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -1151,6 +1160,7 @@ router.post('/fetch', async (req, res) => {
     res.json({ success: true, output: stdout || 'Fetch completed successfully', remoteName });
   } catch (error) {
     console.error('Git fetch error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ 
       error: 'Fetch failed', 
       details: error.message.includes('Could not resolve hostname') 
@@ -1171,7 +1181,7 @@ router.post('/pull', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -1201,6 +1211,7 @@ router.post('/pull', async (req, res) => {
     });
   } catch (error) {
     console.error('Git pull error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
 
     // Enhanced error handling for common pull scenarios
     let errorMessage = 'Pull failed';
@@ -1239,7 +1250,7 @@ router.post('/push', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -1269,6 +1280,7 @@ router.post('/push', async (req, res) => {
     });
   } catch (error) {
     console.error('Git push error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     
     // Enhanced error handling for common push scenarios
     let errorMessage = 'Push failed';
@@ -1310,7 +1322,7 @@ router.post('/publish', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
 
     // Validate branch name
@@ -1354,6 +1366,7 @@ router.post('/publish', async (req, res) => {
     });
   } catch (error) {
     console.error('Git publish error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     
     // Enhanced error handling for common publish scenarios
     let errorMessage = 'Publish failed';
@@ -1389,7 +1402,7 @@ router.post('/discard', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
     const {
       repositoryRootPath,
@@ -1430,6 +1443,7 @@ router.post('/discard', async (req, res) => {
     res.json({ success: true, message: `Changes discarded for ${repositoryRelativeFilePath}` });
   } catch (error) {
     console.error('Git discard error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1443,7 +1457,7 @@ router.post('/delete-untracked', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = resolveTenantWorkspace(req, { requireEdit: true });
     await validateGitRepository(projectPath);
     const {
       repositoryRootPath,
@@ -1481,6 +1495,7 @@ router.post('/delete-untracked', async (req, res) => {
     }
   } catch (error) {
     console.error('Git delete untracked error:', error);
+    if (error.statusCode) return handleWorkspaceError(res, error);
     res.status(500).json({ error: error.message });
   }
 });

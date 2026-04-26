@@ -57,8 +57,10 @@ import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './d
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { tenantContext } from './middleware/tenant-context.js';
+import { resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
 import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
+import { workspaceAccess } from './services/workspace-access.js';
+import { handleWorkspaceError, resolveWorkspaceForRequest } from './services/workspace-request.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -230,6 +232,12 @@ const wss = new WebSocketServer({
                 return false;
             }
             info.req.user = user;
+            const tenant = resolveWebSocketTenant({ request: info.req, user });
+            if (!tenant) {
+                console.log('[WARN] Platform mode WebSocket tenant authentication failed');
+                return false;
+            }
+            info.req.tenant = tenant;
             console.log('[OK] Platform mode WebSocket authenticated for user:', user.username);
             return true;
         }
@@ -249,6 +257,12 @@ const wss = new WebSocketServer({
 
         // Store user info in the request for later use
         info.req.user = user;
+        const tenant = resolveWebSocketTenant({ request: info.req, user });
+        if (!tenant) {
+            console.log('[WARN] WebSocket tenant authentication failed');
+            return false;
+        }
+        info.req.tenant = tenant;
         console.log('[OK] WebSocket authenticated for user:', user.username);
         return true;
     }
@@ -705,7 +719,6 @@ app.post('/api/create-folder', authenticateToken, async (req, res) => {
 // Read file content endpoint
 app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { filePath } = req.query;
 
 
@@ -714,25 +727,15 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Handle both absolute and relative paths
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
 
         const content = await fsPromises.readFile(resolved, 'utf8');
         res.json({ content, path: resolved });
     } catch (error) {
         console.error('Error reading file:', error);
-        if (error.code === 'ENOENT') {
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File not found' });
         } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
@@ -745,7 +748,6 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 // Serve raw file bytes for previews and downloads.
 app.get('/api/projects/:projectName/files/content', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { path: filePath } = req.query;
 
 
@@ -754,20 +756,7 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Match the text reader endpoint so callers can pass either project-relative
-        // or absolute paths without changing how the bytes are served.
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
 
         // Check if file exists
         try {
@@ -794,6 +783,9 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
     } catch (error) {
         console.error('Error serving binary file:', error);
         if (!res.headersSent) {
+            if (error.statusCode) {
+                return handleWorkspaceError(res, error);
+            }
             res.status(500).json({ error: error.message });
         }
     }
@@ -802,7 +794,6 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
 // Save file content endpoint
 app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { filePath, content } = req.body;
 
 
@@ -815,19 +806,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Content is required' });
         }
 
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
-
-        // Handle both absolute and relative paths
-        const resolved = path.isAbsolute(filePath)
-            ? path.resolve(filePath)
-            : path.resolve(projectRoot, filePath);
-        const normalizedRoot = path.resolve(projectRoot) + path.sep;
-        if (!resolved.startsWith(normalizedRoot)) {
-            return res.status(403).json({ error: 'Path must be under project root' });
-        }
+        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
@@ -839,7 +818,9 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
         });
     } catch (error) {
         console.error('Error saving file:', error);
-        if (error.code === 'ENOENT') {
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File or directory not found' });
         } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
@@ -854,15 +835,8 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
 
         // Using fsPromises from import
 
-        // Use extractProjectDirectory to get the actual project path
-        let actualPath;
-        try {
-            actualPath = await extractProjectDirectory(req.params.projectName);
-        } catch (error) {
-            console.error('Error extracting project directory:', error);
-            // Fallback to simple dash replacement
-            actualPath = req.params.projectName.replace(/-/g, '/');
-        }
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: false });
+        const actualPath = workspace.path;
 
         // Check if path exists
         try {
@@ -875,7 +849,10 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
-        res.status(500).json({ error: error.message });
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        }
+        return res.status(500).json({ error: error.message });
     }
 });
 
@@ -894,10 +871,21 @@ function validatePathInProject(projectRoot, targetPath) {
         ? path.resolve(targetPath)
         : path.resolve(projectRoot, targetPath);
     const normalizedRoot = path.resolve(projectRoot) + path.sep;
-    if (!resolved.startsWith(normalizedRoot)) {
+    if (!resolved.startsWith(normalizedRoot) && resolved !== path.resolve(projectRoot)) {
         return { valid: false, error: 'Path must be under project root' };
     }
     return { valid: true, resolved };
+}
+
+function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false } = {}) {
+    const { workspace, accessRole } = resolveWorkspaceForRequest(req, { requireEdit });
+    const validation = validatePathInProject(workspace.path, targetPath || '');
+    if (!validation.valid) {
+        const error = new Error(validation.error);
+        error.statusCode = 403;
+        throw error;
+    }
+    return { workspace, accessRole, resolvedPath: validation.resolved };
 }
 
 /**
@@ -929,7 +917,6 @@ function validateFilename(name) {
 // POST /api/projects/:projectName/files/create - Create new file or directory
 app.post('/api/projects/:projectName/files/create', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { path: parentPath, type, name } = req.body;
 
         // Validate input
@@ -946,11 +933,8 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             return res.status(400).json({ error: nameValidation.error });
         }
 
-        // Get project root
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        const projectRoot = workspace.path;
 
         // Build and validate target path
         const targetDir = parentPath || '';
@@ -993,7 +977,9 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
         });
     } catch (error) {
         console.error('Error creating file/directory:', error);
-        if (error.code === 'EACCES') {
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
         } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'Parent directory not found' });
@@ -1006,7 +992,6 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
 // PUT /api/projects/:projectName/files/rename - Rename file or directory
 app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { oldPath, newName } = req.body;
 
         // Validate input
@@ -1019,11 +1004,8 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             return res.status(400).json({ error: nameValidation.error });
         }
 
-        // Get project root
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        const projectRoot = workspace.path;
 
         // Validate old path
         const oldValidation = validatePathInProject(projectRoot, oldPath);
@@ -1068,7 +1050,9 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
         });
     } catch (error) {
         console.error('Error renaming file/directory:', error);
-        if (error.code === 'EACCES') {
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
         } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File or directory not found' });
@@ -1083,7 +1067,6 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
 // DELETE /api/projects/:projectName/files - Delete file or directory
 app.delete('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {
-        const { projectName } = req.params;
         const { path: targetPath, type } = req.body;
 
         // Validate input
@@ -1091,11 +1074,8 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(400).json({ error: 'Path is required' });
         }
 
-        // Get project root
-        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-        if (!projectRoot) {
-            return res.status(404).json({ error: 'Project not found' });
-        }
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        const projectRoot = workspace.path;
 
         // Validate path
         const validation = validatePathInProject(projectRoot, targetPath);
@@ -1133,7 +1113,9 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
         });
     } catch (error) {
         console.error('Error deleting file/directory:', error);
-        if (error.code === 'EACCES') {
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'EACCES') {
             res.status(403).json({ error: 'Permission denied' });
         } else if (error.code === 'ENOENT') {
             res.status(404).json({ error: 'File or directory not found' });
@@ -1184,7 +1166,6 @@ const uploadFilesHandler = async (req, res) => {
         }
 
         try {
-            const { projectName } = req.params;
             const { targetPath, relativePaths } = req.body;
 
             // Parse relative paths if provided (for folder uploads)
@@ -1198,7 +1179,6 @@ const uploadFilesHandler = async (req, res) => {
             }
 
             console.log('[DEBUG] File upload request:', {
-                projectName,
                 targetPath: JSON.stringify(targetPath),
                 targetPathType: typeof targetPath,
                 filesCount: req.files?.length,
@@ -1209,11 +1189,8 @@ const uploadFilesHandler = async (req, res) => {
                 return res.status(400).json({ error: 'No files provided' });
             }
 
-            // Get project root
-            const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
-            if (!projectRoot) {
-                return res.status(404).json({ error: 'Project not found' });
-            }
+            const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+            const projectRoot = workspace.path;
 
             console.log('[DEBUG] Project root:', projectRoot);
 
@@ -1298,7 +1275,9 @@ const uploadFilesHandler = async (req, res) => {
                     await fsPromises.unlink(file.path).catch(() => {});
                 }
             }
-            if (error.code === 'EACCES') {
+            if (error.statusCode) {
+                return handleWorkspaceError(res, error);
+            } else if (error.code === 'EACCES') {
                 res.status(403).json({ error: 'Permission denied' });
             } else {
                 res.status(500).json({ error: error.message });
@@ -1363,7 +1342,7 @@ wss.on('connection', (ws, request) => {
     const pathname = urlObj.pathname;
 
     if (pathname === '/shell') {
-        handleShellConnection(ws);
+        handleShellConnection(ws, request);
     } else if (pathname === '/ws') {
         handleChatConnection(ws, request);
     } else if (pathname.startsWith('/plugin-ws/')) {
@@ -1408,6 +1387,47 @@ class WebSocketWriter {
     }
 }
 
+function authorizeCommandWorkspace(data, request, writer) {
+    const tenant = request?.tenant;
+    const userId = request?.user?.id ?? request?.user?.userId;
+    const workspaceId = Number(data.options?.workspaceId);
+    const provider = data.type?.replace('-command', '') || 'claude';
+
+    if (!tenant?.id || !workspaceId || !userId) {
+        writer.send(createNormalizedMessage({
+            kind: 'error',
+            content: 'tenantId and workspaceId are required',
+            provider
+        }));
+        return false;
+    }
+
+    try {
+        const { workspace } = workspaceAccess.requireWorkspace({
+            tenantId: tenant.id,
+            userId,
+            workspaceId,
+            requireEdit: true,
+        });
+        data.options = {
+            ...data.options,
+            tenantId: tenant.id,
+            workspaceId,
+            userId,
+            cwd: workspace.path,
+            projectPath: workspace.path,
+        };
+        return true;
+    } catch (error) {
+        writer.send(createNormalizedMessage({
+            kind: 'error',
+            content: error.message,
+            provider
+        }));
+        return false;
+    }
+}
+
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
@@ -1423,6 +1443,7 @@ function handleChatConnection(ws, request) {
             const data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
+                if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1430,18 +1451,21 @@ function handleChatConnection(ws, request) {
                 // Use Claude Agents SDK
                 await queryClaudeSDK(data.command, data.options, writer);
             } else if (data.type === 'cursor-command') {
+                if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await spawnCursor(data.command, data.options, writer);
             } else if (data.type === 'codex-command') {
+                if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
                 await queryCodex(data.command, data.options, writer);
             } else if (data.type === 'gemini-command') {
+                if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1557,7 +1581,7 @@ function handleChatConnection(ws, request) {
 }
 
 // Handle shell WebSocket connections
-function handleShellConnection(ws) {
+function handleShellConnection(ws, request) {
     console.log('🐚 Shell client connected');
     let shellProcess = null;
     let ptySessionKey = null;
@@ -1570,7 +1594,26 @@ function handleShellConnection(ws) {
             console.log('📨 Shell message received:', data.type);
 
             if (data.type === 'init') {
-                const projectPath = data.projectPath || process.cwd();
+                let projectPath;
+                try {
+                    const tenant = request?.tenant;
+                    const userId = request?.user?.id ?? request?.user?.userId;
+                    const workspaceId = Number(data.workspaceId);
+                    if (!tenant?.id || !workspaceId || !userId) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'tenantId and workspaceId are required' }));
+                        return;
+                    }
+                    const { workspace } = workspaceAccess.requireWorkspace({
+                        tenantId: tenant.id,
+                        userId,
+                        workspaceId,
+                        requireEdit: true,
+                    });
+                    projectPath = workspace.path;
+                } catch (error) {
+                    ws.send(JSON.stringify({ type: 'error', message: error.message }));
+                    return;
+                }
                 const sessionId = data.sessionId;
                 const hasSession = data.hasSession;
                 const provider = data.provider || 'claude';
