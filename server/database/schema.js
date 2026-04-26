@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_login DATETIME,
   is_active BOOLEAN DEFAULT 1,
+  is_system_admin BOOLEAN DEFAULT 0,
   git_name TEXT,
   git_email TEXT,
   has_completed_onboarding BOOLEAN DEFAULT 0

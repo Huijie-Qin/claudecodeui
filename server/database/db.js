@@ -12,6 +12,7 @@ import {
   SESSION_NAMES_LOOKUP_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
+import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // The compiled backend lives under dist-server/server/database, but the install root we log
@@ -105,12 +106,18 @@ const runMigrations = () => {
       db.exec('ALTER TABLE users ADD COLUMN has_completed_onboarding BOOLEAN DEFAULT 0');
     }
 
+    if (!columnNames.includes('is_system_admin')) {
+      console.log('Running migration: Adding is_system_admin column');
+      db.exec('ALTER TABLE users ADD COLUMN is_system_admin BOOLEAN DEFAULT 0');
+    }
+
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SQL);
     db.exec(VAPID_KEYS_TABLE_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SQL);
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
+    db.exec(MULTITENANCY_SCHEMA_SQL);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -123,6 +130,7 @@ const runMigrations = () => {
 const initializeDatabase = async () => {
   try {
     db.exec(DATABASE_SCHEMA_SQL);
+    db.exec(MULTITENANCY_SCHEMA_SQL);
     console.log('Database initialized successfully');
     runMigrations();
   } catch (error) {
@@ -144,11 +152,12 @@ const userDb = {
   },
 
   // Create a new user
-  createUser: (username, passwordHash) => {
+  createUser: (username, passwordHash, options = {}) => {
     try {
-      const stmt = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)');
-      const result = stmt.run(username, passwordHash);
-      return { id: result.lastInsertRowid, username };
+      const isSystemAdmin = options.isSystemAdmin === true ? 1 : 0;
+      const stmt = db.prepare('INSERT INTO users (username, password_hash, is_system_admin) VALUES (?, ?, ?)');
+      const result = stmt.run(username, passwordHash, isSystemAdmin);
+      return { id: result.lastInsertRowid, username, is_system_admin: isSystemAdmin };
     } catch (err) {
       throw err;
     }
@@ -176,7 +185,7 @@ const userDb = {
   // Get user by ID
   getUserById: (userId) => {
     try {
-      const row = db.prepare('SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1').get(userId);
+      const row = db.prepare('SELECT id, username, created_at, last_login, is_system_admin FROM users WHERE id = ? AND is_active = 1').get(userId);
       return row;
     } catch (err) {
       throw err;
@@ -185,7 +194,7 @@ const userDb = {
 
   getFirstUser: () => {
     try {
-      const row = db.prepare('SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1').get();
+      const row = db.prepare('SELECT id, username, created_at, last_login, is_system_admin FROM users WHERE is_active = 1 LIMIT 1').get();
       return row;
     } catch (err) {
       throw err;
