@@ -101,6 +101,40 @@ export function createMultitenancyDb(database = db) {
     }
   });
 
+  const upsertSystemAdminMembership = ({ tenantId, userId }) => {
+    database.prepare(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+      VALUES (?, ?, 'system_admin', 'edit', 'active')
+      ON CONFLICT(tenant_id, user_id)
+      DO UPDATE SET
+        role = 'system_admin',
+        permission = 'edit',
+        status = 'active',
+        updated_at = CURRENT_TIMESTAMP
+    `).run(tenantId, userId);
+
+    return database.prepare(`
+      SELECT *
+      FROM tenant_users
+      WHERE tenant_id = ? AND user_id = ?
+    `).get(tenantId, userId);
+  };
+
+  const grantSystemAdminAccessToAllTenantsTransaction = database.transaction((userId) => {
+    const normalizedUserId = requirePositiveInteger(userId, 'userId');
+    const tenants = database.prepare(`
+      SELECT id
+      FROM tenants
+      WHERE status = 'active'
+      ORDER BY id ASC
+    `).all();
+
+    return tenants.map((tenant) => upsertSystemAdminMembership({
+      tenantId: tenant.id,
+      userId: normalizedUserId,
+    }));
+  });
+
   return {
     tenants: {
       createTenant: ({ code, name, status = 'active' }) => {
@@ -184,6 +218,25 @@ export function createMultitenancyDb(database = db) {
           requirePositiveInteger(tenantId, 'tenantId'),
         ) ?? null;
       },
+
+      grantSystemAdminAccessToTenant: ({ userId, tenantId }) => {
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const tenant = database.prepare(`
+          SELECT id
+          FROM tenants
+          WHERE id = ? AND status = 'active'
+        `).get(normalizedTenantId);
+
+        if (!tenant) return null;
+
+        return upsertSystemAdminMembership({
+          tenantId: normalizedTenantId,
+          userId: normalizedUserId,
+        });
+      },
+
+      grantSystemAdminAccessToAllTenants: (userId) => grantSystemAdminAccessToAllTenantsTransaction(userId),
     },
 
     workspaces: {

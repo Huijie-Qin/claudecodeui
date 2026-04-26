@@ -1,14 +1,39 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
 import { userDb as defaultUserDb, db as defaultDb } from '../database/db.js';
+import { multitenancyDb as defaultMultitenancyDb } from '../database/multitenancy-db.js';
 import {
   generateToken as defaultGenerateToken,
   authenticateToken as defaultAuthenticateToken
 } from '../middleware/auth.js';
 
+function ensureBootstrapTenantForSystemAdmin(multitenancy, userId) {
+  if (!multitenancy?.tenants || !multitenancy?.memberships) return null;
+
+  const tenants = typeof multitenancy.tenants.listTenants === 'function'
+    ? multitenancy.tenants.listTenants()
+    : [];
+  const tenant = tenants.find((row) => row.code === 'default') ?? multitenancy.tenants.createTenant({
+    code: 'default',
+    name: 'Default',
+    status: 'active',
+  });
+
+  multitenancy.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId,
+    role: 'system_admin',
+    permission: 'edit',
+    status: 'active',
+  });
+
+  return tenant;
+}
+
 export function createAuthRouter({
   userDb = defaultUserDb,
   db = defaultDb,
+  multitenancy = defaultMultitenancyDb,
   generateToken = defaultGenerateToken,
   authenticateToken = defaultAuthenticateToken,
 } = {}) {
@@ -54,6 +79,9 @@ export function createAuthRouter({
 
         // Create user
         const user = userDb.createUser(username, passwordHash, { isSystemAdmin: isFirstUser });
+        if (isFirstUser) {
+          ensureBootstrapTenantForSystemAdmin(multitenancy, user.id);
+        }
 
         // Generate token
         const token = generateToken(user);

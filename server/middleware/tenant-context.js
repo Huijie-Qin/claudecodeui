@@ -9,6 +9,37 @@ function parsePositiveInt(value) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function isSystemAdmin(user) {
+  return user?.is_system_admin === 1 || user?.is_system_admin === true;
+}
+
+function grantSystemAdminTenantAccess({ multitenancy, userId, tenantId }) {
+  if (typeof multitenancy.memberships.grantSystemAdminAccessToTenant === 'function') {
+    return multitenancy.memberships.grantSystemAdminAccessToTenant({ userId, tenantId });
+  }
+
+  const tenant = multitenancy.tenants?.getTenantById?.(tenantId);
+  if (!tenant || tenant.status !== 'active') return null;
+
+  if (typeof multitenancy.memberships.upsertMembership === 'function') {
+    return multitenancy.memberships.upsertMembership({
+      tenantId,
+      userId,
+      role: 'system_admin',
+      permission: 'edit',
+      status: 'active',
+    });
+  }
+
+  return {
+    tenant_id: tenantId,
+    user_id: userId,
+    role: 'system_admin',
+    permission: 'edit',
+    status: 'active',
+  };
+}
+
 export function resolveTenantIdFromRequest(req) {
   const queryTenantId = parsePositiveInt(req.query?.tenantId);
   if (queryTenantId) return queryTenantId;
@@ -36,7 +67,11 @@ export function createTenantContextMiddleware(multitenancy = multitenancyDb) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const membership = multitenancy.memberships.getActiveMembership(userId, tenantId);
+    let membership = multitenancy.memberships.getActiveMembership(userId, tenantId);
+    if (!membership && isSystemAdmin(req.user)) {
+      membership = grantSystemAdminTenantAccess({ multitenancy, userId, tenantId });
+    }
+
     if (!membership) {
       return res.status(403).json({ error: 'Tenant access denied' });
     }
@@ -57,7 +92,10 @@ export function resolveWebSocketTenant({ request, user, multitenancy = multitena
   const userId = user?.id ?? user?.userId;
   if (!tenantId || !userId) return null;
 
-  const membership = multitenancy.memberships.getActiveMembership(userId, tenantId);
+  let membership = multitenancy.memberships.getActiveMembership(userId, tenantId);
+  if (!membership && isSystemAdmin(user)) {
+    membership = grantSystemAdminTenantAccess({ multitenancy, userId, tenantId });
+  }
   if (!membership) return null;
 
   return {

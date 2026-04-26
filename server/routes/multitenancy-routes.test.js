@@ -53,6 +53,39 @@ test('tenants/me returns current user tenants', async () => {
   assert.deepEqual(payload.tenants.map((tenant) => tenant.code), ['acme']);
 });
 
+test('tenants/me grants system admins access to all active tenants', async () => {
+  const seen = {};
+  const router = createTenantsRouter({
+    tenants: {
+      listTenants: () => [{ id: 2, code: 'acme', name: 'Acme', status: 'active' }],
+    },
+    memberships: {
+      grantSystemAdminAccessToAllTenants: (userId) => {
+        seen.userId = userId;
+        return [{ tenant_id: 2, user_id: userId, role: 'system_admin', permission: 'edit', status: 'active' }];
+      },
+    },
+    joinRequests: {
+      createJoinRequest: () => ({}),
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/me', {
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(seen.userId, 7);
+  assert.deepEqual(payload.tenants, [{
+    id: 2,
+    code: 'acme',
+    name: 'Acme',
+    status: 'active',
+    role: 'system_admin',
+    permission: 'edit',
+  }]);
+});
+
 test('admin router rejects non-admin users', async () => {
   const router = createAdminRouter({
     tenants: { listTenants: () => [] },

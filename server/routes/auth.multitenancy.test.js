@@ -29,6 +29,8 @@ function createRequest(router, method, path, body = null) {
 
 function createFakeDeps() {
   const users = [];
+  const tenants = [];
+  const memberships = [];
   const fakeUserDb = {
     hasUsers: () => users.length > 0,
     createUser: (username, passwordHash, options = {}) => {
@@ -47,7 +49,25 @@ function createFakeDeps() {
 
   return {
     users,
+    tenants,
+    memberships,
     userDb: fakeUserDb,
+    multitenancy: {
+      tenants: {
+        listTenants: () => tenants,
+        createTenant: ({ code, name, status = 'active' }) => {
+          const tenant = { id: tenants.length + 1, code, name, status };
+          tenants.push(tenant);
+          return tenant;
+        },
+      },
+      memberships: {
+        upsertMembership: (membership) => {
+          memberships.push(membership);
+          return membership;
+        },
+      },
+    },
     db: {
       prepare: () => ({ run: () => ({}) }),
     },
@@ -70,6 +90,24 @@ test('first registration creates a system admin bootstrap user', async () => {
   assert.equal(response.status, 200);
   assert.equal(payload.bootstrapAdmin, true);
   assert.equal(payload.user.is_system_admin, 1);
+});
+
+test('first registration creates a default tenant with admin edit access', async () => {
+  const deps = createFakeDeps();
+  const router = createAuthRouter(deps);
+  await createRequest(router, 'POST', '/api/auth/register', {
+    username: 'admin',
+    password: 'secret1',
+  });
+
+  assert.deepEqual(deps.tenants, [{ id: 1, code: 'default', name: 'Default', status: 'active' }]);
+  assert.deepEqual(deps.memberships, [{
+    tenantId: 1,
+    userId: 1,
+    role: 'system_admin',
+    permission: 'edit',
+    status: 'active',
+  }]);
 });
 
 test('later registration creates a normal user without tenant access', async () => {

@@ -51,6 +51,20 @@ test('tenant membership controls visible tenants', () => {
   assert.equal(mt.memberships.getActiveMembership(userId, hiddenTenant.id), null);
 });
 
+test('system admin access can be granted across active tenants', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const activeTenant = mt.tenants.createTenant({ code: 'active', name: 'Active' });
+  const disabledTenant = mt.tenants.createTenant({ code: 'disabled', name: 'Disabled', status: 'disabled' });
+
+  const memberships = mt.memberships.grantSystemAdminAccessToAllTenants(adminId);
+
+  assert.deepEqual(memberships.map((row) => row.tenant_id), [activeTenant.id]);
+  assert.equal(mt.memberships.getActiveMembership(adminId, activeTenant.id).permission, 'edit');
+  assert.equal(mt.memberships.getMembership(adminId, disabledTenant.id), null);
+});
+
 test('workspace ACL grants access only inside the same tenant', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);
