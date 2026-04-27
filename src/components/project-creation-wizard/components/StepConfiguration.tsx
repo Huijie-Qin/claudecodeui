@@ -1,7 +1,9 @@
 import { useTranslation } from 'react-i18next';
+
 import { Input } from '../../../shared/view/ui';
 import { shouldShowGithubAuthentication } from '../utils/pathUtils';
 import type { GithubTokenCredential, TokenMode, WorkspaceType } from '../types';
+
 import GithubAuthenticationCard from './GithubAuthenticationCard';
 import WorkspacePathField from './WorkspacePathField';
 
@@ -51,7 +53,7 @@ export default function StepConfiguration({
         <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
           {workspaceType === 'existing'
             ? t('projectWizard.step2.existingPath')
-            : t('projectWizard.step2.newPath')}
+            : t('projectWizard.step2.newName', { defaultValue: 'Workspace Name' })}
         </label>
 
         <WorkspacePathField

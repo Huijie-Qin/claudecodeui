@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Eye, EyeOff, FolderOpen, FolderPlus, Loader2, Plus, X } from 'lucide-react';
+
 import { Button, Input } from '../../../shared/view/ui';
 import { browseFilesystemFolders, createFolderInFilesystem } from '../data/workspaceApi';
 import { getParentPath, joinFolderPath } from '../utils/pathUtils';
@@ -8,6 +9,7 @@ import type { FolderSuggestion } from '../types';
 type FolderBrowserModalProps = {
   isOpen: boolean;
   autoAdvanceOnSelect: boolean;
+  allowCreateFolder?: boolean;
   onClose: () => void;
   onFolderSelected: (folderPath: string, advanceToConfirm: boolean) => void;
 };
@@ -15,6 +17,7 @@ type FolderBrowserModalProps = {
 export default function FolderBrowserModal({
   isOpen,
   autoAdvanceOnSelect,
+  allowCreateFolder = true,
   onClose,
   onFolderSelected,
 }: FolderBrowserModalProps) {
@@ -26,6 +29,11 @@ export default function FolderBrowserModal({
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const resetNewFolderState = useCallback(() => {
+    setShowNewFolderInput(false);
+    setNewFolderName('');
+  }, []);
 
   const loadFolders = useCallback(async (pathToLoad: string) => {
     setLoadingFolders(true);
@@ -49,6 +57,12 @@ export default function FolderBrowserModal({
     loadFolders('~');
   }, [isOpen, loadFolders]);
 
+  useEffect(() => {
+    if (!allowCreateFolder) {
+      resetNewFolderState();
+    }
+  }, [allowCreateFolder, resetNewFolderState]);
+
   const visibleFolders = useMemo(
     () =>
       folders
@@ -59,11 +73,6 @@ export default function FolderBrowserModal({
     [folders, showHiddenFolders],
   );
 
-  const resetNewFolderState = () => {
-    setShowNewFolderInput(false);
-    setNewFolderName('');
-  };
-
   const handleClose = () => {
     setError(null);
     resetNewFolderState();
@@ -71,6 +80,10 @@ export default function FolderBrowserModal({
   };
 
   const handleCreateFolder = useCallback(async () => {
+    if (!allowCreateFolder) {
+      return;
+    }
+
     if (!newFolderName.trim()) {
       return;
     }
@@ -88,7 +101,7 @@ export default function FolderBrowserModal({
     } finally {
       setCreatingFolder(false);
     }
-  }, [currentPath, loadFolders, newFolderName]);
+  }, [allowCreateFolder, currentPath, loadFolders, newFolderName, resetNewFolderState]);
 
   const parentPath = getParentPath(currentPath);
 
@@ -119,17 +132,19 @@ export default function FolderBrowserModal({
             >
               {showHiddenFolders ? <Eye className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
             </button>
-            <button
-              onClick={() => setShowNewFolderInput((previous) => !previous)}
-              className={`rounded-md p-2 transition-colors ${
-                showNewFolderInput
-                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-                  : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300'
-              }`}
-              title="Create new folder"
-            >
-              <Plus className="h-5 w-5" />
-            </button>
+            {allowCreateFolder && (
+              <button
+                onClick={() => setShowNewFolderInput((previous) => !previous)}
+                className={`rounded-md p-2 transition-colors ${
+                  showNewFolderInput
+                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                    : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300'
+                }`}
+                title="Create new folder"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            )}
             <button
               onClick={handleClose}
               className="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
@@ -139,7 +154,7 @@ export default function FolderBrowserModal({
           </div>
         </div>
 
-        {showNewFolderInput && (
+        {allowCreateFolder && showNewFolderInput && (
           <div className="border-b border-gray-200 bg-blue-50 px-4 py-3 dark:border-gray-700 dark:bg-blue-900/20">
             <div className="flex items-center gap-2">
               <Input

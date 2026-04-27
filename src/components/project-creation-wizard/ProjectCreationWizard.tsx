@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import ErrorBanner from './components/ErrorBanner';
 import StepConfiguration from './components/StepConfiguration';
 import StepReview from './components/StepReview';
@@ -18,7 +19,7 @@ type ProjectCreationWizardProps = {
 };
 
 const initialFormState: WizardFormState = {
-  workspaceType: 'existing',
+  workspaceType: 'new',
   workspacePath: '',
   githubUrl: '',
   tokenMode: 'stored',
@@ -84,7 +85,13 @@ export default function ProjectCreationWizard({
 
     if (step === 2) {
       if (!formState.workspacePath.trim()) {
-        setError(t('projectWizard.errors.providePath'));
+        setError(
+          formState.workspaceType === 'existing'
+            ? t('projectWizard.errors.providePath')
+            : t('projectWizard.errors.provideWorkspaceName', {
+                defaultValue: 'Please provide a workspace name',
+              }),
+        );
         return;
       }
       setStep(3);
@@ -107,6 +114,7 @@ export default function ProjectCreationWizard({
       if (shouldCloneRepository) {
         const project = await cloneWorkspaceWithProgress(
           {
+            workspaceType: formState.workspaceType,
             workspacePath: formState.workspacePath,
             githubUrl: formState.githubUrl,
             tokenMode: formState.tokenMode,

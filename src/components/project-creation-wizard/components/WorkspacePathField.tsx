@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
 import { Button, Input } from '../../../shared/view/ui';
 import { browseFilesystemFolders } from '../data/workspaceApi';
-import { getSuggestionRootPath } from '../utils/pathUtils';
+import { getSuggestionRootPath, shouldUseFilesystemPicker } from '../utils/pathUtils';
 import type { FolderSuggestion, WorkspaceType } from '../types';
+
 import FolderBrowserModal from './FolderBrowserModal';
 
 type WorkspacePathFieldProps = {
@@ -21,11 +24,19 @@ export default function WorkspacePathField({
   onChange,
   onAdvanceToConfirm,
 }: WorkspacePathFieldProps) {
+  const { t } = useTranslation();
   const [pathSuggestions, setPathSuggestions] = useState<FolderSuggestion[]>([]);
   const [showPathDropdown, setShowPathDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const allowFilesystemPicker = shouldUseFilesystemPicker(workspaceType);
 
   useEffect(() => {
+    if (!allowFilesystemPicker) {
+      setPathSuggestions([]);
+      setShowPathDropdown(false);
+      return;
+    }
+
     if (value.trim().length <= 2) {
       setPathSuggestions([]);
       setShowPathDropdown(false);
@@ -59,7 +70,7 @@ export default function WorkspacePathField({
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [value]);
+  }, [allowFilesystemPicker, value]);
 
   const handleSuggestionSelect = useCallback(
     (suggestion: FolderSuggestion) => {
@@ -90,8 +101,10 @@ export default function WorkspacePathField({
             onChange={(event) => onChange(event.target.value)}
             placeholder={
               workspaceType === 'existing'
-                ? '/path/to/existing/workspace'
-                : '/path/to/new/workspace'
+                ? t('projectWizard.step2.existingPlaceholder', {
+                    defaultValue: '/path/to/existing/workspace',
+                  })
+                : t('projectWizard.step2.newPlaceholder', { defaultValue: 'my-workspace' })
             }
             className="w-full"
             disabled={disabled}
@@ -113,24 +126,29 @@ export default function WorkspacePathField({
           )}
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => setShowFolderBrowser(true)}
-          className="px-3"
-          title="Browse folders"
-          disabled={disabled}
-        >
-          <FolderOpen className="h-4 w-4" />
-        </Button>
+        {allowFilesystemPicker && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowFolderBrowser(true)}
+            className="px-3"
+            title="Browse folders"
+            disabled={disabled}
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
-      <FolderBrowserModal
-        isOpen={showFolderBrowser}
-        autoAdvanceOnSelect={workspaceType === 'existing'}
-        onClose={() => setShowFolderBrowser(false)}
-        onFolderSelected={handleFolderSelected}
-      />
+      {allowFilesystemPicker && (
+        <FolderBrowserModal
+          isOpen={showFolderBrowser}
+          autoAdvanceOnSelect={workspaceType === 'existing'}
+          allowCreateFolder={workspaceType === 'existing'}
+          onClose={() => setShowFolderBrowser(false)}
+          onFolderSelected={handleFolderSelected}
+        />
+      )}
     </>
   );
 }

@@ -1,11 +1,12 @@
-import express from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import os from 'os';
-import { addProjectManually } from '../projects.js';
+
+import express from 'express';
+
 import { multitenancyDb } from '../database/multitenancy-db.js';
-import { buildTenantWorkspacePath, slugifyWorkspaceName } from '../services/workspace-projects.js';
+import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
 
 const router = express.Router();
 
@@ -213,19 +214,20 @@ router.post('/create-workspace', async (req, res) => {
       return res.status(400).json({ error: 'workspaceType must be "existing" or "new"' });
     }
 
-    const requestedName = path.basename(path.resolve(workspacePath));
-    const workspaceSlug = slugifyWorkspaceName(requestedName);
-    if (!workspaceSlug) {
-      return res.status(400).json({ error: 'Workspace name must contain letters or numbers' });
-    }
-
-    const generatedWorkspacePath = buildTenantWorkspacePath({
+    const {
+      requestedName,
+      workspaceSlug,
+      targetPath: targetWorkspacePath,
+    } = resolveWorkspaceTarget({
+      workspaceType,
       workspacesRoot: WORKSPACES_ROOT,
       tenantId,
       userId: req.user.id,
       requestedPath: workspacePath,
     });
-    const targetWorkspacePath = workspaceType === 'new' ? generatedWorkspacePath : workspacePath;
+    if (!workspaceSlug) {
+      return res.status(400).json({ error: 'Workspace name must contain letters or numbers' });
+    }
 
     // Validate path safety before any operations
     const validation = await validateWorkspacePath(targetWorkspacePath);
@@ -273,9 +275,6 @@ router.post('/create-workspace', async (req, res) => {
 
     // Handle new workspace creation
     if (workspaceType === 'new') {
-      // Create the directory if it doesn't exist
-      await fs.mkdir(absolutePath, { recursive: true });
-
       // If GitHub URL is provided, clone the repository
       if (githubUrl) {
         let githubToken = null;
@@ -285,8 +284,6 @@ router.post('/create-workspace', async (req, res) => {
           // Fetch token from database
           const token = await getGithubTokenById(githubTokenId, req.user.id);
           if (!token) {
-            // Clean up created directory
-            await fs.rm(absolutePath, { recursive: true, force: true });
             return res.status(404).json({ error: 'GitHub token not found' });
           }
           githubToken = token.github_token;
@@ -297,20 +294,25 @@ router.post('/create-workspace', async (req, res) => {
         // Extract repo name from URL for the clone destination
         const normalizedUrl = githubUrl.replace(/\/+$/, '').replace(/\.git$/, '');
         const repoName = normalizedUrl.split('/').pop() || 'repository';
-        const clonePath = path.join(absolutePath, repoName);
+        const clonePath = resolveCloneDestinationPath({
+          workspaceType,
+          workspaceRootPath: absolutePath,
+          workspaceSlug,
+          repoName,
+        });
 
         // Check if clone destination already exists to prevent data loss
-        try {
-          await fs.access(clonePath);
+        const destination = await validateCloneDestination(clonePath);
+        if (!destination.available) {
           return res.status(409).json({
             error: 'Directory already exists',
-            details: `The destination path "${clonePath}" already exists. Please choose a different location or remove the existing directory.`
+            details: destination.message,
           });
-        } catch (err) {
-          // Directory doesn't exist, which is what we want
         }
 
-        // Clone the repository into a subfolder
+        await fs.mkdir(path.dirname(clonePath), { recursive: true });
+
+        // Clone the repository into its final workspace path
         try {
           await cloneGitHubRepository(githubUrl, clonePath, githubToken);
         } catch (error) {
@@ -343,6 +345,7 @@ router.post('/create-workspace', async (req, res) => {
       }
 
       // Add the new workspace to the project list (no clone)
+      await fs.mkdir(absolutePath, { recursive: true });
       const workspace = multitenancyDb.workspaces.createWorkspace({
         tenantId,
         ownerUserId: req.user.id,
@@ -388,12 +391,45 @@ async function getGithubTokenById(tokenId, userId) {
   return null;
 }
 
+async function validateCloneDestination(clonePath) {
+  try {
+    const stats = await fs.stat(clonePath);
+    if (!stats.isDirectory()) {
+      return {
+        available: false,
+        message: `The destination path "${clonePath}" exists but is not a directory. Please choose a different location.`
+      };
+    }
+
+    const entries = await fs.readdir(clonePath);
+    if (entries.length > 0) {
+      return {
+        available: false,
+        message: `The destination path "${clonePath}" is not empty. Please choose a different location or remove the existing directory.`
+      };
+    }
+
+    return { available: true };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { available: true };
+    }
+    throw error;
+  }
+}
+
 /**
  * Clone repository with progress streaming (SSE)
  * GET /api/projects/clone-progress
  */
 router.get('/clone-progress', async (req, res) => {
-  const { path: workspacePath, githubUrl, githubTokenId, newGithubToken } = req.query;
+  const {
+    path: workspacePath,
+    githubUrl,
+    githubTokenId,
+    newGithubToken,
+    workspaceType = 'new',
+  } = req.query;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -411,7 +447,49 @@ router.get('/clone-progress', async (req, res) => {
       return;
     }
 
-    const validation = await validateWorkspacePath(workspacePath);
+    if (!['existing', 'new'].includes(workspaceType)) {
+      sendEvent('error', { message: 'workspaceType must be "existing" or "new"' });
+      res.end();
+      return;
+    }
+
+    const tenantId = Number(req.query.tenantId || req.headers['x-tenant-id']);
+    if (!tenantId || !req.user?.id) {
+      sendEvent('error', { message: 'tenantId is required' });
+      res.end();
+      return;
+    }
+
+    const membership = multitenancyDb.memberships.getActiveMembership(req.user.id, tenantId);
+    if (!membership) {
+      sendEvent('error', { message: 'Tenant access denied' });
+      res.end();
+      return;
+    }
+    if (membership.permission !== 'edit') {
+      sendEvent('error', { message: 'Tenant edit permission is required to create workspaces' });
+      res.end();
+      return;
+    }
+
+    const {
+      requestedName,
+      workspaceSlug,
+      targetPath: targetWorkspacePath,
+    } = resolveWorkspaceTarget({
+      workspaceType,
+      workspacesRoot: WORKSPACES_ROOT,
+      tenantId,
+      userId: req.user.id,
+      requestedPath: workspacePath,
+    });
+    if (!workspaceSlug) {
+      sendEvent('error', { message: 'Workspace name must contain letters or numbers' });
+      res.end();
+      return;
+    }
+
+    const validation = await validateWorkspacePath(targetWorkspacePath);
     if (!validation.valid) {
       sendEvent('error', { message: validation.error });
       res.end();
@@ -420,13 +498,10 @@ router.get('/clone-progress', async (req, res) => {
 
     const absolutePath = validation.resolvedPath;
 
-    await fs.mkdir(absolutePath, { recursive: true });
-
     let githubToken = null;
     if (githubTokenId) {
       const token = await getGithubTokenById(parseInt(githubTokenId), req.user.id);
       if (!token) {
-        await fs.rm(absolutePath, { recursive: true, force: true });
         sendEvent('error', { message: 'GitHub token not found' });
         res.end();
         return;
@@ -438,17 +513,22 @@ router.get('/clone-progress', async (req, res) => {
 
     const normalizedUrl = githubUrl.replace(/\/+$/, '').replace(/\.git$/, '');
     const repoName = normalizedUrl.split('/').pop() || 'repository';
-    const clonePath = path.join(absolutePath, repoName);
+    const clonePath = resolveCloneDestinationPath({
+      workspaceType,
+      workspaceRootPath: absolutePath,
+      workspaceSlug,
+      repoName,
+    });
 
     // Check if clone destination already exists to prevent data loss
-    try {
-      await fs.access(clonePath);
-      sendEvent('error', { message: `Directory "${repoName}" already exists. Please choose a different location or remove the existing directory.` });
+    const destination = await validateCloneDestination(clonePath);
+    if (!destination.available) {
+      sendEvent('error', { message: destination.message });
       res.end();
       return;
-    } catch (err) {
-      // Directory doesn't exist, which is what we want
     }
+
+    await fs.mkdir(path.dirname(clonePath), { recursive: true });
 
     let cloneUrl = githubUrl;
     if (githubToken) {
@@ -492,7 +572,14 @@ router.get('/clone-progress', async (req, res) => {
     gitProcess.on('close', async (code) => {
       if (code === 0) {
         try {
-          const project = await addProjectManually(clonePath);
+          const workspace = multitenancyDb.workspaces.createWorkspace({
+            tenantId,
+            ownerUserId: req.user.id,
+            slug: workspaceSlug,
+            displayName: requestedName || workspaceSlug,
+            path: clonePath,
+          });
+          const project = createWorkspaceProject(workspace);
           sendEvent('complete', { project, message: 'Repository cloned successfully' });
         } catch (error) {
           sendEvent('error', { message: `Clone succeeded but failed to add project: ${error.message}` });

@@ -16,6 +16,8 @@ export const shouldShowGithubAuthentication = (
 export const isCloneWorkflow = (workspaceType: WorkspaceType, githubUrl: string): boolean =>
   workspaceType === 'new' && githubUrl.trim().length > 0;
 
+export const shouldUseFilesystemPicker = (_workspaceType: WorkspaceType): boolean => false;
+
 export const getSuggestionRootPath = (inputPath: string): string => {
   const trimmedPath = inputPath.trim();
   const lastSeparatorIndex = Math.max(trimmedPath.lastIndexOf('/'), trimmedPath.lastIndexOf('\\'));

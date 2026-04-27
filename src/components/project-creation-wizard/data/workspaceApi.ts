@@ -8,9 +8,11 @@ import type {
   CredentialsResponse,
   FolderSuggestion,
   TokenMode,
+  WorkspaceType,
 } from '../types';
 
 type CloneWorkspaceParams = {
+  workspaceType: WorkspaceType;
   workspacePath: string;
   githubUrl: string;
   tokenMode: TokenMode;
@@ -76,6 +78,7 @@ export const createWorkspaceRequest = async (payload: CreateWorkspacePayload) =>
 };
 
 const buildCloneProgressQuery = ({
+  workspaceType,
   workspacePath,
   githubUrl,
   tokenMode,
@@ -83,6 +86,7 @@ const buildCloneProgressQuery = ({
   newGithubToken,
 }: CloneWorkspaceParams) => {
   const query = new URLSearchParams({
+    workspaceType,
     path: workspacePath.trim(),
     githubUrl: githubUrl.trim(),
   });

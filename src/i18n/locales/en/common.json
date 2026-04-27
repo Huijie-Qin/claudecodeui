@@ -139,23 +139,24 @@
       "confirm": "Confirm"
     },
     "step1": {
-      "question": "Do you already have a workspace, or would you like to create a new one?",
+      "question": "Create a tenant-scoped workspace or add a known existing path?",
       "existing": {
         "title": "Existing Workspace",
-        "description": "I already have a workspace on my server and just need to add it to the project list"
+        "description": "Add a workspace by known server path without browsing the filesystem"
       },
       "new": {
         "title": "New Workspace",
-        "description": "Create a new workspace, optionally clone from a GitHub repository"
+        "description": "Create a workspace under your current tenant and user"
       }
     },
     "step2": {
       "existingPath": "Workspace Path",
       "newPath": "Workspace Path",
+      "newName": "Workspace Name",
       "existingPlaceholder": "/path/to/existing/workspace",
-      "newPlaceholder": "/path/to/new/workspace",
+      "newPlaceholder": "my-workspace",
       "existingHelp": "Full path to your existing workspace directory",
-      "newHelp": "Full path to your workspace directory",
+      "newHelp": "The workspace will be created automatically under your current tenant and user.",
       "githubUrl": "GitHub URL (Optional)",
       "githubPlaceholder": "https://github.com/username/repository",
       "githubHelp": "Optional: provide a GitHub URL to clone a repository",
@@ -180,6 +181,7 @@
       "existingWorkspace": "Existing Workspace",
       "newWorkspace": "New Workspace",
       "path": "Path:",
+      "workspaceName": "Workspace Name:",
       "cloneFrom": "Clone From:",
       "authentication": "Authentication:",
       "usingStoredToken": "Using stored token:",
@@ -187,8 +189,8 @@
       "noAuthentication": "No authentication",
       "sshKey": "SSH Key",
       "existingInfo": "The workspace will be added to your project list and will be available for Claude/Cursor sessions.",
-      "newWithClone": "The repository will be cloned from this folder.",
-      "newEmpty": "The workspace will be added to your project list and will be available for Claude/Cursor sessions.",
+      "newWithClone": "The repository will be cloned into your tenant-scoped workspace.",
+      "newEmpty": "The workspace will be created under your current tenant and user.",
       "cloningRepository": "Cloning repository..."
     },
     "buttons": {
@@ -202,6 +204,7 @@
     "errors": {
       "selectType": "Please select whether you have an existing workspace or want to create a new one",
       "providePath": "Please provide a workspace path",
+      "provideWorkspaceName": "Please provide a workspace name",
       "failedToCreate": "Failed to create workspace",
       "failedToCreateFolder": "Failed to create folder"
     }

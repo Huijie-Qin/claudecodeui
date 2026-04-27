@@ -19,6 +19,36 @@ export function buildTenantWorkspacePath({ workspacesRoot, tenantId, userId, req
   return path.join(workspacesRoot, String(tenantId), String(userId), workspaceSlug);
 }
 
+export function resolveWorkspaceTarget({ workspaceType, workspacesRoot, tenantId, userId, requestedPath }) {
+  const requestedName = path.basename(path.resolve(String(requestedPath || '')));
+  const workspaceSlug = slugifyWorkspaceName(requestedName);
+  const targetPath =
+    workspaceType === 'new'
+      ? buildTenantWorkspacePath({ workspacesRoot, tenantId, userId, requestedPath })
+      : requestedPath;
+
+  return {
+    requestedName,
+    workspaceSlug,
+    targetPath,
+  };
+}
+
+export function resolveCloneDestinationPath({
+  workspaceType,
+  workspaceRootPath,
+  workspaceSlug,
+  repoName,
+}) {
+  const normalizedRepoName = repoName || 'repository';
+  const repoSlug = slugifyWorkspaceName(normalizedRepoName);
+  if (workspaceType === 'new' && repoSlug && repoSlug === workspaceSlug) {
+    return workspaceRootPath;
+  }
+
+  return path.join(workspaceRootPath, normalizedRepoName);
+}
+
 function mapSession(session, workspaceId) {
   return {
     id: session.provider_session_id,

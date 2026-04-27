@@ -58,6 +58,7 @@ import { multitenancyDb } from './database/multitenancy-db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
+import { canAccessHostFilesystem } from './services/host-filesystem-access.js';
 import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
 import { workspaceAccess } from './services/workspace-access.js';
 import { handleWorkspaceError, resolveWorkspaceForRequest } from './services/workspace-request.js';
@@ -598,6 +599,10 @@ const expandWorkspacePath = (inputPath) => {
 // Browse filesystem endpoint for project suggestions - uses existing getFileTree
 app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
     try {
+        if (!canAccessHostFilesystem(req.user)) {
+            return res.status(403).json({ error: 'Host filesystem browsing is restricted to system administrators' });
+        }
+
         const { path: dirPath } = req.query;
 
         console.log('[API] Browse filesystem request for path:', dirPath);
@@ -678,6 +683,10 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
 
 app.post('/api/create-folder', authenticateToken, async (req, res) => {
     try {
+        if (!canAccessHostFilesystem(req.user)) {
+            return res.status(403).json({ error: 'Host filesystem changes are restricted to system administrators' });
+        }
+
         const { path: folderPath } = req.body;
         if (!folderPath) {
             return res.status(400).json({ error: 'Path is required' });

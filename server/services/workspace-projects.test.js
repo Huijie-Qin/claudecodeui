@@ -5,6 +5,8 @@ import test from 'node:test';
 import {
   buildTenantWorkspacePath,
   mapWorkspaceRowsToProjects,
+  resolveCloneDestinationPath,
+  resolveWorkspaceTarget,
   slugifyWorkspaceName,
 } from './workspace-projects.js';
 
@@ -23,6 +25,58 @@ test('buildTenantWorkspacePath isolates tenant and owner paths under workspace r
       requestedPath: '/Users/example/My App',
     }),
     path.join('/tmp/cloudcli', '2', '7', 'my-app'),
+  );
+});
+
+test('resolveWorkspaceTarget keeps new workspaces inside tenant isolation root', () => {
+  const target = resolveWorkspaceTarget({
+    workspaceType: 'new',
+    workspacesRoot: '/tmp/cloudcli',
+    tenantId: 2,
+    userId: 7,
+    requestedPath: '/Users/example/Projects/Team App',
+  });
+
+  assert.equal(target.requestedName, 'Team App');
+  assert.equal(target.workspaceSlug, 'team-app');
+  assert.equal(target.targetPath, path.join('/tmp/cloudcli', '2', '7', 'team-app'));
+});
+
+test('resolveWorkspaceTarget keeps existing workspace paths user selected', () => {
+  const target = resolveWorkspaceTarget({
+    workspaceType: 'existing',
+    workspacesRoot: '/tmp/cloudcli',
+    tenantId: 2,
+    userId: 7,
+    requestedPath: '/Users/example/Projects/Team App',
+  });
+
+  assert.equal(target.requestedName, 'Team App');
+  assert.equal(target.workspaceSlug, 'team-app');
+  assert.equal(target.targetPath, '/Users/example/Projects/Team App');
+});
+
+test('resolveCloneDestinationPath clones matching repos into the workspace root', () => {
+  assert.equal(
+    resolveCloneDestinationPath({
+      workspaceType: 'new',
+      workspaceRootPath: '/tmp/cloudcli/2/7/team-app',
+      workspaceSlug: 'team-app',
+      repoName: 'Team-App',
+    }),
+    '/tmp/cloudcli/2/7/team-app',
+  );
+});
+
+test('resolveCloneDestinationPath keeps distinct repo names in a child folder', () => {
+  assert.equal(
+    resolveCloneDestinationPath({
+      workspaceType: 'new',
+      workspaceRootPath: '/tmp/cloudcli/2/7/customer-portal',
+      workspaceSlug: 'customer-portal',
+      repoName: 'api-service',
+    }),
+    path.join('/tmp/cloudcli/2/7/customer-portal', 'api-service'),
   );
 });
 
