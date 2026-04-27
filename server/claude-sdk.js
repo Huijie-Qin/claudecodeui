@@ -224,6 +224,10 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
+  // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
+  // The provider adapter converts those stream_event payloads into UI stream_delta events.
+  sdkOptions.includePartialMessages = true;
+
   // ANTHROPIC_MODEL pins custom gateways to their configured model name.
   // Without this, the UI model alias (e.g. opus) is forwarded to the gateway.
   sdkOptions.model = resolveClaudeModel(options);

@@ -70,10 +70,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
-    if (raw.type === 'content_block_delta' && raw.delta?.text) {
-      return [createNormalizedMessage({ kind: 'stream_delta', content: raw.delta.text, sessionId, provider: PROVIDER })];
+    const streamEvent = raw.type === 'stream_event' ? readObjectRecord(raw.event) : raw;
+
+    if (streamEvent?.type === 'content_block_delta' && streamEvent.delta?.text) {
+      return [createNormalizedMessage({ kind: 'stream_delta', content: streamEvent.delta.text, sessionId, provider: PROVIDER })];
     }
-    if (raw.type === 'content_block_stop') {
+    if (streamEvent?.type === 'content_block_stop') {
       return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
     }
 

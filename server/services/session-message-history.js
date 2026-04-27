@@ -4,6 +4,12 @@ function generateUserPromptMessageId() {
   return `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+
+function isPersistableMessage(message) {
+  return !TRANSIENT_MESSAGE_KINDS.has(message?.kind);
+}
+
 export function createSessionMessageHistoryService({
   multitenancy = multitenancyDb,
   providerSessions = null,
@@ -66,6 +72,11 @@ export function persistNormalizedMessages({
     return 0;
   }
 
+  const persistableMessages = messages.filter(isPersistableMessage);
+  if (persistableMessages.length === 0) {
+    return 0;
+  }
+
   return multitenancy.sessionMessages.upsertMessages({
     tenantId: options.tenantId,
     userId: options.userId,
@@ -73,7 +84,7 @@ export function persistNormalizedMessages({
     runtimeId,
     provider,
     providerSessionId,
-    messages,
+    messages: persistableMessages,
   });
 }
 

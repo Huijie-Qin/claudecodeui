@@ -72,3 +72,38 @@ test('ClaudeSessionsProvider filters hook-wrapped resume summaries from user-vis
 
   assert.deepEqual(messages, []);
 });
+
+test('ClaudeSessionsProvider normalizes SDK partial stream events into stream messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const deltaMessages = provider.normalizeMessage({
+    type: 'stream_event',
+    uuid: 'partial-1',
+    session_id: 'session-1',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: {
+        type: 'text_delta',
+        text: 'Hel',
+      },
+    },
+  }, 'session-1');
+  const endMessages = provider.normalizeMessage({
+    type: 'stream_event',
+    uuid: 'partial-2',
+    session_id: 'session-1',
+    event: {
+      type: 'content_block_stop',
+      index: 0,
+    },
+  }, 'session-1');
+
+  assert.equal(deltaMessages.length, 1);
+  assert.equal(deltaMessages[0].kind, 'stream_delta');
+  assert.equal(deltaMessages[0].content, 'Hel');
+  assert.equal(deltaMessages[0].sessionId, 'session-1');
+
+  assert.equal(endMessages.length, 1);
+  assert.equal(endMessages[0].kind, 'stream_end');
+  assert.equal(endMessages[0].sessionId, 'session-1');
+});

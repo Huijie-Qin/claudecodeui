@@ -162,3 +162,53 @@ test('user prompt is persisted before assistant history for newly created sessio
   assert.deepEqual(history.messages.map((message) => message.content), ['Reply exactly with ok.', 'ok']);
   assert.deepEqual(history.messages.map((message) => message.sessionId), ['claude-session-1', 'claude-session-1']);
 });
+
+test('streaming control messages are not persisted into durable session history', () => {
+  const persisted = [];
+  const multitenancy = {
+    sessionMessages: {
+      upsertMessages: ({ messages }) => {
+        persisted.push(...messages);
+        return messages.length;
+      },
+    },
+  };
+
+  const changed = persistNormalizedMessages({
+    multitenancy,
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [
+      {
+        id: 'stream-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:00.100Z',
+        provider: 'claude',
+        kind: 'stream_delta',
+        content: 'Hel',
+      },
+      {
+        id: 'stream-end-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:00.200Z',
+        provider: 'claude',
+        kind: 'stream_end',
+      },
+      {
+        id: 'assistant-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:01.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content: 'Hello',
+      },
+    ],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.kind), ['text']);
+  assert.deepEqual(persisted.map((message) => message.content), ['Hello']);
+});
