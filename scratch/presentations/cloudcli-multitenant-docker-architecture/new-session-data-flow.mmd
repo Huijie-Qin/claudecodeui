@@ -1,0 +1,63 @@
+sequenceDiagram
+  autonumber
+  actor User as User
+  participant UI as Browser Chat UI
+  participant WS as WebSocket command handler
+  participant Auth as Auth + Tenant + Workspace guards
+  participant Runtime as AgentSessionRuntimeManager
+  participant DB as Multitenancy DB
+  participant Docker as Docker container
+  participant SDK as Claude SDK bridge
+  participant CLI as Claude Code CLI
+  participant History as SessionMessageHistoryService
+
+  User->>UI: 输入第一条 prompt
+  UI->>WS: send command<br/>tenantId, workspaceId, cwd, provider=claude
+  WS->>Auth: authenticate user + resolve tenant context
+  Auth->>DB: read tenant_users, workspaces, workspace_acl
+  DB-->>Auth: user can edit selected workspace
+  Auth-->>WS: authorized runtime options
+
+  WS->>Runtime: prepareClaudeRuntime(options)
+  Runtime->>DB: insert agent_session_runtime<br/>provider_session_id = null
+  Runtime->>Runtime: create runtime home + wrapper dir
+  Runtime->>Docker: docker run / start container<br/>mount /workspace + /home/cloudcli
+  Docker-->>Runtime: container ready
+  Runtime-->>WS: cwd=/workspace, wrapper path,<br/>runtimeId, settingSources=[project]
+
+  WS->>DB: persist user prompt<br/>agent_session_messages(runtimeId)
+  WS->>SDK: query(prompt, sdkOptions)
+  SDK->>CLI: wrapper executes docker exec claude
+  CLI-->>SDK: first stream event with provider_session_id
+  SDK->>DB: bind runtime.provider_session_id
+  SDK->>DB: bind pending messages to provider_session_id
+  SDK->>DB: upsert session_index ownership
+  SDK-->>WS: session_created(newSessionId)
+  WS-->>UI: session_created
+
+  loop Streaming assistant/tool events
+    CLI-->>SDK: provider event
+    SDK->>SDK: normalizeMessage(provider=claude)
+    SDK->>DB: upsert agent_session_messages<br/>unique(runtimeId, message_id)
+    SDK-->>WS: normalized message
+    WS-->>UI: append realtime message
+    UI->>UI: computeMerged(server, realtime)
+  end
+
+  SDK-->>WS: complete / aborted / failed
+  WS->>Runtime: markIdle(runtimeId)<br/>or markFailed(runtimeId)
+  Runtime->>DB: update runtime.status + last_used_at
+  WS->>DB: update session_index status
+  WS-->>UI: complete event
+
+  User->>UI: 在同一 session 继续对话
+  UI->>History: GET /api/sessions/:sessionId/messages
+  History->>DB: findOwnedSession + listMessages
+  DB-->>History: DB-first normalized history
+  History-->>UI: messages, total, pagination
+  UI->>WS: send next command<br/>sessionId = provider_session_id
+  WS->>Runtime: resolve existing runtime by<br/>tenant/user/workspace/provider/sessionId
+  Runtime->>DB: find agent_session_runtime
+  Runtime->>Docker: start missing/stopped container with same runtime_home
+  WS->>SDK: query(prompt, resume=sessionId)
+  SDK->>CLI: Claude resumes from /home/cloudcli/.claude/projects

@@ -1,0 +1,88 @@
+flowchart LR
+  %% CloudCLI multitenant Docker runtime architecture
+
+  subgraph Browser["Browser / React UI"]
+    UI["Chat UI"]
+    TenantCtx["TenantContext<br/>active tenant"]
+    SessionStore["Session Store<br/>DB-first merge"]
+  end
+
+  subgraph Server["CloudCLI Server"]
+    HTTP["REST API<br/>messages / projects / sessions"]
+    WS["WebSocket<br/>Claude command stream"]
+    Auth["Auth middleware<br/>JWT user"]
+    TenantGuard["Tenant context<br/>membership + permission"]
+    WorkspaceGuard["Workspace authorization<br/>workspace_acl edit/view"]
+    RuntimeMgr["AgentSessionRuntimeManager<br/>mode: local | docker"]
+    ClaudeSDK["Claude SDK bridge<br/>mapCliOptionsToSDK"]
+    HistorySvc["SessionMessageHistoryService<br/>DB first, legacy fallback"]
+  end
+
+  subgraph DB["Multitenancy DB"]
+    Tenants[("tenants<br/>tenant_users")]
+    Workspaces[("workspaces<br/>workspace_acl")]
+    SessionIndex[("session_index<br/>provider_session ownership")]
+    RuntimeTable[("agent_session_runtime<br/>container + runtime home")]
+    MessageTable[("agent_session_messages<br/>normalized UI history")]
+  end
+
+  subgraph HostFS["Host filesystem"]
+    WorkspaceRoot["Authorized workspace<br/>host realpath"]
+    RuntimeRoot["~/.cloudcli/runtimes/claude<br/>tenant/user/workspace/runtime"]
+    Wrapper["per-runtime wrapper<br/>claude-docker-wrapper"]
+  end
+
+  subgraph Docker["Docker execution boundary"]
+    Container["Claude session container<br/>read-only rootfs, no Docker socket"]
+    MountWorkspace["/workspace<br/>selected workspace only"]
+    MountHome["/home/cloudcli<br/>session runtime home"]
+    ClaudeCLI["Claude Code CLI<br/>tool execution"]
+  end
+
+  UI --> TenantCtx
+  UI --> WS
+  UI --> HTTP
+  TenantCtx --> HTTP
+  TenantCtx --> WS
+  SessionStore --> UI
+
+  HTTP --> Auth --> TenantGuard --> HistorySvc
+  WS --> Auth
+  Auth --> TenantGuard --> WorkspaceGuard --> RuntimeMgr
+  WorkspaceGuard --> Workspaces
+  TenantGuard --> Tenants
+
+  RuntimeMgr --> RuntimeTable
+  RuntimeMgr --> WorkspaceRoot
+  RuntimeMgr --> RuntimeRoot
+  RuntimeMgr --> Wrapper
+  RuntimeMgr --> Container
+
+  ClaudeSDK --> Wrapper
+  Wrapper --> Container
+  Container --> MountWorkspace
+  Container --> MountHome
+  MountWorkspace --> ClaudeCLI
+  MountHome --> ClaudeCLI
+
+  ClaudeCLI --> ClaudeSDK
+  ClaudeSDK --> MessageTable
+  ClaudeSDK --> SessionIndex
+  ClaudeSDK --> WS
+  WS --> SessionStore
+
+  HistorySvc --> SessionIndex
+  HistorySvc --> MessageTable
+  HistorySvc --> HTTP
+  HTTP --> SessionStore
+
+  classDef ui fill:#EFF6FF,stroke:#3057C8,color:#111827
+  classDef server fill:#F8FAFC,stroke:#64748B,color:#111827
+  classDef db fill:#F0FDF4,stroke:#2F7D54,color:#111827
+  classDef fs fill:#FFF7ED,stroke:#F2A541,color:#111827
+  classDef docker fill:#ECFEFF,stroke:#0E8A86,color:#111827
+  class UI,TenantCtx,SessionStore ui
+  class HTTP,WS,Auth,TenantGuard,WorkspaceGuard,RuntimeMgr,ClaudeSDK,HistorySvc server
+  class Tenants,Workspaces,SessionIndex,RuntimeTable,MessageTable db
+  class WorkspaceRoot,RuntimeRoot,Wrapper fs
+  class Container,MountWorkspace,MountHome,ClaudeCLI docker
