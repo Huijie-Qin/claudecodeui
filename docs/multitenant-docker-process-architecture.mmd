@@ -1,0 +1,84 @@
+flowchart TB
+  Browser["Browser UI<br/>http://localhost:5173"]
+
+  subgraph Host["Host Machine"]
+    direction TB
+
+    App["One CloudCLI Host Process<br/>Node server + WebSocket + Claude Agent SDK<br/>npm run dev / deployed backend"]
+    DB["CloudCLI DB<br/>tenants / users / workspaces / sessions / runtime binding"]
+
+    subgraph HostControl["Host Runtime Control Plane"]
+      direction LR
+      RuntimeMgr["agent-session-runtime<br/>create or resolve runtime"]
+      WrapperA["wrapper A<br/>claude-docker-wrapper"]
+      WrapperB["wrapper B<br/>claude-docker-wrapper"]
+      WrapperC["wrapper C<br/>claude-docker-wrapper"]
+    end
+
+    subgraph HostTenantA["Tenant A Host Storage"]
+      direction TB
+      AWorkspace["~/.cloudcli/workspaces/tenant-A/user-1/workspace-X"]
+      ARuntime1["~/.cloudcli/runtimes/claude/tenant-A/user-1/workspace-X/runtime-1"]
+      ARuntime2["~/.cloudcli/runtimes/claude/tenant-A/user-1/workspace-X/runtime-2"]
+    end
+
+    subgraph HostTenantB["Tenant B Host Storage"]
+      direction TB
+      BWorkspace["~/.cloudcli/workspaces/tenant-B/user-7/workspace-Y"]
+      BRuntime1["~/.cloudcli/runtimes/claude/tenant-B/user-7/workspace-Y/runtime-3"]
+    end
+  end
+
+  subgraph Docker["Docker Runtime Boundary"]
+    direction TB
+
+    subgraph ContainerA1["Container cc-runtime-1<br/>Tenant A / User 1 / Workspace X / Session 1"]
+      direction TB
+      A1CLI["Claude Code CLI process"]
+      A1Workspace["/workspace"]
+      A1Home["/home/cloudcli"]
+    end
+
+    subgraph ContainerA2["Container cc-runtime-2<br/>Tenant A / User 1 / Workspace X / Session 2"]
+      direction TB
+      A2CLI["Claude Code CLI process"]
+      A2Workspace["/workspace"]
+      A2Home["/home/cloudcli"]
+    end
+
+    subgraph ContainerB1["Container cc-runtime-3<br/>Tenant B / User 7 / Workspace Y / Session 3"]
+      direction TB
+      B1CLI["Claude Code CLI process"]
+      B1Workspace["/workspace"]
+      B1Home["/home/cloudcli"]
+    end
+  end
+
+  Browser -->|"WebSocket / HTTP"| App
+  App --> DB
+  App -->|"prepareClaudeRuntime(options)"| RuntimeMgr
+  RuntimeMgr --> WrapperA
+  RuntimeMgr --> WrapperB
+  RuntimeMgr --> WrapperC
+
+  App -->|"SDK spawn(pathToClaudeCodeExecutable)<br/>stream-json stdio"| WrapperA
+  App -->|"SDK spawn(pathToClaudeCodeExecutable)<br/>stream-json stdio"| WrapperB
+  App -->|"SDK spawn(pathToClaudeCodeExecutable)<br/>stream-json stdio"| WrapperC
+
+  WrapperA -->|"docker exec -i -w /workspace<br/>-e HOME=/home/cloudcli claude &quot;$@&quot;"| A1CLI
+  WrapperB -->|"docker exec -i -w /workspace<br/>-e HOME=/home/cloudcli claude &quot;$@&quot;"| A2CLI
+  WrapperC -->|"docker exec -i -w /workspace<br/>-e HOME=/home/cloudcli claude &quot;$@&quot;"| B1CLI
+
+  AWorkspace -. "bind mount" .-> A1Workspace
+  ARuntime1 -. "bind mount home/" .-> A1Home
+  AWorkspace -. "bind mount" .-> A2Workspace
+  ARuntime2 -. "bind mount home/" .-> A2Home
+  BWorkspace -. "bind mount" .-> B1Workspace
+  BRuntime1 -. "bind mount home/" .-> B1Home
+
+  A1CLI --> A1Workspace
+  A1CLI --> A1Home
+  A2CLI --> A2Workspace
+  A2CLI --> A2Home
+  B1CLI --> B1Workspace
+  B1CLI --> B1Home

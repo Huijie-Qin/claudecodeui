@@ -1,0 +1,22 @@
+flowchart LR
+  subgraph Host["Host Machine"]
+    direction TB
+    HostWorkspace["Workspace root<br/>~/.cloudcli/workspaces/&lt;tenant&gt;/&lt;user&gt;/&lt;workspace&gt;"]
+    HostRuntime["Runtime root<br/>~/.cloudcli/runtimes/claude/&lt;tenant&gt;/&lt;user&gt;/&lt;workspace&gt;/&lt;runtime&gt;"]
+    HostHome["Runtime home<br/><runtime>/home"]
+    HostWrapper["Wrapper script<br/><runtime>/wrapper/claude-docker-wrapper"]
+  end
+
+  subgraph Container["Docker Container"]
+    direction TB
+    ContainerWorkspace["/workspace<br/>Claude Code cwd"]
+    ContainerHome["/home/cloudcli<br/>Claude Code HOME"]
+    ContainerClaude["claude process<br/>Claude Code CLI"]
+  end
+
+  HostWorkspace == "docker run --mount src=workspace,dst=/workspace" ==> ContainerWorkspace
+  HostHome == "docker run --mount src=runtime/home,dst=/home/cloudcli" ==> ContainerHome
+  HostWrapper -->|"docker exec -i<br/>-w /workspace<br/>-e HOME=/home/cloudcli<br/>claude &quot;$@&quot;"| ContainerClaude
+
+  ContainerClaude -->|"reads/writes project files"| ContainerWorkspace
+  ContainerClaude -->|"reads/writes session state<br/>.claude / config / cache"| ContainerHome
