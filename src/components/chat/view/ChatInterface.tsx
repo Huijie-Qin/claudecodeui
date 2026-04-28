@@ -11,6 +11,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -49,18 +50,16 @@ function ChatInterface({
   const { t } = useTranslation('chat');
 
   const sessionStore = useSessionStore();
-  const streamBufferRef = useRef('');
-  const streamTimerRef = useRef<number | null>(null);
-  const accumulatedStreamRef = useRef('');
+  const streamAccumulatorRef = useRef(createSessionStreamAccumulator());
+  const streamTimersRef = useRef(new Map<string, number>());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
 
   const resetStreamingState = useCallback(() => {
-    if (streamTimerRef.current) {
-      clearTimeout(streamTimerRef.current);
-      streamTimerRef.current = null;
+    for (const timerId of streamTimersRef.current.values()) {
+      clearTimeout(timerId);
     }
-    streamBufferRef.current = '';
-    accumulatedStreamRef.current = '';
+    streamTimersRef.current.clear();
+    streamAccumulatorRef.current.clearAll();
   }, []);
 
   const {
@@ -233,9 +232,8 @@ function ChatInterface({
     setTokenBudget,
     setPendingPermissionRequests,
     pendingViewSessionRef,
-    streamBufferRef,
-    streamTimerRef,
-    accumulatedStreamRef,
+    streamAccumulatorRef,
+    streamTimersRef,
     onSessionInactive,
     onSessionProcessing,
     onSessionNotProcessing,

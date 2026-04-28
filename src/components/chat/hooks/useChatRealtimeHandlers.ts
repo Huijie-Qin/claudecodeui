@@ -1,12 +1,16 @@
 import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
+
 import type { PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+
 import {
   scheduleProjectsRefresh,
   shouldRefreshProjectsForRealtimeMessage,
 } from './chatRealtimeRefresh';
+import { shouldAdoptCreatedSession } from './sessionCreatedRouting';
+import type { SessionStreamAccumulator } from './sessionStreamAccumulator';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -63,9 +67,8 @@ interface UseChatRealtimeHandlersArgs {
   setTokenBudget: (budget: Record<string, unknown> | null) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
-  streamBufferRef: MutableRefObject<string>;
-  streamTimerRef: MutableRefObject<number | null>;
-  accumulatedStreamRef: MutableRefObject<string>;
+  streamAccumulatorRef: MutableRefObject<SessionStreamAccumulator>;
+  streamTimersRef: MutableRefObject<Map<string, number>>;
   onSessionInactive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
@@ -92,9 +95,8 @@ export function useChatRealtimeHandlers({
   setTokenBudget,
   setPendingPermissionRequests,
   pendingViewSessionRef,
-  streamBufferRef,
-  streamTimerRef,
-  accumulatedStreamRef,
+  streamAccumulatorRef,
+  streamTimersRef,
   onSessionInactive,
   onSessionProcessing,
   onSessionNotProcessing,
@@ -183,46 +185,60 @@ export function useChatRealtimeHandlers({
     /* ---------------------------------------------------------------- */
 
     const sid = msg.sessionId || activeViewSessionId;
+    const isActiveViewSession = Boolean(sid && sid === activeViewSessionId);
+
+    const clearStreamTimer = (sessionId: string) => {
+      const timerId = streamTimersRef.current.get(sessionId);
+      if (!timerId) return;
+      clearTimeout(timerId);
+      streamTimersRef.current.delete(sessionId);
+    };
+
+    const flushStream = (sessionId: string) => {
+      clearStreamTimer(sessionId);
+      const finalText = streamAccumulatorRef.current.finish(sessionId);
+      if (finalText) {
+        sessionStore.updateStreaming(sessionId, finalText, provider);
+      }
+    };
+
+    const finalizeStreamFallback = (sessionId: string) => {
+      flushStream(sessionId);
+      sessionStore.finalizeStreaming(sessionId);
+    };
 
     // --- Streaming: buffer for performance ---
     if (msg.kind === 'stream_delta') {
+      if (!sid) return;
       const text = msg.content || '';
       if (!text) return;
-      streamBufferRef.current += text;
-      accumulatedStreamRef.current += text;
-      if (!streamTimerRef.current) {
-        streamTimerRef.current = window.setTimeout(() => {
-          streamTimerRef.current = null;
-          if (sid) {
-            sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
+      streamAccumulatorRef.current.appendDelta(sid, text);
+      if (!streamTimersRef.current.has(sid)) {
+        const timerId = window.setTimeout(() => {
+          streamTimersRef.current.delete(sid);
+          const accumulatedText = streamAccumulatorRef.current.get(sid);
+          if (accumulatedText) {
+            sessionStore.updateStreaming(sid, accumulatedText, provider);
           }
         }, 100);
-      }
-      // Also route to store for non-active sessions
-      if (sid && sid !== activeViewSessionId) {
-        sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+        streamTimersRef.current.set(sid, timerId);
       }
       return;
     }
 
     if (msg.kind === 'stream_end') {
-      if (streamTimerRef.current) {
-        clearTimeout(streamTimerRef.current);
-        streamTimerRef.current = null;
-      }
       if (sid) {
-        if (accumulatedStreamRef.current) {
-          sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-        }
-        sessionStore.finalizeStreaming(sid);
+        flushStream(sid);
       }
-      accumulatedStreamRef.current = '';
-      streamBufferRef.current = '';
       return;
     }
 
     // --- All other messages: route to store ---
     if (sid) {
+      if (msg.kind === 'text' && msg.role === 'assistant') {
+        clearStreamTimer(sid);
+        streamAccumulatorRef.current.clear(sid);
+      }
       sessionStore.appendRealtime(sid, msg as NormalizedMessage);
     }
 
@@ -232,7 +248,14 @@ export function useChatRealtimeHandlers({
         const newSessionId = msg.newSessionId;
         if (!newSessionId) break;
 
-        if (!currentSessionId || currentSessionId.startsWith('new-session-')) {
+        const shouldAdoptSession = shouldAdoptCreatedSession({
+          newSessionId,
+          currentSessionId,
+          selectedSessionId: selectedSession?.id || null,
+          hasPendingViewSession: Boolean(pendingViewSessionRef.current),
+        });
+
+        if (shouldAdoptSession) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
           if (pendingViewSessionRef.current && !pendingViewSessionRef.current.sessionId) {
             pendingViewSessionRef.current.sessionId = newSessionId;
@@ -242,8 +265,8 @@ export function useChatRealtimeHandlers({
           setPendingPermissionRequests((prev) =>
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
           );
+          onNavigateToSession?.(newSessionId);
         }
-        onNavigateToSession?.(newSessionId);
         if (shouldRefreshProjectsForRealtimeMessage(msg)) {
           scheduleProjectsRefresh(250);
         }
@@ -251,22 +274,16 @@ export function useChatRealtimeHandlers({
       }
 
       case 'complete': {
-        // Flush any remaining streaming state
-        if (streamTimerRef.current) {
-          clearTimeout(streamTimerRef.current);
-          streamTimerRef.current = null;
+        if (sid) {
+          finalizeStreamFallback(sid);
         }
-        if (sid && accumulatedStreamRef.current) {
-          sessionStore.updateStreaming(sid, accumulatedStreamRef.current, provider);
-          sessionStore.finalizeStreaming(sid);
-        }
-        accumulatedStreamRef.current = '';
-        streamBufferRef.current = '';
 
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
-        setPendingPermissionRequests([]);
+        if (isActiveViewSession) {
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+          setPendingPermissionRequests([]);
+        }
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
 
@@ -296,9 +313,15 @@ export function useChatRealtimeHandlers({
       }
 
       case 'error': {
-        setIsLoading(false);
-        setCanAbortSession(false);
-        setClaudeStatus(null);
+        if (sid) {
+          clearStreamTimer(sid);
+          streamAccumulatorRef.current.clear(sid);
+        }
+        if (isActiveViewSession) {
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+        }
         onSessionInactive?.(sid);
         onSessionNotProcessing?.(sid);
         break;
@@ -317,9 +340,11 @@ export function useChatRealtimeHandlers({
             receivedAt: new Date(),
           }];
         });
-        setIsLoading(true);
-        setCanAbortSession(true);
-        setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        if (isActiveViewSession) {
+          setIsLoading(true);
+          setCanAbortSession(true);
+          setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+        }
         break;
       }
 
@@ -331,6 +356,7 @@ export function useChatRealtimeHandlers({
       }
 
       case 'status': {
+        if (!isActiveViewSession) break;
         if (msg.text === 'token_budget' && msg.tokenBudget) {
           setTokenBudget(msg.tokenBudget as Record<string, unknown>);
         } else if (msg.text) {
@@ -363,9 +389,8 @@ export function useChatRealtimeHandlers({
     setTokenBudget,
     setPendingPermissionRequests,
     pendingViewSessionRef,
-    streamBufferRef,
-    streamTimerRef,
-    accumulatedStreamRef,
+    streamAccumulatorRef,
+    streamTimersRef,
     onSessionInactive,
     onSessionProcessing,
     onSessionNotProcessing,

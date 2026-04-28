@@ -33,6 +33,38 @@ function getMessageTime(message: NormalizedMessage): number | null {
   return Number.isFinite(time) ? time : null;
 }
 
+function isStreamingPlaceholder(message: NormalizedMessage): boolean {
+  return message.kind === 'stream_delta' && message.id === `__streaming_${message.sessionId}`;
+}
+
+function isAssistantText(message: NormalizedMessage): boolean {
+  return message.kind === 'text' && message.role === 'assistant';
+}
+
+function isSupersedingAssistantText(
+  message: NormalizedMessage,
+  streamingPlaceholder: NormalizedMessage,
+): boolean {
+  if (!isAssistantText(message)) return false;
+  if (message.sessionId !== streamingPlaceholder.sessionId) return false;
+  if (message.provider !== streamingPlaceholder.provider) return false;
+
+  const messageTime = getMessageTime(message);
+  const streamTime = getMessageTime(streamingPlaceholder);
+  if (messageTime === null || streamTime === null) return true;
+
+  return messageTime >= streamTime;
+}
+
+function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const filtered = messages.filter((message) => {
+    if (!isStreamingPlaceholder(message)) return true;
+    return !messages.some(candidate => isSupersedingAssistantText(candidate, message));
+  });
+
+  return filtered.length === messages.length ? messages : filtered;
+}
+
 function insertByTimestamp(
   messages: NormalizedMessage[],
   message: NormalizedMessage,
@@ -92,7 +124,7 @@ function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessag
  * Realtime messages that aren't yet in server stay (in-flight streaming).
  */
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
-  const realtimeUnique = dedupeRealtimeMessages(realtime);
+  const realtimeUnique = dropSupersededStreamingPlaceholders(dedupeRealtimeMessages(realtime));
   if (realtimeUnique.length === 0) return server;
   if (server.length === 0) return realtimeUnique;
   const serverIds = new Set(server.map(m => m.id));

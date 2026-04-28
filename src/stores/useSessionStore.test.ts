@@ -95,3 +95,23 @@ test('computeMerged drops duplicated optimistic user text for the same local tim
 
   assert.deepEqual(merged, [firstLocalUser]);
 });
+
+test('computeMerged hides a streaming placeholder once the canonical assistant text arrives', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:17.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Hello can I today?',
+  };
+  const canonicalAssistant = makeAssistantText({
+    id: 'msg_canonical_assistant',
+    timestamp: '2026-04-28T19:01:17.500Z',
+    content: 'Hello! How can I help you today?',
+  });
+
+  const merged = computeMerged([], [streamingPlaceholder, canonicalAssistant]);
+
+  assert.deepEqual(merged, [canonicalAssistant]);
+});

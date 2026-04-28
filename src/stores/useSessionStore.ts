@@ -8,8 +8,10 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+
 import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
+
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
 import { computeMerged } from './sessionMerge';
 
@@ -249,7 +251,11 @@ export function useSessionStore() {
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    let updated = [...slot.realtimeMessages, msg];
+    const shouldReplaceStream = msg.kind === 'text' && msg.role === 'assistant';
+    const current = shouldReplaceStream
+      ? slot.realtimeMessages.filter(m => m.id !== `__streaming_${sessionId}`)
+      : slot.realtimeMessages;
+    let updated = [...current, msg];
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -264,7 +270,11 @@ export function useSessionStore() {
   const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
     if (msgs.length === 0) return;
     const slot = getSlot(sessionId);
-    let updated = [...slot.realtimeMessages, ...msgs];
+    const shouldReplaceStream = msgs.some(msg => msg.kind === 'text' && msg.role === 'assistant');
+    const current = shouldReplaceStream
+      ? slot.realtimeMessages.filter(m => m.id !== `__streaming_${sessionId}`)
+      : slot.realtimeMessages;
+    let updated = [...current, ...msgs];
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }

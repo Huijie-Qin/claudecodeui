@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
+
 import { authenticatedFetch } from '../../../utils/api';
 import type { ChatMessage, Provider } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
-import { normalizedToChatMessages } from './useChatMessages';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+
+import { normalizedToChatMessages } from './useChatMessages';
+import {
+  shouldFlushPendingUserMessageToSession,
+  shouldShowPendingUserMessageInView,
+} from './pendingUserMessageRouting';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -150,7 +156,12 @@ export function useChatSessionState({
 
   // When a real session ID arrives and we have a pending user message, flush it to the store
   const prevActiveSessionRef = useRef<string | null>(null);
-  if (activeSessionId && activeSessionId !== prevActiveSessionRef.current && pendingUserMessage) {
+  if (shouldFlushPendingUserMessageToSession({
+    activeSessionId,
+    previousActiveSessionId: prevActiveSessionRef.current,
+    selectedSessionId: selectedSession?.id || null,
+    hasPendingUserMessage: Boolean(pendingUserMessage),
+  }) && activeSessionId && pendingUserMessage) {
     const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
@@ -172,12 +183,16 @@ export function useChatSessionState({
   const chatMessages = useMemo(() => {
     const all = normalizedToChatMessages(storeMessages);
     // Show pending user message when no session data exists yet (new session, pre-backend-response)
-    if (pendingUserMessage && all.length === 0) {
+    if (pendingUserMessage && shouldShowPendingUserMessageInView({
+      selectedSessionId: selectedSession?.id || null,
+      storeMessageCount: all.length,
+      hasPendingUserMessage: true,
+    })) {
       return [pendingUserMessage];
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingUserMessage]);
+  }, [storeMessages, viewHiddenCount, pendingUserMessage, selectedSession?.id]);
 
   /* ---------------------------------------------------------------- */
   /*  addMessage / clearMessages / rewindMessages                     */
@@ -316,6 +331,7 @@ export function useChatSessionState({
       setCanAbortSession(false);
       setIsLoading(false);
       setCurrentSessionId(null);
+      setPendingUserMessage(null);
       sessionStorage.removeItem('cursorSessionId');
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);
@@ -333,10 +349,10 @@ export function useChatSessionState({
       return;
     }
 
-    const sessionChanged = currentSessionId !== null && currentSessionId !== selectedSession.id;
+    const sessionChanged = currentSessionId !== selectedSession.id;
     if (sessionChanged) {
-      resetStreamingState();
       pendingViewSessionRef.current = null;
+      setPendingUserMessage(null);
       setClaudeStatus(null);
       setCanAbortSession(false);
     }
