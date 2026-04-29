@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildClaudeDockerWrapperScript,
   buildContainerName,
   buildDockerRunArgs,
   buildRuntimePaths,
@@ -76,6 +77,15 @@ test('docker run args mount only workspace and runtime home', () => {
   assert.ok(joined.includes('--read-only'));
   assert.equal(joined.includes('/.claude'), false);
   assert.equal(joined.includes('/var/run/docker.sock'), false);
+});
+
+test('claude docker wrapper tolerates an empty forwarded env array', () => {
+  const wrapper = buildClaudeDockerWrapperScript({
+    containerName: 'cloudcli-claude-test',
+  });
+
+  assert.match(wrapper, /\$\{DOCKER_ENV\[@\]\+"\$\{DOCKER_ENV\[@\]\}"\}/);
+  assert.match(wrapper, /set -euo pipefail/);
 });
 
 test('docker mode creates runtime home, wrapper, DB row, and container', async () => {

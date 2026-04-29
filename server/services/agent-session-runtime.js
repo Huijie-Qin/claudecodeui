@@ -196,7 +196,7 @@ ${envLines}
 exec docker exec -i \\
   -w /workspace \\
   -e HOME=/home/cloudcli \\
-  "\${DOCKER_ENV[@]}" \\
+  \${DOCKER_ENV[@]+"\${DOCKER_ENV[@]}"} \\
   ${container} \\
   ${binary} "$@"
 `;
