@@ -151,6 +151,7 @@ export function useChatComposerState({
     ((event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>) => Promise<void>) | null
   >(null);
   const inputValueRef = useRef(input);
+  const pendingDisplayInputRef = useRef<string | null>(null);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -235,7 +236,7 @@ export function useChatComposerState({
     [onFileOpen, onShowSettings, addMessage, clearMessages, rewindMessages],
   );
 
-  const handleCustomCommand = useCallback(async (result: CommandExecutionResult) => {
+  const handleCustomCommand = useCallback(async (result: CommandExecutionResult, displayInput?: string) => {
     const { content, hasBashCommands } = result;
 
     if (hasBashCommands) {
@@ -253,6 +254,7 @@ export function useChatComposerState({
     }
 
     const commandContent = content || '';
+    pendingDisplayInputRef.current = displayInput?.trim() ? displayInput : null;
     setInput(commandContent);
     inputValueRef.current = commandContent;
 
@@ -316,7 +318,7 @@ export function useChatComposerState({
           setInput('');
           inputValueRef.current = '';
         } else if (result.type === 'custom') {
-          await handleCustomCommand(result);
+          await handleCustomCommand(result, effectiveInput);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -362,7 +364,6 @@ export function useChatComposerState({
     input,
     setInput,
     textareaRef,
-    onExecuteCommand: executeCommand,
   });
 
   const {
@@ -495,6 +496,8 @@ export function useChatComposerState({
       if (selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${currentInput}`;
       }
+      const displayInput = pendingDisplayInputRef.current || currentInput;
+      pendingDisplayInputRef.current = null;
 
       let uploadedImages: unknown[] = [];
       if (attachedImages.length > 0) {
@@ -534,7 +537,7 @@ export function useChatComposerState({
 
       const userMessage: ChatMessage = {
         type: 'user',
-        content: currentInput,
+        content: displayInput,
         images: uploadedImages as any,
         timestamp: new Date(),
       };
@@ -590,7 +593,7 @@ export function useChatComposerState({
 
       const toolsSettings = getToolsSettings();
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
-      const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
+      const sessionSummary = getNotificationSessionSummary(selectedSession, displayInput);
 
       if (provider === 'cursor') {
         sendMessage({
@@ -656,6 +659,7 @@ export function useChatComposerState({
             permissionMode,
             model: claudeModel,
             sessionSummary,
+            displayCommand: displayInput !== currentInput ? displayInput : undefined,
             images: uploadedImages,
           },
         });

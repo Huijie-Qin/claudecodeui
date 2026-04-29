@@ -22,7 +22,6 @@ interface UseSlashCommandsOptions {
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
   textareaRef: RefObject<HTMLTextAreaElement>;
-  onExecuteCommand: (command: SlashCommand, rawInput?: string) => void | Promise<void>;
 }
 
 const getCommandHistoryKey = (projectName: string) => `command_history_${projectName}`;
@@ -45,15 +44,11 @@ const saveCommandHistory = (projectName: string, history: Record<string, number>
   safeLocalStorage.setItem(getCommandHistoryKey(projectName), JSON.stringify(history));
 };
 
-const isPromiseLike = (value: unknown): value is Promise<unknown> =>
-  Boolean(value) && typeof (value as Promise<unknown>).then === 'function';
-
 export function useSlashCommands({
   selectedProject,
   input,
   setInput,
   textareaRef,
-  onExecuteCommand,
 }: UseSlashCommandsOptions) {
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [filteredCommands, setFilteredCommands] = useState<SlashCommand[]>([]);
@@ -198,7 +193,7 @@ export function useSlashCommands({
     [selectedProject],
   );
 
-  const selectCommandFromKeyboard = useCallback(
+  const insertSelectedCommand = useCallback(
     (command: SlashCommand) => {
       const textBeforeSlash = input.slice(0, slashPosition);
       const textAfterSlash = input.slice(slashPosition);
@@ -206,17 +201,12 @@ export function useSlashCommands({
       const textAfterQuery = spaceIndex !== -1 ? textAfterSlash.slice(spaceIndex) : '';
       const newInput = `${textBeforeSlash}${command.name} ${textAfterQuery}`;
 
+      trackCommandUsage(command);
       setInput(newInput);
       resetCommandMenuState();
-
-      const executionResult = onExecuteCommand(command);
-      if (isPromiseLike(executionResult)) {
-        executionResult.catch(() => {
-          // Keep behavior silent; execution errors are handled by caller.
-        });
-      }
+      textareaRef.current?.focus();
     },
-    [input, slashPosition, setInput, resetCommandMenuState, onExecuteCommand],
+    [input, slashPosition, setInput, resetCommandMenuState, textareaRef, trackCommandUsage],
   );
 
   const handleCommandSelect = useCallback(
@@ -230,21 +220,9 @@ export function useSlashCommands({
         return;
       }
 
-      trackCommandUsage(command);
-      const executionResult = onExecuteCommand(command);
-
-      if (isPromiseLike(executionResult)) {
-        executionResult.then(() => {
-          resetCommandMenuState();
-        });
-        executionResult.catch(() => {
-          // Keep behavior silent; execution errors are handled by caller.
-        });
-      } else {
-        resetCommandMenuState();
-      }
+      insertSelectedCommand(command);
     },
-    [selectedProject, trackCommandUsage, onExecuteCommand, resetCommandMenuState],
+    [selectedProject, insertSelectedCommand],
   );
 
   const handleToggleCommandMenu = useCallback(() => {
@@ -333,9 +311,9 @@ export function useSlashCommands({
       if (event.key === 'Tab' || event.key === 'Enter') {
         event.preventDefault();
         if (selectedCommandIndex >= 0) {
-          selectCommandFromKeyboard(filteredCommands[selectedCommandIndex]);
+          insertSelectedCommand(filteredCommands[selectedCommandIndex]);
         } else if (filteredCommands.length > 0) {
-          selectCommandFromKeyboard(filteredCommands[0]);
+          insertSelectedCommand(filteredCommands[0]);
         }
         return true;
       }
@@ -348,7 +326,7 @@ export function useSlashCommands({
 
       return false;
     },
-    [showCommandMenu, filteredCommands, resetCommandMenuState, selectCommandFromKeyboard, selectedCommandIndex],
+    [showCommandMenu, filteredCommands, resetCommandMenuState, insertSelectedCommand, selectedCommandIndex],
   );
 
   useEffect(

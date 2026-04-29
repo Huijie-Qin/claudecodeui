@@ -77,6 +77,101 @@ async function scanCommandsDirectory(dir, baseDir, namespace) {
   return commands;
 }
 
+async function scanSkillsDirectory(dir, namespace) {
+  const commands = [];
+
+  async function walk(currentDir) {
+    try {
+      const entries = await fs.readdir(currentDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(currentDir, entry.name);
+
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+
+        if (!entry.isFile() || entry.name !== 'SKILL.md') {
+          continue;
+        }
+
+        try {
+          const content = await fs.readFile(fullPath, 'utf8');
+          const { data: frontmatter, content: skillContent } = parseFrontmatter(content);
+          const skillName = String(frontmatter.name || path.basename(path.dirname(fullPath))).trim();
+          if (!skillName) {
+            continue;
+          }
+
+          let description = frontmatter.description || '';
+          if (!description) {
+            const firstLine = skillContent.trim().split('\n')[0];
+            description = firstLine.replace(/^#+\s*/, '').trim();
+          }
+
+          commands.push({
+            name: '/' + skillName.replace(/^\//, ''),
+            path: fullPath,
+            relativePath: path.relative(dir, fullPath),
+            description,
+            namespace,
+            metadata: {
+              ...frontmatter,
+              type: 'skill'
+            }
+          });
+        } catch (err) {
+          console.error(`Error parsing skill file ${fullPath}:`, err.message);
+        }
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT' && err.code !== 'EACCES') {
+        console.error(`Error scanning skills directory ${currentDir}:`, err.message);
+      }
+    }
+  }
+
+  await walk(dir);
+  return commands;
+}
+
+async function readJsonFile(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function getEnabledPluginInstallPaths() {
+  const homeDir = os.homedir();
+  const [settings, installedPlugins] = await Promise.all([
+    readJsonFile(path.join(homeDir, '.claude', 'settings.json')),
+    readJsonFile(path.join(homeDir, '.claude', 'plugins', 'installed_plugins.json'))
+  ]);
+  const enabledPlugins = settings?.enabledPlugins || {};
+  const hasExplicitEnabledPlugins = Object.keys(enabledPlugins).length > 0;
+  const plugins = installedPlugins?.plugins || {};
+  const installPaths = [];
+
+  for (const [pluginName, installs] of Object.entries(plugins)) {
+    if (hasExplicitEnabledPlugins && enabledPlugins[pluginName] !== true) {
+      continue;
+    }
+    if (!Array.isArray(installs)) {
+      continue;
+    }
+    for (const install of installs) {
+      if (typeof install?.installPath === 'string' && install.installPath.trim()) {
+        installPaths.push(install.installPath);
+      }
+    }
+  }
+
+  return [...new Set(installPaths)];
+}
+
 /**
  * Built-in commands that are always available
  */
@@ -419,6 +514,10 @@ router.post('/list', async (req, res) => {
         'project'
       );
       allCommands.push(...projectCommands);
+
+      const projectSkillsDir = path.join(projectPath, '.claude', 'skills');
+      const projectSkills = await scanSkillsDirectory(projectSkillsDir, 'project-skill');
+      allCommands.push(...projectSkills);
     }
 
     // Scan user-level commands (~/.claude/commands/)
@@ -430,6 +529,17 @@ router.post('/list', async (req, res) => {
       'user'
     );
     allCommands.push(...userCommands);
+
+    const userSkillsDir = path.join(homeDir, '.claude', 'skills');
+    const userSkills = await scanSkillsDirectory(userSkillsDir, 'user-skill');
+    allCommands.push(...userSkills);
+
+    const pluginInstallPaths = await getEnabledPluginInstallPaths();
+    for (const pluginInstallPath of pluginInstallPaths) {
+      const pluginSkillsDir = path.join(pluginInstallPath, 'skills');
+      const pluginSkills = await scanSkillsDirectory(pluginSkillsDir, 'plugin-skill');
+      allCommands.push(...pluginSkills);
+    }
 
     // Separate built-in and custom commands
     const customCommands = allCommands.filter(cmd => cmd.namespace !== 'builtin');
@@ -498,17 +608,30 @@ router.post('/execute', async (req, res) => {
     {
       const resolvedPath = path.resolve(commandPath);
       const userBase = path.resolve(path.join(os.homedir(), '.claude', 'commands'));
+      const userSkillsBase = path.resolve(path.join(os.homedir(), '.claude', 'skills'));
       const projectBase = context?.projectPath
         ? path.resolve(path.join(context.projectPath, '.claude', 'commands'))
         : null;
+      const projectSkillsBase = context?.projectPath
+        ? path.resolve(path.join(context.projectPath, '.claude', 'skills'))
+        : null;
+      const pluginSkillBases = (await getEnabledPluginInstallPaths())
+        .map((installPath) => path.resolve(path.join(installPath, 'skills')));
       const isUnder = (base) => {
         const rel = path.relative(base, resolvedPath);
         return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
       };
-      if (!(isUnder(userBase) || (projectBase && isUnder(projectBase)))) {
+      const allowedBases = [
+        userBase,
+        userSkillsBase,
+        projectBase,
+        projectSkillsBase,
+        ...pluginSkillBases
+      ].filter(Boolean);
+      if (!allowedBases.some(isUnder)) {
         return res.status(403).json({
           error: 'Access denied',
-          message: 'Command must be in .claude/commands directory'
+          message: 'Command must be in an allowed .claude commands, skills, or plugin directory'
         });
       }
     }
@@ -519,6 +642,7 @@ router.post('/execute', async (req, res) => {
 
     // Replace $ARGUMENTS with all arguments joined
     const argsString = args.join(' ');
+    const hasArgumentPlaceholder = /\$(?:ARGUMENTS|\d+\b)/.test(commandContent);
     processedContent = processedContent.replace(/\$ARGUMENTS/g, argsString);
 
     // Replace $1, $2, etc. with positional arguments
@@ -526,6 +650,10 @@ router.post('/execute', async (req, res) => {
       const placeholder = `$${index + 1}`;
       processedContent = processedContent.replace(new RegExp(`\\${placeholder}\\b`, 'g'), arg);
     });
+
+    if (path.basename(commandPath) === 'SKILL.md' && argsString && !hasArgumentPlaceholder) {
+      processedContent = `${processedContent.trim()}\n\n## User request\n\n${argsString}\n`;
+    }
 
     res.json({
       type: 'custom',

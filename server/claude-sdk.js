@@ -555,12 +555,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
       runtimeMode: runtimeContext.mode,
     };
 
+    const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
+      ? runtimeOptions.displayCommand
+      : command;
+
     persistUserPromptMessage({
       options: runtimeOptions,
       provider: 'claude',
       providerSessionId: capturedSessionId || sessionId || null,
       runtimeId: runtimeOptions.runtimeId,
-      command,
+      command: displayCommand,
     });
 
     // Map CLI options to SDK format
