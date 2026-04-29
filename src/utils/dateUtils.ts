@@ -1,7 +1,21 @@
 import { TFunction } from 'i18next';
 
+const SQLITE_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+
+export const parseTimestamp = (value: string | number | Date): Date => {
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === 'string' && SQLITE_UTC_TIMESTAMP_PATTERN.test(value)) {
+    return new Date(`${value.replace(' ', 'T')}Z`);
+  }
+
+  return new Date(value);
+};
+
 export const formatTimeAgo = (dateString: string, currentTime: Date, t: TFunction) => {
-  const date = new Date(dateString);
+  const date = parseTimestamp(dateString);
   const now = currentTime;
 
   // Check if date is valid

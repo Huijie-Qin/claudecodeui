@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Project } from '../../../types/app';
-import { getAllSessions } from './utils';
+
+import { getAllSessions, getSessionDate } from './utils';
 
 const makeProject = (sessions: Project['sessions']): Project => ({
   name: 'workspace-a',
@@ -42,4 +43,16 @@ test('getAllSessions keeps same-title Claude sessions when their ids differ', ()
 
   assert.equal(sessions.length, 2);
   assert.deepEqual(sessions.map((session) => session.id), ['session-2', 'session-1']);
+});
+
+test('getSessionDate treats SQLite CURRENT_TIMESTAMP values as UTC', () => {
+  assert.equal(
+    getSessionDate({
+      id: 'session-1',
+      summary: 'hello',
+      lastActivity: '2026-04-29 03:25:02',
+      __provider: 'claude',
+    }).toISOString(),
+    '2026-04-29T03:25:02.000Z',
+  );
 });

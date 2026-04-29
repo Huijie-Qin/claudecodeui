@@ -1,5 +1,7 @@
 import type { TFunction } from 'i18next';
+
 import type { Project } from '../../../types/app';
+import { parseTimestamp } from '../../../utils/dateUtils';
 import type {
   AdditionalSessionsByProject,
   ProjectSortOrder,
@@ -41,14 +43,14 @@ export const persistStarredProjects = (starredProjects: Set<string>) => {
 
 export const getSessionDate = (session: SessionWithProvider): Date => {
   if (session.__provider === 'cursor') {
-    return new Date(session.createdAt || 0);
+    return parseTimestamp(session.createdAt || 0);
   }
 
   if (session.__provider === 'codex') {
-    return new Date(session.createdAt || session.lastActivity || 0);
+    return parseTimestamp(session.createdAt || session.lastActivity || 0);
   }
 
-  return new Date(session.lastActivity || session.createdAt || 0);
+  return parseTimestamp(session.lastActivity || session.createdAt || 0);
 };
 
 export const getSessionName = (session: SessionWithProvider, t: TFunction): string => {
