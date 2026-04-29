@@ -41,7 +41,19 @@ const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
-const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+
+function getToolInteractionMessage(toolName) {
+  if (toolName === 'AskUserQuestion') {
+    return 'Claude is asking a question.';
+  }
+
+  if (toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') {
+    return 'Claude is waiting for plan confirmation.';
+  }
+
+  return 'Claude requires your attention.';
+}
 
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -118,40 +130,6 @@ function resolveClaudeModel(options = {}) {
   return envModel || options.model || CLAUDE_MODELS.DEFAULT;
 }
 
-// Match stored permission entries against a tool + input combo.
-// This only supports exact tool names and the Bash(command:*) shorthand
-// used by the UI; it intentionally does not implement full glob semantics,
-// introduced to stay consistent with the UI's "Allow rule" format.
-function matchesToolPermission(entry, toolName, input) {
-  if (!entry || !toolName) {
-    return false;
-  }
-
-  if (entry === toolName) {
-    return true;
-  }
-
-  const bashMatch = entry.match(/^Bash\((.+):\*\)$/);
-  if (toolName === 'Bash' && bashMatch) {
-    const allowedPrefix = bashMatch[1];
-    let command = '';
-
-    if (typeof input === 'string') {
-      command = input.trim();
-    } else if (input && typeof input === 'object' && typeof input.command === 'string') {
-      command = input.command.trim();
-    }
-
-    if (!command) {
-      return false;
-    }
-
-    return command.startsWith(allowedPrefix);
-  }
-
-  return false;
-}
-
 /**
  * Maps CLI options to SDK-compatible options format
  * @param {Object} options - CLI options
@@ -161,7 +139,6 @@ function mapCliOptionsToSDK(options = {}) {
   const {
     sessionId,
     cwd,
-    toolsSettings,
     permissionMode,
     pathToClaudeCodeExecutable,
     executionEnv,
@@ -185,25 +162,12 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.cwd = cwd;
   }
 
-  // Map permission mode
-  if (permissionMode && permissionMode !== 'default') {
+  // Keep plan mode behavior, while normal execution is auto-approved through canUseTool below.
+  if (permissionMode === 'plan') {
     sdkOptions.permissionMode = permissionMode;
   }
 
-  // Map tool settings
-  const settings = toolsSettings || {
-    allowedTools: [],
-    disallowedTools: [],
-    skipPermissions: false
-  };
-
-  // Handle tool permissions
-  if (settings.skipPermissions && permissionMode !== 'plan') {
-    // When skipping permissions, use bypassPermissions mode
-    sdkOptions.permissionMode = 'bypassPermissions';
-  }
-
-  let allowedTools = [...(settings.allowedTools || [])];
+  let allowedTools = [];
 
   // Add plan mode default tools
   if (permissionMode === 'plan') {
@@ -222,7 +186,7 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = settings.disallowedTools || [];
+  sdkOptions.disallowedTools = [];
 
   // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
   // The provider adapter converts those stream_event payloads into UI stream_delta events.
@@ -611,36 +575,21 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
-        if (sdkOptions.permissionMode === 'bypassPermissions') {
-          return { behavior: 'allow', updatedInput: input };
-        }
-
-        const isDisallowed = (sdkOptions.disallowedTools || []).some(entry =>
-          matchesToolPermission(entry, toolName, input)
-        );
-        if (isDisallowed) {
-          return { behavior: 'deny', message: 'Tool disallowed by settings' };
-        }
-
-        const isAllowed = (sdkOptions.allowedTools || []).some(entry =>
-          matchesToolPermission(entry, toolName, input)
-        );
-        if (isAllowed) {
-          return { behavior: 'allow', updatedInput: input };
-        }
+        return { behavior: 'allow', updatedInput: input };
       }
 
       const requestId = createRequestId();
+      const interactionMessage = getToolInteractionMessage(toolName);
       ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: capturedSessionId || sessionId || null,
         kind: 'action_required',
-        code: 'permission.required',
-        meta: { toolName, sessionName: sessionSummary },
+        code: 'agent.notification',
+        meta: { message: interactionMessage, toolName, sessionName: sessionSummary },
         severity: 'warning',
         requiresUserAction: true,
-        dedupeKey: `claude:permission:${capturedSessionId || sessionId || 'none'}:${requestId}`
+        dedupeKey: `claude:interaction:${capturedSessionId || sessionId || 'none'}:${requestId}`
       }));
 
       const decision = await waitForToolApproval(requestId, {
@@ -657,11 +606,11 @@ async function queryClaudeSDK(command, options = {}, ws) {
         }
       });
       if (!decision) {
-        return { behavior: 'deny', message: 'Permission request timed out' };
+        return { behavior: 'deny', message: 'Tool interaction timed out' };
       }
 
       if (decision.cancelled) {
-        return { behavior: 'deny', message: 'Permission request cancelled' };
+        return { behavior: 'deny', message: 'Tool interaction cancelled' };
       }
 
       if (decision.allow) {
@@ -676,7 +625,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
       }
 
-      return { behavior: 'deny', message: decision.message ?? 'User denied tool use' };
+      return { behavior: 'deny', message: decision.message ?? 'User declined tool interaction' };
     };
 
     // Set stream-close timeout for interactive tools (Query constructor reads it synchronously). Claude Agent SDK has a default of 5s and this overrides it

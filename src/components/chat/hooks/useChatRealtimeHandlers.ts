@@ -343,7 +343,11 @@ export function useChatRealtimeHandlers({
         if (isActiveViewSession) {
           setIsLoading(true);
           setCanAbortSession(true);
-          setClaudeStatus({ text: 'Waiting for permission', tokens: 0, can_interrupt: true });
+          setClaudeStatus({
+            text: msg.toolName === 'AskUserQuestion' ? 'Waiting for answer' : 'Waiting for confirmation',
+            tokens: 0,
+            can_interrupt: true,
+          });
         }
         break;
       }
