@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { PendingPermissionRequest } from '../types/types';
-import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 
 import {
@@ -56,8 +56,8 @@ type LatestChatMessage = {
 
 interface UseChatRealtimeHandlersArgs {
   latestMessage: LatestChatMessage | null;
+  subscribeMessage?: (listener: (message: LatestChatMessage) => void) => () => void;
   provider: LLMProvider;
-  selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
   setCurrentSessionId: (sessionId: string | null) => void;
@@ -84,8 +84,8 @@ interface UseChatRealtimeHandlersArgs {
 
 export function useChatRealtimeHandlers({
   latestMessage,
+  subscribeMessage,
   provider,
-  selectedProject,
   selectedSession,
   currentSessionId,
   setCurrentSessionId,
@@ -107,10 +107,10 @@ export function useChatRealtimeHandlers({
 }: UseChatRealtimeHandlersArgs) {
   const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
 
-  useEffect(() => {
-    if (!latestMessage) return;
-    if (lastProcessedMessageRef.current === latestMessage) return;
-    lastProcessedMessageRef.current = latestMessage;
+  const processRealtimeMessage = useCallback((incomingMessage: LatestChatMessage | null) => {
+    if (!incomingMessage) return;
+    if (lastProcessedMessageRef.current === incomingMessage) return;
+    lastProcessedMessageRef.current = incomingMessage;
 
     const activeViewSessionId =
       selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || null;
@@ -119,7 +119,7 @@ export function useChatRealtimeHandlers({
     /*  Legacy messages (no `kind` field) — handle and return           */
     /* ---------------------------------------------------------------- */
 
-    const msg = latestMessage as any;
+    const msg = incomingMessage as any;
 
     if (!msg.kind) {
       const messageType = String(msg.type || '');
@@ -381,9 +381,7 @@ export function useChatRealtimeHandlers({
         break;
     }
   }, [
-    latestMessage,
     provider,
-    selectedProject,
     selectedSession,
     currentSessionId,
     setCurrentSessionId,
@@ -403,4 +401,21 @@ export function useChatRealtimeHandlers({
     onWebSocketReconnect,
     sessionStore,
   ]);
+
+  const processRealtimeMessageRef = useRef(processRealtimeMessage);
+  useEffect(() => {
+    processRealtimeMessageRef.current = processRealtimeMessage;
+  }, [processRealtimeMessage]);
+
+  useEffect(() => {
+    if (!subscribeMessage) return undefined;
+    return subscribeMessage((message) => {
+      processRealtimeMessageRef.current(message);
+    });
+  }, [subscribeMessage]);
+
+  useEffect(() => {
+    if (subscribeMessage) return;
+    processRealtimeMessage(latestMessage);
+  }, [latestMessage, processRealtimeMessage, subscribeMessage]);
 }

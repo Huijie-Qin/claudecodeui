@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type { ChatInterfaceProps, Provider  } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
@@ -48,6 +49,7 @@ function ChatInterface({
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
+  const { subscribeMessage } = useWebSocket();
 
   const sessionStore = useSessionStore();
   const streamAccumulatorRef = useRef(createSessionStreamAccumulator());
@@ -221,8 +223,8 @@ function ChatInterface({
 
   useChatRealtimeHandlers({
     latestMessage,
+    subscribeMessage,
     provider,
-    selectedProject,
     selectedSession,
     currentSessionId,
     setCurrentSessionId,

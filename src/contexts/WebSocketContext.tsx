@@ -9,10 +9,12 @@ import {
   prepareWebSocketConnectionAttempt,
   shouldAttemptTenantWebSocketConnection,
 } from './webSocketLifecycle';
+import { createWebSocketMessageDispatcher } from './webSocketMessageDispatch';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
   sendMessage: (message: any) => void;
+  subscribeMessage: (listener: (message: any) => void) => () => void;
   latestMessage: any | null;
   isConnected: boolean;
 };
@@ -46,6 +48,24 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { token } = useAuth();
   const { currentTenant } = useTenant();
+  const messageDispatcherRef = useRef<ReturnType<typeof createWebSocketMessageDispatcher<any>> | null>(null);
+
+  if (!messageDispatcherRef.current) {
+    messageDispatcherRef.current = createWebSocketMessageDispatcher({
+      updateLatestMessage: setLatestMessage,
+      onListenerError: (error) => {
+        console.error('Error handling WebSocket message listener:', error);
+      },
+    });
+  }
+
+  const publishMessage = useCallback((message: any) => {
+    messageDispatcherRef.current?.publish(message);
+  }, []);
+
+  const subscribeMessage = useCallback((listener: (message: any) => void) => {
+    return messageDispatcherRef.current?.subscribe(listener) ?? (() => {});
+  }, []);
 
   const connect = useCallback((attemptGeneration: number) => {
     if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
@@ -69,7 +89,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         setIsConnected(true);
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
-          setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
+          publishMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
         }
         hasConnectedRef.current = true;
       };
@@ -78,7 +98,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
         try {
           const data = JSON.parse(event.data);
-          setLatestMessage(data);
+          publishMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
         }
@@ -106,7 +126,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
     }
-  }, [currentTenant?.id, token]); // everytime token or tenant changes, we reconnect
+  }, [currentTenant?.id, publishMessage, token]); // everytime token or tenant changes, we reconnect
 
   useEffect(() => {
     const attemptGeneration = prepareWebSocketConnectionAttempt(lifecycleRef);
@@ -139,9 +159,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   ({
     ws: wsRef.current,
     sendMessage,
+    subscribeMessage,
     latestMessage,
     isConnected
-  }), [sendMessage, latestMessage, isConnected]);
+  }), [sendMessage, subscribeMessage, latestMessage, isConnected]);
 
   return value;
 };
