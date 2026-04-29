@@ -149,10 +149,19 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         onSearchQueryChange={setSearchQuery}
         onNewFile={isReadOnly ? undefined : () => operations.handleStartCreate('', 'file')}
         onNewFolder={isReadOnly ? undefined : () => operations.handleStartCreate('', 'directory')}
+        onUpload={isReadOnly ? undefined : () => upload.openFilePicker('')}
         onRefresh={refreshFiles}
         onCollapseAll={collapseAll}
         loading={loading}
-        operationLoading={operations.operationLoading}
+        operationLoading={operations.operationLoading || upload.operationLoading}
+      />
+
+      <input
+        ref={upload.fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={upload.handleFileInputChange}
       />
 
       {viewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
@@ -206,6 +215,8 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           onNewFolder={isReadOnly ? undefined : (path) => operations.handleStartCreate(path, 'directory')}
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
+          onMove={isReadOnly ? undefined : operations.handleStartMove}
+          onUpload={isReadOnly ? undefined : upload.openFilePicker}
           onRefresh={refreshFiles}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}
@@ -214,7 +225,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           handleConfirmRename={operations.handleConfirmRename}
           handleCancelRename={operations.handleCancelRename}
           renameInputRef={renameInputRef}
-          operationLoading={operations.operationLoading}
+          operationLoading={operations.operationLoading || upload.operationLoading}
         />
       </ScrollArea>
 
@@ -264,6 +275,60 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
               >
                 {operations.operationLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {t('fileTree.delete.confirm', 'Delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move Dialog */}
+      {operations.moveDialog.isOpen && operations.moveDialog.item && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-lg border border-border bg-background p-4 shadow-lg">
+            <div className="mb-4">
+              <h3 className="font-medium text-foreground">
+                {t('fileTree.move.title', 'Move {{type}}', {
+                  type: operations.moveDialog.item.type === 'directory' ? 'Folder' : 'File',
+                })}
+              </h3>
+              <p className="mt-1 truncate text-sm text-muted-foreground">
+                {operations.moveDialog.item.path}
+              </p>
+            </div>
+            <label className="mb-2 block text-sm font-medium text-foreground">
+              {t('fileTree.move.targetDirectory', 'Target directory')}
+            </label>
+            <Input
+              type="text"
+              value={operations.moveDialog.targetDirectory}
+              onChange={(event) => operations.setMoveTargetDirectory(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') operations.handleConfirmMove();
+                if (event.key === 'Escape') operations.handleCancelMove();
+              }}
+              placeholder={t('fileTree.move.rootPlaceholder', 'Leave empty for project root, or enter docs/examples')}
+              disabled={operations.operationLoading}
+              className="mb-4"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={operations.handleCancelMove}
+                disabled={operations.operationLoading}
+                className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+              >
+                {t('common.cancel', 'Cancel')}
+              </button>
+              <button
+                onClick={operations.handleConfirmMove}
+                disabled={operations.operationLoading}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+              >
+                {operations.operationLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  t('fileTree.move.confirm', 'Move')
+                )}
               </button>
             </div>
           </div>

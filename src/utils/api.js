@@ -153,6 +153,12 @@ export const api = {
       body: JSON.stringify({ oldPath, newName, workspaceId }),
     }),
 
+  moveFile: (projectName, { sourcePath, targetDirectory, workspaceId }) =>
+    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files/move`), {
+      method: 'PUT',
+      body: JSON.stringify({ sourcePath, targetDirectory, workspaceId }),
+    }),
+
   deleteFile: (projectName, { path, type, workspaceId }) =>
     authenticatedFetch(withTenantParam(`/api/projects/${projectName}/files`), {
       method: 'DELETE',

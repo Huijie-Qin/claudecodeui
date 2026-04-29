@@ -33,6 +33,7 @@ import {
   persistNormalizedMessages,
   persistUserPromptMessage,
 } from './services/session-message-history.js';
+import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -576,6 +577,27 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       if (!requiresInteraction) {
         return { behavior: 'allow', updatedInput: input };
+      }
+
+      if ((toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') && typeof input?.plan === 'string') {
+        try {
+          const savedPlan = await savePlanMarkdownToWorkspaceRoot({
+            workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || options.cwd,
+            plan: input.plan,
+            sessionId: capturedSessionId || sessionId || null,
+          });
+          ws.send({
+            type: 'files_changed',
+            projectName: runtimeOptions.projectName,
+            workspaceId: runtimeOptions.workspaceId,
+            changedPath: savedPlan.relativePath,
+            reason: 'plan',
+            savedPlanPath: savedPlan.relativePath,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.warn('Failed to save plan markdown to workspace root:', error?.message || error);
+        }
       }
 
       const requestId = createRequestId();

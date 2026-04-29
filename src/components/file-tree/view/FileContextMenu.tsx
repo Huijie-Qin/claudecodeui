@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { Copy, Download, FileText, FolderPlus, MoveRight, Pencil, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 type FileContextItem = {
@@ -53,6 +53,8 @@ export default function FileContextMenu({
   onRefresh,
   onCopyPath,
   onDownload,
+  onMove,
+  onUpload,
   isLoading = false,
   className = '',
 }: {
@@ -65,6 +67,8 @@ export default function FileContextMenu({
   onRefresh?: () => void;
   onCopyPath?: (item: FileContextItem) => void;
   onDownload?: (item: FileContextItem) => void;
+  onMove?: (item: FileContextItem) => void;
+  onUpload?: (path: string) => void;
   isLoading?: boolean;
   className?: string;
 }) {
@@ -93,6 +97,12 @@ export default function FileContextMenu({
   const menuActions = useMemo<ContextMenuAction[]>(() => {
     if (item?.type === 'file') {
       return [
+        {
+          key: 'move',
+          icon: MoveRight,
+          label: t('fileTree.context.move', 'Move...'),
+          onSelect: () => onMove?.(item),
+        },
         {
           key: 'rename',
           icon: Pencil,
@@ -125,6 +135,12 @@ export default function FileContextMenu({
     if (item?.type === 'directory') {
       return [
         {
+          key: 'upload',
+          icon: Upload,
+          label: t('fileTree.context.uploadHere', 'Upload Here'),
+          onSelect: () => onUpload?.(item.path),
+        },
+        {
           key: 'newFile',
           icon: FileText,
           label: t('fileTree.context.newFile', 'New File'),
@@ -137,11 +153,17 @@ export default function FileContextMenu({
           onSelect: () => onNewFolder?.(item.path),
         },
         {
+          key: 'move',
+          icon: MoveRight,
+          label: t('fileTree.context.move', 'Move...'),
+          onSelect: () => onMove?.(item),
+          showDividerBefore: true,
+        },
+        {
           key: 'rename',
           icon: Pencil,
           label: t('fileTree.context.rename', 'Rename'),
           onSelect: () => onRename?.(item),
-          showDividerBefore: true,
         },
         {
           key: 'delete',
@@ -168,6 +190,12 @@ export default function FileContextMenu({
 
     return [
       {
+        key: 'upload',
+        icon: Upload,
+        label: t('fileTree.context.uploadHere', 'Upload Here'),
+        onSelect: () => onUpload?.(''),
+      },
+      {
         key: 'newFile',
         icon: FileText,
         label: t('fileTree.context.newFile', 'New File'),
@@ -187,7 +215,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, t]);
+  }, [item, onCopyPath, onDelete, onDownload, onMove, onNewFile, onNewFolder, onRefresh, onRename, onUpload, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

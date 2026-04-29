@@ -650,6 +650,7 @@ export function useChatComposerState({
           type: 'claude-command',
           command: messageContent,
           options: {
+            projectName: selectedProject.name,
             projectPath: resolvedProjectPath,
             cwd: resolvedProjectPath,
             workspaceId: selectedProject.workspaceId,

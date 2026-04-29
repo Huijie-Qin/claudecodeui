@@ -3,6 +3,11 @@ import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '../../../utils/api';
 import { escapeRegExp } from '../utils/chatFormatting';
 import type { Project } from '../../../types/app';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
+import {
+  subscribeProjectFilesChanged,
+  type ProjectFilesChangedEvent,
+} from '../../file-tree/utils/fileTreeEvents';
 
 interface ProjectFileNode {
   name: string;
@@ -54,6 +59,8 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   const [selectedFileIndex, setSelectedFileIndex] = useState(-1);
   const [cursorPosition, setCursorPosition] = useState(0);
   const [atSymbolPosition, setAtSymbolPosition] = useState(-1);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { latestMessage } = useWebSocket();
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -88,7 +95,46 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     return () => {
       abortController.abort();
     };
+  }, [selectedProject?.name, selectedProject?.workspaceId, refreshKey]);
+
+  useEffect(() => {
+    const matchesSelectedProject = (event: ProjectFilesChangedEvent) => {
+      if (!selectedProject?.name) return false;
+      if (event.projectName && event.projectName !== selectedProject.name) return false;
+      if (
+        event.workspaceId != null &&
+        selectedProject.workspaceId != null &&
+        String(event.workspaceId) !== String(selectedProject.workspaceId)
+      ) {
+        return false;
+      }
+      return true;
+    };
+
+    return subscribeProjectFilesChanged((event) => {
+      if (matchesSelectedProject(event)) {
+        setRefreshKey((previous) => previous + 1);
+      }
+    });
   }, [selectedProject?.name, selectedProject?.workspaceId]);
+
+  useEffect(() => {
+    const message = latestMessage as ProjectFilesChangedEvent & { type?: string } | null;
+    if (!message || message.type !== 'files_changed' || !selectedProject?.name) {
+      return;
+    }
+    if (message.projectName && message.projectName !== selectedProject.name) {
+      return;
+    }
+    if (
+      message.workspaceId != null &&
+      selectedProject.workspaceId != null &&
+      String(message.workspaceId) !== String(selectedProject.workspaceId)
+    ) {
+      return;
+    }
+    setRefreshKey((previous) => previous + 1);
+  }, [latestMessage, selectedProject?.name, selectedProject?.workspaceId]);
 
   useEffect(() => {
     const textBeforeCursor = input.slice(0, cursorPosition);
