@@ -59,6 +59,10 @@ function isInternalContent(content: string): boolean {
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix));
 }
 
+function cleanAssistantText(text: string): string {
+  return text.replace(/<\|assistant\|>/g, '');
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -70,10 +74,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
+    if (raw.isSidechain === true || raw.isMeta === true || raw.message?.isMeta === true) {
+      return [];
+    }
+
     const streamEvent = raw.type === 'stream_event' ? readObjectRecord(raw.event) : raw;
 
     if (streamEvent?.type === 'content_block_delta' && streamEvent.delta?.text) {
-      return [createNormalizedMessage({ kind: 'stream_delta', content: streamEvent.delta.text, sessionId, provider: PROVIDER })];
+      const content = cleanAssistantText(streamEvent.delta.text);
+      if (!content) {
+        return [];
+      }
+      return [createNormalizedMessage({ kind: 'stream_delta', content, sessionId, provider: PROVIDER })];
     }
     if (streamEvent?.type === 'content_block_stop') {
       return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
@@ -196,6 +208,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         let partIndex = 0;
         for (const part of raw.message.content) {
           if (part.type === 'text' && part.text) {
+            const content = cleanAssistantText(part.text);
+            if (!content) {
+              partIndex++;
+              continue;
+            }
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -203,7 +220,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'text',
               role: 'assistant',
-              content: part.text,
+              content,
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
@@ -229,6 +246,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           partIndex++;
         }
       } else if (typeof raw.message.content === 'string') {
+        const content = cleanAssistantText(raw.message.content);
+        if (!content) {
+          return messages;
+        }
         messages.push(createNormalizedMessage({
           id: baseId,
           sessionId,
@@ -236,7 +257,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           provider: PROVIDER,
           kind: 'text',
           role: 'assistant',
-          content: raw.message.content,
+          content,
         }));
       }
       return messages;

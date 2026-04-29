@@ -232,7 +232,7 @@ test('agent session messages persist normalized history idempotently', () => {
       provider: 'claude',
       kind: 'text',
       role: 'assistant',
-      content: 'hi',
+      content: 'hi<|assistant|>',
     },
   ];
 

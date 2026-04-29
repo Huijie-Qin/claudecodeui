@@ -73,6 +73,38 @@ test('ClaudeSessionsProvider filters hook-wrapped resume summaries from user-vis
   assert.deepEqual(messages, []);
 });
 
+test('ClaudeSessionsProvider filters sidechain subagent messages from user-visible messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'subagent-prompt',
+    isSidechain: true,
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Search the workspace for skill files.',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
+test('ClaudeSessionsProvider filters meta messages from user-visible messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'skill-meta',
+    isMeta: true,
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Loaded skill body.',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
 test('ClaudeSessionsProvider normalizes SDK partial stream events into stream messages', () => {
   const provider = new ClaudeSessionsProvider();
   const deltaMessages = provider.normalizeMessage({
@@ -106,4 +138,44 @@ test('ClaudeSessionsProvider normalizes SDK partial stream events into stream me
   assert.equal(endMessages.length, 1);
   assert.equal(endMessages[0].kind, 'stream_end');
   assert.equal(endMessages[0].sessionId, 'session-1');
+});
+
+test('ClaudeSessionsProvider strips assistant sentinel tokens from Claude text', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'assistant',
+    uuid: 'assistant-sentinel',
+    timestamp: '2026-04-29T02:55:00.000Z',
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: 'SKILL_FINAL_OK<|assistant|>',
+      }],
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'assistant');
+  assert.equal(messages[0].content, 'SKILL_FINAL_OK');
+});
+
+test('ClaudeSessionsProvider drops stream deltas that only contain assistant sentinel tokens', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'stream_event',
+    uuid: 'partial-sentinel',
+    session_id: 'session-1',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: {
+        type: 'text_delta',
+        text: '<|assistant|>',
+      },
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
 });

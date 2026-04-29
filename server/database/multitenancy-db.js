@@ -82,9 +82,9 @@ function normalizeOffset(value) {
 
 function parseNormalizedMessageRow(row) {
   try {
-    return JSON.parse(row.normalized_json);
+    return cleanStoredNormalizedMessage(row, JSON.parse(row.normalized_json));
   } catch (error) {
-    return {
+    return cleanStoredNormalizedMessage(row, {
       id: row.message_id,
       sessionId: row.provider_session_id,
       timestamp: row.provider_timestamp,
@@ -92,8 +92,23 @@ function parseNormalizedMessageRow(row) {
       kind: row.kind,
       role: row.role || undefined,
       content: row.content_text || undefined,
+    });
+  }
+}
+
+function cleanStoredNormalizedMessage(row, message) {
+  if (
+    row.provider === 'claude' &&
+    message?.role === 'assistant' &&
+    typeof message.content === 'string'
+  ) {
+    return {
+      ...message,
+      content: message.content.replace(/<\|assistant\|>/g, ''),
     };
   }
+
+  return message;
 }
 
 function extractContentText(message) {
