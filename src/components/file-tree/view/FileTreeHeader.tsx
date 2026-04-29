@@ -1,4 +1,4 @@
-import { ChevronDown, Eye, FileText, FolderPlus, List, RefreshCw, Search, TableProperties, X } from 'lucide-react';
+import { ChevronDown, Eye, FileText, FolderPlus, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
@@ -12,6 +12,7 @@ type FileTreeHeaderProps = {
   // Toolbar actions
   onNewFile?: () => void;
   onNewFolder?: () => void;
+  onUpload?: () => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
   // Loading state
@@ -26,6 +27,7 @@ export default function FileTreeHeader({
   onSearchQueryChange,
   onNewFile,
   onNewFolder,
+  onUpload,
   onRefresh,
   onCollapseAll,
   loading,
@@ -64,6 +66,19 @@ export default function FileTreeHeader({
               disabled={operationLoading}
             >
               <FolderPlus className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {onUpload && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={onUpload}
+              title={t('fileTree.upload', 'Upload Files')}
+              aria-label={t('fileTree.upload', 'Upload Files')}
+              disabled={operationLoading}
+            >
+              <Upload className="h-3.5 w-3.5" />
             </Button>
           )}
           {onRefresh && (

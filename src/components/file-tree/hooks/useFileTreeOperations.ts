@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import { api } from '../../../utils/api';
 import type { FileTreeNode } from '../types/types';
 import type { Project } from '../../../types/app';
+import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
 
 // Invalid filename characters
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
@@ -17,6 +18,12 @@ export type ToastMessage = {
 export type DeleteConfirmation = {
   isOpen: boolean;
   item: FileTreeNode | null;
+};
+
+export type MoveDialog = {
+  isOpen: boolean;
+  item: FileTreeNode | null;
+  targetDirectory: string;
 };
 
 export type UseFileTreeOperationsOptions = {
@@ -55,6 +62,13 @@ export type UseFileTreeOperationsResult = {
   handleCopyPath: (item: FileTreeNode) => void;
   handleDownload: (item: FileTreeNode) => Promise<void>;
 
+  // Move operations
+  moveDialog: MoveDialog;
+  handleStartMove: (item: FileTreeNode) => void;
+  handleCancelMove: () => void;
+  handleConfirmMove: () => Promise<void>;
+  setMoveTargetDirectory: (value: string) => void;
+
   // Loading state
   operationLoading: boolean;
 
@@ -76,6 +90,11 @@ export function useFileTreeOperations({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteConfirmation>({
     isOpen: false,
     item: null,
+  });
+  const [moveDialog, setMoveDialog] = useState<MoveDialog>({
+    isOpen: false,
+    item: null,
+    targetDirectory: '',
   });
   const [isCreating, setIsCreating] = useState(false);
   const [newItemParent, setNewItemParent] = useState('');
@@ -141,6 +160,12 @@ export function useFileTreeOperations({
       }
 
       showToast(t('fileTree.toast.renamed', 'Renamed successfully'), 'success');
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId: selectedProject.workspaceId,
+        changedPath: renameValue,
+        reason: 'rename',
+      });
       onRefresh();
       handleCancelRename();
     } catch (err) {
@@ -183,6 +208,12 @@ export function useFileTreeOperations({
           : t('fileTree.toast.fileDeleted', 'File deleted'),
         'success'
       );
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId: selectedProject.workspaceId,
+        changedPath: item.path,
+        reason: 'delete',
+      });
       onRefresh();
       handleCancelDelete();
     } catch (err) {
@@ -237,6 +268,12 @@ export function useFileTreeOperations({
           : t('fileTree.toast.folderCreated', 'Folder created successfully'),
         'success'
       );
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId: selectedProject.workspaceId,
+        changedPath: newItemParent ? `${newItemParent}/${newItemName}` : newItemName,
+        reason: 'create',
+      });
       onRefresh();
       handleCancelCreate();
     } catch (err) {
@@ -346,6 +383,61 @@ export function useFileTreeOperations({
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
   }, [selectedProject, showToast, t, triggerBrowserDownload]);
 
+  const handleStartMove = useCallback((item: FileTreeNode) => {
+    if (isReadOnly) return;
+    setMoveDialog({
+      isOpen: true,
+      item,
+      targetDirectory: '',
+    });
+  }, [isReadOnly]);
+
+  const handleCancelMove = useCallback(() => {
+    setMoveDialog({
+      isOpen: false,
+      item: null,
+      targetDirectory: '',
+    });
+  }, []);
+
+  const setMoveTargetDirectory = useCallback((value: string) => {
+    setMoveDialog((previous) => ({ ...previous, targetDirectory: value }));
+  }, []);
+
+  const handleConfirmMove = useCallback(async () => {
+    const { item, targetDirectory } = moveDialog;
+    if (!item || !selectedProject || isReadOnly) return;
+
+    setOperationLoading(true);
+    try {
+      const response = await api.moveFile(selectedProject.name, {
+        sourcePath: item.path,
+        targetDirectory,
+        workspaceId: selectedProject.workspaceId,
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to move');
+      }
+
+      const result = await response.json();
+      showToast(t('fileTree.toast.moved', 'Moved successfully'), 'success');
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId: selectedProject.workspaceId,
+        changedPath: result.relativePath || item.path,
+        reason: 'move',
+      });
+      onRefresh();
+      handleCancelMove();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [moveDialog, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelMove]);
+
   return {
     // Rename operations
     renamingItem,
@@ -374,6 +466,13 @@ export function useFileTreeOperations({
     // Other operations
     handleCopyPath,
     handleDownload,
+
+    // Move operations
+    moveDialog,
+    handleStartMove,
+    handleCancelMove,
+    handleConfirmMove,
+    setMoveTargetDirectory,
 
     // Loading state
     operationLoading,

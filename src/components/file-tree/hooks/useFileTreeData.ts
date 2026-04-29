@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../../utils/api';
 import type { Project } from '../../../types/app';
 import type { FileTreeNode } from '../types/types';
+import { useWebSocket } from '../../../contexts/WebSocketContext';
+import { subscribeProjectFilesChanged, type ProjectFilesChangedEvent } from '../utils/fileTreeEvents';
 
 type UseFileTreeDataResult = {
   files: FileTreeNode[];
@@ -14,6 +16,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   const [loading, setLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const { latestMessage } = useWebSocket();
 
   const refreshFiles = useCallback(() => {
     setRefreshKey((prev) => prev + 1);
@@ -84,6 +87,45 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       abortControllerRef.current?.abort();
     };
   }, [selectedProject?.name, selectedProject?.workspaceId, refreshKey]);
+
+  useEffect(() => {
+    const matchesSelectedProject = (event: ProjectFilesChangedEvent) => {
+      if (!selectedProject?.name) return false;
+      if (event.projectName && event.projectName !== selectedProject.name) return false;
+      if (
+        event.workspaceId != null &&
+        selectedProject.workspaceId != null &&
+        String(event.workspaceId) !== String(selectedProject.workspaceId)
+      ) {
+        return false;
+      }
+      return true;
+    };
+
+    return subscribeProjectFilesChanged((event) => {
+      if (matchesSelectedProject(event)) {
+        refreshFiles();
+      }
+    });
+  }, [refreshFiles, selectedProject?.name, selectedProject?.workspaceId]);
+
+  useEffect(() => {
+    const message = latestMessage as ProjectFilesChangedEvent & { type?: string } | null;
+    if (!message || message.type !== 'files_changed' || !selectedProject?.name) {
+      return;
+    }
+    if (message.projectName && message.projectName !== selectedProject.name) {
+      return;
+    }
+    if (
+      message.workspaceId != null &&
+      selectedProject.workspaceId != null &&
+      String(message.workspaceId) !== String(selectedProject.workspaceId)
+    ) {
+      return;
+    }
+    refreshFiles();
+  }, [latestMessage, refreshFiles, selectedProject?.name, selectedProject?.workspaceId]);
 
   return {
     files,

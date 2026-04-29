@@ -62,6 +62,7 @@ import { canAccessHostFilesystem } from './services/host-filesystem-access.js';
 import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
 import { workspaceAccess } from './services/workspace-access.js';
 import { handleWorkspaceError, resolveWorkspaceForRequest } from './services/workspace-request.js';
+import { moveWorkspaceItem } from './services/workspace-file-operations.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 
@@ -96,6 +97,23 @@ function broadcastProgress(progress) {
         type: 'loading_progress',
         ...progress
     });
+    connectedClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
+}
+
+function broadcastFilesChanged({ projectName, workspaceId, changedPath, reason }) {
+    const message = JSON.stringify({
+        type: 'files_changed',
+        projectName,
+        workspaceId,
+        changedPath,
+        reason,
+        timestamp: new Date().toISOString(),
+    });
+
     connectedClients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
             client.send(message);
@@ -984,6 +1002,12 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             type,
             message: `${type === 'file' ? 'File' : 'Directory'} created successfully`
         });
+        broadcastFilesChanged({
+            projectName: req.params.projectName,
+            workspaceId: workspace.id,
+            changedPath: targetPath,
+            reason: 'create',
+        });
     } catch (error) {
         console.error('Error creating file/directory:', error);
         if (error.statusCode) {
@@ -1057,8 +1081,60 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             newName,
             message: 'Renamed successfully'
         });
+        broadcastFilesChanged({
+            projectName: req.params.projectName,
+            workspaceId: workspace.id,
+            changedPath: path.relative(projectRoot, resolvedNewPath),
+            reason: 'rename',
+        });
     } catch (error) {
         console.error('Error renaming file/directory:', error);
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        } else if (error.code === 'EACCES') {
+            res.status(403).json({ error: 'Permission denied' });
+        } else if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File or directory not found' });
+        } else if (error.code === 'EXDEV') {
+            res.status(400).json({ error: 'Cannot move across different filesystems' });
+        } else {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
+// PUT /api/projects/:projectName/files/move - Move file or directory to another directory
+app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, res) => {
+    try {
+        const { sourcePath, targetDirectory } = req.body;
+
+        if (!sourcePath) {
+            return res.status(400).json({ error: 'sourcePath is required' });
+        }
+
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        const result = await moveWorkspaceItem({
+            workspaceRoot: workspace.path,
+            sourcePath,
+            targetDirectory: targetDirectory || '',
+        });
+
+        res.json({
+            success: true,
+            oldPath: result.oldPath,
+            newPath: result.newPath,
+            relativePath: result.relativePath,
+            type: result.type,
+            message: 'Moved successfully',
+        });
+        broadcastFilesChanged({
+            projectName: req.params.projectName,
+            workspaceId: workspace.id,
+            changedPath: result.relativePath,
+            reason: 'move',
+        });
+    } catch (error) {
+        console.error('Error moving file/directory:', error);
         if (error.statusCode) {
             return handleWorkspaceError(res, error);
         } else if (error.code === 'EACCES') {
@@ -1119,6 +1195,12 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             path: resolvedPath,
             type: stats.isDirectory() ? 'directory' : 'file',
             message: 'Deleted successfully'
+        });
+        broadcastFilesChanged({
+            projectName: req.params.projectName,
+            workspaceId: workspace.id,
+            changedPath: targetPath,
+            reason: 'delete',
         });
     } catch (error) {
         console.error('Error deleting file/directory:', error);
@@ -1275,6 +1357,12 @@ const uploadFilesHandler = async (req, res) => {
                 files: uploadedFiles,
                 targetPath: resolvedTargetDir,
                 message: `Uploaded ${uploadedFiles.length} file(s) successfully`
+            });
+            broadcastFilesChanged({
+                projectName: req.params.projectName,
+                workspaceId: workspace.id,
+                changedPath: targetDir,
+                reason: 'upload',
             });
         } catch (error) {
             console.error('Error uploading files:', error);

@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef } from 'react';
 import type { Project } from '../../../types/app';
 import { api } from '../../../utils/api';
+import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
@@ -68,6 +69,70 @@ export const useFileTreeUpload = ({
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [operationLoading, setOperationLoading] = useState(false);
   const treeRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pickerTargetPathRef = useRef('');
+
+  const uploadFiles = useCallback(async (files: File[], targetPath = '') => {
+    if (isReadOnly || !selectedProject || files.length === 0) {
+      return;
+    }
+
+    setOperationLoading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('targetPath', targetPath);
+
+      const relativePaths: string[] = [];
+      files.forEach((file) => {
+        const cleanFile = new File([file], file.name.split('/').pop()!, {
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        formData.append('files', cleanFile);
+        relativePaths.push(file.name);
+      });
+
+      formData.append('relativePaths', JSON.stringify(relativePaths));
+
+      const response = await api.uploadFiles(selectedProject.name, formData, selectedProject.workspaceId);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Upload failed');
+      }
+
+      showToast(
+        `Uploaded ${files.length} file(s)`,
+        'success'
+      );
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId: selectedProject.workspaceId,
+        changedPath: targetPath,
+        reason: 'upload',
+      });
+      onRefresh();
+    } catch (err) {
+      console.error('Upload error:', err);
+      showToast(err instanceof Error ? err.message : 'Upload failed', 'error');
+    } finally {
+      setOperationLoading(false);
+      setDropTarget(null);
+    }
+  }, [isReadOnly, selectedProject, onRefresh, showToast]);
+
+  const openFilePicker = useCallback((targetPath = '') => {
+    if (isReadOnly) return;
+    pickerTargetPathRef.current = targetPath;
+    fileInputRef.current?.click();
+  }, [isReadOnly]);
+
+  const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    void uploadFiles(files, pickerTargetPathRef.current);
+  }, [uploadFiles]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -100,7 +165,6 @@ export const useFileTreeUpload = ({
     }
 
     const targetPath = dropTarget || '';
-    setOperationLoading(true);
 
     try {
       const files: File[] = [];
@@ -135,50 +199,16 @@ export const useFileTreeUpload = ({
       }
 
       if (files.length === 0) {
-        setOperationLoading(false);
         setDropTarget(null);
         return;
       }
 
-      const formData = new FormData();
-      formData.append('targetPath', targetPath);
-
-      // Store relative paths separately since FormData strips path info from File.name
-      const relativePaths: string[] = [];
-      files.forEach((file) => {
-        // Create a new file with just the filename (without path) for FormData
-        // but store the relative path separately
-        const cleanFile = new File([file], file.name.split('/').pop()!, {
-          type: file.type,
-          lastModified: file.lastModified
-        });
-        formData.append('files', cleanFile);
-        relativePaths.push(file.name); // Keep the full relative path
-      });
-
-      // Send relative paths as a JSON array
-      formData.append('relativePaths', JSON.stringify(relativePaths));
-
-      const response = await api.uploadFiles(selectedProject.name, formData, selectedProject.workspaceId);
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
-      }
-
-      showToast(
-        `Uploaded ${files.length} file(s)`,
-        'success'
-      );
-      onRefresh();
+      await uploadFiles(files, targetPath);
     } catch (err) {
       console.error('Upload error:', err);
       showToast(err instanceof Error ? err.message : 'Upload failed', 'error');
-    } finally {
-      setOperationLoading(false);
-      setDropTarget(null);
     }
-  }, [dropTarget, selectedProject, isReadOnly, onRefresh, showToast]);
+  }, [dropTarget, selectedProject, isReadOnly, uploadFiles, showToast]);
 
   const handleItemDragOver = useCallback((e: React.DragEvent, itemPath: string) => {
     e.preventDefault();
@@ -197,12 +227,15 @@ export const useFileTreeUpload = ({
     dropTarget,
     operationLoading,
     treeRef,
+    fileInputRef,
     handleDragEnter,
     handleDragOver,
     handleDragLeave,
     handleDrop,
+    handleFileInputChange,
     handleItemDragOver,
     handleItemDrop,
+    openFilePicker,
     setDropTarget,
   };
 };
