@@ -16,10 +16,13 @@ function isPersistedCopyOfOptimisticUserText(
 ): boolean {
   if (!isLocalOptimisticUserText(realtimeMessage)) return false;
   if (serverMessage.kind !== 'text' || serverMessage.role !== 'user') return false;
-  if (serverMessage.sessionId !== realtimeMessage.sessionId) return false;
   if (serverMessage.provider !== realtimeMessage.provider) return false;
   if (typeof serverMessage.content !== 'string') return false;
   if (serverMessage.content.trim() !== realtimeMessage.content?.trim()) return false;
+
+  const sameSession = serverMessage.sessionId === realtimeMessage.sessionId;
+  const pendingNewSessionPrompt = serverMessage.id.startsWith('user_');
+  if (!sameSession && !pendingNewSessionPrompt) return false;
 
   const serverTime = new Date(serverMessage.timestamp).getTime();
   const realtimeTime = new Date(realtimeMessage.timestamp).getTime();

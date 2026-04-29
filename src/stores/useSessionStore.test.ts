@@ -96,6 +96,25 @@ test('computeMerged drops duplicated optimistic user text for the same local tim
   assert.deepEqual(merged, [firstLocalUser]);
 });
 
+test('computeMerged drops pending new-session user after the real session prompt is persisted', () => {
+  const persistedPrompt = makeUserText({
+    id: 'user_1777199493000_abc123',
+    sessionId: 'real-session-1',
+    timestamp: '2026-04-26T10:31:33.700Z',
+    content: 'hello',
+  });
+  const pendingLocalUser = makeUserText({
+    id: 'local_1777199493000_def456',
+    sessionId: 'new-session-1777199493000',
+    timestamp: '2026-04-26T10:31:33.000Z',
+    content: 'hello',
+  });
+
+  const merged = computeMerged([persistedPrompt], [pendingLocalUser]);
+
+  assert.deepEqual(merged, [persistedPrompt]);
+});
+
 test('computeMerged hides a streaming placeholder once the canonical assistant text arrives', () => {
   const streamingPlaceholder: NormalizedMessage = {
     id: '__streaming_session-1',
