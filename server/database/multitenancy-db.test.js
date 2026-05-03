@@ -363,14 +363,18 @@ test('runtime monitor lists runtimes with tenant user and workspace context', ()
     runtimeHomePath: '/tmp/runtime/home',
     status: 'idle',
   });
+  database.prepare("UPDATE workspaces SET status = 'deleted' WHERE id = ?").run(workspace.id);
 
   const result = mt.runtimes.listForMonitor({ limit: 20, offset: 0 });
+  const row = mt.runtimes.getMonitorRowByRuntimeId('runtime-1');
 
   assert.equal(result.total, 1);
   assert.equal(result.rows[0].runtime_id, 'runtime-1');
   assert.equal(result.rows[0].tenant_code, 'default');
   assert.equal(result.rows[0].username, 'admin');
   assert.equal(result.rows[0].workspace_display_name, 'Demo Workspace');
+  assert.equal(row.runtime_id, 'runtime-1');
+  assert.equal(row.workspace_display_name, 'Demo Workspace');
 });
 
 test('runtime monitor filters by status and query text', () => {
@@ -453,6 +457,7 @@ test('runtime monitor selects expired idle runtimes only', () => {
       WHERE runtime_id = ?
     `).run(runtimeId);
   }
+  database.prepare("UPDATE workspaces SET status = 'deleted' WHERE id = ?").run(workspace.id);
 
   const expired = mt.runtimes.listExpiredIdleRuntimes({ olderThanMinutes: 30, limit: 10 });
 

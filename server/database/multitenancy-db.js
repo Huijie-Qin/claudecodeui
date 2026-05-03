@@ -796,7 +796,6 @@ export function createMultitenancyDb(database = db) {
         const normalized = normalizeRuntimeMonitorFilters(filters);
         const whereClauses = [
           "r.status != 'deleted'",
-          "w.status != 'deleted'",
         ];
         const params = [];
 
@@ -890,7 +889,6 @@ export function createMultitenancyDb(database = db) {
           JOIN workspaces w ON w.id = r.workspace_id
           WHERE r.runtime_id = ?
             AND r.status != 'deleted'
-            AND w.status != 'deleted'
         `).get(requireNonEmptyString(runtimeId, 'runtimeId')) ?? null;
       },
 
@@ -915,7 +913,6 @@ export function createMultitenancyDb(database = db) {
           JOIN users u ON u.id = r.user_id
           JOIN workspaces w ON w.id = r.workspace_id
           WHERE r.status = 'idle'
-            AND w.status != 'deleted'
             AND r.last_used_at <= datetime('now', ?)
           ORDER BY r.last_used_at ASC, r.id ASC
           LIMIT ?
