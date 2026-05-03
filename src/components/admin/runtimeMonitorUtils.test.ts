@@ -31,12 +31,14 @@ test('buildRuntimeQueryString encodes spaces and special characters in query tex
 
 test('formatBytes renders compact binary units', () => {
   assert.equal(formatBytes(null), '-');
+  assert.equal(formatBytes(0.5), '1 B');
   assert.equal(formatBytes(1024), '1.0 KiB');
   assert.equal(formatBytes(2147483648), '2.0 GiB');
 });
 
 test('formatRuntimeAge renders compact age values', () => {
   assert.equal(formatRuntimeAge(null), '-');
+  assert.equal(formatRuntimeAge(-1), '-');
   assert.equal(formatRuntimeAge(42), '42s');
   assert.equal(formatRuntimeAge(360), '6m');
   assert.equal(formatRuntimeAge(7200), '2h');
@@ -45,6 +47,8 @@ test('formatRuntimeAge renders compact age values', () => {
 test('runtimeRowContainsHostPath detects host path fields', () => {
   assert.equal(runtimeRowContainsHostPath({ workspaceHostPath: '/workspace' }), true);
   assert.equal(runtimeRowContainsHostPath({ runtimeHomePath: '/runtime-home' }), true);
+  assert.equal(runtimeRowContainsHostPath({ workspace_host_path: '/workspace' }), true);
+  assert.equal(runtimeRowContainsHostPath({ runtime_home_path: '/runtime-home' }), true);
   assert.equal(runtimeRowContainsHostPath({ workspacePath: '/workspace' }), false);
   assert.equal(runtimeRowContainsHostPath(null), false);
 });
