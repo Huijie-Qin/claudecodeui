@@ -437,7 +437,7 @@ test('stopRuntime logs, delegates to runtime manager, and returns refreshed runt
   assert.equal(row.dockerState, 'exited');
 });
 
-test('dockerState filter applies after enrichment without reporting an unfiltered total', async () => {
+test('reports filtered total and unfiltered page total when dockerState filter is applied', async () => {
   const service = createRuntimeMonitorService({
     now: () => new Date('2026-05-04T02:00:00.000Z'),
     multitenancy: {
