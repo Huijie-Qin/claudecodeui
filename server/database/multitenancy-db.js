@@ -88,6 +88,10 @@ function normalizePositiveLimit(value, fallback = 50, max = 200) {
   return Math.min(limit, max);
 }
 
+function normalizeMonitorOffset(value) {
+  return normalizeOffset(value == null || value === '' ? value : Number(value));
+}
+
 function normalizeOptionalPositiveInteger(value, name) {
   if (value == null || value === '') return null;
   return requirePositiveInteger(Number(value), name);
@@ -102,7 +106,7 @@ function normalizeRuntimeMonitorFilters(filters = {}) {
     status: filters.status ? requireEnum(filters.status, RUNTIME_STATUSES, 'status') : null,
     q: typeof filters.q === 'string' && filters.q.trim() ? `%${filters.q.trim().toLowerCase()}%` : null,
     limit: normalizePositiveLimit(filters.limit, 50, 200),
-    offset: normalizeOffset(filters.offset),
+    offset: normalizeMonitorOffset(filters.offset),
   };
 }
 

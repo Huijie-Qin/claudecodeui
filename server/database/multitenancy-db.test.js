@@ -418,6 +418,49 @@ test('runtime monitor filters by status and query text', () => {
   assert.equal(idle.total, 0);
 });
 
+test('runtime monitor accepts query-shaped pagination filters', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const tenant = mt.tenants.createTenant({ code: 'query', name: 'Query' });
+  database.prepare("INSERT INTO users (id, username, password_hash) VALUES (1, 'pager', 'hash')").run();
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId: 1,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: 1,
+    slug: 'pages',
+    displayName: 'Pages',
+    path: '/tmp/pages',
+  });
+  for (const runtimeId of ['runtime-first', 'runtime-second']) {
+    mt.runtimes.createRuntime({
+      runtimeId,
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      userId: 1,
+      provider: 'claude',
+      providerSessionId: `${runtimeId}-session`,
+      containerName: `${runtimeId}-container`,
+      image: 'cloudcli/test:claude',
+      workspaceHostPath: '/tmp/pages',
+      runtimeHomePath: `/tmp/runtime/${runtimeId}`,
+      status: 'idle',
+    });
+  }
+
+  const result = mt.runtimes.listForMonitor({ limit: '1', offset: '1' });
+
+  assert.equal(result.total, 2);
+  assert.equal(result.limit, 1);
+  assert.equal(result.offset, 1);
+  assert.deepEqual(result.rows.map((row) => row.runtime_id), ['runtime-first']);
+});
+
 test('runtime monitor selects expired idle runtimes only', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);
