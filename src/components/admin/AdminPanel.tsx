@@ -6,6 +6,7 @@ import { useTenant } from '../../contexts/TenantContext';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 
 import { buildTenantMembershipPayload, normalizeTenantCode, type TenantPermission } from './adminPanelUtils';
+import RuntimeMonitorTab from './RuntimeMonitorTab';
 
 type AdminTenant = {
   id: number;
@@ -54,6 +55,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [selectedTenantId, setSelectedTenantId] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
   const [permission, setPermission] = useState<TenantPermission>('edit');
+  const [activeTab, setActiveTab] = useState<'tenants' | 'runtimes'>('tenants');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -158,7 +160,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-3xl overflow-hidden p-0">
+      <DialogContent className="max-h-[88vh] max-w-6xl overflow-hidden p-0">
         <DialogTitle>System administration</DialogTitle>
         <div className="flex max-h-[88vh] flex-col">
           <div className="flex items-center gap-3 border-b border-border px-5 py-4">
@@ -167,119 +169,142 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-foreground">System administration</h2>
-              <p className="truncate text-xs text-muted-foreground">Tenants, users, and memberships</p>
+              <p className="truncate text-xs text-muted-foreground">Tenants, users, memberships, and runtimes</p>
             </div>
           </div>
 
-          <div className="space-y-5 overflow-y-auto px-5 py-4">
-            <section className="space-y-3">
-              <h3 className="text-sm font-medium text-foreground">Create tenant</h3>
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Code</span>
-                  <Input
-                    value={tenantCode}
-                    onChange={(event) => setTenantCode(normalizeTenantCode(event.target.value))}
-                    placeholder="acme"
-                    autoCapitalize="none"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Name</span>
-                  <Input
-                    value={tenantName}
-                    onChange={(event) => setTenantName(event.target.value)}
-                    placeholder="Acme"
-                  />
-                </label>
-                <Button className="self-end" onClick={createTenant} disabled={isSaving}>
-                  <Plus className="h-4 w-4" />
-                  Create
-                </Button>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <h3 className="text-sm font-medium text-foreground">Grant tenant access</h3>
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Tenant</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={selectedTenantId}
-                    onChange={(event) => setSelectedTenantId(event.target.value)}
-                  >
-                    <option value="">Select</option>
-                    {tenants.map((tenant) => (
-                      <option key={tenant.id} value={tenant.id}>
-                        {tenant.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">User</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={selectedUserId}
-                    onChange={(event) => setSelectedUserId(event.target.value)}
-                  >
-                    <option value="">Select</option>
-                    {users.map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {user.username}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Access</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={permission}
-                    onChange={(event) => setPermission(event.target.value as TenantPermission)}
-                  >
-                    <option value="edit">Edit</option>
-                    <option value="view">View</option>
-                  </select>
-                </label>
-                <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
-                  Grant
-                </Button>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium text-foreground">Tenants</h3>
-                <Button variant="ghost" size="icon" onClick={() => void load()} disabled={isLoading}>
-                  <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                </Button>
-              </div>
-              <div className="max-h-48 overflow-auto rounded-md border border-border">
-                {tenants.length === 0 ? (
-                  <div className="px-3 py-4 text-sm text-muted-foreground">No tenants</div>
-                ) : (
-                  tenants.map((tenant) => (
-                    <div
-                      key={tenant.id}
-                      className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0"
-                    >
-                      <span className="truncate font-medium text-foreground">{tenant.name}</span>
-                      <span className="truncate text-muted-foreground">{tenant.code}</span>
-                      <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{tenant.status}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
-
-            {error ? (
-              <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {error}
-              </div>
-            ) : null}
+          <div className="flex gap-1 border-b border-border px-5 py-2">
+            <Button
+              variant={activeTab === 'tenants' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('tenants')}
+            >
+              Tenants & Users
+            </Button>
+            <Button
+              variant={activeTab === 'runtimes' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('runtimes')}
+            >
+              Runtime Monitor
+            </Button>
           </div>
+
+          {activeTab === 'tenants' ? (
+            <div className="space-y-5 overflow-y-auto px-5 py-4">
+              <section className="space-y-3">
+                <h3 className="text-sm font-medium text-foreground">Create tenant</h3>
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Code</span>
+                    <Input
+                      value={tenantCode}
+                      onChange={(event) => setTenantCode(normalizeTenantCode(event.target.value))}
+                      placeholder="acme"
+                      autoCapitalize="none"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Name</span>
+                    <Input
+                      value={tenantName}
+                      onChange={(event) => setTenantName(event.target.value)}
+                      placeholder="Acme"
+                    />
+                  </label>
+                  <Button className="self-end" onClick={createTenant} disabled={isSaving}>
+                    <Plus className="h-4 w-4" />
+                    Create
+                  </Button>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-medium text-foreground">Grant tenant access</h3>
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Tenant</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={selectedTenantId}
+                      onChange={(event) => setSelectedTenantId(event.target.value)}
+                    >
+                      <option value="">Select</option>
+                      {tenants.map((tenant) => (
+                        <option key={tenant.id} value={tenant.id}>
+                          {tenant.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">User</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={selectedUserId}
+                      onChange={(event) => setSelectedUserId(event.target.value)}
+                    >
+                      <option value="">Select</option>
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.username}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Access</span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={permission}
+                      onChange={(event) => setPermission(event.target.value as TenantPermission)}
+                    >
+                      <option value="edit">Edit</option>
+                      <option value="view">View</option>
+                    </select>
+                  </label>
+                  <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
+                    Grant
+                  </Button>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-foreground">Tenants</h3>
+                  <Button variant="ghost" size="icon" onClick={() => void load()} disabled={isLoading}>
+                    <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                  </Button>
+                </div>
+                <div className="max-h-48 overflow-auto rounded-md border border-border">
+                  {tenants.length === 0 ? (
+                    <div className="px-3 py-4 text-sm text-muted-foreground">No tenants</div>
+                  ) : (
+                    tenants.map((tenant) => (
+                      <div
+                        key={tenant.id}
+                        className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0"
+                      >
+                        <span className="truncate font-medium text-foreground">{tenant.name}</span>
+                        <span className="truncate text-muted-foreground">{tenant.code}</span>
+                        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{tenant.status}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              {error ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="overflow-y-auto px-5 py-4">
+              <RuntimeMonitorTab />
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

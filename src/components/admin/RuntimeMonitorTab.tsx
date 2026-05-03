@@ -1,0 +1,286 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshCw, Search, Square } from 'lucide-react';
+
+import { Button, Input } from '../../shared/view/ui';
+import { api } from '../../utils/api';
+
+import {
+  buildRuntimeQueryString,
+  formatBytes,
+  formatRuntimeAge,
+  type RuntimeMonitorFilters,
+} from './runtimeMonitorUtils';
+
+type RuntimeRow = {
+  runtimeId: string;
+  tenant: { id: number; code: string; name: string };
+  user: { id: number; username: string };
+  workspace: { id: number; displayName: string; slug?: string };
+  provider: string;
+  providerSessionId: string | null;
+  businessStatus: string;
+  dockerState: string;
+  staleActive?: boolean;
+  containerName: string;
+  image: string;
+  lastUsedAt: string | null;
+  updatedAt: string | null;
+  cpuPercent: number | null;
+  memoryUsageBytes: number | null;
+  memoryLimitBytes: number | null;
+  idleAgeSeconds: number | null;
+  canStop: boolean;
+};
+
+type RuntimeSummary = {
+  total: number;
+  active: number;
+  idleRunning: number;
+  failedOrUnknown: number;
+  missing: number;
+  staleActive: number;
+  totalLiveMemoryBytes: number;
+};
+
+type RuntimePayload = {
+  rows?: RuntimeRow[];
+  total?: number;
+  summary?: RuntimeSummary;
+  error?: string;
+  message?: string;
+};
+
+type RuntimeErrorPayload = {
+  error?: string;
+  message?: string;
+};
+
+const SELECT_CLASS_NAME =
+  'h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+
+function statusClassName(status: string): string {
+  if (status === 'active' || status === 'running') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+  if (status === 'idle' || status === 'exited') {
+    return 'border-slate-200 bg-slate-50 text-slate-700';
+  }
+  if (status === 'failed' || status === 'unknown' || status === 'missing') {
+    return 'border-rose-200 bg-rose-50 text-rose-700';
+  }
+  return 'border-amber-200 bg-amber-50 text-amber-700';
+}
+
+function StatusChip({ value }: { value: string }) {
+  return (
+    <span className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${statusClassName(value)}`}>
+      {value}
+    </span>
+  );
+}
+
+function SummaryTile({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-md border border-border bg-background px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
+
+async function readError(response: Response, fallback: string): Promise<string> {
+  const payload = await response.json().catch(() => ({} as RuntimeErrorPayload));
+  return payload.error || payload.message || fallback;
+}
+
+function formatCpu(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '-';
+  return `${value.toFixed(1)}%`;
+}
+
+export default function RuntimeMonitorTab() {
+  const [filters, setFilters] = useState<RuntimeMonitorFilters>({ status: '', dockerState: '', q: '', limit: 100 });
+  const [rows, setRows] = useState<RuntimeRow[]>([]);
+  const [summary, setSummary] = useState<RuntimeSummary | null>(null);
+  const [total, setTotal] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [stoppingRuntimeId, setStoppingRuntimeId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const queryKey = useMemo(() => buildRuntimeQueryString(filters), [filters]);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await api.admin.runtimes(filters);
+      if (!response.ok) {
+        setError(await readError(response, 'Failed to load runtimes'));
+        return;
+      }
+
+      const payload = await response.json() as RuntimePayload;
+      setRows(payload.rows || []);
+      setSummary(payload.summary || null);
+      setTotal(payload.total || 0);
+    } catch (caughtError) {
+      console.error('[RuntimeMonitorTab] Failed to load runtimes:', { queryKey, error: caughtError });
+      setError('Failed to load runtimes');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters, queryKey]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const stopRuntime = async (runtimeId: string) => {
+    setStoppingRuntimeId(runtimeId);
+    setError(null);
+
+    try {
+      const response = await api.admin.stopRuntime(runtimeId);
+      if (!response.ok) {
+        setError(await readError(response, 'Failed to stop runtime'));
+        return;
+      }
+      await load();
+    } catch (caughtError) {
+      console.error('[RuntimeMonitorTab] Failed to stop runtime:', caughtError);
+      setError('Failed to stop runtime');
+    } finally {
+      setStoppingRuntimeId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:grid-cols-5">
+        <SummaryTile label="Total" value={summary?.total ?? total} />
+        <SummaryTile label="Active" value={summary?.active ?? 0} />
+        <SummaryTile label="Idle running" value={summary?.idleRunning ?? 0} />
+        <SummaryTile label="Failed / unknown" value={summary?.failedOrUnknown ?? 0} />
+        <SummaryTile label="Live memory" value={formatBytes(summary?.totalLiveMemoryBytes)} />
+      </div>
+
+      <div className="grid gap-2 lg:grid-cols-[150px_150px_minmax(280px,1fr)_auto]">
+        <select
+          className={SELECT_CLASS_NAME}
+          value={filters.status || ''}
+          onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
+        >
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="idle">Idle</option>
+          <option value="failed">Failed</option>
+          <option value="pending">Pending</option>
+        </select>
+        <select
+          className={SELECT_CLASS_NAME}
+          value={filters.dockerState || ''}
+          onChange={(event) => setFilters((current) => ({ ...current, dockerState: event.target.value }))}
+        >
+          <option value="">All Docker</option>
+          <option value="running">Running</option>
+          <option value="exited">Exited</option>
+          <option value="missing">Missing</option>
+          <option value="unknown">Unknown</option>
+        </select>
+        <label className="relative">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            className="h-9 pl-9"
+            value={filters.q || ''}
+            onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+            placeholder="Search runtime, session, tenant, user, workspace"
+          />
+        </label>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => void load()}
+          disabled={isLoading}
+          aria-label="Refresh runtimes"
+          title="Refresh runtimes"
+        >
+          <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full min-w-[1080px] text-left text-sm">
+          <thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 font-medium">Runtime</th>
+              <th className="px-3 py-2 font-medium">Tenant</th>
+              <th className="px-3 py-2 font-medium">User</th>
+              <th className="px-3 py-2 font-medium">Workspace</th>
+              <th className="px-3 py-2 font-medium">Business</th>
+              <th className="px-3 py-2 font-medium">Docker</th>
+              <th className="px-3 py-2 font-medium">CPU</th>
+              <th className="px-3 py-2 font-medium">Memory</th>
+              <th className="px-3 py-2 font-medium">Idle age</th>
+              <th className="px-3 py-2 font-medium">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td className="px-3 py-6 text-center text-muted-foreground" colSpan={10}>
+                  {isLoading ? 'Loading runtimes...' : 'No runtimes'}
+                </td>
+              </tr>
+            ) : rows.map((row) => (
+              <tr key={row.runtimeId} className="border-b border-border last:border-b-0">
+                <td className="max-w-60 px-3 py-2">
+                  <div className="truncate font-medium text-foreground">{row.providerSessionId || row.runtimeId}</div>
+                  <div className="truncate text-xs text-muted-foreground">{row.provider} - {row.containerName}</div>
+                </td>
+                <td className="max-w-44 px-3 py-2">
+                  <div className="truncate font-medium text-foreground">{row.tenant.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{row.tenant.code}</div>
+                </td>
+                <td className="max-w-32 truncate px-3 py-2">{row.user.username}</td>
+                <td className="max-w-44 truncate px-3 py-2">{row.workspace.displayName}</td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-1">
+                    <StatusChip value={row.businessStatus} />
+                    {row.staleActive ? <StatusChip value="active stale" /> : null}
+                  </div>
+                </td>
+                <td className="px-3 py-2"><StatusChip value={row.dockerState} /></td>
+                <td className="whitespace-nowrap px-3 py-2">{formatCpu(row.cpuPercent)}</td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  {formatBytes(row.memoryUsageBytes)}
+                  {row.memoryLimitBytes ? (
+                    <span className="text-muted-foreground"> / {formatBytes(row.memoryLimitBytes)}</span>
+                  ) : null}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">{formatRuntimeAge(row.idleAgeSeconds)}</td>
+                <td className="px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!row.canStop || stoppingRuntimeId === row.runtimeId}
+                    onClick={() => void stopRuntime(row.runtimeId)}
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                    {stoppingRuntimeId === row.runtimeId ? 'Stopping' : 'Stop'}
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
