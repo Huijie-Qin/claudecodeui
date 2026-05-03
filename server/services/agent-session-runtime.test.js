@@ -347,3 +347,192 @@ test('docker mode stopRuntime is idempotent for a missing container', async () =
   assert.equal(stoppedContainer, null);
   assert.deepEqual(statusUpdate, { runtimeId: 'runtime-missing', status: 'idle' });
 });
+
+test('docker mode stopExpiredIdleRuntime skips runtimes that are no longer expired idle', async () => {
+  let inspected = false;
+  let stopped = false;
+  let statusUpdate = null;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+    },
+    multitenancy: {
+      runtimes: {
+        findExpiredIdleRuntimeById: () => null,
+        updateStatus: (input) => {
+          statusUpdate = input;
+          return { runtime_id: input.runtimeId, status: input.status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => {
+        inspected = true;
+        return { exists: true, running: true };
+      },
+      stopContainer: async () => {
+        stopped = true;
+      },
+    },
+  });
+
+  const result = await manager.stopExpiredIdleRuntime({
+    runtimeId: 'runtime-resumed',
+    olderThanMinutes: 30,
+  });
+
+  assert.equal(result, false);
+  assert.equal(inspected, false);
+  assert.equal(stopped, false);
+  assert.equal(statusUpdate, null);
+});
+
+test('docker mode stopExpiredIdleRuntime returns false for missing or invalid args', async () => {
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+    },
+    multitenancy: {
+      runtimes: {
+        findExpiredIdleRuntimeById: () => {
+          throw new Error('invalid args should not query DB');
+        },
+      },
+    },
+    docker: {},
+  });
+
+  assert.equal(await manager.stopExpiredIdleRuntime(), false);
+  assert.equal(await manager.stopExpiredIdleRuntime({ runtimeId: '', olderThanMinutes: 30 }), false);
+  assert.equal(await manager.stopExpiredIdleRuntime({ runtimeId: 'runtime-1', olderThanMinutes: 0 }), false);
+});
+
+test('docker mode stopExpiredIdleRuntime stops a running expired idle container and marks idle', async () => {
+  let stoppedContainer = null;
+  let statusUpdate = null;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+    },
+    multitenancy: {
+      runtimes: {
+        findExpiredIdleRuntimeById: ({ runtimeId, olderThanMinutes }) => {
+          assert.equal(runtimeId, 'runtime-idle');
+          assert.equal(olderThanMinutes, 30);
+          return {
+            runtime_id: runtimeId,
+            container_name: 'cloudcli-claude-idle',
+            status: 'idle',
+          };
+        },
+        updateStatus: (input) => {
+          statusUpdate = input;
+          return { runtime_id: input.runtimeId, status: input.status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true }),
+      stopContainer: async (name) => {
+        stoppedContainer = name;
+      },
+    },
+  });
+
+  const result = await manager.stopExpiredIdleRuntime({
+    runtimeId: 'runtime-idle',
+    olderThanMinutes: 30,
+  });
+
+  assert.equal(result, true);
+  assert.equal(stoppedContainer, 'cloudcli-claude-idle');
+  assert.deepEqual(statusUpdate, { runtimeId: 'runtime-idle', status: 'idle' });
+});
+
+test('docker mode serializes protected stop and existing-runtime resume for the same runtime', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-lock-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const events = [];
+  let stopped = false;
+  let resolveStopStarted;
+  let releaseStop;
+  const stopStarted = new Promise((resolve) => {
+    resolveStopStarted = resolve;
+  });
+  const stopRelease = new Promise((resolve) => {
+    releaseStop = resolve;
+  });
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        findExpiredIdleRuntimeById: () => runtimeRow,
+        findByProviderSession: () => runtimeRow,
+        updateStatus: (input) => {
+          events.push(`mark-${input.status}`);
+          return { ...runtimeRow, status: input.status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: !stopped }),
+      stopContainer: async () => {
+        events.push('stop-start');
+        resolveStopStarted();
+        await stopRelease;
+        stopped = true;
+        events.push('stop-end');
+      },
+      startContainer: async () => {
+        events.push('start');
+      },
+      runDetached: async () => {
+        throw new Error('must not create a fresh container for resume');
+      },
+    },
+  });
+
+  const stopPromise = manager.stopExpiredIdleRuntime({
+    runtimeId: 'existing',
+    olderThanMinutes: 30,
+  });
+  await stopStarted;
+
+  const preparePromise = manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['stop-start']);
+
+  releaseStop();
+  assert.equal(await stopPromise, true);
+  const prepared = await preparePromise;
+
+  assert.equal(prepared.runtimeId, 'existing');
+  assert.deepEqual(events, ['stop-start', 'stop-end', 'mark-idle', 'start', 'mark-active']);
+});

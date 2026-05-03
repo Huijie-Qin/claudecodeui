@@ -19,20 +19,14 @@ function createLogger() {
   };
 }
 
-function createMultitenancy(candidates, { revalidatedRuntimes = candidates } = {}) {
+function createMultitenancy(candidates) {
   const calls = [];
-  const revalidationCalls = [];
   return {
     calls,
-    revalidationCalls,
     runtimes: {
       listExpiredIdleRuntimes(args) {
         calls.push(args);
         return candidates;
-      },
-      findExpiredIdleRuntimeById(args) {
-        revalidationCalls.push(args);
-        return revalidatedRuntimes.find((runtime) => runtime.runtime_id === args.runtimeId) ?? null;
       },
     },
   };
@@ -56,9 +50,12 @@ test('sweepOnce stops only expired idle runtimes with running containers', async
     },
   };
   const runtimeManager = {
-    async stopRuntime(runtimeId) {
-      stopped.push(runtimeId);
+    async stopExpiredIdleRuntime(args) {
+      stopped.push(args);
       return true;
+    },
+    stopRuntime: async () => {
+      throw new Error('sweeper must not use generic stopRuntime');
     },
   };
   const sweeper = createRuntimeSweeper({
@@ -73,17 +70,13 @@ test('sweepOnce stops only expired idle runtimes with running containers', async
 
   assert.deepEqual(result, { inspected: 3, stopped: 1, failed: 0 });
   assert.deepEqual(multitenancy.calls, [{ olderThanMinutes: 30, limit: 100 }]);
-  assert.deepEqual(multitenancy.revalidationCalls, [{
-    runtimeId: 'runtime-running',
-    olderThanMinutes: 30,
-  }]);
   assert.deepEqual(inspected, ['container-running', 'container-exited', 'container-missing']);
-  assert.deepEqual(stopped, ['runtime-running']);
+  assert.deepEqual(stopped, [{ runtimeId: 'runtime-running', olderThanMinutes: 30 }]);
 });
 
-test('sweepOnce skips a running candidate that is no longer expired idle before stop', async () => {
+test('sweepOnce skips a running candidate when protected stop reports stale revalidation', async () => {
   const candidates = [{ runtime_id: 'runtime-resumed', container_name: 'container-resumed' }];
-  const multitenancy = createMultitenancy(candidates, { revalidatedRuntimes: [] });
+  const multitenancy = createMultitenancy(candidates);
   const stopped = [];
   const sweeper = createRuntimeSweeper({
     config: ENABLED_CONFIG,
@@ -94,9 +87,12 @@ test('sweepOnce skips a running candidate that is no longer expired idle before 
       },
     },
     runtimeManager: {
-      async stopRuntime(runtimeId) {
-        stopped.push(runtimeId);
-        return true;
+      async stopExpiredIdleRuntime(args) {
+        stopped.push(args);
+        return false;
+      },
+      stopRuntime: async () => {
+        throw new Error('sweeper must not use generic stopRuntime');
       },
     },
     logger: createLogger(),
@@ -105,11 +101,7 @@ test('sweepOnce skips a running candidate that is no longer expired idle before 
   const result = await sweeper.sweepOnce();
 
   assert.deepEqual(result, { inspected: 1, stopped: 0, failed: 0 });
-  assert.deepEqual(multitenancy.revalidationCalls, [{
-    runtimeId: 'runtime-resumed',
-    olderThanMinutes: 30,
-  }]);
-  assert.deepEqual(stopped, []);
+  assert.deepEqual(stopped, [{ runtimeId: 'runtime-resumed', olderThanMinutes: 30 }]);
 });
 
 test('disabled sweeper returns zeros and does not query database', async () => {
@@ -189,7 +181,7 @@ test('sweepOnce contains inspect and stop failures and counts failed runtimes', 
       },
     },
     runtimeManager: {
-      async stopRuntime(runtimeId) {
+      async stopExpiredIdleRuntime({ runtimeId }) {
         if (runtimeId === 'runtime-stop-fails') {
           throw new Error('stop failed');
         }
@@ -281,9 +273,6 @@ test('concurrent sweepOnce calls return zeros for the reentrant call without lis
         });
         return [{ runtime_id: 'runtime-running', container_name: 'container-running' }];
       },
-      findExpiredIdleRuntimeById({ runtimeId }) {
-        return { runtime_id: runtimeId, container_name: 'container-running' };
-      },
     },
   };
   const sweeper = createRuntimeSweeper({
@@ -295,7 +284,7 @@ test('concurrent sweepOnce calls return zeros for the reentrant call without lis
       },
     },
     runtimeManager: {
-      async stopRuntime() {
+      async stopExpiredIdleRuntime() {
         return true;
       },
     },

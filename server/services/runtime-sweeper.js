@@ -48,15 +48,14 @@ export function createRuntimeSweeper({
             continue;
           }
 
-          const stillExpiredIdle = await multitenancy.runtimes.findExpiredIdleRuntimeById({
+          const stopped = await runtimeManager.stopExpiredIdleRuntime({
             runtimeId: runtime.runtime_id,
             olderThanMinutes: config.idleTimeoutMinutes,
           });
-          if (!stillExpiredIdle) {
+          if (!stopped) {
             continue;
           }
 
-          await runtimeManager.stopRuntime(runtime.runtime_id);
           result.stopped += 1;
           logger?.info?.('runtime sweeper stopped idle runtime', {
             runtimeId: runtime.runtime_id,

@@ -298,6 +298,39 @@ export function createAgentSessionRuntimeManager({
   docker = new DockerCliClient(),
   fs = fsPromises,
 } = {}) {
+  const runtimeLocks = new Map();
+
+  async function withRuntimeLock(runtimeId, task) {
+    const previous = runtimeLocks.get(runtimeId) ?? Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const current = previous.catch(() => {}).then(() => gate);
+    runtimeLocks.set(runtimeId, current);
+
+    await previous.catch(() => {});
+    try {
+      return await task();
+    } finally {
+      release();
+      if (runtimeLocks.get(runtimeId) === current) {
+        runtimeLocks.delete(runtimeId);
+      }
+    }
+  }
+
+  function normalizeExpiredIdleStopArgs({ runtimeId, olderThanMinutes } = {}) {
+    try {
+      return {
+        runtimeId: requireValue(runtimeId, 'runtimeId'),
+        olderThanMinutes: requirePositiveInteger(Number(olderThanMinutes), 'olderThanMinutes'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async function resolveWorkspaceHostPath(workspacePath) {
     const resolved = await fs.realpath(requireValue(workspacePath, 'cwd'));
     const stats = await fs.stat(resolved);
@@ -403,6 +436,31 @@ export function createAgentSessionRuntimeManager({
     };
   }
 
+  async function activateRuntimeContext({ runtimeContext, workspaceHostPath }) {
+    await fs.mkdir(runtimeContext.runtime.runtime_home_path, { recursive: true });
+    await ensureContainer(runtimeContext.runtime);
+    const wrapperPath = await writeWrapper(runtimeContext);
+    const runtime = multitenancy.runtimes.updateStatus({
+      runtimeId: runtimeContext.runtime.runtime_id,
+      status: 'active',
+    }) || runtimeContext.runtime;
+
+    return {
+      mode: 'docker',
+      runtimeId: runtime.runtime_id,
+      runtimeHomePath: runtime.runtime_home_path,
+      containerName: runtime.container_name,
+      cwd: workspaceHostPath,
+      containerCwd: '/workspace',
+      projectPath: '/workspace',
+      hostWorkspacePath: workspaceHostPath,
+      pathToClaudeCodeExecutable: wrapperPath,
+      executionEnv: buildWrapperHostEnv(env),
+      settingSources: ['project'],
+      disableHostMcpConfig: true,
+    };
+  }
+
   return {
     async prepareClaudeRuntime(options = {}) {
       const mode = resolveClaudeExecutionMode(env);
@@ -425,28 +483,14 @@ export function createAgentSessionRuntimeManager({
         ? await resolveExistingRuntime({ tenantId, userId, workspaceId, sessionId: options.sessionId })
         : await createNewRuntime({ tenantId, userId, workspaceId, workspaceHostPath });
 
-      await fs.mkdir(runtimeContext.runtime.runtime_home_path, { recursive: true });
-      await ensureContainer(runtimeContext.runtime);
-      const wrapperPath = await writeWrapper(runtimeContext);
-      const runtime = multitenancy.runtimes.updateStatus({
-        runtimeId: runtimeContext.runtime.runtime_id,
-        status: 'active',
-      }) || runtimeContext.runtime;
+      if (options.sessionId) {
+        return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
+          runtimeContext,
+          workspaceHostPath,
+        }));
+      }
 
-      return {
-        mode: 'docker',
-        runtimeId: runtime.runtime_id,
-        runtimeHomePath: runtime.runtime_home_path,
-        containerName: runtime.container_name,
-        cwd: workspaceHostPath,
-        containerCwd: '/workspace',
-        projectPath: '/workspace',
-        hostWorkspacePath: workspaceHostPath,
-        pathToClaudeCodeExecutable: wrapperPath,
-        executionEnv: buildWrapperHostEnv(env),
-        settingSources: ['project'],
-        disableHostMcpConfig: true,
-      };
+      return activateRuntimeContext({ runtimeContext, workspaceHostPath });
     },
 
     bindProviderSession({ runtimeId, providerSessionId }) {
@@ -477,6 +521,30 @@ export function createAgentSessionRuntimeManager({
 
       multitenancy.runtimes.updateStatus({ runtimeId, status: 'idle' });
       return true;
+    },
+
+    async stopExpiredIdleRuntime(input = {}) {
+      const normalized = normalizeExpiredIdleStopArgs(input);
+      if (!normalized) return false;
+
+      return withRuntimeLock(normalized.runtimeId, async () => {
+        const runtime = multitenancy.runtimes.findExpiredIdleRuntimeById({
+          runtimeId: normalized.runtimeId,
+          olderThanMinutes: normalized.olderThanMinutes,
+        });
+        if (!runtime) return false;
+
+        const inspected = await docker.inspectContainer(runtime.container_name);
+        if (inspected?.running) {
+          await docker.stopContainer(runtime.container_name);
+        }
+
+        multitenancy.runtimes.updateStatus({
+          runtimeId: normalized.runtimeId,
+          status: 'idle',
+        });
+        return true;
+      });
     },
   };
 }
