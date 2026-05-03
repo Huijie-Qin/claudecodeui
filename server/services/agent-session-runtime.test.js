@@ -267,3 +267,83 @@ test('docker mode stopRuntime stops the session container and marks runtime idle
   assert.equal(stoppedContainer, 'cloudcli-claude-active');
   assert.deepEqual(statusUpdate, { runtimeId: 'runtime-1', status: 'idle' });
 });
+
+test('docker mode stopRuntime is idempotent for an exited container', async () => {
+  let stoppedContainer = null;
+  let statusUpdate = null;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+    },
+    multitenancy: {
+      runtimes: {
+        findByRuntimeId: (runtimeId) => ({
+          runtime_id: runtimeId,
+          container_name: 'cloudcli-claude-exited',
+          status: 'active',
+        }),
+        updateStatus: (input) => {
+          statusUpdate = input;
+          return { runtime_id: input.runtimeId, status: input.status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({
+        exists: true,
+        running: false,
+        state: {
+          Running: false,
+          Status: 'exited',
+          ExitCode: 0,
+        },
+        status: 'exited',
+        exitCode: 0,
+      }),
+      stopContainer: async (name) => {
+        stoppedContainer = name;
+      },
+    },
+  });
+
+  const stopped = await manager.stopRuntime('runtime-exited');
+
+  assert.equal(stopped, true);
+  assert.equal(stoppedContainer, null);
+  assert.deepEqual(statusUpdate, { runtimeId: 'runtime-exited', status: 'idle' });
+});
+
+test('docker mode stopRuntime is idempotent for a missing container', async () => {
+  let stoppedContainer = null;
+  let statusUpdate = null;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+    },
+    multitenancy: {
+      runtimes: {
+        findByRuntimeId: (runtimeId) => ({
+          runtime_id: runtimeId,
+          container_name: 'cloudcli-claude-missing',
+          status: 'active',
+        }),
+        updateStatus: (input) => {
+          statusUpdate = input;
+          return { runtime_id: input.runtimeId, status: input.status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => null,
+      stopContainer: async (name) => {
+        stoppedContainer = name;
+      },
+    },
+  });
+
+  const stopped = await manager.stopRuntime('runtime-missing');
+
+  assert.equal(stopped, true);
+  assert.equal(stoppedContainer, null);
+  assert.deepEqual(statusUpdate, { runtimeId: 'runtime-missing', status: 'idle' });
+});

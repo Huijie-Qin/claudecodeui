@@ -233,12 +233,18 @@ export class DockerCliClient {
       const { stdout } = await execFileAsync('docker', [
         'inspect',
         '-f',
-        '{{.State.Running}}',
+        '{{json .State}}',
         containerName,
       ]);
+      const state = JSON.parse(stdout.trim());
       return {
         exists: true,
-        running: stdout.trim() === 'true',
+        running: state.Running === true,
+        state,
+        status: state.Status ?? null,
+        exitCode: state.ExitCode ?? null,
+        startedAt: state.StartedAt ?? null,
+        finishedAt: state.FinishedAt ?? null,
       };
     } catch (error) {
       if (error?.code === 1 || error?.stderr?.includes('No such object')) {
@@ -254,6 +260,31 @@ export class DockerCliClient {
 
   async stopContainer(containerName) {
     await execFileAsync('docker', ['stop', '-t', '1', containerName]);
+  }
+
+  async statsContainers(containerNames) {
+    const names = Array.isArray(containerNames)
+      ? containerNames.filter(Boolean)
+      : [];
+    if (names.length === 0) return new Map();
+
+    const { stdout } = await execFileAsync('docker', [
+      'stats',
+      '--no-stream',
+      '--format',
+      'json',
+      ...names,
+    ]);
+    const stats = new Map();
+    for (const line of stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const row = JSON.parse(trimmed);
+      if (row.Name) {
+        stats.set(row.Name, row);
+      }
+    }
+    return stats;
   }
 
   async runDetached(args) {

@@ -1,0 +1,242 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  createRuntimeMonitorService,
+  parseDockerMemoryUsage,
+  parseDockerStatsLine,
+  resolveRuntimeMonitorConfig,
+} from './runtime-monitor.js';
+
+test('resolveRuntimeMonitorConfig defaults to docker-enabled monitor settings', () => {
+  const config = resolveRuntimeMonitorConfig({
+    CLAUDE_EXECUTION_MODE: 'docker',
+  });
+
+  assert.deepEqual(config, {
+    enabled: true,
+    idleTimeoutMinutes: 30,
+    sweeperIntervalSeconds: 60,
+    staleActiveMinutes: 30,
+  });
+});
+
+test('resolveRuntimeMonitorConfig applies explicit overrides', () => {
+  const config = resolveRuntimeMonitorConfig({
+    CLAUDE_EXECUTION_MODE: 'docker',
+    CLOUDCLI_RUNTIME_MONITOR_ENABLED: 'false',
+    CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES: '5',
+    CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS: '10',
+    CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES: '7',
+  });
+
+  assert.deepEqual(config, {
+    enabled: false,
+    idleTimeoutMinutes: 5,
+    sweeperIntervalSeconds: 10,
+    staleActiveMinutes: 7,
+  });
+});
+
+test('parseDockerStatsLine parses Docker JSON stats', () => {
+  const stats = parseDockerStatsLine(JSON.stringify({
+    Name: 'cloudcli-claude-runtime',
+    CPUPerc: '12.34%',
+    MemUsage: '21.5MiB / 2GiB',
+  }));
+
+  assert.deepEqual(stats, {
+    name: 'cloudcli-claude-runtime',
+    cpuPercent: 12.34,
+    memoryUsageBytes: 22544384,
+    memoryLimitBytes: 2147483648,
+    raw: {
+      Name: 'cloudcli-claude-runtime',
+      CPUPerc: '12.34%',
+      MemUsage: '21.5MiB / 2GiB',
+    },
+  });
+});
+
+test('parseDockerStatsLine accepts already-normalized stats objects', () => {
+  const stats = parseDockerStatsLine({
+    name: 'cloudcli-claude-runtime',
+    cpuPercent: 4.5,
+    memoryUsageBytes: 1024,
+    memoryLimitBytes: 2048,
+    raw: { Name: 'cloudcli-claude-runtime' },
+  });
+
+  assert.deepEqual(stats, {
+    name: 'cloudcli-claude-runtime',
+    cpuPercent: 4.5,
+    memoryUsageBytes: 1024,
+    memoryLimitBytes: 2048,
+    raw: { Name: 'cloudcli-claude-runtime' },
+  });
+});
+
+test('parseDockerMemoryUsage handles binary Docker memory units', () => {
+  assert.deepEqual(parseDockerMemoryUsage('512KiB / 1MiB'), {
+    usageBytes: 524288,
+    limitBytes: 1048576,
+  });
+  assert.deepEqual(parseDockerMemoryUsage('1.5MiB / 2GiB'), {
+    usageBytes: 1572864,
+    limitBytes: 2147483648,
+  });
+  assert.deepEqual(parseDockerMemoryUsage('2GiB / 4GiB'), {
+    usageBytes: 2147483648,
+    limitBytes: 4294967296,
+  });
+});
+
+test('createRuntimeMonitorService listRuntimes enriches rows with Docker state, stats, stop flag, and summary', async () => {
+  const rows = [
+    {
+      runtime_id: 'runtime-active',
+      tenant_id: 10,
+      tenant_code: 'default',
+      tenant_name: 'Default Tenant',
+      user_id: 20,
+      username: 'alice',
+      workspace_id: 30,
+      workspace_slug: 'demo',
+      workspace_display_name: 'Demo Workspace',
+      workspace_path: '/host/workspaces/demo',
+      provider: 'claude',
+      provider_session_id: 'session-active',
+      status: 'active',
+      container_name: 'container-active',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:00:00.000Z',
+      updated_at: '2026-05-04T01:01:00.000Z',
+    },
+    {
+      runtime_id: 'runtime-idle',
+      tenant_id: 10,
+      tenant_code: 'default',
+      tenant_name: 'Default Tenant',
+      user_id: 21,
+      username: 'bob',
+      workspace_id: 31,
+      workspace_slug: 'idle',
+      workspace_display_name: 'Idle Workspace',
+      workspace_path: '/host/workspaces/idle',
+      provider: 'claude',
+      provider_session_id: 'session-idle',
+      status: 'idle',
+      container_name: 'container-idle',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:50:00.000Z',
+      updated_at: '2026-05-04T01:51:00.000Z',
+    },
+    {
+      runtime_id: 'runtime-missing',
+      tenant_id: 11,
+      tenant_code: 'missing',
+      tenant_name: 'Missing Tenant',
+      user_id: 22,
+      username: 'carol',
+      workspace_id: 32,
+      workspace_slug: 'missing',
+      workspace_display_name: 'Missing Workspace',
+      workspace_path: '/host/workspaces/missing',
+      provider: 'claude',
+      provider_session_id: 'session-missing',
+      status: 'failed',
+      container_name: 'container-missing',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:55:00.000Z',
+      updated_at: '2026-05-04T01:56:00.000Z',
+    },
+  ];
+  const inspected = [];
+  const statsRequests = [];
+  const service = createRuntimeMonitorService({
+    config: {
+      enabled: true,
+      idleTimeoutMinutes: 30,
+      sweeperIntervalSeconds: 60,
+      staleActiveMinutes: 30,
+    },
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listForMonitor: (filters) => {
+          assert.deepEqual(filters, { limit: 50 });
+          return { rows, total: rows.length, limit: 50, offset: 0 };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async (name) => {
+        inspected.push(name);
+        if (name === 'container-active') {
+          return { exists: true, running: true, status: 'running' };
+        }
+        if (name === 'container-idle') {
+          return { exists: true, running: true, status: 'running' };
+        }
+        return null;
+      },
+      statsContainers: async (names) => {
+        statsRequests.push(names);
+        return new Map([
+          ['container-active', {
+            Name: 'container-active',
+            CPUPerc: '7.5%',
+            MemUsage: '128MiB / 2GiB',
+          }],
+          ['container-idle', {
+            name: 'container-idle',
+            cpuPercent: 0,
+            memoryUsageBytes: 67108864,
+            memoryLimitBytes: 2147483648,
+          }],
+        ]);
+      },
+    },
+  });
+
+  const result = await service.listRuntimes({ limit: 50 });
+
+  assert.deepEqual(inspected, ['container-active', 'container-idle', 'container-missing']);
+  assert.deepEqual(statsRequests, [['container-active', 'container-idle']]);
+  assert.equal(result.total, 3);
+  assert.equal(result.rows.length, 3);
+  assert.deepEqual(result.rows[0], {
+    runtimeId: 'runtime-active',
+    tenant: { id: 10, code: 'default', name: 'Default Tenant' },
+    user: { id: 20, username: 'alice' },
+    workspace: { id: 30, slug: 'demo', displayName: 'Demo Workspace' },
+    provider: 'claude',
+    providerSessionId: 'session-active',
+    businessStatus: 'active',
+    dockerState: 'running',
+    staleActive: true,
+    containerName: 'container-active',
+    image: 'cloudcli/test:claude',
+    lastUsedAt: '2026-05-04T01:00:00.000Z',
+    updatedAt: '2026-05-04T01:01:00.000Z',
+    cpuPercent: 7.5,
+    memoryUsageBytes: 134217728,
+    memoryLimitBytes: 2147483648,
+    idleAgeSeconds: 3600,
+    canStop: true,
+  });
+  assert.equal(result.rows[0].workspace.path, undefined);
+  assert.equal(result.rows[1].dockerState, 'running');
+  assert.equal(result.rows[1].canStop, true);
+  assert.equal(result.rows[2].dockerState, 'missing');
+  assert.equal(result.rows[2].canStop, false);
+  assert.deepEqual(result.summary, {
+    total: 3,
+    active: 1,
+    idleRunning: 1,
+    failedOrUnknown: 1,
+    missing: 1,
+    staleActive: 1,
+    totalLiveMemoryBytes: 201326592,
+  });
+});
