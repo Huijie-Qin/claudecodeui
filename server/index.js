@@ -59,6 +59,7 @@ import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
 import { canAccessHostFilesystem } from './services/host-filesystem-access.js';
+import { runtimeSweeper } from './services/runtime-sweeper.js';
 import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
 import { workspaceAccess } from './services/workspace-access.js';
 import { handleWorkspaceError, resolveWorkspaceForRequest } from './services/workspace-request.js';
@@ -2470,6 +2471,7 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+        runtimeSweeper.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -2512,6 +2514,7 @@ async function startServer() {
 
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
+            runtimeSweeper.stop();
             await stopAllPlugins();
             process.exit(0);
         };
