@@ -16,9 +16,13 @@ function parseBoolean(value, fallback) {
   return fallback;
 }
 
-function parsePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function parsePositiveInteger(value, fallback, name) {
+  if (value == null || String(value).trim() === '') return fallback;
+  const normalized = String(value).trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return Number.parseInt(normalized, 10);
 }
 
 function normalizeDate(value) {
@@ -104,19 +108,24 @@ function buildSummary(rows) {
 
 export function resolveRuntimeMonitorConfig(env = process.env) {
   const dockerMode = String(env.CLAUDE_EXECUTION_MODE || 'local').trim().toLowerCase() === 'docker';
+  const enabledValue = env.CLOUDCLI_RUNTIME_SWEEPER_ENABLED
+    ?? env.CLOUDCLI_RUNTIME_MONITOR_ENABLED;
   return {
-    enabled: parseBoolean(env.CLOUDCLI_RUNTIME_MONITOR_ENABLED, dockerMode),
+    enabled: parseBoolean(enabledValue, dockerMode),
     idleTimeoutMinutes: parsePositiveInteger(
       env.CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES,
       DEFAULT_IDLE_TIMEOUT_MINUTES,
+      'CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES',
     ),
     sweeperIntervalSeconds: parsePositiveInteger(
       env.CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS,
       DEFAULT_SWEEPER_INTERVAL_SECONDS,
+      'CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS',
     ),
     staleActiveMinutes: parsePositiveInteger(
       env.CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES,
       DEFAULT_STALE_ACTIVE_MINUTES,
+      'CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES',
     ),
   };
 }
@@ -252,12 +261,14 @@ export function createRuntimeMonitorService({
 
   async function enrichResult(rows, metadata = {}, filters = {}) {
     let enrichedRows = await enrichRows(rows);
+    const unfilteredTotal = enrichedRows.length;
     if (filters.dockerState) {
       enrichedRows = enrichedRows.filter((row) => row.dockerState === filters.dockerState);
     }
     return {
       rows: enrichedRows,
       total: enrichedRows.length,
+      unfilteredTotal,
       limit: metadata.limit ?? enrichedRows.length,
       offset: metadata.offset ?? 0,
       summary: buildSummary(enrichedRows),

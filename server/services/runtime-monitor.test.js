@@ -24,7 +24,7 @@ test('resolveRuntimeMonitorConfig defaults to docker-enabled monitor settings', 
 test('resolveRuntimeMonitorConfig applies explicit overrides', () => {
   const config = resolveRuntimeMonitorConfig({
     CLAUDE_EXECUTION_MODE: 'docker',
-    CLOUDCLI_RUNTIME_MONITOR_ENABLED: 'false',
+    CLOUDCLI_RUNTIME_SWEEPER_ENABLED: 'false',
     CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES: '5',
     CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS: '10',
     CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES: '7',
@@ -36,6 +36,33 @@ test('resolveRuntimeMonitorConfig applies explicit overrides', () => {
     sweeperIntervalSeconds: 10,
     staleActiveMinutes: 7,
   });
+});
+
+test('resolveRuntimeMonitorConfig falls back to legacy enabled env only when canonical env is unset', () => {
+  assert.equal(resolveRuntimeMonitorConfig({
+    CLAUDE_EXECUTION_MODE: 'docker',
+    CLOUDCLI_RUNTIME_MONITOR_ENABLED: 'false',
+  }).enabled, false);
+  assert.equal(resolveRuntimeMonitorConfig({
+    CLAUDE_EXECUTION_MODE: 'docker',
+    CLOUDCLI_RUNTIME_SWEEPER_ENABLED: 'true',
+    CLOUDCLI_RUNTIME_MONITOR_ENABLED: 'false',
+  }).enabled, true);
+});
+
+test('resolveRuntimeMonitorConfig rejects malformed numeric overrides', () => {
+  assert.throws(
+    () => resolveRuntimeMonitorConfig({ CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES: '5abc' }),
+    /CLOUDCLI_RUNTIME_IDLE_TIMEOUT_MINUTES must be a positive integer/,
+  );
+  assert.throws(
+    () => resolveRuntimeMonitorConfig({ CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS: '0' }),
+    /CLOUDCLI_RUNTIME_SWEEPER_INTERVAL_SECONDS must be a positive integer/,
+  );
+  assert.throws(
+    () => resolveRuntimeMonitorConfig({ CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES: 'abc' }),
+    /CLOUDCLI_RUNTIME_STALE_ACTIVE_MINUTES must be a positive integer/,
+  );
 });
 
 test('parseDockerStatsLine parses Docker JSON stats', () => {
@@ -239,4 +266,236 @@ test('createRuntimeMonitorService listRuntimes enriches rows with Docker state, 
     staleActive: 1,
     totalLiveMemoryBytes: 201326592,
   });
+});
+
+test('listRuntimes keeps rows when Docker inspect fails and marks that row unknown', async () => {
+  const warnings = [];
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listForMonitor: () => ({
+          rows: [
+            {
+              runtime_id: 'runtime-unknown',
+              tenant_id: 1,
+              tenant_code: 'default',
+              tenant_name: 'Default',
+              user_id: 2,
+              username: 'alice',
+              workspace_id: 3,
+              workspace_slug: 'demo',
+              workspace_display_name: 'Demo',
+              provider: 'claude',
+              provider_session_id: 'session-1',
+              status: 'active',
+              container_name: 'container-unknown',
+              image: 'cloudcli/test:claude',
+              last_used_at: '2026-05-04T01:58:00.000Z',
+              updated_at: '2026-05-04T01:59:00.000Z',
+            },
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        }),
+      },
+    },
+    docker: {
+      inspectContainer: async () => {
+        throw new Error('docker inspect failed');
+      },
+      statsContainers: async () => {
+        throw new Error('stats should not run for unknown containers');
+      },
+    },
+    logger: {
+      warn: (...args) => warnings.push(args),
+    },
+  });
+
+  const result = await service.listRuntimes();
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].dockerState, 'unknown');
+  assert.equal(result.rows[0].canStop, false);
+  assert.equal(result.summary.failedOrUnknown, 1);
+  assert.equal(warnings.length, 1);
+});
+
+test('listRuntimes renders rows when Docker stats fails', async () => {
+  const warnings = [];
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listForMonitor: () => ({
+          rows: [
+            {
+              runtime_id: 'runtime-running',
+              tenant_id: 1,
+              tenant_code: 'default',
+              tenant_name: 'Default',
+              user_id: 2,
+              username: 'alice',
+              workspace_id: 3,
+              workspace_slug: 'demo',
+              workspace_display_name: 'Demo',
+              provider: 'claude',
+              provider_session_id: 'session-1',
+              status: 'idle',
+              container_name: 'container-running',
+              image: 'cloudcli/test:claude',
+              last_used_at: '2026-05-04T01:58:00.000Z',
+              updated_at: '2026-05-04T01:59:00.000Z',
+            },
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        }),
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, status: 'running' }),
+      statsContainers: async () => {
+        throw new Error('docker stats failed');
+      },
+    },
+    logger: {
+      warn: (...args) => warnings.push(args),
+    },
+  });
+
+  const result = await service.listRuntimes();
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].dockerState, 'running');
+  assert.equal(result.rows[0].cpuPercent, null);
+  assert.equal(result.rows[0].memoryUsageBytes, null);
+  assert.equal(result.summary.idleRunning, 1);
+  assert.equal(warnings.length, 1);
+});
+
+test('stopRuntime logs, delegates to runtime manager, and returns refreshed runtime row', async () => {
+  const calls = [];
+  const logs = [];
+  const monitorRows = new Map([
+    ['runtime-1', {
+      runtime_id: 'runtime-1',
+      tenant_id: 1,
+      tenant_code: 'default',
+      tenant_name: 'Default',
+      user_id: 2,
+      username: 'alice',
+      workspace_id: 3,
+      workspace_slug: 'demo',
+      workspace_display_name: 'Demo',
+      provider: 'claude',
+      provider_session_id: 'session-1',
+      status: 'active',
+      container_name: 'container-running',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:58:00.000Z',
+      updated_at: '2026-05-04T01:59:00.000Z',
+    }],
+  ]);
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        getMonitorRowByRuntimeId: (runtimeId) => monitorRows.get(runtimeId) ?? null,
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: false, status: 'exited' }),
+      statsContainers: async () => new Map(),
+    },
+    runtimeManager: {
+      stopRuntime: async (runtimeId) => {
+        calls.push(runtimeId);
+        monitorRows.set(runtimeId, {
+          ...monitorRows.get(runtimeId),
+          status: 'idle',
+          updated_at: '2026-05-04T02:00:00.000Z',
+        });
+        return true;
+      },
+    },
+    logger: {
+      info: (...args) => logs.push(args),
+    },
+  });
+
+  const row = await service.stopRuntime({ runtimeId: 'runtime-1', adminUserId: 99 });
+
+  assert.deepEqual(calls, ['runtime-1']);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][1].adminUserId, 99);
+  assert.equal(row.runtimeId, 'runtime-1');
+  assert.equal(row.businessStatus, 'idle');
+  assert.equal(row.dockerState, 'exited');
+});
+
+test('dockerState filter applies after enrichment without reporting an unfiltered total', async () => {
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listForMonitor: () => ({
+          rows: [
+            {
+              runtime_id: 'runtime-running',
+              tenant_id: 1,
+              tenant_code: 'default',
+              tenant_name: 'Default',
+              user_id: 2,
+              username: 'alice',
+              workspace_id: 3,
+              workspace_slug: 'running',
+              workspace_display_name: 'Running',
+              provider: 'claude',
+              status: 'idle',
+              container_name: 'container-running',
+              image: 'cloudcli/test:claude',
+              last_used_at: '2026-05-04T01:58:00.000Z',
+              updated_at: '2026-05-04T01:59:00.000Z',
+            },
+            {
+              runtime_id: 'runtime-missing',
+              tenant_id: 1,
+              tenant_code: 'default',
+              tenant_name: 'Default',
+              user_id: 2,
+              username: 'alice',
+              workspace_id: 4,
+              workspace_slug: 'missing',
+              workspace_display_name: 'Missing',
+              provider: 'claude',
+              status: 'idle',
+              container_name: 'container-missing',
+              image: 'cloudcli/test:claude',
+              last_used_at: '2026-05-04T01:58:00.000Z',
+              updated_at: '2026-05-04T01:59:00.000Z',
+            },
+          ],
+          total: 2,
+          limit: 20,
+          offset: 0,
+        }),
+      },
+    },
+    docker: {
+      inspectContainer: async (name) => (name === 'container-running'
+        ? { exists: true, running: true, status: 'running' }
+        : null),
+      statsContainers: async () => new Map(),
+    },
+  });
+
+  const result = await service.listRuntimes({ dockerState: 'missing' });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.unfilteredTotal, 2);
+  assert.deepEqual(result.rows.map((row) => row.runtimeId), ['runtime-missing']);
 });
