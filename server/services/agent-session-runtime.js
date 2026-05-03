@@ -483,14 +483,10 @@ export function createAgentSessionRuntimeManager({
         ? await resolveExistingRuntime({ tenantId, userId, workspaceId, sessionId: options.sessionId })
         : await createNewRuntime({ tenantId, userId, workspaceId, workspaceHostPath });
 
-      if (options.sessionId) {
-        return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
-          runtimeContext,
-          workspaceHostPath,
-        }));
-      }
-
-      return activateRuntimeContext({ runtimeContext, workspaceHostPath });
+      return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
+        runtimeContext,
+        workspaceHostPath,
+      }));
     },
 
     bindProviderSession({ runtimeId, providerSessionId }) {

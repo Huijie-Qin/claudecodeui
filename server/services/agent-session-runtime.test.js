@@ -643,6 +643,119 @@ test('docker mode serializes manual stop after existing-runtime resume when prep
   ]);
 });
 
+test('docker mode serializes manual stop after new-runtime activation when prepare wins first', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-new-lock-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  await fs.mkdir(workspacePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const events = [];
+  let runtimeRow = null;
+  let stopped = false;
+  let status = 'pending';
+  let inspectCount = 0;
+  let resolveRunStarted;
+  let releaseRun;
+  const runStarted = new Promise((resolve) => {
+    resolveRunStarted = resolve;
+  });
+  const runRelease = new Promise((resolve) => {
+    releaseRun = resolve;
+  });
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: (runtime) => {
+          runtimeRow = {
+            runtime_id: runtime.runtimeId,
+            tenant_id: runtime.tenantId,
+            workspace_id: runtime.workspaceId,
+            user_id: runtime.userId,
+            provider: runtime.provider,
+            provider_session_id: null,
+            container_name: runtime.containerName,
+            image: runtime.image,
+            workspace_host_path: runtime.workspaceHostPath,
+            runtime_home_path: runtime.runtimeHomePath,
+            status,
+          };
+          events.push('create-pending');
+          return runtimeRow;
+        },
+        findByRuntimeId: () => ({ ...runtimeRow, status }),
+        updateStatus: (input) => {
+          status = input.status;
+          events.push(`mark-${input.status}`);
+          return { ...runtimeRow, status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => {
+        inspectCount += 1;
+        if (inspectCount === 1) {
+          events.push('inspect-prepare');
+          return null;
+        }
+        events.push('inspect-stop');
+        return { exists: true, running: !stopped };
+      },
+      runDetached: async () => {
+        events.push('run-start');
+        resolveRunStarted();
+        await runRelease;
+        stopped = false;
+        events.push('run-end');
+      },
+      stopContainer: async () => {
+        events.push('stop');
+        stopped = true;
+      },
+      startContainer: async () => {
+        events.push('start');
+        stopped = false;
+      },
+    },
+  });
+
+  const preparePromise = manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+  });
+  await runStarted;
+
+  const stopPromise = manager.stopRuntime(runtimeRow.runtime_id);
+  await new Promise((resolve) => setImmediate(resolve));
+  const eventsBeforeRelease = [...events];
+
+  releaseRun();
+  const prepared = await preparePromise;
+  assert.equal(await stopPromise, true);
+
+  assert.deepEqual(eventsBeforeRelease, ['create-pending', 'inspect-prepare', 'run-start']);
+  assert.equal(prepared.runtimeId, runtimeRow.runtime_id);
+  assert.equal(status, 'idle');
+  assert.equal(stopped, true);
+  assert.deepEqual(events, [
+    'create-pending',
+    'inspect-prepare',
+    'run-start',
+    'run-end',
+    'mark-active',
+    'inspect-stop',
+    'stop',
+    'mark-idle',
+  ]);
+  assert.equal(runtimeRow.workspace_host_path, workspaceRealPath);
+});
+
 test('docker mode serializes existing-runtime resume after manual stop when stop wins first', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-manual-lock-stop-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
