@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Search, Square } from 'lucide-react';
 
 import { Button, Input } from '../../shared/view/ui';
@@ -104,54 +104,110 @@ export default function RuntimeMonitorTab() {
   const [summary, setSummary] = useState<RuntimeSummary | null>(null);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [stoppingRuntimeId, setStoppingRuntimeId] = useState<string | null>(null);
+  const [stoppingRuntimeIds, setStoppingRuntimeIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const filtersRef = useRef(filters);
+  const isMountedRef = useRef(true);
+  const latestLoadRequestIdRef = useRef(0);
+  const stoppingRuntimeIdsRef = useRef<Set<string>>(new Set());
 
   const queryKey = useMemo(() => buildRuntimeQueryString(filters), [filters]);
+  filtersRef.current = filters;
+
+  const isLatestLoad = useCallback((requestId: number) => (
+    isMountedRef.current && latestLoadRequestIdRef.current === requestId
+  ), []);
+
+  const setRuntimeStopping = useCallback((runtimeId: string, isStopping: boolean) => {
+    const nextStoppingRuntimeIds = new Set(stoppingRuntimeIdsRef.current);
+
+    if (isStopping) {
+      nextStoppingRuntimeIds.add(runtimeId);
+    } else {
+      nextStoppingRuntimeIds.delete(runtimeId);
+    }
+
+    stoppingRuntimeIdsRef.current = nextStoppingRuntimeIds;
+
+    if (isMountedRef.current) {
+      setStoppingRuntimeIds(nextStoppingRuntimeIds);
+    }
+  }, []);
 
   const load = useCallback(async () => {
+    const requestId = latestLoadRequestIdRef.current + 1;
+    latestLoadRequestIdRef.current = requestId;
+
+    if (!isMountedRef.current) return;
+
+    const requestFilters = filtersRef.current;
+    const requestQueryKey = buildRuntimeQueryString(requestFilters);
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await api.admin.runtimes(filters);
+      const response = await api.admin.runtimes(requestFilters);
+      if (!isLatestLoad(requestId)) return;
+
       if (!response.ok) {
-        setError(await readError(response, 'Failed to load runtimes'));
+        const errorMessage = await readError(response, 'Failed to load runtimes');
+        if (isLatestLoad(requestId)) {
+          setError(errorMessage);
+        }
         return;
       }
 
       const payload = await response.json() as RuntimePayload;
+      if (!isLatestLoad(requestId)) return;
+
       setRows(payload.rows || []);
       setSummary(payload.summary || null);
       setTotal(payload.total || 0);
     } catch (caughtError) {
-      console.error('[RuntimeMonitorTab] Failed to load runtimes:', { queryKey, error: caughtError });
+      if (!isLatestLoad(requestId)) return;
+
+      console.error('[RuntimeMonitorTab] Failed to load runtimes:', { queryKey: requestQueryKey, error: caughtError });
       setError('Failed to load runtimes');
     } finally {
-      setIsLoading(false);
+      if (isLatestLoad(requestId)) {
+        setIsLoading(false);
+      }
     }
-  }, [filters, queryKey]);
+  }, [isLatestLoad]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, queryKey]);
+
+  useEffect(() => () => {
+    isMountedRef.current = false;
+    latestLoadRequestIdRef.current += 1;
+  }, []);
 
   const stopRuntime = async (runtimeId: string) => {
-    setStoppingRuntimeId(runtimeId);
+    if (stoppingRuntimeIdsRef.current.has(runtimeId)) return;
+
+    setRuntimeStopping(runtimeId, true);
     setError(null);
 
     try {
       const response = await api.admin.stopRuntime(runtimeId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to stop runtime'));
+        const errorMessage = await readError(response, 'Failed to stop runtime');
+        if (isMountedRef.current) {
+          setError(errorMessage);
+        }
         return;
       }
       await load();
     } catch (caughtError) {
       console.error('[RuntimeMonitorTab] Failed to stop runtime:', caughtError);
-      setError('Failed to stop runtime');
+      if (isMountedRef.current) {
+        setError('Failed to stop runtime');
+      }
     } finally {
-      setStoppingRuntimeId(null);
+      setRuntimeStopping(runtimeId, false);
     }
   };
 
@@ -238,46 +294,50 @@ export default function RuntimeMonitorTab() {
                   {isLoading ? 'Loading runtimes...' : 'No runtimes'}
                 </td>
               </tr>
-            ) : rows.map((row) => (
-              <tr key={row.runtimeId} className="border-b border-border last:border-b-0">
-                <td className="max-w-60 px-3 py-2">
-                  <div className="truncate font-medium text-foreground">{row.providerSessionId || row.runtimeId}</div>
-                  <div className="truncate text-xs text-muted-foreground">{row.provider} - {row.containerName}</div>
-                </td>
-                <td className="max-w-44 px-3 py-2">
-                  <div className="truncate font-medium text-foreground">{row.tenant.name}</div>
-                  <div className="truncate text-xs text-muted-foreground">{row.tenant.code}</div>
-                </td>
-                <td className="max-w-32 truncate px-3 py-2">{row.user.username}</td>
-                <td className="max-w-44 truncate px-3 py-2">{row.workspace.displayName}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap gap-1">
-                    <StatusChip value={row.businessStatus} />
-                    {row.staleActive ? <StatusChip value="active stale" /> : null}
-                  </div>
-                </td>
-                <td className="px-3 py-2"><StatusChip value={row.dockerState} /></td>
-                <td className="whitespace-nowrap px-3 py-2">{formatCpu(row.cpuPercent)}</td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  {formatBytes(row.memoryUsageBytes)}
-                  {row.memoryLimitBytes ? (
-                    <span className="text-muted-foreground"> / {formatBytes(row.memoryLimitBytes)}</span>
-                  ) : null}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2">{formatRuntimeAge(row.idleAgeSeconds)}</td>
-                <td className="px-3 py-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!row.canStop || stoppingRuntimeId === row.runtimeId}
-                    onClick={() => void stopRuntime(row.runtimeId)}
-                  >
-                    <Square className="h-3.5 w-3.5" />
-                    {stoppingRuntimeId === row.runtimeId ? 'Stopping' : 'Stop'}
-                  </Button>
-                </td>
-              </tr>
-            ))}
+            ) : rows.map((row) => {
+              const isStoppingRuntime = stoppingRuntimeIds.has(row.runtimeId);
+
+              return (
+                <tr key={row.runtimeId} className="border-b border-border last:border-b-0">
+                  <td className="max-w-60 px-3 py-2">
+                    <div className="truncate font-medium text-foreground">{row.providerSessionId || row.runtimeId}</div>
+                    <div className="truncate text-xs text-muted-foreground">{row.provider} - {row.containerName}</div>
+                  </td>
+                  <td className="max-w-44 px-3 py-2">
+                    <div className="truncate font-medium text-foreground">{row.tenant.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">{row.tenant.code}</div>
+                  </td>
+                  <td className="max-w-32 truncate px-3 py-2">{row.user.username}</td>
+                  <td className="max-w-44 truncate px-3 py-2">{row.workspace.displayName}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      <StatusChip value={row.businessStatus} />
+                      {row.staleActive ? <StatusChip value="active stale" /> : null}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2"><StatusChip value={row.dockerState} /></td>
+                  <td className="whitespace-nowrap px-3 py-2">{formatCpu(row.cpuPercent)}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatBytes(row.memoryUsageBytes)}
+                    {row.memoryLimitBytes ? (
+                      <span className="text-muted-foreground"> / {formatBytes(row.memoryLimitBytes)}</span>
+                    ) : null}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">{formatRuntimeAge(row.idleAgeSeconds)}</td>
+                  <td className="px-3 py-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!row.canStop || isStoppingRuntime}
+                      onClick={() => void stopRuntime(row.runtimeId)}
+                    >
+                      <Square className="h-3.5 w-3.5" />
+                      {isStoppingRuntime ? 'Stopping' : 'Stop'}
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
