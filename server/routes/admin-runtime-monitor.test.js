@@ -114,6 +114,51 @@ test('GET /runtimes parses query-string pagination as numbers', async () => {
   });
 });
 
+test('GET /runtimes rejects invalid status without calling runtime monitor', async () => {
+  let called = false;
+  const router = createRouter({
+    listRuntimes: async () => {
+      called = true;
+      return { rows: [], total: 0, summary: { total: 0 } };
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/runtimes?status=paused');
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'Invalid runtime monitor filters');
+  assert.equal(called, false);
+});
+
+test('GET /runtimes rejects invalid limit without calling runtime monitor', async () => {
+  let called = false;
+  const router = createRouter({
+    listRuntimes: async () => {
+      called = true;
+      return { rows: [], total: 0, summary: { total: 0 } };
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/runtimes?limit=abc');
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'Invalid runtime monitor filters');
+  assert.equal(called, false);
+});
+
+test('GET /runtimes returns sanitized 500 for runtime monitor failures', async () => {
+  const router = createRouter({
+    listRuntimes: async () => {
+      throw new Error('database credentials leaked');
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/runtimes');
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(payload, { error: 'Failed to list runtimes' });
+});
+
 test('GET /runtimes/summary returns runtime monitor summary', async () => {
   const summary = { total: 3, active: 1, idleRunning: 2 };
   const seen = {};
@@ -132,6 +177,19 @@ test('GET /runtimes/summary returns runtime monitor summary', async () => {
     provider: 'claude',
     limit: 10,
   });
+});
+
+test('GET /runtimes/summary returns sanitized 500 for runtime monitor failures', async () => {
+  const router = createRouter({
+    getSummary: async () => {
+      throw new Error('database credentials leaked');
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/runtimes/summary');
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(payload, { error: 'Failed to load runtime summary' });
 });
 
 test('POST /runtimes/:runtimeId/stop passes runtime and admin user ids', async () => {

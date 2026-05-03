@@ -18,17 +18,44 @@ function sendRouteError(res, error, fallbackMessage) {
   return res.status(statusCode).json({ error: message || fallbackMessage });
 }
 
+class RuntimeFilterValidationError extends Error {
+  constructor() {
+    super('Invalid runtime monitor filters');
+    this.name = 'RuntimeFilterValidationError';
+  }
+}
+
+const VALID_RUNTIME_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
+const VALID_RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'deleted']);
+const VALID_DOCKER_STATES = new Set(['running', 'exited', 'missing', 'unknown']);
+
+function parseRuntimeFilterInteger(value, { min }) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min) {
+    throw new RuntimeFilterValidationError();
+  }
+  return parsed;
+}
+
+function parseRuntimeFilterEnum(value, validValues) {
+  const parsed = String(value);
+  if (!validValues.has(parsed)) {
+    throw new RuntimeFilterValidationError();
+  }
+  return parsed;
+}
+
 function buildRuntimeFilters(query = {}) {
   const filters = {
-    tenantId: query.tenantId == null ? undefined : Number(query.tenantId),
-    userId: query.userId == null ? undefined : Number(query.userId),
-    workspaceId: query.workspaceId == null ? undefined : Number(query.workspaceId),
-    provider: query.provider == null ? undefined : String(query.provider),
-    status: query.status == null ? undefined : String(query.status),
-    dockerState: query.dockerState == null ? undefined : String(query.dockerState),
+    tenantId: query.tenantId == null ? undefined : parseRuntimeFilterInteger(query.tenantId, { min: 1 }),
+    userId: query.userId == null ? undefined : parseRuntimeFilterInteger(query.userId, { min: 1 }),
+    workspaceId: query.workspaceId == null ? undefined : parseRuntimeFilterInteger(query.workspaceId, { min: 1 }),
+    provider: query.provider == null ? undefined : parseRuntimeFilterEnum(query.provider, VALID_RUNTIME_PROVIDERS),
+    status: query.status == null ? undefined : parseRuntimeFilterEnum(query.status, VALID_RUNTIME_STATUSES),
+    dockerState: query.dockerState == null ? undefined : parseRuntimeFilterEnum(query.dockerState, VALID_DOCKER_STATES),
     q: query.q == null ? undefined : String(query.q),
-    limit: query.limit == null ? undefined : Number(query.limit),
-    offset: query.offset == null ? undefined : Number(query.offset),
+    limit: query.limit == null ? undefined : parseRuntimeFilterInteger(query.limit, { min: 1 }),
+    offset: query.offset == null ? undefined : parseRuntimeFilterInteger(query.offset, { min: 0 }),
   };
 
   return Object.fromEntries(
@@ -40,6 +67,13 @@ function isDockerError(error) {
   return error?.code === 'DOCKER_UNAVAILABLE'
     || error?.code === 'DOCKER_ERROR'
     || /\bdocker\b/i.test(error?.message || '');
+}
+
+function sendRuntimeMonitorError(res, error, fallbackMessage) {
+  if (error instanceof RuntimeFilterValidationError) {
+    return res.status(400).json({ error: error.message });
+  }
+  return res.status(500).json({ error: fallbackMessage });
 }
 
 export function createAdminRouter(
@@ -101,7 +135,7 @@ export function createAdminRouter(
       const result = await runtimeMonitor.listRuntimes(buildRuntimeFilters(req.query));
       res.json(result);
     } catch (error) {
-      sendRouteError(res, error, 'Failed to list runtimes');
+      sendRuntimeMonitorError(res, error, 'Failed to list runtimes');
     }
   });
 
@@ -110,7 +144,7 @@ export function createAdminRouter(
       const summary = await runtimeMonitor.getSummary(buildRuntimeFilters(req.query));
       res.json({ summary });
     } catch (error) {
-      sendRouteError(res, error, 'Failed to load runtime summary');
+      sendRuntimeMonitorError(res, error, 'Failed to load runtime summary');
     }
   });
 
