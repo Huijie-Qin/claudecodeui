@@ -25,15 +25,26 @@ function parsePositiveInteger(value, fallback, name) {
   return Number.parseInt(normalized, 10);
 }
 
-function normalizeDate(value) {
+function parseRuntimeTimestamp(value) {
   if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
+  if (value instanceof Date) return value;
+
+  const normalized = String(value).trim();
+  const utcSqliteTimestamp = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(normalized)
+    ? `${normalized.replace(' ', 'T')}Z`
+    : normalized;
+
+  return new Date(utcSqliteTimestamp);
+}
+
+function normalizeDate(value) {
+  const date = parseRuntimeTimestamp(value);
+  if (!date || Number.isNaN(date.getTime())) return null;
   return date.toISOString();
 }
 
 function ageSeconds(value, now) {
-  const date = value ? new Date(value) : null;
+  const date = parseRuntimeTimestamp(value);
   if (!date || Number.isNaN(date.getTime())) return null;
   return Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
 }
