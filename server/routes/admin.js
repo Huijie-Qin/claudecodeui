@@ -2,6 +2,7 @@ import express from 'express';
 
 import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { runtimeMonitorService } from '../services/runtime-monitor.js';
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -17,7 +18,35 @@ function sendRouteError(res, error, fallbackMessage) {
   return res.status(statusCode).json({ error: message || fallbackMessage });
 }
 
-export function createAdminRouter(multitenancy = multitenancyDb, users = userDb) {
+function buildRuntimeFilters(query = {}) {
+  const filters = {
+    tenantId: query.tenantId == null ? undefined : Number(query.tenantId),
+    userId: query.userId == null ? undefined : Number(query.userId),
+    workspaceId: query.workspaceId == null ? undefined : Number(query.workspaceId),
+    provider: query.provider == null ? undefined : String(query.provider),
+    status: query.status == null ? undefined : String(query.status),
+    dockerState: query.dockerState == null ? undefined : String(query.dockerState),
+    q: query.q == null ? undefined : String(query.q),
+    limit: query.limit == null ? undefined : Number(query.limit),
+    offset: query.offset == null ? undefined : Number(query.offset),
+  };
+
+  return Object.fromEntries(
+    Object.entries(filters).filter(([, value]) => value !== undefined),
+  );
+}
+
+function isDockerError(error) {
+  return error?.code === 'DOCKER_UNAVAILABLE'
+    || error?.code === 'DOCKER_ERROR'
+    || /\bdocker\b/i.test(error?.message || '');
+}
+
+export function createAdminRouter(
+  multitenancy = multitenancyDb,
+  users = userDb,
+  runtimeMonitor = runtimeMonitorService,
+) {
   const router = express.Router();
   router.use(requireSystemAdmin);
 
@@ -67,8 +96,45 @@ export function createAdminRouter(multitenancy = multitenancyDb, users = userDb)
     }
   });
 
+  router.get('/runtimes', async (req, res) => {
+    try {
+      const result = await runtimeMonitor.listRuntimes(buildRuntimeFilters(req.query));
+      res.json(result);
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to list runtimes');
+    }
+  });
+
+  router.get('/runtimes/summary', async (req, res) => {
+    try {
+      const summary = await runtimeMonitor.getSummary(buildRuntimeFilters(req.query));
+      res.json({ summary });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load runtime summary');
+    }
+  });
+
+  router.post('/runtimes/:runtimeId/stop', async (req, res) => {
+    try {
+      const runtime = await runtimeMonitor.stopRuntime({
+        runtimeId: req.params.runtimeId,
+        adminUserId: req.user.id,
+      });
+      if (!runtime) {
+        return res.status(404).json({ error: 'Runtime not found' });
+      }
+      return res.json({ runtime });
+    } catch (error) {
+      if (isDockerError(error)) {
+        const message = error instanceof Error ? error.message : 'Docker runtime unavailable';
+        return res.status(503).json({ error: message });
+      }
+      return sendRouteError(res, error, 'Failed to stop runtime');
+    }
+  });
+
   return router;
 }
 
 export { requireSystemAdmin };
-export default createAdminRouter(multitenancyDb, userDb);
+export default createAdminRouter(multitenancyDb, userDb, runtimeMonitorService);
