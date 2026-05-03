@@ -329,3 +329,132 @@ test('agent session message pagination returns recent messages in chronological 
   assert.equal(page.hasMore, true);
   assert.deepEqual(page.messages.map((message) => message.id), ['msg-2', 'msg-3']);
 });
+
+test('runtime monitor lists runtimes with tenant user and workspace context', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const tenant = mt.tenants.createTenant({ code: 'default', name: 'Default' });
+  const user = { id: 1 };
+  database.prepare("INSERT INTO users (id, username, password_hash) VALUES (1, 'admin', 'hash')").run();
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId: user.id,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: user.id,
+    slug: 'demo',
+    displayName: 'Demo Workspace',
+    path: '/tmp/demo',
+  });
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: user.id,
+    provider: 'claude',
+    providerSessionId: 'session-1',
+    containerName: 'cloudcli-claude-demo',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: '/tmp/demo',
+    runtimeHomePath: '/tmp/runtime/home',
+    status: 'idle',
+  });
+
+  const result = mt.runtimes.listForMonitor({ limit: 20, offset: 0 });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.rows[0].runtime_id, 'runtime-1');
+  assert.equal(result.rows[0].tenant_code, 'default');
+  assert.equal(result.rows[0].username, 'admin');
+  assert.equal(result.rows[0].workspace_display_name, 'Demo Workspace');
+});
+
+test('runtime monitor filters by status and query text', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const tenant = mt.tenants.createTenant({ code: 'acme', name: 'Acme' });
+  database.prepare("INSERT INTO users (id, username, password_hash) VALUES (1, 'alice', 'hash')").run();
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId: 1,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: 1,
+    slug: 'alpha',
+    displayName: 'Alpha',
+    path: '/tmp/alpha',
+  });
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-active',
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: 1,
+    provider: 'claude',
+    providerSessionId: 'session-alpha',
+    containerName: 'container-alpha',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: '/tmp/alpha',
+    runtimeHomePath: '/tmp/runtime/alpha',
+    status: 'active',
+  });
+
+  const active = mt.runtimes.listForMonitor({ status: 'active', q: 'alpha' });
+  const idle = mt.runtimes.listForMonitor({ status: 'idle', q: 'alpha' });
+
+  assert.equal(active.total, 1);
+  assert.equal(active.rows[0].runtime_id, 'runtime-active');
+  assert.equal(idle.total, 0);
+});
+
+test('runtime monitor selects expired idle runtimes only', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  database.prepare("INSERT INTO users (id, username, password_hash) VALUES (1, 'owner', 'hash')").run();
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId: 1,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: 1,
+    slug: 'work',
+    displayName: 'Work',
+    path: '/tmp/work',
+  });
+  for (const [runtimeId, status] of [['old-idle', 'idle'], ['old-active', 'active']]) {
+    mt.runtimes.createRuntime({
+      runtimeId,
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      userId: 1,
+      provider: 'claude',
+      providerSessionId: `${runtimeId}-session`,
+      containerName: `${runtimeId}-container`,
+      image: 'cloudcli/test:claude',
+      workspaceHostPath: '/tmp/work',
+      runtimeHomePath: `/tmp/runtime/${runtimeId}`,
+      status,
+    });
+    database.prepare(`
+      UPDATE agent_session_runtime
+      SET last_used_at = datetime('now', '-45 minutes')
+      WHERE runtime_id = ?
+    `).run(runtimeId);
+  }
+
+  const expired = mt.runtimes.listExpiredIdleRuntimes({ olderThanMinutes: 30, limit: 10 });
+
+  assert.deepEqual(expired.map((row) => row.runtime_id), ['old-idle']);
+});

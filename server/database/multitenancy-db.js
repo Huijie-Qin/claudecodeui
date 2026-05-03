@@ -80,6 +80,32 @@ function normalizeOffset(value) {
   return offset;
 }
 
+function normalizePositiveLimit(value, fallback = 50, max = 200) {
+  const limit = value == null ? fallback : Number(value);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error('limit must be a positive integer');
+  }
+  return Math.min(limit, max);
+}
+
+function normalizeOptionalPositiveInteger(value, name) {
+  if (value == null || value === '') return null;
+  return requirePositiveInteger(Number(value), name);
+}
+
+function normalizeRuntimeMonitorFilters(filters = {}) {
+  return {
+    tenantId: normalizeOptionalPositiveInteger(filters.tenantId, 'tenantId'),
+    userId: normalizeOptionalPositiveInteger(filters.userId, 'userId'),
+    workspaceId: normalizeOptionalPositiveInteger(filters.workspaceId, 'workspaceId'),
+    provider: filters.provider ? requireEnum(filters.provider, PROVIDERS, 'provider') : null,
+    status: filters.status ? requireEnum(filters.status, RUNTIME_STATUSES, 'status') : null,
+    q: typeof filters.q === 'string' && filters.q.trim() ? `%${filters.q.trim().toLowerCase()}%` : null,
+    limit: normalizePositiveLimit(filters.limit, 50, 200),
+    offset: normalizeOffset(filters.offset),
+  };
+}
+
 function parseNormalizedMessageRow(row) {
   try {
     return cleanStoredNormalizedMessage(row, JSON.parse(row.normalized_json));
@@ -764,6 +790,136 @@ export function createMultitenancyDb(database = db) {
         `).run(normalizedStatus, normalizedRuntimeId);
 
         return database.prepare('SELECT * FROM agent_session_runtime WHERE runtime_id = ?').get(normalizedRuntimeId) ?? null;
+      },
+
+      listForMonitor: (filters = {}) => {
+        const normalized = normalizeRuntimeMonitorFilters(filters);
+        const whereClauses = [
+          "r.status != 'deleted'",
+          "w.status != 'deleted'",
+        ];
+        const params = [];
+
+        if (normalized.tenantId !== null) {
+          whereClauses.push('r.tenant_id = ?');
+          params.push(normalized.tenantId);
+        }
+        if (normalized.userId !== null) {
+          whereClauses.push('r.user_id = ?');
+          params.push(normalized.userId);
+        }
+        if (normalized.workspaceId !== null) {
+          whereClauses.push('r.workspace_id = ?');
+          params.push(normalized.workspaceId);
+        }
+        if (normalized.provider !== null) {
+          whereClauses.push('r.provider = ?');
+          params.push(normalized.provider);
+        }
+        if (normalized.status !== null) {
+          whereClauses.push('r.status = ?');
+          params.push(normalized.status);
+        }
+        if (normalized.q !== null) {
+          whereClauses.push(`(
+            lower(r.runtime_id) LIKE ?
+            OR lower(COALESCE(r.provider_session_id, '')) LIKE ?
+            OR lower(r.container_name) LIKE ?
+            OR lower(r.image) LIKE ?
+            OR lower(r.workspace_host_path) LIKE ?
+            OR lower(r.runtime_home_path) LIKE ?
+            OR lower(t.code) LIKE ?
+            OR lower(t.name) LIKE ?
+            OR lower(u.username) LIKE ?
+            OR lower(w.slug) LIKE ?
+            OR lower(w.display_name) LIKE ?
+            OR lower(w.path) LIKE ?
+          )`);
+          params.push(...Array(12).fill(normalized.q));
+        }
+
+        const whereSql = whereClauses.join('\n            AND ');
+        const total = database.prepare(`
+          SELECT COUNT(*) AS total
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE ${whereSql}
+        `).get(...params).total;
+
+        const rows = database.prepare(`
+          SELECT
+            r.*,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            u.username,
+            w.slug AS workspace_slug,
+            w.display_name AS workspace_display_name,
+            w.path AS workspace_path
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE ${whereSql}
+          ORDER BY r.updated_at DESC, r.id DESC
+          LIMIT ? OFFSET ?
+        `).all(...params, normalized.limit, normalized.offset);
+
+        return {
+          rows,
+          total,
+          limit: normalized.limit,
+          offset: normalized.offset,
+        };
+      },
+
+      getMonitorRowByRuntimeId: (runtimeId) => {
+        return database.prepare(`
+          SELECT
+            r.*,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            u.username,
+            w.slug AS workspace_slug,
+            w.display_name AS workspace_display_name,
+            w.path AS workspace_path
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE r.runtime_id = ?
+            AND r.status != 'deleted'
+            AND w.status != 'deleted'
+        `).get(requireNonEmptyString(runtimeId, 'runtimeId')) ?? null;
+      },
+
+      listExpiredIdleRuntimes: ({ olderThanMinutes, limit = 100 }) => {
+        const normalizedOlderThanMinutes = requirePositiveInteger(
+          Number(olderThanMinutes),
+          'olderThanMinutes',
+        );
+        const normalizedLimit = normalizePositiveLimit(limit, 100, 200);
+
+        return database.prepare(`
+          SELECT
+            r.*,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            u.username,
+            w.slug AS workspace_slug,
+            w.display_name AS workspace_display_name,
+            w.path AS workspace_path
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE r.status = 'idle'
+            AND w.status != 'deleted'
+            AND r.last_used_at <= datetime('now', ?)
+          ORDER BY r.last_used_at ASC, r.id ASC
+          LIMIT ?
+        `).all(`-${normalizedOlderThanMinutes} minutes`, normalizedLimit);
       },
     },
 
