@@ -107,16 +107,33 @@ export default function RuntimeMonitorTab() {
   const [stoppingRuntimeIds, setStoppingRuntimeIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const filtersRef = useRef(filters);
+  const currentQueryKeyRef = useRef(buildRuntimeQueryString(filters));
   const isMountedRef = useRef(true);
   const latestLoadRequestIdRef = useRef(0);
   const stoppingRuntimeIdsRef = useRef<Set<string>>(new Set());
 
   const queryKey = useMemo(() => buildRuntimeQueryString(filters), [filters]);
   filtersRef.current = filters;
+  currentQueryKeyRef.current = queryKey;
 
-  const isLatestLoad = useCallback((requestId: number) => (
-    isMountedRef.current && latestLoadRequestIdRef.current === requestId
+  const isLatestLoad = useCallback((requestId: number, requestQueryKey: string) => (
+    isMountedRef.current &&
+    latestLoadRequestIdRef.current === requestId &&
+    currentQueryKeyRef.current === requestQueryKey
   ), []);
+
+  const updateFilters = useCallback((getNextFilters: (currentFilters: RuntimeMonitorFilters) => RuntimeMonitorFilters) => {
+    const nextFilters = getNextFilters(filtersRef.current);
+    const nextQueryKey = buildRuntimeQueryString(nextFilters);
+
+    if (nextQueryKey !== currentQueryKeyRef.current) {
+      latestLoadRequestIdRef.current += 1;
+    }
+
+    filtersRef.current = nextFilters;
+    currentQueryKeyRef.current = nextQueryKey;
+    setFilters(nextFilters);
+  }, []);
 
   const setRuntimeStopping = useCallback((runtimeId: string, isStopping: boolean) => {
     const nextStoppingRuntimeIds = new Set(stoppingRuntimeIdsRef.current);
@@ -148,29 +165,29 @@ export default function RuntimeMonitorTab() {
 
     try {
       const response = await api.admin.runtimes(requestFilters);
-      if (!isLatestLoad(requestId)) return;
+      if (!isLatestLoad(requestId, requestQueryKey)) return;
 
       if (!response.ok) {
         const errorMessage = await readError(response, 'Failed to load runtimes');
-        if (isLatestLoad(requestId)) {
+        if (isLatestLoad(requestId, requestQueryKey)) {
           setError(errorMessage);
         }
         return;
       }
 
       const payload = await response.json() as RuntimePayload;
-      if (!isLatestLoad(requestId)) return;
+      if (!isLatestLoad(requestId, requestQueryKey)) return;
 
       setRows(payload.rows || []);
       setSummary(payload.summary || null);
       setTotal(payload.total || 0);
     } catch (caughtError) {
-      if (!isLatestLoad(requestId)) return;
+      if (!isLatestLoad(requestId, requestQueryKey)) return;
 
       console.error('[RuntimeMonitorTab] Failed to load runtimes:', { queryKey: requestQueryKey, error: caughtError });
       setError('Failed to load runtimes');
     } finally {
-      if (isLatestLoad(requestId)) {
+      if (isLatestLoad(requestId, requestQueryKey)) {
         setIsLoading(false);
       }
     }
@@ -225,7 +242,7 @@ export default function RuntimeMonitorTab() {
         <select
           className={SELECT_CLASS_NAME}
           value={filters.status || ''}
-          onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
+          onChange={(event) => updateFilters((current) => ({ ...current, status: event.target.value }))}
         >
           <option value="">All statuses</option>
           <option value="active">Active</option>
@@ -236,7 +253,7 @@ export default function RuntimeMonitorTab() {
         <select
           className={SELECT_CLASS_NAME}
           value={filters.dockerState || ''}
-          onChange={(event) => setFilters((current) => ({ ...current, dockerState: event.target.value }))}
+          onChange={(event) => updateFilters((current) => ({ ...current, dockerState: event.target.value }))}
         >
           <option value="">All Docker</option>
           <option value="running">Running</option>
@@ -249,7 +266,7 @@ export default function RuntimeMonitorTab() {
           <Input
             className="h-9 pl-9"
             value={filters.q || ''}
-            onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+            onChange={(event) => updateFilters((current) => ({ ...current, q: event.target.value }))}
             placeholder="Search runtime, session, tenant, user, workspace"
           />
         </label>
