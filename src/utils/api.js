@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
 
 // Utility function for authenticated API calls
 export const authenticatedFetch = (url, options = {}) => {
@@ -258,6 +259,14 @@ export const api = {
 
   admin: {
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    runtimes: (filters = {}) =>
+      authenticatedFetch(`/api/admin/runtimes${buildRuntimeQueryString(filters)}`),
+    runtimeSummary: (filters = {}) =>
+      authenticatedFetch(`/api/admin/runtimes/summary${buildRuntimeQueryString(filters)}`),
+    stopRuntime: (runtimeId) =>
+      authenticatedFetch(`/api/admin/runtimes/${encodeURIComponent(runtimeId)}/stop`, {
+        method: 'POST',
+      }),
     createTenant: (payload) =>
       authenticatedFetch('/api/admin/tenants', {
         method: 'POST',
