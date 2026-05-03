@@ -151,6 +151,15 @@ export default function RuntimeMonitorTab() {
     }
   }, []);
 
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      latestLoadRequestIdRef.current += 1;
+    };
+  }, []);
+
   const load = useCallback(async () => {
     const requestId = latestLoadRequestIdRef.current + 1;
     latestLoadRequestIdRef.current = requestId;
@@ -196,11 +205,6 @@ export default function RuntimeMonitorTab() {
   useEffect(() => {
     void load();
   }, [load, queryKey]);
-
-  useEffect(() => () => {
-    isMountedRef.current = false;
-    latestLoadRequestIdRef.current += 1;
-  }, []);
 
   const stopRuntime = async (runtimeId: string) => {
     if (stoppingRuntimeIdsRef.current.has(runtimeId)) return;
