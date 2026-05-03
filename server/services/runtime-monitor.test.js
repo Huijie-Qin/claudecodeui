@@ -377,6 +377,52 @@ test('listRuntimes renders rows when Docker stats fails', async () => {
   assert.equal(warnings.length, 1);
 });
 
+test('listRuntimes preserves database total when no dockerState filter is applied', async () => {
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listForMonitor: () => ({
+          rows: [
+            {
+              runtime_id: 'runtime-page-one',
+              tenant_id: 1,
+              tenant_code: 'default',
+              tenant_name: 'Default',
+              user_id: 2,
+              username: 'alice',
+              workspace_id: 3,
+              workspace_slug: 'demo',
+              workspace_display_name: 'Demo',
+              provider: 'claude',
+              provider_session_id: 'session-1',
+              status: 'idle',
+              container_name: 'container-page-one',
+              image: 'cloudcli/test:claude',
+              last_used_at: '2026-05-04T01:58:00.000Z',
+              updated_at: '2026-05-04T01:59:00.000Z',
+            },
+          ],
+          total: 2,
+          limit: 1,
+          offset: 0,
+        }),
+      },
+    },
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: false, status: 'exited' }),
+      statsContainers: async () => new Map(),
+    },
+  });
+
+  const result = await service.listRuntimes({ limit: 1 });
+
+  assert.equal(result.total, 2);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.limit, 1);
+  assert.equal(result.offset, 0);
+});
+
 test('stopRuntime logs, delegates to runtime manager, and returns refreshed runtime row', async () => {
   const calls = [];
   const logs = [];

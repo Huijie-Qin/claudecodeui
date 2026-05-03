@@ -261,13 +261,14 @@ export function createRuntimeMonitorService({
 
   async function enrichResult(rows, metadata = {}, filters = {}) {
     let enrichedRows = await enrichRows(rows);
-    const unfilteredTotal = enrichedRows.length;
-    if (filters.dockerState) {
+    const unfilteredTotal = metadata.total ?? enrichedRows.length;
+    const hasDockerStateFilter = Boolean(filters.dockerState);
+    if (hasDockerStateFilter) {
       enrichedRows = enrichedRows.filter((row) => row.dockerState === filters.dockerState);
     }
     return {
       rows: enrichedRows,
-      total: enrichedRows.length,
+      total: hasDockerStateFilter ? enrichedRows.length : unfilteredTotal,
       unfilteredTotal,
       limit: metadata.limit ?? enrichedRows.length,
       offset: metadata.offset ?? 0,
