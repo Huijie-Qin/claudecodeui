@@ -536,3 +536,214 @@ test('docker mode serializes protected stop and existing-runtime resume for the 
   assert.equal(prepared.runtimeId, 'existing');
   assert.deepEqual(events, ['stop-start', 'stop-end', 'mark-idle', 'start', 'mark-active']);
 });
+
+test('docker mode serializes manual stop after existing-runtime resume when prepare wins first', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-manual-lock-prepare-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const events = [];
+  let stopped = false;
+  let status = 'idle';
+  let inspectCount = 0;
+  let resolvePrepareInspectStarted;
+  let releasePrepareInspect;
+  const prepareInspectStarted = new Promise((resolve) => {
+    resolvePrepareInspectStarted = resolve;
+  });
+  const prepareInspectRelease = new Promise((resolve) => {
+    releasePrepareInspect = resolve;
+  });
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status,
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ ...runtimeRow, status }),
+        findByRuntimeId: () => ({ ...runtimeRow, status }),
+        updateStatus: (input) => {
+          status = input.status;
+          events.push(`mark-${input.status}`);
+          return { ...runtimeRow, status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => {
+        inspectCount += 1;
+        if (inspectCount === 1) {
+          events.push('inspect-prepare-start');
+          resolvePrepareInspectStarted();
+          await prepareInspectRelease;
+          events.push('inspect-prepare-end');
+          return { exists: true, running: true };
+        }
+        events.push('inspect-stop');
+        return { exists: true, running: !stopped };
+      },
+      stopContainer: async () => {
+        events.push('stop');
+        stopped = true;
+      },
+      startContainer: async () => {
+        events.push('start');
+        stopped = false;
+      },
+      runDetached: async () => {
+        throw new Error('must not create a fresh container for resume');
+      },
+    },
+  });
+
+  const preparePromise = manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+  await prepareInspectStarted;
+
+  const stopPromise = manager.stopRuntime('existing');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['inspect-prepare-start']);
+
+  releasePrepareInspect();
+  const prepared = await preparePromise;
+  assert.equal(prepared.runtimeId, 'existing');
+  assert.equal(await stopPromise, true);
+
+  assert.equal(status, 'idle');
+  assert.equal(stopped, true);
+  assert.deepEqual(events, [
+    'inspect-prepare-start',
+    'inspect-prepare-end',
+    'mark-active',
+    'inspect-stop',
+    'stop',
+    'mark-idle',
+  ]);
+});
+
+test('docker mode serializes existing-runtime resume after manual stop when stop wins first', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-manual-lock-stop-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const events = [];
+  let stopped = false;
+  let status = 'active';
+  let resolveStopStarted;
+  let releaseStop;
+  const stopStarted = new Promise((resolve) => {
+    resolveStopStarted = resolve;
+  });
+  const stopRelease = new Promise((resolve) => {
+    releaseStop = resolve;
+  });
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status,
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ ...runtimeRow, status }),
+        findByRuntimeId: () => ({ ...runtimeRow, status }),
+        updateStatus: (input) => {
+          status = input.status;
+          events.push(`mark-${input.status}`);
+          return { ...runtimeRow, status };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async () => {
+        if (events.includes('stop-start')) {
+          events.push('inspect-prepare');
+          return { exists: true, running: !stopped };
+        }
+        events.push('inspect-stop');
+        return { exists: true, running: !stopped };
+      },
+      stopContainer: async () => {
+        events.push('stop-start');
+        resolveStopStarted();
+        await stopRelease;
+        stopped = true;
+        events.push('stop-end');
+      },
+      startContainer: async () => {
+        events.push('start');
+        stopped = false;
+      },
+      runDetached: async () => {
+        throw new Error('must not create a fresh container for resume');
+      },
+    },
+  });
+
+  const stopPromise = manager.stopRuntime('existing');
+  await stopStarted;
+
+  const preparePromise = manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['inspect-stop', 'stop-start']);
+
+  releaseStop();
+  assert.equal(await stopPromise, true);
+  const prepared = await preparePromise;
+
+  assert.equal(prepared.runtimeId, 'existing');
+  assert.equal(status, 'active');
+  assert.equal(stopped, false);
+  assert.deepEqual(events, [
+    'inspect-stop',
+    'stop-start',
+    'stop-end',
+    'mark-idle',
+    'inspect-prepare',
+    'start',
+    'mark-active',
+  ]);
+});

@@ -514,13 +514,15 @@ export function createAgentSessionRuntimeManager({
       const runtime = multitenancy.runtimes.findByRuntimeId(runtimeId);
       if (!runtime) return false;
 
-      const inspected = await docker.inspectContainer(runtime.container_name);
-      if (inspected?.running) {
-        await docker.stopContainer(runtime.container_name);
-      }
+      return withRuntimeLock(runtime.runtime_id, async () => {
+        const inspected = await docker.inspectContainer(runtime.container_name);
+        if (inspected?.running) {
+          await docker.stopContainer(runtime.container_name);
+        }
 
-      multitenancy.runtimes.updateStatus({ runtimeId, status: 'idle' });
-      return true;
+        multitenancy.runtimes.updateStatus({ runtimeId, status: 'idle' });
+        return true;
+      });
     },
 
     async stopExpiredIdleRuntime(input = {}) {
