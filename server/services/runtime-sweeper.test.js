@@ -11,19 +11,28 @@ const ENABLED_CONFIG = {
 
 function createLogger() {
   return {
+    entries: [],
     info: () => {},
-    warn: () => {},
+    warn(message, metadata) {
+      this.entries.push({ level: 'warn', message, metadata });
+    },
   };
 }
 
-function createMultitenancy(candidates) {
+function createMultitenancy(candidates, { revalidatedRuntimes = candidates } = {}) {
   const calls = [];
+  const revalidationCalls = [];
   return {
     calls,
+    revalidationCalls,
     runtimes: {
       listExpiredIdleRuntimes(args) {
         calls.push(args);
         return candidates;
+      },
+      findExpiredIdleRuntimeById(args) {
+        revalidationCalls.push(args);
+        return revalidatedRuntimes.find((runtime) => runtime.runtime_id === args.runtimeId) ?? null;
       },
     },
   };
@@ -64,8 +73,43 @@ test('sweepOnce stops only expired idle runtimes with running containers', async
 
   assert.deepEqual(result, { inspected: 3, stopped: 1, failed: 0 });
   assert.deepEqual(multitenancy.calls, [{ olderThanMinutes: 30, limit: 100 }]);
+  assert.deepEqual(multitenancy.revalidationCalls, [{
+    runtimeId: 'runtime-running',
+    olderThanMinutes: 30,
+  }]);
   assert.deepEqual(inspected, ['container-running', 'container-exited', 'container-missing']);
   assert.deepEqual(stopped, ['runtime-running']);
+});
+
+test('sweepOnce skips a running candidate that is no longer expired idle before stop', async () => {
+  const candidates = [{ runtime_id: 'runtime-resumed', container_name: 'container-resumed' }];
+  const multitenancy = createMultitenancy(candidates, { revalidatedRuntimes: [] });
+  const stopped = [];
+  const sweeper = createRuntimeSweeper({
+    config: ENABLED_CONFIG,
+    multitenancy,
+    docker: {
+      async inspectContainer() {
+        return { exists: true, running: true };
+      },
+    },
+    runtimeManager: {
+      async stopRuntime(runtimeId) {
+        stopped.push(runtimeId);
+        return true;
+      },
+    },
+    logger: createLogger(),
+  });
+
+  const result = await sweeper.sweepOnce();
+
+  assert.deepEqual(result, { inspected: 1, stopped: 0, failed: 0 });
+  assert.deepEqual(multitenancy.revalidationCalls, [{
+    runtimeId: 'runtime-resumed',
+    olderThanMinutes: 30,
+  }]);
+  assert.deepEqual(stopped, []);
 });
 
 test('disabled sweeper returns zeros and does not query database', async () => {
@@ -162,6 +206,63 @@ test('sweepOnce contains inspect and stop failures and counts failed runtimes', 
   assert.deepEqual(stopped, ['runtime-running']);
 });
 
+test('sweepOnce contains candidate-list failures and resets reentrant guard', async () => {
+  let calls = 0;
+  const logger = createLogger();
+  const sweeper = createRuntimeSweeper({
+    config: ENABLED_CONFIG,
+    multitenancy: {
+      runtimes: {
+        listExpiredIdleRuntimes() {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error('list failed');
+          }
+          return [];
+        },
+      },
+    },
+    docker: {},
+    runtimeManager: {},
+    logger,
+  });
+
+  assert.deepEqual(await sweeper.sweepOnce(), { inspected: 0, stopped: 0, failed: 1 });
+  assert.deepEqual(await sweeper.sweepOnce(), { inspected: 0, stopped: 0, failed: 0 });
+  assert.equal(calls, 2);
+  assert.equal(logger.entries[0].message, 'runtime sweeper list failed');
+});
+
+test('interval-triggered sweep failure is contained', async () => {
+  const logger = createLogger();
+  const intervals = [];
+  const sweeper = createRuntimeSweeper({
+    config: ENABLED_CONFIG,
+    multitenancy: {
+      runtimes: {
+        listExpiredIdleRuntimes() {
+          throw new Error('list failed');
+        },
+      },
+    },
+    docker: {},
+    runtimeManager: {},
+    logger,
+    setIntervalFn(callback, ms) {
+      const interval = { callback, ms };
+      intervals.push(interval);
+      return interval;
+    },
+    clearIntervalFn: () => {},
+  });
+
+  sweeper.start();
+  assert.doesNotThrow(() => intervals[0].callback());
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(logger.entries[0].message, 'runtime sweeper list failed');
+});
+
 test('concurrent sweepOnce calls return zeros for the reentrant call without listing again', async () => {
   let listStarted;
   let resolveListStarted;
@@ -179,6 +280,9 @@ test('concurrent sweepOnce calls return zeros for the reentrant call without lis
           releaseList = release;
         });
         return [{ runtime_id: 'runtime-running', container_name: 'container-running' }];
+      },
+      findExpiredIdleRuntimeById({ runtimeId }) {
+        return { runtime_id: runtimeId, container_name: 'container-running' };
       },
     },
   };

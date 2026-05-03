@@ -28,16 +28,31 @@ export function createRuntimeSweeper({
     const result = { inspected: 0, stopped: 0, failed: 0 };
 
     try {
-      const candidates = await multitenancy.runtimes.listExpiredIdleRuntimes({
-        olderThanMinutes: config.idleTimeoutMinutes,
-        limit: 100,
-      });
+      let candidates;
+      try {
+        candidates = await multitenancy.runtimes.listExpiredIdleRuntimes({
+          olderThanMinutes: config.idleTimeoutMinutes,
+          limit: 100,
+        });
+      } catch (error) {
+        result.failed += 1;
+        logger?.warn?.('runtime sweeper list failed', { error: error?.message });
+        return result;
+      }
 
       for (const runtime of candidates) {
         result.inspected += 1;
         try {
           const inspected = await docker.inspectContainer(runtime.container_name);
           if (!inspected?.running) {
+            continue;
+          }
+
+          const stillExpiredIdle = await multitenancy.runtimes.findExpiredIdleRuntimeById({
+            runtimeId: runtime.runtime_id,
+            olderThanMinutes: config.idleTimeoutMinutes,
+          });
+          if (!stillExpiredIdle) {
             continue;
           }
 
@@ -69,7 +84,9 @@ export function createRuntimeSweeper({
     }
 
     interval = setIntervalFn(() => {
-      void sweepOnce();
+      void sweepOnce().catch((error) => {
+        logger?.warn?.('runtime sweeper interval failed', { error: error?.message });
+      });
     }, config.sweeperIntervalSeconds * 1000);
     interval?.unref?.();
   }

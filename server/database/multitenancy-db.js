@@ -922,6 +922,34 @@ export function createMultitenancyDb(database = db) {
           LIMIT ?
         `).all(`-${normalizedOlderThanMinutes} minutes`, normalizedLimit);
       },
+
+      findExpiredIdleRuntimeById: ({ runtimeId, olderThanMinutes }) => {
+        const normalizedOlderThanMinutes = requirePositiveInteger(
+          Number(olderThanMinutes),
+          'olderThanMinutes',
+        );
+
+        return database.prepare(`
+          SELECT
+            r.*,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            u.username,
+            w.slug AS workspace_slug,
+            w.display_name AS workspace_display_name,
+            w.path AS workspace_path
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE r.runtime_id = ?
+            AND r.status = 'idle'
+            AND r.last_used_at <= datetime('now', ?)
+        `).get(
+          requireNonEmptyString(runtimeId, 'runtimeId'),
+          `-${normalizedOlderThanMinutes} minutes`,
+        ) ?? null;
+      },
     },
 
     sessionMessages: {
