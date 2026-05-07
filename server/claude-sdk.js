@@ -34,6 +34,7 @@ import {
   persistUserPromptMessage,
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
+import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -520,6 +521,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
       runtimeMode: runtimeContext.mode,
     };
 
+    await reconcileWorkspaceSkillsForAgentTurn({
+      workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
+    });
+
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
@@ -831,8 +836,21 @@ async function queryClaudeSDK(command, options = {}, ws) {
       ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
       : error.message;
 
+    const errorMessage = {
+      kind: 'error',
+      content: errorContent,
+      sessionId: finalSessionId,
+      provider: 'claude'
+    };
+    if (error?.code) {
+      errorMessage.code = error.code;
+    }
+    if (Array.isArray(error?.failures)) {
+      errorMessage.failures = error.failures;
+    }
+
     // Send error to WebSocket
-    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: finalSessionId, provider: 'claude' }));
+    ws.send(createNormalizedMessage(errorMessage));
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',

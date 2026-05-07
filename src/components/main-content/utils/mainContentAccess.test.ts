@@ -16,3 +16,12 @@ test('resolveAllowedWorkspaceTab falls back to files when active tab is disabled
   assert.equal(resolveAllowedWorkspaceTab('files', disabledTabs), 'files');
   assert.equal(resolveAllowedWorkspaceTab('plugin:preview', disabledTabs), 'plugin:preview');
 });
+
+test('view-only workspaces can inspect skills and tools inventory tabs', () => {
+  const disabledTabs = getWorkspaceDisabledTabs('view');
+
+  assert.equal(disabledTabs.has('skills'), false);
+  assert.equal(disabledTabs.has('tools'), false);
+  assert.equal(resolveAllowedWorkspaceTab('skills', disabledTabs), 'skills');
+  assert.equal(resolveAllowedWorkspaceTab('tools', disabledTabs), 'tools');
+});

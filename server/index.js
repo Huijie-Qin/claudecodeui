@@ -39,6 +39,8 @@ import authRoutes from './routes/auth.js';
 import tenantsRoutes from './routes/tenants.js';
 import adminRoutes from './routes/admin.js';
 import workspacesRoutes from './routes/workspaces.js';
+import workspaceSkillsRoutes from './routes/workspace-skills.js';
+import workspaceToolsRoutes from './routes/workspace-tools.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -324,6 +326,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
+app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
+app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectsRoutes);

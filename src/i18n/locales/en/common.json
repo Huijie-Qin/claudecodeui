@@ -21,6 +21,8 @@
     "chat": "Chat",
     "shell": "Shell",
     "files": "Files",
+    "skills": "Skills",
+    "tools": "Tools",
     "git": "Source Control",
     "tasks": "Tasks"
   },
@@ -94,6 +96,145 @@
     "newSession": "New Session",
     "untitledSession": "Untitled Session",
     "projectFiles": "Project Files"
+  },
+  "skillsMarket": {
+    "title": "Skills",
+    "installFromGitHub": "Install from GitHub",
+    "uploadSkill": "Upload skill",
+    "searchPlaceholder": "Search skills...",
+    "loading": "Loading skills...",
+    "errorTitle": "Could not load skills",
+    "retry": "Retry",
+    "emptyTitle": "No skills installed",
+    "emptyDescription": "This workspace does not have any project-level skills yet.",
+    "emptySearchTitle": "No matching skills",
+    "emptySearchDescription": "No workspace skills match the current search.",
+    "detailTitle": "Skill details",
+    "detailEmpty": "No skill selected.",
+    "parseError": "Parse error",
+    "filters": {
+      "workspace": "Workspace"
+    },
+    "summary": {
+      "total": "Total",
+      "managed": "Managed",
+      "invalid": "Invalid"
+    },
+    "kind": {
+      "managed": "Managed",
+      "unmanaged": "Unmanaged",
+      "system": "System"
+    },
+    "status": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "available": "Available",
+      "invalid": "Invalid"
+    },
+    "detail": {
+      "kind": "Kind",
+      "status": "Status",
+      "sourceType": "Source",
+      "sourceUrl": "Source URL",
+      "sourceFileName": "Source file",
+      "resolvedCommit": "Commit",
+      "sourceSubdir": "Source subdir",
+      "runtimePath": "Runtime path",
+      "sourcePath": "Source path",
+      "parseError": "Parse error"
+    },
+    "installModal": {
+      "title": "Install workspace skill",
+      "description": "Preview a GitHub skill or upload a local ZIP before installing it into this workspace.",
+      "githubTab": "GitHub",
+      "localTab": "Local ZIP",
+      "githubUrl": "GitHub skill URL",
+      "localArchive": "Skill ZIP archive",
+      "enableOnInstall": "Enable after install",
+      "preview": "Preview",
+      "install": "Install skill",
+      "previewFailed": "Failed to preview skill.",
+      "installFailed": "Failed to install skill.",
+      "files": "{{count}} files",
+      "conflictBlocked": "This preview conflicts with an existing {{type}} skill and cannot be installed.",
+      "conflictWarning": "This preview will replace the existing {{type}} skill after install."
+    }
+  },
+  "toolsMarket": {
+    "title": "Tools",
+    "connectMcpServer": "Connect MCP Server",
+    "searchPlaceholder": "Search tools...",
+    "loading": "Loading tools...",
+    "errorTitle": "Unable to load tools",
+    "retry": "Retry",
+    "emptyTitle": "No MCP servers connected",
+    "emptyDescription": "This workspace does not have any HTTP MCP servers yet.",
+    "emptySearchTitle": "No matching tools",
+    "emptySearchDescription": "Try a different search term.",
+    "detailTitle": "Tool details",
+    "detailEmpty": "Select a tool to view permission state, transport, probe status, and visible configuration values.",
+    "toolCount": "{{count}} tools",
+    "delete": "Delete server",
+    "deleteConfirm": "Delete {{name}} from this workspace?",
+    "filters": {
+      "all": "All"
+    },
+    "summary": {
+      "total": "Total",
+      "httpMcp": "HTTP MCP",
+      "blocked": "Blocked"
+    },
+    "type": {
+      "builtin": "Built-in",
+      "mcp": "MCP"
+    },
+    "status": {
+      "available": "Available",
+      "healthy": "Healthy",
+      "needs_value": "Needs value",
+      "probe_failed": "Probe failed",
+      "read_only": "Read only",
+      "unverified": "Unverified",
+      "unsupported": "Unsupported"
+    },
+    "detail": {
+      "type": "Type",
+      "status": "Status",
+      "permission": "Permission",
+      "transport": "Transport",
+      "url": "URL",
+      "headers": "Headers",
+      "checkedAt": "Checked at",
+      "phase": "Probe phase",
+      "probeError": "Probe error",
+      "missingValues": "Missing values",
+      "exposedTools": "Exposed tools"
+    },
+    "dialog": {
+      "title": "Connect HTTP MCP Server",
+      "description": "Project-level HTTP MCP servers are saved to this workspace and are visible to everyone with access.",
+      "close": "Close",
+      "name": "Server name",
+      "url": "HTTP URL",
+      "headers": "Headers",
+      "probe": "Probe",
+      "save": "Save",
+      "probeEmpty": "Run a real HTTP probe before saving to see initialize and tools/list results.",
+      "probeHealthy": "Probe healthy",
+      "probeFailed": "Probe failed",
+      "probePhase": "Phase: {{phase}}",
+      "importJson": "Import JSON",
+      "previewImport": "Preview import",
+      "importSummary": "{{total}} entries · {{ready}} ready · {{needsValue}} need values · {{unsupported}} unsupported · {{invalid}} invalid",
+      "conflict": "conflict",
+      "useEntry": "Use"
+    },
+    "errors": {
+      "delete": "Failed to delete MCP server.",
+      "probe": "Failed to probe MCP server.",
+      "save": "Failed to save MCP server.",
+      "importPreview": "Failed to preview MCP import."
+    }
   },
   "fileTree": {
     "loading": "Loading files...",

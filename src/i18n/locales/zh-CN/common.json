@@ -21,6 +21,8 @@
     "chat": "聊天",
     "shell": "终端",
     "files": "文件",
+    "skills": "技能",
+    "tools": "工具",
     "git": "源代码管理",
     "tasks": "任务"
   },
@@ -94,6 +96,145 @@
     "newSession": "新会话",
     "untitledSession": "未命名会话",
     "projectFiles": "项目文件"
+  },
+  "skillsMarket": {
+    "title": "技能",
+    "installFromGitHub": "从 GitHub 安装",
+    "uploadSkill": "上传技能",
+    "searchPlaceholder": "搜索技能...",
+    "loading": "正在加载技能...",
+    "errorTitle": "技能加载失败",
+    "retry": "重试",
+    "emptyTitle": "暂无已安装技能",
+    "emptyDescription": "当前 workspace 还没有 project 级别的技能。",
+    "emptySearchTitle": "没有匹配的技能",
+    "emptySearchDescription": "当前搜索没有匹配的 workspace 技能。",
+    "detailTitle": "技能详情",
+    "detailEmpty": "未选择技能。",
+    "parseError": "解析错误",
+    "filters": {
+      "workspace": "Workspace"
+    },
+    "summary": {
+      "total": "总数",
+      "managed": "已管理",
+      "invalid": "无效"
+    },
+    "kind": {
+      "managed": "已管理",
+      "unmanaged": "未托管",
+      "system": "系统"
+    },
+    "status": {
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "available": "可用",
+      "invalid": "无效"
+    },
+    "detail": {
+      "kind": "类型",
+      "status": "状态",
+      "sourceType": "来源",
+      "sourceUrl": "来源 URL",
+      "sourceFileName": "来源文件",
+      "resolvedCommit": "Commit",
+      "sourceSubdir": "来源子目录",
+      "runtimePath": "运行路径",
+      "sourcePath": "源码路径",
+      "parseError": "解析错误"
+    },
+    "installModal": {
+      "title": "安装 workspace 技能",
+      "description": "安装前先预览 GitHub 技能或上传本地 ZIP，确认后写入当前 workspace。",
+      "githubTab": "GitHub",
+      "localTab": "本地 ZIP",
+      "githubUrl": "GitHub 技能 URL",
+      "localArchive": "技能 ZIP 压缩包",
+      "enableOnInstall": "安装后启用",
+      "preview": "预览",
+      "install": "安装技能",
+      "previewFailed": "技能预览失败。",
+      "installFailed": "技能安装失败。",
+      "files": "{{count}} 个文件",
+      "conflictBlocked": "该预览与已有 {{type}} 技能冲突，无法安装。",
+      "conflictWarning": "安装后将替换已有 {{type}} 技能。"
+    }
+  },
+  "toolsMarket": {
+    "title": "工具",
+    "connectMcpServer": "连接 MCP Server",
+    "searchPlaceholder": "搜索工具...",
+    "loading": "正在加载工具...",
+    "errorTitle": "无法加载工具",
+    "retry": "重试",
+    "emptyTitle": "暂无已连接 MCP Server",
+    "emptyDescription": "当前 workspace 还没有 HTTP MCP Server。",
+    "emptySearchTitle": "没有匹配的工具",
+    "emptySearchDescription": "换一个搜索词试试。",
+    "detailTitle": "工具详情",
+    "detailEmpty": "选择一个工具后可查看权限状态、传输方式、探测状态和可见配置值。",
+    "toolCount": "{{count}} 个工具",
+    "delete": "删除 Server",
+    "deleteConfirm": "从当前 workspace 删除 {{name}}？",
+    "filters": {
+      "all": "全部"
+    },
+    "summary": {
+      "total": "总数",
+      "httpMcp": "HTTP MCP",
+      "blocked": "已阻止"
+    },
+    "type": {
+      "builtin": "内置",
+      "mcp": "MCP"
+    },
+    "status": {
+      "available": "可用",
+      "healthy": "健康",
+      "needs_value": "缺少值",
+      "probe_failed": "探测失败",
+      "read_only": "只读",
+      "unverified": "未验证",
+      "unsupported": "不支持"
+    },
+    "detail": {
+      "type": "类型",
+      "status": "状态",
+      "permission": "权限",
+      "transport": "传输",
+      "url": "URL",
+      "headers": "Headers",
+      "checkedAt": "检查时间",
+      "phase": "探测阶段",
+      "probeError": "探测错误",
+      "missingValues": "缺少值",
+      "exposedTools": "暴露工具"
+    },
+    "dialog": {
+      "title": "连接 HTTP MCP Server",
+      "description": "Project 级 HTTP MCP Server 会保存到当前 workspace，拥有访问权限的人都可见。",
+      "close": "关闭",
+      "name": "Server 名称",
+      "url": "HTTP URL",
+      "headers": "Headers",
+      "probe": "探测",
+      "save": "保存",
+      "probeEmpty": "保存前可先运行真实 HTTP probe，查看 initialize 与 tools/list 结果。",
+      "probeHealthy": "探测健康",
+      "probeFailed": "探测失败",
+      "probePhase": "阶段：{{phase}}",
+      "importJson": "导入 JSON",
+      "previewImport": "预览导入",
+      "importSummary": "{{total}} 项 · {{ready}} 可用 · {{needsValue}} 缺值 · {{unsupported}} 不支持 · {{invalid}} 无效",
+      "conflict": "冲突",
+      "useEntry": "使用"
+    },
+    "errors": {
+      "delete": "删除 MCP Server 失败。",
+      "probe": "探测 MCP Server 失败。",
+      "save": "保存 MCP Server 失败。",
+      "importPreview": "预览 MCP 导入失败。"
+    }
   },
   "fileTree": {
     "loading": "正在加载文件...",

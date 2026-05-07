@@ -3,7 +3,9 @@ import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
 import GitPanel from '../../git-panel/view/GitPanel';
+import SkillsPanel from '../../skills-market/SkillsPanel';
 import PluginTabContent from '../../plugins/view/PluginTabContent';
+import ToolsPanel from '../../tools-market/ToolsPanel';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
@@ -159,6 +161,18 @@ function MainContent({
                 onFileOpen={handleFileOpen}
                 isReadOnly={isViewOnlyWorkspace}
               />
+            </div>
+          )}
+
+          {activeTab === 'skills' && (
+            <div className="h-full overflow-hidden">
+              <SkillsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
+            </div>
+          )}
+
+          {activeTab === 'tools' && (
+            <div className="h-full overflow-hidden">
+              <ToolsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
             </div>
           )}
 

@@ -2,7 +2,16 @@ export type LLMProvider = 'claude' | 'cursor' | 'codex' | 'gemini';
 export type TenantPermission = 'view' | 'edit';
 export type WorkspaceAccessRole = 'owner' | 'view' | 'edit';
 
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'preview' | `plugin:${string}`;
+export type AppTab =
+  | 'chat'
+  | 'files'
+  | 'skills'
+  | 'tools'
+  | 'shell'
+  | 'git'
+  | 'tasks'
+  | 'preview'
+  | `plugin:${string}`;
 
 export interface Tenant {
   id: number;

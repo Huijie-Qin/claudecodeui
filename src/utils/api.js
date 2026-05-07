@@ -289,6 +289,48 @@ export const api = {
       }),
   },
 
+  workspaceSkills: {
+    list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
+    previewGithub: (workspaceId, url) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/preview`), {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      }),
+    uploadLocal: (workspaceId, formData) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/upload`), {
+        method: 'POST',
+        body: formData,
+      }),
+    installPreview: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  },
+
+  workspaceTools: {
+    list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools`)),
+    probeMcp: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools/mcp/probe`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    upsertMcp: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools/mcp`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    removeMcp: (workspaceId, name) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools/mcp/${encodeURIComponent(name)}`), {
+        method: 'DELETE',
+      }),
+    previewMcpImport: (workspaceId, json) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools/mcp/import-preview`), {
+        method: 'POST',
+        body: JSON.stringify({ json }),
+      }),
+  },
+
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

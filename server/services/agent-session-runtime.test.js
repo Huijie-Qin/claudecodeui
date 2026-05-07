@@ -79,6 +79,23 @@ test('docker run args mount only workspace and runtime home', () => {
   assert.equal(joined.includes('/var/run/docker.sock'), false);
 });
 
+test('docker workspace bind mount exposes project-level Claude skills to the container', () => {
+  const workspaceHostPath = '/tmp/team-a/workspace';
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rabc',
+    image: 'cloudcli/test:claude',
+    uid: 501,
+    gid: 20,
+    workspaceHostPath,
+    runtimeHomePath: '/tmp/runtime/home',
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes(`src=${workspaceHostPath},dst=/workspace`));
+  assert.equal(path.relative(workspaceHostPath, path.join(workspaceHostPath, '.claude', 'skills')), '.claude/skills');
+  assert.equal(path.posix.join('/workspace', '.claude', 'skills'), '/workspace/.claude/skills');
+});
+
 test('claude docker wrapper tolerates an empty forwarded env array', () => {
   const wrapper = buildClaudeDockerWrapperScript({
     containerName: 'cloudcli-claude-test',
