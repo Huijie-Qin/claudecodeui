@@ -544,7 +544,9 @@ async function sandboxCommand(args) {
                     .map(e => `export ${e}`)
                     .join('\n');
                 if (exports) {
-                    sbx(['exec', opts.name, 'bash', '-c', `echo '${exports}' >> /etc/sandbox-persistent.sh`]);
+                    // Base64-encode to avoid shell injection when env values contain quotes/metacharacters
+                    const b64 = Buffer.from(exports).toString('base64');
+                    sbx(['exec', opts.name, 'bash', '-c', `echo '${b64}' | base64 -d >> /etc/sandbox-persistent.sh`]);
                 }
                 const invalid = opts.env.filter(e => !/^\w+=.+$/.test(e));
                 if (invalid.length > 0) {
