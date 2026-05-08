@@ -10,6 +10,7 @@ import { useAuth } from '../auth/context/AuthContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useTenant } from '../../contexts/TenantContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
+import { useModelResponseBrowserNotifications } from '../../hooks/useModelResponseBrowserNotifications';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
 import type { Tenant } from '../../types/app';
@@ -21,7 +22,7 @@ export default function AppContent() {
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { user } = useAuth();
   const { tenants, currentTenant, selectTenant } = useTenant();
-  const { ws, sendMessage, latestMessage, isConnected } = useWebSocket();
+  const { ws, sendMessage, subscribeMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const isSystemAdmin = isSystemAdminUser(user);
@@ -66,6 +67,17 @@ export default function AppContent() {
       setSidebarOpen(false);
     }
   }, [isMobile, navigate, selectTenant, setSidebarOpen]);
+
+  const handleNotificationNavigate = useCallback((targetSessionId: string) => {
+    setActiveTab('chat');
+    setSidebarOpen(false);
+    navigate(`/session/${targetSessionId}`);
+  }, [navigate, setActiveTab, setSidebarOpen]);
+
+  useModelResponseBrowserNotifications({
+    subscribeMessage,
+    onNavigateToSession: handleNotificationNavigate,
+  });
 
   useEffect(() => {
     // Expose a non-blocking refresh for chat/session flows.

@@ -13,6 +13,7 @@ import {
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // The compiled backend lives under dist-server/server/database, but the install root we log
@@ -395,10 +396,11 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
     webPush: false
   },
   events: {
-    actionRequired: true,
-    stop: true,
-    error: true
-  }
+    actionRequired: false,
+    stop: false,
+    error: false
+  },
+  modelResponseHooks: DEFAULT_MODEL_RESPONSE_HOOK_CONFIG
 };
 
 const normalizeNotificationPreferences = (value) => {
@@ -410,10 +412,11 @@ const normalizeNotificationPreferences = (value) => {
       webPush: source.channels?.webPush === true
     },
     events: {
-      actionRequired: source.events?.actionRequired !== false,
-      stop: source.events?.stop !== false,
-      error: source.events?.error !== false
-    }
+      actionRequired: false,
+      stop: false,
+      error: false
+    },
+    modelResponseHooks: normalizeModelResponseHookConfig(source.modelResponseHooks)
   };
 };
 
