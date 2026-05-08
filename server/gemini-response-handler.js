@@ -1,5 +1,6 @@
 // Gemini Response Handler - JSON Stream processing
 import { sessionsService } from './modules/providers/services/sessions.service.js';
+import { sendMessage } from './utils/send-message.js';
 
 class GeminiResponseHandler {
   constructor(ws, options = {}) {
@@ -58,7 +59,7 @@ class GeminiResponseHandler {
     // Normalize via adapter and send all resulting messages
     const normalized = sessionsService.normalizeMessage('gemini', event, sid);
     for (const msg of normalized) {
-      this.ws.send(msg);
+      sendMessage(this.ws, msg);
     }
   }
 

@@ -18,6 +18,7 @@ import { notifyRunFailed, notifyRunStopped } from './services/notification-orche
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { createNormalizedMessage } from './shared/utils.js';
+import { sendMessage } from './utils/send-message.js';
 
 // Track active sessions
 const activeCodexSessions = new Map();
@@ -389,25 +390,6 @@ export function getActiveCodexSessions() {
   }
 
   return sessions;
-}
-
-/**
- * Helper to send message via WebSocket or writer
- * @param {WebSocket|object} ws - WebSocket or response writer
- * @param {object} data - Data to send
- */
-function sendMessage(ws, data) {
-  try {
-    if (ws.isSSEStreamWriter || ws.isWebSocketWriter) {
-      // Writer handles stringification (SSEStreamWriter or WebSocketWriter)
-      ws.send(data);
-    } else if (typeof ws.send === 'function') {
-      // Raw WebSocket - stringify here
-      ws.send(JSON.stringify(data));
-    }
-  } catch (error) {
-    console.error('[Codex] Error sending message:', error);
-  }
 }
 
 // Clean up old completed sessions periodically
