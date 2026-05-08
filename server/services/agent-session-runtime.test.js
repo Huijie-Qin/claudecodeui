@@ -12,6 +12,7 @@ import {
   createAgentSessionRuntimeManager,
   resolveClaudeExecutionMode,
 } from './agent-session-runtime.js';
+import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
 
 test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   assert.equal(resolveClaudeExecutionMode({}), 'local');
@@ -94,6 +95,24 @@ test('docker workspace bind mount exposes project-level Claude skills to the con
   assert.ok(joined.includes(`src=${workspaceHostPath},dst=/workspace`));
   assert.equal(path.relative(workspaceHostPath, path.join(workspaceHostPath, '.claude', 'skills')), '.claude/skills');
   assert.equal(path.posix.join('/workspace', '.claude', 'skills'), '/workspace/.claude/skills');
+});
+
+test('docker workspace bind mount exposes project-level MCP config to Claude CLI', () => {
+  const workspaceHostPath = '/tmp/team-a/workspace';
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rabc',
+    image: 'cloudcli/test:claude',
+    uid: 501,
+    gid: 20,
+    workspaceHostPath,
+    runtimeHomePath: '/tmp/runtime/home',
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes(`src=${workspaceHostPath},dst=/workspace`));
+  assert.equal(path.relative(workspaceHostPath, path.join(workspaceHostPath, '.mcp.json')), '.mcp.json');
+  assert.equal(MCP_CONTAINER_CONFIG_PATH, '/workspace/.mcp.json');
+  assert.equal(path.posix.join('/workspace', '.mcp.json'), MCP_CONTAINER_CONFIG_PATH);
 });
 
 test('claude docker wrapper tolerates an empty forwarded env array', () => {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
 import Database from 'better-sqlite3';
 
 import { DATABASE_SCHEMA_SQL } from './schema.js';
@@ -95,6 +96,136 @@ test('workspace ACL grants access only inside the same tenant', () => {
   assert.deepEqual(mt.workspaces.listVisibleWorkspaces({ tenantId: tenant.id, userId: ownerId }).map((row) => row.accessRole), ['owner']);
   assert.deepEqual(mt.workspaces.listVisibleWorkspaces({ tenantId: tenant.id, userId: editorId }).map((row) => row.accessRole), ['edit']);
   assert.deepEqual(mt.workspaces.listVisibleWorkspaces({ tenantId: tenant.id, userId: outsiderId }), []);
+});
+
+test('mcp presets are isolated per tenant and can be filtered to published presets', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  const otherTenant = mt.tenants.createTenant({ code: 'other', name: 'Other' });
+
+  const draft = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    description: 'Search internal docs',
+    config: { type: 'http', url: 'https://mcp.internal/knowledge' },
+    status: 'draft',
+    createdByUserId: adminId,
+  });
+  const published = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'data-query',
+    displayName: 'Data Query MCP',
+    description: 'Run internal lookups',
+    config: { type: 'http', url: 'https://mcp.internal/data' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+  mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'disabled-search',
+    displayName: 'Disabled Search MCP',
+    description: 'Disabled preset',
+    config: { type: 'http', url: 'https://mcp.internal/disabled' },
+    status: 'disabled',
+    createdByUserId: adminId,
+  });
+  mt.mcpPresets.createPreset({
+    tenantId: otherTenant.id,
+    name: 'knowledge',
+    displayName: 'Other Tenant Knowledge MCP',
+    description: 'Same name in another tenant is allowed',
+    config: { type: 'http', url: 'https://mcp.other/knowledge' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+
+  assert.throws(() => mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Duplicate Knowledge MCP',
+    description: 'Duplicate preset',
+    config: { type: 'http', url: 'https://mcp.internal/dupe' },
+    status: 'draft',
+    createdByUserId: adminId,
+  }));
+
+  assert.deepEqual(
+    mt.mcpPresets.listPresets({ tenantId: tenant.id }).map((row) => row.name),
+    ['data-query', 'disabled-search', 'knowledge'],
+  );
+  assert.deepEqual(
+    mt.mcpPresets.listPresets({ tenantId: tenant.id, status: 'published' }).map((row) => row.id),
+    [published.id],
+  );
+  assert.deepEqual(
+    mt.mcpPresets.listPresets({ tenantId: tenant.id, includeDisabled: false }).map((row) => row.id),
+    [published.id, draft.id],
+  );
+  assert.deepEqual(
+    mt.mcpPresets.listPresets({ tenantId: otherTenant.id }).map((row) => row.display_name),
+    ['Other Tenant Knowledge MCP'],
+  );
+});
+
+test('mcp preset installs are idempotent per workspace and preset', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    description: 'Search internal docs',
+    config: { type: 'http', url: 'https://mcp.internal/knowledge' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+
+  const first = mt.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    installedByUserId: userId,
+    probeStatus: 'ok',
+    probeError: null,
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }],
+  });
+  const second = mt.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    installedByUserId: userId,
+    probeStatus: 'ok',
+    probeError: null,
+    toolCount: 3,
+    tools: [{ name: 'search_docs' }, { name: 'read_doc' }, { name: 'summarize_doc' }],
+  });
+
+  assert.equal(second.workspace_id, first.workspace_id);
+  assert.equal(second.preset_id, first.preset_id);
+  assert.equal(second.status, 'installed');
+  assert.equal(second.tool_count, 3);
+  assert.deepEqual(
+    mt.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id }).map((row) => row.preset_id),
+    [preset.id],
+  );
+
+  const removed = mt.mcpInstalls.removeInstall({ workspaceId: workspace.id, presetId: preset.id });
+
+  assert.equal(removed.status, 'removed');
+  assert.deepEqual(mt.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id }), []);
 });
 
 test('session index keeps shared workspace sessions private per user', () => {

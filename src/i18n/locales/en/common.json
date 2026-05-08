@@ -21,6 +21,7 @@
     "chat": "Chat",
     "shell": "Shell",
     "files": "Files",
+    "mcpTools": "MCP Tools",
     "skills": "Skills",
     "tools": "Tools",
     "git": "Source Control",
@@ -234,6 +235,43 @@
       "probe": "Failed to probe MCP server.",
       "save": "Failed to save MCP server.",
       "importPreview": "Failed to preview MCP import."
+    }
+  },
+  "mcpTools": {
+    "title": "MCP Tools",
+    "description": "Install Admin-approved internal MCP servers into this workspace.",
+    "searchPlaceholder": "Search MCP servers...",
+    "loading": "Loading MCP Tools...",
+    "empty": "No MCP servers match this view.",
+    "detailTitle": "MCP server details",
+    "noSelection": "Select an MCP server to inspect its Admin-managed preset and runtime policy.",
+    "install": "Install",
+    "installing": "Installing",
+    "available": "Available",
+    "connected": "Connected",
+    "requiresEditAccess": "Requires edit access",
+    "installSuccess": "{{name}} installed. It applies on the next Agent turn.",
+    "removeSuccess": "{{name}} removed from this workspace.",
+    "appliesOnNextTurn": "Applies on next Agent turn",
+    "toolCount": "{{count}} tools",
+    "cardAriaLabel": "{{name}} MCP server. Double-click to view details.",
+    "summary": {
+      "available": "Available",
+      "installed": "Installed"
+    },
+    "filters": {
+      "all": "All",
+      "available": "Available",
+      "installed": "Installed"
+    },
+    "detail": {
+      "serverName": "Server name",
+      "source": "Source",
+      "adminPublished": "Admin published preset",
+      "runtimePolicy": "Runtime policy",
+      "toolsTitle": "Included tools",
+      "toolsEmpty": "No tools were published for this MCP server.",
+      "noToolDescription": "No description provided."
     }
   },
   "fileTree": {

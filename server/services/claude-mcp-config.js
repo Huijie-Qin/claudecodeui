@@ -1,0 +1,72 @@
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+
+async function readJsonIfPresent(filePath, label) {
+  try {
+    try {
+      await fs.access(filePath);
+    } catch (error) {
+      return null;
+    }
+
+    const configContent = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(configContent);
+  } catch (error) {
+    console.error(`Failed to parse ${label}:`, error.message);
+    return null;
+  }
+}
+
+function mergeMcpServers(target, source) {
+  if (source && typeof source === 'object' && !Array.isArray(source)) {
+    return { ...target, ...source };
+  }
+  return target;
+}
+
+/**
+ * Loads MCP server configurations visible to the current Claude agent turn.
+ * Admin-installed workspace presets are written to <cwd>/.mcp.json and must be
+ * forwarded to the Agent SDK; the SDK does not reliably discover that file for us.
+ *
+ * @param {string} cwd - Current workspace path for project-scoped configs
+ * @param {Object} options
+ * @param {boolean} options.includeHostConfig - Whether to include host ~/.claude.json
+ * @param {string} options.homeDir - Home directory to read host Claude config from
+ * @returns {Object|null} MCP servers object or null if none found
+ */
+async function loadMcpConfig(cwd, { includeHostConfig = true, homeDir = os.homedir() } = {}) {
+  try {
+    let mcpServers = {};
+
+    if (includeHostConfig) {
+      const claudeConfigPath = path.join(homeDir, '.claude.json');
+      const claudeConfig = await readJsonIfPresent(claudeConfigPath, '~/.claude.json');
+
+      if (claudeConfig) {
+        mcpServers = mergeMcpServers(mcpServers, claudeConfig.mcpServers);
+
+        if (claudeConfig.claudeProjects && cwd) {
+          const projectConfig = claudeConfig.claudeProjects[cwd];
+          mcpServers = mergeMcpServers(mcpServers, projectConfig?.mcpServers);
+        }
+      }
+    }
+
+    if (cwd) {
+      const workspaceConfig = await readJsonIfPresent(path.join(cwd, '.mcp.json'), `${cwd}/.mcp.json`);
+      mcpServers = mergeMcpServers(mcpServers, workspaceConfig?.mcpServers);
+    }
+
+    if (Object.keys(mcpServers).length === 0) {
+      return null;
+    }
+    return mcpServers;
+  } catch (error) {
+    console.error('Error loading MCP config:', error.message);
+    return null;
+  }
+}
+
+export { loadMcpConfig };

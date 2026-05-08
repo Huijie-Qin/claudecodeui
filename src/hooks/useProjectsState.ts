@@ -11,6 +11,7 @@ import type {
   ProjectSession,
   ProjectsUpdatedMessage,
 } from '../types/app';
+import { resolveSupportedWorkspaceTab } from '../components/main-content/utils/mainContentAccess';
 
 import { isProjectUpdateScopedToTenant } from './projectTenantUpdates';
 
@@ -112,10 +113,8 @@ const isUpdateAdditive = (
   );
 };
 
-const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'preview']);
-
 const isValidTab = (tab: string): tab is AppTab => {
-  return VALID_TABS.has(tab) || tab.startsWith('plugin:');
+  return resolveSupportedWorkspaceTab(tab) === tab;
 };
 
 const readPersistedTab = (): AppTab => {
@@ -407,10 +406,6 @@ export function useProjectsState({
     (session: ProjectSession) => {
       setSelectedSession(session);
 
-      if (activeTab === 'tasks' || activeTab === 'preview') {
-        setActiveTab('chat');
-      }
-
       const provider = localStorage.getItem('selected-provider') || 'claude';
       if (provider === 'cursor') {
         sessionStorage.setItem('cursorSessionId', session.id);
@@ -427,7 +422,7 @@ export function useProjectsState({
 
       navigate(`/session/${session.id}`);
     },
-    [activeTab, isMobile, navigate, selectedProject?.name],
+    [isMobile, navigate, selectedProject?.name],
   );
 
   const handleNewSession = useCallback(

@@ -2,6 +2,7 @@ import express from 'express';
 
 import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { mcpPresetService } from '../services/mcp-presets.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 
 function requireSystemAdmin(req, res, next) {
@@ -14,7 +15,7 @@ function requireSystemAdmin(req, res, next) {
 function sendRouteError(res, error, fallbackMessage) {
   const message = error instanceof Error ? error.message : fallbackMessage;
   const isConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || error?.code === 'SQLITE_CONSTRAINT';
-  const statusCode = isConstraint ? 409 : 400;
+  const statusCode = error?.statusCode || (isConstraint ? 409 : 400);
   return res.status(statusCode).json({ error: message || fallbackMessage });
 }
 
@@ -63,6 +64,16 @@ function buildRuntimeFilters(query = {}) {
   );
 }
 
+function parsePositiveId(value, name) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    const error = new Error(`${name} must be a positive integer`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
 function isDockerError(error) {
   return error?.code === 'DOCKER_UNAVAILABLE'
     || error?.code === 'DOCKER_ERROR'
@@ -80,6 +91,7 @@ export function createAdminRouter(
   multitenancy = multitenancyDb,
   users = userDb,
   runtimeMonitor = runtimeMonitorService,
+  mcpPresets = mcpPresetService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -130,6 +142,101 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/mcp-presets', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      const presets = mcpPresets.listAdminPresets({ tenantId });
+      return res.json({ presets });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list MCP presets');
+    }
+  });
+
+  router.post('/mcp-presets', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId, 'tenantId');
+      const preset = mcpPresets.createPreset({
+        tenantId,
+        userId: req.user.id,
+        input: req.body,
+      });
+      return res.status(201).json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create MCP preset');
+    }
+  });
+
+  router.put('/mcp-presets/:presetId', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = mcpPresets.updatePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+        input: req.body,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update MCP preset');
+    }
+  });
+
+  router.post('/mcp-presets/:presetId/test', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = await mcpPresets.testPreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+        input: req.body?.url || req.body?.config ? req.body : null,
+      });
+      return res.json({ preset, probe: preset.probe, transient: preset.transient === true });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to test MCP preset');
+    }
+  });
+
+  router.post('/mcp-presets/:presetId/publish', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = mcpPresets.publishPreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish MCP preset');
+    }
+  });
+
+  router.post('/mcp-presets/:presetId/disable', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = mcpPresets.disablePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to disable MCP preset');
+    }
+  });
+
+  router.delete('/mcp-presets/:presetId', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const deleted = mcpPresets.deletePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+      });
+      return res.json({ deleted });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete MCP preset');
+    }
+  });
+
   router.get('/runtimes', async (req, res) => {
     try {
       const result = await runtimeMonitor.listRuntimes(buildRuntimeFilters(req.query));
@@ -171,4 +278,4 @@ export function createAdminRouter(
 }
 
 export { requireSystemAdmin };
-export default createAdminRouter(multitenancyDb, userDb, runtimeMonitorService);
+export default createAdminRouter(multitenancyDb, userDb, runtimeMonitorService, mcpPresetService);

@@ -9,8 +9,11 @@ const WORKSPACE_STATUSES = new Set(['active', 'archived', 'deleted']);
 const JOIN_REQUEST_STATUSES = new Set(['pending', 'approved', 'rejected']);
 const SESSION_STATUSES = new Set(['active', 'completed', 'aborted', 'failed', 'deleted']);
 const RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'deleted']);
+const MCP_PRESET_STATUSES = new Set(['draft', 'published', 'disabled']);
+const MCP_TRANSPORTS = new Set(['http']);
 const PERMISSIONS = new Set(['view', 'edit']);
 const PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
+const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 
 export function initializeMultitenancyTables(database = db) {
   database.exec(MULTITENANCY_SCHEMA_SQL);
@@ -59,9 +62,58 @@ function serializeMetadata(metadata) {
   return JSON.stringify(metadata);
 }
 
+function serializeJson(value, name) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    JSON.parse(value);
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    throw new Error(`${name} must be JSON serializable`);
+  }
+}
+
+function parseJson(value, fallback) {
+  if (value == null || value === '') return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function optionalNonEmptyString(value, name) {
   if (value == null || value === '') return null;
   return requireNonEmptyString(value, name);
+}
+
+function normalizeMcpServerName(value) {
+  const normalized = requireNonEmptyString(value, 'name');
+  if (!MCP_SERVER_NAME_PATTERN.test(normalized)) {
+    throw new Error('name must use letters, numbers, dots, underscores, or hyphens');
+  }
+  return normalized;
+}
+
+function normalizeMcpConfig(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('config must be an object');
+  }
+  const transport = requireEnum(value.type || value.transport || 'http', MCP_TRANSPORTS, 'transport');
+  return {
+    transport,
+    configJson: serializeJson({ ...value, type: transport }, 'config'),
+  };
+}
+
+function normalizeToolsJson(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) {
+    throw new Error('tools must be an array');
+  }
+  return serializeJson(value, 'tools');
 }
 
 function normalizeLimit(value) {
@@ -149,6 +201,24 @@ function extractContentText(message) {
 
 function normalizeMessageRole(role) {
   return role === 'user' || role === 'assistant' ? role : null;
+}
+
+function hydrateMcpPresetRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    docker_compatible: row.docker_compatible === 1 ? 1 : 0,
+    config: parseJson(row.config_json, {}),
+    tools: parseJson(row.tools_json, []),
+  };
+}
+
+function hydrateMcpInstallRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    tools: parseJson(row.tools_json, []),
+  };
 }
 
 export function createMultitenancyDb(database = db) {
@@ -550,6 +620,338 @@ export function createMultitenancyDb(database = db) {
           requirePositiveInteger(workspaceId, 'workspaceId'),
           requirePositiveInteger(userId, 'userId'),
         ) ?? null;
+      },
+    },
+
+    mcpPresets: {
+      createPreset: ({
+        tenantId,
+        name,
+        displayName,
+        description = '',
+        config,
+        status = 'draft',
+        createdByUserId,
+        updatedByUserId = createdByUserId,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedName = normalizeMcpServerName(name);
+        const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
+        const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+        const { transport, configJson } = normalizeMcpConfig(config);
+        const normalizedStatus = requireEnum(status, MCP_PRESET_STATUSES, 'status');
+        const normalizedCreatedBy = requirePositiveInteger(createdByUserId, 'createdByUserId');
+        const normalizedUpdatedBy = requirePositiveInteger(updatedByUserId, 'updatedByUserId');
+
+        const result = database.prepare(`
+          INSERT INTO mcp_server_presets (
+            tenant_id,
+            name,
+            display_name,
+            description,
+            transport,
+            config_json,
+            status,
+            created_by_user_id,
+            updated_by_user_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          normalizedTenantId,
+          normalizedName,
+          normalizedDisplayName,
+          normalizedDescription,
+          transport,
+          configJson,
+          normalizedStatus,
+          normalizedCreatedBy,
+          normalizedUpdatedBy,
+        );
+
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE id = ?
+        `).get(Number(result.lastInsertRowid)));
+      },
+
+      updatePreset: ({
+        presetId,
+        tenantId,
+        name,
+        displayName,
+        description = '',
+        config,
+        status,
+        updatedByUserId,
+      }) => {
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedName = normalizeMcpServerName(name);
+        const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
+        const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+        const { transport, configJson } = normalizeMcpConfig(config);
+        const normalizedStatus = requireEnum(status, MCP_PRESET_STATUSES, 'status');
+        const normalizedUpdatedBy = requirePositiveInteger(updatedByUserId, 'updatedByUserId');
+
+        database.prepare(`
+          UPDATE mcp_server_presets
+          SET
+            name = ?,
+            display_name = ?,
+            description = ?,
+            transport = ?,
+            config_json = ?,
+            status = ?,
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND tenant_id = ?
+        `).run(
+          normalizedName,
+          normalizedDisplayName,
+          normalizedDescription,
+          transport,
+          configJson,
+          normalizedStatus,
+          normalizedUpdatedBy,
+          normalizedPresetId,
+          normalizedTenantId,
+        );
+
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE id = ? AND tenant_id = ?
+        `).get(normalizedPresetId, normalizedTenantId));
+      },
+
+      getPresetById: ({ tenantId, presetId }) => {
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        ));
+      },
+
+      listPresets: ({ tenantId, includeDisabled = true, status = null }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const whereClauses = ['tenant_id = ?'];
+        const params = [normalizedTenantId];
+
+        if (status != null) {
+          whereClauses.push('status = ?');
+          params.push(requireEnum(status, MCP_PRESET_STATUSES, 'status'));
+        } else if (!includeDisabled) {
+          whereClauses.push("status != 'disabled'");
+        }
+
+        return database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY display_name ASC, id ASC
+        `).all(...params).map(hydrateMcpPresetRow);
+      },
+
+      publishPreset: ({ tenantId, presetId, updatedByUserId }) => {
+        database.prepare(`
+          UPDATE mcp_server_presets
+          SET
+            status = 'published',
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+
+      disablePreset: ({ tenantId, presetId, updatedByUserId }) => {
+        database.prepare(`
+          UPDATE mcp_server_presets
+          SET
+            status = 'disabled',
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+
+      deletePreset: ({ tenantId, presetId }) => {
+        const result = database.prepare(`
+          DELETE FROM mcp_server_presets
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return result.changes > 0;
+      },
+
+      recordPresetTest: ({
+        tenantId,
+        presetId,
+        status,
+        error = null,
+        toolCount = 0,
+        tools = [],
+        dockerCompatible = false,
+        updatedByUserId,
+      }) => {
+        const normalizedToolsJson = normalizeToolsJson(tools);
+        database.prepare(`
+          UPDATE mcp_server_presets
+          SET
+            last_test_status = ?,
+            last_test_error = ?,
+            last_tested_at = CURRENT_TIMESTAMP,
+            tool_count = ?,
+            tools_json = ?,
+            docker_compatible = ?,
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requireNonEmptyString(status, 'status'),
+          error == null ? null : String(error),
+          Number.isInteger(toolCount) && toolCount >= 0 ? toolCount : 0,
+          normalizedToolsJson,
+          dockerCompatible ? 1 : 0,
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateMcpPresetRow(database.prepare(`
+          SELECT *
+          FROM mcp_server_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+    },
+
+    mcpInstalls: {
+      upsertInstall: ({
+        workspaceId,
+        presetId,
+        installedByUserId,
+        probeStatus = null,
+        probeError = null,
+        toolCount = 0,
+        tools = [],
+      }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedInstalledBy = requirePositiveInteger(installedByUserId, 'installedByUserId');
+        const normalizedToolsJson = normalizeToolsJson(tools);
+        const normalizedToolCount = Number.isInteger(toolCount) && toolCount >= 0 ? toolCount : 0;
+
+        database.prepare(`
+          INSERT INTO workspace_mcp_preset_installs (
+            workspace_id,
+            preset_id,
+            installed_by_user_id,
+            status,
+            last_probe_status,
+            last_probe_error,
+            tool_count,
+            tools_json
+          )
+          VALUES (?, ?, ?, 'installed', ?, ?, ?, ?)
+          ON CONFLICT(workspace_id, preset_id)
+          DO UPDATE SET
+            installed_by_user_id = excluded.installed_by_user_id,
+            status = 'installed',
+            updated_at = CURRENT_TIMESTAMP,
+            last_applied_at = CURRENT_TIMESTAMP,
+            last_probe_status = excluded.last_probe_status,
+            last_probe_error = excluded.last_probe_error,
+            tool_count = excluded.tool_count,
+            tools_json = excluded.tools_json
+        `).run(
+          normalizedWorkspaceId,
+          normalizedPresetId,
+          normalizedInstalledBy,
+          probeStatus == null ? null : String(probeStatus),
+          probeError == null ? null : String(probeError),
+          normalizedToolCount,
+          normalizedToolsJson,
+        );
+
+        return hydrateMcpInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_mcp_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
+      removeInstall: ({ workspaceId, presetId }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        database.prepare(`
+          UPDATE workspace_mcp_preset_installs
+          SET
+            status = 'removed',
+            updated_at = CURRENT_TIMESTAMP
+          WHERE workspace_id = ?
+            AND preset_id = ?
+        `).run(normalizedWorkspaceId, normalizedPresetId);
+
+        return hydrateMcpInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_mcp_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
+      listInstallsForWorkspace: ({ workspaceId, includeRemoved = false }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const whereStatus = includeRemoved ? '' : "AND i.status = 'installed'";
+        return database.prepare(`
+          SELECT
+            i.*,
+            p.tenant_id,
+            p.name,
+            p.display_name,
+            p.description,
+            p.transport,
+            p.status AS preset_status,
+            p.docker_compatible,
+            p.config_json,
+            p.tools_json AS preset_tools_json
+          FROM workspace_mcp_preset_installs i
+          JOIN mcp_server_presets p ON p.id = i.preset_id
+          WHERE i.workspace_id = ?
+            ${whereStatus}
+          ORDER BY p.display_name ASC, p.id ASC
+        `).all(normalizedWorkspaceId).map(hydrateMcpInstallRow);
       },
     },
 

@@ -60,6 +60,55 @@ CREATE TABLE IF NOT EXISTS workspace_acl (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_acl_user_permission ON workspace_acl(user_id, permission);
 
+CREATE TABLE IF NOT EXISTS mcp_server_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT 'http' CHECK (transport IN ('http')),
+  config_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
+  docker_compatible INTEGER NOT NULL DEFAULT 0,
+  last_test_status TEXT,
+  last_test_error TEXT,
+  last_tested_at DATETIME,
+  tool_count INTEGER NOT NULL DEFAULT 0,
+  tools_json TEXT,
+  created_by_user_id INTEGER NOT NULL,
+  updated_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (tenant_id, name),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_status
+  ON mcp_server_presets(tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS workspace_mcp_preset_installs (
+  workspace_id INTEGER NOT NULL,
+  preset_id INTEGER NOT NULL,
+  installed_by_user_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'installed' CHECK (status IN ('installed', 'removed')),
+  installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_probe_status TEXT,
+  last_probe_error TEXT,
+  tool_count INTEGER NOT NULL DEFAULT 0,
+  tools_json TEXT,
+  PRIMARY KEY (workspace_id, preset_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE,
+  FOREIGN KEY (installed_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mcp_preset_installs_preset
+  ON workspace_mcp_preset_installs(preset_id, status);
+
 CREATE TABLE IF NOT EXISTS tenant_join_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id INTEGER NOT NULL,

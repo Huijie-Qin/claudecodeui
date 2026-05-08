@@ -1,19 +1,13 @@
 import React, { useEffect, useMemo } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
-import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
-import GitPanel from '../../git-panel/view/GitPanel';
-import SkillsPanel from '../../skills-market/SkillsPanel';
-import PluginTabContent from '../../plugins/view/PluginTabContent';
-import ToolsPanel from '../../tools-market/ToolsPanel';
+import McpToolsPanel from '../../tools-market/McpToolsPanel';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
-import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
@@ -22,12 +16,6 @@ import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/m
 type TaskMasterContextValue = {
   currentProject?: Project | null;
   setCurrentProject?: ((project: Project) => void) | null;
-};
-
-type TasksSettingsContextValue = {
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  isTaskMasterReady: boolean | null;
 };
 
 function MainContent({
@@ -56,9 +44,7 @@ function MainContent({
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
-  const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
-  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
   const disabledTabs = useMemo(
     () => getWorkspaceDisabledTabs(selectedProject?.accessRole),
     [selectedProject?.accessRole],
@@ -90,12 +76,6 @@ function MainContent({
   }, [selectedProject, currentProject?.name, setCurrentProject]);
 
   useEffect(() => {
-    if (!shouldShowTasksTab && activeTab === 'tasks') {
-      setActiveTab('chat');
-    }
-  }, [shouldShowTasksTab, activeTab, setActiveTab]);
-
-  useEffect(() => {
     const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs);
     if (allowedTab !== activeTab) {
       setActiveTab(allowedTab);
@@ -117,7 +97,6 @@ function MainContent({
         setActiveTab={setActiveTab}
         selectedProject={selectedProject}
         selectedSession={selectedSession}
-        shouldShowTasksTab={shouldShowTasksTab}
         disabledTabs={disabledTabs}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
@@ -149,7 +128,7 @@ function MainContent({
                 autoScrollToBottom={autoScrollToBottom}
                 sendByCtrlEnter={sendByCtrlEnter}
                 externalMessageUpdate={externalMessageUpdate}
-                onShowAllTasks={tasksEnabled ? () => setActiveTab('tasks') : null}
+                onShowAllTasks={null}
               />
             </ErrorBoundary>
           </div>
@@ -164,46 +143,9 @@ function MainContent({
             </div>
           )}
 
-          {activeTab === 'skills' && (
+          {activeTab === 'mcp-tools' && (
             <div className="h-full overflow-hidden">
-              <SkillsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
-            </div>
-          )}
-
-          {activeTab === 'tools' && (
-            <div className="h-full overflow-hidden">
-              <ToolsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
-            </div>
-          )}
-
-          {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
-              />
-            </div>
-          )}
-
-          {activeTab === 'git' && (
-            <div className="h-full overflow-hidden">
-              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
-            </div>
-          )}
-
-          {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
-
-          <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
-
-          {activeTab.startsWith('plugin:') && (
-            <div className="h-full overflow-hidden">
-              <PluginTabContent
-                pluginName={activeTab.replace('plugin:', '')}
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-              />
+              <McpToolsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
             </div>
           )}
         </div>

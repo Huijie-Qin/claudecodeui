@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from './mainContentAccess';
 
-test('getWorkspaceDisabledTabs disables write and execution tabs for view-only workspaces', () => {
-  assert.deepEqual(Array.from(getWorkspaceDisabledTabs('view')).sort(), ['chat', 'git', 'shell']);
+test('getWorkspaceDisabledTabs disables chat for view-only workspaces while keeping inspection tabs available', () => {
+  assert.deepEqual(Array.from(getWorkspaceDisabledTabs('view')).sort(), ['chat']);
   assert.equal(getWorkspaceDisabledTabs('edit').size, 0);
   assert.equal(getWorkspaceDisabledTabs('owner').size, 0);
 });
@@ -14,14 +14,22 @@ test('resolveAllowedWorkspaceTab falls back to files when active tab is disabled
 
   assert.equal(resolveAllowedWorkspaceTab('chat', disabledTabs), 'files');
   assert.equal(resolveAllowedWorkspaceTab('files', disabledTabs), 'files');
-  assert.equal(resolveAllowedWorkspaceTab('plugin:preview', disabledTabs), 'plugin:preview');
+  assert.equal(resolveAllowedWorkspaceTab('mcp-tools', disabledTabs), 'mcp-tools');
 });
 
-test('view-only workspaces can inspect skills and tools inventory tabs', () => {
+test('resolveAllowedWorkspaceTab normalizes removed workspace tabs to chat', () => {
+  const editableTabs = getWorkspaceDisabledTabs('edit');
+  const viewOnlyTabs = getWorkspaceDisabledTabs('view');
+
+  for (const oldTab of ['skills', 'tools', 'shell', 'git', 'tasks', 'preview', 'plugin:preview']) {
+    assert.equal(resolveAllowedWorkspaceTab(oldTab, editableTabs), 'chat');
+    assert.equal(resolveAllowedWorkspaceTab(oldTab, viewOnlyTabs), 'files');
+  }
+});
+
+test('view-only workspaces can inspect MCP Tools inventory', () => {
   const disabledTabs = getWorkspaceDisabledTabs('view');
 
-  assert.equal(disabledTabs.has('skills'), false);
-  assert.equal(disabledTabs.has('tools'), false);
-  assert.equal(resolveAllowedWorkspaceTab('skills', disabledTabs), 'skills');
-  assert.equal(resolveAllowedWorkspaceTab('tools', disabledTabs), 'tools');
+  assert.equal(disabledTabs.has('mcp-tools'), false);
+  assert.equal(resolveAllowedWorkspaceTab('mcp-tools', disabledTabs), 'mcp-tools');
 });

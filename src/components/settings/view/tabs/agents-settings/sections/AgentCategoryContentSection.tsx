@@ -1,5 +1,4 @@
 import type { AgentCategoryContentSectionProps } from '../types';
-import { McpServers } from '../../../../../mcp';
 
 import AccountContent from './content/AccountContent';
 import PermissionsContent from './content/PermissionsContent';
@@ -14,7 +13,6 @@ export default function AgentCategoryContentSection({
   onCursorPermissionsChange,
   codexPermissionMode,
   onCodexPermissionModeChange,
-  projects,
 }: AgentCategoryContentSectionProps) {
   return (
     <div className="flex-1 overflow-y-auto p-3 md:p-4">
@@ -67,13 +65,6 @@ export default function AgentCategoryContentSection({
           agent="codex"
           permissionMode={codexPermissionMode}
           onPermissionModeChange={onCodexPermissionModeChange}
-        />
-      )}
-
-      {selectedCategory === 'mcp' && (
-        <McpServers
-          selectedProvider={selectedAgent}
-          currentProjects={projects}
         />
       )}
     </div>

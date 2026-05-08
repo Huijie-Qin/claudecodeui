@@ -259,6 +259,33 @@ export const api = {
 
   admin: {
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    mcpPresets: (tenantId) =>
+      authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
+    createMcpPreset: (payload) =>
+      authenticatedFetch('/api/admin/mcp-presets', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateMcpPreset: (presetId, payload) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    testMcpPreset: (presetId, tenantId, payload) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}/test`, {
+        method: 'POST',
+        body: JSON.stringify({ ...(payload || {}), tenantId }),
+      }),
+    publishMcpPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      }),
+    disableMcpPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}/disable`, {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      }),
     runtimes: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes${buildRuntimeQueryString(filters)}`),
     runtimeSummary: (filters = {}) =>
@@ -328,6 +355,18 @@ export const api = {
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools/mcp/import-preview`), {
         method: 'POST',
         body: JSON.stringify({ json }),
+      }),
+  },
+
+  workspaceMcpTools: {
+    list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools`)),
+    install: (workspaceId, presetId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/install`), {
+        method: 'POST',
+      }),
+    remove: (workspaceId, presetId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}`), {
+        method: 'DELETE',
       }),
   },
 

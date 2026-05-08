@@ -1,0 +1,1408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CloudCLI MCP Tools UX</title>
+  <style>
+    :root {
+      --background: #ffffff;
+      --foreground: #0f172a;
+      --muted: #f1f5f9;
+      --muted-2: #f8fafc;
+      --muted-foreground: #64748b;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --primary: #2563eb;
+      --primary-soft: #eff6ff;
+      --primary-border: #bfdbfe;
+      --success: #047857;
+      --success-soft: #ecfdf5;
+      --success-border: #a7f3d0;
+      --warning: #b45309;
+      --warning-soft: #fffbeb;
+      --warning-border: #fde68a;
+      --danger: #b91c1c;
+      --danger-soft: #fef2f2;
+      --danger-border: #fecaca;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      --radius: 8px;
+      --sidebar: 260px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #f8fafc;
+      color: var(--foreground);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .design-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: end;
+      margin-bottom: 20px;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 26px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    h3 {
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .subtle {
+      color: var(--muted-foreground);
+    }
+
+    .quick-nav {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--background);
+    }
+
+    .quick-nav a {
+      padding: 7px 10px;
+      border-radius: 7px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .quick-nav a:hover {
+      background: var(--muted);
+      color: var(--foreground);
+    }
+
+    .screen {
+      margin-top: 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--background);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .screen-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--muted-2);
+    }
+
+    .screen-label code {
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      min-height: 800px;
+      background: var(--background);
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: #fbfdff;
+      padding: 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 12px;
+      padding: 0 4px;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .brand-title {
+      font-weight: 750;
+    }
+
+    .sidebar-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      margin-bottom: 8px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--background);
+    }
+
+    .sidebar-tab {
+      padding: 7px 8px;
+      border-radius: 7px;
+      color: var(--muted-foreground);
+      text-align: center;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .sidebar-tab.active {
+      background: var(--muted);
+      color: var(--foreground);
+    }
+
+    .search {
+      position: relative;
+      margin: 8px 0 14px;
+    }
+
+    .search input,
+    .input,
+    .select,
+    .textarea {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--background);
+      padding: 8px 10px;
+      color: var(--foreground);
+      font: inherit;
+      outline: none;
+    }
+
+    .search input {
+      padding-left: 28px;
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--muted-foreground);
+      border-radius: 50%;
+      transform: translateY(-50%);
+      opacity: 0.7;
+    }
+
+    .search-icon::after {
+      content: "";
+      position: absolute;
+      width: 6px;
+      height: 2px;
+      right: -5px;
+      bottom: -3px;
+      border-radius: 2px;
+      background: var(--muted-foreground);
+      transform: rotate(45deg);
+    }
+
+    .project-list {
+      display: grid;
+      gap: 4px;
+    }
+
+    .project {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      border-radius: 8px;
+      color: var(--muted-foreground);
+    }
+
+    .project.active {
+      background: #edf4ff;
+      color: var(--foreground);
+    }
+
+    .folder-icon {
+      width: 15px;
+      height: 11px;
+      border: 1.7px solid currentColor;
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .folder-icon::before {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: -5px;
+      width: 8px;
+      height: 5px;
+      border: 1.7px solid currentColor;
+      border-bottom: 0;
+      border-radius: 2px 2px 0 0;
+      background: inherit;
+    }
+
+    .project-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+    }
+
+    .project-meta {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .new-session {
+      margin: 8px 16px 8px 16px;
+      padding: 9px 12px;
+      border-radius: 7px;
+      background: var(--primary);
+      color: #fff;
+      text-align: center;
+      font-weight: 750;
+    }
+
+    .sidebar-footer {
+      margin-top: 22px;
+      display: grid;
+      gap: 3px;
+      color: var(--muted-foreground);
+      font-size: 13px;
+    }
+
+    .footer-link {
+      padding: 8px;
+      border-radius: 7px;
+    }
+
+    .footer-link.active {
+      background: var(--muted);
+      color: var(--foreground);
+      font-weight: 700;
+    }
+
+    .main {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      background: var(--background);
+    }
+
+    .topbar {
+      display: flex;
+      min-height: 49px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+    }
+
+    .workspace-title {
+      min-width: 0;
+    }
+
+    .workspace-title strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.15;
+    }
+
+    .workspace-title span {
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .pills {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 3px;
+      border-radius: 10px;
+      background: var(--muted);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.active {
+      background: var(--background);
+      color: var(--foreground);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    }
+
+    .content {
+      min-height: 0;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .mcp-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      min-height: 750px;
+    }
+
+    .mcp-main {
+      min-width: 0;
+      border-right: 1px solid var(--border);
+    }
+
+    .page-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .head-title {
+      display: grid;
+      gap: 3px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--background);
+      color: var(--foreground);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+
+    .button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .button.danger {
+      border-color: var(--danger-border);
+      color: var(--danger);
+    }
+
+    .button.ghost {
+      box-shadow: none;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--muted-2);
+    }
+
+    .filter-pills {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .filter {
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--background);
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .filter.active {
+      border-color: var(--primary-border);
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      border-bottom: 1px solid var(--border);
+      background: var(--border);
+      gap: 1px;
+    }
+
+    .summary-tile {
+      background: var(--background);
+      padding: 12px 16px;
+    }
+
+    .summary-tile span {
+      display: block;
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .summary-tile strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .tool-sections {
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .section-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 2px 0 8px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .tool-card {
+      min-height: 144px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--background);
+      padding: 13px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .tool-card.selected {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+    }
+
+    .tool-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .tool-copy {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .tool-copy p {
+      color: var(--muted-foreground);
+      font-size: 13px;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 7px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--muted-2);
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .badge.success {
+      border-color: var(--success-border);
+      background: var(--success-soft);
+      color: var(--success);
+    }
+
+    .badge.warning {
+      border-color: var(--warning-border);
+      background: var(--warning-soft);
+      color: var(--warning);
+    }
+
+    .badge.danger {
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .tool-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .detail {
+      background: var(--muted-2);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .detail-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--background);
+    }
+
+    .detail-body {
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .detail-block {
+      display: grid;
+      gap: 7px;
+    }
+
+    .detail-label {
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .kv dt {
+      color: var(--muted-foreground);
+    }
+
+    .kv dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-weight: 600;
+    }
+
+    .callout {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--background);
+    }
+
+    .callout.warning {
+      border-color: var(--warning-border);
+      background: var(--warning-soft);
+      color: #78350f;
+    }
+
+    .callout.success {
+      border-color: var(--success-border);
+      background: var(--success-soft);
+      color: #064e3b;
+    }
+
+    .callout.danger {
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
+      color: #7f1d1d;
+    }
+
+    .screen-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px;
+      background: #f8fafc;
+    }
+
+    .direct-install-canvas {
+      display: grid;
+      gap: 18px;
+      padding: 18px;
+      background: #f8fafc;
+    }
+
+    .action-demo {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .action-step {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--background);
+      min-height: 190px;
+    }
+
+    .action-step h3 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .toast-demo {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--success-border);
+      border-radius: 10px;
+      background: var(--success-soft);
+      color: #064e3b;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      color: var(--foreground);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .textarea {
+      min-height: 86px;
+      resize: none;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .admin-shell {
+      min-height: 760px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .admin-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .admin-tabs {
+      display: flex;
+      gap: 5px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--muted-2);
+    }
+
+    .admin-tab {
+      padding: 7px 11px;
+      border-radius: 7px;
+      color: var(--muted-foreground);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .admin-tab.active {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .admin-content {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      min-height: 650px;
+    }
+
+    .admin-table-wrap {
+      padding: 16px;
+      background: #fbfdff;
+    }
+
+    .table-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--background);
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      background: var(--muted-2);
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .drawer {
+      border-left: 1px solid var(--border);
+      background: var(--background);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .drawer-body {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      padding: 18px;
+      background: #f8fafc;
+    }
+
+    .state-card {
+      min-height: 210px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--background);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .icon-box {
+      display: inline-grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    @media (max-width: 1100px) {
+      .app-shell,
+      .mcp-layout,
+      .admin-content,
+      .screen-row,
+      .state-grid,
+      .action-demo {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar,
+      .detail,
+      .drawer {
+        display: none;
+      }
+
+      .cards {
+        grid-template-columns: 1fr;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="design-header">
+      <div>
+        <p class="eyebrow">UX design draft</p>
+        <h1>CloudCLI MCP Tools</h1>
+        <p class="subtle">Main workspace IA is reduced to Chat, Files, and MCP Tools. Admin manages self-developed internal MCP Server presets.</p>
+      </div>
+      <nav class="quick-nav" aria-label="Design sections">
+        <a href="#workspace">Workspace</a>
+        <a href="#install">Action</a>
+        <a href="#admin">Admin</a>
+        <a href="#states">States</a>
+      </nav>
+    </header>
+
+    <section id="workspace" class="screen">
+      <div class="screen-label">
+        <div>
+          <h2>1. Workspace MCP Tools page</h2>
+          <p class="subtle">Current CloudCLI shell style, but top tabs are limited to Chat, Files, MCP Tools.</p>
+        </div>
+        <code>Desktop 1440 x 900</code>
+      </div>
+      <div class="app-shell">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="brand-mark">C</div>
+            <div>
+              <div class="brand-title">CloudCLI</div>
+              <div class="subtle" style="font-size:12px">Open Source</div>
+            </div>
+          </div>
+          <div class="sidebar-tabs">
+            <div class="sidebar-tab active">Projects</div>
+            <div class="sidebar-tab">Conversations</div>
+          </div>
+          <div class="search">
+            <span class="search-icon"></span>
+            <input value="" placeholder="Search projects..." />
+          </div>
+          <div class="project-list">
+            <div class="project">
+              <span class="folder-icon"></span>
+              <div>
+                <div class="project-name">DataAgent_alpha</div>
+                <div class="project-meta">3 sessions</div>
+              </div>
+              <span>&gt;</span>
+            </div>
+            <div class="project">
+              <span class="folder-icon"></span>
+              <div>
+                <div class="project-name">DataAgent_test</div>
+                <div class="project-meta">1 session</div>
+              </div>
+              <span>&gt;</span>
+            </div>
+            <div class="project active">
+              <span class="folder-icon"></span>
+              <div>
+                <div class="project-name">myworkspace3</div>
+                <div class="project-meta">4 sessions</div>
+              </div>
+              <span>v</span>
+            </div>
+          </div>
+          <div class="new-session">New Session</div>
+          <div class="project-list">
+            <div class="project active">
+              <span class="icon-box">C</span>
+              <div>
+                <div class="project-name">docker-session-B</div>
+                <div class="project-meta">3 days ago</div>
+              </div>
+            </div>
+            <div class="project">
+              <span class="icon-box">C</span>
+              <div>
+                <div class="project-name">docker-session-A</div>
+                <div class="project-meta">3 days ago</div>
+              </div>
+            </div>
+          </div>
+          <div class="sidebar-footer">
+            <div class="footer-link">Report Issue</div>
+            <div class="footer-link">Join Community</div>
+            <div class="footer-link active">Admin</div>
+            <div class="footer-link">Settings</div>
+          </div>
+        </aside>
+
+        <section class="main">
+          <div class="topbar">
+            <div class="workspace-title">
+              <strong>MCP Tools</strong>
+              <span>myworkspace3</span>
+            </div>
+            <div class="pills">
+              <div class="pill">Chat</div>
+              <div class="pill">Files</div>
+              <div class="pill active">MCP Tools</div>
+            </div>
+          </div>
+
+          <div class="content">
+            <div class="mcp-layout">
+              <div class="mcp-main">
+                <div class="page-head">
+                  <div class="head-title">
+                    <h2>MCP Tools</h2>
+                  <p class="subtle">Install Admin-approved internal MCP servers into this workspace.</p>
+                  </div>
+                  <button class="button">Refresh</button>
+                </div>
+
+                <div class="summary-grid">
+                  <div class="summary-tile"><span>Available</span><strong>8</strong></div>
+                  <div class="summary-tile"><span>Installed</span><strong>3</strong></div>
+                </div>
+
+                <div class="toolbar">
+                  <div class="search" style="margin:0">
+                    <span class="search-icon"></span>
+                    <input placeholder="Search MCP servers..." />
+                  </div>
+                  <div class="filter-pills">
+                    <div class="filter active">All</div>
+                    <div class="filter">Available</div>
+                    <div class="filter">Installed</div>
+                  </div>
+                </div>
+
+                <div class="tool-sections">
+                  <div class="section-heading">
+                    <span>Available internal MCP servers</span>
+                    <span>Fully configured by Admin</span>
+                  </div>
+                  <div class="cards">
+                    <article class="tool-card selected">
+                      <div class="tool-top">
+                        <div class="tool-copy">
+                          <h3>Knowledge Retrieval MCP</h3>
+                          <p>Search internal knowledge bases, product specs, and implementation notes from Agent turns.</p>
+                        </div>
+                        <span class="badge">Available</span>
+                      </div>
+                      <div class="badge-row">
+                        <span class="badge">HTTP</span>
+                        <span class="badge success">No user setup</span>
+                        <span class="badge success">Docker compatible</span>
+                      </div>
+                      <div class="tool-actions">
+                        <span class="subtle">12 tools after install</span>
+                        <button class="button primary">Install</button>
+                      </div>
+                    </article>
+
+                    <article class="tool-card">
+                      <div class="tool-top">
+                        <div class="tool-copy">
+                          <h3>Data Query MCP</h3>
+                          <p>Run approved internal data lookups and return governed results to the Agent.</p>
+                        </div>
+                        <span class="badge">Available</span>
+                      </div>
+                      <div class="badge-row">
+                        <span class="badge">HTTP</span>
+                        <span class="badge success">No user setup</span>
+                        <span class="badge success">Docker compatible</span>
+                      </div>
+                      <div class="tool-actions">
+                        <span class="subtle">8 tools after install</span>
+                        <button class="button primary">Install</button>
+                      </div>
+                    </article>
+                  </div>
+
+                  <div class="section-heading">
+                    <span>Installed MCP servers</span>
+                    <span>Runtime visible from /workspace/.mcp.json</span>
+                  </div>
+                  <div class="cards">
+                    <article class="tool-card">
+                      <div class="tool-top">
+                        <div class="tool-copy">
+                          <h3>Workspace Insight MCP</h3>
+                          <p>Inspect repository metadata, dependency maps, and workspace health signals.</p>
+                        </div>
+                        <span class="badge success">Connected</span>
+                      </div>
+                      <div class="badge-row">
+                        <span class="badge">HTTP</span>
+                        <span class="badge success">15 tools</span>
+                        <span class="badge">Tested 2m ago</span>
+                      </div>
+                      <div class="tool-actions">
+                        <span class="subtle">Applies on next Agent turn</span>
+                        <button class="button">View details</button>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+              </div>
+
+              <aside class="detail">
+                <div class="detail-head">
+                  <h2>Knowledge Retrieval MCP</h2>
+                  <p class="subtle">Admin preset, not installed in this workspace.</p>
+                </div>
+                <div class="detail-body">
+                  <div class="badge-row">
+                    <span class="badge">Available</span>
+                    <span class="badge">HTTP</span>
+                    <span class="badge success">No user setup</span>
+                    <span class="badge success">Docker compatible</span>
+                  </div>
+                  <div class="detail-block">
+                    <div class="detail-label">Purpose</div>
+                    <p>Gives the Agent controlled access to internal knowledge and project documentation approved for this tenant.</p>
+                  </div>
+                  <dl class="kv">
+                    <dt>Preset source</dt><dd>Admin published</dd>
+                    <dt>Install target</dt><dd>myworkspace3/.mcp.json</dd>
+                    <dt>Container path</dt><dd>/workspace/.mcp.json</dd>
+                    <dt>User configuration</dt><dd>Not required</dd>
+                    <dt>Probe context</dt><dd>Docker runtime network</dd>
+                  </dl>
+                  <div class="callout success">
+                    <strong>Runtime policy</strong>
+                    <span>CloudCLI writes .mcp.json to the workspace root. Docker mode bind-mounts the whole workspace to /workspace, so Claude CLI sees it at /workspace/.mcp.json.</span>
+                  </div>
+                  <div class="detail-block">
+                    <div class="detail-label">Primary action</div>
+                    <button class="button primary">Install</button>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="install" class="screen">
+      <div class="screen-label">
+        <div>
+          <h2>2. Direct install action</h2>
+          <p class="subtle">Clicking Install runs immediately from the card. No confirmation page, no user-side configuration.</p>
+        </div>
+        <code>Card states</code>
+      </div>
+      <div class="direct-install-canvas">
+        <div class="action-demo">
+          <article class="action-step">
+            <div>
+              <span class="badge">Available</span>
+              <h3 style="margin-top:10px">Before click</h3>
+            </div>
+            <p class="subtle">The user sees an Admin-published internal MCP server with no required setup.</p>
+            <button class="button primary">Install</button>
+          </article>
+
+          <article class="action-step">
+            <div>
+              <span class="badge">Installing</span>
+              <h3 style="margin-top:10px">After click</h3>
+            </div>
+            <p class="subtle">CloudCLI writes the preset to myworkspace3/.mcp.json and validates from the Docker runtime network.</p>
+            <button class="button" disabled>Installing</button>
+          </article>
+
+          <article class="action-step">
+            <div>
+              <span class="badge success">Connected</span>
+              <h3 style="margin-top:10px">After success</h3>
+            </div>
+            <p class="subtle">The card moves to Installed. The server is available on the next Agent turn or session reload.</p>
+            <button class="button">View details</button>
+          </article>
+        </div>
+
+        <div class="toast-demo">
+          <div>
+            <strong>Knowledge Retrieval MCP installed</strong>
+            <p class="subtle" style="margin:4px 0 0">Config written to myworkspace3/.mcp.json. Docker mode sees it at /workspace/.mcp.json.</p>
+          </div>
+          <span class="badge success">12 tools</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="admin" class="screen">
+      <div class="screen-label">
+        <div>
+          <h2>3. Admin MCP Server Presets</h2>
+          <p class="subtle">Admin owns curated internal presets. Users only install published presets into their current workspace.</p>
+        </div>
+        <code>Admin dialog</code>
+      </div>
+      <div class="admin-shell">
+        <div class="admin-head">
+          <div>
+            <h2>System administration</h2>
+            <p class="subtle">Tenants, users, runtimes, and MCP server presets.</p>
+          </div>
+          <button class="button primary">Create preset</button>
+        </div>
+        <div class="admin-tabs">
+          <div class="admin-tab">Tenants &amp; Users</div>
+          <div class="admin-tab">Runtime Monitor</div>
+          <div class="admin-tab active">MCP Server Presets</div>
+        </div>
+        <div class="admin-content">
+          <div class="admin-table-wrap">
+            <div class="table-toolbar">
+              <div class="search" style="margin:0">
+                <span class="search-icon"></span>
+                <input placeholder="Search presets..." />
+              </div>
+              <div class="filter-pills">
+                <div class="filter active">Published</div>
+                <div class="filter">Draft</div>
+                <div class="filter">Disabled</div>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Transport</th>
+                  <th>Visibility</th>
+                  <th>Docker</th>
+                  <th>Status</th>
+                  <th>Installs</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Knowledge Retrieval MCP</strong><br><span class="subtle">Knowledge bases and project docs</span></td>
+                  <td>HTTP</td>
+                  <td>Tenant</td>
+                  <td><span class="badge success">Compatible</span></td>
+                  <td><span class="badge success">Published</span></td>
+                  <td>14</td>
+                </tr>
+                <tr>
+                  <td><strong>Data Query MCP</strong><br><span class="subtle">Governed internal data lookups</span></td>
+                  <td>HTTP</td>
+                  <td>Tenant</td>
+                  <td><span class="badge success">Compatible</span></td>
+                  <td><span class="badge success">Published</span></td>
+                  <td>9</td>
+                </tr>
+                <tr>
+                  <td><strong>Release Radar MCP</strong><br><span class="subtle">Release readiness and rollout status</span></td>
+                  <td>HTTP</td>
+                  <td>Tenant</td>
+                  <td><span class="badge warning">Warning</span></td>
+                  <td><span class="badge warning">Draft</span></td>
+                  <td>0</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <aside class="drawer">
+            <div class="detail-head">
+              <h2>Create MCP Server Preset</h2>
+              <p class="subtle">Preset must be complete and runtime-tested before it can be published.</p>
+            </div>
+            <div class="drawer-body">
+              <div class="form-grid" style="grid-template-columns:1fr">
+                <div class="field">
+                  <label>Display name</label>
+                  <input class="input" value="Knowledge Retrieval MCP" />
+                </div>
+                <div class="field">
+                  <label>Preset name</label>
+                  <input class="input" value="knowledge_retrieval" />
+                </div>
+                <div class="field">
+                  <label>Description</label>
+                  <textarea class="textarea">Search internal knowledge bases, product specs, and implementation notes from Agent turns.</textarea>
+                </div>
+                <div class="field">
+                  <label>URL template</label>
+                  <input class="input" value="https://mcp.internal.example/knowledge" />
+                </div>
+                <div class="field">
+                  <label>User install mode</label>
+                  <input class="input" value="One-click install, no user configuration" />
+                </div>
+                <div class="field">
+                  <label>Admin-managed config</label>
+                  <input class="input" value="Credentials and headers are stored in the Admin preset" />
+                </div>
+              </div>
+              <div class="callout warning">
+                <strong>Docker compatibility</strong>
+                <span>Private network URLs must be tested from the Docker runtime context before publish.</span>
+              </div>
+              <div style="display:flex; gap:8px; justify-content:flex-end">
+                <button class="button">Save draft</button>
+                <button class="button">Test preset</button>
+                <button class="button primary">Publish</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section id="states" class="screen">
+      <div class="screen-label">
+        <div>
+          <h2>4. Required states</h2>
+          <p class="subtle">These states are first-class UX, not backend-only error strings.</p>
+        </div>
+        <code>State matrix</code>
+      </div>
+      <div class="state-grid">
+        <article class="state-card">
+          <div>
+            <span class="badge">Available</span>
+            <h3 style="margin-top:10px">Ready to install</h3>
+            <p class="subtle">The Admin preset is published and can be installed into the current workspace with one click.</p>
+          </div>
+          <button class="button primary">Install</button>
+        </article>
+        <article class="state-card">
+          <div>
+            <span class="badge">Installing</span>
+            <h3 style="margin-top:10px">Binding workspace</h3>
+            <p class="subtle">CloudCLI writes the Admin-managed preset into the workspace MCP config and relies on the workspace bind mount.</p>
+          </div>
+          <button class="button" disabled>Installing</button>
+        </article>
+        <article class="state-card">
+          <div>
+            <span class="badge success">Installed</span>
+            <h3 style="margin-top:10px">Ready for next Agent turn</h3>
+            <p class="subtle">The MCP server is available from /workspace/.mcp.json when the next Agent turn starts.</p>
+          </div>
+          <button class="button">View details</button>
+        </article>
+        <article class="state-card">
+          <div>
+            <span class="badge">View only</span>
+            <h3 style="margin-top:10px">No edit access</h3>
+            <p class="subtle">Workspace viewers can inspect installed servers but cannot install or remove them.</p>
+          </div>
+          <button class="button" disabled>Requires edit access</button>
+        </article>
+      </div>
+    </section>
+
+  </main>
+</body>
+</html>

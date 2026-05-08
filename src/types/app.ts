@@ -5,13 +5,7 @@ export type WorkspaceAccessRole = 'owner' | 'view' | 'edit';
 export type AppTab =
   | 'chat'
   | 'files'
-  | 'skills'
-  | 'tools'
-  | 'shell'
-  | 'git'
-  | 'tasks'
-  | 'preview'
-  | `plugin:${string}`;
+  | 'mcp-tools';
 
 export interface Tenant {
   id: number;

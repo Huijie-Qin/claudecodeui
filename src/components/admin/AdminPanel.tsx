@@ -6,6 +6,7 @@ import { useTenant } from '../../contexts/TenantContext';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 
 import { buildTenantMembershipPayload, normalizeTenantCode, type TenantPermission } from './adminPanelUtils';
+import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 
 type AdminTenant = {
@@ -55,11 +56,11 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [selectedTenantId, setSelectedTenantId] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
   const [permission, setPermission] = useState<TenantPermission>('edit');
-  const [activeTab, setActiveTab] = useState<'tenants' | 'runtimes'>('tenants');
+  const [activeTab, setActiveTab] = useState<'tenants' | 'mcpPresets' | 'runtimes'>('tenants');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const { refreshTenants } = useTenant();
+  const { currentTenant, refreshTenants } = useTenant();
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -169,7 +170,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-foreground">System administration</h2>
-              <p className="truncate text-xs text-muted-foreground">Tenants, users, memberships, and runtimes</p>
+              <p className="truncate text-xs text-muted-foreground">Tenants, users, internal MCP presets, and runtimes</p>
             </div>
           </div>
 
@@ -180,6 +181,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               onClick={() => setActiveTab('tenants')}
             >
               Tenants & Users
+            </Button>
+            <Button
+              variant={activeTab === 'mcpPresets' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('mcpPresets')}
+            >
+              MCP Server Presets
             </Button>
             <Button
               variant={activeTab === 'runtimes' ? 'default' : 'ghost'}
@@ -299,6 +307,10 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   {error}
                 </div>
               ) : null}
+            </div>
+          ) : activeTab === 'mcpPresets' ? (
+            <div className="overflow-y-auto px-5 py-4">
+              <McpPresetsTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : (
             <div className="overflow-y-auto px-5 py-4">

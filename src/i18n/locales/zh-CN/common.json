@@ -21,6 +21,7 @@
     "chat": "聊天",
     "shell": "终端",
     "files": "文件",
+    "mcpTools": "MCP Tools",
     "skills": "技能",
     "tools": "工具",
     "git": "源代码管理",
@@ -234,6 +235,43 @@
       "probe": "探测 MCP Server 失败。",
       "save": "保存 MCP Server 失败。",
       "importPreview": "预览 MCP 导入失败。"
+    }
+  },
+  "mcpTools": {
+    "title": "MCP Tools",
+    "description": "将 Admin 审核发布的内部 MCP Server 安装到当前 workspace。",
+    "searchPlaceholder": "搜索 MCP Server...",
+    "loading": "正在加载 MCP Tools...",
+    "empty": "当前视图下没有匹配的 MCP Server。",
+    "detailTitle": "MCP Server 详情",
+    "noSelection": "选择一个 MCP Server，查看 Admin 预置和运行时策略。",
+    "install": "安装",
+    "installing": "安装中",
+    "available": "可用",
+    "connected": "已连接",
+    "requiresEditAccess": "需要编辑权限",
+    "installSuccess": "{{name}} 已安装，将在下一次 Agent turn 生效。",
+    "removeSuccess": "{{name}} 已从当前 workspace 移除。",
+    "appliesOnNextTurn": "下一次 Agent turn 生效",
+    "toolCount": "{{count}} 个工具",
+    "cardAriaLabel": "{{name}} MCP Server，双击查看详情。",
+    "summary": {
+      "available": "可用",
+      "installed": "已安装"
+    },
+    "filters": {
+      "all": "全部",
+      "available": "可用",
+      "installed": "已安装"
+    },
+    "detail": {
+      "serverName": "Server 名称",
+      "source": "来源",
+      "adminPublished": "Admin 发布的预置",
+      "runtimePolicy": "运行时策略",
+      "toolsTitle": "包含的工具",
+      "toolsEmpty": "这个 MCP Server 暂未发布工具列表。",
+      "noToolDescription": "暂无描述。"
     }
   },
   "fileTree": {
