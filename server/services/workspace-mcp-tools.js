@@ -44,6 +44,12 @@ function summarizePresets(presets) {
   };
 }
 
+function isWorkspaceVisiblePreset(row) {
+  return row?.status === 'published'
+    && row.last_test_status === 'healthy'
+    && Number(row.tool_count || 0) > 0;
+}
+
 function buildStatusEntry(preset, now = new Date()) {
   return {
     name: preset.name,
@@ -64,7 +70,7 @@ export function createWorkspaceMcpToolsService({ multitenancy = multitenancyDb }
     const presets = multitenancy.mcpPresets.listPresets({
       tenantId: normalizedTenantId,
       status: 'published',
-    });
+    }).filter(isWorkspaceVisiblePreset);
     const installs = multitenancy.mcpInstalls.listInstallsForWorkspace({
       workspaceId: normalizedWorkspaceId,
     });

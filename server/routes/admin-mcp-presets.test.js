@@ -36,6 +36,35 @@ async function requestJson(
   });
 }
 
+async function requestFormData(
+  router,
+  path,
+  { method = 'POST', formData, user = { id: 1, is_system_admin: 1 } } = {},
+) {
+  return new Promise((resolve, reject) => {
+    const app = express();
+    app.use((req, res, next) => {
+      req.user = user;
+      next();
+    });
+    app.use(router);
+
+    const server = app.listen(0, async () => {
+      try {
+        const { port } = server.address();
+        const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+          method,
+          body: formData,
+        });
+        const payload = await response.json();
+        server.close(() => resolve({ response, payload }));
+      } catch (error) {
+        server.close(() => reject(error));
+      }
+    });
+  });
+}
+
 function createRouter({ service } = {}) {
   return createAdminRouter(
     {
@@ -136,4 +165,45 @@ test('admin mcp preset routes create and publish presets through the service', a
   assert.equal(tested.response.status, 200);
   assert.equal(tested.payload.transient, true);
   assert.equal(seen.test.input.url, 'https://mcp.internal/broken');
+});
+
+test('admin mcp preset routes upload helper scripts through the service', async () => {
+  const seen = {};
+  const router = createRouter({
+    service: {
+      uploadHelperScript: ({ tenantId, presetId, userId, originalName, content }) => {
+        seen.upload = { tenantId, presetId, userId, originalName, content };
+        return {
+          id: presetId,
+          helperScript: {
+            fileName: originalName,
+            sizeBytes: Buffer.byteLength(content, 'utf8'),
+            sha256: 'abc123',
+          },
+        };
+      },
+    },
+  });
+  const formData = new FormData();
+  formData.set('tenantId', '7');
+  formData.set('script', new Blob(['print("secret")\n'], { type: 'text/x-python' }), 'auth.py');
+
+  const { response, payload } = await requestFormData(router, '/mcp-presets/2/helper-script', {
+    formData,
+    user: { id: 9, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(seen.upload, {
+    tenantId: 7,
+    presetId: 2,
+    userId: 9,
+    originalName: 'auth.py',
+    content: 'print("secret")\n',
+  });
+  assert.deepEqual(payload.preset.helperScript, {
+    fileName: 'auth.py',
+    sizeBytes: 16,
+    sha256: 'abc123',
+  });
 });

@@ -2,6 +2,8 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { applyWorkspaceMcpHelperScripts } from './mcp-helper-scripts.js';
+
 async function readJsonIfPresent(filePath, label) {
   try {
     try {
@@ -34,9 +36,20 @@ function mergeMcpServers(target, source) {
  * @param {Object} options
  * @param {boolean} options.includeHostConfig - Whether to include host ~/.claude.json
  * @param {string} options.homeDir - Home directory to read host Claude config from
+ * @param {number} options.tenantId - Tenant id used to resolve Admin-managed helper scripts
+ * @param {number} options.workspaceId - Workspace id used to resolve Admin-managed installs
+ * @param {string} options.runtimeMode - local or docker
+ * @param {string} options.runtimeHomePath - Docker runtime home mounted at /home/cloudcli
  * @returns {Object|null} MCP servers object or null if none found
  */
-async function loadMcpConfig(cwd, { includeHostConfig = true, homeDir = os.homedir() } = {}) {
+async function loadMcpConfig(cwd, {
+  includeHostConfig = true,
+  homeDir = os.homedir(),
+  tenantId = null,
+  workspaceId = null,
+  runtimeMode = 'local',
+  runtimeHomePath = null,
+} = {}) {
   try {
     let mcpServers = {};
 
@@ -61,6 +74,14 @@ async function loadMcpConfig(cwd, { includeHostConfig = true, homeDir = os.homed
 
     if (Object.keys(mcpServers).length === 0) {
       return null;
+    }
+    if (tenantId && workspaceId) {
+      mcpServers = await applyWorkspaceMcpHelperScripts(mcpServers, {
+        tenantId,
+        workspaceId,
+        runtimeMode,
+        runtimeHomePath,
+      });
     }
     return mcpServers;
   } catch (error) {

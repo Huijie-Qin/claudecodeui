@@ -15,6 +15,7 @@ export type AdminMcpPreset = {
     type: 'http';
     url: string;
     headers?: Record<string, string>;
+    headersHelper?: string;
   };
   status: 'draft' | 'published' | 'disabled';
   dockerCompatible: boolean;
@@ -23,6 +24,12 @@ export type AdminMcpPreset = {
   lastTestedAt?: string | null;
   toolCount: number;
   tools?: Array<{ name: string; description?: string }>;
+  helperScript?: {
+    fileName: string;
+    sizeBytes: number;
+    sha256: string;
+    updatedAt?: string | null;
+  } | null;
 };
 
 export type AdminMcpPresetTestResult = {
@@ -197,6 +204,26 @@ export function useAdminMcpPresets(tenantId?: number) {
     }
   }, [load, tenantId]);
 
+  const uploadHelperScript = useCallback(async (presetId: number, file: File) => {
+    if (!tenantId) return null;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set('script', file);
+      const response = await api.admin.uploadMcpPresetHelperScript(presetId, tenantId, formData);
+      if (!response.ok) {
+        setError(await readError(response, 'Failed to upload helper script'));
+        return null;
+      }
+      const data = await response.json() as { preset: AdminMcpPreset };
+      await load();
+      return data.preset;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [load, tenantId]);
+
   const disablePreset = useCallback(async (presetId: number) => {
     if (!tenantId) return null;
     setIsSaving(true);
@@ -227,5 +254,6 @@ export function useAdminMcpPresets(tenantId?: number) {
     testPreset,
     publishPreset,
     disablePreset,
+    uploadHelperScript,
   };
 }

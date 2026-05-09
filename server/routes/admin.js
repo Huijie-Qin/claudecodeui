@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import express from 'express';
+import multer from 'multer';
 
 import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
@@ -85,6 +86,13 @@ class RuntimeFilterValidationError extends Error {
 const VALID_RUNTIME_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const VALID_RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'deleted']);
 const VALID_DOCKER_STATES = new Set(['running', 'exited', 'missing', 'unknown']);
+const helperScriptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 64 * 1024,
+    files: 1,
+  },
+});
 
 function parseRuntimeFilterInteger(value, { min }) {
   const parsed = Number(value);
@@ -361,6 +369,37 @@ export function createAdminRouter(
     } catch (error) {
       return sendRouteError(res, error, 'Failed to publish MCP preset');
     }
+  });
+
+  router.post('/mcp-presets/:presetId/helper-script', (req, res) => {
+    helperScriptUpload.single('script')(req, res, (uploadError) => {
+      try {
+        if (uploadError) {
+          const error = new Error(uploadError.code === 'LIMIT_FILE_SIZE'
+            ? 'Helper script must be 64KB or smaller'
+            : uploadError.message);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (!req.file?.buffer) {
+          const error = new Error('Helper script file is required');
+          error.statusCode = 400;
+          throw error;
+        }
+
+        const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+        const preset = mcpPresets.uploadHelperScript({
+          tenantId,
+          presetId: parsePositiveId(req.params.presetId, 'presetId'),
+          userId: req.user.id,
+          originalName: req.file.originalname,
+          content: req.file.buffer.toString('utf8'),
+        });
+        return res.status(201).json({ preset });
+      } catch (error) {
+        return sendRouteError(res, error, 'Failed to upload helper script');
+      }
+    });
   });
 
   router.post('/mcp-presets/:presetId/disable', (req, res) => {

@@ -1,5 +1,11 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
+import {
+  buildMcpHelperScriptMetadata,
+  getPresetHelperScript,
+  resolvePresetProbeConfig,
+  savePresetHelperScript,
+} from './mcp-helper-scripts.js';
 import { probeHttpMcpServer } from './workspace-tools.js';
 
 export const WORKSPACE_MCP_CONFIG_FILE = '.mcp.json';
@@ -66,12 +72,31 @@ function normalizeHeaders(headers) {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeHeadersHelper(headersHelper) {
+  if (headersHelper == null || headersHelper === '') return undefined;
+  if (typeof headersHelper !== 'string') {
+    throw createHttpError('headersHelper must be a string', 400);
+  }
+  return headersHelper.trim() || undefined;
+}
+
 function normalizeStatus(status, fallback = 'draft') {
   const value = status || fallback;
   if (!['draft', 'published', 'disabled'].includes(value)) {
     throw createHttpError('status must be one of: draft, published, disabled', 400);
   }
   return value;
+}
+
+function normalizeEditableStatus(status, fallback = 'draft') {
+  const value = normalizeStatus(status, fallback);
+  return value === 'published' ? 'draft' : value;
+}
+
+function isWorkspaceVisiblePreset(row) {
+  return row?.status === 'published'
+    && row.last_test_status === 'healthy'
+    && Number(row.tool_count || 0) > 0;
 }
 
 function compactObject(value) {
@@ -95,11 +120,12 @@ export function normalizePresetInput(input = {}) {
       type: 'http',
       url: normalizeHttpUrl(config.url),
       headers: normalizeHeaders(config.headers),
+      headersHelper: normalizeHeadersHelper(config.headersHelper),
     }),
   };
 }
 
-export function toAdminPreset(row) {
+export function toAdminPreset(row, helperScript = null) {
   if (!row) return null;
   return {
     id: row.id,
@@ -116,6 +142,7 @@ export function toAdminPreset(row) {
     lastTestedAt: row.last_tested_at || null,
     toolCount: Number(row.tool_count || 0),
     tools: Array.isArray(row.tools) ? row.tools : [],
+    helperScript: buildMcpHelperScriptMetadata(helperScript),
     createdByUserId: row.created_by_user_id,
     updatedByUserId: row.updated_by_user_id,
     createdAt: row.created_at,
@@ -149,6 +176,7 @@ export function toWorkspacePreset(row, installRow = null) {
 export function createMcpPresetService({
   multitenancy = multitenancyDb,
   probeHttpMcpServer: probe = probeHttpMcpServer,
+  resolveHelperConfig = resolvePresetProbeConfig,
 } = {}) {
   const getExistingPreset = ({ tenantId, presetId }) => {
     const preset = multitenancy.mcpPresets.getPresetById({
@@ -163,11 +191,15 @@ export function createMcpPresetService({
 
   return {
     listAdminPresets: ({ tenantId, includeDisabled = true, status = null }) => {
+      const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
       return multitenancy.mcpPresets.listPresets({
-        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        tenantId: normalizedTenantId,
         includeDisabled,
         status,
-      }).map(toAdminPreset);
+      }).map((preset) => toAdminPreset(
+        preset,
+        getPresetHelperScript(multitenancy, { tenantId: normalizedTenantId, presetId: preset.id }),
+      ));
     },
 
     createPreset: ({ tenantId, userId, input }) => {
@@ -178,14 +210,14 @@ export function createMcpPresetService({
         displayName: normalized.displayName,
         description: normalized.description,
         config: normalized.config,
-        status: normalizeStatus(input?.status, 'draft'),
+        status: normalizeEditableStatus(input?.status, 'draft'),
         createdByUserId: requirePositiveInteger(userId, 'userId'),
       });
-      return toAdminPreset(preset);
+      return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId: preset.id }));
     },
 
     updatePreset: ({ tenantId, presetId, userId, input }) => {
-      getExistingPreset({ tenantId, presetId });
+      const existing = getExistingPreset({ tenantId, presetId });
       const normalized = normalizePresetInput(input);
       const preset = multitenancy.mcpPresets.updatePreset({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
@@ -194,29 +226,37 @@ export function createMcpPresetService({
         displayName: normalized.displayName,
         description: normalized.description,
         config: normalized.config,
-        status: normalizeStatus(input?.status, 'draft'),
+        status: normalizeEditableStatus(input?.status, existing.status === 'disabled' ? 'disabled' : 'draft'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
-      return toAdminPreset(preset);
+      return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId: preset.id }));
     },
 
     testPreset: async ({ tenantId, presetId, userId, input = null }) => {
       const preset = getExistingPreset({ tenantId, presetId });
       const normalizedInput = input ? normalizePresetInput(input) : null;
-      const probeResult = await probe(normalizedInput?.config || preset.config);
+      const baseProbeConfig = normalizedInput
+        ? { ...normalizedInput.config, name: normalizedInput.name }
+        : { ...preset.config, name: preset.name };
+      const probeConfig = await resolveHelperConfig({
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        presetName: normalizedInput?.name || preset.name,
+        config: baseProbeConfig,
+        multitenancy,
+      });
+      const probeResult = await probe(probeConfig);
       if (normalizedInput) {
-        return {
-          ...toAdminPreset(preset),
+        multitenancy.mcpPresets.updatePreset({
+          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+          presetId: requirePositiveInteger(presetId, 'presetId'),
+          name: normalizedInput.name,
+          displayName: normalizedInput.displayName,
+          description: normalizedInput.description,
           config: normalizedInput.config,
-          lastTestStatus: probeResult.status,
-          lastTestError: probeResult.error || null,
-          lastTestedAt: new Date().toISOString(),
-          toolCount: Number(probeResult.toolCount || 0),
-          tools: Array.isArray(probeResult.tools) ? probeResult.tools : [],
-          dockerCompatible: probeResult.status === 'healthy',
-          transient: true,
-          probe: probeResult,
-        };
+          status: normalizeEditableStatus(input?.status, preset.status === 'disabled' ? 'disabled' : 'draft'),
+          updatedByUserId: requirePositiveInteger(userId, 'userId'),
+        });
       }
 
       const tested = multitenancy.mcpPresets.recordPresetTest({
@@ -230,7 +270,7 @@ export function createMcpPresetService({
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
       return {
-        ...toAdminPreset(tested),
+        ...toAdminPreset(tested, getPresetHelperScript(multitenancy, { tenantId, presetId })),
         probe: probeResult,
       };
     },
@@ -240,12 +280,15 @@ export function createMcpPresetService({
       if (preset.last_test_status !== 'healthy') {
         throw createHttpError('MCP preset requires a successful test before publish', 400);
       }
+      if (Number(preset.tool_count || 0) <= 0) {
+        throw createHttpError('MCP preset must expose at least one tool before publish', 400);
+      }
       const published = multitenancy.mcpPresets.publishPreset({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
-      return toAdminPreset(published);
+      return toAdminPreset(published, getPresetHelperScript(multitenancy, { tenantId, presetId }));
     },
 
     disablePreset: ({ tenantId, presetId, userId }) => {
@@ -255,7 +298,7 @@ export function createMcpPresetService({
         presetId: requirePositiveInteger(presetId, 'presetId'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
-      return toAdminPreset(disabled);
+      return toAdminPreset(disabled, getPresetHelperScript(multitenancy, { tenantId, presetId }));
     },
 
     deletePreset: ({ tenantId, presetId }) => {
@@ -266,11 +309,25 @@ export function createMcpPresetService({
       });
     },
 
+    uploadHelperScript: ({ tenantId, presetId, userId, originalName, content }) => {
+      getExistingPreset({ tenantId, presetId });
+      savePresetHelperScript({
+        tenantId,
+        presetId,
+        userId,
+        originalName,
+        content,
+        multitenancy,
+      });
+      const preset = getExistingPreset({ tenantId, presetId });
+      return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId }));
+    },
+
     listWorkspacePresets: ({ tenantId, workspaceId }) => {
       const presets = multitenancy.mcpPresets.listPresets({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         status: 'published',
-      });
+      }).filter(isWorkspaceVisiblePreset);
       const installs = multitenancy.mcpInstalls.listInstallsForWorkspace({
         workspaceId: requirePositiveInteger(workspaceId, 'workspaceId'),
       });

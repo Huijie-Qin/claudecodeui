@@ -59,9 +59,17 @@ function seedWorkspaceAndPresets(database) {
       type: 'http',
       url: 'https://mcp.internal/knowledge',
       headers: { Authorization: 'Bearer internal-secret' },
+      headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     },
     status: 'published',
     createdByUserId: adminId,
+  });
+  multitenancy.mcpPresetHelperScripts.upsertScript({
+    tenantId: tenant.id,
+    presetId: published.id,
+    fileName: 'auth.py',
+    content: 'print("secret")\n',
+    uploadedByUserId: adminId,
   });
   multitenancy.mcpPresets.recordPresetTest({
     tenantId: tenant.id,
@@ -73,6 +81,11 @@ function seedWorkspaceAndPresets(database) {
     dockerCompatible: true,
     updatedByUserId: adminId,
   });
+  multitenancy.mcpPresets.publishPreset({
+    tenantId: tenant.id,
+    presetId: published.id,
+    updatedByUserId: adminId,
+  });
   multitenancy.mcpPresets.createPreset({
     tenantId: tenant.id,
     name: 'draft-only',
@@ -80,6 +93,15 @@ function seedWorkspaceAndPresets(database) {
     description: 'Draft',
     config: { type: 'http', url: 'https://mcp.internal/draft' },
     status: 'draft',
+    createdByUserId: adminId,
+  });
+  multitenancy.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'legacy-published',
+    displayName: 'Legacy Published MCP',
+    description: 'Published without a persisted healthy tools/list result',
+    config: { type: 'http', url: 'https://mcp.internal/legacy' },
+    status: 'published',
     createdByUserId: adminId,
   });
 
@@ -126,7 +148,9 @@ test('workspace mcp tools install writes project mcp config without drafts', asy
       type: 'http',
       url: 'https://mcp.internal/knowledge',
       headers: { Authorization: 'Bearer internal-secret' },
+      headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     });
+    assert.equal(JSON.stringify(config).includes('print("secret")'), false);
     assert.deepEqual(drafts.drafts, {});
     assert.equal(result.installed.writeTarget, 'Repo/.mcp.json');
     assert.equal(result.installed.containerPath, '/workspace/.mcp.json');

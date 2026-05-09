@@ -88,6 +88,24 @@ CREATE TABLE IF NOT EXISTS mcp_server_presets (
 CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_status
   ON mcp_server_presets(tenant_id, status);
 
+CREATE TABLE IF NOT EXISTS mcp_preset_helper_scripts (
+  preset_id INTEGER PRIMARY KEY,
+  tenant_id INTEGER NOT NULL,
+  file_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT NOT NULL,
+  uploaded_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_preset_helper_scripts_tenant
+  ON mcp_preset_helper_scripts(tenant_id);
+
 CREATE TABLE IF NOT EXISTS workspace_mcp_preset_installs (
   workspace_id INTEGER NOT NULL,
   preset_id INTEGER NOT NULL,

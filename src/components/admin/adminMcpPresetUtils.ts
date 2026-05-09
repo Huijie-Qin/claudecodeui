@@ -7,6 +7,7 @@ export type McpPresetFormValues = {
   description: string;
   url: string;
   headersText: string;
+  headersHelper: string;
   status: AdminMcpPresetStatus;
 };
 
@@ -52,6 +53,7 @@ export function parseHeadersText(value: string): Record<string, string> {
 }
 
 export function buildMcpPresetPayload(values: McpPresetFormValues) {
+  const headersHelper = values.headersHelper.trim();
   return {
     tenantId: values.tenantId,
     name: normalizeMcpPresetName(values.name),
@@ -61,5 +63,6 @@ export function buildMcpPresetPayload(values: McpPresetFormValues) {
     type: 'http' as const,
     url: values.url.trim(),
     headers: parseHeadersText(values.headersText),
+    headersHelper: headersHelper || undefined,
   };
 }

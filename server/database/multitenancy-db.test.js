@@ -201,6 +201,85 @@ test('mcp presets are isolated per tenant and can be filtered to published prese
   );
 });
 
+test('updating an mcp preset clears stale validation metadata', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    description: 'Search internal docs',
+    config: { type: 'http', url: 'https://mcp.internal/knowledge' },
+    status: 'draft',
+    createdByUserId: adminId,
+  });
+  mt.mcpPresets.recordPresetTest({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    status: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'read_doc' }],
+    dockerCompatible: true,
+    updatedByUserId: adminId,
+  });
+
+  const updated = mt.mcpPresets.updatePreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    description: 'Updated docs',
+    config: { type: 'http', url: 'https://mcp.internal/updated' },
+    status: 'draft',
+    updatedByUserId: adminId,
+  });
+
+  assert.equal(updated.last_test_status, null);
+  assert.equal(updated.last_test_error, null);
+  assert.equal(updated.last_tested_at, null);
+  assert.equal(updated.tool_count, 0);
+  assert.deepEqual(updated.tools, []);
+  assert.equal(updated.docker_compatible, 0);
+});
+
+test('mcp preset helper scripts are stored outside preset runtime config', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    description: 'Search internal docs',
+    config: {
+      type: 'http',
+      url: 'https://mcp.internal/knowledge',
+      headersHelper: 'python3 auth.py',
+    },
+    status: 'draft',
+    createdByUserId: adminId,
+  });
+
+  const script = mt.mcpPresetHelperScripts.upsertScript({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    fileName: 'auth.py',
+    content: 'print("secret")\n',
+    uploadedByUserId: adminId,
+  });
+  const fetchedPreset = mt.mcpPresets.getPresetById({ tenantId: tenant.id, presetId: preset.id });
+  const fetchedScript = mt.mcpPresetHelperScripts.getScript({ tenantId: tenant.id, presetId: preset.id });
+
+  assert.equal(script.file_name, 'auth.py');
+  assert.equal(script.size_bytes, Buffer.byteLength('print("secret")\n', 'utf8'));
+  assert.equal(fetchedScript.content, 'print("secret")\n');
+  assert.equal(Object.hasOwn(fetchedPreset.config, 'helperScript'), false);
+  assert.equal(Object.hasOwn(fetchedPreset.config, 'scriptContent'), false);
+});
+
 test('mcp preset installs are idempotent per workspace and preset', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

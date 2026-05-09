@@ -37,6 +37,7 @@ test('normalizes admin preset input while workspace serialization redacts connec
     headers: {
       Authorization: 'Bearer internal-secret',
     },
+    headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
   });
 
   assert.deepEqual(normalized, {
@@ -49,6 +50,7 @@ test('normalizes admin preset input while workspace serialization redacts connec
       headers: {
         Authorization: 'Bearer internal-secret',
       },
+      headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     },
   });
 
@@ -95,11 +97,13 @@ test('admin preset publish requires a successful test result', async () => {
       name: 'knowledge',
       displayName: 'Knowledge MCP',
       description: 'Search internal docs',
+      status: 'published',
       type: 'http',
       url: 'https://mcp.internal/knowledge',
     },
   });
 
+  assert.equal(preset.status, 'draft');
   assert.throws(
     () => service.publishPreset({ tenantId: tenant.id, presetId: preset.id, userId: adminId }),
     /successful test/,
@@ -121,16 +125,54 @@ test('admin preset publish requires a successful test result', async () => {
   assert.equal(published.status, 'published');
 });
 
-test('admin preset test can validate current form input without mutating saved preset', async () => {
+test('admin preset publish rejects healthy servers with no discovered tools', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  const service = createMcpPresetService({
+    multitenancy,
+    probeHttpMcpServer: async () => ({
+      status: 'healthy',
+      phase: 'tools_list',
+      toolCount: 0,
+      tools: [],
+    }),
+  });
+
+  const preset = service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: {
+      name: 'empty',
+      displayName: 'Empty MCP',
+      type: 'http',
+      url: 'https://mcp.internal/empty',
+    },
+  });
+
+  const tested = await service.testPreset({ tenantId: tenant.id, presetId: preset.id, userId: adminId });
+
+  assert.equal(tested.lastTestStatus, 'healthy');
+  assert.equal(tested.toolCount, 0);
+  assert.throws(
+    () => service.publishPreset({ tenantId: tenant.id, presetId: preset.id, userId: adminId }),
+    /at least one tool/,
+  );
+});
+
+test('admin preset test validates current form input and persists discovered tools', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const adminId = seedUser(database, 'admin');
   const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
   const probedUrls = [];
+  const probedHelpers = [];
   const service = createMcpPresetService({
     multitenancy,
     probeHttpMcpServer: async (config) => {
       probedUrls.push(config.url);
+      probedHelpers.push(config.headersHelper);
       return {
         status: config.url.includes('/broken') ? 'failed' : 'healthy',
         phase: 'tools_list',
@@ -163,14 +205,70 @@ test('admin preset test can validate current form input without mutating saved p
       description: 'Search internal docs',
       type: 'http',
       url: 'https://mcp.internal/broken',
+      headersHelper: '/opt/bin/get-form-headers.sh',
     },
   });
   const stored = multitenancy.mcpPresets.getPresetById({ tenantId: tenant.id, presetId: preset.id });
 
   assert.deepEqual(probedUrls, ['https://mcp.internal/broken']);
-  assert.equal(tested.transient, true);
+  assert.deepEqual(probedHelpers, ['/opt/bin/get-form-headers.sh']);
   assert.equal(tested.lastTestStatus, 'failed');
   assert.equal(tested.lastTestError, 'Not found');
-  assert.equal(stored.config.url, 'https://mcp.internal/knowledge');
-  assert.equal(stored.last_test_status, null);
+  assert.equal(stored.config.url, 'https://mcp.internal/broken');
+  assert.equal(stored.config.headersHelper, '/opt/bin/get-form-headers.sh');
+  assert.equal(stored.last_test_status, 'failed');
+  assert.equal(stored.tool_count, 0);
+});
+
+test('workspace presets omit legacy published rows without healthy tools', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const userId = seedUser(database, 'alice');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  multitenancy.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = multitenancy.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/repo',
+  });
+  const service = createMcpPresetService({ multitenancy });
+
+  const visible = multitenancy.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'visible',
+    displayName: 'Visible MCP',
+    config: { type: 'http', url: 'https://mcp.internal/visible' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+  multitenancy.mcpPresets.recordPresetTest({
+    tenantId: tenant.id,
+    presetId: visible.id,
+    status: 'healthy',
+    toolCount: 1,
+    tools: [{ name: 'lookup' }],
+    dockerCompatible: true,
+    updatedByUserId: adminId,
+  });
+  multitenancy.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'legacy',
+    displayName: 'Legacy MCP',
+    config: { type: 'http', url: 'https://mcp.internal/legacy' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+
+  const presets = service.listWorkspacePresets({ tenantId: tenant.id, workspaceId: workspace.id });
+
+  assert.deepEqual(presets.map((preset) => preset.name), ['visible']);
 });

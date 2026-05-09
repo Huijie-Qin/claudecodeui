@@ -68,6 +68,18 @@ function updateSet(current: Set<number>, id: number, isPresent: boolean) {
   return next;
 }
 
+function normalizeWorkspaceMcpToolsPayload(payload: WorkspaceMcpToolsResponse): WorkspaceMcpToolsResponse {
+  const presets = (payload.presets ?? []).filter((preset) => preset.toolCount > 0);
+  return {
+    ...payload,
+    presets,
+    summary: {
+      available: presets.filter((preset) => !preset.installed).length,
+      installed: presets.filter((preset) => preset.installed).length,
+    },
+  };
+}
+
 export function useWorkspaceMcpTools(workspaceId?: number) {
   const [state, setState] = useState<UseWorkspaceMcpToolsState>(EMPTY_STATE);
 
@@ -89,7 +101,7 @@ export function useWorkspaceMcpTools(workspaceId?: number) {
       }
       setState((current) => ({
         ...current,
-        data: payload as WorkspaceMcpToolsResponse,
+        data: normalizeWorkspaceMcpToolsPayload(payload as WorkspaceMcpToolsResponse),
         error: null,
         isLoading: false,
       }));
@@ -124,7 +136,7 @@ export function useWorkspaceMcpTools(workspaceId?: number) {
       }
       setState((current) => ({
         ...current,
-        data: payload,
+        data: normalizeWorkspaceMcpToolsPayload(payload),
         error: null,
         installingPresetIds: updateSet(current.installingPresetIds, presetId, false),
       }));
@@ -156,7 +168,7 @@ export function useWorkspaceMcpTools(workspaceId?: number) {
       }
       setState((current) => ({
         ...current,
-        data: payload,
+        data: normalizeWorkspaceMcpToolsPayload(payload),
         error: null,
         removingPresetIds: updateSet(current.removingPresetIds, presetId, false),
       }));

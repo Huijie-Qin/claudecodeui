@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import { db } from './db.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
 
@@ -218,6 +220,14 @@ function hydrateMcpInstallRow(row) {
   return {
     ...row,
     tools: parseJson(row.tools_json, []),
+  };
+}
+
+function hydrateMcpHelperScriptRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    size_bytes: Number(row.size_bytes || 0),
   };
 }
 
@@ -768,6 +778,12 @@ export function createMultitenancyDb(database = db) {
             transport = ?,
             config_json = ?,
             status = ?,
+            last_test_status = NULL,
+            last_test_error = NULL,
+            last_tested_at = NULL,
+            tool_count = 0,
+            tools_json = NULL,
+            docker_compatible = 0,
             updated_by_user_id = ?,
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
@@ -919,6 +935,100 @@ export function createMultitenancyDb(database = db) {
           FROM mcp_server_presets
           WHERE tenant_id = ? AND id = ?
         `).get(tenantId, presetId));
+      },
+    },
+
+    mcpPresetHelperScripts: {
+      upsertScript: ({
+        tenantId,
+        presetId,
+        fileName,
+        content,
+        uploadedByUserId,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedFileName = requireNonEmptyString(fileName, 'fileName');
+        const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+        const normalizedUploadedBy = requirePositiveInteger(uploadedByUserId, 'uploadedByUserId');
+        const sizeBytes = Buffer.byteLength(normalizedContent, 'utf8');
+        const sha256 = crypto.createHash('sha256').update(normalizedContent).digest('hex');
+
+        database.prepare(`
+          INSERT INTO mcp_preset_helper_scripts (
+            preset_id,
+            tenant_id,
+            file_name,
+            content,
+            size_bytes,
+            sha256,
+            uploaded_by_user_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(preset_id)
+          DO UPDATE SET
+            tenant_id = excluded.tenant_id,
+            file_name = excluded.file_name,
+            content = excluded.content,
+            size_bytes = excluded.size_bytes,
+            sha256 = excluded.sha256,
+            uploaded_by_user_id = excluded.uploaded_by_user_id,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(
+          normalizedPresetId,
+          normalizedTenantId,
+          normalizedFileName,
+          normalizedContent,
+          sizeBytes,
+          sha256,
+          normalizedUploadedBy,
+        );
+        database.prepare(`
+          UPDATE mcp_server_presets
+          SET
+            status = 'draft',
+            last_test_status = NULL,
+            last_test_error = NULL,
+            last_tested_at = NULL,
+            tool_count = 0,
+            tools_json = NULL,
+            docker_compatible = 0,
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(normalizedUploadedBy, normalizedTenantId, normalizedPresetId);
+
+        return hydrateMcpHelperScriptRow(database.prepare(`
+          SELECT *
+          FROM mcp_preset_helper_scripts
+          WHERE tenant_id = ?
+            AND preset_id = ?
+        `).get(normalizedTenantId, normalizedPresetId));
+      },
+
+      getScript: ({ tenantId, presetId }) => {
+        return hydrateMcpHelperScriptRow(database.prepare(`
+          SELECT *
+          FROM mcp_preset_helper_scripts
+          WHERE tenant_id = ?
+            AND preset_id = ?
+        `).get(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        ));
+      },
+
+      deleteScript: ({ tenantId, presetId }) => {
+        const result = database.prepare(`
+          DELETE FROM mcp_preset_helper_scripts
+          WHERE tenant_id = ?
+            AND preset_id = ?
+        `).run(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+        return result.changes > 0;
       },
     },
 

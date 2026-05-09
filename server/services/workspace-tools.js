@@ -1,10 +1,15 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 const EMPTY_MCP_CONFIG = Object.freeze({ mcpServers: {} });
 const EMPTY_STATUS = Object.freeze({ version: 1, servers: {} });
 const EMPTY_DRAFTS = Object.freeze({ version: 1, drafts: {} });
 const HTTP_TIMEOUT_MS = 10_000;
+const HEADER_HELPER_TIMEOUT_MS = 10_000;
+const HEADER_HELPER_MAX_BUFFER_BYTES = 64 * 1024;
+const execFileAsync = promisify(execFile);
 
 const BUILT_IN_TOOLS = Object.freeze([
   {
@@ -142,7 +147,7 @@ export async function probeWorkspaceMcpServer({
   probe = probeHttpMcpServer,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: false });
-  const result = await probe(normalized.config);
+  const result = await probe({ ...normalized.config, name: normalized.name });
   const checkedAt = now().toISOString();
   const entry = {
     ...result,
@@ -194,7 +199,7 @@ export async function upsertWorkspaceMcpServer({
     };
   }
 
-  const probeResult = await probe(normalized.config);
+  const probeResult = await probe({ ...normalized.config, name: normalized.name });
   if (probeResult.status !== 'healthy') {
     const status = await readMcpStatus(workspacePath);
     await writeMcpStatus(workspacePath, {
@@ -345,11 +350,12 @@ export async function probeHttpMcpServer(config, {
 
   try {
     const normalized = normalizeHttpConfig(config);
+    const requestHeaders = await resolveRequestHeaders(normalized);
     const initialize = await postJsonRpc({
       fetchImpl,
       timeoutMs,
       url: normalized.url,
-      headers: normalized.headers,
+      headers: requestHeaders,
       payload: initializePayload,
     });
 
@@ -369,8 +375,8 @@ export async function probeHttpMcpServer(config, {
       timeoutMs,
       url: normalized.url,
       headers: sessionId
-        ? { ...normalized.headers, 'Mcp-Session-Id': sessionId }
-        : normalized.headers,
+        ? { ...requestHeaders, 'Mcp-Session-Id': sessionId }
+        : requestHeaders,
       payload: {
         jsonrpc: '2.0',
         method: 'notifications/initialized',
@@ -383,8 +389,8 @@ export async function probeHttpMcpServer(config, {
       timeoutMs,
       url: normalized.url,
       headers: sessionId
-        ? { ...normalized.headers, 'Mcp-Session-Id': sessionId }
-        : normalized.headers,
+        ? { ...requestHeaders, 'Mcp-Session-Id': sessionId }
+        : requestHeaders,
       payload: {
         jsonrpc: '2.0',
         id: 2,
@@ -458,6 +464,7 @@ function toMcpTool(name, rawConfig, cachedStatus) {
     manageable: isHttp,
     url: firstString(rawConfig?.url),
     headers: readStringRecord(rawConfig?.headers),
+    headersHelper: firstString(rawConfig?.headersHelper) || undefined,
     config: sanitizeConfigForUi(rawConfig),
     probe: normalizedStatus,
     tools: normalizedStatus?.tools,
@@ -480,6 +487,7 @@ function toDraftTool(draft) {
     missingValues: Array.isArray(draft.missingValues) ? draft.missingValues : [],
     url: firstString(draft.config?.url),
     headers: readStringRecord(draft.config?.headers),
+    headersHelper: firstString(draft.config?.headersHelper) || undefined,
     config: sanitizeConfigForUi(draft.config),
     createdAt: firstString(draft.createdAt),
     updatedAt: firstString(draft.updatedAt),
@@ -520,6 +528,7 @@ function normalizeHttpMcpInput(server, { allowDraft }) {
       type: 'http',
       url,
       headers,
+      headersHelper: firstString(record.headersHelper) || undefined,
     },
   };
 }
@@ -530,9 +539,74 @@ function normalizeHttpConfig(config) {
   assertHttpUrl(url);
   return {
     type: 'http',
+    name: firstString(record.name) || undefined,
     url,
     headers: readStringRecord(record.headers) || {},
+    headersHelper: firstString(record.headersHelper) || undefined,
   };
+}
+
+async function resolveRequestHeaders(config) {
+  const helperHeaders = await resolveHeadersHelper(config);
+  return {
+    ...config.headers,
+    ...helperHeaders,
+  };
+}
+
+async function resolveHeadersHelper(config) {
+  if (!config.headersHelper) {
+    return {};
+  }
+
+  let stdout = '';
+  try {
+    const result = await execFileAsync('/bin/sh', ['-lc', config.headersHelper], {
+      timeout: HEADER_HELPER_TIMEOUT_MS,
+      maxBuffer: HEADER_HELPER_MAX_BUFFER_BYTES,
+      env: {
+        ...process.env,
+        CLAUDE_CODE_MCP_SERVER_NAME: config.name || '',
+        CLAUDE_CODE_MCP_SERVER_URL: config.url || '',
+      },
+    });
+    stdout = result.stdout;
+  } catch (error) {
+    throw createHttpError(describeHeadersHelperFailure(error), 400);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
+  }
+
+  const record = readPlainObject(parsed);
+  if (!record) {
+    throw createHttpError('headersHelper must write a JSON object of string header values', 400);
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(record)) {
+    const headerName = firstString(key);
+    if (!headerName || typeof value !== 'string') {
+      throw createHttpError('headersHelper must write a JSON object of string header values', 400);
+    }
+    headers[headerName] = value;
+  }
+  return headers;
+}
+
+function describeHeadersHelperFailure(error) {
+  if (error?.killed || error?.signal === 'SIGTERM' || error?.code === 'ETIMEDOUT') {
+    return 'headersHelper timed out after 10 seconds';
+  }
+  const stderr = firstString(error?.stderr);
+  if (stderr) {
+    return `headersHelper failed: ${stderr}`;
+  }
+  return `headersHelper failed: ${error?.message || 'command failed'}`;
 }
 
 async function postJsonRpc({ fetchImpl, timeoutMs, url, headers, payload }) {
@@ -643,6 +717,7 @@ function classifyImportEntry(name, value, existing) {
       transport: 'http',
       url: normalized.config.url,
       headers: normalized.config.headers,
+      headersHelper: normalized.config.headersHelper,
       missingValues: normalized.missingValues,
       conflict: existing.has(serverName),
     });
@@ -779,6 +854,7 @@ function sanitizeConfigForUi(config) {
     url: firstString(record.url),
     command: firstString(record.command),
     headers: readStringRecord(record.headers),
+    headersHelper: firstString(record.headersHelper) || undefined,
   });
 }
 

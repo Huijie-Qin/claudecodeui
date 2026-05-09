@@ -44,7 +44,12 @@ test('listWorkspaceTools reads project .mcp.json and preserves unsupported exist
   try {
     await writeWorkspaceMcpConfig(workspacePath, {
       mcpServers: {
-        docs: { type: 'http', url: 'http://127.0.0.1:3333/mcp', headers: { Authorization: 'Bearer visible' } },
+        docs: {
+          type: 'http',
+          url: 'http://127.0.0.1:3333/mcp',
+          headers: { Authorization: 'Bearer visible' },
+          headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+        },
         local: { type: 'stdio', command: 'npx', args: ['server'] },
       },
     });
@@ -58,6 +63,7 @@ test('listWorkspaceTools reads project .mcp.json and preserves unsupported exist
     assert.deepEqual(inventory.mcpServers.find((server) => server.name === 'docs').headers, {
       Authorization: 'Bearer visible',
     });
+    assert.equal(inventory.mcpServers.find((server) => server.name === 'docs').headersHelper, '/opt/bin/get-mcp-auth-headers.sh');
     assert.equal(inventory.mcpServers.find((server) => server.name === 'local').status, 'unsupported');
   } finally {
     await cleanup();
@@ -220,6 +226,7 @@ test('previewMcpJsonImport classifies HTTP, needs-value, unsupported, invalid, a
     json: JSON.stringify({
       mcpServers: {
         ready: { type: 'http', url: 'http://localhost:3000/mcp' },
+        dynamic: { type: 'http', url: 'http://localhost:3001/mcp', headersHelper: '/opt/bin/get-mcp-auth-headers.sh' },
         missing: { type: 'http', headers: { Authorization: '' } },
         stdio: { type: 'stdio', command: 'npx' },
         invalid: null,
@@ -228,12 +235,59 @@ test('previewMcpJsonImport classifies HTTP, needs-value, unsupported, invalid, a
     }),
   });
 
-  assert.equal(preview.summary.ready, 2);
+  assert.equal(preview.summary.ready, 3);
   assert.equal(preview.summary.needsValue, 1);
   assert.equal(preview.summary.unsupported, 1);
   assert.equal(preview.summary.invalid, 1);
   assert.equal(preview.summary.conflicts, 1);
   assert.equal(preview.entries.find((entry) => entry.name === 'existing').conflict, true);
+});
+
+test('probeHttpMcpServer runs headersHelper and lets dynamic headers override static headers', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
+    if (calls.length === 1) {
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'session-one' },
+      });
+    }
+    if (calls.length === 2) {
+      return new Response('', { status: 202 });
+    }
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [] } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const helperScript = [
+    'process.stdout.write(JSON.stringify({',
+    'Authorization: "Bearer dynamic",',
+    '"X-Helper": process.env.CLAUDE_CODE_MCP_SERVER_NAME + ":" + process.env.CLAUDE_CODE_MCP_SERVER_URL',
+    '}))',
+  ].join('');
+  const headersHelper = `${JSON.stringify(process.execPath)} -e '${helperScript}'`;
+
+  const result = await probeHttpMcpServer(
+    {
+      type: 'http',
+      name: 'docs',
+      url: 'http://127.0.0.1:9000/mcp',
+      headers: {
+        Authorization: 'Bearer static',
+        'X-Static': 'yes',
+      },
+      headersHelper,
+    },
+    { fetchImpl },
+  );
+
+  assert.equal(result.status, 'healthy');
+  assert.equal(calls[0].headers.Authorization, 'Bearer dynamic');
+  assert.equal(calls[0].headers['X-Static'], 'yes');
+  assert.equal(calls[0].headers['X-Helper'], 'docs:http://127.0.0.1:9000/mcp');
+  assert.equal(calls[2].headers.Authorization, 'Bearer dynamic');
 });
 
 test('probeHttpMcpServer performs initialize and tools/list over HTTP JSON-RPC', async () => {

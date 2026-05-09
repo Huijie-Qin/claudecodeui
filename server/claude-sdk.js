@@ -486,6 +486,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
       includeHostConfig: !runtimeContext.disableHostMcpConfig,
+      tenantId: runtimeOptions.tenantId,
+      workspaceId: runtimeOptions.workspaceId,
+      runtimeMode: runtimeContext.mode,
+      runtimeHomePath: runtimeContext.runtimeHomePath,
     });
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;

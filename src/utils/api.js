@@ -282,6 +282,13 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ ...(payload || {}), tenantId }),
       }),
+    uploadMcpPresetHelperScript: (presetId, tenantId, formData) => {
+      formData.set('tenantId', String(tenantId));
+      return authenticatedFetch(`/api/admin/mcp-presets/${presetId}/helper-script`, {
+        method: 'POST',
+        body: formData,
+      });
+    },
     publishMcpPreset: (presetId, tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets/${presetId}/publish`, {
         method: 'POST',

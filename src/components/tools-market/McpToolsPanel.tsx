@@ -49,7 +49,14 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
   } = useWorkspaceMcpTools(selectedProject.workspaceId);
   const canManage = !isReadOnly && data?.canManage !== false;
 
-  const presets = useMemo(() => data?.presets ?? [], [data?.presets]);
+  const presets = useMemo(
+    () => (data?.presets ?? []).filter((preset) => preset.toolCount > 0),
+    [data?.presets],
+  );
+  const summary = useMemo(() => ({
+    available: presets.filter((preset) => !preset.installed).length,
+    installed: presets.filter((preset) => preset.installed).length,
+  }), [presets]);
   const filteredPresets = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return presets.filter((preset) => {
@@ -127,8 +134,8 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
       </div>
 
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border">
-        <SummaryTile label={t('mcpTools.summary.available')} value={data?.summary.available ?? 0} />
-        <SummaryTile label={t('mcpTools.summary.installed')} value={data?.summary.installed ?? 0} />
+        <SummaryTile label={t('mcpTools.summary.available')} value={summary.available} />
+        <SummaryTile label={t('mcpTools.summary.installed')} value={summary.installed} />
       </div>
 
       <div className="flex min-h-0 flex-1">

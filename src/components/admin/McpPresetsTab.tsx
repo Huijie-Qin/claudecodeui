@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Upload } from 'lucide-react';
 
 import { Button, Input } from '../../shared/view/ui';
 
@@ -33,6 +33,7 @@ const EMPTY_VALUES: McpPresetFormValues = {
   description: '',
   url: '',
   headersText: '',
+  headersHelper: '',
   status: 'draft',
 };
 
@@ -58,6 +59,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     testPreset,
     publishPreset,
     disablePreset,
+    uploadHelperScript,
   } = useAdminMcpPresets(tenantId || undefined);
 
   useEffect(() => {
@@ -88,7 +90,8 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
       description: preset.description || '',
       url: preset.config?.url || '',
       headersText: headersToText(preset.config?.headers),
-      status: preset.status,
+      headersHelper: preset.config?.headersHelper || '',
+      status: preset.status === 'disabled' ? 'disabled' : 'draft',
     });
   };
 
@@ -117,6 +120,14 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
 
   const handleSave = async () => {
     const saved = await savePreset({ ...values, tenantId }, selectedPresetId);
+    if (saved) {
+      selectPreset(saved);
+    }
+  };
+
+  const handleHelperScriptUpload = async (file?: File | null) => {
+    if (!file || !selectedPreset) return;
+    const saved = await uploadHelperScript(selectedPreset.id, file);
     if (saved) {
       selectPreset(saved);
     }
@@ -217,7 +228,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               <Input value={values.url} onChange={(event) => updateValue('url', event.target.value)} placeholder="https://mcp.internal/knowledge" />
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">Headers JSON or key/value lines</span>
+              <span className="text-xs text-muted-foreground">Static headers JSON or key/value lines</span>
               <textarea
                 value={values.headersText}
                 onChange={(event) => updateValue('headersText', event.target.value)}
@@ -225,6 +236,61 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                 className="min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             </label>
+            <label className="space-y-1 sm:col-span-2">
+              <span className="text-xs text-muted-foreground">Headers helper command</span>
+              <Input
+                value={values.headersHelper}
+                onChange={(event) => updateValue('headersHelper', event.target.value)}
+                placeholder={'python3 auth.py'}
+                className="font-mono"
+              />
+              <span className="block text-xs text-muted-foreground">
+                Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.
+              </span>
+            </label>
+            <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-medium text-foreground">Private helper script</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Stored outside the workspace. Workspace users cannot browse this file from Files.
+                  </div>
+                </div>
+                <label>
+                  <input
+                    type="file"
+                    accept=".py,.sh,.js,.mjs,.cjs,.txt"
+                    className="sr-only"
+                    disabled={!selectedPreset || isSaving || isTestingSelectedPreset}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      event.target.value = '';
+                      void handleHelperScriptUpload(file);
+                    }}
+                  />
+                  <span
+                    className={`inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm ${
+                      !selectedPreset || isSaving || isTestingSelectedPreset ? 'pointer-events-none opacity-50' : 'hover:bg-accent'
+                    }`}
+                  >
+                    <Upload className="h-4 w-4" />
+                    Upload script
+                  </span>
+                </label>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {selectedPreset?.helperScript ? (
+                  <span>
+                    Current script: <span className="font-mono text-foreground">{selectedPreset.helperScript.fileName}</span>
+                    {' '}({Math.max(1, Math.ceil(selectedPreset.helperScript.sizeBytes / 1024))} KB)
+                  </span>
+                ) : selectedPreset ? (
+                  <span>No helper script uploaded.</span>
+                ) : (
+                  <span>Save the preset before uploading a helper script.</span>
+                )}
+              </div>
+            </div>
             <label className="space-y-1">
               <span className="text-xs text-muted-foreground">Status</span>
               <select
@@ -233,9 +299,11 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                 className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
               >
                 <option value="draft">Draft</option>
-                <option value="published">Published</option>
                 <option value="disabled">Disabled</option>
               </select>
+              <span className="block text-xs text-muted-foreground">
+                Publishing is controlled by the Publish button after a successful saved test.
+              </span>
             </label>
             <div className="flex items-end gap-2">
               <Button onClick={handleSave} disabled={isSaving || isTestingSelectedPreset || !tenantId}>
@@ -279,7 +347,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   <Button
                     variant="outline"
                     onClick={() => void publishPreset(selectedPreset.id)}
-                    disabled={isSaving || isTestingSelectedPreset || selectedPreset.lastTestStatus !== 'healthy'}
+                    disabled={isSaving || isTestingSelectedPreset || selectedPreset.lastTestStatus !== 'healthy' || selectedPreset.toolCount <= 0}
                   >
                     <CheckCircle2 className="h-4 w-4" />
                     Publish
