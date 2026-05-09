@@ -64,6 +64,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
+    invitation: (token) => fetch(`/api/auth/invitations/${encodeURIComponent(token)}`),
+    acceptInvitation: (token, password) => fetch(`/api/auth/invitations/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }),
     user: () => authenticatedFetch('/api/auth/user'),
     logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
   },
@@ -299,11 +305,29 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    createUser: (payload) =>
+      authenticatedFetch('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     users: () => authenticatedFetch('/api/admin/users'),
+    memberships: () => authenticatedFetch('/api/admin/memberships'),
+    createUserActivationLink: (userId) =>
+      authenticatedFetch(`/api/admin/users/${userId}/invitation`, {
+        method: 'POST',
+      }),
+    deleteUser: (userId) =>
+      authenticatedFetch(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+      }),
     upsertTenantUser: (tenantId, userId, payload) =>
       authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
+      }),
+    deleteTenantUser: (tenantId, userId) =>
+      authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
+        method: 'DELETE',
       }),
   },
 

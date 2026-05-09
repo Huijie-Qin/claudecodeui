@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import test from 'node:test';
+
 import express from 'express';
 
 import { createAuthRouter } from './auth.js';
@@ -31,6 +33,7 @@ function createFakeDeps() {
   const users = [];
   const tenants = [];
   const memberships = [];
+  const invitations = [];
   const fakeUserDb = {
     hasUsers: () => users.length > 0,
     createUser: (username, passwordHash, options = {}) => {
@@ -39,18 +42,41 @@ function createFakeDeps() {
         username,
         password_hash: passwordHash,
         is_system_admin: options.isSystemAdmin ? 1 : 0,
+        is_active: 1,
       };
       users.push(user);
       return user;
     },
     updateLastLogin: () => {},
-    getUserByUsername: (username) => users.find((user) => user.username === username) || null,
+    getUserByUsername: (username) => users.find((user) => user.username === username && user.is_active !== 0) || null,
+    getInvitationByTokenHash: (tokenHash) => {
+      const invitation = invitations.find((row) => row.token_hash === tokenHash);
+      if (!invitation) return null;
+      const user = users.find((row) => row.id === invitation.user_id);
+      return {
+        ...invitation,
+        username: user?.username,
+        is_active: user?.is_active,
+        is_system_admin: user?.is_system_admin,
+      };
+    },
+    acceptInvitation: ({ tokenHash, passwordHash }) => {
+      const invitation = invitations.find((row) => row.token_hash === tokenHash);
+      if (!invitation || invitation.accepted_at || invitation.revoked_at) return null;
+      const user = users.find((row) => row.id === invitation.user_id);
+      if (!user) return null;
+      invitation.accepted_at = new Date().toISOString();
+      user.password_hash = passwordHash;
+      user.is_active = 1;
+      return user;
+    },
   };
 
   return {
     users,
     tenants,
     memberships,
+    invitations,
     userDb: fakeUserDb,
     multitenancy: {
       tenants: {
@@ -77,6 +103,10 @@ function createFakeDeps() {
       next();
     },
   };
+}
+
+function invitationTokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 test('first registration creates a system admin bootstrap user', async () => {
@@ -122,4 +152,62 @@ test('later registration creates a normal user without tenant access', async () 
   assert.equal(response.status, 200);
   assert.equal(payload.bootstrapAdmin, false);
   assert.equal(payload.user.is_system_admin, 0);
+});
+
+test('invitation lookup returns the admin-selected username', async () => {
+  const deps = createFakeDeps();
+  const token = 'invite-token';
+  deps.users.push({
+    id: 1,
+    username: 'member',
+    password_hash: '',
+    is_system_admin: 0,
+    is_active: 0,
+  });
+  deps.invitations.push({
+    id: 1,
+    user_id: 1,
+    token_hash: invitationTokenHash(token),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    accepted_at: null,
+    revoked_at: null,
+  });
+
+  const router = createAuthRouter(deps);
+  const { response, payload } = await createRequest(router, 'GET', `/api/auth/invitations/${token}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.invitation.username, 'member');
+});
+
+test('accepting an invitation activates the user and signs them in', async () => {
+  const deps = createFakeDeps();
+  const token = 'invite-token';
+  deps.users.push({
+    id: 1,
+    username: 'member',
+    password_hash: '',
+    is_system_admin: 0,
+    is_active: 0,
+  });
+  deps.invitations.push({
+    id: 1,
+    user_id: 1,
+    token_hash: invitationTokenHash(token),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    accepted_at: null,
+    revoked_at: null,
+  });
+
+  const router = createAuthRouter(deps);
+  const { response, payload } = await createRequest(router, 'POST', `/api/auth/invitations/${token}/accept`, {
+    password: 'secret1',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'member');
+  assert.equal(payload.token, 'token-1');
+  assert.equal(deps.users[0].is_active, 1);
+  assert.notEqual(deps.users[0].password_hash, '');
 });

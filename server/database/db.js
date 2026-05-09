@@ -8,6 +8,9 @@ import {
   USER_NOTIFICATION_PREFERENCES_TABLE_SQL,
   VAPID_KEYS_TABLE_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SQL,
+  USER_INVITATIONS_TABLE_SQL,
+  USER_INVITATIONS_TOKEN_INDEX_SQL,
+  USER_INVITATIONS_USER_INDEX_SQL,
   SESSION_NAMES_TABLE_SQL,
   SESSION_NAMES_LOOKUP_INDEX_SQL,
   DATABASE_SCHEMA_SQL
@@ -114,6 +117,9 @@ const runMigrations = () => {
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SQL);
     db.exec(VAPID_KEYS_TABLE_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SQL);
+    db.exec(USER_INVITATIONS_TABLE_SQL);
+    db.exec(USER_INVITATIONS_TOKEN_INDEX_SQL);
+    db.exec(USER_INVITATIONS_USER_INDEX_SQL);
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
@@ -163,6 +169,90 @@ const userDb = {
     }
   },
 
+  createInvitedUser: ({ username, tokenHash, createdByUserId, expiresAt }) => {
+    try {
+      const createInvitation = db.transaction(() => {
+        const userResult = db
+          .prepare('INSERT INTO users (username, password_hash, is_active, is_system_admin) VALUES (?, ?, 0, 0)')
+          .run(username, '');
+        const user = {
+          id: userResult.lastInsertRowid,
+          username,
+          is_active: 0,
+          is_system_admin: 0,
+        };
+
+        const invitationResult = db
+          .prepare(`
+            INSERT INTO user_invitations (user_id, token_hash, created_by_user_id, expires_at)
+            VALUES (?, ?, ?, ?)
+          `)
+          .run(user.id, tokenHash, createdByUserId, expiresAt);
+
+        return {
+          user,
+          invitation: {
+            id: invitationResult.lastInsertRowid,
+            user_id: user.id,
+            expires_at: expiresAt,
+          },
+        };
+      });
+
+      return createInvitation();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  createInvitationForUser: ({ userId, tokenHash, createdByUserId, expiresAt }) => {
+    try {
+      const createInvitation = db.transaction(() => {
+        const user = db.prepare(`
+          SELECT id, username, is_active, is_system_admin
+          FROM users
+          WHERE id = ?
+        `).get(userId);
+
+        if (!user) {
+          return null;
+        }
+
+        if (user.is_active === 1) {
+          throw new Error('User is already active');
+        }
+
+        db.prepare(`
+          UPDATE user_invitations
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE user_id = ?
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL
+        `).run(user.id);
+
+        const invitationResult = db
+          .prepare(`
+            INSERT INTO user_invitations (user_id, token_hash, created_by_user_id, expires_at)
+            VALUES (?, ?, ?, ?)
+          `)
+          .run(user.id, tokenHash, createdByUserId, expiresAt);
+
+        return {
+          user,
+          invitation: {
+            id: invitationResult.lastInsertRowid,
+            user_id: user.id,
+            expires_at: expiresAt,
+          },
+        };
+      });
+
+      return createInvitation();
+    } catch (err) {
+      throw err;
+    }
+  },
+
   // Get user by username
   getUserByUsername: (username) => {
     try {
@@ -203,11 +293,121 @@ const userDb = {
 
   listUsers: () => {
     try {
-      return db.prepare(`
-        SELECT id, username, created_at, last_login, is_active, is_system_admin
-        FROM users
+      const rows = db.prepare(`
+        SELECT
+          u.id,
+          u.username,
+          u.created_at,
+          u.last_login,
+          u.is_active,
+          u.is_system_admin,
+          (
+            SELECT ui.expires_at
+            FROM user_invitations ui
+            WHERE ui.user_id = u.id
+              AND ui.accepted_at IS NULL
+              AND ui.revoked_at IS NULL
+            ORDER BY ui.created_at DESC
+            LIMIT 1
+          ) AS invitation_expires_at,
+          (
+            SELECT ui.created_at
+            FROM user_invitations ui
+            WHERE ui.user_id = u.id
+              AND ui.accepted_at IS NULL
+              AND ui.revoked_at IS NULL
+            ORDER BY ui.created_at DESC
+            LIMIT 1
+          ) AS invitation_created_at
+        FROM users u
         ORDER BY username COLLATE NOCASE ASC
       `).all();
+
+      return rows.map((row) => {
+        if (row.is_active === 1) {
+          return { ...row, invitation_status: 'active' };
+        }
+
+        const expiresAt = row.invitation_expires_at ? Date.parse(row.invitation_expires_at) : NaN;
+        if (Number.isFinite(expiresAt)) {
+          return {
+            ...row,
+            invitation_status: expiresAt > Date.now() ? 'invited' : 'expired',
+          };
+        }
+
+        return { ...row, invitation_status: 'inactive' };
+      });
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getInvitationByTokenHash: (tokenHash) => {
+    try {
+      return db.prepare(`
+        SELECT
+          ui.id,
+          ui.user_id,
+          ui.token_hash,
+          ui.created_by_user_id,
+          ui.expires_at,
+          ui.accepted_at,
+          ui.revoked_at,
+          ui.created_at,
+          u.username,
+          u.is_active,
+          u.is_system_admin
+        FROM user_invitations ui
+        JOIN users u ON u.id = ui.user_id
+        WHERE ui.token_hash = ?
+        LIMIT 1
+      `).get(tokenHash);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  deleteUser: (userId) => {
+    try {
+      const result = db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  acceptInvitation: ({ tokenHash, passwordHash }) => {
+    try {
+      const accept = db.transaction(() => {
+        const invitation = userDb.getInvitationByTokenHash(tokenHash);
+        if (!invitation) {
+          return null;
+        }
+
+        const invitationUpdate = db.prepare(`
+          UPDATE user_invitations
+          SET accepted_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL
+        `).run(invitation.id);
+
+        if (invitationUpdate.changes === 0) {
+          return null;
+        }
+
+        db.prepare('UPDATE users SET password_hash = ?, is_active = 1 WHERE id = ?')
+          .run(passwordHash, invitation.user_id);
+
+        return db.prepare(`
+          SELECT id, username, created_at, last_login, is_system_admin
+          FROM users
+          WHERE id = ? AND is_active = 1
+        `).get(invitation.user_id);
+      });
+
+      return accept();
     } catch (err) {
       throw err;
     }

@@ -1,5 +1,8 @@
-import express from 'express';
+import crypto from 'crypto';
+
 import bcrypt from 'bcrypt';
+import express from 'express';
+
 import { userDb as defaultUserDb, db as defaultDb } from '../database/db.js';
 import { multitenancyDb as defaultMultitenancyDb } from '../database/multitenancy-db.js';
 import {
@@ -28,6 +31,31 @@ function ensureBootstrapTenantForSystemAdmin(multitenancy, userId) {
   });
 
   return tenant;
+}
+
+function hashInvitationToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getInvitationFailure(invitation) {
+  if (!invitation) {
+    return { statusCode: 404, message: 'Invitation not found' };
+  }
+
+  if (invitation.accepted_at || invitation.is_active === 1) {
+    return { statusCode: 410, message: 'Invitation has already been accepted' };
+  }
+
+  if (invitation.revoked_at) {
+    return { statusCode: 410, message: 'Invitation has been revoked' };
+  }
+
+  const expiresAt = Date.parse(invitation.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return { statusCode: 410, message: 'Invitation has expired' };
+  }
+
+  return null;
 }
 
 export function createAuthRouter({
@@ -155,6 +183,80 @@ export function createAuthRouter({
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/invitations/:token', (req, res) => {
+    try {
+      if (typeof userDb.getInvitationByTokenHash !== 'function') {
+        return res.status(404).json({ error: 'Invitation not found' });
+      }
+
+      const invitation = userDb.getInvitationByTokenHash(hashInvitationToken(req.params.token));
+      const failure = getInvitationFailure(invitation);
+      if (failure) {
+        return res.status(failure.statusCode).json({ error: failure.message });
+      }
+
+      return res.json({
+        invitation: {
+          username: invitation.username,
+          expires_at: invitation.expires_at,
+        },
+      });
+    } catch (error) {
+      console.error('Invitation lookup error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.post('/invitations/:token/accept', async (req, res) => {
+    try {
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ error: 'Password is required' });
+      }
+
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
+
+      if (
+        typeof userDb.getInvitationByTokenHash !== 'function'
+        || typeof userDb.acceptInvitation !== 'function'
+      ) {
+        return res.status(404).json({ error: 'Invitation not found' });
+      }
+
+      const tokenHash = hashInvitationToken(req.params.token);
+      const invitation = userDb.getInvitationByTokenHash(tokenHash);
+      const failure = getInvitationFailure(invitation);
+      if (failure) {
+        return res.status(failure.statusCode).json({ error: failure.message });
+      }
+
+      const saltRounds = 12;
+      const passwordHash = await bcrypt.hash(password, saltRounds);
+      const user = userDb.acceptInvitation({ tokenHash, passwordHash });
+      if (!user) {
+        return res.status(410).json({ error: 'Invitation is no longer available' });
+      }
+
+      const token = generateToken(user);
+      userDb.updateLastLogin(user.id);
+
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          is_system_admin: user.is_system_admin,
+        },
+        token,
+      });
+    } catch (error) {
+      console.error('Invitation acceptance error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 

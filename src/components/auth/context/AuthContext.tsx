@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+
 import { IS_PLATFORM } from '../../../constants/config';
 import { api } from '../../../utils/api';
 import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_STORAGE_KEY } from '../constants';
@@ -180,6 +181,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  const acceptInvitation = useCallback<AuthContextValue['acceptInvitation']>(
+    async (invitationToken, password) => {
+      try {
+        setError(null);
+        const response = await api.auth.acceptInvitation(invitationToken, password);
+        const payload = await parseJsonSafely<AuthSessionPayload>(response);
+
+        if (!response.ok || !payload?.token || !payload.user) {
+          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.registrationFailed);
+          setError(message);
+          return { success: false, error: message };
+        }
+
+        setSession(payload.user, payload.token);
+        setNeedsSetup(false);
+        await checkOnboardingStatus();
+        return { success: true };
+      } catch (caughtError) {
+        console.error('Invitation acceptance error:', caughtError);
+        setError(AUTH_ERROR_MESSAGES.networkError);
+        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+      }
+    },
+    [checkOnboardingStatus, setSession],
+  );
+
   const logout = useCallback(() => {
     const tokenToInvalidate = token;
     clearSession();
@@ -201,10 +228,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       error,
       login,
       register,
+      acceptInvitation,
       logout,
       refreshOnboardingStatus,
     }),
     [
+      acceptInvitation,
       error,
       hasCompletedOnboarding,
       isLoading,

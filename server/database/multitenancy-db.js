@@ -468,6 +468,71 @@ export function createMultitenancyDb(database = db) {
         `).get(normalizedTenantId, normalizedUserId);
       },
 
+      listMemberships: ({ tenantId, userId } = {}) => {
+        const filters = [];
+        const params = [];
+
+        if (tenantId != null) {
+          filters.push('tu.tenant_id = ?');
+          params.push(requirePositiveInteger(tenantId, 'tenantId'));
+        }
+
+        if (userId != null) {
+          filters.push('tu.user_id = ?');
+          params.push(requirePositiveInteger(userId, 'userId'));
+        }
+
+        const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+
+        return database.prepare(`
+          SELECT
+            tu.tenant_id,
+            tu.user_id,
+            tu.role,
+            tu.permission,
+            tu.status,
+            tu.created_at,
+            tu.updated_at,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            t.status AS tenant_status,
+            u.username,
+            u.is_active AS user_is_active,
+            u.is_system_admin
+          FROM tenant_users tu
+          JOIN tenants t ON t.id = tu.tenant_id
+          JOIN users u ON u.id = tu.user_id
+          ${whereClause}
+          ORDER BY t.code COLLATE NOCASE ASC, u.username COLLATE NOCASE ASC
+        `).all(...params);
+      },
+
+      deleteMembership: ({ tenantId, userId }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+
+        const removeMembership = database.transaction(() => {
+          database.prepare(`
+            DELETE FROM workspace_acl
+            WHERE user_id = ?
+              AND workspace_id IN (
+                SELECT id
+                FROM workspaces
+                WHERE tenant_id = ?
+              )
+          `).run(normalizedUserId, normalizedTenantId);
+
+          const result = database.prepare(`
+            DELETE FROM tenant_users
+            WHERE tenant_id = ? AND user_id = ?
+          `).run(normalizedTenantId, normalizedUserId);
+
+          return result.changes > 0;
+        });
+
+        return removeMembership();
+      },
+
       getMembership: (userId, tenantId) => {
         return database.prepare(`
           SELECT *

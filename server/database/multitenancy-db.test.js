@@ -66,6 +66,37 @@ test('system admin access can be granted across active tenants', () => {
   assert.equal(mt.memberships.getMembership(adminId, disabledTenant.id), null);
 });
 
+test('tenant memberships can be listed and deleted with workspace ACL cleanup', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const editorId = seedUser(database, 'editor');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: editorId, role: 'member', permission: 'view', status: 'active' });
+
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'app',
+    displayName: 'App',
+    path: '/tmp/cloudcli/team/owner/app',
+  });
+  mt.workspaceAcl.replaceAcl({
+    workspaceId: workspace.id,
+    ownerUserId: ownerId,
+    entries: [{ userId: editorId, permission: 'view' }],
+  });
+
+  const listed = mt.memberships.listMemberships({ tenantId: tenant.id });
+  assert.deepEqual(listed.map((row) => row.username), ['editor', 'owner']);
+
+  assert.equal(mt.memberships.deleteMembership({ tenantId: tenant.id, userId: editorId }), true);
+  assert.equal(mt.memberships.getMembership(editorId, tenant.id), null);
+  assert.deepEqual(mt.workspaceAcl.listAcl(workspace.id), []);
+});
+
 test('workspace ACL grants access only inside the same tenant', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

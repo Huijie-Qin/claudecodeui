@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
 import express from 'express';
 
 import { createTenantsRouter } from './tenants.js';
@@ -146,6 +147,124 @@ test('admin router grants creator access to newly created tenant', async () => {
     permission: 'edit',
     status: 'active',
   });
+});
+
+test('admin router creates invited users and returns an invitation URL', async () => {
+  const seen = {};
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {},
+    },
+    {
+      createInvitedUser: ({ username, tokenHash, createdByUserId, expiresAt }) => {
+        seen.invitation = { username, tokenHash, createdByUserId, expiresAt };
+        return {
+          user: { id: 12, username, is_active: 0, is_system_admin: 0 },
+          invitation: { id: 1, user_id: 12, expires_at: expiresAt },
+        };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/users', {
+    method: 'POST',
+    body: { username: 'member' },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(payload.user.username, 'member');
+  assert.match(payload.invitation.url, /^http:\/\/127\.0\.0\.1:\d+\/invite\/.+/);
+  assert.equal(seen.invitation.username, 'member');
+  assert.equal(seen.invitation.createdByUserId, 7);
+  assert.equal(new RegExp(seen.invitation.tokenHash).test(payload.invitation.url), false);
+});
+
+test('admin router creates activation links for inactive users', async () => {
+  const seen = {};
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {},
+    },
+    {
+      createInvitationForUser: ({ userId, tokenHash, createdByUserId, expiresAt }) => {
+        seen.invitation = { userId, tokenHash, createdByUserId, expiresAt };
+        return {
+          user: { id: userId, username: 'member', is_active: 0, is_system_admin: 0 },
+          invitation: { id: 2, user_id: userId, expires_at: expiresAt },
+        };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/users/12/invitation', {
+    method: 'POST',
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(payload.user.username, 'member');
+  assert.match(payload.invitation.url, /^http:\/\/127\.0\.0\.1:\d+\/invite\/.+/);
+  assert.equal(seen.invitation.userId, 12);
+  assert.equal(seen.invitation.createdByUserId, 7);
+});
+
+test('admin router deletes users but rejects deleting the current account', async () => {
+  const deleted = [];
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {},
+    },
+    {
+      deleteUser: (userId) => {
+        deleted.push(userId);
+        return true;
+      },
+    },
+  );
+
+  const selfDelete = await requestJson(router, '/users/7', {
+    method: 'DELETE',
+    user: { id: 7, is_system_admin: 1 },
+  });
+  assert.equal(selfDelete.response.status, 400);
+
+  const otherDelete = await requestJson(router, '/users/12', {
+    method: 'DELETE',
+    user: { id: 7, is_system_admin: 1 },
+  });
+  assert.equal(otherDelete.response.status, 200);
+  assert.deepEqual(deleted, [12]);
+});
+
+test('admin router lists and deletes tenant access', async () => {
+  const seen = {};
+  const router = createAdminRouter({
+    tenants: { listTenants: () => [] },
+    memberships: {
+      listMemberships: () => [{ tenant_id: 2, user_id: 12, permission: 'edit' }],
+      deleteMembership: ({ tenantId, userId }) => {
+        seen.deleted = { tenantId, userId };
+        return true;
+      },
+    },
+  });
+
+  const listResult = await requestJson(router, '/memberships', {
+    user: { id: 7, is_system_admin: 1 },
+  });
+  assert.equal(listResult.response.status, 200);
+  assert.deepEqual(listResult.payload.memberships, [{ tenant_id: 2, user_id: 12, permission: 'edit' }]);
+
+  const deleteResult = await requestJson(router, '/tenants/2/users/12', {
+    method: 'DELETE',
+    user: { id: 7, is_system_admin: 1 },
+  });
+  assert.equal(deleteResult.response.status, 200);
+  assert.deepEqual(seen.deleted, { tenantId: 2, userId: 12 });
 });
 
 test('workspace share route lets owners replace ACL entries', async () => {

@@ -28,6 +28,22 @@ export const PUSH_SUBSCRIPTIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS push_sub
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );`;
 
+export const USER_INVITATIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS user_invitations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_by_user_id INTEGER NOT NULL,
+  expires_at DATETIME NOT NULL,
+  accepted_at DATETIME,
+  revoked_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);`;
+
+export const USER_INVITATIONS_TOKEN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_invitations_token_hash ON user_invitations(token_hash);`;
+export const USER_INVITATIONS_USER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_invitations_user_status ON user_invitations(user_id, accepted_at, revoked_at);`;
+
 export const SESSION_NAMES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_names (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
@@ -57,6 +73,12 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
+
+${USER_INVITATIONS_TABLE_SQL}
+
+${USER_INVITATIONS_TOKEN_INDEX_SQL}
+
+${USER_INVITATIONS_USER_INDEX_SQL}
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
