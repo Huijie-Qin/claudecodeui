@@ -322,6 +322,12 @@ export function useProjectsState({
   }, []);
 
   useEffect(() => {
+    if (sessionId) {
+      setActiveTab('chat');
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!sessionId || projects.length === 0) {
       return;
     }
@@ -404,7 +410,16 @@ export function useProjectsState({
 
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
+      const sessionProjectName = session.__projectName;
+      if (sessionProjectName && sessionProjectName !== selectedProject?.name) {
+        const sessionProject = projects.find((project) => project.name === sessionProjectName);
+        if (sessionProject) {
+          setSelectedProject(sessionProject);
+        }
+      }
+
       setSelectedSession(session);
+      setActiveTab('chat');
 
       const provider = localStorage.getItem('selected-provider') || 'claude';
       if (provider === 'cursor') {
@@ -412,7 +427,6 @@ export function useProjectsState({
       }
 
       if (isMobile) {
-        const sessionProjectName = session.__projectName;
         const currentProjectName = selectedProject?.name;
 
         if (sessionProjectName !== currentProjectName) {
@@ -422,7 +436,7 @@ export function useProjectsState({
 
       navigate(`/session/${session.id}`);
     },
-    [isMobile, navigate, selectedProject?.name],
+    [isMobile, navigate, projects, selectedProject?.name],
   );
 
   const handleNewSession = useCallback(
