@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildMcpPresetPayload,
   normalizeMcpPresetName,
+  parseHelperEnvText,
   parseHeadersText,
 } from './adminMcpPresetUtils';
 
@@ -23,6 +24,16 @@ test('parseHeadersText accepts JSON objects and key-value lines', () => {
   });
 });
 
+test('parseHelperEnvText accepts JSON objects and key-value lines', () => {
+  assert.deepEqual(parseHelperEnvText('{"ROOT_SECRET":"root-key"}'), {
+    ROOT_SECRET: 'root-key',
+  });
+  assert.deepEqual(parseHelperEnvText('ROOT_SECRET=root-key\nTOKEN: token-value'), {
+    ROOT_SECRET: 'root-key',
+    TOKEN: 'token-value',
+  });
+});
+
 test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup fields', () => {
   assert.deepEqual(buildMcpPresetPayload({
     tenantId: 7,
@@ -32,6 +43,7 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
     url: 'https://mcp.internal/knowledge',
     headersText: 'Authorization: Bearer token',
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+    helperEnvText: 'ROOT_SECRET=root-key',
     status: 'draft',
   }), {
     tenantId: 7,
@@ -45,5 +57,8 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
       Authorization: 'Bearer token',
     },
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+    helperEnv: {
+      ROOT_SECRET: 'root-key',
+    },
   });
 });

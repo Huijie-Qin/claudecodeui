@@ -16,6 +16,7 @@ export type AdminMcpPreset = {
     url: string;
     headers?: Record<string, string>;
     headersHelper?: string;
+    helperEnv?: Record<string, string>;
   };
   status: 'draft' | 'published' | 'disabled';
   dockerCompatible: boolean;

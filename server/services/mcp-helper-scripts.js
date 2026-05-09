@@ -6,9 +6,11 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 
 export const MCP_HELPER_CONTAINER_ROOT = '/home/cloudcli/.cloudcli/mcp-helpers';
 export const DEFAULT_MCP_HELPER_HOST_ROOT = path.join(os.homedir(), '.cloudcli', 'mcp-helper-scripts');
+const HELPER_ENV_FILE_NAME = '.headers-helper.env.sh';
 
 const HELPER_FILE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const HELPER_SCRIPT_MAX_BYTES = 64 * 1024;
+const HELPER_ENV_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
@@ -36,6 +38,18 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function readStringRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, entry]) => HELPER_ENV_NAME_PATTERN.test(String(key)) && entry != null && String(entry) !== '')
+      .map(([key, entry]) => [String(key), String(entry)]),
+  );
+}
+
 function helperDirectoryForPreset(root, { tenantId, presetId }) {
   return path.join(
     root,
@@ -61,13 +75,39 @@ async function writeHelperScript({ directory, fileName, content, fsImpl = fs }) 
   return scriptPath;
 }
 
-function withHelperWorkingDirectory(config, workingDirectory) {
-  if (!config?.headersHelper || !workingDirectory) {
-    return config;
+async function writeHelperEnvFile({ directory, helperEnv, fsImpl = fs }) {
+  const env = readStringRecord(helperEnv);
+  if (Object.keys(env).length === 0) {
+    return null;
   }
+
+  await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fsImpl.chmod(directory, 0o700).catch(() => {});
+  const envPath = path.join(directory, HELPER_ENV_FILE_NAME);
+  const content = Object.entries(env)
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join('\n');
+  await fsImpl.writeFile(envPath, `${content}\n`, { mode: 0o600 });
+  await fsImpl.chmod(envPath, 0o600).catch(() => {});
+  return envPath;
+}
+
+function withoutHelperEnv(config) {
+  const { helperEnv, ...safeConfig } = config || {};
+  return safeConfig;
+}
+
+function withHelperWorkingDirectory(config, workingDirectory, { includeEnvFile = false } = {}) {
+  const safeConfig = withoutHelperEnv(config);
+  if (!config?.headersHelper || !workingDirectory) {
+    return safeConfig;
+  }
+  const envPrefix = includeEnvFile
+    ? `set -a && . ${shellQuote(`./${HELPER_ENV_FILE_NAME}`)} && set +a && `
+    : '';
   return {
-    ...config,
-    headersHelper: `cd ${shellQuote(workingDirectory)} && ${config.headersHelper}`,
+    ...safeConfig,
+    headersHelper: `cd ${shellQuote(workingDirectory)} && ${envPrefix}${config.headersHelper}`,
   };
 }
 
@@ -134,18 +174,30 @@ export async function resolvePresetProbeConfig({
   fsImpl = fs,
 }) {
   const script = getPresetHelperScript(multitenancy, { tenantId, presetId });
-  if (!script || !config?.headersHelper) {
-    return config;
+  const helperEnv = readStringRecord(config?.helperEnv);
+  if ((!script && Object.keys(helperEnv).length === 0) || !config?.headersHelper) {
+    return withoutHelperEnv(config);
   }
 
   const helperDirectory = helperDirectoryForPreset(helperRoot, { tenantId, presetId });
-  await writeHelperScript({
+  if (script) {
+    await writeHelperScript({
+      directory: helperDirectory,
+      fileName: script.file_name,
+      content: script.content,
+      fsImpl,
+    });
+  }
+  const envPath = await writeHelperEnvFile({
     directory: helperDirectory,
-    fileName: script.file_name,
-    content: script.content,
+    helperEnv,
     fsImpl,
   });
-  return withHelperWorkingDirectory({ ...config, name: presetName }, helperDirectory);
+  return withHelperWorkingDirectory(
+    { ...config, name: presetName },
+    helperDirectory,
+    { includeEnvFile: Boolean(envPath) },
+  );
 }
 
 export async function applyWorkspaceMcpHelperScripts(mcpServers, {
@@ -173,12 +225,20 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
     const serverName = install.name;
     const currentConfig = nextServers[serverName];
     if (!currentConfig?.headersHelper) continue;
+    const preset = multitenancy.mcpPresets?.getPresetById?.({
+      tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+      presetId: install.preset_id,
+    });
+    const helperEnv = readStringRecord(preset?.config?.helperEnv);
 
     const script = getPresetHelperScript(multitenancy, {
       tenantId: requirePositiveInteger(tenantId, 'tenantId'),
       presetId: install.preset_id,
     });
-    if (!script) continue;
+    if (!script && Object.keys(helperEnv).length === 0) {
+      nextServers[serverName] = withoutHelperEnv(currentConfig);
+      continue;
+    }
 
     const hostDirectory = runtimeMode === 'docker' && runtimeHomePath
       ? helperDirectoryForRuntime(runtimeHomePath, serverName)
@@ -187,13 +247,24 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
       ? helperContainerDirectory(serverName)
       : hostDirectory;
 
-    await writeHelperScript({
+    if (script) {
+      await writeHelperScript({
+        directory: hostDirectory,
+        fileName: script.file_name,
+        content: script.content,
+        fsImpl,
+      });
+    }
+    const envPath = await writeHelperEnvFile({
       directory: hostDirectory,
-      fileName: script.file_name,
-      content: script.content,
+      helperEnv,
       fsImpl,
     });
-    nextServers[serverName] = withHelperWorkingDirectory(currentConfig, commandDirectory);
+    nextServers[serverName] = withHelperWorkingDirectory(
+      currentConfig,
+      commandDirectory,
+      { includeEnvFile: Boolean(envPath) },
+    );
   }
   return nextServers;
 }

@@ -60,6 +60,7 @@ function seedWorkspaceAndPresets(database) {
       url: 'https://mcp.internal/knowledge',
       headers: { Authorization: 'Bearer internal-secret' },
       headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+      helperEnv: { ROOT_SECRET: 'internal-root-key' },
     },
     status: 'published',
     createdByUserId: adminId,
@@ -151,6 +152,8 @@ test('workspace mcp tools install writes project mcp config without drafts', asy
       headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     });
     assert.equal(JSON.stringify(config).includes('print("secret")'), false);
+    assert.equal(JSON.stringify(config).includes('internal-root-key'), false);
+    assert.equal(Object.hasOwn(config.mcpServers.knowledge, 'helperEnv'), false);
     assert.deepEqual(drafts.drafts, {});
     assert.equal(result.installed.writeTarget, 'Repo/.mcp.json');
     assert.equal(result.installed.containerPath, '/workspace/.mcp.json');

@@ -3,6 +3,7 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import {
   MCP_CONTAINER_CONFIG_PATH,
   WORKSPACE_MCP_CONFIG_FILE,
+  toWorkspaceMcpServerConfig,
   toWorkspacePreset,
 } from './mcp-presets.js';
 import {
@@ -117,7 +118,7 @@ export function createWorkspaceMcpToolsService({ multitenancy = multitenancyDb }
           ...config,
           mcpServers: {
             ...config.mcpServers,
-            [preset.name]: preset.config,
+            [preset.name]: toWorkspaceMcpServerConfig(preset.config),
           },
         }),
         writeMcpStatus(workspacePath, {

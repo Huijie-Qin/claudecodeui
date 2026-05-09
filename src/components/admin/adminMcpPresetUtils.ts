@@ -8,6 +8,7 @@ export type McpPresetFormValues = {
   url: string;
   headersText: string;
   headersHelper: string;
+  helperEnvText: string;
   status: AdminMcpPresetStatus;
 };
 
@@ -52,8 +53,19 @@ export function parseHeadersText(value: string): Record<string, string> {
   );
 }
 
+export function parseHelperEnvText(value: string): Record<string, string> {
+  const parsed = parseHeadersText(value);
+  for (const key of Object.keys(parsed)) {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+      throw new Error('Helper environment variable names must use shell-safe syntax');
+    }
+  }
+  return parsed;
+}
+
 export function buildMcpPresetPayload(values: McpPresetFormValues) {
   const headersHelper = values.headersHelper.trim();
+  const helperEnv = parseHelperEnvText(values.helperEnvText || '');
   return {
     tenantId: values.tenantId,
     name: normalizeMcpPresetName(values.name),
@@ -64,5 +76,6 @@ export function buildMcpPresetPayload(values: McpPresetFormValues) {
     url: values.url.trim(),
     headers: parseHeadersText(values.headersText),
     headersHelper: headersHelper || undefined,
+    ...(Object.keys(helperEnv).length > 0 ? { helperEnv } : {}),
   };
 }

@@ -34,6 +34,7 @@ const EMPTY_VALUES: McpPresetFormValues = {
   url: '',
   headersText: '',
   headersHelper: '',
+  helperEnvText: '',
   status: 'draft',
 };
 
@@ -91,6 +92,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
       url: preset.config?.url || '',
       headersText: headersToText(preset.config?.headers),
       headersHelper: preset.config?.headersHelper || '',
+      helperEnvText: headersToText(preset.config?.helperEnv),
       status: preset.status === 'disabled' ? 'disabled' : 'draft',
     });
   };
@@ -246,6 +248,18 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               />
               <span className="block text-xs text-muted-foreground">
                 Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.
+              </span>
+            </label>
+            <label className="space-y-1 sm:col-span-2">
+              <span className="text-xs text-muted-foreground">Headers helper environment</span>
+              <textarea
+                value={values.helperEnvText}
+                onChange={(event) => updateValue('helperEnvText', event.target.value)}
+                placeholder={'ROOT_SECRET=internal-root-key'}
+                className="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <span className="block text-xs text-muted-foreground">
+                Private variables injected only when headersHelper runs. They are not written to workspace files.
               </span>
             </label>
             <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">

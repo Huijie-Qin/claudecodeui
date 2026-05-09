@@ -38,6 +38,9 @@ test('normalizes admin preset input while workspace serialization redacts connec
       Authorization: 'Bearer internal-secret',
     },
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+    helperEnv: {
+      ROOT_SECRET: 'internal-root-key',
+    },
   });
 
   assert.deepEqual(normalized, {
@@ -51,6 +54,9 @@ test('normalizes admin preset input while workspace serialization redacts connec
         Authorization: 'Bearer internal-secret',
       },
       headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+      helperEnv: {
+        ROOT_SECRET: 'internal-root-key',
+      },
     },
   });
 
@@ -73,6 +79,23 @@ test('normalizes admin preset input while workspace serialization redacts connec
   assert.equal(Object.hasOwn(workspacePreset, 'config'), false);
   assert.equal(Object.hasOwn(workspacePreset, 'url'), false);
   assert.equal(Object.hasOwn(workspacePreset, 'headers'), false);
+});
+
+test('workspace mcp server config redacts helper environment secrets', () => {
+  const normalized = normalizePresetInput({
+    name: 'knowledge_retrieval',
+    displayName: 'Knowledge Retrieval MCP',
+    type: 'http',
+    url: 'https://mcp.internal/knowledge',
+    headersHelper: 'python3 auth.py',
+    helperEnv: {
+      ROOT_SECRET: 'internal-root-key',
+    },
+  });
+
+  assert.deepEqual(normalized.config.helperEnv, {
+    ROOT_SECRET: 'internal-root-key',
+  });
 });
 
 test('admin preset publish requires a successful test result', async () => {

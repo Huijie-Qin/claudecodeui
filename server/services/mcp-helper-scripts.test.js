@@ -58,6 +58,9 @@ function seedWorkspaceWithPreset(database) {
       type: 'http',
       url: 'https://mcp.internal/knowledge',
       headersHelper: 'python3 auth.py',
+      helperEnv: {
+        ROOT_SECRET: 'dynamic-root-key',
+      },
     },
     status: 'published',
     createdByUserId: adminId,
@@ -133,11 +136,14 @@ test('workspace MCP config resolves uploaded helper script into private docker r
     });
 
     const scriptPath = path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', 'knowledge', 'auth.py');
+    const envPath = path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', 'knowledge', '.headers-helper.env.sh');
     assert.equal(await fs.readFile(scriptPath, 'utf8'), 'import json\nprint(json.dumps({"Authorization": "Bearer dynamic"}))\n');
+    assert.equal(await fs.readFile(envPath, 'utf8'), "export ROOT_SECRET='dynamic-root-key'\n");
     assert.equal(
       resolved.knowledge.headersHelper,
-      "cd '/home/cloudcli/.cloudcli/mcp-helpers/knowledge' && python3 auth.py",
+      "cd '/home/cloudcli/.cloudcli/mcp-helpers/knowledge' && set -a && . './.headers-helper.env.sh' && set +a && python3 auth.py",
     );
+    assert.equal(Object.hasOwn(resolved.knowledge, 'helperEnv'), false);
     assert.equal(resolved.knowledge.headersHelper.includes(workspacePath), false);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -160,8 +166,11 @@ test('preset probe resolves uploaded helper script into private host directory',
     });
 
     const scriptPath = path.join(helperRoot, `tenant-${tenant.id}`, `preset-${preset.id}`, 'auth.py');
-    assert.match(resolved.headersHelper, /^cd '.+' && python3 auth\.py$/);
+    const envPath = path.join(helperRoot, `tenant-${tenant.id}`, `preset-${preset.id}`, '.headers-helper.env.sh');
+    assert.match(resolved.headersHelper, /^cd '.+' && set -a && \. '\.\/\.headers-helper\.env\.sh' && set \+a && python3 auth\.py$/);
     assert.equal(await fs.readFile(scriptPath, 'utf8'), 'import json\nprint(json.dumps({"Authorization": "Bearer dynamic"}))\n');
+    assert.equal(await fs.readFile(envPath, 'utf8'), "export ROOT_SECRET='dynamic-root-key'\n");
+    assert.equal(Object.hasOwn(resolved, 'helperEnv'), false);
   } finally {
     await fs.rm(helperRoot, { recursive: true, force: true });
   }

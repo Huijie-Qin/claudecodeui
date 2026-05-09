@@ -80,6 +80,24 @@ function normalizeHeadersHelper(headersHelper) {
   return headersHelper.trim() || undefined;
 }
 
+function normalizeHelperEnv(helperEnv) {
+  if (helperEnv == null || helperEnv === '') return undefined;
+  if (typeof helperEnv !== 'object' || Array.isArray(helperEnv)) {
+    throw createHttpError('helperEnv must be an object', 400);
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(helperEnv)) {
+    const envName = requireNonEmptyString(key, 'helper environment variable name');
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(envName)) {
+      throw createHttpError('helperEnv names must use shell-safe environment variable syntax', 400);
+    }
+    if (value == null || value === '') continue;
+    normalized[envName] = String(value);
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeStatus(status, fallback = 'draft') {
   const value = status || fallback;
   if (!['draft', 'published', 'disabled'].includes(value)) {
@@ -121,8 +139,14 @@ export function normalizePresetInput(input = {}) {
       url: normalizeHttpUrl(config.url),
       headers: normalizeHeaders(config.headers),
       headersHelper: normalizeHeadersHelper(config.headersHelper),
+      helperEnv: normalizeHelperEnv(config.helperEnv),
     }),
   };
+}
+
+export function toWorkspaceMcpServerConfig(config = {}) {
+  const { helperEnv, ...safeConfig } = config || {};
+  return safeConfig;
 }
 
 export function toAdminPreset(row, helperScript = null) {
