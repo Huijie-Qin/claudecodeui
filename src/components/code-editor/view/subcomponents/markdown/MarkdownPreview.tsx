@@ -1,3 +1,4 @@
+import { parse } from 'yaml';
 import { useMemo } from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
@@ -9,6 +10,83 @@ import MarkdownCodeBlock from './MarkdownCodeBlock';
 type MarkdownPreviewProps = {
   content: string;
 };
+
+type ParsedFrontMatter = {
+  frontMatter: Record<string, unknown> | null;
+  body: string;
+};
+
+function extractFrontMatter(content: string): ParsedFrontMatter {
+  if (!content.startsWith('---')) {
+    return { frontMatter: null, body: content };
+  }
+
+  const frontMatterMatch = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  if (!frontMatterMatch) {
+    return { frontMatter: null, body: content };
+  }
+
+  const frontMatterBody = frontMatterMatch[1].trim();
+  const rest = content.slice(frontMatterMatch[0].length);
+
+  if (!frontMatterBody) {
+    return { frontMatter: null, body: rest };
+  }
+
+  try {
+    const parsed = parse(frontMatterBody);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { frontMatter: null, body: content };
+    }
+
+    return { frontMatter: parsed as Record<string, unknown>, body: rest };
+  } catch {
+    return { frontMatter: null, body: content };
+  }
+}
+
+function formatFrontMatterValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value === 'boolean' || typeof value === 'number') {
+    return String(value);
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  return JSON.stringify(value);
+}
+
+function FrontMatterTable({ frontMatter }: { frontMatter: Record<string, unknown> }) {
+  const entries = Object.entries(frontMatter);
+
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <table className="mb-4 w-full border-collapse border border-gray-200 text-sm dark:border-gray-700">
+      <tbody>
+        {entries
+          .filter(([key]) => typeof key === 'string' && key.length > 0)
+          .map(([key, value]) => (
+            <tr key={key}>
+              <td className="w-1/3 border border-gray-200 bg-gray-50 px-3 py-2 font-semibold text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                {key}
+              </td>
+              <td className="border border-gray-200 px-3 py-2 text-gray-900 dark:border-gray-700 dark:text-gray-200">
+                <span className="whitespace-pre-wrap">{formatFrontMatterValue(value)}</span>
+              </td>
+            </tr>
+          ))}
+      </tbody>
+    </table>
+  );
+}
 
 const markdownPreviewComponents: Components = {
   code: MarkdownCodeBlock,
@@ -39,14 +117,18 @@ const markdownPreviewComponents: Components = {
 export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
+  const parsed = useMemo(() => extractFrontMatter(content), [content]);
 
   return (
-    <ReactMarkdown
-      remarkPlugins={remarkPlugins}
-      rehypePlugins={rehypePlugins}
-      components={markdownPreviewComponents}
-    >
-      {content}
-    </ReactMarkdown>
+    <>
+      {parsed.frontMatter ? <FrontMatterTable frontMatter={parsed.frontMatter} /> : null}
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={markdownPreviewComponents}
+      >
+        {parsed.frontMatter ? parsed.body : content}
+      </ReactMarkdown>
+    </>
   );
 }
