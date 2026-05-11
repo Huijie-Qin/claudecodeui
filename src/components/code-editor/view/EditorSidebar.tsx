@@ -40,6 +40,7 @@ export default function EditorSidebar({
   const [poppedOut, setPoppedOut] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [effectiveWidth, setEffectiveWidth] = useState(editorWidth);
+  const shouldFillRemaining = editorExpanded || (fillSpace && !hasManualWidth);
 
   // Adjust editor width when container size changes to ensure buttons are always visible
   useEffect(() => {
@@ -102,10 +103,13 @@ export default function EditorSidebar({
   }
 
   // In files tab, fill the remaining width unless user has dragged manually.
-  const useFlexLayout = editorExpanded || (fillSpace && !hasManualWidth);
+  const useFlexLayout = shouldFillRemaining;
 
   return (
-    <div ref={containerRef} className={`flex h-full min-w-0 flex-shrink-0 ${editorExpanded ? 'flex-1' : ''}`}>
+    <div
+      ref={containerRef}
+      className={`flex h-full min-w-0 flex-shrink-0 ${useFlexLayout ? 'flex-1' : ''}`}
+    >
       {!editorExpanded && (
         <div
           ref={resizeHandleRef}
@@ -118,7 +122,9 @@ export default function EditorSidebar({
       )}
 
       <div
-        className={`h-full overflow-hidden border-l border-gray-200 dark:border-gray-700 ${useFlexLayout ? 'min-w-0 flex-1' : `min-w-[ flex-shrink-0${MIN_EDITOR_WIDTH}px]`}`}
+        className={`h-full overflow-hidden border-l border-gray-200 dark:border-gray-700 ${
+          useFlexLayout ? 'min-w-0 flex-1' : `min-w-[${MIN_EDITOR_WIDTH}px] flex-shrink-0`
+        }`}
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
         <CodeEditor
