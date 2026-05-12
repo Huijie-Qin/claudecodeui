@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { userDb as defaultUserDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +19,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_AUTH_TOKEN',
+  USER_KEY_ENV_NAME,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -27,6 +30,7 @@ const WRAPPER_HOST_ENV_ALLOWLIST = [
   'DOCKER_CONFIG',
   'XDG_RUNTIME_DIR',
 ];
+const CONTAINER_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function requireValue(value, name) {
   if (value == null || String(value).trim() === '') {
@@ -69,6 +73,19 @@ function currentUid() {
 
 function currentGid() {
   return typeof process.getgid === 'function' ? process.getgid() : 1000;
+}
+
+function resolveContainerUser(env = process.env) {
+  const defaultUid = currentUid();
+  const defaultGid = currentGid();
+  return {
+    uid: Number.parseInt(env.CLOUDCLI_DOCKER_UID || String(defaultUid > 0 ? defaultUid : 1000), 10),
+    gid: Number.parseInt(env.CLOUDCLI_DOCKER_GID || String(defaultGid > 0 ? defaultGid : 1000), 10),
+  };
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
 }
 
 function buildRuntimeId() {
@@ -139,9 +156,13 @@ export function buildDockerRunArgs({
   gid,
   workspaceHostPath,
   runtimeHomePath,
+  containerEnv = {},
   memory = DEFAULT_DOCKER_MEMORY,
   cpus = DEFAULT_DOCKER_CPUS,
 }) {
+  const containerEnvArgs = Object.entries(normalizeContainerEnvRecord(containerEnv))
+    .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+
   return [
     'run',
     '-d',
@@ -167,6 +188,7 @@ export function buildDockerRunArgs({
     `type=bind,src=${requireValue(runtimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
     '-e',
     'HOME=/home/cloudcli',
+    ...containerEnvArgs,
     '-w',
     '/workspace',
     requireValue(image, 'image'),
@@ -202,16 +224,70 @@ exec docker exec -i \\
 `;
 }
 
-function buildWrapperHostEnv(env = process.env) {
+export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, gid } = {}) {
+  await fsImpl.mkdir(runtimeHomePath, { recursive: true });
+
+  let chownSucceeded = false;
+  if (
+    typeof fsImpl.chown === 'function'
+    && isNonNegativeInteger(uid)
+    && isNonNegativeInteger(gid)
+  ) {
+    try {
+      await fsImpl.chown(runtimeHomePath, uid, gid);
+      chownSucceeded = true;
+    } catch {
+      // Some deployments run without permission to chown bind mounts. In that
+      // case, fall back to a writable runtime home so the sandbox user can
+      // create Claude config files.
+    }
+  }
+
+  if (typeof fsImpl.chmod === 'function') {
+    await fsImpl.chmod(runtimeHomePath, chownSucceeded ? 0o700 : 0o777);
+  }
+}
+
+function normalizeContainerEnvRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, entry]) => CONTAINER_ENV_NAME_PATTERN.test(String(key)) && entry != null)
+      .map(([key, entry]) => [String(key), String(entry)]),
+  );
+}
+
+function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   const output = {};
   for (const name of WRAPPER_HOST_ENV_ALLOWLIST) {
     if (env[name] != null) {
       output[name] = String(env[name]);
     }
   }
+  Object.assign(output, normalizeContainerEnvRecord(containerEnv));
   if (!output.PATH) output.PATH = process.env.PATH || '';
   if (!output.HOME) output.HOME = os.homedir();
   return output;
+}
+
+function buildContainerEnvAllowlist(containerEnv = {}) {
+  return Array.from(new Set([
+    ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
+    ...Object.keys(normalizeContainerEnvRecord(containerEnv)),
+  ]));
+}
+
+function readUserContainerEnv(users, userId) {
+  if (typeof users?.getEnvForUser !== 'function') {
+    return {};
+  }
+  const env = normalizeContainerEnvRecord(users.getEnvForUser(userId));
+  return env[USER_KEY_ENV_NAME]
+    ? { [USER_KEY_ENV_NAME]: env[USER_KEY_ENV_NAME] }
+    : {};
 }
 
 async function pathExists(fsImpl, targetPath) {
@@ -295,6 +371,7 @@ export class DockerCliClient {
 export function createAgentSessionRuntimeManager({
   env = process.env,
   multitenancy = multitenancyDb,
+  users = defaultUserDb,
   docker = new DockerCliClient(),
   fs = fsPromises,
 } = {}) {
@@ -340,7 +417,7 @@ export function createAgentSessionRuntimeManager({
     return resolved;
   }
 
-  async function ensureContainer(runtime) {
+  async function ensureContainer(runtime, containerEnv = {}) {
     const inspected = await docker.inspectContainer(runtime.container_name);
     if (inspected?.running) {
       return;
@@ -350,13 +427,15 @@ export function createAgentSessionRuntimeManager({
       return;
     }
 
+    const containerUser = resolveContainerUser(env);
     const args = buildDockerRunArgs({
       containerName: runtime.container_name,
       image: runtime.image,
-      uid: Number.parseInt(env.CLOUDCLI_DOCKER_UID || String(currentUid()), 10),
-      gid: Number.parseInt(env.CLOUDCLI_DOCKER_GID || String(currentGid()), 10),
+      uid: containerUser.uid,
+      gid: containerUser.gid,
       workspaceHostPath: runtime.workspace_host_path,
       runtimeHomePath: runtime.runtime_home_path,
+      containerEnv,
       memory: env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY,
       cpus: env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS,
     });
@@ -368,7 +447,10 @@ export function createAgentSessionRuntimeManager({
     const wrapperPath = path.join(wrapperDir, 'claude-docker-wrapper');
     await fs.writeFile(
       wrapperPath,
-      buildClaudeDockerWrapperScript({ containerName: runtime.container_name }),
+      buildClaudeDockerWrapperScript({
+        containerName: runtime.container_name,
+        envAllowlist: buildContainerEnvAllowlist(runtime.userEnv),
+      }),
       { mode: 0o700 },
     );
     await fs.chmod(wrapperPath, 0o700);
@@ -393,7 +475,7 @@ export function createAgentSessionRuntimeManager({
       runtimeId,
     });
 
-    await fs.mkdir(runtimePaths.runtimeHomePath, { recursive: true });
+    await ensureRuntimeHomeWritable(fs, runtimePaths.runtimeHomePath, resolveContainerUser(env));
 
     const runtime = multitenancy.runtimes.createRuntime({
       runtimeId,
@@ -437,9 +519,16 @@ export function createAgentSessionRuntimeManager({
   }
 
   async function activateRuntimeContext({ runtimeContext, workspaceHostPath }) {
-    await fs.mkdir(runtimeContext.runtime.runtime_home_path, { recursive: true });
-    await ensureContainer(runtimeContext.runtime);
-    const wrapperPath = await writeWrapper(runtimeContext);
+    const userEnv = normalizeContainerEnvRecord(runtimeContext.userEnv);
+    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
+    await ensureContainer(runtimeContext.runtime, userEnv);
+    const wrapperPath = await writeWrapper({
+      ...runtimeContext,
+      runtime: {
+        ...runtimeContext.runtime,
+        userEnv,
+      },
+    });
     const runtime = multitenancy.runtimes.updateStatus({
       runtimeId: runtimeContext.runtime.runtime_id,
       status: 'active',
@@ -455,7 +544,7 @@ export function createAgentSessionRuntimeManager({
       projectPath: '/workspace',
       hostWorkspacePath: workspaceHostPath,
       pathToClaudeCodeExecutable: wrapperPath,
-      executionEnv: buildWrapperHostEnv(env),
+      executionEnv: buildWrapperHostEnv(env, userEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,
     };
@@ -479,9 +568,11 @@ export function createAgentSessionRuntimeManager({
       const userId = requirePositiveInteger(options.userId, 'userId');
       const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
       const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
+      const userEnv = readUserContainerEnv(users, userId);
       const runtimeContext = options.sessionId
         ? await resolveExistingRuntime({ tenantId, userId, workspaceId, sessionId: options.sessionId })
         : await createNewRuntime({ tenantId, userId, workspaceId, workspaceHostPath });
+      runtimeContext.userEnv = userEnv;
 
       return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
         runtimeContext,

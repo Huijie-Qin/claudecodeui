@@ -10,9 +10,14 @@ import {
   buildDockerRunArgs,
   buildRuntimePaths,
   createAgentSessionRuntimeManager,
+  ensureRuntimeHomeWritable,
   resolveClaudeExecutionMode,
 } from './agent-session-runtime.js';
 import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
+
+const emptyUserEnvDb = {
+  getEnvForUser: () => ({}),
+};
 
 test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   assert.equal(resolveClaudeExecutionMode({}), 'local');
@@ -25,6 +30,7 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
 });
 
 test('runtime paths stay under the configured runtime root', () => {
+  const runtimeRoot = path.resolve('/var/cloudcli/runtimes');
   const paths = buildRuntimePaths({
     runtimeRoot: '/var/cloudcli/runtimes',
     provider: 'claude',
@@ -36,11 +42,11 @@ test('runtime paths stay under the configured runtime root', () => {
 
   assert.equal(
     paths.runtimeHomePath,
-    '/var/cloudcli/runtimes/claude/tenant-3/user-4/workspace-5/runtime-runtime-abc/home',
+    path.join(runtimeRoot, 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-runtime-abc', 'home'),
   );
   assert.equal(
     paths.wrapperDir,
-    '/var/cloudcli/runtimes/claude/tenant-3/user-4/workspace-5/runtime-runtime-abc/wrapper',
+    path.join(runtimeRoot, 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-runtime-abc', 'wrapper'),
   );
 });
 
@@ -93,8 +99,30 @@ test('docker workspace bind mount exposes project-level Claude skills to the con
   const joined = args.join(' ');
 
   assert.ok(joined.includes(`src=${workspaceHostPath},dst=/workspace`));
-  assert.equal(path.relative(workspaceHostPath, path.join(workspaceHostPath, '.claude', 'skills')), '.claude/skills');
+  assert.equal(
+    path.relative(workspaceHostPath, path.join(workspaceHostPath, '.claude', 'skills')).replace(/\\/g, '/'),
+    '.claude/skills',
+  );
   assert.equal(path.posix.join('/workspace', '.claude', 'skills'), '/workspace/.claude/skills');
+});
+
+test('docker run args inject sanitized user environment values', () => {
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rabc',
+    image: 'cloudcli/test:claude',
+    uid: 501,
+    gid: 20,
+    workspaceHostPath: '/tmp/team-a/workspace',
+    runtimeHomePath: '/tmp/runtime/home',
+    containerEnv: {
+      USER_KEY: 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+      'BAD-NAME': 'ignored',
+    },
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes('-e USER_KEY=security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'));
+  assert.equal(joined.includes('BAD-NAME'), false);
 });
 
 test('docker workspace bind mount exposes project-level MCP config to Claude CLI', () => {
@@ -124,6 +152,41 @@ test('claude docker wrapper tolerates an empty forwarded env array', () => {
   assert.match(wrapper, /set -euo pipefail/);
 });
 
+test('docker runtime home is owned by the sandbox user when possible', async () => {
+  const calls = [];
+  const fsMock = {
+    mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
+    chown: async (targetPath, uid, gid) => calls.push(['chown', targetPath, uid, gid]),
+    chmod: async (targetPath, mode) => calls.push(['chmod', targetPath, mode]),
+  };
+
+  await ensureRuntimeHomeWritable(fsMock, '/tmp/runtime/home', { uid: 1000, gid: 1000 });
+
+  assert.deepEqual(calls, [
+    ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chown', '/tmp/runtime/home', 1000, 1000],
+    ['chmod', '/tmp/runtime/home', 0o700],
+  ]);
+});
+
+test('docker runtime home falls back to writable permissions when chown fails', async () => {
+  const calls = [];
+  const fsMock = {
+    mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
+    chown: async () => {
+      throw new Error('operation not permitted');
+    },
+    chmod: async (targetPath, mode) => calls.push(['chmod', targetPath, mode]),
+  };
+
+  await ensureRuntimeHomeWritable(fsMock, '/tmp/runtime/home', { uid: 1000, gid: 1000 });
+
+  assert.deepEqual(calls, [
+    ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chmod', '/tmp/runtime/home', 0o777],
+  ]);
+});
+
 test('docker mode creates runtime home, wrapper, DB row, and container', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
@@ -133,6 +196,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
 
   const createdRuntimes = [];
   const dockerCalls = [];
+  const encryptedUserKey = 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+  let envUserId = null;
   const manager = createAgentSessionRuntimeManager({
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
@@ -169,6 +234,15 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
         }),
       },
     },
+    users: {
+      getEnvForUser: (userId) => {
+        envUserId = userId;
+        return {
+          USER_KEY: encryptedUserKey,
+          'BAD-NAME': 'do-not-forward',
+        };
+      },
+    },
     docker: {
       inspectContainer: async () => null,
       runDetached: async (args) => {
@@ -190,14 +264,21 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.projectPath, '/workspace');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
+  assert.equal(envUserId, 4);
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
+  assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
+  assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
+  assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
   assert.match(wrapper, /^#!\/usr\/bin\/env bash/);
   assert.match(wrapper, /docker exec -i/);
   assert.match(wrapper, /-e ANTHROPIC_API_KEY/);
+  assert.match(wrapper, /-e USER_KEY/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
+  assert.equal(wrapper.includes('BAD-NAME'), false);
 });
 
 test('docker mode resumes an existing runtime home for provider session id', async () => {
@@ -244,6 +325,7 @@ test('docker mode resumes an existing runtime home for provider session id', asy
         }),
       },
     },
+    users: emptyUserEnvDb,
     docker: {
       inspectContainer: async () => ({ exists: true, running: false }),
       startContainer: async (name) => {
@@ -531,6 +613,7 @@ test('docker mode serializes protected stop and existing-runtime resume for the 
         },
       },
     },
+    users: emptyUserEnvDb,
     docker: {
       inspectContainer: async () => ({ exists: true, running: !stopped }),
       stopContainer: async () => {
@@ -622,6 +705,7 @@ test('docker mode serializes manual stop after existing-runtime resume when prep
         },
       },
     },
+    users: emptyUserEnvDb,
     docker: {
       inspectContainer: async () => {
         inspectCount += 1;
@@ -731,6 +815,7 @@ test('docker mode serializes manual stop after new-runtime activation when prepa
         },
       },
     },
+    users: emptyUserEnvDb,
     docker: {
       inspectContainer: async () => {
         inspectCount += 1;
@@ -840,6 +925,7 @@ test('docker mode serializes existing-runtime resume after manual stop when stop
         },
       },
     },
+    users: emptyUserEnvDb,
     docker: {
       inspectContainer: async () => {
         if (events.includes('stop-start')) {

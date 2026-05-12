@@ -1,8 +1,11 @@
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+
+import Database from 'better-sqlite3';
+
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
+
 import {
   APP_CONFIG_TABLE_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SQL,
@@ -17,6 +20,11 @@ import {
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
+import {
+  ensureUserKeyEnvRecord,
+  parseUserEnvJson,
+  serializeUserEnvRecord,
+} from './user-env.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // The compiled backend lives under dist-server/server/database, but the install root we log
@@ -36,6 +44,8 @@ const c = {
     bright: (text) => `${colors.bright}${text}${colors.reset}`,
     dim: (text) => `${colors.dim}${text}${colors.reset}`,
 };
+
+const USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY = 'user_key_encryption_secret';
 
 // Use DATABASE_PATH environment variable if set, otherwise use default location
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'auth.db');
@@ -115,6 +125,11 @@ const runMigrations = () => {
       db.exec('ALTER TABLE users ADD COLUMN is_system_admin BOOLEAN DEFAULT 0');
     }
 
+    if (!columnNames.includes('env')) {
+      console.log('Running migration: Adding env column');
+      db.exec("ALTER TABLE users ADD COLUMN env TEXT DEFAULT '{}'");
+    }
+
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SQL);
     db.exec(VAPID_KEYS_TABLE_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SQL);
@@ -146,6 +161,41 @@ const initializeDatabase = async () => {
   }
 };
 
+function getUserKeyEncryptionSecret() {
+  const configured = process.env.PROXY_ENCRYPTION_KEY;
+  if (typeof configured === 'string' && configured.trim() !== '') {
+    return configured;
+  }
+
+  let secret = appConfigDb.get(USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY);
+  if (!secret) {
+    secret = crypto.randomBytes(32).toString('hex');
+    appConfigDb.set(USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY, secret);
+  }
+  return secret;
+}
+
+function buildUserEnvJson(value = {}) {
+  const env = ensureUserKeyEnvRecord(parseUserEnvJson(value), {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+  return serializeUserEnvRecord(env);
+}
+
+function ensureUserEnvForRow(row) {
+  if (!row) return null;
+  const env = ensureUserKeyEnvRecord(parseUserEnvJson(row.env), {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+  const envJson = serializeUserEnvRecord(env);
+
+  if (row.env !== envJson) {
+    db.prepare('UPDATE users SET env = ? WHERE id = ?').run(envJson, row.id);
+  }
+
+  return env;
+}
+
 // User database operations
 const userDb = {
   // Check if any users exist
@@ -162,8 +212,9 @@ const userDb = {
   createUser: (username, passwordHash, options = {}) => {
     try {
       const isSystemAdmin = options.isSystemAdmin === true ? 1 : 0;
-      const stmt = db.prepare('INSERT INTO users (username, password_hash, is_system_admin) VALUES (?, ?, ?)');
-      const result = stmt.run(username, passwordHash, isSystemAdmin);
+      const envJson = buildUserEnvJson(options.env);
+      const stmt = db.prepare('INSERT INTO users (username, password_hash, is_system_admin, env) VALUES (?, ?, ?, ?)');
+      const result = stmt.run(username, passwordHash, isSystemAdmin, envJson);
       return { id: result.lastInsertRowid, username, is_system_admin: isSystemAdmin };
     } catch (err) {
       throw err;
@@ -173,9 +224,10 @@ const userDb = {
   createInvitedUser: ({ username, tokenHash, createdByUserId, expiresAt }) => {
     try {
       const createInvitation = db.transaction(() => {
+        const envJson = buildUserEnvJson();
         const userResult = db
-          .prepare('INSERT INTO users (username, password_hash, is_active, is_system_admin) VALUES (?, ?, 0, 0)')
-          .run(username, '');
+          .prepare('INSERT INTO users (username, password_hash, is_active, is_system_admin, env) VALUES (?, ?, 0, 0, ?)')
+          .run(username, '', envJson);
         const user = {
           id: userResult.lastInsertRowid,
           username,
@@ -400,6 +452,7 @@ const userDb = {
 
         db.prepare('UPDATE users SET password_hash = ?, is_active = 1 WHERE id = ?')
           .run(passwordHash, invitation.user_id);
+        userDb.ensureEnvForUser(invitation.user_id);
 
         return db.prepare(`
           SELECT id, username, created_at, last_login, is_system_admin
@@ -445,6 +498,23 @@ const userDb = {
     try {
       const row = db.prepare('SELECT has_completed_onboarding FROM users WHERE id = ?').get(userId);
       return row?.has_completed_onboarding === 1;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  ensureEnvForUser: (userId) => {
+    try {
+      const row = db.prepare('SELECT id, env FROM users WHERE id = ?').get(userId);
+      return ensureUserEnvForRow(row);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getEnvForUser: (userId) => {
+    try {
+      return userDb.ensureEnvForUser(userId) || {};
     } catch (err) {
       throw err;
     }
