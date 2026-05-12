@@ -44,8 +44,10 @@ const INTERNAL_CONTENT_PREFIXES = [
   '<command-message>',
   '<command-args>',
   '<local-command-stdout>',
+  '<local-command-caveat>',
   '<system-reminder>',
   '<!-- ECC:SUMMARY:START -->',
+  'Base directory for this skill:',
   '# Session:',
   'Hook SessionStart:',
   'Previous session summary:',
@@ -74,7 +76,16 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return [];
     }
 
-    if (raw.isSidechain === true || raw.isMeta === true || raw.message?.isMeta === true) {
+    if (
+      raw.isSidechain === true ||
+      raw.is_sidechain === true ||
+      raw.isMeta === true ||
+      raw.is_meta === true ||
+      raw.message?.isMeta === true ||
+      raw.message?.is_meta === true ||
+      raw.message?.isSidechain === true ||
+      raw.message?.is_sidechain === true
+    ) {
       return [];
     }
 

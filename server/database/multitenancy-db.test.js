@@ -512,6 +512,119 @@ test('agent session messages persist normalized history idempotently', () => {
   assert.equal(history.messages[1].content, 'hi');
 });
 
+test('agent session message history hides Claude meta messages from durable history', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:claude',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+
+  const changed = mt.sessionMessages.upsertMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    runtimeId: 'runtime-1',
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    messages: [
+      {
+        id: 'skill-meta-new',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-05-12T00:00:00.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'user',
+        isMeta: true,
+        content: 'Base directory for this skill: /Users/song/.claude/skills/find-skills\n\n# Find Skills',
+      },
+      {
+        id: 'visible-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-05-12T00:00:02.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content: 'visible',
+      },
+    ],
+  });
+
+  assert.equal(changed, 1);
+
+  database.prepare(`
+    INSERT INTO agent_session_messages (
+      tenant_id,
+      workspace_id,
+      user_id,
+      runtime_id,
+      provider,
+      provider_session_id,
+      message_id,
+      kind,
+      role,
+      content_text,
+      normalized_json,
+      provider_timestamp,
+      sequence
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    tenant.id,
+    workspace.id,
+    userId,
+    'runtime-1',
+    'claude',
+    'claude-session-1',
+    'skill-meta-legacy',
+    'text',
+    'user',
+    'Base directory for this skill: /Users/song/.claude/skills/find-skills\n\n# Find Skills',
+    JSON.stringify({
+      id: 'skill-meta-legacy',
+      sessionId: 'claude-session-1',
+      timestamp: '2026-05-12T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'user',
+      content: 'Base directory for this skill: /Users/song/.claude/skills/find-skills\n\n# Find Skills',
+    }),
+    '2026-05-12T00:00:01.000Z',
+    2,
+  );
+
+  const history = mt.sessionMessages.listMessages({
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    limit: null,
+    offset: 0,
+  });
+
+  assert.equal(history.total, 1);
+  assert.deepEqual(history.messages.map((message) => message.id), ['visible-1']);
+});
+
 test('agent session message pagination returns recent messages in chronological order', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

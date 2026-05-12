@@ -105,6 +105,69 @@ test('ClaudeSessionsProvider filters meta messages from user-visible messages', 
   assert.deepEqual(messages, []);
 });
 
+test('ClaudeSessionsProvider filters snake-case meta messages from user-visible messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'skill-meta-snake',
+    is_meta: true,
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Loaded skill body.',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
+test('ClaudeSessionsProvider filters skill bodies even when the meta flag is missing', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'skill-body',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Base directory for this skill: /Users/song/.claude/skills/find-skills\n\n# Find Skills',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
+test('ClaudeSessionsProvider filters snake-case sidechain messages from user-visible messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'subagent-prompt-snake',
+    is_sidechain: true,
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Search the workspace for skill files.',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
+test('ClaudeSessionsProvider filters nested sidechain messages from user-visible messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'subagent-prompt-nested',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      isSidechain: true,
+      content: 'Search the workspace for skill files.',
+    },
+  }, 'session-1');
+
+  assert.deepEqual(messages, []);
+});
+
 test('ClaudeSessionsProvider normalizes SDK partial stream events into stream messages', () => {
   const provider = new ClaudeSessionsProvider();
   const deltaMessages = provider.normalizeMessage({

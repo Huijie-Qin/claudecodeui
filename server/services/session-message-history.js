@@ -5,9 +5,45 @@ function generateUserPromptMessageId() {
 }
 
 const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
+  '<local-command-caveat>',
+  'Base directory for this skill:',
+];
+
+function hasHiddenMessageFlag(message) {
+  return (
+    message?.isMeta === true ||
+    message?.is_meta === true ||
+    message?.isSidechain === true ||
+    message?.is_sidechain === true ||
+    message?.message?.isMeta === true ||
+    message?.message?.is_meta === true ||
+    message?.message?.isSidechain === true ||
+    message?.message?.is_sidechain === true
+  );
+}
+
+function getMessageContent(message) {
+  if (typeof message?.content === 'string') return message.content;
+  if (typeof message?.text === 'string') return message.text;
+  return '';
+}
+
+function isClaudeInternalContent(message) {
+  if (message?.provider !== 'claude' && message?.providerName !== 'claude') {
+    return false;
+  }
+
+  const content = getMessageContent(message).trimStart();
+  return CLAUDE_INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
+}
 
 function isPersistableMessage(message) {
-  return !TRANSIENT_MESSAGE_KINDS.has(message?.kind);
+  return (
+    !TRANSIENT_MESSAGE_KINDS.has(message?.kind) &&
+    !hasHiddenMessageFlag(message) &&
+    !isClaudeInternalContent(message)
+  );
 }
 
 export function createSessionMessageHistoryService({

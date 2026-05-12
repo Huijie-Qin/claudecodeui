@@ -195,6 +195,37 @@ function cleanStoredNormalizedMessage(row, message) {
   return message;
 }
 
+const CLAUDE_HIDDEN_CONTENT_PREFIXES = [
+  '<local-command-caveat>',
+  'Base directory for this skill:',
+];
+
+function hasHiddenMessageFlag(message) {
+  return (
+    message?.isMeta === true ||
+    message?.is_meta === true ||
+    message?.isSidechain === true ||
+    message?.is_sidechain === true ||
+    message?.message?.isMeta === true ||
+    message?.message?.is_meta === true ||
+    message?.message?.isSidechain === true ||
+    message?.message?.is_sidechain === true
+  );
+}
+
+function startsWithHiddenClaudeContent(content) {
+  if (typeof content !== 'string') return false;
+  const normalizedContent = content.trimStart();
+  return CLAUDE_HIDDEN_CONTENT_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix));
+}
+
+function isHiddenSessionMessage(provider, message) {
+  return hasHiddenMessageFlag(message) || (
+    provider === 'claude' &&
+    startsWithHiddenClaudeContent(extractContentText(message))
+  );
+}
+
 function extractContentText(message) {
   if (typeof message.content === 'string') return message.content;
   if (typeof message.text === 'string') return message.text;
@@ -386,6 +417,9 @@ export function createMultitenancyDb(database = db) {
     let changed = 0;
     for (const message of messages) {
       if (!message || typeof message !== 'object') {
+        continue;
+      }
+      if (isHiddenSessionMessage(normalizedProvider, message)) {
         continue;
       }
 
@@ -1564,21 +1598,30 @@ export function createMultitenancyDb(database = db) {
         const normalizedLimit = normalizeLimit(limit);
         const normalizedOffset = normalizeOffset(offset);
 
-        const total = database.prepare(`
-          SELECT COUNT(*) AS total
+        const visibleRows = database.prepare(`
+          SELECT *
           FROM agent_session_messages
           WHERE tenant_id = ?
             AND workspace_id = ?
             AND user_id = ?
             AND provider = ?
             AND provider_session_id = ?
-        `).get(
+          ORDER BY sequence ASC, id ASC
+        `).all(
           normalizedTenantId,
           normalizedWorkspaceId,
           normalizedUserId,
           normalizedProvider,
           normalizedProviderSessionId,
-        ).total;
+        ).map((row) => ({
+          row,
+          message: parseNormalizedMessageRow(row),
+        })).filter(({ row, message }) => (
+          !isHiddenSessionMessage(row.provider, message) &&
+          !(row.provider === 'claude' && startsWithHiddenClaudeContent(row.content_text))
+        ));
+
+        const total = visibleRows.length;
 
         if (total === 0 || (normalizedLimit !== null && normalizedOffset >= total)) {
           return {
@@ -1590,51 +1633,18 @@ export function createMultitenancyDb(database = db) {
           };
         }
 
-        let rows;
+        let pageRows;
         let hasMore = false;
         if (normalizedLimit === null) {
-          rows = database.prepare(`
-            SELECT *
-            FROM agent_session_messages
-            WHERE tenant_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-              AND provider = ?
-              AND provider_session_id = ?
-            ORDER BY sequence ASC, id ASC
-          `).all(
-            normalizedTenantId,
-            normalizedWorkspaceId,
-            normalizedUserId,
-            normalizedProvider,
-            normalizedProviderSessionId,
-          );
+          pageRows = visibleRows;
         } else {
           const startIndex = Math.max(0, total - normalizedOffset - normalizedLimit);
           hasMore = startIndex > 0;
-          rows = database.prepare(`
-            SELECT *
-            FROM agent_session_messages
-            WHERE tenant_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-              AND provider = ?
-              AND provider_session_id = ?
-            ORDER BY sequence ASC, id ASC
-            LIMIT ? OFFSET ?
-          `).all(
-            normalizedTenantId,
-            normalizedWorkspaceId,
-            normalizedUserId,
-            normalizedProvider,
-            normalizedProviderSessionId,
-            normalizedLimit,
-            startIndex,
-          );
+          pageRows = visibleRows.slice(startIndex, startIndex + normalizedLimit);
         }
 
         return {
-          messages: rows.map(parseNormalizedMessageRow),
+          messages: pageRows.map(({ message }) => message),
           total,
           hasMore,
           offset: normalizedOffset,

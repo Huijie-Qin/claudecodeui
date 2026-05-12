@@ -212,3 +212,57 @@ test('streaming control messages are not persisted into durable session history'
   assert.deepEqual(persisted.map((message) => message.kind), ['text']);
   assert.deepEqual(persisted.map((message) => message.content), ['Hello']);
 });
+
+test('Claude meta and sidechain messages are not persisted into durable session history', () => {
+  const persisted = [];
+  const multitenancy = {
+    sessionMessages: {
+      upsertMessages: ({ messages }) => {
+        persisted.push(...messages);
+        return messages.length;
+      },
+    },
+  };
+
+  const changed = persistNormalizedMessages({
+    multitenancy,
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [
+      {
+        id: 'skill-meta-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-05-12T00:00:00.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'user',
+        isMeta: true,
+        content: 'Base directory for this skill: /Users/song/.claude/skills/find-skills\n\n# Find Skills',
+      },
+      {
+        id: 'sidechain-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-05-12T00:00:01.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'user',
+        isSidechain: true,
+        content: 'Search the workspace for skill files.',
+      },
+      {
+        id: 'assistant-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-05-12T00:00:02.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content: 'Done',
+      },
+    ],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.id), ['assistant-1']);
+});
