@@ -22,7 +22,7 @@ export function initializeMultitenancyTables(database = db) {
 }
 
 function requirePositiveInteger(value, name) {
-  if (!Number.isInteger(value) || value <= 0) {
+  if (!Number.isInteger(value) || value < 0) {
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
