@@ -65,6 +65,15 @@ function cleanAssistantText(text: string): string {
   return text.replace(/<\|assistant\|>/g, '');
 }
 
+function resolveConversationRole(raw: AnyRecord): 'user' | 'assistant' | undefined {
+  if (raw.type === 'user') return 'user';
+  if (raw.type === 'assistant') return 'assistant';
+  if (raw.message?.role === 'user' || raw.message?.role === 'assistant') {
+    return raw.message.role;
+  }
+  return undefined;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -105,8 +114,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const messages: NormalizedMessage[] = [];
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
+    const conversationRole = resolveConversationRole(raw);
 
-    if (raw.message?.role === 'user' && raw.message?.content) {
+    if (conversationRole === 'user' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
@@ -214,7 +224,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return messages;
     }
 
-    if (raw.message?.role === 'assistant' && raw.message?.content) {
+    if (conversationRole === 'assistant' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {

@@ -224,6 +224,27 @@ test('ClaudeSessionsProvider strips assistant sentinel tokens from Claude text',
   assert.equal(messages[0].content, 'SKILL_FINAL_OK');
 });
 
+test('ClaudeSessionsProvider trusts top-level assistant type over nested role', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'assistant',
+    uuid: 'assistant-top-level',
+    timestamp: '2026-05-12T00:00:00.000Z',
+    message: {
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: 'Top-level assistant entry.',
+      }],
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'assistant');
+  assert.equal(messages[0].content, 'Top-level assistant entry.');
+});
+
 test('ClaudeSessionsProvider drops stream deltas that only contain assistant sentinel tokens', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({
