@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import ProviderLoginModal from '../../provider-auth/view/ProviderLoginModal';
 import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
@@ -12,7 +13,6 @@ import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
-import { useWebPush } from '../../../hooks/useWebPush';
 import type { SettingsProps } from '../types/types';
 
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
@@ -45,32 +45,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     isOpen,
     initialTab
   });
-
-  const {
-    permission: pushPermission,
-    isSubscribed: isPushSubscribed,
-    isLoading: isPushLoading,
-    subscribe: pushSubscribe,
-    unsubscribe: pushUnsubscribe,
-  } = useWebPush();
-
-  const handleEnablePush = async () => {
-    await pushSubscribe();
-    // Server sets webPush: true in preferences on subscribe; sync local state
-    setNotificationPreferences({
-      ...notificationPreferences,
-      channels: { ...notificationPreferences.channels, webPush: true },
-    });
-  };
-
-  const handleDisablePush = async () => {
-    await pushUnsubscribe();
-    // Server sets webPush: false in preferences on unsubscribe; sync local state
-    setNotificationPreferences({
-      ...notificationPreferences,
-      channels: { ...notificationPreferences.channels, webPush: false },
-    });
-  };
 
   if (!isOpen) {
     return null;
@@ -143,11 +117,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               <NotificationsSettingsTab
                 notificationPreferences={notificationPreferences}
                 onNotificationPreferencesChange={setNotificationPreferences}
-                pushPermission={pushPermission}
-                isPushSubscribed={isPushSubscribed}
-                isPushLoading={isPushLoading}
-                onEnablePush={handleEnablePush}
-                onDisablePush={handleDisablePush}
               />
             )}
 

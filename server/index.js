@@ -293,6 +293,7 @@ const wss = new WebSocketServer({
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
+app.locals.chatClients = connectedClients;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
@@ -1535,6 +1536,8 @@ function authorizeCommandWorkspace(data, request, writer) {
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
+
+    ws.userId = request?.user?.id ?? request?.user?.userId ?? null;
 
     // Add to connected clients for project updates
     connectedClients.add(ws);

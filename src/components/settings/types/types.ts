@@ -1,5 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
+
 import type { LLMProvider } from '../../../types/app';
+import type { ModelResponseHookConfig } from '../../../hooks/modelResponseNotificationHooks';
 import type { ProviderAuthStatus } from '../../provider-auth/types';
 
 export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'tasks' | 'notifications' | 'plugins' | 'about';
@@ -35,6 +37,7 @@ export type NotificationPreferencesState = {
     stop: boolean;
     error: boolean;
   };
+  modelResponseHooks: ModelResponseHookConfig;
 };
 
 export type CursorPermissionsState = {

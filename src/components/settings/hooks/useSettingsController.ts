@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { useTheme } from '../../../contexts/ThemeContext';
+import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from '../../../hooks/modelResponseNotificationHooks';
 import { authenticatedFetch } from '../../../utils/api';
 import { useProviderAuthStatus } from '../../provider-auth/hooks/useProviderAuthStatus';
 import {
@@ -109,11 +111,31 @@ const createDefaultNotificationPreferences = (): NotificationPreferencesState =>
     webPush: false,
   },
   events: {
-    actionRequired: true,
-    stop: true,
-    error: true,
+    actionRequired: false,
+    stop: false,
+    error: false,
   },
+  modelResponseHooks: DEFAULT_MODEL_RESPONSE_HOOK_CONFIG,
 });
+
+const normalizeNotificationPreferences = (
+  value: NotificationPreferencesState | undefined,
+): NotificationPreferencesState => {
+  const source = value || createDefaultNotificationPreferences();
+
+  return {
+    channels: {
+      inApp: source.channels?.inApp === true,
+      webPush: source.channels?.webPush === true,
+    },
+    events: {
+      actionRequired: false,
+      stop: false,
+      error: false,
+    },
+    modelResponseHooks: normalizeModelResponseHookConfig(source.modelResponseHooks),
+  };
+};
 
 export function useSettingsController({ isOpen, initialTab }: UseSettingsControllerArgs) {
   const { isDarkMode, toggleDarkMode } = useTheme() as ThemeContextValue;
@@ -186,7 +208,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         if (notificationResponse.ok) {
           const notificationData = await toResponseJson<NotificationPreferencesResponse>(notificationResponse);
           if (notificationData.success && notificationData.preferences) {
-            setNotificationPreferences(notificationData.preferences);
+            setNotificationPreferences(normalizeNotificationPreferences(notificationData.preferences));
           } else {
             setNotificationPreferences(createDefaultNotificationPreferences());
           }

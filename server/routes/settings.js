@@ -5,6 +5,24 @@ import { createNotificationEvent, notifyUserIfEnabled } from '../services/notifi
 
 const router = express.Router();
 
+function broadcastModelResponseHookConfig(clients, userId, config) {
+  if (!clients || !userId) {
+    return;
+  }
+
+  const message = JSON.stringify({
+    type: 'model-response-hooks-updated',
+    config,
+    timestamp: new Date().toISOString(),
+  });
+
+  clients.forEach((client) => {
+    if (client.readyState === 1 && client.userId === userId) {
+      client.send(message);
+    }
+  });
+}
+
 // ===============================
 // API Keys Management
 // ===============================
@@ -194,10 +212,21 @@ router.get('/notification-preferences', async (req, res) => {
 router.put('/notification-preferences', async (req, res) => {
   try {
     const preferences = notificationPreferencesDb.updatePreferences(req.user.id, req.body || {});
+    broadcastModelResponseHookConfig(req.app?.locals?.chatClients, req.user.id, preferences.modelResponseHooks);
     res.json({ success: true, preferences });
   } catch (error) {
     console.error('Error saving notification preferences:', error);
     res.status(500).json({ error: 'Failed to save notification preferences' });
+  }
+});
+
+router.get('/model-response-hooks', async (req, res) => {
+  try {
+    const preferences = notificationPreferencesDb.getPreferences(req.user.id);
+    res.json({ success: true, config: preferences.modelResponseHooks });
+  } catch (error) {
+    console.error('Error fetching model response hooks:', error);
+    res.status(500).json({ error: 'Failed to fetch model response hooks' });
   }
 });
 
