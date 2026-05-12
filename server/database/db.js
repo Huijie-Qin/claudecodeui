@@ -130,6 +130,8 @@ const runMigrations = () => {
       db.exec("ALTER TABLE users ADD COLUMN env TEXT DEFAULT '{}'");
     }
 
+    backfillExistingUserEnvRecords();
+
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SQL);
     db.exec(VAPID_KEYS_TABLE_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SQL);
@@ -194,6 +196,13 @@ function ensureUserEnvForRow(row) {
   }
 
   return env;
+}
+
+function backfillExistingUserEnvRecords() {
+  const rows = db.prepare('SELECT id, env FROM users').all();
+  for (const row of rows) {
+    ensureUserEnvForRow(row);
+  }
 }
 
 // User database operations

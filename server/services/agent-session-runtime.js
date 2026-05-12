@@ -11,6 +11,7 @@ import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 const execFileAsync = promisify(execFile);
 
+const USER_ID_ENV_NAME = 'W3_NAME';
 const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
@@ -20,6 +21,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_AUTH_TOKEN',
   USER_KEY_ENV_NAME,
+  USER_ID_ENV_NAME,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -281,13 +283,17 @@ function buildContainerEnvAllowlist(containerEnv = {}) {
 }
 
 function readUserContainerEnv(users, userId) {
+  const output = {
+    [USER_ID_ENV_NAME]: String(userId),
+  };
   if (typeof users?.getEnvForUser !== 'function') {
-    return {};
+    return output;
   }
   const env = normalizeContainerEnvRecord(users.getEnvForUser(userId));
-  return env[USER_KEY_ENV_NAME]
-    ? { [USER_KEY_ENV_NAME]: env[USER_KEY_ENV_NAME] }
-    : {};
+  if (env[USER_KEY_ENV_NAME]) {
+    output[USER_KEY_ENV_NAME] = env[USER_KEY_ENV_NAME];
+  }
+  return output;
 }
 
 async function pathExists(fsImpl, targetPath) {

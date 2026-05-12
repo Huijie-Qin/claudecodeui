@@ -116,12 +116,14 @@ test('docker run args inject sanitized user environment values', () => {
     runtimeHomePath: '/tmp/runtime/home',
     containerEnv: {
       USER_KEY: 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+      W3_NAME: '4',
       'BAD-NAME': 'ignored',
     },
   });
   const joined = args.join(' ');
 
   assert.ok(joined.includes('-e USER_KEY=security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'));
+  assert.ok(joined.includes('-e W3_NAME=4'));
   assert.equal(joined.includes('BAD-NAME'), false);
 });
 
@@ -268,8 +270,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  assert.equal(runtime.executionEnv.W3_NAME, '4');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
+  assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=4'));
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
@@ -277,6 +281,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /docker exec -i/);
   assert.match(wrapper, /-e ANTHROPIC_API_KEY/);
   assert.match(wrapper, /-e USER_KEY/);
+  assert.match(wrapper, /-e W3_NAME/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });
