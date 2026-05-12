@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 
 import express from 'express';
 import multer from 'multer';
@@ -6,9 +9,15 @@ import multer from 'multer';
 import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
+import { buildTenantWorkspacePath } from '../services/workspace-projects.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
+import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ROOT_WORKSPACE_NAME = 'root-workspace';
+const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
+const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
+const SOURCE_SKILLS_PATH = path.join(APP_ROOT, 'default_files');
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -136,6 +145,59 @@ function parsePositiveId(value, name) {
     throw error;
   }
   return parsed;
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyDefaultSkills(workspacePath) {
+  await fs.mkdir(workspacePath, { recursive: true });
+
+  if (await pathExists(SOURCE_SKILLS_PATH)) {
+    const entries = await fs.readdir(SOURCE_SKILLS_PATH, { withFileTypes: true });
+    await Promise.all(entries.map((entry) => fs.cp(
+      path.join(SOURCE_SKILLS_PATH, entry.name),
+      path.join(workspacePath, entry.name),
+      {
+        recursive: true,
+        force: true,
+      },
+    )));
+  }
+}
+
+async function ensureDefaultRootWorkspace(multitenancy, { tenantId, userId }) {
+  const workspacePath = buildTenantWorkspacePath({
+    workspacesRoot: WORKSPACES_ROOT,
+    tenantId,
+    userId,
+    requestedPath: ROOT_WORKSPACE_NAME,
+  });
+
+  await fs.mkdir(workspacePath, { recursive: true });
+
+  const existingWorkspace = multitenancy.workspaces.getWorkspaceByTenantSlug({
+    tenantId,
+    ownerUserId: userId,
+    slug: ROOT_WORKSPACE_NAME,
+  });
+
+  const workspace = existingWorkspace || multitenancy.workspaces.createWorkspace({
+    tenantId,
+    ownerUserId: userId,
+    slug: ROOT_WORKSPACE_NAME,
+    displayName: ROOT_WORKSPACE_NAME,
+    path: workspacePath,
+  });
+
+  await copyDefaultSkills(workspace.path);
+  return workspace;
 }
 
 function isDockerError(error) {
@@ -267,16 +329,21 @@ export function createAdminRouter(
     }
   });
 
-  router.put('/tenants/:tenantId/users/:userId', (req, res) => {
+  router.put('/tenants/:tenantId/users/:userId', async (req, res) => {
     try {
+      const tenantId = Number(req.params.tenantId);
+      const userId = Number(req.params.userId);
       const membership = multitenancy.memberships.upsertMembership({
-        tenantId: Number(req.params.tenantId),
-        userId: Number(req.params.userId),
+        tenantId,
+        userId,
         role: req.body?.role || 'member',
         permission: req.body?.permission || 'view',
         status: req.body?.status || 'active',
       });
-      res.json({ membership });
+      const defaultWorkspace = membership.status === 'active'
+        ? await ensureDefaultRootWorkspace(multitenancy, { tenantId, userId })
+        : null;
+      res.json({ membership, defaultWorkspace });
     } catch (error) {
       sendRouteError(res, error, 'Failed to update tenant access');
     }
