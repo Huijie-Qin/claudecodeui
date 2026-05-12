@@ -27,6 +27,15 @@ function seedUser(database, username) {
   return Number(result.lastInsertRowid);
 }
 
+function createTestUsers(database, envByUserId = new Map()) {
+  return {
+    getUserById: (userId) => database
+      .prepare('SELECT id, username FROM users WHERE id = ?')
+      .get(userId),
+    getEnvForUser: (userId) => envByUserId.get(Number(userId)) || {},
+  };
+}
+
 test('normalizes admin preset input while workspace serialization redacts connection secrets', () => {
   const normalized = normalizePresetInput({
     name: 'knowledge_retrieval',
@@ -105,6 +114,7 @@ test('admin preset publish requires a successful test result', async () => {
   const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
   const service = createMcpPresetService({
     multitenancy,
+    users: createTestUsers(database),
     probeHttpMcpServer: async () => ({
       status: 'healthy',
       phase: 'tools_list',
@@ -148,6 +158,76 @@ test('admin preset publish requires a successful test result', async () => {
   assert.equal(published.status, 'published');
 });
 
+test('admin preset test temporarily injects user env into host process', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  const originalUserKey = process.env.USER_KEY;
+  const hadOriginalUserKey = Object.hasOwn(process.env, 'USER_KEY');
+  const originalW3Name = process.env.W3_NAME;
+  const hadOriginalW3Name = Object.hasOwn(process.env, 'W3_NAME');
+  let observedEnv = null;
+
+  try {
+    process.env.USER_KEY = 'outer-user-key';
+    delete process.env.W3_NAME;
+
+    const service = createMcpPresetService({
+      multitenancy,
+      users: createTestUsers(database, new Map([[adminId, { USER_KEY: 'security:admin-user-key' }]])),
+      probeHttpMcpServer: async () => {
+        assert.equal(process.env.W3_NAME, 'admin');
+        observedEnv = {
+          USER_KEY: process.env.USER_KEY,
+          W3_NAME: process.env.W3_NAME,
+        };
+        return {
+          status: 'healthy',
+          phase: 'tools_list',
+          toolCount: 1,
+          tools: [{ name: 'lookup' }],
+        };
+      },
+    });
+
+    const preset = service.createPreset({
+      tenantId: tenant.id,
+      userId: adminId,
+      input: {
+        name: 'env_test',
+        displayName: 'Env Test MCP',
+        type: 'http',
+        url: 'https://mcp.internal/env',
+      },
+    });
+
+    await service.testPreset({
+      tenantId: tenant.id,
+      presetId: preset.id,
+      userId: adminId,
+    });
+
+    assert.deepEqual(observedEnv, {
+      USER_KEY: 'security:admin-user-key',
+      W3_NAME: 'admin',
+    });
+    assert.equal(process.env.USER_KEY, 'outer-user-key');
+    assert.equal(Object.hasOwn(process.env, 'W3_NAME'), false);
+  } finally {
+    if (hadOriginalUserKey) {
+      process.env.USER_KEY = originalUserKey;
+    } else {
+      delete process.env.USER_KEY;
+    }
+    if (hadOriginalW3Name) {
+      process.env.W3_NAME = originalW3Name;
+    } else {
+      delete process.env.W3_NAME;
+    }
+  }
+});
+
 test('admin preset publish rejects healthy servers with no discovered tools', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
@@ -155,6 +235,7 @@ test('admin preset publish rejects healthy servers with no discovered tools', as
   const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
   const service = createMcpPresetService({
     multitenancy,
+    users: createTestUsers(database),
     probeHttpMcpServer: async () => ({
       status: 'healthy',
       phase: 'tools_list',
@@ -193,6 +274,7 @@ test('admin preset test validates current form input and persists discovered too
   const probedHelpers = [];
   const service = createMcpPresetService({
     multitenancy,
+    users: createTestUsers(database),
     probeHttpMcpServer: async (config) => {
       probedUrls.push(config.url);
       probedHelpers.push(config.headersHelper);

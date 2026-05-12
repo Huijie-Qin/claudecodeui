@@ -11,7 +11,7 @@ import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 const execFileAsync = promisify(execFile);
 
-const USER_ID_ENV_NAME = 'W3_NAME';
+const W3_NAME_ENV_NAME = 'W3_NAME';
 const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
@@ -23,7 +23,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'NO_PROXY',
   'no_proxy',
   USER_KEY_ENV_NAME,
-  USER_ID_ENV_NAME,
+  W3_NAME_ENV_NAME,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -284,9 +284,24 @@ function buildContainerEnvAllowlist(containerEnv = {}) {
   ]));
 }
 
+function readUsernameForEnv(users, userId) {
+  if (typeof users?.getUserById !== 'function') {
+    return null;
+  }
+
+  const user = users.getUserById(userId);
+  const username = user?.username;
+  return typeof username === 'string' && username.trim() !== '' ? username.trim() : null;
+}
+
 function readUserContainerEnv(users, userId) {
+  const username = readUsernameForEnv(users, userId);
+  if (!username) {
+    throw new Error('username is required for W3_NAME');
+  }
+
   const output = {
-    [USER_ID_ENV_NAME]: String(userId),
+    [W3_NAME_ENV_NAME]: username,
   };
   if (typeof users?.getEnvForUser !== 'function') {
     return output;

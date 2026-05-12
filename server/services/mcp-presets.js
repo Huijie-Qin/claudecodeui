@@ -1,4 +1,5 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 import {
   buildMcpHelperScriptMetadata,
@@ -12,6 +13,7 @@ export const WORKSPACE_MCP_CONFIG_FILE = '.mcp.json';
 export const MCP_CONTAINER_CONFIG_PATH = '/workspace/.mcp.json';
 
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const W3_NAME_ENV_NAME = 'W3_NAME';
 
 function createHttpError(message, statusCode = 400, code = undefined) {
   const error = new Error(message);
@@ -123,6 +125,73 @@ function compactObject(value) {
   );
 }
 
+async function getPresetTestUserStore(users) {
+  if (users) {
+    return users;
+  }
+
+  const { userDb } = await import('../database/db.js');
+  return userDb;
+}
+
+async function getPresetTestUserContext(users, userId) {
+  const userStore = await getPresetTestUserStore(users);
+  const user = typeof userStore?.getUserById === 'function'
+    ? userStore.getUserById(userId)
+    : null;
+  const username = user?.username;
+
+  if (typeof username !== 'string' || username.trim() === '') {
+    throw createHttpError('User not found', 404);
+  }
+
+  return {
+    username: username.trim(),
+    userEnv: typeof userStore?.getEnvForUser === 'function'
+      ? userStore.getEnvForUser(userId)
+      : {},
+  };
+}
+
+async function buildPresetTestHostEnv(users, userId) {
+  const normalizedUserId = requirePositiveInteger(userId, 'userId');
+  const { username, userEnv } = await getPresetTestUserContext(users, normalizedUserId);
+  const env = {
+    [W3_NAME_ENV_NAME]: username,
+  };
+
+  const userKey = userEnv?.[USER_KEY_ENV_NAME];
+  if (typeof userKey === 'string' && userKey.trim() !== '') {
+    env[USER_KEY_ENV_NAME] = userKey;
+  }
+
+  return env;
+}
+
+async function withTemporaryProcessEnv(env, task) {
+  const previousValues = new Map();
+
+  for (const [key, value] of Object.entries(env)) {
+    previousValues.set(key, {
+      hadValue: Object.hasOwn(process.env, key),
+      value: process.env[key],
+    });
+    process.env[key] = String(value);
+  }
+
+  try {
+    return await task();
+  } finally {
+    for (const [key, previous] of previousValues) {
+      if (previous.hadValue) {
+        process.env[key] = previous.value;
+      } else {
+        delete process.env[key];
+      }
+    }
+  }
+}
+
 export function normalizePresetInput(input = {}) {
   const config = input.config && typeof input.config === 'object' ? input.config : input;
   const type = String(config.type || config.transport || 'http').trim().toLowerCase();
@@ -199,6 +268,7 @@ export function toWorkspacePreset(row, installRow = null) {
 
 export function createMcpPresetService({
   multitenancy = multitenancyDb,
+  users = null,
   probeHttpMcpServer: probe = probeHttpMcpServer,
   resolveHelperConfig = resolvePresetProbeConfig,
 } = {}) {
@@ -257,19 +327,23 @@ export function createMcpPresetService({
     },
 
     testPreset: async ({ tenantId, presetId, userId, input = null }) => {
+      const normalizedUserId = requirePositiveInteger(userId, 'userId');
       const preset = getExistingPreset({ tenantId, presetId });
       const normalizedInput = input ? normalizePresetInput(input) : null;
       const baseProbeConfig = normalizedInput
         ? { ...normalizedInput.config, name: normalizedInput.name }
         : { ...preset.config, name: preset.name };
-      const probeConfig = await resolveHelperConfig({
-        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
-        presetId: requirePositiveInteger(presetId, 'presetId'),
-        presetName: normalizedInput?.name || preset.name,
-        config: baseProbeConfig,
-        multitenancy,
+      const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId);
+      const probeResult = await withTemporaryProcessEnv(probeEnv, async () => {
+        const probeConfig = await resolveHelperConfig({
+          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+          presetId: requirePositiveInteger(presetId, 'presetId'),
+          presetName: normalizedInput?.name || preset.name,
+          config: baseProbeConfig,
+          multitenancy,
+        });
+        return probe(probeConfig);
       });
-      const probeResult = await probe(probeConfig);
       if (normalizedInput) {
         multitenancy.mcpPresets.updatePreset({
           tenantId: requirePositiveInteger(tenantId, 'tenantId'),
@@ -279,7 +353,7 @@ export function createMcpPresetService({
           description: normalizedInput.description,
           config: normalizedInput.config,
           status: normalizeEditableStatus(input?.status, preset.status === 'disabled' ? 'disabled' : 'draft'),
-          updatedByUserId: requirePositiveInteger(userId, 'userId'),
+          updatedByUserId: normalizedUserId,
         });
       }
 
@@ -291,7 +365,7 @@ export function createMcpPresetService({
         toolCount: Number(probeResult.toolCount || 0),
         tools: Array.isArray(probeResult.tools) ? probeResult.tools : [],
         dockerCompatible: probeResult.status === 'healthy',
-        updatedByUserId: requirePositiveInteger(userId, 'userId'),
+        updatedByUserId: normalizedUserId,
       });
       return {
         ...toAdminPreset(tested, getPresetHelperScript(multitenancy, { tenantId, presetId })),

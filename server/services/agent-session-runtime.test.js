@@ -16,6 +16,7 @@ import {
 import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
 
 const emptyUserEnvDb = {
+  getUserById: (userId) => ({ id: userId, username: `user-${userId}` }),
   getEnvForUser: () => ({}),
 };
 
@@ -116,14 +117,14 @@ test('docker run args inject sanitized user environment values', () => {
     runtimeHomePath: '/tmp/runtime/home',
     containerEnv: {
       USER_KEY: 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
-      W3_NAME: '4',
+      W3_NAME: 'alice',
       'BAD-NAME': 'ignored',
     },
   });
   const joined = args.join(' ');
 
   assert.ok(joined.includes('-e USER_KEY=security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'));
-  assert.ok(joined.includes('-e W3_NAME=4'));
+  assert.ok(joined.includes('-e W3_NAME=alice'));
   assert.equal(joined.includes('BAD-NAME'), false);
 });
 
@@ -200,6 +201,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   const dockerCalls = [];
   const encryptedUserKey = 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
   let envUserId = null;
+  let usernameUserId = null;
   const manager = createAgentSessionRuntimeManager({
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
@@ -237,6 +239,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       },
     },
     users: {
+      getUserById: (userId) => {
+        usernameUserId = userId;
+        return { id: userId, username: 'alice' };
+      },
       getEnvForUser: (userId) => {
         envUserId = userId;
         return {
@@ -266,14 +272,15 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.projectPath, '/workspace');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
+  assert.equal(usernameUserId, 4);
   assert.equal(envUserId, 4);
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
-  assert.equal(runtime.executionEnv.W3_NAME, '4');
+  assert.equal(runtime.executionEnv.W3_NAME, 'alice');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
-  assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=4'));
+  assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
