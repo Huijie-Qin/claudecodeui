@@ -21,6 +21,7 @@ import {
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
+  decryptUserEnvRecord,
   ensureUserKeyEnvRecord,
   parseUserEnvJson,
   serializeUserEnvRecord,
@@ -196,6 +197,12 @@ function ensureUserEnvForRow(row) {
   }
 
   return env;
+}
+
+function decryptUserEnvForRuntime(env) {
+  return decryptUserEnvRecord(env, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
 }
 
 function backfillExistingUserEnvRecords() {
@@ -523,7 +530,7 @@ const userDb = {
 
   getEnvForUser: (userId) => {
     try {
-      return userDb.ensureEnvForUser(userId) || {};
+      return decryptUserEnvForRuntime(userDb.ensureEnvForUser(userId) || {});
     } catch (err) {
       throw err;
     }

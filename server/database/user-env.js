@@ -160,6 +160,20 @@ export function ensureUserKeyEnvRecord(value, { secretMaterial } = {}) {
   };
 }
 
+export function decryptUserEnvRecord(value, { secretMaterial } = {}) {
+  const env = normalizeUserEnvRecord(value);
+  const userKey = env[USER_KEY_ENV_NAME];
+
+  if (!isEncryptedUserKey(userKey)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    [USER_KEY_ENV_NAME]: decryptUserKey(userKey, { secretMaterial }),
+  };
+}
+
 export function serializeUserEnvRecord(value) {
   return JSON.stringify(normalizeUserEnvRecord(value));
 }
