@@ -59,16 +59,16 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    register: (username, password) => fetch('/api/auth/register', {
+    register: (username, password, gitEmail) => fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, gitEmail }),
     }),
     invitation: (token) => fetch(`/api/auth/invitations/${encodeURIComponent(token)}`),
-    acceptInvitation: (token, password) => fetch(`/api/auth/invitations/${encodeURIComponent(token)}/accept`, {
+    acceptInvitation: (token, password, gitEmail) => fetch(`/api/auth/invitations/${encodeURIComponent(token)}/accept`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, gitEmail }),
     }),
     user: () => authenticatedFetch('/api/auth/user'),
     logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),

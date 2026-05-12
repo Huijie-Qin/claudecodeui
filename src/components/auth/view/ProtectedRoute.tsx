@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { IS_PLATFORM } from '../../../constants/config';
 import { useTenant } from '../../../contexts/TenantContext';
-import Onboarding from '../../onboarding/view/Onboarding';
 import TenantSelection from '../../tenant/TenantSelection';
 import { useAuth } from '../context/AuthContext';
 
@@ -31,7 +29,7 @@ function getInvitationTokenFromLocation(): string | null {
 }
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { user, isLoading, needsSetup, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
+  const { user, isLoading, needsSetup } = useAuth();
   const { isLoadingTenants, needsTenantSelection } = useTenant();
   const invitationToken = getInvitationTokenFromLocation();
 
@@ -62,18 +60,6 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (needsTenantSelection) {
     return <TenantSelection />;
-  }
-
-  if (IS_PLATFORM) {
-    if (!hasCompletedOnboarding) {
-      return <Onboarding onComplete={refreshOnboardingStatus} />;
-    }
-
-    return <>{children}</>;
-  }
-
-  if (!hasCompletedOnboarding) {
-    return <Onboarding onComplete={refreshOnboardingStatus} />;
   }
 
   return <>{children}</>;

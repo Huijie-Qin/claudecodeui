@@ -156,10 +156,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const register = useCallback<AuthContextValue['register']>(
-    async (username, password) => {
+    async (username, password, gitEmail) => {
       try {
         setError(null);
-        const response = await api.auth.register(username, password);
+        const response = await api.auth.register(username, password, gitEmail);
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
@@ -182,10 +182,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const acceptInvitation = useCallback<AuthContextValue['acceptInvitation']>(
-    async (invitationToken, password) => {
+    async (invitationToken, password, gitEmail) => {
       try {
         setError(null);
-        const response = await api.auth.acceptInvitation(invitationToken, password);
+        const response = await api.auth.acceptInvitation(invitationToken, password, gitEmail);
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {

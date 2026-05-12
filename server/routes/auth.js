@@ -85,11 +85,16 @@ export function createAuthRouter({
   // Public registration. The first user bootstraps system administration.
   router.post('/register', async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, gitEmail } = req.body;
 
       // Validate input
-      if (!username || !password) {
-        return res.status(400).json({ error: 'Username and password are required' });
+      if (!username || !password || !gitEmail) {
+        return res.status(400).json({ error: 'Username, password, and git email are required' });
+      }
+
+      const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!gitEmailPattern.test(gitEmail)) {
+        return res.status(400).json({ error: 'Invalid git email format' });
       }
 
       if (username.length < 3 || password.length < 6) {
@@ -107,6 +112,13 @@ export function createAuthRouter({
 
         // Create user
         const user = userDb.createUser(username, passwordHash, { isSystemAdmin: isFirstUser });
+        const trimmedGitEmail = gitEmail.trim();
+        if (typeof userDb.updateGitConfig === 'function') {
+          userDb.updateGitConfig(user.id, username, trimmedGitEmail);
+        }
+        if (typeof userDb.completeOnboarding === 'function') {
+          userDb.completeOnboarding(user.id);
+        }
         if (isFirstUser) {
           ensureBootstrapTenantForSystemAdmin(multitenancy, user.id);
         }
@@ -212,13 +224,18 @@ export function createAuthRouter({
 
   router.post('/invitations/:token/accept', async (req, res) => {
     try {
-      const { password } = req.body;
-      if (!password) {
-        return res.status(400).json({ error: 'Password is required' });
+      const { password, gitEmail } = req.body;
+      if (!password || !gitEmail) {
+        return res.status(400).json({ error: 'Password and git email are required' });
       }
 
       if (password.length < 6) {
         return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
+
+      const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!gitEmailPattern.test(gitEmail)) {
+        return res.status(400).json({ error: 'Invalid git email format' });
       }
 
       if (
@@ -240,6 +257,14 @@ export function createAuthRouter({
       const user = userDb.acceptInvitation({ tokenHash, passwordHash });
       if (!user) {
         return res.status(410).json({ error: 'Invitation is no longer available' });
+      }
+
+      const trimmedGitEmail = gitEmail.trim();
+      if (typeof userDb.updateGitConfig === 'function') {
+        userDb.updateGitConfig(user.id, user.username, trimmedGitEmail);
+      }
+      if (typeof userDb.completeOnboarding === 'function') {
+        userDb.completeOnboarding(user.id);
       }
 
       const token = generateToken(user);

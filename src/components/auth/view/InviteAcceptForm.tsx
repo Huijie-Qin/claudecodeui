@@ -25,11 +25,13 @@ type InvitationPayload = {
 type InviteFormState = {
   password: string;
   confirmPassword: string;
+  gitEmail: string;
 };
 
 const initialState: InviteFormState = {
   password: '',
   confirmPassword: '',
+  gitEmail: '',
 };
 
 function getHomePath(): string {
@@ -38,7 +40,7 @@ function getHomePath(): string {
 }
 
 function validateInviteForm(formState: InviteFormState): string | null {
-  if (!formState.password || !formState.confirmPassword) {
+  if (!formState.password || !formState.confirmPassword || !formState.gitEmail.trim()) {
     return 'Please fill in all fields.';
   }
 
@@ -48,6 +50,11 @@ function validateInviteForm(formState: InviteFormState): string | null {
 
   if (formState.password !== formState.confirmPassword) {
     return 'Passwords do not match.';
+  }
+
+  const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!gitEmailPattern.test(formState.gitEmail.trim())) {
+    return 'Please enter a valid Git email address.';
   }
 
   return null;
@@ -118,7 +125,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
       }
 
       setIsSubmitting(true);
-      const result = await acceptInvitation(token, formState.password);
+      const result = await acceptInvitation(token, formState.password, formState.gitEmail.trim());
       if (!result.success) {
         setErrorMessage(result.error);
         setIsSubmitting(false);
@@ -172,6 +179,18 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
           isDisabled={isLoadingInvitation || isSubmitting || !username}
           type="password"
           autoComplete="new-password"
+        />
+
+        <AuthInputField
+          id="gitEmail"
+          name="gitEmail"
+          label="Email"
+          value={formState.gitEmail}
+          onChange={(value) => updateField('gitEmail', value)}
+          placeholder="Enter your Huawei Email"
+          isDisabled={isLoadingInvitation || isSubmitting || !username}
+          type="email"
+          autoComplete="email"
         />
 
         <AuthErrorAlert errorMessage={errorMessage} />

@@ -7,12 +7,14 @@ import AuthScreenLayout from './AuthScreenLayout';
 
 type SetupFormState = {
   username: string;
+  gitEmail: string;
   password: string;
   confirmPassword: string;
 };
 
 const initialState: SetupFormState = {
   username: '',
+  gitEmail: '',
   password: '',
   confirmPassword: '',
 };
@@ -23,12 +25,17 @@ const initialState: SetupFormState = {
  *   form is valid.
  */
 function validateSetupForm(formState: SetupFormState): string | null {
-  if (!formState.username.trim() || !formState.password || !formState.confirmPassword) {
+  if (!formState.username.trim() || !formState.gitEmail.trim() || !formState.password || !formState.confirmPassword) {
     return 'Please fill in all fields.';
   }
 
   if (formState.username.trim().length < 3) {
     return 'Username must be at least 3 characters long.';
+  }
+
+  const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!gitEmailPattern.test(formState.gitEmail.trim())) {
+    return 'Please enter a valid Git email address.';
   }
 
   if (formState.password.length < 6) {
@@ -71,7 +78,11 @@ export default function SetupForm() {
       }
 
       setIsSubmitting(true);
-      const result = await register(formState.username.trim(), formState.password);
+      const result = await register(
+        formState.username.trim(),
+        formState.password,
+        formState.gitEmail.trim(),
+      );
       if (!result.success) {
         setErrorMessage(result.error);
       }
@@ -88,19 +99,19 @@ export default function SetupForm() {
       logo={<img src="/logo.svg" alt="CloudCLI" className="h-16 w-16" />}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <AuthInputField
-          id="username"
-          name="username"
-          label="Username"
-          value={formState.username}
+      <AuthInputField
+        id="username"
+        name="username"
+        label="Username"
+        value={formState.username}
           onChange={(value) => updateField('username', value)}
           placeholder="Enter your username"
           isDisabled={isSubmitting}
-          autoComplete="username"
-        />
+        autoComplete="username"
+      />
 
-        <AuthInputField
-          id="password"
+      <AuthInputField
+        id="password"
           name="password"
           label="Password"
           value={formState.password}
@@ -122,6 +133,18 @@ export default function SetupForm() {
           type="password"
           autoComplete="new-password"
         />
+
+      <AuthInputField
+        id="gitEmail"
+        name="gitEmail"
+        label="Email"
+        value={formState.gitEmail}
+        onChange={(value) => updateField('gitEmail', value)}
+        placeholder="Enter your Huawei Email"
+        isDisabled={isSubmitting}
+        type="email"
+        autoComplete="email"
+      />
 
         <AuthErrorAlert errorMessage={errorMessage} />
 

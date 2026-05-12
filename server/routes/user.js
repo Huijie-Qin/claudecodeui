@@ -1,7 +1,6 @@
 import express from 'express';
 import { userDb } from '../database/db.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { getSystemGitConfig } from '../utils/gitConfig.js';
 import { spawn } from 'child_process';
 
 const router = express.Router();
@@ -28,24 +27,22 @@ function spawnAsync(command, args, options = {}) {
 router.get('/git-config', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    let gitConfig = userDb.getGitConfig(userId);
+    const gitConfig = userDb.getGitConfig(userId);
+    const defaultGitName = req.user?.username?.trim() || '';
+    const defaultGitEmail = '';
 
-    // If database is empty, try to get from system git config
-    if (!gitConfig || (!gitConfig.git_name && !gitConfig.git_email)) {
-      const systemConfig = await getSystemGitConfig();
+    const gitName = (gitConfig?.git_name?.trim()) || defaultGitName || null;
+    const gitEmail = (gitConfig?.git_email?.trim()) || defaultGitEmail || null;
+    const needsDbSync = !gitConfig || gitName !== (gitConfig?.git_name || null) || gitEmail !== (gitConfig?.git_email || null);
 
-      // If system has values, save them to database for this user
-      if (systemConfig.git_name || systemConfig.git_email) {
-        userDb.updateGitConfig(userId, systemConfig.git_name, systemConfig.git_email);
-        gitConfig = systemConfig;
-        console.log(`Auto-populated git config from system for user ${userId}: ${systemConfig.git_name} <${systemConfig.git_email}>`);
-      }
+    if (needsDbSync && (gitName || gitEmail)) {
+      userDb.updateGitConfig(userId, gitName, gitEmail);
     }
 
     res.json({
       success: true,
-      gitName: gitConfig?.git_name || null,
-      gitEmail: gitConfig?.git_email || null
+      gitName,
+      gitEmail
     });
   } catch (error) {
     console.error('Error getting git config:', error);
