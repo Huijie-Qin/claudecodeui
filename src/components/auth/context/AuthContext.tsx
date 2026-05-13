@@ -208,11 +208,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const logout = useCallback(() => {
+    if (IS_PLATFORM) {
+      return;
+    }
+
     const tokenToInvalidate = token;
     clearSession();
 
     if (tokenToInvalidate) {
-      void api.auth.logout().catch((caughtError: unknown) => {
+      void api.auth.logout(tokenToInvalidate).catch((caughtError: unknown) => {
         console.error('Logout endpoint error:', caughtError);
       });
     }

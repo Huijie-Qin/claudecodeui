@@ -1,10 +1,11 @@
-import { Settings, ArrowUpCircle, Bug, Shield, Building2 } from 'lucide-react';
+import { Settings, ArrowUpCircle, Bug, Shield, Building2, LogOut } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '../../../../constants/config';
 import type { Tenant } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import { resolveTenantSelection, shouldShowTenantSwitcher } from '../../../tenant/tenantSwitcherUtils';
+import { useAuth } from '../../../auth/context/AuthContext';
 
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
 const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
@@ -48,7 +49,9 @@ export default function SidebarFooter({
   onTenantSwitch,
   t,
 }: SidebarFooterProps) {
+  const { logout } = useAuth();
   const showTenantSwitcher = shouldShowTenantSwitcher(tenants) && currentTenant && onTenantSwitch;
+  const showLogout = !IS_PLATFORM;
   const handleTenantChange = (tenantId: string) => {
     const tenant = resolveTenantSelection(tenants, tenantId);
     if (tenant && tenant.id !== currentTenant?.id) {
@@ -179,6 +182,18 @@ export default function SidebarFooter({
         </button>
       </div>
 
+      {showLogout && (
+        <div className="hidden px-2 pb-1.5 md:block">
+          <button
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            onClick={logout}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="text-sm">{t('common:navigation.logout')}</span>
+          </button>
+        </div>
+      )}
+
       {/* Desktop version brand line (OSS mode only) */}
       {!IS_PLATFORM && (
         <div className="hidden px-3 py-2 text-center md:block">
@@ -250,6 +265,20 @@ export default function SidebarFooter({
           <span className="text-base font-medium text-foreground">{t('actions.settings')}</span>
         </button>
       </div>
+
+      {showLogout && (
+        <div className="px-3 pb-3 md:hidden">
+          <button
+            className="flex h-12 w-full items-center gap-3.5 rounded-xl bg-destructive/10 px-4 transition-all hover:bg-destructive/15 active:scale-[0.98]"
+            onClick={logout}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/80">
+              <LogOut className="w-4.5 h-4.5 text-destructive" />
+            </div>
+            <span className="text-base font-medium text-destructive">{t('common:navigation.logout')}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

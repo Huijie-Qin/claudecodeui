@@ -71,7 +71,10 @@ export const api = {
       body: JSON.stringify({ password, gitEmail }),
     }),
     user: () => authenticatedFetch('/api/auth/user'),
-    logout: () => authenticatedFetch('/api/auth/logout', { method: 'POST' }),
+    logout: (token) => fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }),
   },
 
   // Protected endpoints
