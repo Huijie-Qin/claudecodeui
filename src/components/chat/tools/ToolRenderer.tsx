@@ -2,6 +2,7 @@ import React, { memo, useMemo, useCallback } from 'react';
 
 import type { Project } from '../../../types/app';
 import type { SubagentChildTool } from '../types/types';
+import { isClaudePermissionErrorContent } from '../utils/chatPermissions';
 
 import { getToolConfig } from './configs/toolConfigs';
 import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
@@ -47,19 +48,10 @@ function getToolCategory(toolName: string): string {
   return 'default';
 }
 
-// Exact denial messages from server/claude-sdk.js — other providers can't reliably signal denial
-const CLAUDE_DENIAL_MESSAGES = [
-  'user denied tool use',
-  'tool disallowed by settings',
-  'permission request timed out',
-  'permission request cancelled',
-];
-
 function deriveToolStatus(toolResult: any): ToolStatus {
   if (!toolResult) return 'running';
   if (toolResult.isError) {
-    const content = String(toolResult.content || '').toLowerCase().trim();
-    if (CLAUDE_DENIAL_MESSAGES.some((msg) => content.includes(msg))) {
+    if (isClaudePermissionErrorContent(toolResult.content)) {
       return 'denied';
     }
     return 'error';

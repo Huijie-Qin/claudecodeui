@@ -1,6 +1,57 @@
 import { safeJsonParse } from '../../../lib/utils.js';
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } from '../types/types.js';
+
 import { CLAUDE_SETTINGS_KEY, getClaudeSettings, safeLocalStorage } from './chatStorage';
+
+const CLAUDE_PERMISSION_ERROR_MESSAGES = [
+  'user denied tool use',
+  'tool disallowed by settings',
+  'permission request timed out',
+  'permission request cancelled',
+  'tool interaction timed out',
+  'tool interaction cancelled',
+  'user declined tool interaction',
+];
+
+function stringifyToolResultContent(content: unknown): string {
+  if (content === undefined || content === null) return '';
+  if (typeof content === 'string') return content;
+  if (typeof content === 'number' || typeof content === 'boolean') return String(content);
+  if (Array.isArray(content)) {
+    return content.map((item) => stringifyToolResultContent(item)).filter(Boolean).join('\n');
+  }
+  if (typeof content === 'object') {
+    const maybeText = content as { text?: unknown; content?: unknown; message?: unknown; error?: unknown };
+    const text = stringifyToolResultContent(maybeText.text);
+    const nestedContent = stringifyToolResultContent(maybeText.content);
+    const message = stringifyToolResultContent(maybeText.message);
+    const error = stringifyToolResultContent(maybeText.error);
+    const parts = [text, nestedContent, message, error].filter(Boolean);
+    if (parts.length) return parts.join('\n');
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return String(content);
+    }
+  }
+  return String(content);
+}
+
+export function isClaudePermissionErrorContent(content: unknown): boolean {
+  const normalizedContent = stringifyToolResultContent(content).toLowerCase().trim();
+  return CLAUDE_PERMISSION_ERROR_MESSAGES.some((message) => normalizedContent.includes(message));
+}
+
+export function isClaudePermissionToolError(
+  message: ChatMessage | null | undefined,
+  provider: string,
+): boolean {
+  return Boolean(
+    provider === 'claude' &&
+    message?.toolResult?.isError &&
+    isClaudePermissionErrorContent(message.toolResult.content),
+  );
+}
 
 export function buildClaudeToolPermissionEntry(toolName?: string, toolInput?: unknown) {
   if (!toolName) return null;
@@ -33,8 +84,8 @@ export function getClaudePermissionSuggestion(
   message: ChatMessage | null | undefined,
   provider: string,
 ): ClaudePermissionSuggestion | null {
-  if (provider !== 'claude') return null;
-  if (!message?.toolResult?.isError) return null;
+  if (!isClaudePermissionToolError(message, provider)) return null;
+  if (!message) return null;
 
   const toolName = message?.toolName;
   const entry = buildClaudeToolPermissionEntry(toolName, message.toolInput);

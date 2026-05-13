@@ -35,6 +35,10 @@
     "readTodo": "Read todo list",
     "searchResults": "results"
   },
+  "toolResults": {
+    "failed": "Tool call failed",
+    "permissionDenied": "Tool permission denied"
+  },
   "search": {
     "found": "Found {{count}} {{type}}",
     "file": "file",

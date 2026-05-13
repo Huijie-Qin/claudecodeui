@@ -12,8 +12,8 @@ const STATUS_CONFIG: Record<ToolStatus, { label: string; className: string }> = 
     className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300',
   },
   error: {
-    label: 'Error',
-    className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+    label: 'Failed',
+    className: 'bg-gray-100 text-gray-600 dark:bg-gray-800/70 dark:text-gray-300',
   },
   denied: {
     label: 'Denied',

@@ -35,6 +35,10 @@
     "readTodo": "读取待办列表",
     "searchResults": "结果"
   },
+  "toolResults": {
+    "failed": "工具调用失败",
+    "permissionDenied": "工具权限被拒绝"
+  },
   "search": {
     "found": "找到 {{count}} 个{{type}}",
     "file": "文件",
