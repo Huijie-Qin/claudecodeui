@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { TFunction } from 'i18next';
 import { Check, Copy, Plus, RefreshCw, Shield, Trash2, UserMinus, UserPlus } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
 import { useTenant } from '../../contexts/TenantContext';
@@ -83,18 +85,18 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return payload.error || payload.message || fallback;
 }
 
-function formatDateTime(value?: string | null): string {
-  if (!value) return 'Never';
+function formatDateTime(value?: string | null, emptyLabel = 'Never'): string {
+  if (!value) return emptyLabel;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
 
-function getUserStatusLabel(user: AdminUser): string {
-  if (user.is_active === 1 || user.invitation_status === 'active') return 'Active';
-  if (user.invitation_status === 'invited') return 'Pending invite';
-  if (user.invitation_status === 'expired') return 'Invite expired';
-  return 'Inactive';
+function getUserStatusKey(user: AdminUser): string {
+  if (user.is_active === 1 || user.invitation_status === 'active') return 'active';
+  if (user.invitation_status === 'invited') return 'pendingInvite';
+  if (user.invitation_status === 'expired') return 'inviteExpired';
+  return 'inactive';
 }
 
 function getUserStatusClassName(user: AdminUser): string {
@@ -111,7 +113,16 @@ function membershipKey(membership: Pick<AdminMembership, 'tenant_id' | 'user_id'
   return `${membership.tenant_id}:${membership.user_id}`;
 }
 
+function translateStatus(t: TFunction, value: string): string {
+  return t(`statuses.${value}`, { defaultValue: value });
+}
+
+function translatePermission(t: TFunction, value: TenantPermission): string {
+  return t(`permissions.${value}`, { defaultValue: value });
+}
+
 export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
+  const { t } = useTranslation('admin');
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [memberships, setMemberships] = useState<AdminMembership[]>([]);
@@ -147,17 +158,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       ]);
 
       if (!tenantResponse.ok) {
-        setError(await readError(tenantResponse, 'Failed to load tenants'));
+        setError(await readError(tenantResponse, t('errors.loadTenants')));
         return;
       }
 
       if (!userResponse.ok) {
-        setError(await readError(userResponse, 'Failed to load users'));
+        setError(await readError(userResponse, t('errors.loadUsers')));
         return;
       }
 
       if (!membershipResponse.ok) {
-        setError(await readError(membershipResponse, 'Failed to load tenant access'));
+        setError(await readError(membershipResponse, t('errors.loadTenantAccess')));
         return;
       }
 
@@ -169,11 +180,11 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       setMemberships(membershipPayload.memberships || []);
     } catch (caughtError) {
       console.error('[AdminPanel] Failed to load admin data:', caughtError);
-      setError('Failed to load admin data');
+      setError(t('errors.loadAdminData'));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (open) {
@@ -187,7 +198,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
     setError(null);
     if (!code || !name) {
-      setError('Tenant code and name are required');
+      setError(t('errors.tenantRequired'));
       return;
     }
 
@@ -195,7 +206,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     try {
       const response = await api.admin.createTenant({ code, name });
       if (!response.ok) {
-        setError(await readError(response, 'Failed to create tenant'));
+        setError(await readError(response, t('errors.createTenant')));
         return;
       }
 
@@ -215,7 +226,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     setCreatedInvite(null);
     setCopiedInviteUrl(false);
     if (username.length < 3) {
-      setError('Username must be at least 3 characters');
+      setError(t('errors.usernameMinLength'));
       return;
     }
 
@@ -224,7 +235,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       const response = await api.admin.createUser({ username });
       const payload = await response.json().catch(() => ({} as AdminCreateUserPayload)) as AdminCreateUserPayload;
       if (!response.ok || !payload.invitation?.url) {
-        setError(payload.error || payload.message || 'Failed to create user invitation');
+        setError(payload.error || payload.message || t('errors.createUserInvite'));
         return;
       }
 
@@ -258,7 +269,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       const response = await api.admin.createUserActivationLink(targetUser.id);
       const payload = await response.json().catch(() => ({} as AdminCreateUserPayload)) as AdminCreateUserPayload;
       if (!response.ok || !payload.invitation?.url) {
-        setError(payload.error || payload.message || 'Failed to create activation link');
+        setError(payload.error || payload.message || t('errors.createActivationLink'));
         return;
       }
 
@@ -283,11 +294,11 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
   const deleteUser = async (targetUser: AdminUser) => {
     if (targetUser.id === currentUserId) {
-      setError('You cannot delete your own user account');
+      setError(t('errors.deleteOwnUser'));
       return;
     }
 
-    const confirmed = window.confirm(`Delete user "${targetUser.username}"? This removes their tenant access and owned data.`);
+    const confirmed = window.confirm(t('confirm.deleteUser', { username: targetUser.username }));
     if (!confirmed) return;
 
     setError(null);
@@ -296,7 +307,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     try {
       const response = await api.admin.deleteUser(targetUser.id);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to delete user'));
+        setError(await readError(response, t('errors.deleteUser')));
         return;
       }
 
@@ -317,7 +328,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
     setError(null);
     if (!tenantId || !userId) {
-      setError('Select a tenant and a user');
+      setError(t('errors.selectTenantAndUser'));
       return;
     }
 
@@ -330,7 +341,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       );
 
       if (!response.ok) {
-        setError(await readError(response, 'Failed to grant tenant access'));
+        setError(await readError(response, t('errors.grantTenantAccess')));
         return;
       }
 
@@ -345,7 +356,10 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   };
 
   const removeMembership = async (membership: AdminMembership) => {
-    const confirmed = window.confirm(`Remove ${membership.username}'s access to ${membership.tenant_name}?`);
+    const confirmed = window.confirm(t('confirm.removeAccess', {
+      username: membership.username,
+      tenantName: membership.tenant_name,
+    }));
     if (!confirmed) return;
 
     setError(null);
@@ -354,7 +368,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     try {
       const response = await api.admin.deleteTenantUser(membership.tenant_id, membership.user_id);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to delete tenant access'));
+        setError(await readError(response, t('errors.deleteTenantAccess')));
         return;
       }
 
@@ -368,15 +382,15 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[88vh] max-w-6xl overflow-hidden p-0">
-        <DialogTitle>System administration</DialogTitle>
+        <DialogTitle>{t('title')}</DialogTitle>
         <div className="flex max-h-[88vh] flex-col">
           <div className="flex items-center gap-3 border-b border-border px-5 py-4">
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
               <Shield className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold text-foreground">System administration</h2>
-              <p className="truncate text-xs text-muted-foreground">Tenants, users, internal MCP presets, and runtimes</p>
+              <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+              <p className="truncate text-xs text-muted-foreground">{t('subtitle')}</p>
             </div>
           </div>
 
@@ -386,49 +400,49 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               size="sm"
               onClick={() => setActiveTab('users')}
             >
-              Users
+              {t('tabs.users')}
             </Button>
             <Button
               variant={activeTab === 'tenants' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab('tenants')}
             >
-              Tenant Access
+              {t('tabs.tenants')}
             </Button>
             <Button
               variant={activeTab === 'mcpPresets' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab('mcpPresets')}
             >
-              MCP Server Presets
+              {t('tabs.mcpPresets')}
             </Button>
             <Button
               variant={activeTab === 'runtimes' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab('runtimes')}
             >
-              Runtime Monitor
+              {t('tabs.runtimes')}
             </Button>
           </div>
 
           {activeTab === 'users' ? (
             <div className="space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">Create user</h3>
+                <h3 className="text-sm font-medium text-foreground">{t('users.createTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Username</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.username')}</span>
                     <Input
                       value={newUsername}
                       onChange={(event) => setNewUsername(event.target.value)}
-                      placeholder="teammate"
+                      placeholder={t('users.usernamePlaceholder')}
                       autoCapitalize="none"
                       autoComplete="off"
                     />
                   </label>
                   <Button className="self-end" onClick={createUserInvite} disabled={isSaving}>
                     <UserPlus className="h-4 w-4" />
-                    Create Invite
+                    {t('users.createInvite')}
                   </Button>
                 </div>
               </section>
@@ -437,15 +451,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                 <section className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h3 className="text-sm font-medium text-foreground">Invitation link</h3>
+                      <h3 className="text-sm font-medium text-foreground">{t('users.invitationLink')}</h3>
                       <p className="text-xs text-muted-foreground">
                         {createdInvite.username}
-                        {createdInvite.expiresAt ? ` · Expires ${formatDateTime(createdInvite.expiresAt)}` : ''}
+                        {createdInvite.expiresAt
+                          ? ` · ${t('users.expires', { time: formatDateTime(createdInvite.expiresAt, t('common.never')) })}`
+                          : ''}
                       </p>
                     </div>
                     <Button variant="outline" size="sm" onClick={() => void copyInviteLink()}>
                       {copiedInviteUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                      {copiedInviteUrl ? 'Copied' : 'Copy'}
+                      {copiedInviteUrl ? t('common.copied') : t('common.copy')}
                     </Button>
                   </div>
                   <Input value={createdInvite.url} readOnly className="font-mono text-xs" />
@@ -453,16 +469,16 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               ) : null}
 
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">Grant tenant access</h3>
+                <h3 className="text-sm font-medium text-foreground">{t('users.grantAccessTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">User</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.user')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={selectedUserId}
                       onChange={(event) => setSelectedUserId(event.target.value)}
                     >
-                      <option value="">Select</option>
+                      <option value="">{t('common.select')}</option>
                       {users.map((user) => (
                         <option key={user.id} value={user.id}>
                           {user.username}
@@ -471,13 +487,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Tenant</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.tenant')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={selectedTenantId}
                       onChange={(event) => setSelectedTenantId(event.target.value)}
                     >
-                      <option value="">Select</option>
+                      <option value="">{t('common.select')}</option>
                       {tenants.map((tenant) => (
                         <option key={tenant.id} value={tenant.id}>
                           {tenant.name}
@@ -486,32 +502,32 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Access</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.access')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={permission}
                       onChange={(event) => setPermission(event.target.value as TenantPermission)}
                     >
-                      <option value="edit">Edit</option>
-                      <option value="view">View</option>
+                      <option value="edit">{t('permissions.edit')}</option>
+                      <option value="view">{t('permissions.view')}</option>
                     </select>
                   </label>
                   <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
-                    Grant
+                    {t('common.grant')}
                   </Button>
                 </div>
               </section>
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium text-foreground">Users</h3>
+                  <h3 className="text-sm font-medium text-foreground">{t('users.listTitle')}</h3>
                   <Button variant="ghost" size="icon" onClick={() => void load()} disabled={isLoading}>
                     <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                   </Button>
                 </div>
                 <div className="max-h-72 overflow-auto rounded-md border border-border">
                   {users.length === 0 ? (
-                    <div className="px-3 py-4 text-sm text-muted-foreground">No users</div>
+                    <div className="px-3 py-4 text-sm text-muted-foreground">{t('users.empty')}</div>
                   ) : (
                     users.map((user) => (
                       <div
@@ -523,23 +539,23 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                             <span className="truncate font-medium text-foreground">{user.username}</span>
                             {user.is_system_admin === 1 ? (
                               <span className="rounded bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                                Admin
+                                {t('common.admin')}
                               </span>
                             ) : null}
                             <span className={`rounded px-2 py-0.5 text-xs ${getUserStatusClassName(user)}`}>
-                              {getUserStatusLabel(user)}
+                              {t(`statuses.${getUserStatusKey(user)}`)}
                             </span>
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
-                            Last login {formatDateTime(user.last_login)}
+                            {t('users.lastLogin', { time: formatDateTime(user.last_login, t('common.never')) })}
                             {' · '}
                             {user.invitation_status === 'invited' && user.invitation_expires_at
-                              ? `Invite expires ${formatDateTime(user.invitation_expires_at)}`
-                              : `Created ${formatDateTime(user.created_at)}`}
+                              ? t('users.inviteExpires', { time: formatDateTime(user.invitation_expires_at, t('common.never')) })
+                              : t('users.created', { time: formatDateTime(user.created_at, t('common.never')) })}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {memberships.filter((membership) => membership.user_id === user.id).length === 0 ? (
-                              <span className="text-xs text-muted-foreground">No tenant access</span>
+                              <span className="text-xs text-muted-foreground">{t('users.noTenantAccess')}</span>
                             ) : (
                               memberships
                                 .filter((membership) => membership.user_id === user.id)
@@ -548,7 +564,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                                     key={membershipKey(membership)}
                                     className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                                   >
-                                    {membership.tenant_name} · {membership.permission}
+                                    {membership.tenant_name} · {translatePermission(t, membership.permission)}
                                   </span>
                                 ))
                             )}
@@ -563,7 +579,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                               disabled={copyingActivationUserId === user.id}
                             >
                               {copiedActivationUserId === user.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                              {copiedActivationUserId === user.id ? 'Copied' : 'Activation Link'}
+                              {copiedActivationUserId === user.id ? t('common.copied') : t('users.activationLink')}
                             </Button>
                           ) : null}
                           <Button
@@ -573,7 +589,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                             disabled={deletingUserId === user.id || user.id === currentUserId}
                           >
                             <Trash2 className="h-4 w-4" />
-                            Delete
+                            {t('common.delete')}
                           </Button>
                         </div>
                       </div>
@@ -593,43 +609,43 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           {activeTab === 'tenants' ? (
             <div className="space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">Create tenant</h3>
+                <h3 className="text-sm font-medium text-foreground">{t('tenants.createTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Code</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.code')}</span>
                     <Input
                       value={tenantCode}
                       onChange={(event) => setTenantCode(normalizeTenantCode(event.target.value))}
-                      placeholder="acme"
+                      placeholder={t('tenants.codePlaceholder')}
                       autoCapitalize="none"
                     />
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Name</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.name')}</span>
                     <Input
                       value={tenantName}
                       onChange={(event) => setTenantName(event.target.value)}
-                      placeholder="Acme"
+                      placeholder={t('tenants.namePlaceholder')}
                     />
                   </label>
                   <Button className="self-end" onClick={createTenant} disabled={isSaving}>
                     <Plus className="h-4 w-4" />
-                    Create
+                    {t('common.create')}
                   </Button>
                 </div>
               </section>
 
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">Grant tenant access</h3>
+                <h3 className="text-sm font-medium text-foreground">{t('tenants.grantAccessTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Tenant</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.tenant')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={selectedTenantId}
                       onChange={(event) => setSelectedTenantId(event.target.value)}
                     >
-                      <option value="">Select</option>
+                      <option value="">{t('common.select')}</option>
                       {tenants.map((tenant) => (
                         <option key={tenant.id} value={tenant.id}>
                           {tenant.name}
@@ -638,13 +654,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">User</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.user')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={selectedUserId}
                       onChange={(event) => setSelectedUserId(event.target.value)}
                     >
-                      <option value="">Select</option>
+                      <option value="">{t('common.select')}</option>
                       {users.map((user) => (
                         <option key={user.id} value={user.id}>
                           {user.username}
@@ -653,32 +669,32 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">Access</span>
+                    <span className="text-xs text-muted-foreground">{t('fields.access')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={permission}
                       onChange={(event) => setPermission(event.target.value as TenantPermission)}
                     >
-                      <option value="edit">Edit</option>
-                      <option value="view">View</option>
+                      <option value="edit">{t('permissions.edit')}</option>
+                      <option value="view">{t('permissions.view')}</option>
                     </select>
                   </label>
                   <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
-                    Grant
+                    {t('common.grant')}
                   </Button>
                 </div>
               </section>
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium text-foreground">Tenant access</h3>
+                  <h3 className="text-sm font-medium text-foreground">{t('tenants.accessTitle')}</h3>
                   <Button variant="ghost" size="icon" onClick={() => void load()} disabled={isLoading}>
                     <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                   </Button>
                 </div>
                 <div className="max-h-72 overflow-auto rounded-md border border-border">
                   {tenants.length === 0 ? (
-                    <div className="px-3 py-4 text-sm text-muted-foreground">No tenants</div>
+                    <div className="px-3 py-4 text-sm text-muted-foreground">{t('tenants.empty')}</div>
                   ) : (
                     tenants.map((tenant) => {
                       const tenantMemberships = memberships.filter((membership) => membership.tenant_id === tenant.id);
@@ -687,12 +703,12 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium text-foreground">{tenant.name}</span>
                             <span className="text-xs text-muted-foreground">{tenant.code}</span>
-                            <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{tenant.status}</span>
+                            <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{translateStatus(t, tenant.status)}</span>
                           </div>
                           <div className="mt-3 space-y-2">
                             {tenantMemberships.length === 0 ? (
                               <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                                No authorized users
+                                {t('tenants.noAuthorizedUsers')}
                               </div>
                             ) : (
                               tenantMemberships.map((membership) => (
@@ -702,10 +718,10 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                                 >
                                   <span className="min-w-0 truncate text-foreground">{membership.username}</span>
                                   <span className="self-center rounded bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                                    {membership.permission}
+                                    {translatePermission(t, membership.permission)}
                                   </span>
                                   <span className="self-center rounded bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                                    {membership.status}
+                                    {translateStatus(t, membership.status)}
                                   </span>
                                   <Button
                                     variant="outline"
@@ -714,7 +730,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                                     disabled={deletingMembership === membershipKey(membership)}
                                   >
                                     <UserMinus className="h-4 w-4" />
-                                    Remove
+                                    {t('common.remove')}
                                   </Button>
                                 </div>
                               ))
@@ -728,10 +744,10 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               </section>
 
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">Tenants</h3>
+                <h3 className="text-sm font-medium text-foreground">{t('tenants.listTitle')}</h3>
                 <div className="max-h-48 overflow-auto rounded-md border border-border">
                   {tenants.length === 0 ? (
-                    <div className="px-3 py-4 text-sm text-muted-foreground">No tenants</div>
+                    <div className="px-3 py-4 text-sm text-muted-foreground">{t('tenants.empty')}</div>
                   ) : (
                     tenants.map((tenant) => (
                       <div
@@ -740,7 +756,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                       >
                         <span className="truncate font-medium text-foreground">{tenant.name}</span>
                         <span className="truncate text-muted-foreground">{tenant.code}</span>
-                        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{tenant.status}</span>
+                        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{translateStatus(t, tenant.status)}</span>
                       </div>
                     ))
                   )}

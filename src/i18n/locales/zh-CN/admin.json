@@ -1,0 +1,207 @@
+{
+  "title": "系统管理",
+  "subtitle": "租户、用户、内部 MCP 预置和运行时",
+  "tabs": {
+    "users": "用户",
+    "tenants": "租户权限",
+    "mcpPresets": "MCP Server 预置",
+    "runtimes": "运行时监控"
+  },
+  "common": {
+    "select": "选择",
+    "refresh": "刷新",
+    "copy": "复制",
+    "copied": "已复制",
+    "create": "创建",
+    "delete": "删除",
+    "remove": "移除",
+    "grant": "授权",
+    "admin": "管理员",
+    "never": "从未"
+  },
+  "fields": {
+    "username": "用户名",
+    "user": "用户",
+    "tenant": "租户",
+    "access": "权限",
+    "code": "代码",
+    "name": "名称",
+    "status": "状态"
+  },
+  "permissions": {
+    "edit": "编辑",
+    "view": "查看"
+  },
+  "statuses": {
+    "active": "活跃",
+    "inactive": "未激活",
+    "invited": "待接受邀请",
+    "expired": "邀请已过期",
+    "pendingInvite": "待接受邀请",
+    "inviteExpired": "邀请已过期",
+    "draft": "草稿",
+    "published": "已发布",
+    "disabled": "已禁用",
+    "running": "运行中",
+    "exited": "已退出",
+    "missing": "缺失",
+    "unknown": "未知",
+    "idle": "空闲",
+    "failed": "失败",
+    "pending": "待处理",
+    "healthy": "健康",
+    "tested": "已测试",
+    "notTested": "未测试",
+    "activeStale": "活跃但过期"
+  },
+  "errors": {
+    "loadTenants": "加载租户失败",
+    "loadUsers": "加载用户失败",
+    "loadTenantAccess": "加载租户权限失败",
+    "loadAdminData": "加载管理数据失败",
+    "tenantRequired": "租户代码和名称为必填项",
+    "createTenant": "创建租户失败",
+    "usernameMinLength": "用户名至少需要 3 个字符",
+    "createUserInvite": "创建用户邀请失败",
+    "createActivationLink": "创建激活链接失败",
+    "deleteOwnUser": "不能删除自己的用户账号",
+    "deleteUser": "删除用户失败",
+    "selectTenantAndUser": "请选择租户和用户",
+    "grantTenantAccess": "授予租户权限失败",
+    "deleteTenantAccess": "删除租户权限失败"
+  },
+  "confirm": {
+    "deleteUser": "删除用户“{{username}}”？这会移除该用户的租户权限和其拥有的数据。",
+    "removeAccess": "移除 {{username}} 对 {{tenantName}} 的访问权限？"
+  },
+  "users": {
+    "createTitle": "创建用户",
+    "usernamePlaceholder": "teammate",
+    "createInvite": "创建邀请",
+    "invitationLink": "邀请链接",
+    "expires": "{{time}} 过期",
+    "grantAccessTitle": "授予租户权限",
+    "listTitle": "用户",
+    "empty": "暂无用户",
+    "noTenantAccess": "无租户权限",
+    "lastLogin": "上次登录 {{time}}",
+    "inviteExpires": "邀请过期时间 {{time}}",
+    "created": "创建时间 {{time}}",
+    "activationLink": "激活链接"
+  },
+  "tenants": {
+    "createTitle": "创建租户",
+    "codePlaceholder": "acme",
+    "namePlaceholder": "Acme",
+    "grantAccessTitle": "授予租户权限",
+    "accessTitle": "租户权限",
+    "listTitle": "租户",
+    "empty": "暂无租户",
+    "noAuthorizedUsers": "暂无授权用户"
+  },
+  "mcp": {
+    "title": "MCP Server 预置",
+    "description": "由管理员管理的内部 MCP Server。工作区用户可一键安装这些预置，无需输入 URL、Token 或 Header 值。",
+    "newPreset": "新建预置",
+    "presets": "预置",
+    "noPresets": "暂无 MCP 预置",
+    "transportHttp": "HTTP",
+    "toolsCount": "{{count}} 个工具",
+    "docker": "Docker",
+    "publishNotice": "已发布的预置会出现在工作区 MCP 工具页中。安装仍是一键完成，并且不需要用户侧配置。",
+    "fields": {
+      "displayName": "显示名称",
+      "displayNamePlaceholder": "知识检索 MCP",
+      "presetName": "预置名称",
+      "presetNamePlaceholder": "knowledge_retrieval",
+      "description": "描述",
+      "descriptionPlaceholder": "搜索内部知识库和项目文档。",
+      "httpUrl": "HTTP URL",
+      "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "staticHeaders": "静态 Header JSON 或键值行",
+      "headersHelper": "Header helper 命令",
+      "headersHelperHelp": "可选的 Claude Code headersHelper。可通过文件名使用已上传的私有脚本，例如 python3 auth.py。",
+      "headersHelperEnv": "Header helper 环境变量",
+      "headersHelperEnvHelp": "仅在 headersHelper 运行时注入的私有变量，不会写入工作区文件。",
+      "status": "状态",
+      "statusHelp": "发布由 Publish 按钮控制，需先完成一次成功的已保存测试。"
+    },
+    "helperScript": {
+      "title": "私有 helper 脚本",
+      "description": "存储在工作区之外。工作区用户无法在文件列表中浏览此文件。",
+      "upload": "上传脚本",
+      "current": "当前脚本：{{fileName}}（{{sizeKb}} KB）",
+      "none": "尚未上传 helper 脚本。",
+      "saveFirst": "请先保存预置，再上传 helper 脚本。"
+    },
+    "buttons": {
+      "saveDraft": "保存草稿",
+      "testing": "测试中",
+      "test": "测试",
+      "publish": "发布",
+      "disable": "禁用"
+    },
+    "validation": {
+      "title": "最近校验",
+      "testing": "正在测试连接并加载工具...",
+      "statusWithTools": "{{status}} · {{count}} 个工具",
+      "lastTested": "上次测试 {{time}}",
+      "fromCurrentFormValues": "来自当前表单值",
+      "testingTitle": "正在测试 MCP Server 连接",
+      "testingDescription": "正在检查配置端点的 initialize 和 tools/list。",
+      "runTest": "运行测试以验证端点并发现其工具。",
+      "passed": "连接测试通过",
+      "failed": "连接测试失败",
+      "toolsDiscovered": "发现 {{count}} 个工具{{timeSuffix}}",
+      "serverFailed": "MCP Server 未成功响应。"
+    },
+    "validationErrors": {
+      "headersFormat": "Header 必须是 JSON，或每行一个键值对",
+      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
+    },
+    "errors": {
+      "load": "加载 MCP 预置失败",
+      "save": "保存 MCP 预置失败",
+      "invalidConfig": "MCP 预置配置无效",
+      "test": "测试 MCP 预置失败",
+      "publish": "发布 MCP 预置失败",
+      "uploadHelper": "上传 helper 脚本失败",
+      "disable": "禁用 MCP 预置失败"
+    }
+  },
+  "runtimes": {
+    "summary": {
+      "total": "总数",
+      "active": "活跃",
+      "idleRunning": "空闲运行中",
+      "failedUnknown": "失败 / 未知",
+      "liveMemory": "实时内存"
+    },
+    "filters": {
+      "allStatuses": "所有状态",
+      "allDocker": "所有 Docker",
+      "searchPlaceholder": "搜索运行时、会话、租户、用户、工作区"
+    },
+    "refresh": "刷新运行时",
+    "table": {
+      "runtime": "运行时",
+      "tenant": "租户",
+      "user": "用户",
+      "workspace": "工作区",
+      "business": "业务状态",
+      "docker": "Docker",
+      "cpu": "CPU",
+      "memory": "内存",
+      "idleAge": "空闲时长",
+      "action": "操作"
+    },
+    "loading": "正在加载运行时...",
+    "empty": "暂无运行时",
+    "stop": "停止",
+    "stopping": "停止中",
+    "errors": {
+      "load": "加载运行时失败",
+      "stop": "停止运行时失败"
+    }
+  }
+}

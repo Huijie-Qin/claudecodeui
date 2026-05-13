@@ -11,10 +11,10 @@
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-// eslint-disable-next-line import-x/order
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 // Import translation resources
+import enAdmin from './locales/en/admin.json';
 import enCommon from './locales/en/common.json';
 import enSettings from './locales/en/settings.json';
 import enAuth from './locales/en/auth.json';
@@ -32,13 +32,15 @@ import koChat from './locales/ko/chat.json';
 // eslint-disable-next-line import-x/order
 import koCodeEditor from './locales/ko/codeEditor.json';
 
+import zhAdmin from './locales/zh-CN/admin.json';
 import zhCommon from './locales/zh-CN/common.json';
 import zhSettings from './locales/zh-CN/settings.json';
 import zhAuth from './locales/zh-CN/auth.json';
 import zhSidebar from './locales/zh-CN/sidebar.json';
 import zhChat from './locales/zh-CN/chat.json';
-// eslint-disable-next-line import-x/order
 import zhCodeEditor from './locales/zh-CN/codeEditor.json';
+// eslint-disable-next-line import-x/order
+import zhTasks from './locales/zh-CN/tasks.json';
 
 import jaCommon from './locales/ja/common.json';
 import jaSettings from './locales/ja/settings.json';
@@ -73,7 +75,6 @@ import trAuth from './locales/tr/auth.json';
 import trSidebar from './locales/tr/sidebar.json';
 import trChat from './locales/tr/chat.json';
 import trCodeEditor from './locales/tr/codeEditor.json';
-// eslint-disable-next-line import-x/order
 import trTasks from './locales/tr/tasks.json';
 import itCommon from './locales/it/common.json';
 import itSettings from './locales/it/settings.json';
@@ -87,6 +88,8 @@ import itTasks from './locales/it/tasks.json';
 // Import supported languages configuration
 import { languages } from './languages.js';
 
+const DEFAULT_LANGUAGE = 'zh-CN';
+
 // Get saved language preference from localStorage
 const getSavedLanguage = () => {
   try {
@@ -95,9 +98,9 @@ const getSavedLanguage = () => {
     if (saved && languages.some(lang => lang.value === saved)) {
       return saved;
     }
-    return 'en';
+    return DEFAULT_LANGUAGE;
   } catch {
-    return 'en';
+    return DEFAULT_LANGUAGE;
   }
 };
 
@@ -109,6 +112,7 @@ i18n
     // Resources containing all translations
     resources: {
       en: {
+        admin: enAdmin,
         common: enCommon,
         settings: enSettings,
         auth: enAuth,
@@ -126,12 +130,14 @@ i18n
         codeEditor: koCodeEditor,
       },
       'zh-CN': {
+        admin: zhAdmin,
         common: zhCommon,
         settings: zhSettings,
         auth: zhAuth,
         sidebar: zhSidebar,
         chat: zhChat,
         codeEditor: zhCodeEditor,
+        tasks: zhTasks,
       },
       ja: {
         common: jaCommon,
@@ -190,7 +196,7 @@ i18n
     debug: import.meta.env.DEV,
 
     // Namespaces - load only what's needed
-    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks'],
+    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks', 'admin'],
     defaultNS: 'common',
 
     // Key separator for nested keys (default: '.')

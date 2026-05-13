@@ -1,0 +1,207 @@
+{
+  "title": "System administration",
+  "subtitle": "Tenants, users, internal MCP presets, and runtimes",
+  "tabs": {
+    "users": "Users",
+    "tenants": "Tenant Access",
+    "mcpPresets": "MCP Server Presets",
+    "runtimes": "Runtime Monitor"
+  },
+  "common": {
+    "select": "Select",
+    "refresh": "Refresh",
+    "copy": "Copy",
+    "copied": "Copied",
+    "create": "Create",
+    "delete": "Delete",
+    "remove": "Remove",
+    "grant": "Grant",
+    "admin": "Admin",
+    "never": "Never"
+  },
+  "fields": {
+    "username": "Username",
+    "user": "User",
+    "tenant": "Tenant",
+    "access": "Access",
+    "code": "Code",
+    "name": "Name",
+    "status": "Status"
+  },
+  "permissions": {
+    "edit": "Edit",
+    "view": "View"
+  },
+  "statuses": {
+    "active": "Active",
+    "inactive": "Inactive",
+    "invited": "Pending invite",
+    "expired": "Invite expired",
+    "pendingInvite": "Pending invite",
+    "inviteExpired": "Invite expired",
+    "draft": "Draft",
+    "published": "Published",
+    "disabled": "Disabled",
+    "running": "Running",
+    "exited": "Exited",
+    "missing": "Missing",
+    "unknown": "Unknown",
+    "idle": "Idle",
+    "failed": "Failed",
+    "pending": "Pending",
+    "healthy": "Healthy",
+    "tested": "Tested",
+    "notTested": "Not tested",
+    "activeStale": "Active stale"
+  },
+  "errors": {
+    "loadTenants": "Failed to load tenants",
+    "loadUsers": "Failed to load users",
+    "loadTenantAccess": "Failed to load tenant access",
+    "loadAdminData": "Failed to load admin data",
+    "tenantRequired": "Tenant code and name are required",
+    "createTenant": "Failed to create tenant",
+    "usernameMinLength": "Username must be at least 3 characters",
+    "createUserInvite": "Failed to create user invitation",
+    "createActivationLink": "Failed to create activation link",
+    "deleteOwnUser": "You cannot delete your own user account",
+    "deleteUser": "Failed to delete user",
+    "selectTenantAndUser": "Select a tenant and a user",
+    "grantTenantAccess": "Failed to grant tenant access",
+    "deleteTenantAccess": "Failed to delete tenant access"
+  },
+  "confirm": {
+    "deleteUser": "Delete user \"{{username}}\"? This removes their tenant access and owned data.",
+    "removeAccess": "Remove {{username}}'s access to {{tenantName}}?"
+  },
+  "users": {
+    "createTitle": "Create user",
+    "usernamePlaceholder": "teammate",
+    "createInvite": "Create Invite",
+    "invitationLink": "Invitation link",
+    "expires": "Expires {{time}}",
+    "grantAccessTitle": "Grant tenant access",
+    "listTitle": "Users",
+    "empty": "No users",
+    "noTenantAccess": "No tenant access",
+    "lastLogin": "Last login {{time}}",
+    "inviteExpires": "Invite expires {{time}}",
+    "created": "Created {{time}}",
+    "activationLink": "Activation Link"
+  },
+  "tenants": {
+    "createTitle": "Create tenant",
+    "codePlaceholder": "acme",
+    "namePlaceholder": "Acme",
+    "grantAccessTitle": "Grant tenant access",
+    "accessTitle": "Tenant access",
+    "listTitle": "Tenants",
+    "empty": "No tenants",
+    "noAuthorizedUsers": "No authorized users"
+  },
+  "mcp": {
+    "title": "MCP Server Presets",
+    "description": "Admin-managed internal MCP servers. Workspace users install these presets with one click and never enter URL, token, or header values.",
+    "newPreset": "New preset",
+    "presets": "Presets",
+    "noPresets": "No MCP presets",
+    "transportHttp": "HTTP",
+    "toolsCount": "{{count}} tools",
+    "docker": "Docker",
+    "publishNotice": "Published presets become available on the workspace MCP Tools page. Install remains one-click and requires no user-side configuration.",
+    "fields": {
+      "displayName": "Display name",
+      "displayNamePlaceholder": "Knowledge Retrieval MCP",
+      "presetName": "Preset name",
+      "presetNamePlaceholder": "knowledge_retrieval",
+      "description": "Description",
+      "descriptionPlaceholder": "Search internal knowledge bases and project docs.",
+      "httpUrl": "HTTP URL",
+      "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "staticHeaders": "Static headers JSON or key/value lines",
+      "headersHelper": "Headers helper command",
+      "headersHelperHelp": "Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.",
+      "headersHelperEnv": "Headers helper environment",
+      "headersHelperEnvHelp": "Private variables injected only when headersHelper runs. They are not written to workspace files.",
+      "status": "Status",
+      "statusHelp": "Publishing is controlled by the Publish button after a successful saved test."
+    },
+    "helperScript": {
+      "title": "Private helper script",
+      "description": "Stored outside the workspace. Workspace users cannot browse this file from Files.",
+      "upload": "Upload script",
+      "current": "Current script: {{fileName}} ({{sizeKb}} KB)",
+      "none": "No helper script uploaded.",
+      "saveFirst": "Save the preset before uploading a helper script."
+    },
+    "buttons": {
+      "saveDraft": "Save draft",
+      "testing": "Testing",
+      "test": "Test",
+      "publish": "Publish",
+      "disable": "Disable"
+    },
+    "validation": {
+      "title": "Latest validation",
+      "testing": "Testing connection and loading tools...",
+      "statusWithTools": "{{status}} · {{count}} tools",
+      "lastTested": "Last tested {{time}}",
+      "fromCurrentFormValues": "from current form values",
+      "testingTitle": "Testing MCP server connection",
+      "testingDescription": "Checking initialize and tools/list from the configured endpoint.",
+      "runTest": "Run Test to verify the endpoint and discover its tools.",
+      "passed": "Connection test passed",
+      "failed": "Connection test failed",
+      "toolsDiscovered": "{{count}} tools discovered{{timeSuffix}}",
+      "serverFailed": "The MCP server did not respond successfully."
+    },
+    "validationErrors": {
+      "headersFormat": "Headers must be JSON or one key/value pair per line",
+      "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax"
+    },
+    "errors": {
+      "load": "Failed to load MCP presets",
+      "save": "Failed to save MCP preset",
+      "invalidConfig": "Invalid MCP preset configuration",
+      "test": "Failed to test MCP preset",
+      "publish": "Failed to publish MCP preset",
+      "uploadHelper": "Failed to upload helper script",
+      "disable": "Failed to disable MCP preset"
+    }
+  },
+  "runtimes": {
+    "summary": {
+      "total": "Total",
+      "active": "Active",
+      "idleRunning": "Idle running",
+      "failedUnknown": "Failed / unknown",
+      "liveMemory": "Live memory"
+    },
+    "filters": {
+      "allStatuses": "All statuses",
+      "allDocker": "All Docker",
+      "searchPlaceholder": "Search runtime, session, tenant, user, workspace"
+    },
+    "refresh": "Refresh runtimes",
+    "table": {
+      "runtime": "Runtime",
+      "tenant": "Tenant",
+      "user": "User",
+      "workspace": "Workspace",
+      "business": "Business",
+      "docker": "Docker",
+      "cpu": "CPU",
+      "memory": "Memory",
+      "idleAge": "Idle age",
+      "action": "Action"
+    },
+    "loading": "Loading runtimes...",
+    "empty": "No runtimes",
+    "stop": "Stop",
+    "stopping": "Stopping",
+    "errors": {
+      "load": "Failed to load runtimes",
+      "stop": "Failed to stop runtime"
+    }
+  }
+}

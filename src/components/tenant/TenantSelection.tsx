@@ -1,23 +1,25 @@
 import { Building2, Check, RefreshCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { useTenant } from '../../contexts/TenantContext';
 import { Button, Card } from '../../shared/view/ui';
 
 export default function TenantSelection() {
+  const { t } = useTranslation('auth');
   const { tenants, isLoadingTenants, refreshTenants, selectTenant } = useTenant();
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-lg space-y-4">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold text-foreground">Select tenant</h1>
-          <p className="text-sm text-muted-foreground">Choose the organization workspace for this session.</p>
+          <h1 className="text-2xl font-semibold text-foreground">{t('tenantSelection.title')}</h1>
+          <p className="text-sm text-muted-foreground">{t('tenantSelection.description')}</p>
         </div>
 
         <Card className="space-y-2 p-3">
           {tenants.length === 0 && !isLoadingTenants ? (
             <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
-              No tenant access is available for this account.
+              {t('tenantSelection.empty')}
             </div>
           ) : null}
 
@@ -33,7 +35,7 @@ export default function TenantSelection() {
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{tenant.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">
-                    {tenant.code} · {tenant.permission}
+                    {tenant.code} · {t(`tenantSelection.permissions.${tenant.permission}`, { defaultValue: tenant.permission })}
                   </span>
                 </span>
               </span>
@@ -44,7 +46,7 @@ export default function TenantSelection() {
 
         <Button variant="outline" onClick={() => void refreshTenants()} disabled={isLoadingTenants}>
           <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
+          {t('tenantSelection.refresh')}
         </Button>
       </div>
     </div>

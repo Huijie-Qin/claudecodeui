@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
 import type { McpPresetFormValues } from '../adminMcpPresetUtils';
@@ -53,6 +54,7 @@ async function readError(response: Response, fallback: string): Promise<string> 
 }
 
 export function useAdminMcpPresets(tenantId?: number) {
+  const { t } = useTranslation('admin');
   const [presets, setPresets] = useState<AdminMcpPreset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -72,7 +74,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     try {
       const response = await api.admin.mcpPresets(tenantId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to load MCP presets'));
+        setError(await readError(response, t('mcp.errors.load')));
         return;
       }
       const payload = await response.json() as { presets?: AdminMcpPreset[] };
@@ -80,7 +82,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     } finally {
       setIsLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, t]);
 
   useEffect(() => {
     void load();
@@ -90,12 +92,15 @@ export function useAdminMcpPresets(tenantId?: number) {
     setIsSaving(true);
     setError(null);
     try {
-      const payload = buildMcpPresetPayload(values);
+      const payload = buildMcpPresetPayload(values, {
+        headersFormat: t('mcp.validationErrors.headersFormat'),
+        helperEnvSyntax: t('mcp.validationErrors.helperEnvSyntax'),
+      });
       const response = presetId
         ? await api.admin.updateMcpPreset(presetId, payload)
         : await api.admin.createMcpPreset(payload);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to save MCP preset'));
+        setError(await readError(response, t('mcp.errors.save')));
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
@@ -104,7 +109,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     } finally {
       setIsSaving(false);
     }
-  }, [load]);
+  }, [load, t]);
 
   const testPreset = useCallback(async (presetId: number, values?: McpPresetFormValues) => {
     if (!tenantId) return null;
@@ -118,9 +123,12 @@ export function useAdminMcpPresets(tenantId?: number) {
       let payload: ReturnType<typeof buildMcpPresetPayload> | null = null;
       if (values) {
         try {
-          payload = buildMcpPresetPayload({ ...values, tenantId });
+          payload = buildMcpPresetPayload({ ...values, tenantId }, {
+            headersFormat: t('mcp.validationErrors.headersFormat'),
+            helperEnvSyntax: t('mcp.validationErrors.helperEnvSyntax'),
+          });
         } catch (caught) {
-          const message = caught instanceof Error ? caught.message : 'Invalid MCP preset configuration';
+          const message = caught instanceof Error ? caught.message : t('mcp.errors.invalidConfig');
           setError(message);
           setLatestTestResult({
             presetId,
@@ -136,7 +144,7 @@ export function useAdminMcpPresets(tenantId?: number) {
 
       const response = await api.admin.testMcpPreset(presetId, tenantId, payload);
       if (!response.ok) {
-        const message = await readError(response, 'Failed to test MCP preset');
+        const message = await readError(response, t('mcp.errors.test'));
         setError(message);
         setLatestTestResult({
           presetId,
@@ -167,7 +175,7 @@ export function useAdminMcpPresets(tenantId?: number) {
       }
       return data.preset;
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Failed to test MCP preset';
+      const message = caught instanceof Error ? caught.message : t('mcp.errors.test');
       setError(message);
       setLatestTestResult({
         presetId,
@@ -185,7 +193,7 @@ export function useAdminMcpPresets(tenantId?: number) {
         return next;
       });
     }
-  }, [load, tenantId]);
+  }, [load, tenantId, t]);
 
   const publishPreset = useCallback(async (presetId: number) => {
     if (!tenantId) return null;
@@ -194,7 +202,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     try {
       const response = await api.admin.publishMcpPreset(presetId, tenantId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to publish MCP preset'));
+        setError(await readError(response, t('mcp.errors.publish')));
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
@@ -203,7 +211,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     } finally {
       setIsSaving(false);
     }
-  }, [load, tenantId]);
+  }, [load, tenantId, t]);
 
   const uploadHelperScript = useCallback(async (presetId: number, file: File) => {
     if (!tenantId) return null;
@@ -214,7 +222,7 @@ export function useAdminMcpPresets(tenantId?: number) {
       formData.set('script', file);
       const response = await api.admin.uploadMcpPresetHelperScript(presetId, tenantId, formData);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to upload helper script'));
+        setError(await readError(response, t('mcp.errors.uploadHelper')));
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
@@ -223,7 +231,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     } finally {
       setIsSaving(false);
     }
-  }, [load, tenantId]);
+  }, [load, tenantId, t]);
 
   const disablePreset = useCallback(async (presetId: number) => {
     if (!tenantId) return null;
@@ -232,7 +240,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     try {
       const response = await api.admin.disableMcpPreset(presetId, tenantId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to disable MCP preset'));
+        setError(await readError(response, t('mcp.errors.disable')));
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
@@ -241,7 +249,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     } finally {
       setIsSaving(false);
     }
-  }, [load, tenantId]);
+  }, [load, tenantId, t]);
 
   return {
     presets,

@@ -12,6 +12,11 @@ export type McpPresetFormValues = {
   status: AdminMcpPresetStatus;
 };
 
+type McpPresetValidationMessages = {
+  headersFormat?: string;
+  helperEnvSyntax?: string;
+};
+
 export function normalizeMcpPresetName(value: string): string {
   return value
     .trim()
@@ -21,7 +26,7 @@ export function normalizeMcpPresetName(value: string): string {
     .slice(0, 80);
 }
 
-export function parseHeadersText(value: string): Record<string, string> {
+export function parseHeadersText(value: string, messages: McpPresetValidationMessages = {}): Record<string, string> {
   const trimmed = value.trim();
   if (!trimmed) return {};
 
@@ -42,7 +47,7 @@ export function parseHeadersText(value: string): Record<string, string> {
       .map((line) => {
         const separatorIndex = line.includes(':') ? line.indexOf(':') : line.indexOf('=');
         if (separatorIndex <= 0) {
-          throw new Error('Headers must be JSON or one key/value pair per line');
+          throw new Error(messages.headersFormat || 'Headers must be JSON or one key/value pair per line');
         }
         return [
           line.slice(0, separatorIndex).trim(),
@@ -53,19 +58,19 @@ export function parseHeadersText(value: string): Record<string, string> {
   );
 }
 
-export function parseHelperEnvText(value: string): Record<string, string> {
-  const parsed = parseHeadersText(value);
+export function parseHelperEnvText(value: string, messages: McpPresetValidationMessages = {}): Record<string, string> {
+  const parsed = parseHeadersText(value, messages);
   for (const key of Object.keys(parsed)) {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-      throw new Error('Helper environment variable names must use shell-safe syntax');
+      throw new Error(messages.helperEnvSyntax || 'Helper environment variable names must use shell-safe syntax');
     }
   }
   return parsed;
 }
 
-export function buildMcpPresetPayload(values: McpPresetFormValues) {
+export function buildMcpPresetPayload(values: McpPresetFormValues, messages: McpPresetValidationMessages = {}) {
   const headersHelper = values.headersHelper.trim();
-  const helperEnv = parseHelperEnvText(values.helperEnvText || '');
+  const helperEnv = parseHelperEnvText(values.helperEnvText || '', messages);
   return {
     tenantId: values.tenantId,
     name: normalizeMcpPresetName(values.name),
@@ -74,7 +79,7 @@ export function buildMcpPresetPayload(values: McpPresetFormValues) {
     status: values.status,
     type: 'http' as const,
     url: values.url.trim(),
-    headers: parseHeadersText(values.headersText),
+    headers: parseHeadersText(values.headersText, messages),
     headersHelper: headersHelper || undefined,
     ...(Object.keys(helperEnv).length > 0 ? { helperEnv } : {}),
   };

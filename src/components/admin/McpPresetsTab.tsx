@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Upload } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../shared/view/ui';
 
@@ -44,6 +45,7 @@ function headersToText(headers?: Record<string, string>) {
 }
 
 export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTabProps) {
+  const { t } = useTranslation('admin');
   const defaultTenantId = currentTenantId || tenants[0]?.id || 0;
   const [tenantId, setTenantId] = useState(defaultTenantId);
   const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
@@ -78,7 +80,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const selectedTestResult = selectedPreset && latestTestResult?.presetId === selectedPreset.id
     ? latestTestResult
     : null;
-  const displayedValidationStatus = selectedTestResult?.status || selectedPreset?.lastTestStatus || 'Not tested';
+  const displayedValidationStatus = selectedTestResult?.status || selectedPreset?.lastTestStatus || 'notTested';
   const displayedValidationToolCount = selectedTestResult?.toolCount ?? selectedPreset?.toolCount ?? 0;
   const displayedValidationTime = selectedTestResult?.testedAt || selectedPreset?.lastTestedAt || null;
 
@@ -139,9 +141,9 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">MCP Server Presets</h3>
+          <h3 className="text-sm font-semibold text-foreground">{t('mcp.title')}</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Admin-managed internal MCP servers. Workspace users install these presets with one click and never enter URL, token, or header values.
+            {t('mcp.description')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -159,7 +161,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
           <Button variant="ghost" size="icon" onClick={() => void reload()} disabled={isLoading}>
             <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
           </Button>
-          <Button variant="outline" onClick={startNew}>New preset</Button>
+          <Button variant="outline" onClick={startNew}>{t('mcp.newPreset')}</Button>
         </div>
       </div>
 
@@ -172,13 +174,13 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
       <div className="grid min-h-[520px] gap-4 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
         <div className="overflow-hidden rounded-md border border-border">
           <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Presets
+            {t('mcp.presets')}
           </div>
           <div className="max-h-[620px] overflow-auto">
             {presets.length === 0 ? (
               <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
                 <Server className="h-4 w-4" />
-                No MCP presets
+                {t('mcp.noPresets')}
               </div>
             ) : (
               presets.map((preset) => (
@@ -196,9 +198,9 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{preset.name}</div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span className="rounded border border-border px-2 py-0.5">HTTP</span>
-                    <span className="rounded border border-border px-2 py-0.5">{preset.toolCount} tools</span>
-                    {preset.dockerCompatible ? <span className="rounded border border-emerald-200 px-2 py-0.5 text-emerald-700">Docker</span> : null}
+                    <span className="rounded border border-border px-2 py-0.5">{t('mcp.transportHttp')}</span>
+                    <span className="rounded border border-border px-2 py-0.5">{t('mcp.toolsCount', { count: preset.toolCount })}</span>
+                    {preset.dockerCompatible ? <span className="rounded border border-emerald-200 px-2 py-0.5 text-emerald-700">{t('mcp.docker')}</span> : null}
                   </div>
                 </button>
               ))
@@ -209,28 +211,28 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
         <div className="rounded-md border border-border bg-background p-4">
           <div className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>Published presets become available on the workspace MCP Tools page. Install remains one-click and requires no user-side configuration.</span>
+            <span>{t('mcp.publishNotice')}</span>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">Display name</span>
-              <Input value={values.displayName} onChange={(event) => handleDisplayNameChange(event.target.value)} placeholder="Knowledge Retrieval MCP" />
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.displayName')}</span>
+              <Input value={values.displayName} onChange={(event) => handleDisplayNameChange(event.target.value)} placeholder={t('mcp.fields.displayNamePlaceholder')} />
             </label>
             <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">Preset name</span>
-              <Input value={values.name} onChange={(event) => updateValue('name', normalizeMcpPresetName(event.target.value))} placeholder="knowledge_retrieval" />
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.presetName')}</span>
+              <Input value={values.name} onChange={(event) => updateValue('name', normalizeMcpPresetName(event.target.value))} placeholder={t('mcp.fields.presetNamePlaceholder')} />
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">Description</span>
-              <Input value={values.description} onChange={(event) => updateValue('description', event.target.value)} placeholder="Search internal knowledge bases and project docs." />
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.description')}</span>
+              <Input value={values.description} onChange={(event) => updateValue('description', event.target.value)} placeholder={t('mcp.fields.descriptionPlaceholder')} />
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">HTTP URL</span>
-              <Input value={values.url} onChange={(event) => updateValue('url', event.target.value)} placeholder="https://mcp.internal/knowledge" />
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.httpUrl')}</span>
+              <Input value={values.url} onChange={(event) => updateValue('url', event.target.value)} placeholder={t('mcp.fields.httpUrlPlaceholder')} />
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">Static headers JSON or key/value lines</span>
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.staticHeaders')}</span>
               <textarea
                 value={values.headersText}
                 onChange={(event) => updateValue('headersText', event.target.value)}
@@ -239,7 +241,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               />
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">Headers helper command</span>
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.headersHelper')}</span>
               <Input
                 value={values.headersHelper}
                 onChange={(event) => updateValue('headersHelper', event.target.value)}
@@ -247,11 +249,11 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                 className="font-mono"
               />
               <span className="block text-xs text-muted-foreground">
-                Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.
+                {t('mcp.fields.headersHelperHelp')}
               </span>
             </label>
             <label className="space-y-1 sm:col-span-2">
-              <span className="text-xs text-muted-foreground">Headers helper environment</span>
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.headersHelperEnv')}</span>
               <textarea
                 value={values.helperEnvText}
                 onChange={(event) => updateValue('helperEnvText', event.target.value)}
@@ -259,15 +261,15 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                 className="min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <span className="block text-xs text-muted-foreground">
-                Private variables injected only when headersHelper runs. They are not written to workspace files.
+                {t('mcp.fields.headersHelperEnvHelp')}
               </span>
             </label>
             <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs font-medium text-foreground">Private helper script</div>
+                  <div className="text-xs font-medium text-foreground">{t('mcp.helperScript.title')}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    Stored outside the workspace. Workspace users cannot browse this file from Files.
+                    {t('mcp.helperScript.description')}
                   </div>
                 </div>
                 <label>
@@ -288,40 +290,40 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                     }`}
                   >
                     <Upload className="h-4 w-4" />
-                    Upload script
+                    {t('mcp.helperScript.upload')}
                   </span>
                 </label>
               </div>
               <div className="text-xs text-muted-foreground">
                 {selectedPreset?.helperScript ? (
-                  <span>
-                    Current script: <span className="font-mono text-foreground">{selectedPreset.helperScript.fileName}</span>
-                    {' '}({Math.max(1, Math.ceil(selectedPreset.helperScript.sizeBytes / 1024))} KB)
-                  </span>
+                  <span>{t('mcp.helperScript.current', {
+                    fileName: selectedPreset.helperScript.fileName,
+                    sizeKb: Math.max(1, Math.ceil(selectedPreset.helperScript.sizeBytes / 1024)),
+                  })}</span>
                 ) : selectedPreset ? (
-                  <span>No helper script uploaded.</span>
+                  <span>{t('mcp.helperScript.none')}</span>
                 ) : (
-                  <span>Save the preset before uploading a helper script.</span>
+                  <span>{t('mcp.helperScript.saveFirst')}</span>
                 )}
               </div>
             </div>
             <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">Status</span>
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.status')}</span>
               <select
                 value={values.status}
                 onChange={(event) => updateValue('status', event.target.value as AdminMcpPresetStatus)}
                 className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
               >
-                <option value="draft">Draft</option>
-                <option value="disabled">Disabled</option>
+                <option value="draft">{t('statuses.draft')}</option>
+                <option value="disabled">{t('statuses.disabled')}</option>
               </select>
               <span className="block text-xs text-muted-foreground">
-                Publishing is controlled by the Publish button after a successful saved test.
+                {t('mcp.fields.statusHelp')}
               </span>
             </label>
             <div className="flex items-end gap-2">
               <Button onClick={handleSave} disabled={isSaving || isTestingSelectedPreset || !tenantId}>
-                Save draft
+                {t('mcp.buttons.saveDraft')}
               </Button>
               {selectedPreset ? (
                 <Button
@@ -334,7 +336,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   ) : (
                     <FlaskConical className="h-4 w-4" />
                   )}
-                  {isTestingSelectedPreset ? 'Testing' : 'Test'}
+                  {isTestingSelectedPreset ? t('mcp.buttons.testing') : t('mcp.buttons.test')}
                 </Button>
               ) : null}
             </div>
@@ -344,16 +346,19 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
             <div className="mt-5 rounded-md border border-border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-sm">
-                  <div className="font-medium text-foreground">Latest validation</div>
+                  <div className="font-medium text-foreground">{t('mcp.validation.title')}</div>
                   <div className="mt-1 text-muted-foreground">
                     {isTestingSelectedPreset
-                      ? 'Testing connection and loading tools...'
-                      : `${displayedValidationStatus} · ${displayedValidationToolCount} tools`}
+                      ? t('mcp.validation.testing')
+                      : t('mcp.validation.statusWithTools', {
+                          status: t(`statuses.${displayedValidationStatus}`, { defaultValue: displayedValidationStatus }),
+                          count: displayedValidationToolCount,
+                        })}
                   </div>
                   {!isTestingSelectedPreset && displayedValidationTime ? (
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Last tested {formatValidationTime(displayedValidationTime)}
-                      {selectedTestResult?.transient ? ' from current form values' : null}
+                      {t('mcp.validation.lastTested', { time: formatValidationTime(displayedValidationTime) })}
+                      {selectedTestResult?.transient ? ` ${t('mcp.validation.fromCurrentFormValues')}` : null}
                     </div>
                   ) : null}
                 </div>
@@ -364,14 +369,14 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                     disabled={isSaving || isTestingSelectedPreset || selectedPreset.lastTestStatus !== 'healthy' || selectedPreset.toolCount <= 0}
                   >
                     <CheckCircle2 className="h-4 w-4" />
-                    Publish
+                    {t('mcp.buttons.publish')}
                   </Button>
                   <Button
                     variant="outline"
                     onClick={() => void disablePreset(selectedPreset.id)}
                     disabled={isSaving || isTestingSelectedPreset}
                   >
-                    Disable
+                    {t('mcp.buttons.disable')}
                   </Button>
                 </div>
               </div>
@@ -404,6 +409,8 @@ function ValidationFeedback({
   latestResult: AdminMcpPresetTestResult | null;
   isTesting: boolean;
 }) {
+  const { t } = useTranslation('admin');
+
   if (isTesting) {
     return (
       <div
@@ -412,8 +419,8 @@ function ValidationFeedback({
       >
         <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
         <div>
-          <div className="font-medium">Testing MCP server connection</div>
-          <div className="mt-0.5 text-primary/80">Checking initialize and tools/list from the configured endpoint.</div>
+          <div className="font-medium">{t('mcp.validation.testingTitle')}</div>
+          <div className="mt-0.5 text-primary/80">{t('mcp.validation.testingDescription')}</div>
         </div>
       </div>
     );
@@ -423,7 +430,7 @@ function ValidationFeedback({
   if (!status) {
     return (
       <div className="mt-3 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-        Run Test to verify the endpoint and discover its tools.
+        {t('mcp.validation.runTest')}
       </div>
     );
   }
@@ -449,11 +456,14 @@ function ValidationFeedback({
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
       )}
       <div>
-        <div className="font-medium">{isHealthy ? 'Connection test passed' : 'Connection test failed'}</div>
+        <div className="font-medium">{isHealthy ? t('mcp.validation.passed') : t('mcp.validation.failed')}</div>
         <div className="mt-0.5">
           {isHealthy
-            ? `${toolCount} tools discovered${timeText ? ` · ${timeText}` : ''}`
-            : error || 'The MCP server did not respond successfully.'}
+            ? t('mcp.validation.toolsDiscovered', {
+                count: toolCount,
+                timeSuffix: timeText ? ` · ${timeText}` : '',
+              })
+            : error || t('mcp.validation.serverFailed')}
         </div>
       </div>
     </div>
@@ -461,10 +471,15 @@ function ValidationFeedback({
 }
 
 function PresetStatus({ status }: { status: AdminMcpPresetStatus }) {
+  const { t } = useTranslation('admin');
   const className = status === 'published'
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : status === 'disabled'
       ? 'border-border bg-muted text-muted-foreground'
       : 'border-amber-200 bg-amber-50 text-amber-700';
-  return <span className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-semibold ${className}`}>{status}</span>;
+  return (
+    <span className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-semibold ${className}`}>
+      {t(`statuses.${status}`, { defaultValue: status })}
+    </span>
+  );
 }

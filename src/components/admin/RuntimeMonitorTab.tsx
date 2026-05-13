@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Search, Square } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../shared/view/ui';
 import { api } from '../../utils/api';
@@ -72,9 +73,12 @@ function statusClassName(status: string): string {
 }
 
 function StatusChip({ value }: { value: string }) {
+  const { t } = useTranslation('admin');
+  const statusKey = value === 'active stale' ? 'activeStale' : value;
+
   return (
     <span className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${statusClassName(value)}`}>
-      {value}
+      {t(`statuses.${statusKey}`, { defaultValue: value })}
     </span>
   );
 }
@@ -99,6 +103,7 @@ function formatCpu(value: number | null): string {
 }
 
 export default function RuntimeMonitorTab() {
+  const { t } = useTranslation('admin');
   const [filters, setFilters] = useState<RuntimeMonitorFilters>({ status: '', dockerState: '', q: '', limit: 100 });
   const [rows, setRows] = useState<RuntimeRow[]>([]);
   const [summary, setSummary] = useState<RuntimeSummary | null>(null);
@@ -177,7 +182,7 @@ export default function RuntimeMonitorTab() {
       if (!isLatestLoad(requestId, requestQueryKey)) return;
 
       if (!response.ok) {
-        const errorMessage = await readError(response, 'Failed to load runtimes');
+        const errorMessage = await readError(response, t('runtimes.errors.load'));
         if (isLatestLoad(requestId, requestQueryKey)) {
           setError(errorMessage);
         }
@@ -194,13 +199,13 @@ export default function RuntimeMonitorTab() {
       if (!isLatestLoad(requestId, requestQueryKey)) return;
 
       console.error('[RuntimeMonitorTab] Failed to load runtimes:', { queryKey: requestQueryKey, error: caughtError });
-      setError('Failed to load runtimes');
+      setError(t('runtimes.errors.load'));
     } finally {
       if (isLatestLoad(requestId, requestQueryKey)) {
         setIsLoading(false);
       }
     }
-  }, [isLatestLoad]);
+  }, [isLatestLoad, t]);
 
   useEffect(() => {
     void load();
@@ -215,7 +220,7 @@ export default function RuntimeMonitorTab() {
     try {
       const response = await api.admin.stopRuntime(runtimeId);
       if (!response.ok) {
-        const errorMessage = await readError(response, 'Failed to stop runtime');
+        const errorMessage = await readError(response, t('runtimes.errors.stop'));
         if (isMountedRef.current) {
           setError(errorMessage);
         }
@@ -225,7 +230,7 @@ export default function RuntimeMonitorTab() {
     } catch (caughtError) {
       console.error('[RuntimeMonitorTab] Failed to stop runtime:', caughtError);
       if (isMountedRef.current) {
-        setError('Failed to stop runtime');
+        setError(t('runtimes.errors.stop'));
       }
     } finally {
       setRuntimeStopping(runtimeId, false);
@@ -235,11 +240,11 @@ export default function RuntimeMonitorTab() {
   return (
     <div className="space-y-4">
       <div className="grid gap-2 sm:grid-cols-5">
-        <SummaryTile label="Total" value={summary?.total ?? total} />
-        <SummaryTile label="Active" value={summary?.active ?? 0} />
-        <SummaryTile label="Idle running" value={summary?.idleRunning ?? 0} />
-        <SummaryTile label="Failed / unknown" value={summary?.failedOrUnknown ?? 0} />
-        <SummaryTile label="Live memory" value={formatBytes(summary?.totalLiveMemoryBytes)} />
+        <SummaryTile label={t('runtimes.summary.total')} value={summary?.total ?? total} />
+        <SummaryTile label={t('runtimes.summary.active')} value={summary?.active ?? 0} />
+        <SummaryTile label={t('runtimes.summary.idleRunning')} value={summary?.idleRunning ?? 0} />
+        <SummaryTile label={t('runtimes.summary.failedUnknown')} value={summary?.failedOrUnknown ?? 0} />
+        <SummaryTile label={t('runtimes.summary.liveMemory')} value={formatBytes(summary?.totalLiveMemoryBytes)} />
       </div>
 
       <div className="grid gap-2 lg:grid-cols-[150px_150px_minmax(280px,1fr)_auto]">
@@ -248,22 +253,22 @@ export default function RuntimeMonitorTab() {
           value={filters.status || ''}
           onChange={(event) => updateFilters((current) => ({ ...current, status: event.target.value }))}
         >
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="idle">Idle</option>
-          <option value="failed">Failed</option>
-          <option value="pending">Pending</option>
+          <option value="">{t('runtimes.filters.allStatuses')}</option>
+          <option value="active">{t('statuses.active')}</option>
+          <option value="idle">{t('statuses.idle')}</option>
+          <option value="failed">{t('statuses.failed')}</option>
+          <option value="pending">{t('statuses.pending')}</option>
         </select>
         <select
           className={SELECT_CLASS_NAME}
           value={filters.dockerState || ''}
           onChange={(event) => updateFilters((current) => ({ ...current, dockerState: event.target.value }))}
         >
-          <option value="">All Docker</option>
-          <option value="running">Running</option>
-          <option value="exited">Exited</option>
-          <option value="missing">Missing</option>
-          <option value="unknown">Unknown</option>
+          <option value="">{t('runtimes.filters.allDocker')}</option>
+          <option value="running">{t('statuses.running')}</option>
+          <option value="exited">{t('statuses.exited')}</option>
+          <option value="missing">{t('statuses.missing')}</option>
+          <option value="unknown">{t('statuses.unknown')}</option>
         </select>
         <label className="relative">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -271,7 +276,7 @@ export default function RuntimeMonitorTab() {
             className="h-9 pl-9"
             value={filters.q || ''}
             onChange={(event) => updateFilters((current) => ({ ...current, q: event.target.value }))}
-            placeholder="Search runtime, session, tenant, user, workspace"
+            placeholder={t('runtimes.filters.searchPlaceholder')}
           />
         </label>
         <Button
@@ -279,8 +284,8 @@ export default function RuntimeMonitorTab() {
           size="icon"
           onClick={() => void load()}
           disabled={isLoading}
-          aria-label="Refresh runtimes"
-          title="Refresh runtimes"
+          aria-label={t('runtimes.refresh')}
+          title={t('runtimes.refresh')}
         >
           <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
         </Button>
@@ -296,23 +301,23 @@ export default function RuntimeMonitorTab() {
         <table className="w-full min-w-[1080px] text-left text-sm">
           <thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 font-medium">Runtime</th>
-              <th className="px-3 py-2 font-medium">Tenant</th>
-              <th className="px-3 py-2 font-medium">User</th>
-              <th className="px-3 py-2 font-medium">Workspace</th>
-              <th className="px-3 py-2 font-medium">Business</th>
-              <th className="px-3 py-2 font-medium">Docker</th>
-              <th className="px-3 py-2 font-medium">CPU</th>
-              <th className="px-3 py-2 font-medium">Memory</th>
-              <th className="px-3 py-2 font-medium">Idle age</th>
-              <th className="px-3 py-2 font-medium">Action</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.runtime')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.tenant')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.user')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.workspace')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.business')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.docker')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.cpu')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.memory')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.idleAge')}</th>
+              <th className="px-3 py-2 font-medium">{t('runtimes.table.action')}</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td className="px-3 py-6 text-center text-muted-foreground" colSpan={10}>
-                  {isLoading ? 'Loading runtimes...' : 'No runtimes'}
+                  {isLoading ? t('runtimes.loading') : t('runtimes.empty')}
                 </td>
               </tr>
             ) : rows.map((row) => {
@@ -353,7 +358,7 @@ export default function RuntimeMonitorTab() {
                       onClick={() => void stopRuntime(row.runtimeId)}
                     >
                       <Square className="h-3.5 w-3.5" />
-                      {isStoppingRuntime ? 'Stopping' : 'Stop'}
+                      {isStoppingRuntime ? t('runtimes.stopping') : t('runtimes.stop')}
                     </Button>
                   </td>
                 </tr>
