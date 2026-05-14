@@ -7,6 +7,58 @@ interface QuestionAnswerContentProps {
   className?: string;
 }
 
+const normalizeQuestions = (raw: unknown): Question[] => {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((q) => {
+      if (!q || typeof q !== 'object') {
+        return {
+          question: '',
+          options: [],
+          multiSelect: false,
+        };
+      }
+
+      const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
+      const options = rawOptions
+        .map((opt) => {
+          if (!opt || typeof opt !== 'object' || typeof (opt as any).label !== 'string') {
+            return null;
+          }
+          return {
+            label: (opt as any).label,
+            description: typeof (opt as any).description === 'string' ? (opt as any).description : undefined,
+          };
+        })
+        .filter((opt): opt is { label: string; description?: string } => opt !== null);
+
+      return {
+        question: typeof (q as any).question === 'string' ? (q as any).question : String((q as any).question || ''),
+        header: typeof (q as any).header === 'string' ? (q as any).header : undefined,
+        options,
+        multiSelect: (q as any).multiSelect === true,
+      };
+    })
+    .filter((q) => q.question || q.options.length > 0);
+};
+
+const normalizeAnswers = (raw: unknown): Record<string, string> => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string') {
+      normalized[key] = value;
+    }
+  }
+  return normalized;
+};
+
 // Exception to the stateless ContentRenderer pattern: multi-question navigation requires local state.
 export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
   questions,
@@ -14,18 +66,21 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
   className = '',
 }) => {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const safeQuestions = normalizeQuestions(questions);
+  const safeAnswers = normalizeAnswers(answers);
 
-  if (!questions || questions.length === 0) {
+  if (!safeQuestions || safeQuestions.length === 0) {
     return null;
   }
 
-  const hasAnyAnswer = Object.keys(answers || {}).length > 0;
-  const total = questions.length;
+  const hasAnyAnswer = Object.keys(safeAnswers).length > 0;
+  const total = safeQuestions.length;
 
   return (
     <div className={`space-y-2 ${className}`}>
-      {questions.map((q, idx) => {
-        const answer = answers?.[q.question];
+      {safeQuestions.map((q, idx) => {
+        const options = q.options || [];
+        const answer = safeAnswers?.[q.question];
         const answerLabels = answer ? answer.split(', ') : [];
         const skipped = !answer;
         const isExpanded = expandedIdx === idx;
@@ -110,11 +165,12 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
             {isExpanded && (
               <div className="border-t border-gray-100 px-3 pb-2.5 pt-0.5 dark:border-gray-700/40">
                 <div className="ml-6.5 space-y-1">
-                  {q.options.map((opt) => {
-                    const wasSelected = answerLabels.includes(opt.label);
+                    {q.options.map((opt) => {
+                    const optionLabel = opt?.label || '';
+                    const wasSelected = answerLabels.includes(optionLabel);
                     return (
                       <div
-                        key={opt.label}
+                        key={optionLabel}
                         className={`flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[12px] ${
                           wasSelected
                             ? 'border border-blue-200/60 bg-blue-50/80 dark:border-blue-800/40 dark:bg-blue-900/20'
@@ -133,8 +189,8 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <span className={wasSelected ? 'font-medium text-gray-900 dark:text-gray-100' : ''}>
-                            {opt.label}
+                            <span className={wasSelected ? 'font-medium text-gray-900 dark:text-gray-100' : ''}>
+                            {optionLabel}
                           </span>
                           {opt.description && (
                             <span className={`mt-0.5 block text-[11px] ${
@@ -144,11 +200,11 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
                             </span>
                           )}
                         </div>
-                      </div>
-                    );
-                  })}
+                    </div>
+                  );
+                })}
 
-                  {answerLabels.filter(lbl => !q.options.some(o => o.label === lbl)).map(lbl => (
+                  {answerLabels.filter(lbl => !options.some(o => o.label === lbl)).map(lbl => (
                     <div
                       key={lbl}
                       className="flex items-start gap-2 rounded-lg border border-blue-200/60 bg-blue-50/80 px-2.5 py-1.5 text-[12px] dark:border-blue-800/40 dark:bg-blue-900/20"

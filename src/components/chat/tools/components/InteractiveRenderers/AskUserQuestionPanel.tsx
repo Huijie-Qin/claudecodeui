@@ -2,12 +2,65 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import type { PermissionPanelProps } from '../../configs/permissionPanelRegistry';
 import type { Question } from '../../../types/types';
 
+const normalizeQuestionList = (value: unknown): Question[] => {
+  if (!Array.isArray(value)) {
+    if (typeof value !== 'string') {
+      return [];
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      value = parsed;
+    } catch {
+      return [];
+    }
+  }
+
+  return (value as any[]).map((q) => {
+    if (!q || typeof q !== 'object') {
+      return {
+        question: typeof q === 'string' ? q : '',
+        options: [],
+        multiSelect: false,
+      };
+    }
+
+    const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
+    const options = rawOptions
+      .map((option) => {
+        if (!option || typeof option !== 'object' || typeof (option as any).label !== 'string') {
+          return null;
+        }
+        return {
+          label: (option as any).label,
+          description: typeof (option as any).description === 'string' ? (option as any).description : undefined,
+        };
+      })
+      .filter((option): option is { label: string; description?: string } => option !== null);
+
+    return {
+      question: typeof (q as any).question === 'string' ? (q as any).question : String((q as any).question || ''),
+      header: typeof (q as any).header === 'string' ? (q as any).header : undefined,
+      options,
+      multiSelect: (q as any).multiSelect === true,
+    };
+  });
+};
+
 export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   request,
   onDecision,
 }) => {
   const input = request.input as { questions?: Question[] } | undefined;
-  const questions: Question[] = input?.questions || [];
+  const questions: Question[] = normalizeQuestionList(input?.questions);
 
   const [currentStep, setCurrentStep] = useState(0);
   const [selections, setSelections] = useState<Map<number, Set<string>>>(() => new Map());

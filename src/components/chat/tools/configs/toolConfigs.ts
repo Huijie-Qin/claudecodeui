@@ -41,6 +41,96 @@ export interface ToolDisplayConfig {
   };
 }
 
+function normalizeAskUserQuestionAnswers(value: unknown): Record<string, string> {
+  let parsed = value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return {};
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return {};
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (typeof entry === 'string') {
+      normalized[key] = entry;
+    }
+  }
+  return normalized;
+}
+
+function parseQuestionList(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+      if (parsed && Array.isArray((parsed as any).questions)) {
+        return (parsed as any).questions;
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function normalizeAskUserQuestionInput(value: unknown): any[] {
+  const raw = parseQuestionList(value);
+  return raw
+    .map((q) => {
+      if (!q || typeof q !== 'object') {
+        return {
+          question: typeof q === 'string' ? q : '',
+          header: undefined,
+          options: [],
+          multiSelect: false,
+        };
+      }
+
+      const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
+      const options = rawOptions
+        .map((opt) => {
+          if (!opt || typeof opt !== 'object') {
+            return null;
+          }
+          if (typeof opt.label !== 'string') {
+            return null;
+          }
+          return {
+            label: opt.label,
+            description: typeof opt.description === 'string' ? opt.description : undefined,
+          };
+        })
+        .filter((opt): opt is { label: string; description?: string } => opt !== null);
+
+      return {
+        question: typeof (q as any).question === 'string' ? (q as any).question : '',
+        header: typeof (q as any).header === 'string' ? (q as any).header : undefined,
+        options,
+        multiSelect: (q as any).multiSelect === true,
+      };
+    })
+    .filter((q) => q.question || q.options.length > 0);
+}
+
 export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   // ============================================================================
   // COMMAND TOOLS
@@ -468,10 +558,12 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
     input: {
       type: 'collapsible',
       title: (input: any) => {
-        const count = input.questions?.length || 0;
-        const hasAnswers = input.answers && Object.keys(input.answers).length > 0;
+        const questions = normalizeAskUserQuestionInput(input?.questions);
+        const answers = normalizeAskUserQuestionAnswers(input?.answers);
+        const count = questions.length;
+        const hasAnswers = Object.keys(answers).length > 0;
         if (count === 1) {
-          const header = input.questions[0]?.header || 'Question';
+          const header = questions[0]?.header || 'Question';
           return hasAnswers ? `${header} — answered` : header;
         }
         return hasAnswers ? `${count} questions — answered` : `${count} questions`;
@@ -479,8 +571,8 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       defaultOpen: true,
       contentType: 'question-answer',
       getContentProps: (input: any) => ({
-        questions: input.questions || [],
-        answers: input.answers || {}
+        questions: normalizeAskUserQuestionInput(input?.questions),
+        answers: normalizeAskUserQuestionAnswers(input?.answers),
       }),
     },
     result: {
