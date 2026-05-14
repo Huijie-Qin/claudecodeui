@@ -20,8 +20,6 @@ export type AdminMcpPreset = {
     helperEnv?: Record<string, string>;
   };
   status: 'draft' | 'published' | 'disabled';
-  preinstallScope: 'none' | 'all_workspaces';
-  preinstall?: boolean;
   dockerCompatible: boolean;
   lastTestStatus?: string | null;
   lastTestError?: string | null;

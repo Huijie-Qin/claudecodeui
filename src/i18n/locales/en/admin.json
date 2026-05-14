@@ -108,7 +108,6 @@
     "transportHttp": "HTTP",
     "toolsCount": "{{count}} tools",
     "docker": "Docker",
-    "preinstallBadge": "Preinstall",
     "publishNotice": "Published presets become available on the workspace MCP Tools page. Install remains one-click and requires no user-side configuration.",
     "fields": {
       "displayName": "Display name",
@@ -124,8 +123,6 @@
       "headersHelperHelp": "Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.",
       "headersHelperEnv": "Headers helper environment",
       "headersHelperEnvHelp": "Private variables injected only when headersHelper runs. They are not written to workspace files.",
-      "preinstall": "Preinstall to workspaces",
-      "preinstallHelp": "When published, this MCP preset is installed automatically into every newly created workspace.",
       "status": "Status",
       "statusHelp": "Publishing is controlled by the Publish button after a successful saved test."
     },

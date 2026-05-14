@@ -249,12 +249,6 @@
     "installing": "Installing",
     "available": "Available",
     "connected": "Connected",
-    "connection": {
-      "available": "Available",
-      "connected": "Connected",
-      "probe_failed": "Connection failed",
-      "unverified": "Unverified"
-    },
     "requiresEditAccess": "Requires edit access",
     "installSuccess": "{{name}} installed. It applies on the next Agent turn.",
     "removeSuccess": "{{name}} removed from this workspace.",
@@ -274,10 +268,6 @@
       "serverName": "Server name",
       "source": "Source",
       "adminPublished": "Admin published preset",
-      "connection": "Connection",
-      "checkedAt": "Checked at",
-      "probePhase": "Probe phase",
-      "probeError": "Probe error",
       "runtimePolicy": "Runtime policy",
       "toolsTitle": "Included tools",
       "toolsEmpty": "No tools were published for this MCP server.",

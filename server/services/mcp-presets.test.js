@@ -56,7 +56,6 @@ test('normalizes admin preset input while workspace serialization redacts connec
     name: 'knowledge_retrieval',
     displayName: 'Knowledge Retrieval MCP',
     description: 'Search internal docs',
-    preinstallScope: 'none',
     config: {
       type: 'http',
       url: 'https://mcp.internal/knowledge',

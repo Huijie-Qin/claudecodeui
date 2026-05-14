@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS mcp_server_presets (
   description TEXT NOT NULL DEFAULT '',
   transport TEXT NOT NULL DEFAULT 'http' CHECK (transport IN ('http')),
   config_json TEXT NOT NULL,
-  preinstall_scope TEXT NOT NULL DEFAULT 'none' CHECK (preinstall_scope IN ('none', 'all_workspaces')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
   docker_compatible INTEGER NOT NULL DEFAULT 0,
   last_test_status TEXT,

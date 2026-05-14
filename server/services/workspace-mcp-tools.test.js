@@ -10,7 +10,7 @@ import { DATABASE_SCHEMA_SQL } from '../database/schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 import { createMultitenancyDb } from '../database/multitenancy-db.js';
 
-import { readMcpDrafts, readMcpStatus, readWorkspaceMcpConfig, writeWorkspaceMcpConfig } from './workspace-tools.js';
+import { readMcpDrafts, readWorkspaceMcpConfig, writeWorkspaceMcpConfig } from './workspace-tools.js';
 import { createWorkspaceMcpToolsService } from './workspace-mcp-tools.js';
 
 function createTestDb() {
@@ -109,23 +109,12 @@ function seedWorkspaceAndPresets(database) {
   return { multitenancy, tenant, workspace, userId, published };
 }
 
-function okProbe(tools = [{ name: 'search_docs' }]) {
-  return async () => ({
-    status: 'healthy',
-    phase: 'tools_list',
-    error: '',
-    latencyMs: 12,
-    toolCount: tools.length,
-    tools,
-  });
-}
-
-test('workspace mcp tools catalog lists only published presets and redacts config', async () => {
+test('workspace mcp tools catalog lists only published presets and redacts config', () => {
   const database = createTestDb();
   const { multitenancy, tenant, workspace, published } = seedWorkspaceAndPresets(database);
   const service = createWorkspaceMcpToolsService({ multitenancy });
 
-  const catalog = await service.listWorkspaceMcpPresetCatalog({
+  const catalog = service.listWorkspaceMcpPresetCatalog({
     tenantId: tenant.id,
     workspaceId: workspace.id,
     accessRole: 'view',
@@ -138,180 +127,12 @@ test('workspace mcp tools catalog lists only published presets and redacts confi
   assert.equal(Object.hasOwn(catalog.presets[0], 'config'), false);
 });
 
-test('workspace mcp tools catalog probes installed presets and records connection state', async () => {
-  const database = createTestDb();
-  const { workspacePath, cleanup } = await createWorkspacePath();
-  try {
-    const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    const seen = [];
-    const service = createWorkspaceMcpToolsService({
-      multitenancy,
-      probeHttpMcpServer: async (config) => {
-        seen.push(config);
-        return {
-          status: 'healthy',
-          phase: 'tools_list',
-          error: '',
-          latencyMs: 8,
-          toolCount: 2,
-          tools: [{ name: 'fresh_search' }, { name: 'fresh_read' }],
-        };
-      },
-    });
-    await writeWorkspaceMcpConfig(workspacePath, {
-      mcpServers: {
-        knowledge: {
-          type: 'http',
-          url: 'https://mcp.internal/knowledge',
-          headers: { Authorization: 'Bearer workspace-secret' },
-        },
-      },
-    });
-    multitenancy.mcpInstalls.upsertInstall({
-      workspaceId: workspace.id,
-      presetId: published.id,
-      installedByUserId: userId,
-      probeStatus: 'healthy',
-      probeError: null,
-      toolCount: 1,
-      tools: [{ name: 'search_docs' }],
-    });
-
-    const catalog = await service.listWorkspaceMcpPresetCatalog({
-      tenantId: tenant.id,
-      workspaceId: workspace.id,
-      workspacePath,
-      accessRole: 'view',
-      now: () => new Date('2026-05-14T10:00:00.000Z'),
-    });
-    const status = await readMcpStatus(workspacePath);
-    const installs = multitenancy.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id });
-
-    assert.deepEqual(seen, [{
-      type: 'http',
-      name: 'knowledge',
-      url: 'https://mcp.internal/knowledge',
-      headers: { Authorization: 'Bearer workspace-secret' },
-    }]);
-    assert.equal(catalog.presets[0].installed, true);
-    assert.equal(catalog.presets[0].connectionStatus, 'connected');
-    assert.equal(catalog.presets[0].probeStatus, 'healthy');
-    assert.equal(catalog.presets[0].lastProbedAt, '2026-05-14T10:00:00.000Z');
-    assert.deepEqual(catalog.presets[0].tools.map((tool) => tool.name), ['fresh_search', 'fresh_read']);
-    assert.equal(status.servers.knowledge.status, 'healthy');
-    assert.equal(status.servers.knowledge.toolCount, 2);
-    assert.equal(installs[0].last_probe_status, 'healthy');
-    assert.equal(installs[0].tool_count, 2);
-  } finally {
-    await cleanup();
-  }
-});
-
-test('workspace mcp tools catalog resolves uploaded helper scripts before probing', async () => {
-  const database = createTestDb();
-  const { workspacePath, cleanup } = await createWorkspacePath();
-  try {
-    const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    const seen = [];
-    const service = createWorkspaceMcpToolsService({
-      multitenancy,
-      users: {
-        getUserById: () => ({ id: userId, username: 'alice' }),
-        getEnvForUser: () => ({ USER_KEY: 'security:test-user-key' }),
-      },
-      probeHttpMcpServer: async (config) => {
-        seen.push({
-          headersHelper: config.headersHelper,
-          W3_NAME: process.env.W3_NAME,
-          USER_KEY: process.env.USER_KEY,
-        });
-        return {
-          status: 'healthy',
-          phase: 'tools_list',
-          error: '',
-          latencyMs: 8,
-          toolCount: 1,
-          tools: [{ name: 'fresh_search' }],
-        };
-      },
-    });
-    await writeWorkspaceMcpConfig(workspacePath, {
-      mcpServers: {
-        knowledge: {
-          type: 'http',
-          url: 'https://mcp.internal/knowledge',
-          headersHelper: 'python3 auth.py',
-        },
-      },
-    });
-    multitenancy.mcpInstalls.upsertInstall({
-      workspaceId: workspace.id,
-      presetId: published.id,
-      installedByUserId: userId,
-      probeStatus: 'healthy',
-      probeError: null,
-      toolCount: 1,
-      tools: [{ name: 'search_docs' }],
-    });
-
-    const catalog = await service.listWorkspaceMcpPresetCatalog({
-      tenantId: tenant.id,
-      workspaceId: workspace.id,
-      workspacePath,
-      accessRole: 'view',
-    });
-
-    assert.equal(catalog.presets[0].connectionStatus, 'connected');
-    assert.match(seen[0].headersHelper, /cd '.+mcp-helper-scripts.+tenant-\d+.+preset-\d+'/);
-    assert.match(seen[0].headersHelper, /python3 auth\.py/);
-    assert.equal(seen[0].W3_NAME, 'alice');
-    assert.equal(seen[0].USER_KEY, 'security:test-user-key');
-  } finally {
-    await cleanup();
-  }
-});
-
-test('workspace mcp tools catalog reports installed presets with missing workspace config as disconnected', async () => {
-  const database = createTestDb();
-  const { workspacePath, cleanup } = await createWorkspacePath();
-  try {
-    const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    const service = createWorkspaceMcpToolsService({
-      multitenancy,
-      probeHttpMcpServer: okProbe(),
-    });
-    multitenancy.mcpInstalls.upsertInstall({
-      workspaceId: workspace.id,
-      presetId: published.id,
-      installedByUserId: userId,
-      probeStatus: 'healthy',
-      probeError: null,
-      toolCount: 1,
-      tools: [{ name: 'search_docs' }],
-    });
-
-    const catalog = await service.listWorkspaceMcpPresetCatalog({
-      tenantId: tenant.id,
-      workspaceId: workspace.id,
-      workspacePath,
-      accessRole: 'view',
-    });
-
-    assert.equal(catalog.presets[0].installed, true);
-    assert.equal(catalog.presets[0].connectionStatus, 'probe_failed');
-    assert.equal(catalog.presets[0].probePhase, 'config');
-    assert.match(catalog.presets[0].probeError, /missing from \.mcp\.json/);
-  } finally {
-    await cleanup();
-  }
-});
-
 test('workspace mcp tools install writes project mcp config without drafts', async () => {
   const database = createTestDb();
   const { workspacePath, cleanup } = await createWorkspacePath();
   try {
     const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    const service = createWorkspaceMcpToolsService({ multitenancy, probeHttpMcpServer: okProbe() });
+    const service = createWorkspaceMcpToolsService({ multitenancy });
 
     const result = await service.installWorkspaceMcpPreset({
       tenantId: tenant.id,
@@ -337,56 +158,6 @@ test('workspace mcp tools install writes project mcp config without drafts', asy
     assert.equal(result.installed.writeTarget, 'Repo/.mcp.json');
     assert.equal(result.installed.containerPath, '/workspace/.mcp.json');
     assert.equal(result.summary.installed, 1);
-    assert.equal(result.presets[0].connectionStatus, 'connected');
-  } finally {
-    await cleanup();
-  }
-});
-
-test('workspace mcp tools preinstall uses the standard install flow', async () => {
-  const database = createTestDb();
-  const { workspacePath, cleanup } = await createWorkspacePath();
-  try {
-    const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    multitenancy.mcpPresets.updatePreset({
-      tenantId: tenant.id,
-      presetId: published.id,
-      name: published.name,
-      displayName: published.display_name,
-      description: published.description,
-      config: published.config,
-      preinstallScope: 'all_workspaces',
-      status: 'published',
-      updatedByUserId: userId,
-    });
-    multitenancy.mcpPresets.recordPresetTest({
-      tenantId: tenant.id,
-      presetId: published.id,
-      status: 'healthy',
-      error: null,
-      toolCount: 1,
-      tools: [{ name: 'search_docs' }],
-      dockerCompatible: true,
-      updatedByUserId: userId,
-    });
-    const service = createWorkspaceMcpToolsService({ multitenancy, probeHttpMcpServer: okProbe() });
-
-    const result = await service.installPreinstalledWorkspaceMcpPresets({
-      tenantId: tenant.id,
-      workspaceId: workspace.id,
-      workspacePath,
-      workspaceDisplayName: 'Repo',
-      userId,
-    });
-    const config = await readWorkspaceMcpConfig(workspacePath);
-    const installs = multitenancy.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id });
-
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.installed.map((install) => install.name), ['knowledge']);
-    assert.deepEqual(Object.keys(config.mcpServers), ['knowledge']);
-    assert.equal(installs.length, 1);
-    assert.equal(installs[0].preset_id, published.id);
-    assert.equal(installs[0].status, 'installed');
   } finally {
     await cleanup();
   }
@@ -397,7 +168,7 @@ test('workspace mcp tools remove keeps unrelated unmanaged mcp servers', async (
   const { workspacePath, cleanup } = await createWorkspacePath();
   try {
     const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
-    const service = createWorkspaceMcpToolsService({ multitenancy, probeHttpMcpServer: okProbe() });
+    const service = createWorkspaceMcpToolsService({ multitenancy });
     await writeWorkspaceMcpConfig(workspacePath, {
       mcpServers: {
         unmanaged: { type: 'http', url: 'https://mcp.internal/unmanaged' },

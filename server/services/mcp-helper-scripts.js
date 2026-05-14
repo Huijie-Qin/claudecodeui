@@ -62,123 +62,33 @@ function helperDirectoryForRuntime(runtimeHomePath, presetName) {
   return path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', String(presetName));
 }
 
-function currentUid() {
-  return typeof process.getuid === 'function' ? process.getuid() : 1000;
-}
-
-function currentGid() {
-  return typeof process.getgid === 'function' ? process.getgid() : 1000;
-}
-
-function parseContainerId(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function resolveDockerHelperOwner(env = process.env) {
-  const defaultUid = currentUid();
-  const defaultGid = currentGid();
-  return {
-    uid: parseContainerId(env.CLOUDCLI_DOCKER_UID, defaultUid > 0 ? defaultUid : 1000),
-    gid: parseContainerId(env.CLOUDCLI_DOCKER_GID, defaultGid > 0 ? defaultGid : 1000),
-  };
-}
-
 function helperContainerDirectory(presetName) {
   return path.posix.join(MCP_HELPER_CONTAINER_ROOT, String(presetName));
 }
 
-async function applyPathAccess(fsImpl, targetPath, {
-  owner = null,
-  mode,
-  fallbackMode = mode,
-} = {}) {
-  let chownSucceeded = false;
-  if (
-    owner
-    && typeof fsImpl.chown === 'function'
-    && Number.isInteger(owner.uid)
-    && Number.isInteger(owner.gid)
-  ) {
-    try {
-      await fsImpl.chown(targetPath, owner.uid, owner.gid);
-      chownSucceeded = true;
-    } catch {
-      // If the deployment cannot chown bind-mounted files, keep the helper
-      // readable by the sandbox user so MCP auth does not fail at runtime.
-    }
-  }
-  if (typeof fsImpl.chmod === 'function') {
-    await fsImpl.chmod(targetPath, owner && !chownSucceeded ? fallbackMode : mode).catch(() => {});
-  }
-}
-
-async function prepareRuntimeHelperRoot({ runtimeHomePath, fsImpl, owner }) {
-  const cloudcliDir = path.join(runtimeHomePath, '.cloudcli');
-  const helperRoot = path.join(cloudcliDir, 'mcp-helpers');
-
-  for (const directory of [cloudcliDir, helperRoot]) {
-    await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
-    await applyPathAccess(fsImpl, directory, {
-      owner,
-      mode: 0o700,
-      fallbackMode: 0o755,
-    });
-  }
-
-  return owner;
-}
-
-async function writeHelperScript({
-  directory,
-  fileName,
-  content,
-  fsImpl = fs,
-  owner = null,
-}) {
+async function writeHelperScript({ directory, fileName, content, fsImpl = fs }) {
   await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
-  await applyPathAccess(fsImpl, directory, {
-    owner,
-    mode: 0o700,
-    fallbackMode: 0o755,
-  });
+  await fsImpl.chmod(directory, 0o700).catch(() => {});
   const scriptPath = path.join(directory, requireSafeHelperFileName(fileName));
   await fsImpl.writeFile(scriptPath, content, { mode: 0o700 });
-  await applyPathAccess(fsImpl, scriptPath, {
-    owner,
-    mode: 0o700,
-    fallbackMode: 0o755,
-  });
+  await fsImpl.chmod(scriptPath, 0o700).catch(() => {});
   return scriptPath;
 }
 
-async function writeHelperEnvFile({
-  directory,
-  helperEnv,
-  fsImpl = fs,
-  owner = null,
-}) {
+async function writeHelperEnvFile({ directory, helperEnv, fsImpl = fs }) {
   const env = readStringRecord(helperEnv);
   if (Object.keys(env).length === 0) {
     return null;
   }
 
   await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
-  await applyPathAccess(fsImpl, directory, {
-    owner,
-    mode: 0o700,
-    fallbackMode: 0o755,
-  });
+  await fsImpl.chmod(directory, 0o700).catch(() => {});
   const envPath = path.join(directory, HELPER_ENV_FILE_NAME);
   const content = Object.entries(env)
     .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
     .join('\n');
   await fsImpl.writeFile(envPath, `${content}\n`, { mode: 0o600 });
-  await applyPathAccess(fsImpl, envPath, {
-    owner,
-    mode: 0o600,
-    fallbackMode: 0o644,
-  });
+  await fsImpl.chmod(envPath, 0o600).catch(() => {});
   return envPath;
 }
 
@@ -295,7 +205,6 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
   workspaceId,
   runtimeMode = 'local',
   runtimeHomePath = null,
-  runtimeOwner = null,
   helperRoot = process.env.CLOUDCLI_MCP_HELPER_ROOT || DEFAULT_MCP_HELPER_HOST_ROOT,
   multitenancy = multitenancyDb,
   fsImpl = fs,
@@ -312,12 +221,6 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
   }
 
   const nextServers = { ...mcpServers };
-  const runtimeHelperOwner = runtimeMode === 'docker' && runtimeHomePath
-    ? runtimeOwner || resolveDockerHelperOwner()
-    : null;
-  if (runtimeHelperOwner) {
-    await prepareRuntimeHelperRoot({ runtimeHomePath, fsImpl, owner: runtimeHelperOwner });
-  }
   for (const install of installs) {
     const serverName = install.name;
     const currentConfig = nextServers[serverName];
@@ -350,14 +253,12 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
         fileName: script.file_name,
         content: script.content,
         fsImpl,
-        owner: runtimeHelperOwner,
       });
     }
     const envPath = await writeHelperEnvFile({
       directory: hostDirectory,
       helperEnv,
       fsImpl,
-      owner: runtimeHelperOwner,
     });
     nextServers[serverName] = withHelperWorkingDirectory(
       currentConfig,

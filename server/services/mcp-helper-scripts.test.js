@@ -150,50 +150,6 @@ test('workspace MCP config resolves uploaded helper script into private docker r
   }
 });
 
-test('workspace MCP docker helper files inherit runtime home owner', async () => {
-  const database = createTestDb();
-  const { multitenancy, tenant, workspace } = seedWorkspaceWithPreset(database);
-  const runtimeHomePath = path.join('/data/runtimes', 'claude', 'team', 'alice', 'repo', 'home');
-  const calls = [];
-  const fsMock = {
-    mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
-    chown: async (targetPath, uid, gid) => calls.push(['chown', targetPath, uid, gid]),
-    chmod: async (targetPath, mode) => calls.push(['chmod', targetPath, mode]),
-    writeFile: async (targetPath, content, options) => calls.push(['writeFile', targetPath, content, options]),
-  };
-
-  await applyWorkspaceMcpHelperScripts({
-    knowledge: {
-      type: 'http',
-      url: 'https://mcp.internal/knowledge',
-      headersHelper: 'python3 auth.py',
-    },
-  }, {
-    tenantId: tenant.id,
-    workspaceId: workspace.id,
-    runtimeMode: 'docker',
-    runtimeHomePath,
-    runtimeOwner: { uid: 1000, gid: 1000 },
-    multitenancy,
-    fsImpl: fsMock,
-  });
-
-  const cloudcliDir = path.join(runtimeHomePath, '.cloudcli');
-  const helperRoot = path.join(cloudcliDir, 'mcp-helpers');
-  const helperDir = path.join(helperRoot, 'knowledge');
-  const scriptPath = path.join(helperDir, 'auth.py');
-  const envPath = path.join(helperDir, '.headers-helper.env.sh');
-  const chownedPaths = new Set(
-    calls
-      .filter(([operation]) => operation === 'chown')
-      .map(([, targetPath, uid, gid]) => `${targetPath}:${uid}:${gid}`),
-  );
-
-  for (const targetPath of [cloudcliDir, helperRoot, helperDir, scriptPath, envPath]) {
-    assert.ok(chownedPaths.has(`${targetPath}:1000:1000`), `${targetPath} should be chowned to the runtime user`);
-  }
-});
-
 test('preset probe resolves uploaded helper script into private host directory', async () => {
   const database = createTestDb();
   const { multitenancy, tenant, preset } = seedWorkspaceWithPreset(database);

@@ -8,17 +8,11 @@ export type WorkspaceMcpPreset = {
   displayName: string;
   description: string;
   transport: 'http';
-  status: 'available' | 'connected' | 'probe_failed' | 'unverified';
+  status: 'available' | 'installed';
   dockerCompatible: boolean;
   toolCount: number;
   tools?: Array<{ name: string; description?: string }>;
   installed: boolean;
-  connectionStatus: 'available' | 'connected' | 'probe_failed' | 'unverified';
-  probeStatus?: 'healthy' | 'probe_failed' | null;
-  probePhase?: string | null;
-  probeError?: string | null;
-  probeLatencyMs?: number | null;
-  lastProbedAt?: string | null;
   userSetupRequired: false;
   source: 'admin_published';
   containerPath: string;
@@ -75,7 +69,7 @@ function updateSet(current: Set<number>, id: number, isPresent: boolean) {
 }
 
 function normalizeWorkspaceMcpToolsPayload(payload: WorkspaceMcpToolsResponse): WorkspaceMcpToolsResponse {
-  const presets = payload.presets ?? [];
+  const presets = (payload.presets ?? []).filter((preset) => preset.toolCount > 0);
   return {
     ...payload,
     presets,

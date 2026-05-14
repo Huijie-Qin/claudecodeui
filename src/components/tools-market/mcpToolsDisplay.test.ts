@@ -25,7 +25,6 @@ function createPreset(overrides: Partial<WorkspaceMcpPreset> = {}): WorkspaceMcp
       { name: 'lookup_customer_segment', description: 'Return governed segment metadata.' },
     ],
     installed: false,
-    connectionStatus: 'available',
     userSetupRequired: false,
     source: 'admin_published',
     containerPath: '/workspace/.mcp.json',

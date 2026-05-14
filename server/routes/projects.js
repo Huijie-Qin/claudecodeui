@@ -6,7 +6,6 @@ import os from 'os';
 import express from 'express';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
-import { workspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
 
 const router = express.Router();
@@ -58,23 +57,6 @@ function createWorkspaceProject(workspace) {
     path: workspace.path,
     accessRole: 'owner',
   };
-}
-
-async function installPreinstalledMcpPresets(workspace) {
-  try {
-    const result = await workspaceMcpToolsService.installPreinstalledWorkspaceMcpPresets({
-      tenantId: workspace.tenant_id,
-      workspaceId: workspace.id,
-      workspacePath: workspace.path,
-      workspaceDisplayName: workspace.display_name || workspace.slug || String(workspace.id),
-      userId: workspace.owner_user_id,
-    });
-    if (result.errors?.length > 0) {
-      console.warn('Failed to preinstall some MCP presets:', result.errors);
-    }
-  } catch (error) {
-    console.warn('Failed to preinstall MCP presets for workspace:', error instanceof Error ? error.message : error);
-  }
 }
 
 /**
@@ -292,7 +274,6 @@ router.post('/create-workspace', async (req, res) => {
         displayName: requestedName || workspaceSlug,
         path: absolutePath,
       });
-      await installPreinstalledMcpPresets(workspace);
 
       return res.json({
         success: true,
@@ -364,7 +345,6 @@ router.post('/create-workspace', async (req, res) => {
           displayName: requestedName || workspaceSlug,
           path: clonePath,
         });
-        await installPreinstalledMcpPresets(workspace);
 
         return res.json({
           success: true,
@@ -382,7 +362,6 @@ router.post('/create-workspace', async (req, res) => {
         displayName: requestedName || workspaceSlug,
         path: absolutePath,
       });
-      await installPreinstalledMcpPresets(workspace);
 
       return res.json({
         success: true,
@@ -618,7 +597,6 @@ router.get('/clone-progress', async (req, res) => {
             displayName: requestedName || workspaceSlug,
             path: clonePath,
           });
-          await installPreinstalledMcpPresets(workspace);
           const project = createWorkspaceProject(workspace);
           sendEvent('complete', { project, message: 'Repository cloned successfully' });
         } catch (error) {
