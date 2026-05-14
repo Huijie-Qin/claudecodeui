@@ -208,6 +208,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
       ANTHROPIC_API_KEY: 'key-1',
+      HTTP_PROXY: 'http://proxy.example:8080',
+      HTTPS_PROXY: 'http://secure-proxy.example:8443',
+      http_proxy: 'http://lower-proxy.example:8080',
+      https_proxy: 'http://lower-secure-proxy.example:8443',
       EXTRA_SECRET: 'do-not-forward',
     },
     multitenancy: {
@@ -278,6 +282,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
   assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+  assert.equal(runtime.executionEnv.HTTP_PROXY, 'http://proxy.example:8080');
+  assert.equal(runtime.executionEnv.HTTPS_PROXY, 'http://secure-proxy.example:8443');
+  assert.equal(runtime.executionEnv.http_proxy, 'http://lower-proxy.example:8080');
+  assert.equal(runtime.executionEnv.https_proxy, 'http://lower-secure-proxy.example:8443');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
@@ -287,6 +295,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /^#!\/usr\/bin\/env bash/);
   assert.match(wrapper, /docker exec -i/);
   assert.match(wrapper, /-e ANTHROPIC_API_KEY/);
+  assert.match(wrapper, /-e HTTP_PROXY/);
+  assert.match(wrapper, /-e HTTPS_PROXY/);
+  assert.match(wrapper, /-e http_proxy/);
+  assert.match(wrapper, /-e https_proxy/);
   assert.match(wrapper, /-e USER_KEY/);
   assert.match(wrapper, /-e W3_NAME/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
