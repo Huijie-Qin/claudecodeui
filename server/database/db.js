@@ -149,6 +149,7 @@ const runMigrations = () => {
     db.exec(CODEHUB_REPOSITORIES_TABLE_SQL);
     db.exec(CODEHUB_REPOSITORIES_USER_INDEX_SQL);
     db.exec(MULTITENANCY_SCHEMA_SQL);
+    runMultitenancyMigrations();
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -156,6 +157,23 @@ const runMigrations = () => {
     throw error;
   }
 };
+
+function runMultitenancyMigrations() {
+  const mcpPresetColumns = db
+    .prepare("PRAGMA table_info(mcp_server_presets)")
+    .all()
+    .map((col) => col.name);
+
+  if (!mcpPresetColumns.includes('preinstall_scope')) {
+    console.log('Running migration: Adding mcp_server_presets.preinstall_scope column');
+    db.exec("ALTER TABLE mcp_server_presets ADD COLUMN preinstall_scope TEXT NOT NULL DEFAULT 'none'");
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_preinstall
+      ON mcp_server_presets(tenant_id, preinstall_scope, status)
+  `);
+}
 
 // Initialize database with schema
 const initializeDatabase = async () => {

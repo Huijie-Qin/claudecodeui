@@ -50,7 +50,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
   const canManage = !isReadOnly && data?.canManage !== false;
 
   const presets = useMemo(
-    () => (data?.presets ?? []).filter((preset) => preset.toolCount > 0),
+    () => data?.presets ?? [],
     [data?.presets],
   );
   const summary = useMemo(() => ({
@@ -320,6 +320,12 @@ function PresetDetail({ canManage, preset }: { canManage: boolean; preset: Works
   const rows = [
     [t('mcpTools.detail.serverName'), preset.name],
     [t('mcpTools.detail.source'), t('mcpTools.detail.adminPublished')],
+    ...(preset.installed ? [
+      [t('mcpTools.detail.connection'), t(`mcpTools.connection.${preset.connectionStatus}`)],
+      ...(preset.lastProbedAt ? [[t('mcpTools.detail.checkedAt'), preset.lastProbedAt]] : []),
+      ...(preset.probePhase ? [[t('mcpTools.detail.probePhase'), preset.probePhase]] : []),
+      ...(preset.probeError ? [[t('mcpTools.detail.probeError'), preset.probeError]] : []),
+    ] : []),
     [t('mcpTools.detail.runtimePolicy'), t('mcpTools.appliesOnNextTurn')],
   ];
   const tools = getPresetToolDetails(preset);
@@ -429,14 +435,23 @@ function ToolList({ tools }: { tools: ReturnType<typeof getPresetToolDetails> })
 
 function StatusBadge({ preset }: { preset: WorkspaceMcpPreset }) {
   const { t } = useTranslation();
+  const connectionStatus = preset.connectionStatus ?? (preset.installed ? 'unverified' : 'available');
+  const tone = preset.installed ? connectionStatus : 'available';
+  const className = tone === 'connected'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+    : tone === 'probe_failed'
+      ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200'
+      : tone === 'unverified'
+        ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'
+        : 'border-border bg-muted text-muted-foreground';
+  const label = preset.installed
+    ? t(`mcpTools.connection.${connectionStatus}`)
+    : t('mcpTools.available');
+
   return (
-    <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold ${
-      preset.installed
-        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
-        : 'border-border bg-muted text-muted-foreground'
-    }`}
+    <span className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-semibold ${className}`}
     >
-      {preset.installed ? t('mcpTools.connected') : t('mcpTools.available')}
+      {label}
     </span>
   );
 }

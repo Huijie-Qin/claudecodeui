@@ -82,6 +82,7 @@ test('GET /:workspaceId/mcp-tools returns catalog for view-only users', async ()
   assert.deepEqual(seen.catalogArgs, {
     tenantId: 2,
     workspaceId: 10,
+    workspacePath: '/tmp/workspace',
     accessRole: 'view',
   });
   assert.equal(payload.canManage, false);

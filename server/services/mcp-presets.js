@@ -13,6 +13,7 @@ export const WORKSPACE_MCP_CONFIG_FILE = '.mcp.json';
 export const MCP_CONTAINER_CONFIG_PATH = '/workspace/.mcp.json';
 
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const MCP_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 const W3_NAME_ENV_NAME = 'W3_NAME';
 
 function createHttpError(message, statusCode = 400, code = undefined) {
@@ -111,6 +112,14 @@ function normalizeStatus(status, fallback = 'draft') {
 function normalizeEditableStatus(status, fallback = 'draft') {
   const value = normalizeStatus(status, fallback);
   return value === 'published' ? 'draft' : value;
+}
+
+function normalizePreinstallScope(input = {}) {
+  const value = input.preinstallScope ?? (input.preinstall === true ? 'all_workspaces' : 'none');
+  if (!MCP_PREINSTALL_SCOPES.has(value)) {
+    throw createHttpError('preinstallScope must be one of: none, all_workspaces', 400);
+  }
+  return value;
 }
 
 function isWorkspaceVisiblePreset(row) {
@@ -236,6 +245,7 @@ export function normalizePresetInput(input = {}) {
     name: normalizeServerName(input.name ?? config.name),
     displayName: requireNonEmptyString(input.displayName ?? input.display_name, 'displayName'),
     description: typeof input.description === 'string' ? input.description.trim() : '',
+    preinstallScope: normalizePreinstallScope(input),
     config: compactObject({
       type: 'http',
       url: normalizeHttpUrl(config.url),
@@ -261,6 +271,8 @@ export function toAdminPreset(row, helperScript = null) {
     description: row.description || '',
     transport: row.transport || 'http',
     config: row.config || {},
+    preinstallScope: row.preinstall_scope || 'none',
+    preinstall: row.preinstall_scope === 'all_workspaces',
     status: row.status,
     dockerCompatible: row.docker_compatible === 1,
     lastTestStatus: row.last_test_status || null,
@@ -276,20 +288,44 @@ export function toAdminPreset(row, helperScript = null) {
   };
 }
 
-export function toWorkspacePreset(row, installRow = null) {
+export function toWorkspacePreset(row, installRow = null, probe = null) {
   if (!row) return null;
   const installed = installRow?.status === 'installed';
+  const probeStatus = probe?.status || installRow?.last_probe_status || null;
+  const connectionStatus = !installed
+    ? 'available'
+    : probeStatus === 'healthy'
+      ? 'connected'
+      : probeStatus === 'probe_failed'
+        ? 'probe_failed'
+        : 'unverified';
+  const liveTools = Array.isArray(probe?.tools) ? probe.tools : null;
+  const installedTools = Array.isArray(installRow?.tools) ? installRow.tools : null;
+  const publishedTools = Array.isArray(row.tools) ? row.tools : [];
+  const tools = probeStatus === 'healthy'
+    ? liveTools || installedTools || publishedTools
+    : publishedTools;
+  const toolCount = probeStatus === 'healthy'
+    ? Number(probe?.toolCount ?? installRow?.tool_count ?? row.tool_count ?? 0)
+    : Number(row.tool_count || 0);
+
   return {
     id: row.id,
     name: row.name,
     displayName: row.display_name,
     description: row.description || '',
     transport: row.transport || 'http',
-    status: installed ? 'installed' : 'available',
+    status: installed ? connectionStatus : 'available',
     dockerCompatible: row.docker_compatible === 1,
-    toolCount: Number(row.tool_count || 0),
-    tools: Array.isArray(row.tools) ? row.tools : [],
+    toolCount,
+    tools,
     installed,
+    connectionStatus,
+    probeStatus,
+    probePhase: probe?.phase || null,
+    probeError: probe?.error || installRow?.last_probe_error || null,
+    probeLatencyMs: typeof probe?.latencyMs === 'number' ? probe.latencyMs : null,
+    lastProbedAt: probe?.checkedAt || null,
     userSetupRequired: false,
     source: 'admin_published',
     containerPath: MCP_CONTAINER_CONFIG_PATH,
@@ -337,6 +373,7 @@ export function createMcpPresetService({
         displayName: normalized.displayName,
         description: normalized.description,
         config: normalized.config,
+        preinstallScope: normalized.preinstallScope,
         status: normalizeEditableStatus(input?.status, 'draft'),
         createdByUserId: requirePositiveInteger(userId, 'userId'),
       });
@@ -353,6 +390,7 @@ export function createMcpPresetService({
         displayName: normalized.displayName,
         description: normalized.description,
         config: normalized.config,
+        preinstallScope: normalized.preinstallScope,
         status: normalizeEditableStatus(input?.status, existing.status === 'disabled' ? 'disabled' : 'draft'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
@@ -414,6 +452,7 @@ export function createMcpPresetService({
           displayName: normalizedInput.displayName,
           description: normalizedInput.description,
           config: normalizedInput.config,
+          preinstallScope: normalizedInput.preinstallScope,
           status: normalizeEditableStatus(input?.status, preset.status === 'disabled' ? 'disabled' : 'draft'),
           updatedByUserId: normalizedUserId,
         });

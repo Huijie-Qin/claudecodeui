@@ -9,6 +9,7 @@ export type McpPresetFormValues = {
   headersText: string;
   headersHelper: string;
   helperEnvText: string;
+  preinstall: boolean;
   status: AdminMcpPresetStatus;
 };
 
@@ -77,6 +78,7 @@ export function buildMcpPresetPayload(values: McpPresetFormValues, messages: Mcp
     displayName: values.displayName.trim(),
     description: values.description.trim(),
     status: values.status,
+    preinstallScope: values.preinstall ? 'all_workspaces' : 'none',
     type: 'http' as const,
     url: values.url.trim(),
     headers: parseHeadersText(values.headersText, messages),

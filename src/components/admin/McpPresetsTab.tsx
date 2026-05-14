@@ -36,6 +36,7 @@ const EMPTY_VALUES: McpPresetFormValues = {
   headersText: '',
   headersHelper: '',
   helperEnvText: '',
+  preinstall: false,
   status: 'draft',
 };
 
@@ -95,6 +96,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
       headersText: headersToText(preset.config?.headers),
       headersHelper: preset.config?.headersHelper || '',
       helperEnvText: headersToText(preset.config?.helperEnv),
+      preinstall: preset.preinstallScope === 'all_workspaces',
       status: preset.status === 'disabled' ? 'disabled' : 'draft',
     });
   };
@@ -200,6 +202,11 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span className="rounded border border-border px-2 py-0.5">{t('mcp.transportHttp')}</span>
                     <span className="rounded border border-border px-2 py-0.5">{t('mcp.toolsCount', { count: preset.toolCount })}</span>
+                    {preset.preinstallScope === 'all_workspaces' ? (
+                      <span className="rounded border border-sky-200 px-2 py-0.5 text-sky-700">
+                        {t('mcp.preinstallBadge', { defaultValue: 'Preinstall' })}
+                      </span>
+                    ) : null}
                     {preset.dockerCompatible ? <span className="rounded border border-emerald-200 px-2 py-0.5 text-emerald-700">{t('mcp.docker')}</span> : null}
                   </div>
                 </button>
@@ -319,6 +326,24 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               </select>
               <span className="block text-xs text-muted-foreground">
                 {t('mcp.fields.statusHelp')}
+              </span>
+            </label>
+            <label className="flex items-start gap-3 rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={values.preinstall}
+                onChange={(event) => updateValue('preinstall', event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-input"
+              />
+              <span>
+                <span className="block text-sm font-medium text-foreground">
+                  {t('mcp.fields.preinstall', { defaultValue: 'Preinstall to workspaces' })}
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {t('mcp.fields.preinstallHelp', {
+                    defaultValue: 'When published, this MCP preset is installed automatically into every newly created workspace.',
+                  })}
+                </span>
               </span>
             </label>
             <div className="flex items-end gap-2">
