@@ -1,4 +1,5 @@
-import { ChevronDown, Eye, FileText, FolderPlus, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, Eye, FileText, FolderPlus, FolderUp, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
@@ -13,6 +14,7 @@ type FileTreeHeaderProps = {
   onNewFile?: () => void;
   onNewFolder?: () => void;
   onUpload?: () => void;
+  onUploadFolder?: () => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
   // Loading state
@@ -28,12 +30,50 @@ export default function FileTreeHeader({
   onNewFile,
   onNewFolder,
   onUpload,
+  onUploadFolder,
   onRefresh,
   onCollapseAll,
   loading,
   operationLoading,
 }: FileTreeHeaderProps) {
   const { t } = useTranslation();
+  const [isUploadMenuOpen, setIsUploadMenuOpen] = useState(false);
+  const uploadMenuRef = useRef<HTMLDivElement | null>(null);
+  const hasUploadOptions = Boolean(onUpload && onUploadFolder);
+
+  const closeUploadMenu = useCallback(() => {
+    setIsUploadMenuOpen(false);
+  }, []);
+
+  const runUploadAction = useCallback((action?: () => void) => {
+    closeUploadMenu();
+    action?.();
+  }, [closeUploadMenu]);
+
+  useEffect(() => {
+    if (!isUploadMenuOpen) {
+      return;
+    }
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (uploadMenuRef.current && !uploadMenuRef.current.contains(event.target as Node)) {
+        closeUploadMenu();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeUploadMenu();
+      }
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeUploadMenu, isUploadMenuOpen]);
 
   return (
     <div className="space-y-2 border-b border-border px-3 pb-2 pt-3">
@@ -68,18 +108,55 @@ export default function FileTreeHeader({
               <FolderPlus className="h-3.5 w-3.5" />
             </Button>
           )}
-          {onUpload && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={onUpload}
-              title={t('fileTree.upload', 'Upload Files')}
-              aria-label={t('fileTree.upload', 'Upload Files')}
-              disabled={operationLoading}
-            >
-              <Upload className="h-3.5 w-3.5" />
-            </Button>
+          {(onUpload || onUploadFolder) && (
+            <div ref={uploadMenuRef} className="relative">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => {
+                  if (hasUploadOptions) {
+                    setIsUploadMenuOpen((current) => !current);
+                    return;
+                  }
+                  runUploadAction(onUpload || onUploadFolder);
+                }}
+                title={t('fileTree.upload', 'Upload')}
+                aria-label={t('fileTree.upload', 'Upload')}
+                aria-haspopup={hasUploadOptions ? 'menu' : undefined}
+                aria-expanded={hasUploadOptions ? isUploadMenuOpen : undefined}
+                disabled={operationLoading}
+              >
+                <Upload className="h-3.5 w-3.5" />
+              </Button>
+
+              {hasUploadOptions && isUploadMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label={t('fileTree.uploadMenu', 'Upload menu')}
+                  className="absolute right-0 top-full z-50 mt-1 min-w-[170px] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus:bg-accent focus:outline-none"
+                    onClick={() => runUploadAction(onUpload)}
+                  >
+                    <Upload className="h-4 w-4" />
+                    <span>{t('fileTree.uploadFiles', 'Upload Files')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus:bg-accent focus:outline-none"
+                    onClick={() => runUploadAction(onUploadFolder)}
+                  >
+                    <FolderUp className="h-4 w-4" />
+                    <span>{t('fileTree.uploadFolder', 'Upload Folder')}</span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {onRefresh && (
             <Button

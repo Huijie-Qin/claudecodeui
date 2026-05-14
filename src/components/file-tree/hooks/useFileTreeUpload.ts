@@ -59,6 +59,16 @@ const readAllDirectoryEntries = async (directoryEntry: FileSystemDirectoryEntry,
   return files;
 };
 
+function getUploadRelativePath(file: File) {
+  const browserRelativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return browserRelativePath || file.name;
+}
+
+function getUploadFileName(file: File, relativePath: string) {
+  const pathParts = relativePath.split('/').filter(Boolean);
+  return pathParts[pathParts.length - 1] || file.name;
+}
+
 export const useFileTreeUpload = ({
   selectedProject,
   onRefresh,
@@ -70,6 +80,7 @@ export const useFileTreeUpload = ({
   const [operationLoading, setOperationLoading] = useState(false);
   const treeRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const pickerTargetPathRef = useRef('');
 
   const uploadFiles = useCallback(async (files: File[], targetPath = '') => {
@@ -85,12 +96,13 @@ export const useFileTreeUpload = ({
 
       const relativePaths: string[] = [];
       files.forEach((file) => {
-        const cleanFile = new File([file], file.name.split('/').pop()!, {
+        const relativePath = getUploadRelativePath(file);
+        const cleanFile = new File([file], getUploadFileName(file, relativePath), {
           type: file.type,
           lastModified: file.lastModified
         });
         formData.append('files', cleanFile);
-        relativePaths.push(file.name);
+        relativePaths.push(relativePath);
       });
 
       formData.append('relativePaths', JSON.stringify(relativePaths));
@@ -126,6 +138,14 @@ export const useFileTreeUpload = ({
     if (isReadOnly) return;
     pickerTargetPathRef.current = targetPath;
     fileInputRef.current?.click();
+  }, [isReadOnly]);
+
+  const openFolderPicker = useCallback((targetPath = '') => {
+    if (isReadOnly) return;
+    pickerTargetPathRef.current = targetPath;
+    folderInputRef.current?.setAttribute('webkitdirectory', '');
+    folderInputRef.current?.setAttribute('directory', '');
+    folderInputRef.current?.click();
   }, [isReadOnly]);
 
   const handleFileInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -228,6 +248,7 @@ export const useFileTreeUpload = ({
     operationLoading,
     treeRef,
     fileInputRef,
+    folderInputRef,
     handleDragEnter,
     handleDragOver,
     handleDragLeave,
@@ -236,6 +257,7 @@ export const useFileTreeUpload = ({
     handleItemDragOver,
     handleItemDrop,
     openFilePicker,
+    openFolderPicker,
     setDropTarget,
   };
 };

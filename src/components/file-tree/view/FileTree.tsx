@@ -150,6 +150,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         onNewFile={isReadOnly ? undefined : () => operations.handleStartCreate('', 'file')}
         onNewFolder={isReadOnly ? undefined : () => operations.handleStartCreate('', 'directory')}
         onUpload={isReadOnly ? undefined : () => upload.openFilePicker('')}
+        onUploadFolder={isReadOnly ? undefined : () => upload.openFolderPicker('')}
         onRefresh={refreshFiles}
         onCollapseAll={collapseAll}
         loading={loading}
@@ -158,6 +159,13 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
 
       <input
         ref={upload.fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={upload.handleFileInputChange}
+      />
+      <input
+        ref={upload.folderInputRef}
         type="file"
         multiple
         className="hidden"
@@ -217,6 +225,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           onDownload={operations.handleDownload}
           onMove={isReadOnly ? undefined : operations.handleStartMove}
           onUpload={isReadOnly ? undefined : upload.openFilePicker}
+          onUploadFolder={isReadOnly ? undefined : upload.openFolderPicker}
           onRefresh={refreshFiles}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}
