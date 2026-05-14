@@ -162,9 +162,14 @@ export function bindRuntimeMessagesToProviderSession({
   multitenancy = multitenancyDb,
   runtimeId,
   providerSessionId,
+  fromProviderSessionId = null,
 }) {
   if (!runtimeId || !providerSessionId) return 0;
-  return multitenancy.sessionMessages.bindProviderSession({ runtimeId, providerSessionId });
+  return multitenancy.sessionMessages.bindProviderSession({
+    runtimeId,
+    providerSessionId,
+    fromProviderSessionId,
+  });
 }
 
 export const sessionMessageHistoryService = createSessionMessageHistoryService();

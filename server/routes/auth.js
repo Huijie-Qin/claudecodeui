@@ -101,18 +101,17 @@ export function createAuthRouter({
         return res.status(400).json({ error: 'Username must be at least 3 characters, password at least 6 characters' });
       }
 
+      const saltRounds = 12;
+      const passwordHash = await bcrypt.hash(password, saltRounds);
+      const trimmedGitEmail = gitEmail.trim();
+
       // Use a transaction to prevent race conditions
       db.prepare('BEGIN').run();
       try {
         const isFirstUser = !userDb.hasUsers();
 
-        // Hash password
-        const saltRounds = 12;
-        const passwordHash = await bcrypt.hash(password, saltRounds);
-
         // Create user
         const user = userDb.createUser(username, passwordHash, { isSystemAdmin: isFirstUser });
-        const trimmedGitEmail = gitEmail.trim();
         if (typeof userDb.updateGitConfig === 'function') {
           userDb.updateGitConfig(user.id, username, trimmedGitEmail);
         }

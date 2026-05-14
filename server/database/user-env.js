@@ -2,9 +2,11 @@ import crypto from 'node:crypto';
 
 export const USER_KEY_ENV_NAME = 'USER_KEY';
 export const USER_KEY_ENCRYPTION_PREFIX = 'security';
+export const SECRET_STRING_ENCRYPTION_PREFIX = 'secret';
 
 const USER_KEY_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const USER_KEY_ENCRYPTED_PATTERN = /^security:[0-9a-f]{24}:[0-9a-f]+:[0-9a-f]{32}$/i;
+const SECRET_STRING_ENCRYPTED_PATTERN = /^secret:[0-9a-f]{24}:[0-9a-f]*:[0-9a-f]{32}$/i;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function requireSecretMaterial(secretMaterial) {
@@ -72,6 +74,10 @@ export function isEncryptedUserKey(value) {
   return USER_KEY_ENCRYPTED_PATTERN.test(String(value || '').trim());
 }
 
+export function isEncryptedSecretString(value) {
+  return SECRET_STRING_ENCRYPTED_PATTERN.test(String(value || '').trim());
+}
+
 export function encryptUserKey(userKey, { secretMaterial, iv = null } = {}) {
   const plaintext = String(userKey || '').trim().toUpperCase();
   if (!isRawUserKey(plaintext)) {
@@ -102,6 +108,47 @@ export function decryptUserKey(value, { secretMaterial } = {}) {
   const encrypted = String(value || '').trim();
   if (!isEncryptedUserKey(encrypted)) {
     throw new Error('Encrypted USER_KEY is malformed');
+  }
+
+  const [, nonceHex, ciphertextHex, tagHex] = encrypted.split(':');
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    deriveUserKeyEncryptionKey(secretMaterial),
+    fromHex(nonceHex, 'nonce'),
+  );
+  decipher.setAuthTag(fromHex(tagHex, 'tag'));
+  return Buffer.concat([
+    decipher.update(fromHex(ciphertextHex, 'ciphertext')),
+    decipher.final(),
+  ]).toString('utf8');
+}
+
+export function encryptSecretString(value, { secretMaterial, iv = null } = {}) {
+  const plaintext = String(value ?? '');
+  const nonce = iv ? Buffer.from(iv) : crypto.randomBytes(12);
+  if (nonce.length !== 12) {
+    throw new Error('Secret AES-GCM nonce must be 12 bytes');
+  }
+
+  const cipher = crypto.createCipheriv('aes-256-gcm', deriveUserKeyEncryptionKey(secretMaterial), nonce);
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, 'utf8'),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+
+  return [
+    SECRET_STRING_ENCRYPTION_PREFIX,
+    toHex(nonce),
+    toHex(ciphertext),
+    toHex(tag),
+  ].join(':');
+}
+
+export function decryptSecretString(value, { secretMaterial } = {}) {
+  const encrypted = String(value || '').trim();
+  if (!isEncryptedSecretString(encrypted)) {
+    throw new Error('Encrypted secret is malformed');
   }
 
   const [, nonceHex, ciphertextHex, tagHex] = encrypted.split(':');

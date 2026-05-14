@@ -172,9 +172,13 @@ async function copyDefaultSkills(workspacePath) {
   }
 }
 
-async function ensureDefaultRootWorkspace(multitenancy, { tenantId, userId }) {
+async function ensureDefaultRootWorkspace(multitenancy, users, { tenantId, userId }) {
+  const tenant = multitenancy.tenants.getTenantById(tenantId);
+  const user = typeof users?.getUserById === 'function' ? users.getUserById(userId) : null;
   const workspacePath = buildTenantWorkspacePath({
     workspacesRoot: WORKSPACES_ROOT,
+    tenantCode: tenant?.code,
+    username: user?.username,
     tenantId,
     userId,
     requestedPath: ROOT_WORKSPACE_NAME,
@@ -341,7 +345,7 @@ export function createAdminRouter(
         status: req.body?.status || 'active',
       });
       const defaultWorkspace = membership.status === 'active'
-        ? await ensureDefaultRootWorkspace(multitenancy, { tenantId, userId })
+        ? await ensureDefaultRootWorkspace(multitenancy, users, { tenantId, userId })
         : null;
       res.json({ membership, defaultWorkspace });
     } catch (error) {

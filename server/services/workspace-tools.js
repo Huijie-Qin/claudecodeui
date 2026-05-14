@@ -38,6 +38,33 @@ const BUILT_IN_TOOLS = Object.freeze([
   },
 ]);
 
+function redactProbeLogValue(value) {
+  return String(value || '')
+    .replace(/security:[0-9a-f:]+/gi, 'security:[redacted]')
+    .replace(/\b[0-9a-f]{64}\b/gi, '[hex64-redacted]')
+    .replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer [redacted]');
+}
+
+function probeLogSnippet(value) {
+  const redacted = redactProbeLogValue(value);
+  return redacted.length > 300 ? `${redacted.slice(0, 300)}...` : redacted;
+}
+
+function logMcpProbe(event, details = {}) {
+  console.log(`[MCP Probe] ${event}`, details);
+}
+
+function summarizeProbeConfig(config = {}) {
+  return {
+    name: config.name || null,
+    url: config.url || null,
+    hasHeadersHelper: typeof config.headersHelper === 'string' && config.headersHelper.trim() !== '',
+    staticHeaderKeys: config.headers && typeof config.headers === 'object'
+      ? Object.keys(config.headers)
+      : [],
+  };
+}
+
 export function getWorkspaceToolsPaths(workspacePath) {
   return {
     mcpConfigPath: path.join(workspacePath, '.mcp.json'),
@@ -350,13 +377,28 @@ export async function probeHttpMcpServer(config, {
 
   try {
     const normalized = normalizeHttpConfig(config);
+    logMcpProbe('start', summarizeProbeConfig(normalized));
     const requestHeaders = await resolveRequestHeaders(normalized);
+    logMcpProbe('headers_ready', {
+      name: normalized.name || null,
+      url: normalized.url,
+      headerKeys: Object.keys(requestHeaders),
+    });
     const initialize = await postJsonRpc({
       fetchImpl,
       timeoutMs,
       url: normalized.url,
       headers: requestHeaders,
       payload: initializePayload,
+    });
+    const sessionId = initialize.headers.get('mcp-session-id') || initialize.headers.get('Mcp-Session-Id');
+    logMcpProbe('initialize_response', {
+      name: normalized.name || null,
+      url: normalized.url,
+      httpStatus: initialize.httpStatus,
+      ok: initialize.ok,
+      hasRpcError: Boolean(initialize.body?.error),
+      hasSessionId: Boolean(sessionId),
     });
 
     if (initialize.httpStatus === 401 || initialize.httpStatus === 403) {
@@ -369,7 +411,6 @@ export async function probeHttpMcpServer(config, {
       return failedProbe('initialize', readRpcError(initialize.body.error), startedAt);
     }
 
-    const sessionId = initialize.headers.get('mcp-session-id') || initialize.headers.get('Mcp-Session-Id');
     await postJsonRpc({
       fetchImpl,
       timeoutMs,
@@ -382,7 +423,13 @@ export async function probeHttpMcpServer(config, {
         method: 'notifications/initialized',
         params: {},
       },
-    }).catch(() => {});
+    }).catch((error) => {
+      logMcpProbe('initialized_notification_failed', {
+        name: normalized.name || null,
+        url: normalized.url,
+        error: error?.message || 'request failed',
+      });
+    });
 
     const toolsList = await postJsonRpc({
       fetchImpl,
@@ -398,6 +445,13 @@ export async function probeHttpMcpServer(config, {
         params: {},
       },
     });
+    logMcpProbe('tools_list_response', {
+      name: normalized.name || null,
+      url: normalized.url,
+      httpStatus: toolsList.httpStatus,
+      ok: toolsList.ok,
+      hasRpcError: Boolean(toolsList.body?.error),
+    });
 
     if (toolsList.httpStatus === 401 || toolsList.httpStatus === 403) {
       return failedProbe('auth', `HTTP ${toolsList.httpStatus}`, startedAt);
@@ -410,6 +464,13 @@ export async function probeHttpMcpServer(config, {
     }
 
     const tools = normalizeProbeTools(toolsList.body?.result?.tools);
+    logMcpProbe('complete', {
+      name: normalized.name || null,
+      url: normalized.url,
+      status: 'healthy',
+      toolCount: tools.length,
+      latencyMs: Date.now() - startedAt,
+    });
     return {
       status: 'healthy',
       phase: 'tools_list',
@@ -419,6 +480,12 @@ export async function probeHttpMcpServer(config, {
       tools,
     };
   } catch (error) {
+    logMcpProbe('failed', {
+      name: config?.name || null,
+      url: config?.url || null,
+      statusCode: error?.statusCode || null,
+      error: error?.message || 'Network probe failed',
+    });
     if (error?.statusCode) {
       return failedProbe('static_validation', error.message, startedAt);
     }
@@ -559,6 +626,11 @@ async function resolveHeadersHelper(config) {
     return {};
   }
 
+  logMcpProbe('headers_helper_start', {
+    name: config.name || null,
+    url: config.url || null,
+    commandPresent: true,
+  });
   let stdout = '';
   try {
     const result = await execFileAsync('/bin/sh', ['-lc', config.headersHelper], {
@@ -571,7 +643,17 @@ async function resolveHeadersHelper(config) {
       },
     });
     stdout = result.stdout;
+    logMcpProbe('headers_helper_exit', {
+      name: config.name || null,
+      url: config.url || null,
+      stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
+    });
   } catch (error) {
+    logMcpProbe('headers_helper_failed', {
+      name: config.name || null,
+      url: config.url || null,
+      error: describeHeadersHelperFailure(error),
+    });
     throw createHttpError(describeHeadersHelperFailure(error), 400);
   }
 
@@ -579,6 +661,12 @@ async function resolveHeadersHelper(config) {
   try {
     parsed = JSON.parse(stdout.trim());
   } catch {
+    logMcpProbe('headers_helper_invalid_stdout', {
+      name: config.name || null,
+      url: config.url || null,
+      stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
+      stdoutSnippet: probeLogSnippet(stdout),
+    });
     throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
   }
 
@@ -595,6 +683,11 @@ async function resolveHeadersHelper(config) {
     }
     headers[headerName] = value;
   }
+  logMcpProbe('headers_helper_parsed', {
+    name: config.name || null,
+    url: config.url || null,
+    headerKeys: Object.keys(headers),
+  });
   return headers;
 }
 

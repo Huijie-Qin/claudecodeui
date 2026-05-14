@@ -56,6 +56,24 @@ export const SESSION_NAMES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_names
 
 export const SESSION_NAMES_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider);`;
 
+export const CODEHUB_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS codehub_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  target_repository TEXT NOT NULL,
+  private_repository TEXT NOT NULL,
+  token_encrypted TEXT NOT NULL,
+  last_test_status TEXT,
+  last_test_error TEXT,
+  last_tested_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, target_repository, private_repository),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);`;
+
+export const CODEHUB_REPOSITORIES_USER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_codehub_repositories_user
+  ON codehub_repositories(user_id, updated_at);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -121,6 +139,10 @@ ${PUSH_SUBSCRIPTIONS_TABLE_SQL}
 ${SESSION_NAMES_TABLE_SQL}
 
 ${SESSION_NAMES_LOOKUP_INDEX_SQL}
+
+${CODEHUB_REPOSITORIES_TABLE_SQL}
+
+${CODEHUB_REPOSITORIES_USER_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

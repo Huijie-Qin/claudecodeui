@@ -92,6 +92,7 @@
     "agents": "Agents",
     "appearance": "Appearance",
     "git": "Git",
+    "codeHub": "CodeHub",
     "apiTokens": "API & Tokens",
     "tasks": "Tasks",
     "notifications": "Notifications",
@@ -227,6 +228,47 @@
     },
     "status": {
       "success": "Saved successfully"
+    }
+  },
+  "codeHub": {
+    "title": "CodeHub",
+    "description": "Map a workspace repository to a private repository token. Tokens are encrypted at rest and exposed to Docker runtimes as PRIVATE_TOKEN only when the target repository matches.",
+    "loading": "Loading CodeHub repositories...",
+    "form": {
+      "targetRepository": "Target Repository",
+      "privateRepository": "Private Repository",
+      "token": "Personal Token",
+      "targetPlaceholder": "https://github.com/team/app.git",
+      "privatePlaceholder": "https://gitlab.example.com/team/private-tools.git",
+      "tokenPlaceholder": "Personal access token",
+      "tokenUpdatePlaceholder": "Leave blank to keep the saved token",
+      "tokenHelp": "The token is encrypted before storage and loaded as PRIVATE_TOKEN during Test and matching Docker sessions.",
+      "showToken": "Show token",
+      "hideToken": "Hide token"
+    },
+    "actions": {
+      "add": "Add Repository",
+      "update": "Update Repository",
+      "cancel": "Cancel",
+      "edit": "Edit",
+      "delete": "Delete",
+      "test": "Test",
+      "testing": "Testing...",
+      "confirmDelete": "Delete this CodeHub repository configuration?"
+    },
+    "repositories": {
+      "title": "Repositories",
+      "description": "Test uses git ls-remote with the decrypted token in PRIVATE_TOKEN.",
+      "empty": "No CodeHub repositories configured yet.",
+      "privateLabel": "Private repository",
+      "tokenSaved": "Token saved",
+      "tokenMissing": "Token missing",
+      "lastTested": "Last tested"
+    },
+    "status": {
+      "connected": "Connected",
+      "failed": "Failed",
+      "untested": "Untested"
     }
   },
   "apiKeys": {

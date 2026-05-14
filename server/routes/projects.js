@@ -126,6 +126,8 @@ export async function validateWorkspacePath(requestedPath) {
       }
     }
 
+    await fs.mkdir(WORKSPACES_ROOT, { recursive: true });
+
     // Resolve the workspace root to its real path
     const resolvedWorkspaceRoot = await fs.realpath(WORKSPACES_ROOT);
 
@@ -210,6 +212,11 @@ router.post('/create-workspace', async (req, res) => {
       return res.status(403).json({ error: 'Tenant edit permission is required to create workspaces' });
     }
 
+    const tenant = multitenancyDb.tenants.getTenantById(tenantId);
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+
     if (!['existing', 'new'].includes(workspaceType)) {
       return res.status(400).json({ error: 'workspaceType must be "existing" or "new"' });
     }
@@ -221,6 +228,8 @@ router.post('/create-workspace', async (req, res) => {
     } = resolveWorkspaceTarget({
       workspaceType,
       workspacesRoot: WORKSPACES_ROOT,
+      tenantCode: tenant.code,
+      username: req.user.username,
       tenantId,
       userId: req.user.id,
       requestedPath: workspacePath,
@@ -472,6 +481,13 @@ router.get('/clone-progress', async (req, res) => {
       return;
     }
 
+    const tenant = multitenancyDb.tenants.getTenantById(tenantId);
+    if (!tenant) {
+      sendEvent('error', { message: 'Tenant not found' });
+      res.end();
+      return;
+    }
+
     const {
       requestedName,
       workspaceSlug,
@@ -479,6 +495,8 @@ router.get('/clone-progress', async (req, res) => {
     } = resolveWorkspaceTarget({
       workspaceType,
       workspacesRoot: WORKSPACES_ROOT,
+      tenantCode: tenant.code,
+      username: req.user.username,
       tenantId,
       userId: req.user.id,
       requestedPath: workspacePath,

@@ -125,6 +125,39 @@ function compactObject(value) {
   );
 }
 
+function logPresetTest(event, details = {}) {
+  console.log(`[MCP Preset Test] ${event}`, details);
+}
+
+function summarizePresetTestConfig(config = {}) {
+  return {
+    name: config.name || null,
+    url: config.url || null,
+    hasHeadersHelper: typeof config.headersHelper === 'string' && config.headersHelper.trim() !== '',
+    staticHeaderKeys: config.headers && typeof config.headers === 'object'
+      ? Object.keys(config.headers)
+      : [],
+    helperEnvKeys: config.helperEnv && typeof config.helperEnv === 'object'
+      ? Object.keys(config.helperEnv)
+      : [],
+  };
+}
+
+function summarizePresetTestEnv(env = {}) {
+  const userKey = env[USER_KEY_ENV_NAME];
+  return {
+    W3_NAME: env[W3_NAME_ENV_NAME] || null,
+    USER_KEY: userKey
+      ? {
+          present: true,
+          length: String(userKey).length,
+          isHex64: /^[0-9a-f]{64}$/i.test(String(userKey)),
+          startsWithSecurity: String(userKey).startsWith('security:'),
+        }
+      : { present: false },
+  };
+}
+
 async function getPresetTestUserStore(users) {
   if (users) {
     return users;
@@ -333,7 +366,21 @@ export function createMcpPresetService({
       const baseProbeConfig = normalizedInput
         ? { ...normalizedInput.config, name: normalizedInput.name }
         : { ...preset.config, name: preset.name };
+      logPresetTest('start', {
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        userId: normalizedUserId,
+        presetName: normalizedInput?.name || preset.name,
+        hasDraftInput: Boolean(normalizedInput),
+        config: summarizePresetTestConfig(baseProbeConfig),
+      });
       const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId);
+      logPresetTest('env_ready', {
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        userId: normalizedUserId,
+        env: summarizePresetTestEnv(probeEnv),
+      });
       const probeResult = await withTemporaryProcessEnv(probeEnv, async () => {
         const probeConfig = await resolveHelperConfig({
           tenantId: requirePositiveInteger(tenantId, 'tenantId'),
@@ -342,7 +389,22 @@ export function createMcpPresetService({
           config: baseProbeConfig,
           multitenancy,
         });
+        logPresetTest('probe_config_resolved', {
+          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+          presetId: requirePositiveInteger(presetId, 'presetId'),
+          userId: normalizedUserId,
+          config: summarizePresetTestConfig(probeConfig),
+        });
         return probe(probeConfig);
+      });
+      logPresetTest('probe_result', {
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        userId: normalizedUserId,
+        status: probeResult.status,
+        phase: probeResult.phase,
+        toolCount: Number(probeResult.toolCount || 0),
+        error: probeResult.error || null,
       });
       if (normalizedInput) {
         multitenancy.mcpPresets.updatePreset({

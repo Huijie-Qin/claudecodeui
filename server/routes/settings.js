@@ -1,5 +1,7 @@
 import express from 'express';
+
 import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb } from '../database/db.js';
+import { codeHubService } from '../services/codehub.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
 
@@ -21,6 +23,15 @@ function broadcastModelResponseHookConfig(clients, userId, config) {
       client.send(message);
     }
   });
+}
+
+function respondSettingsError(res, error, fallbackMessage) {
+  const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+  const message = error?.message || fallbackMessage;
+  if (statusCode >= 500) {
+    console.error(fallbackMessage, error);
+  }
+  return res.status(statusCode).json({ success: false, error: message });
 }
 
 // ===============================
@@ -192,6 +203,77 @@ router.patch('/credentials/:credentialId/toggle', async (req, res) => {
   } catch (error) {
     console.error('Error toggling credential:', error);
     res.status(500).json({ error: 'Failed to toggle credential' });
+  }
+});
+
+// ===============================
+// CodeHub Repository Credentials
+// ===============================
+
+router.get('/codehub/repositories', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      repositories: codeHubService.listRepositories(req.user.id),
+    });
+  } catch (error) {
+    return respondSettingsError(res, error, 'Failed to fetch CodeHub repositories');
+  }
+});
+
+router.post('/codehub/repositories', async (req, res) => {
+  try {
+    const repository = codeHubService.createRepository({
+      userId: req.user.id,
+      targetRepository: req.body?.targetRepository,
+      privateRepository: req.body?.privateRepository,
+      token: req.body?.token,
+    });
+    res.status(201).json({ success: true, repository });
+  } catch (error) {
+    return respondSettingsError(res, error, 'Failed to create CodeHub repository');
+  }
+});
+
+router.put('/codehub/repositories/:repositoryId', async (req, res) => {
+  try {
+    const repository = codeHubService.updateRepository({
+      userId: req.user.id,
+      repositoryId: req.params.repositoryId,
+      targetRepository: req.body?.targetRepository,
+      privateRepository: req.body?.privateRepository,
+      token: req.body?.token,
+    });
+    res.json({ success: true, repository });
+  } catch (error) {
+    return respondSettingsError(res, error, 'Failed to update CodeHub repository');
+  }
+});
+
+router.delete('/codehub/repositories/:repositoryId', async (req, res) => {
+  try {
+    const removed = codeHubService.deleteRepository({
+      userId: req.user.id,
+      repositoryId: req.params.repositoryId,
+    });
+    if (!removed) {
+      return res.status(404).json({ success: false, error: 'CodeHub repository not found' });
+    }
+    res.json({ success: true, removed: true });
+  } catch (error) {
+    return respondSettingsError(res, error, 'Failed to delete CodeHub repository');
+  }
+});
+
+router.post('/codehub/repositories/:repositoryId/test', async (req, res) => {
+  try {
+    const result = await codeHubService.testRepository({
+      userId: req.user.id,
+      repositoryId: req.params.repositoryId,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    return respondSettingsError(res, error, 'Failed to test CodeHub repository');
   }
 });
 

@@ -9,22 +9,58 @@ export function slugifyWorkspaceName(value) {
     .slice(0, 63);
 }
 
-export function buildTenantWorkspacePath({ workspacesRoot, tenantId, userId, requestedPath }) {
+export function sanitizePathSegment(value, fallback = 'x') {
+  const sanitized = String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63);
+  return sanitized || fallback;
+}
+
+export function buildTenantWorkspacePath({
+  workspacesRoot,
+  tenantCode,
+  username,
+  tenantId,
+  userId,
+  requestedPath,
+}) {
   const requestedName = path.basename(path.resolve(String(requestedPath || '')));
   const workspaceSlug = slugifyWorkspaceName(requestedName);
   if (!workspaceSlug) {
     return '';
   }
 
-  return path.join(workspacesRoot, String(tenantId), String(userId), workspaceSlug);
+  return path.join(
+    workspacesRoot,
+    sanitizePathSegment(tenantCode, String(tenantId)),
+    sanitizePathSegment(username, String(userId)),
+    workspaceSlug,
+  );
 }
 
-export function resolveWorkspaceTarget({ workspaceType, workspacesRoot, tenantId, userId, requestedPath }) {
+export function resolveWorkspaceTarget({
+  workspaceType,
+  workspacesRoot,
+  tenantCode,
+  username,
+  tenantId,
+  userId,
+  requestedPath,
+}) {
   const requestedName = path.basename(path.resolve(String(requestedPath || '')));
   const workspaceSlug = slugifyWorkspaceName(requestedName);
   const targetPath =
     workspaceType === 'new'
-      ? buildTenantWorkspacePath({ workspacesRoot, tenantId, userId, requestedPath })
+      ? buildTenantWorkspacePath({
+        workspacesRoot,
+        tenantCode,
+        username,
+        tenantId,
+        userId,
+        requestedPath,
+      })
       : requestedPath;
 
   return {

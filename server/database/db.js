@@ -16,12 +16,16 @@ import {
   USER_INVITATIONS_USER_INDEX_SQL,
   SESSION_NAMES_TABLE_SQL,
   SESSION_NAMES_LOOKUP_INDEX_SQL,
+  CODEHUB_REPOSITORIES_TABLE_SQL,
+  CODEHUB_REPOSITORIES_USER_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
   decryptUserEnvRecord,
+  decryptSecretString,
+  encryptSecretString,
   ensureUserKeyEnvRecord,
   parseUserEnvJson,
   serializeUserEnvRecord,
@@ -142,6 +146,8 @@ const runMigrations = () => {
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
+    db.exec(CODEHUB_REPOSITORIES_TABLE_SQL);
+    db.exec(CODEHUB_REPOSITORIES_USER_INDEX_SQL);
     db.exec(MULTITENANCY_SCHEMA_SQL);
 
     console.log('Database migrations completed successfully');
@@ -203,6 +209,64 @@ function decryptUserEnvForRuntime(env) {
   return decryptUserEnvRecord(env, {
     secretMaterial: getUserKeyEncryptionSecret(),
   });
+}
+
+function encryptCodeHubToken(token) {
+  return encryptSecretString(token, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+}
+
+function decryptCodeHubToken(tokenEncrypted) {
+  return decryptSecretString(tokenEncrypted, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+}
+
+function requireCodeHubRepositoryValue(value, name) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    throw new Error(`${name} is required`);
+  }
+  if (normalized.length > 2048) {
+    throw new Error(`${name} must be 2048 characters or fewer`);
+  }
+  return normalized;
+}
+
+function requireCodeHubToken(value) {
+  const token = String(value || '').trim();
+  if (!token) {
+    throw new Error('token is required');
+  }
+  if (token.length > 8192) {
+    throw new Error('token must be 8192 characters or fewer');
+  }
+  return token;
+}
+
+function hydrateCodeHubRepository(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    target_repository: row.target_repository,
+    private_repository: row.private_repository,
+    token_configured: typeof row.token_encrypted === 'string' && row.token_encrypted.trim() !== '',
+    last_test_status: row.last_test_status || null,
+    last_test_error: row.last_test_error || null,
+    last_tested_at: row.last_tested_at || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function getCodeHubRepositoryRowForUser(userId, repositoryId) {
+  return db.prepare(`
+    SELECT *
+    FROM codehub_repositories
+    WHERE id = ? AND user_id = ?
+  `).get(Number(repositoryId), Number(userId)) || null;
 }
 
 function backfillExistingUserEnvRecords() {
@@ -535,6 +599,163 @@ const userDb = {
       throw err;
     }
   }
+};
+
+const codeHubDb = {
+  listRepositories: (userId) => {
+    try {
+      return db.prepare(`
+        SELECT *
+        FROM codehub_repositories
+        WHERE user_id = ?
+        ORDER BY updated_at DESC, id DESC
+      `).all(Number(userId)).map(hydrateCodeHubRepository);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  listRepositorySecrets: (userId) => {
+    try {
+      return db.prepare(`
+        SELECT *
+        FROM codehub_repositories
+        WHERE user_id = ?
+        ORDER BY updated_at DESC, id DESC
+      `).all(Number(userId));
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  createRepository: ({ userId, targetRepository, privateRepository, token }) => {
+    try {
+      const normalizedTargetRepository = requireCodeHubRepositoryValue(targetRepository, 'targetRepository');
+      const normalizedPrivateRepository = requireCodeHubRepositoryValue(privateRepository, 'privateRepository');
+      const tokenEncrypted = encryptCodeHubToken(requireCodeHubToken(token));
+      const result = db.prepare(`
+        INSERT INTO codehub_repositories (
+          user_id,
+          target_repository,
+          private_repository,
+          token_encrypted
+        )
+        VALUES (?, ?, ?, ?)
+      `).run(
+        Number(userId),
+        normalizedTargetRepository,
+        normalizedPrivateRepository,
+        tokenEncrypted,
+      );
+
+      return hydrateCodeHubRepository(getCodeHubRepositoryRowForUser(userId, result.lastInsertRowid));
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  updateRepository: ({ userId, repositoryId, targetRepository, privateRepository, token }) => {
+    try {
+      const existing = getCodeHubRepositoryRowForUser(userId, repositoryId);
+      if (!existing) {
+        return null;
+      }
+
+      const normalizedTargetRepository = requireCodeHubRepositoryValue(targetRepository, 'targetRepository');
+      const normalizedPrivateRepository = requireCodeHubRepositoryValue(privateRepository, 'privateRepository');
+      const hasTokenUpdate = typeof token === 'string' && token.trim() !== '';
+      if (hasTokenUpdate) {
+        db.prepare(`
+          UPDATE codehub_repositories
+          SET
+            target_repository = ?,
+            private_repository = ?,
+            token_encrypted = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND user_id = ?
+        `).run(
+          normalizedTargetRepository,
+          normalizedPrivateRepository,
+          encryptCodeHubToken(requireCodeHubToken(token)),
+          Number(repositoryId),
+          Number(userId),
+        );
+      } else {
+        db.prepare(`
+          UPDATE codehub_repositories
+          SET
+            target_repository = ?,
+            private_repository = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND user_id = ?
+        `).run(
+          normalizedTargetRepository,
+          normalizedPrivateRepository,
+          Number(repositoryId),
+          Number(userId),
+        );
+      }
+
+      return hydrateCodeHubRepository(getCodeHubRepositoryRowForUser(userId, repositoryId));
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  deleteRepository: ({ userId, repositoryId }) => {
+    try {
+      const result = db.prepare(`
+        DELETE FROM codehub_repositories
+        WHERE id = ? AND user_id = ?
+      `).run(Number(repositoryId), Number(userId));
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getRepositorySecret: ({ userId, repositoryId }) => {
+    try {
+      const row = getCodeHubRepositoryRowForUser(userId, repositoryId);
+      if (!row) {
+        return null;
+      }
+      return {
+        ...hydrateCodeHubRepository(row),
+        token: decryptCodeHubToken(row.token_encrypted),
+      };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  recordTest: ({ userId, repositoryId, status, error = null, testedAt = new Date() }) => {
+    try {
+      const normalizedStatus = status === 'connected' ? 'connected' : 'failed';
+      const errorText = error ? String(error).slice(0, 2000) : null;
+      const checkedAt = testedAt instanceof Date ? testedAt.toISOString() : String(testedAt);
+      db.prepare(`
+        UPDATE codehub_repositories
+        SET
+          last_test_status = ?,
+          last_test_error = ?,
+          last_tested_at = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `).run(
+        normalizedStatus,
+        errorText,
+        checkedAt,
+        Number(repositoryId),
+        Number(userId),
+      );
+      return hydrateCodeHubRepository(getCodeHubRepositoryRowForUser(userId, repositoryId));
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  decryptRepositoryToken: (row) => decryptCodeHubToken(row.token_encrypted),
 };
 
 // API Keys database operations
@@ -892,6 +1113,7 @@ export {
   db,
   initializeDatabase,
   userDb,
+  codeHubDb,
   apiKeysDb,
   credentialsDb,
   notificationPreferencesDb,

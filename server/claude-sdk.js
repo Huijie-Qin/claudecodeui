@@ -263,6 +263,18 @@ function getAllSessions() {
   return Array.from(activeSessions.keys());
 }
 
+function countActiveSessionsForRuntime(runtimeId, { excludingSessionId = null } = {}) {
+  if (!runtimeId) return 0;
+  let count = 0;
+  for (const [activeSessionId, session] of activeSessions.entries()) {
+    if (activeSessionId === excludingSessionId) continue;
+    if (session.runtimeMode === 'docker' && session.runtimeId === runtimeId && session.status === 'active') {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /**
  * Transforms SDK messages to WebSocket format expected by frontend
  * @param {Object} sdkMessage - SDK message object
@@ -421,6 +433,7 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
 async function queryClaudeSDK(command, options = {}, ws) {
   const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
+  const pendingProviderSessionId = sessionId ? null : `pending:${createRequestId()}`;
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
@@ -447,6 +460,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     bindRuntimeMessagesToProviderSession({
       runtimeId: runtimeOptions.runtimeId,
       providerSessionId,
+      fromProviderSessionId: pendingProviderSessionId,
     });
     runtimeBoundToProviderSession = true;
   };
@@ -475,7 +489,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     persistUserPromptMessage({
       options: runtimeOptions,
       provider: 'claude',
-      providerSessionId: capturedSessionId || sessionId || null,
+      providerSessionId: capturedSessionId || sessionId || pendingProviderSessionId,
       runtimeId: runtimeOptions.runtimeId,
       command: displayCommand,
     });
@@ -667,13 +681,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
       // Transform and normalize message via adapter
       const transformedMessage = transformMessage(message);
       const sid = capturedSessionId || sessionId || null;
+      const persistenceSessionId = sid || pendingProviderSessionId;
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',
-        providerSessionId: sid,
+        providerSessionId: persistenceSessionId,
         runtimeId: runtimeOptions.runtimeId,
         messages: normalized,
       });
@@ -826,8 +841,9 @@ async function abortClaudeSDKSession(sessionId) {
   try {
     console.log(`Aborting SDK session: ${sessionId}`);
 
-    // Docker-backed Claude runs inside a per-session container. Interrupting the
-    // SDK can leave the process inside docker exec alive, so stop that container too.
+    // Docker-backed Claude runs inside a reusable user/workspace container. If this
+    // is the last active session for that runtime, stop the container as a hard
+    // cleanup because SDK interrupt can leave docker exec alive.
     session.status = 'aborted';
     abortedSessions.add(sessionId);
 
@@ -837,7 +853,11 @@ async function abortClaudeSDKSession(sessionId) {
         console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
       });
 
-    if (session.runtimeMode === 'docker' && session.runtimeId) {
+    if (
+      session.runtimeMode === 'docker' &&
+      session.runtimeId &&
+      countActiveSessionsForRuntime(session.runtimeId, { excludingSessionId: sessionId }) === 0
+    ) {
       await agentSessionRuntimeManager.stopRuntime(session.runtimeId);
     } else {
       await interruptPromise;

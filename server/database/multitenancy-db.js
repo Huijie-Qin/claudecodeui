@@ -1373,6 +1373,46 @@ export function createMultitenancyDb(database = db) {
         ) ?? null;
       },
 
+      findByOwner: ({ tenantId, workspaceId, userId, provider, workspaceHostPath = null }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+        const params = [
+          normalizedTenantId,
+          normalizedWorkspaceId,
+          normalizedUserId,
+          normalizedProvider,
+        ];
+        let workspacePathFilter = '';
+        if (workspaceHostPath != null) {
+          workspacePathFilter = 'AND workspace_host_path = ?';
+          params.push(requireNonEmptyString(workspaceHostPath, 'workspaceHostPath'));
+        }
+
+        return database.prepare(`
+          SELECT *
+          FROM agent_session_runtime
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            AND user_id = ?
+            AND provider = ?
+            ${workspacePathFilter}
+            AND status != 'deleted'
+          ORDER BY
+            CASE status
+              WHEN 'active' THEN 0
+              WHEN 'idle' THEN 1
+              WHEN 'pending' THEN 2
+              WHEN 'failed' THEN 3
+              ELSE 4
+            END,
+            last_used_at DESC,
+            id DESC
+          LIMIT 1
+        `).get(...params) ?? null;
+      },
+
       bindProviderSession: ({ runtimeId, providerSessionId }) => {
         const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
         const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
@@ -1566,17 +1606,28 @@ export function createMultitenancyDb(database = db) {
     sessionMessages: {
       upsertMessages: (input) => upsertSessionMessagesTransaction(input),
 
-      bindProviderSession: ({ runtimeId, providerSessionId }) => {
+      bindProviderSession: ({ runtimeId, providerSessionId, fromProviderSessionId = null }) => {
         const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
         const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+        const normalizedFromProviderSessionId = optionalNonEmptyString(
+          fromProviderSessionId,
+          'fromProviderSessionId',
+        );
+        const sourceFilter = normalizedFromProviderSessionId === null
+          ? 'provider_session_id IS NULL'
+          : 'provider_session_id = ?';
+        const params = normalizedFromProviderSessionId === null
+          ? [normalizedProviderSessionId, normalizedRuntimeId]
+          : [normalizedProviderSessionId, normalizedRuntimeId, normalizedFromProviderSessionId];
+
         const result = database.prepare(`
           UPDATE agent_session_messages
           SET
             provider_session_id = ?,
             updated_at = CURRENT_TIMESTAMP
           WHERE runtime_id = ?
-            AND provider_session_id IS NULL
-        `).run(normalizedProviderSessionId, normalizedRuntimeId);
+            AND ${sourceFilter}
+        `).run(...params);
 
         return result.changes;
       },

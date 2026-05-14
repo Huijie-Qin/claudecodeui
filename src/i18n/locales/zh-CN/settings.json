@@ -92,6 +92,7 @@
     "agents": "智能体",
     "appearance": "外观",
     "git": "Git",
+    "codeHub": "CodeHub",
     "apiTokens": "API 和令牌",
     "tasks": "任务",
     "notifications": "通知",
@@ -227,6 +228,47 @@
     },
     "status": {
       "success": "保存成功"
+    }
+  },
+  "codeHub": {
+    "title": "CodeHub",
+    "description": "将当前工作区的目标仓库映射到私有仓库和个人令牌。令牌会加密落库，并且只在目标仓库匹配时作为 PRIVATE_TOKEN 注入 Docker 运行时。",
+    "loading": "正在加载 CodeHub 仓库...",
+    "form": {
+      "targetRepository": "目标仓库",
+      "privateRepository": "私人仓库",
+      "token": "个人 Token",
+      "targetPlaceholder": "https://github.com/team/app.git",
+      "privatePlaceholder": "https://gitlab.example.com/team/private-tools.git",
+      "tokenPlaceholder": "个人访问令牌",
+      "tokenUpdatePlaceholder": "留空表示继续使用已保存的 Token",
+      "tokenHelp": "Token 会先加密再保存；点击 Test 和启动匹配的 Docker 会话时，会解密并作为 PRIVATE_TOKEN 注入环境变量。",
+      "showToken": "显示 Token",
+      "hideToken": "隐藏 Token"
+    },
+    "actions": {
+      "add": "添加仓库",
+      "update": "更新仓库",
+      "cancel": "取消",
+      "edit": "编辑",
+      "delete": "删除",
+      "test": "Test",
+      "testing": "测试中...",
+      "confirmDelete": "确定删除这个 CodeHub 仓库配置吗？"
+    },
+    "repositories": {
+      "title": "仓库列表",
+      "description": "Test 会执行 git ls-remote，并把解密后的令牌放入 PRIVATE_TOKEN 环境变量。",
+      "empty": "还没有配置 CodeHub 仓库。",
+      "privateLabel": "私人仓库",
+      "tokenSaved": "Token 已保存",
+      "tokenMissing": "Token 缺失",
+      "lastTested": "最后测试"
+    },
+    "status": {
+      "connected": "已连接",
+      "failed": "失败",
+      "untested": "未测试"
     }
   },
   "apiKeys": {

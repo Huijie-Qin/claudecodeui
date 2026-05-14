@@ -9,6 +9,9 @@ import { userDb as defaultUserDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
+import { codeHubService } from './codehub.js';
+import { sanitizePathSegment } from './workspace-projects.js';
+
 const execFileAsync = promisify(execFile);
 
 const W3_NAME_ENV_NAME = 'W3_NAME';
@@ -114,21 +117,21 @@ export function resolveClaudeExecutionMode(env = process.env) {
 export function buildRuntimePaths({
   runtimeRoot,
   provider,
+  tenantCode,
+  username,
+  workspaceSlug,
   tenantId,
   userId,
   workspaceId,
-  runtimeId,
 }) {
   const resolvedRoot = path.resolve(expandHome(runtimeRoot || DEFAULT_RUNTIME_ROOT));
   const providerSegment = sanitizeSegment(requireValue(provider, 'provider'));
-  const runtimeSegment = sanitizeSegment(requireValue(runtimeId, 'runtimeId'));
   const runtimeDir = path.resolve(
     resolvedRoot,
     providerSegment,
-    `tenant-${requirePositiveInteger(tenantId, 'tenantId')}`,
-    `user-${requirePositiveInteger(userId, 'userId')}`,
-    `workspace-${requirePositiveInteger(workspaceId, 'workspaceId')}`,
-    `runtime-${runtimeSegment}`,
+    sanitizePathSegment(tenantCode, `tenant-${requirePositiveInteger(tenantId, 'tenantId')}`),
+    sanitizePathSegment(username, `user-${requirePositiveInteger(userId, 'userId')}`),
+    sanitizePathSegment(workspaceSlug, `workspace-${requirePositiveInteger(workspaceId, 'workspaceId')}`),
   );
 
   if (runtimeDir !== resolvedRoot && !runtimeDir.startsWith(`${resolvedRoot}${path.sep}`)) {
@@ -155,6 +158,21 @@ export function buildContainerName({
   const prefix = `cloudcli-${providerSegment}-t${requirePositiveInteger(tenantId, 'tenantId')}-u${requirePositiveInteger(userId, 'userId')}-w${requirePositiveInteger(workspaceId, 'workspaceId')}-r`;
   const maxRuntimeLength = Math.max(8, 120 - prefix.length - runtimeHash.length - 1);
   return `${prefix}${runtimeSegment.slice(0, maxRuntimeLength)}-${runtimeHash}`.slice(0, 120);
+}
+
+function buildRuntimeScopeLockKey({
+  provider,
+  tenantId,
+  userId,
+  workspaceId,
+}) {
+  return [
+    'scope',
+    sanitizeSegment(provider),
+    `t${requirePositiveInteger(tenantId, 'tenantId')}`,
+    `u${requirePositiveInteger(userId, 'userId')}`,
+    `w${requirePositiveInteger(workspaceId, 'workspaceId')}`,
+  ].join(':');
 }
 
 export function buildDockerRunArgs({
@@ -399,10 +417,12 @@ export function createAgentSessionRuntimeManager({
   env = process.env,
   multitenancy = multitenancyDb,
   users = defaultUserDb,
+  codeHub = null,
   docker = new DockerCliClient(),
   fs = fsPromises,
 } = {}) {
   const runtimeLocks = new Map();
+  const activeRuntimeUses = new Map();
 
   async function withRuntimeLock(runtimeId, task) {
     const previous = runtimeLocks.get(runtimeId) ?? Promise.resolve();
@@ -426,9 +446,13 @@ export function createAgentSessionRuntimeManager({
 
   function normalizeExpiredIdleStopArgs({ runtimeId, olderThanMinutes } = {}) {
     try {
+      const normalizedOlderThanMinutes = Number(olderThanMinutes);
+      if (!Number.isInteger(normalizedOlderThanMinutes) || normalizedOlderThanMinutes <= 0) {
+        throw new Error('olderThanMinutes must be a positive integer');
+      }
       return {
         runtimeId: requireValue(runtimeId, 'runtimeId'),
-        olderThanMinutes: requirePositiveInteger(Number(olderThanMinutes), 'olderThanMinutes'),
+        olderThanMinutes: normalizedOlderThanMinutes,
       };
     } catch {
       return null;
@@ -442,6 +466,56 @@ export function createAgentSessionRuntimeManager({
       throw new Error('workspace path must be a directory');
     }
     return resolved;
+  }
+
+  function beginRuntimeUse(runtimeId) {
+    if (!runtimeId) return 0;
+    const next = (activeRuntimeUses.get(runtimeId) || 0) + 1;
+    activeRuntimeUses.set(runtimeId, next);
+    return next;
+  }
+
+  function endRuntimeUse(runtimeId) {
+    if (!runtimeId) return 0;
+    const current = activeRuntimeUses.get(runtimeId) || 0;
+    const next = Math.max(0, current - 1);
+    if (next === 0) {
+      activeRuntimeUses.delete(runtimeId);
+    } else {
+      activeRuntimeUses.set(runtimeId, next);
+    }
+    return next;
+  }
+
+  async function readCodeHubContainerEnv({ userId, workspaceHostPath }) {
+    if (typeof codeHub?.resolvePrivateTokenEnvForWorkspace !== 'function') {
+      return {};
+    }
+
+    return normalizeContainerEnvRecord(
+      await codeHub.resolvePrivateTokenEnvForWorkspace({
+        userId,
+        workspacePath: workspaceHostPath,
+      }),
+    );
+  }
+
+  function readRuntimePathSegments({ tenantId, userId, workspaceId, workspaceHostPath }) {
+    const tenant = typeof multitenancy.tenants?.getTenantById === 'function'
+      ? multitenancy.tenants.getTenantById(tenantId)
+      : null;
+    const user = typeof users?.getUserById === 'function'
+      ? users.getUserById(userId)
+      : null;
+    const workspace = typeof multitenancy.workspaces?.getWorkspaceById === 'function'
+      ? multitenancy.workspaces.getWorkspaceById(workspaceId)
+      : null;
+
+    return {
+      tenantCode: tenant?.code,
+      username: user?.username,
+      workspaceSlug: workspace?.slug || path.basename(workspaceHostPath),
+    };
   }
 
   async function ensureContainer(runtime, containerEnv = {}) {
@@ -484,15 +558,21 @@ export function createAgentSessionRuntimeManager({
     return wrapperPath;
   }
 
-  async function createNewRuntime({ tenantId, userId, workspaceId, workspaceHostPath }) {
+  async function createNewRuntime({
+    tenantId,
+    userId,
+    workspaceId,
+    workspaceHostPath,
+    pathSegments,
+  }) {
     const runtimeId = buildRuntimeId();
     const runtimePaths = buildRuntimePaths({
       runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
       provider: 'claude',
+      ...pathSegments,
       tenantId,
       userId,
       workspaceId,
-      runtimeId,
     });
     const containerName = buildContainerName({
       provider: 'claude',
@@ -523,26 +603,58 @@ export function createAgentSessionRuntimeManager({
     };
   }
 
-  async function resolveExistingRuntime({ tenantId, userId, workspaceId, sessionId }) {
-    const runtime = multitenancy.runtimes.findByProviderSession({
-      tenantId,
-      userId,
-      workspaceId,
-      provider: 'claude',
-      providerSessionId: sessionId,
-    });
-
-    if (!runtime) {
-      throw new Error('Claude Docker runtime not found for this session');
-    }
+  async function toRuntimeContext(runtime, { requireHome = false } = {}) {
+    if (!runtime) return null;
     if (!(await pathExists(fs, runtime.runtime_home_path))) {
-      throw new Error('Claude Docker runtime home is missing for this session');
+      if (requireHome) {
+        throw new Error('Claude Docker runtime home is missing for this session');
+      }
+      multitenancy.runtimes.updateStatus?.({
+        runtimeId: runtime.runtime_id,
+        status: 'deleted',
+      });
+      return null;
     }
 
     return {
       runtime,
       wrapperDir: wrapperDirFromRuntimeHome(runtime.runtime_home_path),
     };
+  }
+
+  async function resolveRuntimeForSession({ tenantId, userId, workspaceId, workspaceHostPath, sessionId }) {
+    if (sessionId && typeof multitenancy.runtimes.findByProviderSession === 'function') {
+      const sessionRuntime = await toRuntimeContext(
+        multitenancy.runtimes.findByProviderSession({
+          tenantId,
+          userId,
+          workspaceId,
+          provider: 'claude',
+          providerSessionId: sessionId,
+        }),
+        { requireHome: true },
+      );
+      if (sessionRuntime) {
+        return sessionRuntime;
+      }
+    }
+
+    if (typeof multitenancy.runtimes.findByOwner === 'function') {
+      const userRuntime = await toRuntimeContext(
+        multitenancy.runtimes.findByOwner({
+          tenantId,
+          userId,
+          workspaceId,
+          provider: 'claude',
+          workspaceHostPath,
+        }),
+      );
+      if (userRuntime) {
+        return userRuntime;
+      }
+    }
+
+    return null;
   }
 
   async function activateRuntimeContext({ runtimeContext, workspaceHostPath }) {
@@ -560,6 +672,7 @@ export function createAgentSessionRuntimeManager({
       runtimeId: runtimeContext.runtime.runtime_id,
       status: 'active',
     }) || runtimeContext.runtime;
+    beginRuntimeUse(runtime.runtime_id);
 
     return {
       mode: 'docker',
@@ -595,16 +708,44 @@ export function createAgentSessionRuntimeManager({
       const userId = requirePositiveInteger(options.userId, 'userId');
       const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
       const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
-      const userEnv = readUserContainerEnv(users, userId);
-      const runtimeContext = options.sessionId
-        ? await resolveExistingRuntime({ tenantId, userId, workspaceId, sessionId: options.sessionId })
-        : await createNewRuntime({ tenantId, userId, workspaceId, workspaceHostPath });
-      runtimeContext.userEnv = userEnv;
-
-      return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
-        runtimeContext,
+      const userEnv = {
+        ...readUserContainerEnv(users, userId),
+        ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
+      };
+      const pathSegments = readRuntimePathSegments({
+        tenantId,
+        userId,
+        workspaceId,
         workspaceHostPath,
-      }));
+      });
+      const scopeLockKey = buildRuntimeScopeLockKey({
+        provider: 'claude',
+        tenantId,
+        userId,
+        workspaceId,
+      });
+
+      return withRuntimeLock(scopeLockKey, async () => {
+        const runtimeContext = await resolveRuntimeForSession({
+          tenantId,
+          userId,
+          workspaceId,
+          workspaceHostPath,
+          sessionId: options.sessionId,
+        }) || await createNewRuntime({
+          tenantId,
+          userId,
+          workspaceId,
+          workspaceHostPath,
+          pathSegments,
+        });
+        runtimeContext.userEnv = userEnv;
+
+        return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
+          runtimeContext,
+          workspaceHostPath,
+        }));
+      });
     },
 
     bindProviderSession({ runtimeId, providerSessionId }) {
@@ -614,11 +755,17 @@ export function createAgentSessionRuntimeManager({
 
     markIdle(runtimeId) {
       if (!runtimeId) return null;
+      if (endRuntimeUse(runtimeId) > 0) {
+        return multitenancy.runtimes.updateStatus({ runtimeId, status: 'active' });
+      }
       return multitenancy.runtimes.updateStatus({ runtimeId, status: 'idle' });
     },
 
     markFailed(runtimeId) {
       if (!runtimeId) return null;
+      if (endRuntimeUse(runtimeId) > 0) {
+        return multitenancy.runtimes.updateStatus({ runtimeId, status: 'active' });
+      }
       return multitenancy.runtimes.updateStatus({ runtimeId, status: 'failed' });
     },
 
@@ -634,6 +781,7 @@ export function createAgentSessionRuntimeManager({
           await docker.stopContainer(runtime.container_name);
         }
 
+        activeRuntimeUses.delete(runtime.runtime_id);
         multitenancy.runtimes.updateStatus({ runtimeId, status: 'idle' });
         return true;
       });
@@ -655,6 +803,7 @@ export function createAgentSessionRuntimeManager({
           await docker.stopContainer(runtime.container_name);
         }
 
+        activeRuntimeUses.delete(normalized.runtimeId);
         multitenancy.runtimes.updateStatus({
           runtimeId: normalized.runtimeId,
           status: 'idle',
@@ -665,4 +814,4 @@ export function createAgentSessionRuntimeManager({
   };
 }
 
-export const agentSessionRuntimeManager = createAgentSessionRuntimeManager();
+export const agentSessionRuntimeManager = createAgentSessionRuntimeManager({ codeHub: codeHubService });
