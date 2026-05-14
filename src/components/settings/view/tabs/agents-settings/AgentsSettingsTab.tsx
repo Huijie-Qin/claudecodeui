@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { useServerPlatform } from '../../../../../hooks/useServerPlatform';
+import { CLI_PROVIDERS } from '../../../../provider-auth/types';
 import type { AgentCategory, AgentProvider } from '../../../types/types';
 
 import type { AgentContext, AgentsSettingsTabProps } from './types';
@@ -26,7 +27,7 @@ export default function AgentsSettingsTab({
   const { isWindowsServer } = useServerPlatform();
 
   const visibleAgents = useMemo<AgentProvider[]>(() => {
-    const all: AgentProvider[] = ['claude', 'cursor', 'codex', 'gemini'];
+    const all: AgentProvider[] = [...CLI_PROVIDERS];
     if (isWindowsServer) {
       return all.filter((id) => id !== 'cursor');
     }
@@ -39,6 +40,12 @@ export default function AgentsSettingsTab({
       setSelectedAgent('claude');
     }
   }, [isWindowsServer, selectedAgent]);
+
+  useEffect(() => {
+    if (!visibleAgents.includes(selectedAgent)) {
+      setSelectedAgent('claude');
+    }
+  }, [selectedAgent, visibleAgents]);
 
   const agentContextById = useMemo<Record<AgentProvider, AgentContext>>(() => ({
     claude: {

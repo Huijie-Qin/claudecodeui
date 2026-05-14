@@ -3,7 +3,6 @@ import { Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project, Tenant } from '../../../../types/app';
-import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
@@ -53,11 +52,6 @@ type SidebarContentProps = {
   isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
-  updateAvailable: boolean;
-  releaseInfo: ReleaseInfo | null;
-  latestVersion: string | null;
-  currentVersion: string;
-  onShowVersionModal: () => void;
   onShowSettings: () => void;
   showAdminEntry?: boolean;
   onShowAdminPanel?: () => void;
@@ -86,11 +80,6 @@ export default function SidebarContent({
   isRefreshing,
   onCreateProject,
   onCollapseSidebar,
-  updateAvailable,
-  releaseInfo,
-  latestVersion,
-  currentVersion,
-  onShowVersionModal,
   onShowSettings,
   showAdminEntry,
   onShowAdminPanel,
@@ -226,11 +215,6 @@ export default function SidebarContent({
       </ScrollArea>
 
       <SidebarFooter
-        updateAvailable={updateAvailable}
-        releaseInfo={releaseInfo}
-        latestVersion={latestVersion}
-        currentVersion={currentVersion}
-        onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
         showAdminEntry={showAdminEntry}
         onShowAdminPanel={onShowAdminPanel}

@@ -1,4 +1,5 @@
 import type { LLMProvider } from '../../types/app';
+import { IS_PLATFORM } from '../../constants/config';
 
 export type ProviderAuthStatus = {
   authenticated: boolean;
@@ -8,9 +9,12 @@ export type ProviderAuthStatus = {
   loading: boolean;
 };
 
+const ALL_CLI_PROVIDERS: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini'];
+
 export type ProviderAuthStatusMap = Record<LLMProvider, ProviderAuthStatus>;
 
-export const CLI_PROVIDERS: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini'];
+// In platform/remote deployments, only Claude login is exposed in the UI.
+export const CLI_PROVIDERS: LLMProvider[] = IS_PLATFORM ? ['claude'] : ALL_CLI_PROVIDERS;
 
 export const PROVIDER_AUTH_STATUS_ENDPOINTS: Record<LLMProvider, string> = {
   claude: '/api/providers/claude/auth/status',

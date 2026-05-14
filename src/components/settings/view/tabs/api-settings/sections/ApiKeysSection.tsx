@@ -41,19 +41,6 @@ export default function ApiKeysSection({
         </Button>
       </div>
 
-      <div className="mb-4">
-        <p className="mb-2 text-sm text-muted-foreground">{t('apiKeys.description')}</p>
-        <a
-          href="/api-docs.html"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-        >
-          {t('apiKeys.apiDocsLink')}
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      </div>
-
       {showNewKeyForm && (
         <div className="mb-4 rounded-lg border bg-card p-4">
           <Input

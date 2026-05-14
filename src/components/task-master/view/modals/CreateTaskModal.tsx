@@ -49,17 +49,6 @@ export default function CreateTaskModal({ isOpen, onClose }: CreateTaskModalProp
             </div>
           </div>
 
-          <div className="border-t border-gray-200 pt-4 text-center dark:border-gray-700">
-            <a
-              href="https://github.com/eyaltoledano/claude-task-master/blob/main/docs/examples.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block text-sm font-medium text-blue-600 underline hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-            >
-              View TaskMaster documentation
-            </a>
-          </div>
-
           <button
             onClick={onClose}
             className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"

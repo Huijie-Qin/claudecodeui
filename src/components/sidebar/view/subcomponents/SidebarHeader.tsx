@@ -1,9 +1,7 @@
 import { Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button, Input } from '../../../../shared/view/ui';
-import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
-import GitHubStarBadge from './GitHubStarBadge';
 
 type SearchMode = 'projects' | 'conversations';
 
@@ -59,17 +57,7 @@ export default function SidebarHeader({
         style={{}}
       >
         <div className="flex items-center justify-between gap-2">
-          {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
-              className="flex min-w-0 items-center gap-2.5 transition-opacity hover:opacity-80"
-              title={t('tooltips.viewEnvironments')}
-            >
-              <LogoBlock />
-            </a>
-          ) : (
-            <LogoBlock />
-          )}
+          <LogoBlock />
 
           <div className="flex flex-shrink-0 items-center gap-0.5">
             <Button
@@ -106,8 +94,6 @@ export default function SidebarHeader({
             </Button>
           </div>
         </div>
-
-        <GitHubStarBadge />
 
         {/* Search bar */}
         {projectsCount > 0 && !isLoading && (
@@ -173,17 +159,7 @@ export default function SidebarHeader({
         style={isPWA && isMobile ? { paddingTop: '16px' } : {}}
       >
         <div className="flex items-center justify-between">
-          {IS_PLATFORM ? (
-            <a
-              href="https://cloudcli.ai/dashboard"
-              className="flex min-w-0 items-center gap-2.5 transition-opacity active:opacity-70"
-              title={t('tooltips.viewEnvironments')}
-            >
-              <LogoBlock />
-            </a>
-          ) : (
-            <LogoBlock />
-          )}
+          <LogoBlock />
 
           <div className="flex flex-shrink-0 gap-1.5">
             <button

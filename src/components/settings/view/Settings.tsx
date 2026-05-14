@@ -11,7 +11,6 @@ import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
-import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
 
@@ -123,21 +122,19 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'api' && <CredentialsSettingsTab />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
-
-              {activeTab === 'about' && <AboutTab />}
             </div>
           </main>
         </div>
       </div>
 
-      <ProviderLoginModal
-        key={loginProvider || 'claude'}
-        isOpen={showLoginModal}
-        onClose={() => setShowLoginModal(false)}
-        provider={loginProvider || 'claude'}
-        onComplete={handleLoginComplete}
-        isAuthenticated={isAuthenticated}
-      />
+      {/*<ProviderLoginModal*/}
+      {/*  key={loginProvider || 'claude'}*/}
+      {/*  isOpen={showLoginModal}*/}
+      {/*  onClose={() => setShowLoginModal(false)}*/}
+      {/*  provider={loginProvider || 'claude'}*/}
+      {/*  onComplete={handleLoginComplete}*/}
+      {/*  isAuthenticated={isAuthenticated}*/}
+      {/*/>*/}
 
     </div>
   );
