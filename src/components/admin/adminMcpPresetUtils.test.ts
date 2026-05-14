@@ -44,6 +44,7 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
     headersText: 'Authorization: Bearer token',
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     helperEnvText: 'ROOT_SECRET=root-key',
+    preinstall: true,
     status: 'draft',
   }), {
     tenantId: 7,
@@ -51,6 +52,7 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
     displayName: 'Knowledge MCP',
     description: 'Search docs',
     status: 'draft',
+    preinstallScope: 'all_workspaces',
     type: 'http',
     url: 'https://mcp.internal/knowledge',
     headers: {

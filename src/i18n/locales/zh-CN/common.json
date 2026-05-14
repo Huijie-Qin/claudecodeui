@@ -249,6 +249,12 @@
     "installing": "安装中",
     "available": "可用",
     "connected": "已连接",
+    "connection": {
+      "available": "可用",
+      "connected": "已连接",
+      "probe_failed": "连接失败",
+      "unverified": "未验证"
+    },
     "requiresEditAccess": "需要编辑权限",
     "installSuccess": "{{name}} 已安装，将在下一次 Agent turn 生效。",
     "removeSuccess": "{{name}} 已从当前 workspace 移除。",
@@ -268,6 +274,10 @@
       "serverName": "Server 名称",
       "source": "来源",
       "adminPublished": "Admin 发布的预置",
+      "connection": "连接状态",
+      "checkedAt": "检测时间",
+      "probePhase": "探测阶段",
+      "probeError": "探测错误",
       "runtimePolicy": "运行时策略",
       "toolsTitle": "包含的工具",
       "toolsEmpty": "这个 MCP Server 暂未发布工具列表。",

@@ -24,6 +24,7 @@ export function createWorkspaceMcpToolsRouter({
       const catalog = await mcpToolsService.listWorkspaceMcpPresetCatalog({
         tenantId: workspace.tenant_id,
         workspaceId: workspace.id,
+        workspacePath: workspace.path,
         accessRole,
       });
 

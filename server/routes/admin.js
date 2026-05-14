@@ -9,6 +9,7 @@ import multer from 'multer';
 import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
+import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { buildTenantWorkspacePath } from '../services/workspace-projects.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
@@ -172,7 +173,27 @@ async function copyDefaultSkills(workspacePath) {
   }
 }
 
-async function ensureDefaultRootWorkspace(multitenancy, users, { tenantId, userId }) {
+async function installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace }) {
+  if (typeof workspaceMcpTools?.installPreinstalledWorkspaceMcpPresets !== 'function') {
+    return { installed: [], errors: [] };
+  }
+
+  const result = await workspaceMcpTools.installPreinstalledWorkspaceMcpPresets({
+    tenantId,
+    workspaceId: workspace.id,
+    workspacePath: workspace.path,
+    workspaceDisplayName: workspace.display_name || workspace.slug || String(workspace.id),
+    userId,
+  });
+
+  if (result.errors?.length > 0) {
+    console.warn('Failed to preinstall some MCP presets:', result.errors);
+  }
+
+  return result;
+}
+
+async function ensureDefaultRootWorkspace(multitenancy, users, workspaceMcpTools, { tenantId, userId }) {
   const tenant = multitenancy.tenants.getTenantById(tenantId);
   const user = typeof users?.getUserById === 'function' ? users.getUserById(userId) : null;
   const workspacePath = buildTenantWorkspacePath({
@@ -201,6 +222,7 @@ async function ensureDefaultRootWorkspace(multitenancy, users, { tenantId, userI
   });
 
   await copyDefaultSkills(workspace.path);
+  await installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace });
   return workspace;
 }
 
@@ -222,6 +244,7 @@ export function createAdminRouter(
   users = userDb,
   runtimeMonitor = runtimeMonitorService,
   mcpPresets = mcpPresetService,
+  workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -345,7 +368,7 @@ export function createAdminRouter(
         status: req.body?.status || 'active',
       });
       const defaultWorkspace = membership.status === 'active'
-        ? await ensureDefaultRootWorkspace(multitenancy, users, { tenantId, userId })
+        ? await ensureDefaultRootWorkspace(multitenancy, users, workspaceMcpTools, { tenantId, userId })
         : null;
       res.json({ membership, defaultWorkspace });
     } catch (error) {

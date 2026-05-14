@@ -13,6 +13,7 @@ const SESSION_STATUSES = new Set(['active', 'completed', 'aborted', 'failed', 'd
 const RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'deleted']);
 const MCP_PRESET_STATUSES = new Set(['draft', 'published', 'disabled']);
 const MCP_TRANSPORTS = new Set(['http']);
+const MCP_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 const PERMISSIONS = new Set(['view', 'edit']);
 const PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
@@ -108,6 +109,10 @@ function normalizeMcpConfig(value) {
     transport,
     configJson: serializeJson({ ...value, type: transport }, 'config'),
   };
+}
+
+function normalizeMcpPreinstallScope(value = 'none') {
+  return requireEnum(value || 'none', MCP_PREINSTALL_SCOPES, 'preinstallScope');
 }
 
 function normalizeToolsJson(value) {
@@ -240,6 +245,7 @@ function hydrateMcpPresetRow(row) {
   if (!row) return null;
   return {
     ...row,
+    preinstall_scope: row.preinstall_scope || 'none',
     docker_compatible: row.docker_compatible === 1 ? 1 : 0,
     config: parseJson(row.config_json, {}),
     tools: parseJson(row.tools_json, []),
@@ -739,6 +745,7 @@ export function createMultitenancyDb(database = db) {
         displayName,
         description = '',
         config,
+        preinstallScope = 'none',
         status = 'draft',
         createdByUserId,
         updatedByUserId = createdByUserId,
@@ -748,6 +755,7 @@ export function createMultitenancyDb(database = db) {
         const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
         const normalizedDescription = typeof description === 'string' ? description.trim() : '';
         const { transport, configJson } = normalizeMcpConfig(config);
+        const normalizedPreinstallScope = normalizeMcpPreinstallScope(preinstallScope);
         const normalizedStatus = requireEnum(status, MCP_PRESET_STATUSES, 'status');
         const normalizedCreatedBy = requirePositiveInteger(createdByUserId, 'createdByUserId');
         const normalizedUpdatedBy = requirePositiveInteger(updatedByUserId, 'updatedByUserId');
@@ -760,11 +768,12 @@ export function createMultitenancyDb(database = db) {
             description,
             transport,
             config_json,
+            preinstall_scope,
             status,
             created_by_user_id,
             updated_by_user_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           normalizedTenantId,
           normalizedName,
@@ -772,6 +781,7 @@ export function createMultitenancyDb(database = db) {
           normalizedDescription,
           transport,
           configJson,
+          normalizedPreinstallScope,
           normalizedStatus,
           normalizedCreatedBy,
           normalizedUpdatedBy,
@@ -791,6 +801,7 @@ export function createMultitenancyDb(database = db) {
         displayName,
         description = '',
         config,
+        preinstallScope = 'none',
         status,
         updatedByUserId,
       }) => {
@@ -800,6 +811,7 @@ export function createMultitenancyDb(database = db) {
         const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
         const normalizedDescription = typeof description === 'string' ? description.trim() : '';
         const { transport, configJson } = normalizeMcpConfig(config);
+        const normalizedPreinstallScope = normalizeMcpPreinstallScope(preinstallScope);
         const normalizedStatus = requireEnum(status, MCP_PRESET_STATUSES, 'status');
         const normalizedUpdatedBy = requirePositiveInteger(updatedByUserId, 'updatedByUserId');
 
@@ -811,6 +823,7 @@ export function createMultitenancyDb(database = db) {
             description = ?,
             transport = ?,
             config_json = ?,
+            preinstall_scope = ?,
             status = ?,
             last_test_status = NULL,
             last_test_error = NULL,
@@ -828,6 +841,7 @@ export function createMultitenancyDb(database = db) {
           normalizedDescription,
           transport,
           configJson,
+          normalizedPreinstallScope,
           normalizedStatus,
           normalizedUpdatedBy,
           normalizedPresetId,
@@ -852,7 +866,7 @@ export function createMultitenancyDb(database = db) {
         ));
       },
 
-      listPresets: ({ tenantId, includeDisabled = true, status = null }) => {
+      listPresets: ({ tenantId, includeDisabled = true, status = null, preinstallScope = null }) => {
         const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
         const whereClauses = ['tenant_id = ?'];
         const params = [normalizedTenantId];
@@ -862,6 +876,11 @@ export function createMultitenancyDb(database = db) {
           params.push(requireEnum(status, MCP_PRESET_STATUSES, 'status'));
         } else if (!includeDisabled) {
           whereClauses.push("status != 'disabled'");
+        }
+
+        if (preinstallScope != null) {
+          whereClauses.push('preinstall_scope = ?');
+          params.push(normalizeMcpPreinstallScope(preinstallScope));
         }
 
         return database.prepare(`
@@ -1132,6 +1151,46 @@ export function createMultitenancyDb(database = db) {
           WHERE workspace_id = ?
             AND preset_id = ?
         `).run(normalizedWorkspaceId, normalizedPresetId);
+
+        return hydrateMcpInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_mcp_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
+      recordProbe: ({
+        workspaceId,
+        presetId,
+        probeStatus = null,
+        probeError = null,
+        toolCount = 0,
+        tools = [],
+      }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedToolsJson = normalizeToolsJson(tools);
+        const normalizedToolCount = Number.isInteger(toolCount) && toolCount >= 0 ? toolCount : 0;
+
+        database.prepare(`
+          UPDATE workspace_mcp_preset_installs
+          SET
+            last_probe_status = ?,
+            last_probe_error = ?,
+            tool_count = ?,
+            tools_json = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE workspace_id = ?
+            AND preset_id = ?
+            AND status = 'installed'
+        `).run(
+          probeStatus == null ? null : String(probeStatus),
+          probeError == null ? null : String(probeError),
+          normalizedToolCount,
+          normalizedToolsJson,
+          normalizedWorkspaceId,
+          normalizedPresetId,
+        );
 
         return hydrateMcpInstallRow(database.prepare(`
           SELECT *

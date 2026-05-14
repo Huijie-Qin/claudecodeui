@@ -35,19 +35,21 @@ test('runtime paths stay under the configured runtime root', () => {
   const paths = buildRuntimePaths({
     runtimeRoot: '/var/cloudcli/runtimes',
     provider: 'claude',
+    tenantCode: 'tenantA',
+    username: 'userA',
+    workspaceSlug: 'workspaceA',
     tenantId: 3,
     userId: 4,
     workspaceId: 5,
-    runtimeId: 'runtime-abc',
   });
 
   assert.equal(
     paths.runtimeHomePath,
-    path.join(runtimeRoot, 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-runtime-abc', 'home'),
+    path.join(runtimeRoot, 'claude', 'tenantA', 'userA', 'workspaceA', 'home'),
   );
   assert.equal(
     paths.wrapperDir,
-    path.join(runtimeRoot, 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-runtime-abc', 'wrapper'),
+    path.join(runtimeRoot, 'claude', 'tenantA', 'userA', 'workspaceA', 'wrapper'),
   );
 });
 

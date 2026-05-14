@@ -151,6 +151,7 @@ test('mcp presets are isolated per tenant and can be filtered to published prese
     displayName: 'Data Query MCP',
     description: 'Run internal lookups',
     config: { type: 'http', url: 'https://mcp.internal/data' },
+    preinstallScope: 'all_workspaces',
     status: 'published',
     createdByUserId: adminId,
   });
@@ -189,6 +190,11 @@ test('mcp presets are isolated per tenant and can be filtered to published prese
   );
   assert.deepEqual(
     mt.mcpPresets.listPresets({ tenantId: tenant.id, status: 'published' }).map((row) => row.id),
+    [published.id],
+  );
+  assert.equal(published.preinstall_scope, 'all_workspaces');
+  assert.deepEqual(
+    mt.mcpPresets.listPresets({ tenantId: tenant.id, preinstallScope: 'all_workspaces' }).map((row) => row.id),
     [published.id],
   );
   assert.deepEqual(
@@ -331,6 +337,19 @@ test('mcp preset installs are idempotent per workspace and preset', () => {
     mt.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id }).map((row) => row.preset_id),
     [preset.id],
   );
+
+  const probed = mt.mcpInstalls.recordProbe({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    probeStatus: 'probe_failed',
+    probeError: 'connection refused',
+    toolCount: 0,
+    tools: [],
+  });
+
+  assert.equal(probed.last_probe_status, 'probe_failed');
+  assert.equal(probed.last_probe_error, 'connection refused');
+  assert.equal(probed.tool_count, 0);
 
   const removed = mt.mcpInstalls.removeInstall({ workspaceId: workspace.id, presetId: preset.id });
 
