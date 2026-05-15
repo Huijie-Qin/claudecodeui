@@ -6,7 +6,6 @@ import { formatTimeAgo } from '../../../../utils/dateUtils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
 type SidebarSessionItemProps = {
   project: Project;
@@ -82,15 +81,6 @@ export default function SidebarSessionItem({
           onClick={selectMobileSession}
         >
           <div className="flex items-center gap-2">
-            <div
-              className={cn(
-                'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
-                isSelected ? 'bg-primary/10' : 'bg-muted/50',
-              )}
-            >
-              <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-            </div>
-
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
               <div className="mt-0.5 flex items-center gap-1">
@@ -103,9 +93,6 @@ export default function SidebarSessionItem({
                     {sessionView.messageCount}
                   </Badge>
                 )}
-                <span className="ml-1 opacity-70">
-                  <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-                </span>
               </div>
             </div>
 
@@ -134,7 +121,6 @@ export default function SidebarSessionItem({
           onClick={() => onSessionSelect(session, project.name)}
         >
           <div className="flex w-full min-w-0 items-start gap-2">
-            <SessionProviderLogo provider={session.__provider} className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
               <div className="mt-0.5 flex items-center gap-1">
@@ -150,9 +136,6 @@ export default function SidebarSessionItem({
                     {sessionView.messageCount}
                   </Badge>
                 )}
-                <span className="ml-1 opacity-70 transition-opacity group-hover:opacity-0">
-                  <SessionProviderLogo provider={session.__provider} className="h-3 w-3" />
-                </span>
               </div>
             </div>
           </div>

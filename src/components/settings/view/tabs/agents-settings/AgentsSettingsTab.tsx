@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { useServerPlatform } from '../../../../../hooks/useServerPlatform';
-import { CLI_PROVIDERS } from '../../../../provider-auth/types';
 import type { AgentCategory, AgentProvider } from '../../../types/types';
 
 import type { AgentContext, AgentsSettingsTabProps } from './types';
@@ -27,12 +26,11 @@ export default function AgentsSettingsTab({
   const { isWindowsServer } = useServerPlatform();
 
   const visibleAgents = useMemo<AgentProvider[]>(() => {
-    const all: AgentProvider[] = [...CLI_PROVIDERS];
     if (isWindowsServer) {
-      return all.filter((id) => id !== 'cursor');
+      return ['claude'];
     }
 
-    return all;
+    return ['claude'];
   }, [isWindowsServer]);
 
   useEffect(() => {

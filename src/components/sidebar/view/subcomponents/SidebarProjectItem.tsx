@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Share2, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -79,7 +79,7 @@ export default function SidebarProjectItem({
   onEditingNameChange,
   onToggleProject,
   onProjectSelect,
-  onShareProject,
+  onShareProject: _onShareProject,
   onToggleStarProject,
   onStartEditingProject,
   onCancelEditingProject,
@@ -101,7 +101,9 @@ export default function SidebarProjectItem({
   const sessionCountDisplay = getSessionCountDisplay(sessions, hasMoreSessions);
   const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
-  const canShareProject = project.accessRole === 'owner' && Boolean(project.workspaceId);
+  const canShareProject = false;
+
+  void _onShareProject;
 
   const toggleProject = () => onToggleProject(project.name);
   const toggleStarProject = () => onToggleStarProject(project.name);
@@ -237,19 +239,6 @@ export default function SidebarProjectItem({
                         )}
                       />
                     </button>
-
-                    {canShareProject && (
-                      <button
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onShareProject(project);
-                        }}
-                        title="Share workspace"
-                      >
-                        <Share2 className="h-4 w-4 text-primary" />
-                      </button>
-                    )}
 
                     <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
@@ -398,18 +387,6 @@ export default function SidebarProjectItem({
                 >
                   <Edit3 className="h-3 w-3" />
                 </div>
-                {canShareProject && (
-                  <div
-                    className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onShareProject(project);
-                    }}
-                    title="Share workspace"
-                  >
-                    <Share2 className="h-3 w-3" />
-                  </div>
-                )}
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
                   onClick={(event) => {
