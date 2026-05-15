@@ -15,7 +15,7 @@ import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const ROOT_WORKSPACE_NAME = 'root-workspace';
+const ROOT_WORKSPACE_NAME = 'workspace';
 const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
 const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
 const SOURCE_SKILLS_PATH = path.join(APP_ROOT, 'default_files');

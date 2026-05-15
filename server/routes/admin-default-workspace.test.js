@@ -117,7 +117,7 @@ test('admin tenant activation preinstalls MCP presets only when creating the def
     assert.equal(workspaces.length, 1);
     assert.equal(preinstallCalls.length, 1);
     assert.equal(preinstallCalls[0].workspaceId, 1);
-    assert.equal(preinstallCalls[0].workspaceDisplayName, 'root-workspace');
+    assert.equal(preinstallCalls[0].workspaceDisplayName, 'workspace');
   } finally {
     if (previousRoot == null) {
       delete process.env.WORKSPACES_ROOT;
