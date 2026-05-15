@@ -182,24 +182,24 @@ const builtInCommands = [
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
-  {
-    name: '/clear',
-    description: 'Clear the conversation history',
-    namespace: 'builtin',
-    metadata: { type: 'builtin' }
-  },
-  {
-    name: '/model',
-    description: 'Switch or view the current AI model',
-    namespace: 'builtin',
-    metadata: { type: 'builtin' }
-  },
-  {
-    name: '/cost',
-    description: 'Display token usage and cost information',
-    namespace: 'builtin',
-    metadata: { type: 'builtin' }
-  },
+  // {
+  //   name: '/clear',
+  //   description: 'Clear the conversation history',
+  //   namespace: 'builtin',
+  //   metadata: { type: 'builtin' }
+  // },
+  // {
+  //   name: '/model',
+  //   description: 'Switch or view the current AI model',
+  //   namespace: 'builtin',
+  //   metadata: { type: 'builtin' }
+  // },
+  // {
+  //   name: '/cost',
+  //   description: 'Display token usage and cost information',
+  //   namespace: 'builtin',
+  //   metadata: { type: 'builtin' }
+  // },
   {
     name: '/memory',
     description: 'Open CLAUDE.md memory file for editing',
@@ -212,12 +212,12 @@ const builtInCommands = [
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
-  {
-    name: '/status',
-    description: 'Show system status and version information',
-    namespace: 'builtin',
-    metadata: { type: 'builtin' }
-  },
+  // {
+  //   name: '/status',
+  //   description: 'Show system status and version information',
+  //   namespace: 'builtin',
+  //   metadata: { type: 'builtin' }
+  // },
   {
     name: '/rewind',
     description: 'Rewind the conversation to a previous state',
