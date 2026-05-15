@@ -667,6 +667,78 @@ export function createMultitenancyDb(database = db) {
         ) ?? null;
       },
 
+      getWorkspaceByTenantSlugForUser: ({ tenantId, userId, slug }) => {
+        return database.prepare(`
+          SELECT *
+          FROM (
+            SELECT
+              w.*,
+              'owner' AS accessRole,
+              'edit' AS accessPermission
+            FROM workspaces w
+            JOIN tenant_users tu ON tu.tenant_id = w.tenant_id AND tu.user_id = ?
+            WHERE w.tenant_id = ?
+              AND w.owner_user_id = ?
+              AND w.slug = ?
+              AND w.status = 'active'
+              AND tu.status = 'active'
+
+            UNION
+
+            SELECT
+              w.*,
+              wa.permission AS accessRole,
+              wa.permission AS accessPermission
+            FROM workspaces w
+            JOIN workspace_acl wa ON wa.workspace_id = w.id
+            JOIN tenant_users tu ON tu.tenant_id = w.tenant_id AND tu.user_id = wa.user_id
+            WHERE w.tenant_id = ?
+              AND wa.user_id = ?
+              AND w.slug = ?
+              AND w.status = 'active'
+              AND tu.status = 'active'
+          ) AS visibleWorkspaces
+          ORDER BY accessRole = 'edit' DESC, id ASC
+          LIMIT 1
+        `).get(
+          requirePositiveInteger(userId, 'userId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(userId, 'userId'),
+          requireSlug(slug),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(userId, 'userId'),
+          requireSlug(slug),
+        ) ?? null;
+      },
+
+      updateDisplayName: ({ workspaceId, displayName }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
+
+        const result = database.prepare(`
+          UPDATE workspaces
+          SET display_name = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status != 'deleted'
+        `).run(normalizedDisplayName, normalizedWorkspaceId);
+
+        if (!result.changes) {
+          throw new Error('Workspace not found');
+        }
+
+        return database.prepare('SELECT * FROM workspaces WHERE id = ?').get(normalizedWorkspaceId);
+      },
+
+      markDeleted: ({ workspaceId }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const result = database.prepare(`
+          UPDATE workspaces
+          SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status != 'deleted'
+        `).run(normalizedWorkspaceId);
+
+        return result.changes > 0;
+      },
+
       listVisibleWorkspaces: ({ tenantId, userId }) => {
         return database.prepare(`
           SELECT w.*, 'owner' AS "accessRole", 'edit' AS "accessPermission"
@@ -1306,7 +1378,11 @@ export function createMultitenancyDb(database = db) {
         `).all(...params);
       },
 
-      findOwnedSession: ({ tenantId, userId, provider, providerSessionId }) => {
+      findOwnedSession: ({ tenantId, userId, provider, providerSessionId, workspaceId }) => {
+        const normalizedWorkspaceId = workspaceId != null
+          ? requirePositiveInteger(workspaceId, 'workspaceId')
+          : null;
+
         return database.prepare(`
           SELECT
             si.*,
@@ -1319,15 +1395,27 @@ export function createMultitenancyDb(database = db) {
             AND si.provider = ?
             AND si.provider_session_id = ?
             AND si.status != 'deleted'
+            ${normalizedWorkspaceId != null ? 'AND si.workspace_id = ?' : ''}
         `).get(
           requirePositiveInteger(tenantId, 'tenantId'),
           requirePositiveInteger(userId, 'userId'),
           requireEnum(provider, PROVIDERS, 'provider'),
           requireNonEmptyString(providerSessionId, 'providerSessionId'),
+          ...(normalizedWorkspaceId != null ? [normalizedWorkspaceId] : []),
         ) ?? null;
       },
 
-      markDeleted: ({ tenantId, userId, provider, providerSessionId }) => {
+      markDeleted: ({
+        tenantId,
+        userId,
+        provider,
+        providerSessionId,
+        workspaceId,
+      }) => {
+        const normalizedWorkspaceId = workspaceId != null
+          ? requirePositiveInteger(workspaceId, 'workspaceId')
+          : null;
+
         const result = database.prepare(`
           UPDATE session_index
           SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
@@ -1335,11 +1423,51 @@ export function createMultitenancyDb(database = db) {
             AND user_id = ?
             AND provider = ?
             AND provider_session_id = ?
+            ${normalizedWorkspaceId != null ? 'AND workspace_id = ?' : ''}
         `).run(
           requirePositiveInteger(tenantId, 'tenantId'),
           requirePositiveInteger(userId, 'userId'),
           requireEnum(provider, PROVIDERS, 'provider'),
           requireNonEmptyString(providerSessionId, 'providerSessionId'),
+          ...(normalizedWorkspaceId != null ? [normalizedWorkspaceId] : []),
+        );
+
+        return result.changes > 0;
+      },
+
+      renameSummary: ({
+        tenantId,
+        userId,
+        provider,
+        providerSessionId,
+        workspaceId,
+        summary,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+        const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+        const normalizedSummary = requireNonEmptyString(summary, 'summary');
+        const normalizedWorkspaceId = workspaceId != null
+          ? requirePositiveInteger(workspaceId, 'workspaceId')
+          : null;
+
+        const result = database.prepare(`
+          UPDATE session_index
+          SET summary = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND user_id = ?
+            AND provider = ?
+            AND provider_session_id = ?
+            AND status != 'deleted'
+            ${normalizedWorkspaceId != null ? 'AND workspace_id = ?' : ''}
+        `).run(
+          normalizedSummary,
+          normalizedTenantId,
+          normalizedUserId,
+          normalizedProvider,
+          normalizedProviderSessionId,
+          ...(normalizedWorkspaceId != null ? [normalizedWorkspaceId] : []),
         );
 
         return result.changes > 0;

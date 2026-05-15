@@ -19,6 +19,7 @@ export type SessionDeleteConfirmation = {
   sessionId: string;
   sessionTitle: string;
   provider: LLMProvider;
+  workspaceId?: number;
 };
 
 export type SidebarProps = {
@@ -30,7 +31,7 @@ export type SidebarProps = {
   onSessionSelect: (session: ProjectSession) => void;
   onNewSession: (project: Project) => void;
   onSessionDelete?: (sessionId: string) => void;
-  onProjectDelete?: (projectName: string) => void;
+  onProjectDelete?: (project: Project) => void;
   isLoading: boolean;
   loadingProgress: LoadingProgress | null;
   onRefresh: () => Promise<void> | void;

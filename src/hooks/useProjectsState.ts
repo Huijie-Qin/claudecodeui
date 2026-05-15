@@ -77,6 +77,14 @@ const getProjectSessions = (project: Project): ProjectSession[] => {
   ];
 };
 
+const hasSameProjectIdentity = (left: Project, right: Project) => {
+  if (left.workspaceId != null && right.workspaceId != null) {
+    return left.workspaceId === right.workspaceId;
+  }
+
+  return left.name === right.name;
+};
+
 const isUpdateAdditive = (
   currentProjects: Project[],
   updatedProjects: Project[],
@@ -87,8 +95,8 @@ const isUpdateAdditive = (
     return true;
   }
 
-  const currentSelectedProject = currentProjects.find((project) => project.name === selectedProject.name);
-  const updatedSelectedProject = updatedProjects.find((project) => project.name === selectedProject.name);
+  const currentSelectedProject = currentProjects.find((project) => hasSameProjectIdentity(project, selectedProject));
+  const updatedSelectedProject = updatedProjects.find((project) => hasSameProjectIdentity(project, selectedProject));
 
   if (!currentSelectedProject || !updatedSelectedProject) {
     return false;
@@ -287,8 +295,8 @@ export function useProjectsState({
       return;
     }
 
-    const updatedSelectedProject = updatedProjects.find(
-      (project) => project.name === selectedProject.name,
+    const updatedSelectedProject = updatedProjects.find((project) =>
+      hasSameProjectIdentity(project, selectedProject),
     );
 
     if (!updatedSelectedProject) {
@@ -335,7 +343,7 @@ export function useProjectsState({
     for (const project of projects) {
       const claudeSession = project.sessions?.find((session) => session.id === sessionId);
       if (claudeSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateProject = selectedProject ? !hasSameProjectIdentity(project, selectedProject) : true;
         const shouldUpdateSession =
           selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude';
 
@@ -350,7 +358,7 @@ export function useProjectsState({
 
       const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
       if (cursorSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateProject = selectedProject ? !hasSameProjectIdentity(project, selectedProject) : true;
         const shouldUpdateSession =
           selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor';
 
@@ -365,7 +373,7 @@ export function useProjectsState({
 
       const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
       if (codexSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateProject = selectedProject ? !hasSameProjectIdentity(project, selectedProject) : true;
         const shouldUpdateSession =
           selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex';
 
@@ -380,7 +388,7 @@ export function useProjectsState({
 
       const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
       if (geminiSession) {
-        const shouldUpdateProject = selectedProject?.name !== project.name;
+        const shouldUpdateProject = selectedProject ? !hasSameProjectIdentity(project, selectedProject) : true;
         const shouldUpdateSession =
           selectedSession?.id !== sessionId || selectedSession.__provider !== 'gemini';
 
@@ -393,7 +401,7 @@ export function useProjectsState({
         return;
       }
     }
-  }, [sessionId, projects, selectedProject?.name, selectedSession?.id, selectedSession?.__provider]);
+  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider]);
 
   const handleProjectSelect = useCallback(
     (project: Project) => {
@@ -411,8 +419,18 @@ export function useProjectsState({
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
       const sessionProjectName = session.__projectName;
-      if (sessionProjectName && sessionProjectName !== selectedProject?.name) {
-        const sessionProject = projects.find((project) => project.name === sessionProjectName);
+      if (sessionProjectName) {
+        const candidateProjects = projects.filter((project) => project.name === sessionProjectName);
+        const sessionWorkspaceId = (session as ProjectSession & { __workspaceId?: number }).__workspaceId;
+        const selectedByWorkspace = sessionWorkspaceId == null
+          ? null
+          : candidateProjects.find((project) => project.workspaceId === sessionWorkspaceId);
+        const sessionProject = selectedByWorkspace
+          ?? (selectedProject
+            ? candidateProjects.find((project) => hasSameProjectIdentity(project, selectedProject))
+            : candidateProjects[0])
+          ?? candidateProjects[0];
+
         if (sessionProject) {
           setSelectedProject(sessionProject);
         }
@@ -427,16 +445,20 @@ export function useProjectsState({
       }
 
       if (isMobile) {
-        const currentProjectName = selectedProject?.name;
+        if (!selectedProject || !sessionProjectName) {
+          setSidebarOpen(false);
+          return;
+        }
 
-        if (sessionProjectName !== currentProjectName) {
+        const shouldCloseSidebar = selectedProject.name !== sessionProjectName;
+        if (shouldCloseSidebar) {
           setSidebarOpen(false);
         }
       }
 
       navigate(`/session/${session.id}`);
     },
-    [isMobile, navigate, projects, selectedProject?.name],
+    [isMobile, navigate, projects, selectedProject],
   );
 
   const handleNewSession = useCallback(
@@ -464,9 +486,20 @@ export function useProjectsState({
         prevProjects.map((project) => ({
           ...project,
           sessions: project.sessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          codexSessions: project.codexSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          cursorSessions: project.cursorSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
+          geminiSessions: project.geminiSessions?.filter((session) => session.id !== sessionIdToDelete) ?? [],
           sessionMeta: {
             ...project.sessionMeta,
-            total: Math.max(0, (project.sessionMeta?.total as number | undefined ?? 0) - 1),
+            total: Math.max(
+              0,
+              (project.sessionMeta?.total as number | undefined ?? 0) -
+              (project.sessions?.some((session) => session.id === sessionIdToDelete) ||
+              project.codexSessions?.some((session) => session.id === sessionIdToDelete) ||
+              project.cursorSessions?.some((session) => session.id === sessionIdToDelete) ||
+              project.geminiSessions?.some((session) => session.id === sessionIdToDelete)
+                ? 1 : 0),
+            ),
           },
         })),
       );
@@ -494,7 +527,9 @@ export function useProjectsState({
         return;
       }
 
-      const refreshedProject = freshProjects.find((project) => project.name === selectedProject.name);
+      const refreshedProject = freshProjects.find((project) =>
+        hasSameProjectIdentity(project, selectedProject),
+      );
       if (!refreshedProject) {
         return;
       }
@@ -527,17 +562,19 @@ export function useProjectsState({
     }
   }, [currentTenant, selectedProject, selectedSession]);
 
-  const handleProjectDelete = useCallback(
-    (projectName: string) => {
-      if (selectedProject?.name === projectName) {
+    const handleProjectDelete = useCallback(
+    (projectToDelete: Project) => {
+      if (selectedProject && hasSameProjectIdentity(selectedProject, projectToDelete)) {
         setSelectedProject(null);
         setSelectedSession(null);
         navigate('/');
       }
 
-      setProjects((prevProjects) => prevProjects.filter((project) => project.name !== projectName));
+      setProjects((prevProjects) =>
+        prevProjects.filter((project) => !hasSameProjectIdentity(project, projectToDelete)),
+      );
     },
-    [navigate, selectedProject?.name],
+    [navigate, selectedProject],
   );
 
   const sidebarSharedProps = useMemo(

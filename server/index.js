@@ -60,7 +60,7 @@ import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './d
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
+import { resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
 import { canAccessHostFilesystem } from './services/host-filesystem-access.js';
 import { runtimeSweeper } from './services/runtime-sweeper.js';
 import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
@@ -94,6 +94,54 @@ let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
+
+function resolveEditableWorkspace(req, { projectName, requireEdit = true } = {}) {
+  const tenantId = req.tenant?.id ?? resolveTenantIdFromRequest(req);
+  if (!tenantId) return null;
+  const userId = req.user?.id ?? req.user?.userId;
+  const targetName = projectName || req.params?.projectName;
+  if (!targetName) return null;
+  const normalizedTenantId = Number.parseInt(String(tenantId), 10);
+  if (!Number.isInteger(normalizedTenantId) || normalizedTenantId <= 0) return null;
+
+  const workspaceId = Number.parseInt(req.query.workspaceId, 10);
+  if (workspaceId > 0) {
+    return workspaceAccess.requireWorkspace({
+      tenantId: normalizedTenantId,
+      userId,
+      workspaceId,
+      requireEdit,
+    });
+  }
+
+  const workspace = multitenancyDb.workspaces.getWorkspaceByTenantSlugForUser({
+    tenantId: normalizedTenantId,
+    userId,
+    slug: targetName,
+  });
+  if (!workspace) return null;
+  if (requireEdit && workspace.accessRole !== 'owner' && workspace.accessRole !== 'edit') {
+    const error = new Error('Workspace edit access denied');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return {
+    workspace,
+    accessRole: workspace.accessRole,
+  };
+}
+
+function attachTenantContextIfNeeded(req, res, next) {
+  const tenantId = resolveTenantIdFromRequest(req);
+  if (!tenantId) {
+    if (IS_PLATFORM) {
+      return res.status(400).json({ error: 'tenantId is required' });
+    }
+    return next();
+  }
+  return tenantContext(req, res, next);
+}
 
 // Broadcast progress to all connected WebSocket clients
 function broadcastProgress(progress) {
@@ -357,10 +405,18 @@ app.use('/api/settings', authenticateToken, settingsRoutes);
 app.use('/api/user', authenticateToken, userRoutes);
 
 // Codex API Routes (protected)
-app.use('/api/codex', authenticateToken, codexRoutes);
+if (IS_PLATFORM) {
+    app.use('/api/codex', authenticateToken, tenantContext, codexRoutes);
+} else {
+    app.use('/api/codex', authenticateToken, codexRoutes);
+}
 
 // Gemini API Routes (protected)
-app.use('/api/gemini', authenticateToken, geminiRoutes);
+if (IS_PLATFORM) {
+    app.use('/api/gemini', authenticateToken, tenantContext, geminiRoutes);
+} else {
+    app.use('/api/gemini', authenticateToken, geminiRoutes);
+}
 
 // Plugins API Routes (protected)
 app.use('/api/plugins', authenticateToken, pluginsRoutes);
@@ -488,31 +544,128 @@ app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
     }
 });
 
-app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
+app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        if (req.tenant) {
+            const { limit = 5, offset = 0 } = req.query;
+            const normalizedLimit = parseInt(String(limit), 10);
+            const normalizedOffset = parseInt(String(offset), 10);
+            const pageLimit = Number.isInteger(normalizedLimit) && normalizedLimit > 0 ? normalizedLimit : 5;
+            const pageOffset = Number.isInteger(normalizedOffset) && normalizedOffset >= 0 ? normalizedOffset : 0;
+
+            const resolvedWorkspace = resolveEditableWorkspace(req, { projectName: req.params.projectName, requireEdit: false });
+            if (!resolvedWorkspace?.workspace) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+
+            const { workspace } = resolvedWorkspace;
+            const rows = multitenancyDb.sessions.listSessions({
+                tenantId: req.tenant.id,
+                userId: req.user?.id ?? req.user?.userId,
+                workspaceId: workspace.id,
+                provider: 'claude',
+            });
+            const total = rows.length;
+            const sessions = rows
+                .slice(pageOffset, pageOffset + pageLimit)
+                .map((session) => ({
+                    id: session.provider_session_id,
+                    summary: session.summary || 'New Session',
+                    lastActivity: session.updated_at,
+                    __provider: 'claude',
+                    __workspaceId: workspace.id,
+                }));
+
+            res.json({
+                sessions,
+                hasMore: pageOffset + pageLimit < total,
+                total,
+                offset: pageOffset,
+                limit: pageLimit,
+            });
+            return;
+        }
+
         const { limit = 5, offset = 0 } = req.query;
         const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
         applyCustomSessionNames(result.sessions, 'claude');
         res.json(result);
     } catch (error) {
+        const statusCode = error.statusCode || 500;
+        if (req.tenant) {
+            res.status(statusCode).json({ error: error.message });
+            return;
+        }
         res.status(500).json({ error: error.message });
     }
 });
 
 // Rename project endpoint
-app.put('/api/projects/:projectName/rename', authenticateToken, async (req, res) => {
+app.put('/api/projects/:projectName/rename', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        if (req.tenant) {
+            const { displayName } = req.body;
+            if (!displayName || typeof displayName !== 'string') {
+                return res.status(400).json({ error: 'Display name is required' });
+            }
+
+            const { projectName } = req.params;
+            const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
+            if (!resolvedWorkspace) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+
+            const { workspace } = resolvedWorkspace;
+            multitenancyDb.workspaces.updateDisplayName({
+                workspaceId: workspace.id,
+                displayName: displayName.trim(),
+            });
+            res.json({ success: true });
+            return;
+        }
+
         const { displayName } = req.body;
         await renameProject(req.params.projectName, displayName);
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({ error: error.message });
     }
 });
 
 // Delete session endpoint
-app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, async (req, res) => {
+app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        if (req.tenant) {
+            const { projectName, sessionId } = req.params;
+            const provider = req.body?.provider || 'claude';
+            console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
+
+            const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
+            const { workspace } = resolvedWorkspace ?? {};
+            if (!workspace) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+
+            if (!provider || !VALID_PROVIDERS.includes(provider)) {
+                return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+            }
+
+            const renamed = multitenancyDb.sessions.markDeleted({
+                tenantId: req.tenant.id,
+                userId: req.user?.id ?? req.user?.userId,
+                provider,
+                providerSessionId: sessionId,
+                workspaceId: workspace?.id,
+            });
+            if (!renamed) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+            console.log(`[API] Session ${sessionId} deleted successfully`);
+            res.json({ success: true });
+            return;
+        }
+
         const { projectName, sessionId } = req.params;
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         await deleteSession(projectName, sessionId);
@@ -521,13 +674,48 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error deleting session ${req.params.sessionId}:`, error);
-        res.status(500).json({ error: error.message });
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({ error: error.message });
     }
 });
 
 // Rename session endpoint
-app.put('/api/sessions/:sessionId/rename', authenticateToken, async (req, res) => {
+app.put('/api/sessions/:sessionId/rename', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        if (req.tenant) {
+            const { sessionId } = req.params;
+            const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
+            if (!safeSessionId || safeSessionId !== String(sessionId)) {
+                return res.status(400).json({ error: 'Invalid sessionId' });
+            }
+
+            const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+            const { summary, provider } = req.body;
+            if (!summary || typeof summary !== 'string' || summary.trim() === '') {
+                return res.status(400).json({ error: 'Summary is required' });
+            }
+            if (summary.trim().length > 500) {
+                return res.status(400).json({ error: 'Summary must not exceed 500 characters' });
+            }
+            if (!provider || !VALID_PROVIDERS.includes(provider)) {
+                return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+            }
+
+            const renamed = multitenancyDb.sessions.renameSummary({
+                tenantId: req.tenant.id,
+                userId: req.user?.id ?? req.user?.userId,
+                provider,
+                providerSessionId: safeSessionId,
+                workspaceId: workspace.id,
+                summary: summary.trim(),
+            });
+            if (!renamed) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+            res.json({ success: true });
+            return;
+        }
+
         const { sessionId } = req.params;
         const safeSessionId = String(sessionId).replace(/[^a-zA-Z0-9._-]/g, '');
         if (!safeSessionId || safeSessionId !== String(sessionId)) {
@@ -547,22 +735,47 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, async (req, res) =
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error renaming session ${req.params.sessionId}:`, error);
-        res.status(500).json({ error: error.message });
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({ error: error.message });
     }
 });
 
 // Delete project endpoint
 // force=true to allow removal even when sessions exist
 // deleteData=true to also delete session/memory files on disk (destructive)
-app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => {
+app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        if (req.tenant) {
+            const { projectName } = req.params;
+            const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
+            const { workspace } = resolvedWorkspace ?? {};
+            if (!workspace) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+            const force = req.query.force === 'true';
+            const deleteData = req.query.deleteData === 'true';
+
+            if (deleteData) {
+                try {
+                    await deleteProject(projectName, force, deleteData, { skipSessionCheck: true });
+                } catch (error) {
+                    console.error(`[WARN] Platform project cleanup for ${projectName} failed:`, error);
+                }
+            }
+
+            multitenancyDb.workspaces.markDeleted({ workspaceId: workspace.id });
+            res.json({ success: true });
+            return;
+        }
+
         const { projectName } = req.params;
         const force = req.query.force === 'true';
         const deleteData = req.query.deleteData === 'true';
         await deleteProject(projectName, force, deleteData);
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({ error: error.message });
     }
 });
 

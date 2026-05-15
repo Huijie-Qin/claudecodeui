@@ -169,8 +169,8 @@ function Sidebar({
     onShareProject: handleShareProject,
     onStartEditingProject: startEditing,
     onCancelEditingProject: cancelEditing,
-    onSaveProjectName: (projectName) => {
-      void saveProjectName(projectName);
+    onSaveProjectName: (project) => {
+      void saveProjectName(project);
     },
     onDeleteProject: requestProjectDelete,
     onSessionSelect: handleSessionClick,
@@ -188,8 +188,8 @@ function Sidebar({
       setEditingSession(null);
       setEditingSessionName('');
     },
-    onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
-      void updateSessionSummary(projectName, sessionId, summary, provider);
+    onSaveEditingSession: (project, sessionId: string, summary: string, provider: LLMProvider) => {
+      void updateSessionSummary(project, sessionId, summary, provider);
     },
     t,
   };

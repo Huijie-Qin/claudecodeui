@@ -18,11 +18,11 @@ type SidebarProjectSessionsProps = {
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
-  onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
-    projectName: string,
+    project: Project,
     sessionId: string,
     sessionTitle: string,
     provider: LLMProvider,

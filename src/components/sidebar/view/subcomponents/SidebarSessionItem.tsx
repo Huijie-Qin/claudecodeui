@@ -18,11 +18,11 @@ type SidebarSessionItemProps = {
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
-  onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
-    projectName: string,
+    project: Project,
     sessionId: string,
     sessionTitle: string,
     provider: LLMProvider,
@@ -55,11 +55,11 @@ export default function SidebarSessionItem({
   };
 
   const saveEditedSession = () => {
-    onSaveEditingSession(project.name, session.id, editingSessionName, session.__provider);
+    onSaveEditingSession(project, session.id, editingSessionName, session.__provider);
   };
 
   const requestDeleteSession = () => {
-    onDeleteSession(project.name, session.id, sessionView.sessionName, session.__provider);
+    onDeleteSession(project, session.id, sessionView.sessionName, session.__provider);
   };
 
   return (

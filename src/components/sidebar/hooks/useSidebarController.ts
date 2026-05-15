@@ -69,7 +69,7 @@ type UseSidebarControllerArgs = {
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: ProjectSession) => void;
   onSessionDelete?: (sessionId: string) => void;
-  onProjectDelete?: (projectName: string) => void;
+  onProjectDelete?: (project: Project) => void;
   setCurrentProject: (project: Project) => void;
   setSidebarVisible: (visible: boolean) => void;
   sidebarVisible: boolean;
@@ -117,7 +117,6 @@ export function useSidebarController({
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
-
   const isSidebarCollapsed = !isMobile && !sidebarVisible;
 
   useEffect(() => {
@@ -374,9 +373,9 @@ export function useSidebarController({
   }, []);
 
   const saveProjectName = useCallback(
-    async (projectName: string) => {
+    async (project: Project) => {
       try {
-        const response = await api.renameProject(projectName, editingName);
+        const response = await api.renameProject(project.name, editingName, project.workspaceId);
         if (response.ok) {
           if (window.refreshProjects) {
             await window.refreshProjects();
@@ -398,12 +397,18 @@ export function useSidebarController({
 
   const showDeleteSessionConfirmation = useCallback(
     (
-      projectName: string,
+      project: Project,
       sessionId: string,
       sessionTitle: string,
       provider: SessionDeleteConfirmation['provider'] = 'claude',
     ) => {
-      setSessionDeleteConfirmation({ projectName, sessionId, sessionTitle, provider });
+      setSessionDeleteConfirmation({
+        projectName: project.name,
+        sessionId,
+        sessionTitle,
+        provider,
+        workspaceId: project.workspaceId,
+      });
     },
     [],
   );
@@ -413,17 +418,17 @@ export function useSidebarController({
       return;
     }
 
-    const { projectName, sessionId, provider } = sessionDeleteConfirmation;
+    const { projectName, sessionId, provider, workspaceId } = sessionDeleteConfirmation;
     setSessionDeleteConfirmation(null);
 
     try {
       let response;
       if (provider === 'codex') {
-        response = await api.deleteCodexSession(sessionId);
+        response = await api.deleteCodexSession(sessionId, workspaceId);
       } else if (provider === 'gemini') {
-        response = await api.deleteGeminiSession(sessionId);
+        response = await api.deleteGeminiSession(sessionId, workspaceId);
       } else {
-        response = await api.deleteSession(projectName, sessionId);
+        response = await api.deleteSession(projectName, sessionId, provider, workspaceId);
       }
 
       if (response.ok) {
@@ -464,10 +469,10 @@ export function useSidebarController({
     setDeletingProjects((prev) => new Set([...prev, project.name]));
 
     try {
-      const response = await api.deleteProject(project.name, !isEmpty, deleteData);
+      const response = await api.deleteProject(project.name, !isEmpty, deleteData, project.workspaceId);
 
       if (response.ok) {
-        onProjectDelete?.(project.name);
+        onProjectDelete?.(project);
       } else {
         const error = (await response.json()) as { error?: string };
         alert(error.error || t('messages.deleteProjectFailed'));
@@ -498,7 +503,7 @@ export function useSidebarController({
       try {
         const currentSessionCount =
           (project.sessions?.length || 0) + (additionalSessions[project.name]?.length || 0);
-        const response = await api.sessions(project.name, 5, currentSessionCount);
+        const response = await api.sessions(project.name, 5, currentSessionCount, project.workspaceId);
 
         if (!response.ok) {
           return;
@@ -545,7 +550,7 @@ export function useSidebarController({
   }, [onRefresh]);
 
   const updateSessionSummary = useCallback(
-    async (_projectName: string, sessionId: string, summary: string, provider: LLMProvider) => {
+    async (project: Project, sessionId: string, summary: string, provider: LLMProvider) => {
       const trimmed = summary.trim();
       if (!trimmed) {
         setEditingSession(null);
@@ -553,7 +558,7 @@ export function useSidebarController({
         return;
       }
       try {
-        const response = await api.renameSession(sessionId, trimmed, provider);
+        const response = await api.renameSession(sessionId, trimmed, provider, project.workspaceId);
         if (response.ok) {
           await onRefresh();
         } else {

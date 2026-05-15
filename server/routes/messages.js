@@ -37,7 +37,9 @@ router.get('/:sessionId/messages', async (req, res) => {
     const { sessionId } = req.params;
     const provider = String(req.query.provider || 'claude').trim().toLowerCase();
     const tenantId = Number(req.query.tenantId || req.headers['x-tenant-id']);
+    const workspaceId = Number(req.query.workspaceId);
     const userId = req.user?.id ?? req.user?.userId;
+    const normalizedWorkspaceId = Number.isInteger(workspaceId) && workspaceId > 0 ? workspaceId : null;
     const limitParam = req.query.limit;
     const limit = limitParam !== undefined && limitParam !== null && limitParam !== ''
       ? parseInt(limitParam, 10)
@@ -59,6 +61,7 @@ router.get('/:sessionId/messages', async (req, res) => {
       userId,
       provider,
       providerSessionId: sessionId,
+      ...(normalizedWorkspaceId != null ? { workspaceId: normalizedWorkspaceId } : {}),
     });
     if (!ownedSession) {
       return res.status(404).json({ error: 'Session not found' });

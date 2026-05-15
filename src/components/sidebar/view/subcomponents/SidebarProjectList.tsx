@@ -36,11 +36,11 @@ export type SidebarProjectListProps = {
   onToggleStarProject: (projectName: string) => void;
   onStartEditingProject: (project: Project) => void;
   onCancelEditingProject: () => void;
-  onSaveProjectName: (projectName: string) => void;
+  onSaveProjectName: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onDeleteSession: (
-    projectName: string,
+    project: Project,
     sessionId: string,
     sessionTitle: string,
     provider: LLMProvider,
@@ -50,7 +50,7 @@ export type SidebarProjectListProps = {
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
-  onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   t: TFunction;
 };
 

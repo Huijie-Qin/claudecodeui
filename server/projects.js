@@ -1153,11 +1153,14 @@ async function deleteSession(projectName, sessionId) {
 }
 
 // Check if a project is empty (has no sessions)
-async function isProjectEmpty(projectName) {
+async function isProjectEmpty(projectName, { allowMissingDirectory = false } = {}) {
   try {
     const sessionsResult = await getSessions(projectName, 1, 0);
     return sessionsResult.total === 0;
   } catch (error) {
+    if (allowMissingDirectory && error.code === 'ENOENT') {
+      return true;
+    }
     console.error(`Error checking if project ${projectName} is empty:`, error);
     return false;
   }
@@ -1165,11 +1168,14 @@ async function isProjectEmpty(projectName) {
 
 // Remove a project from the UI.
 // When deleteData=true, also delete session/memory files on disk (destructive).
-async function deleteProject(projectName, force = false, deleteData = false) {
+async function deleteProject(projectName, force = false, deleteData = false, options = {}) {
+  const { skipSessionCheck = false } = options;
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
 
   try {
-    const isEmpty = await isProjectEmpty(projectName);
+    const isEmpty = skipSessionCheck
+      ? true
+      : await isProjectEmpty(projectName, { allowMissingDirectory: true });
     if (!isEmpty && !force) {
       throw new Error('Cannot delete project with existing sessions');
     }

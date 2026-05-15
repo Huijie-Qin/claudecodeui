@@ -80,8 +80,8 @@ export const api = {
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: () => authenticatedFetch(withTenantParam('/api/projects')),
-  sessions: (projectName, limit = 5, offset = 0) =>
-    authenticatedFetch(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`),
+  sessions: (projectName, limit = 5, offset = 0, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`, workspaceId)),
   // Unified endpoint — all providers through one URL
   unifiedSessionMessages: (sessionId, provider = 'claude', { projectName = '', projectPath = '', workspaceId, limit = null, offset = 0 } = {}) => {
     const params = new URLSearchParams();
@@ -96,34 +96,36 @@ export const api = {
     const queryString = params.toString();
     return authenticatedFetch(withTenantParam(`/api/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`));
   },
-  renameProject: (projectName, displayName) =>
-    authenticatedFetch(`/api/projects/${projectName}/rename`, {
+  renameProject: (projectName, displayName, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/rename`, workspaceId), {
       method: 'PUT',
       body: JSON.stringify({ displayName }),
     }),
-  deleteSession: (projectName, sessionId) =>
-    authenticatedFetch(`/api/projects/${projectName}/sessions/${sessionId}`, {
+  deleteSession: (projectName, sessionId, provider = 'claude', workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/sessions/${sessionId}`, workspaceId), {
       method: 'DELETE',
+      body: JSON.stringify({ provider }),
     }),
-  renameSession: (sessionId, summary, provider) =>
-    authenticatedFetch(`/api/sessions/${sessionId}/rename`, {
+  renameSession: (sessionId, summary, provider, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${sessionId}/rename`, workspaceId), {
       method: 'PUT',
       body: JSON.stringify({ summary, provider }),
     }),
-  deleteCodexSession: (sessionId) =>
-    authenticatedFetch(`/api/codex/sessions/${sessionId}`, {
+  deleteCodexSession: (sessionId, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/codex/sessions/${sessionId}`, workspaceId), {
       method: 'DELETE',
     }),
-  deleteGeminiSession: (sessionId) =>
-    authenticatedFetch(`/api/gemini/sessions/${sessionId}`, {
+  deleteGeminiSession: (sessionId, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/gemini/sessions/${sessionId}`, workspaceId), {
       method: 'DELETE',
     }),
-  deleteProject: (projectName, force = false, deleteData = false) => {
+  deleteProject: (projectName, force = false, deleteData = false, workspaceId) => {
     const params = new URLSearchParams();
     if (force) params.set('force', 'true');
     if (deleteData) params.set('deleteData', 'true');
     const qs = params.toString();
-    return authenticatedFetch(`/api/projects/${projectName}${qs ? `?${qs}` : ''}`, {
+    const url = withTenantAndWorkspaceParam(`/api/projects/${projectName}${qs ? `?${qs}` : ''}`, workspaceId);
+    return authenticatedFetch(url, {
       method: 'DELETE',
     });
   },
