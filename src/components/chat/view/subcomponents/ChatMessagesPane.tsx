@@ -100,7 +100,7 @@ export default function ChatMessagesPane({
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
   const allocatedKeysRef = useRef<Set<string>>(new Set());
   const generatedMessageKeyCounterRef = useRef(0);
-
+  const shouldShowLoadAllImmediately = hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && !isLoadingSessionMessages && chatMessages.length > 0;
   // Keep keys stable across prepends so existing MessageComponent instances retain local state.
   const getMessageKey = useCallback((message: ChatMessage) => {
     const existingKey = messageKeyMapRef.current.get(message);
@@ -184,7 +184,7 @@ export default function ChatMessagesPane({
           )}
 
           {/* Floating "Load all messages" overlay */}
-          {(showLoadAllOverlay || isLoadingAllMessages || loadAllJustFinished) && (
+          {(showLoadAllOverlay || isLoadingAllMessages || loadAllJustFinished || shouldShowLoadAllImmediately) && (
             <div className="pointer-events-none sticky top-2 z-20 flex justify-center">
               {loadAllJustFinished ? (
                 <div className="flex items-center space-x-2 rounded-full bg-green-600 px-4 py-1.5 text-xs font-medium text-white shadow-lg dark:bg-green-500">
