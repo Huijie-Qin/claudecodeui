@@ -68,6 +68,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     onRefresh: refreshFiles,
     showToast,
     isReadOnly,
+    projectFiles: files,
   });
 
   // Focus input when creating new item
@@ -275,7 +276,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
                 disabled={operations.operationLoading}
                 className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
               >
-                {t('common.cancel', 'Cancel')}
+                {t('fileTree.upload.overwriteCancel', 'Cancel')}
               </button>
               <button
                 onClick={operations.handleConfirmDelete}
@@ -284,6 +285,61 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
               >
                 {operations.operationLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {t('fileTree.delete.confirm', 'Delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Overwrite Confirmation Dialog */}
+      {upload.overwriteDialog.isOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-lg rounded-lg border border-border bg-background p-4 shadow-lg">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="rounded-full bg-amber-100 p-2 dark:bg-amber-900/30">
+                <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <h3 className="font-medium text-foreground">
+                  {t('fileTree.upload.overwriteTitle', 'Overwrite existing files')}
+                </h3>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {t('fileTree.upload.overwriteWarning', 'The following files already exist in the target folder and will be overwritten:')}
+                </p>
+              </div>
+            </div>
+            <div className="mb-4 max-h-48 overflow-auto rounded border border-border bg-muted/20 p-3">
+              {upload.overwriteDialog.duplicates.length > 0 && (
+                <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                  {upload.overwriteDialog.duplicates.map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                </ul>
+              )}
+              {upload.overwriteDialog.tooMany > 0 && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {t('fileTree.upload.overwriteMore', '{{count}} more', { count: upload.overwriteDialog.tooMany })}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={upload.handleCancelOverwrite}
+                disabled={operations.operationLoading || upload.operationLoading}
+                className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+              >
+                {t('fileTree.upload.overwriteCancel', 'Cancel')}
+              </button>
+              <button
+                onClick={upload.handleConfirmOverwrite}
+                disabled={operations.operationLoading || upload.operationLoading}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+              >
+                {upload.operationLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  t('fileTree.upload.overwriteConfirm', 'Continue upload')
+                )}
               </button>
             </div>
           </div>
@@ -326,7 +382,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
                 disabled={operations.operationLoading}
                 className="rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-accent"
               >
-                {t('common.cancel', 'Cancel')}
+                {t('fileTree.upload.overwriteCancel', 'Cancel')}
               </button>
               <button
                 onClick={operations.handleConfirmMove}

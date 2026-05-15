@@ -1,4 +1,4 @@
-{
+﻿{
   "buttons": {
     "save": "保存",
     "cancel": "取消",
@@ -308,6 +308,13 @@
     "newFolder": "新建文件夹 (Cmd+Shift+N)",
     "refresh": "刷新",
     "collapseAll": "全部折叠",
+    "upload": {
+      "overwriteTitle": "检测到重复文件",
+      "overwriteWarning": "以下文件已存在于目标文件夹中，将被覆盖：",
+      "overwriteMore": "...还有 {{count}} 个",
+      "overwriteConfirm": "继续上传",
+      "overwriteCancel": "取消"
+    },
     "context": {
       "rename": "重命名",
       "delete": "删除",
@@ -458,3 +465,7 @@
     }
   }
 }
+
+
+
+

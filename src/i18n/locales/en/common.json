@@ -1,4 +1,4 @@
-{
+﻿{
   "buttons": {
     "save": "Save",
     "cancel": "Cancel",
@@ -308,6 +308,13 @@
     "newFolder": "New Folder (Cmd+Shift+N)",
     "refresh": "Refresh",
     "collapseAll": "Collapse All",
+    "upload": {
+      "overwriteTitle": "Overwrite existing files?",
+      "overwriteWarning": "The following files already exist in the target folder and will be overwritten:",
+      "overwriteMore": "...and {{count}} more",
+      "overwriteConfirm": "Continue upload",
+      "overwriteCancel": "Cancel"
+    },
     "context": {
       "rename": "Rename",
       "delete": "Delete",
@@ -360,7 +367,7 @@
       "tokenPlaceholder": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "tokenHelp": "This token will be used only for this operation",
       "publicRepoInfo": "Public repositories don't require authentication. You can skip providing a token if cloning a public repo.",
-      "noTokensHelp": "No stored tokens available. You can add tokens in Settings → API Keys for easier reuse.",
+      "noTokensHelp": "No stored tokens available. You can add tokens in Settings �?API Keys for easier reuse.",
       "optionalTokenPublic": "GitHub Token (Optional for Public Repos)",
       "tokenPublicPlaceholder": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (leave empty for public repos)"
     },
@@ -458,3 +465,4 @@
     }
   }
 }
+

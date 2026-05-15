@@ -1,5 +1,6 @@
 import { useCallback, useState, useRef } from 'react';
 import type { Project } from '../../../types/app';
+import type { FileTreeNode } from '../types/types';
 import { api } from '../../../utils/api';
 import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
 
@@ -8,6 +9,14 @@ type UseFileTreeUploadOptions = {
   onRefresh: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
   isReadOnly?: boolean;
+  projectFiles: FileTreeNode[];
+};
+
+type UploadOverwriteDialogState = {
+  isOpen: boolean;
+  duplicates: string[];
+  tooMany: number;
+  targetPath: string;
 };
 
 // Helper function to read all files from a directory entry recursively
@@ -65,8 +74,53 @@ function getUploadRelativePath(file: File) {
 }
 
 function getUploadFileName(file: File, relativePath: string) {
-  const pathParts = relativePath.split('/').filter(Boolean);
+  const pathParts = relativePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean);
   return pathParts[pathParts.length - 1] || file.name;
+}
+
+function normalizePath(pathValue: string) {
+  return pathValue.replace(/\\/g, '/').replace(/\/+$/g, '');
+}
+
+function isAbsolutePath(pathValue: string) {
+  const normalized = normalizePath(pathValue);
+  return normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized);
+}
+
+function joinPath(basePath: string, childPath: string) {
+  const normalizedBase = normalizePath(basePath);
+  const normalizedChild = normalizePath(childPath).replace(/^\/+/, '');
+  if (!normalizedBase) return normalizedChild;
+  if (!normalizedChild) return normalizedBase;
+  return `${normalizedBase}/${normalizedChild}`;
+}
+
+function collectAllPaths(nodes: FileTreeNode[], result: Set<string>) {
+  for (const node of nodes) {
+    result.add(normalizePath(node.path).toLowerCase());
+    if (node.children?.length) {
+      collectAllPaths(node.children, result);
+    }
+  }
+}
+
+function getProjectRoot(project: Project | null) {
+  return normalizePath(project?.path || '');
+}
+
+function resolveTargetBase(targetPath: string, projectRoot: string) {
+  if (!targetPath || targetPath === '.' || targetPath === './') {
+    return projectRoot;
+  }
+
+  return isAbsolutePath(targetPath) ? normalizePath(targetPath) : joinPath(projectRoot, targetPath);
+}
+
+function getDisplayRelativePath(relativePath: string) {
+  return normalizePath(relativePath).replace(/^\//, '');
 }
 
 export const useFileTreeUpload = ({
@@ -74,16 +128,25 @@ export const useFileTreeUpload = ({
   onRefresh,
   showToast,
   isReadOnly = false,
+  projectFiles,
 }: UseFileTreeUploadOptions) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [operationLoading, setOperationLoading] = useState(false);
+  const [overwriteDialog, setOverwriteDialog] = useState<UploadOverwriteDialogState>({
+    isOpen: false,
+    duplicates: [],
+    tooMany: 0,
+    targetPath: '',
+  });
+
   const treeRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const pickerTargetPathRef = useRef('');
+  const pendingUploadRef = useRef<{ files: File[]; targetPath: string } | null>(null);
 
-  const uploadFiles = useCallback(async (files: File[], targetPath = '') => {
+  const performUpload = useCallback(async (files: File[], targetPath = '') => {
     if (isReadOnly || !selectedProject || files.length === 0) {
       return;
     }
@@ -132,7 +195,80 @@ export const useFileTreeUpload = ({
       setOperationLoading(false);
       setDropTarget(null);
     }
-  }, [isReadOnly, selectedProject, onRefresh, showToast]);
+  }, [isReadOnly, onRefresh, selectedProject, showToast]);
+
+  const uploadFiles = useCallback(async (files: File[], targetPath = '') => {
+    if (isReadOnly || !selectedProject || files.length === 0) {
+      return;
+    }
+
+    const projectRoot = getProjectRoot(selectedProject);
+    const existingPaths = new Set<string>();
+    collectAllPaths(projectFiles, existingPaths);
+
+    const resolvedTargetPath = resolveTargetBase(targetPath, projectRoot);
+    const duplicateFiles = files
+      .map((file) => {
+        const relativePath = getDisplayRelativePath(getUploadRelativePath(file) || file.name);
+        const finalPath = joinPath(resolvedTargetPath, relativePath).toLowerCase();
+        const isDuplicate = existingPaths.has(finalPath);
+
+        return isDuplicate
+          ? {
+              relativePath,
+              finalPath,
+            }
+          : null;
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          relativePath: string;
+          finalPath: string;
+        } => Boolean(item),
+      );
+
+    const uniqueDuplicateLabels = Array.from(
+      new Map(duplicateFiles.map((item) => [item.finalPath, item.relativePath])).values(),
+    );
+
+    if (uniqueDuplicateLabels.length > 0) {
+      const maxShow = 20;
+      const shownConflicts = uniqueDuplicateLabels.slice(0, maxShow);
+      const tooMany = uniqueDuplicateLabels.length > maxShow
+        ? uniqueDuplicateLabels.length - maxShow
+        : 0;
+
+      pendingUploadRef.current = { files, targetPath };
+      setOverwriteDialog({
+        isOpen: true,
+        duplicates: shownConflicts,
+        tooMany,
+        targetPath,
+      });
+      return;
+    }
+
+    await performUpload(files, targetPath);
+  }, [isReadOnly, selectedProject, projectFiles, performUpload]);
+
+  const handleConfirmOverwrite = useCallback(async () => {
+    const pendingUpload = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+    setOverwriteDialog({ isOpen: false, duplicates: [], tooMany: 0, targetPath: '' });
+
+    if (!pendingUpload) {
+      return;
+    }
+
+    await performUpload(pendingUpload.files, pendingUpload.targetPath);
+  }, [performUpload]);
+
+  const handleCancelOverwrite = useCallback(() => {
+    pendingUploadRef.current = null;
+    setOverwriteDialog({ isOpen: false, duplicates: [], tooMany: 0, targetPath: '' });
+  }, []);
 
   const openFilePicker = useCallback((targetPath = '') => {
     if (isReadOnly) return;
@@ -246,6 +382,7 @@ export const useFileTreeUpload = ({
     isDragOver,
     dropTarget,
     operationLoading,
+    overwriteDialog,
     treeRef,
     fileInputRef,
     folderInputRef,
@@ -259,5 +396,7 @@ export const useFileTreeUpload = ({
     openFilePicker,
     openFolderPicker,
     setDropTarget,
+    handleConfirmOverwrite,
+    handleCancelOverwrite,
   };
 };
