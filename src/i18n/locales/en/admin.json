@@ -74,6 +74,9 @@
     "deleteUser": "Delete user \"{{username}}\"? This removes their tenant access and owned data.",
     "removeAccess": "Remove {{username}}'s access to {{tenantName}}?"
   },
+  "toast": {
+    "grantTenantAccessSuccess": "Granted {{username}} access to {{tenantName}}"
+  },
   "users": {
     "createTitle": "Create user",
     "usernamePlaceholder": "teammate",

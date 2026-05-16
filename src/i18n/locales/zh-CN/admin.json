@@ -74,6 +74,9 @@
     "deleteUser": "删除用户“{{username}}”？这会移除该用户的租户权限和其拥有的数据。",
     "removeAccess": "移除 {{username}} 对 {{tenantName}} 的访问权限？"
   },
+  "toast": {
+    "grantTenantAccessSuccess": "已授权 {{username}} 访问 {{tenantName}}"
+  },
   "users": {
     "createTitle": "创建用户",
     "usernamePlaceholder": "teammate",

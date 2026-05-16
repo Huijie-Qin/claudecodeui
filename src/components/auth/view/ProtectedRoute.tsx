@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import { useTenant } from '../../../contexts/TenantContext';
 import TenantSelection from '../../tenant/TenantSelection';
+import { shouldShowTenantLoadingScreen } from '../../tenant/tenantSelectionHelper';
 import { useAuth } from '../context/AuthContext';
 
 import AuthLoadingScreen from './AuthLoadingScreen';
@@ -30,7 +31,7 @@ function getInvitationTokenFromLocation(): string | null {
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, isLoading, needsSetup } = useAuth();
-  const { isLoadingTenants, needsTenantSelection } = useTenant();
+  const { currentTenant, isLoadingTenants, needsTenantSelection } = useTenant();
   const invitationToken = getInvitationTokenFromLocation();
 
   if (isLoading) {
@@ -54,7 +55,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     return <LoginForm />;
   }
 
-  if (isLoadingTenants) {
+  if (shouldShowTenantLoadingScreen(isLoadingTenants, currentTenant)) {
     return <AuthLoadingScreen />;
   }
 

@@ -14,3 +14,7 @@ export function chooseInitialTenant(savedTenantId: string | null, tenants: Tenan
 
   return tenants.find((tenant) => tenant.id === numericId) ?? null;
 }
+
+export function shouldShowTenantLoadingScreen(isLoadingTenants: boolean, currentTenant: Tenant | null): boolean {
+  return isLoadingTenants && !currentTenant;
+}

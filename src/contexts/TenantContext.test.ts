@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { chooseInitialTenant } from '../components/tenant/tenantSelectionHelper';
+import {
+  chooseInitialTenant,
+  shouldShowTenantLoadingScreen,
+} from '../components/tenant/tenantSelectionHelper';
 
 test('chooseInitialTenant keeps saved tenant when still visible', () => {
   const tenant = chooseInitialTenant('2', [
@@ -18,4 +21,10 @@ test('chooseInitialTenant requires explicit choice when saved tenant is gone', (
   ]);
 
   assert.equal(tenant, null);
+});
+
+test('shouldShowTenantLoadingScreen keeps the app mounted during background tenant refreshes', () => {
+  assert.equal(shouldShowTenantLoadingScreen(true, null), true);
+  assert.equal(shouldShowTenantLoadingScreen(true, { id: 1, code: 'one', name: 'One', permission: 'edit' }), false);
+  assert.equal(shouldShowTenantLoadingScreen(false, null), false);
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, Copy, Plus, RefreshCw, Shield, Trash2, UserMinus, UserPlus } from 'lucide-react';
+import { Check, Copy, Plus, RefreshCw, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
@@ -80,6 +80,11 @@ type AdminErrorPayload = {
   message?: string;
 };
 
+type AdminToast = {
+  message: string;
+  type: 'success' | 'error';
+} | null;
+
 async function readError(response: Response, fallback: string): Promise<string> {
   const payload = await response.json().catch(() => ({} as AdminErrorPayload));
   return payload.error || payload.message || fallback;
@@ -140,11 +145,23 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [permission, setPermission] = useState<TenantPermission>('edit');
   const [activeTab, setActiveTab] = useState<'users' | 'tenants' | 'mcpPresets' | 'runtimes'>('users');
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const { currentTenant, refreshTenants } = useTenant();
   const { user: currentUser } = useAuth();
   const currentUserId = currentUser?.id == null ? null : Number(currentUser.id);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error') => {
+    setToast({ message, type });
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+
+    const timer = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -328,10 +345,14 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
     setError(null);
     if (!tenantId || !userId) {
-      setError(t('errors.selectTenantAndUser'));
+      const message = t('errors.selectTenantAndUser');
+      setError(message);
+      showToast(message, 'error');
       return;
     }
 
+    const selectedTenant = tenants.find((tenant) => tenant.id === tenantId);
+    const selectedUser = users.find((user) => user.id === userId);
     setIsSaving(true);
     try {
       const response = await api.admin.upsertTenantUser(
@@ -341,15 +362,26 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       );
 
       if (!response.ok) {
-        setError(await readError(response, t('errors.grantTenantAccess')));
+        const message = await readError(response, t('errors.grantTenantAccess'));
+        setError(message);
+        showToast(message, 'error');
         return;
       }
 
       setSelectedTenantId('');
       setSelectedUserId('');
       setPermission('edit');
+      showToast(t('toast.grantTenantAccessSuccess', {
+        tenantName: selectedTenant?.name || t('fields.tenant'),
+        username: selectedUser?.username || t('fields.user'),
+      }), 'success');
       await load();
       await refreshTenants();
+    } catch (caughtError) {
+      console.error('[AdminPanel] Failed to grant tenant access:', caughtError);
+      const message = t('errors.grantTenantAccess');
+      setError(message);
+      showToast(message, 'error');
     } finally {
       setIsSaving(false);
     }
@@ -381,8 +413,20 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-6xl overflow-hidden p-0">
+      <DialogContent className="relative max-h-[88vh] max-w-6xl overflow-hidden p-0">
         <DialogTitle>{t('title')}</DialogTitle>
+        {toast ? (
+          <div
+            className={`animate-in slide-in-from-bottom-2 pointer-events-none absolute bottom-4 right-4 z-20 flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white shadow-lg ${
+              toast.type === 'success' ? 'bg-emerald-600' : 'bg-destructive'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {toast.type === 'success' ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+            <span>{toast.message}</span>
+          </div>
+        ) : null}
         <div className="flex max-h-[88vh] flex-col">
           <div className="flex items-center gap-3 border-b border-border px-5 py-4">
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
