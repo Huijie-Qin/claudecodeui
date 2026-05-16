@@ -1,7 +1,9 @@
 import type { ReactNode, RefObject } from 'react';
 import { Folder, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import type { FileTreeNode, FileTreeViewMode } from '../types/types';
+
 import FileTreeEmptyState from './FileTreeEmptyState';
 import FileTreeList from './FileTreeList';
 
@@ -11,6 +13,7 @@ type FileTreeBodyProps = {
   searchQuery: string;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
+  dropTarget?: string | null;
   onItemClick: (item: FileTreeNode) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
@@ -41,6 +44,7 @@ export default function FileTreeBody({
   searchQuery,
   viewMode,
   expandedDirs,
+  dropTarget,
   onItemClick,
   renderFileIcon,
   formatFileSize,
@@ -84,6 +88,7 @@ export default function FileTreeBody({
           items={filteredFiles}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
+          dropTarget={dropTarget}
           onItemClick={onItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}

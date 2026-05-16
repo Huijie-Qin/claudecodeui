@@ -6,6 +6,8 @@ export const FILE_TREE_DEFAULT_VIEW_MODE: FileTreeViewMode = 'detailed';
 
 export const FILE_TREE_VIEW_MODES: FileTreeViewMode[] = ['simple', 'compact', 'detailed'];
 
+export const FILE_TREE_DROP_TARGET_ATTRIBUTE = 'data-file-tree-drop-target';
+
 export const IMAGE_FILE_EXTENSIONS = new Set([
   'png',
   'jpg',

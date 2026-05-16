@@ -1,8 +1,11 @@
 import type { ReactNode, RefObject } from 'react';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
+
 import { cn } from '../../../lib/utils';
+import { FILE_TREE_DROP_TARGET_ATTRIBUTE } from '../constants/constants';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
 import { Input } from '../../../shared/view/ui';
+
 import FileContextMenu from './FileContextMenu';
 
 type FileTreeNodeProps = {
@@ -10,6 +13,7 @@ type FileTreeNodeProps = {
   level: number;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
+  dropTarget?: string | null;
   onItemClick: (item: FileTreeNodeType) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
@@ -67,6 +71,7 @@ export default function FileTreeNode({
   level,
   viewMode,
   expandedDirs,
+  dropTarget,
   onItemClick,
   renderFileIcon,
   formatFileSize,
@@ -93,6 +98,10 @@ export default function FileTreeNode({
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
   const isRenaming = renamingItem?.path === item.path;
+  const isDropTarget = isDirectory && dropTarget === item.path;
+  const dropTargetAttributes: Record<string, string> = isDirectory
+    ? { [FILE_TREE_DROP_TARGET_ATTRIBUTE]: item.path }
+    : {};
 
   const nameClassName = cn(
     'text-[13px] leading-tight truncate',
@@ -108,6 +117,7 @@ export default function FileTreeNode({
       : 'group flex items-center gap-1.5 py-[3px] pr-2 cursor-pointer rounded-sm hover:bg-accent/60 transition-colors duration-100',
     isDirectory && isOpen && 'border-l-2 border-primary/30',
     (isDirectory && !isOpen) || !isDirectory ? 'border-l-2 border-transparent' : '',
+    isDropTarget && 'bg-blue-500/15 ring-1 ring-inset ring-blue-500/50',
   );
 
   // Render rename input if this item is being renamed
@@ -115,6 +125,7 @@ export default function FileTreeNode({
     return (
       <div
         className={cn(rowClassName, 'bg-accent/30')}
+        {...dropTargetAttributes}
         style={{ paddingLeft: `${level * 16 + 4}px` }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -144,6 +155,7 @@ export default function FileTreeNode({
   const rowContent = (
     <div
       className={rowClassName}
+      {...dropTargetAttributes}
       style={{ paddingLeft: `${level * 16 + 4}px` }}
       onClick={() => onItemClick(item)}
     >
@@ -222,6 +234,7 @@ export default function FileTreeNode({
               level={level + 1}
               viewMode={viewMode}
               expandedDirs={expandedDirs}
+              dropTarget={dropTarget}
               onItemClick={onItemClick}
               renderFileIcon={renderFileIcon}
               formatFileSize={formatFileSize}

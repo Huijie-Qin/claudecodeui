@@ -1,7 +1,9 @@
 import { useCallback, useState, useRef } from 'react';
+
 import type { Project } from '../../../types/app';
 import type { FileTreeNode } from '../types/types';
 import { api } from '../../../utils/api';
+import { FILE_TREE_DROP_TARGET_ATTRIBUTE } from '../constants/constants';
 import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
 
 type UseFileTreeUploadOptions = {
@@ -121,6 +123,17 @@ function resolveTargetBase(targetPath: string, projectRoot: string) {
 
 function getDisplayRelativePath(relativePath: string) {
   return normalizePath(relativePath).replace(/^\//, '');
+}
+
+function resolveDirectoryDropTarget(eventTarget: EventTarget | null) {
+  if (!(eventTarget instanceof Node)) {
+    return '';
+  }
+
+  const element = eventTarget instanceof Element ? eventTarget : eventTarget.parentElement;
+  const dropTargetElement = element?.closest(`[${FILE_TREE_DROP_TARGET_ATTRIBUTE}]`);
+
+  return dropTargetElement?.getAttribute(FILE_TREE_DROP_TARGET_ATTRIBUTE) || '';
 }
 
 export const useFileTreeUpload = ({
@@ -295,12 +308,21 @@ export const useFileTreeUpload = ({
     e.stopPropagation();
     if (isReadOnly) return;
     setIsDragOver(true);
+    const nextDropTarget = resolveDirectoryDropTarget(e.target);
+    setDropTarget((currentDropTarget) => (
+      currentDropTarget === nextDropTarget ? currentDropTarget : nextDropTarget
+    ));
   }, [isReadOnly]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-  }, []);
+    if (isReadOnly) return;
+    const nextDropTarget = resolveDirectoryDropTarget(e.target);
+    setDropTarget((currentDropTarget) => (
+      currentDropTarget === nextDropTarget ? currentDropTarget : nextDropTarget
+    ));
+  }, [isReadOnly]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -320,7 +342,8 @@ export const useFileTreeUpload = ({
       return;
     }
 
-    const targetPath = dropTarget || '';
+    const targetPath = resolveDirectoryDropTarget(e.target) || dropTarget || '';
+    setDropTarget(null);
 
     try {
       const files: File[] = [];
@@ -366,18 +389,6 @@ export const useFileTreeUpload = ({
     }
   }, [dropTarget, selectedProject, isReadOnly, uploadFiles, showToast]);
 
-  const handleItemDragOver = useCallback((e: React.DragEvent, itemPath: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDropTarget(itemPath);
-  }, []);
-
-  const handleItemDrop = useCallback((e: React.DragEvent, itemPath: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDropTarget(itemPath);
-  }, []);
-
   return {
     isDragOver,
     dropTarget,
@@ -391,8 +402,6 @@ export const useFileTreeUpload = ({
     handleDragLeave,
     handleDrop,
     handleFileInputChange,
-    handleItemDragOver,
-    handleItemDrop,
     openFilePicker,
     openFolderPicker,
     setDropTarget,
