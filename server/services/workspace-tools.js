@@ -10,6 +10,7 @@ const HTTP_TIMEOUT_MS = 10_000;
 const HEADER_HELPER_TIMEOUT_MS = 10_000;
 const HEADER_HELPER_MAX_BUFFER_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
+const mcpStatusCache = new Map();
 
 const BUILT_IN_TOOLS = Object.freeze([
   {
@@ -97,26 +98,17 @@ export async function writeWorkspaceMcpConfig(workspacePath, config) {
 }
 
 export async function readMcpStatus(workspacePath) {
-  const { statusPath } = getWorkspaceToolsPaths(workspacePath);
-  try {
-    const parsed = JSON.parse(await fs.readFile(statusPath, 'utf8'));
-    return normalizeStatus(parsed);
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return { ...EMPTY_STATUS, servers: {} };
-    }
-    throw error;
-  }
+  const cached = mcpStatusCache.get(getMcpStatusCacheKey(workspacePath));
+  return cached ? cloneStatus(cached) : { ...EMPTY_STATUS, servers: {} };
 }
 
 export async function writeMcpStatus(workspacePath, status) {
-  const { statusPath } = getWorkspaceToolsPaths(workspacePath);
   const normalized = normalizeStatus(status);
   if (Object.keys(normalized.servers).length === 0) {
-    await removeJsonFile(statusPath, { workspacePath });
+    mcpStatusCache.delete(getMcpStatusCacheKey(workspacePath));
     return;
   }
-  await writeJsonFile(statusPath, normalized);
+  mcpStatusCache.set(getMcpStatusCacheKey(workspacePath), cloneStatus(normalized));
 }
 
 export async function readMcpDrafts(workspacePath) {
@@ -850,6 +842,14 @@ function normalizeStatus(status) {
     version: 1,
     servers: readPlainObject(status?.servers) || {},
   };
+}
+
+function getMcpStatusCacheKey(workspacePath) {
+  return path.resolve(String(workspacePath || ''));
+}
+
+function cloneStatus(status) {
+  return JSON.parse(JSON.stringify(normalizeStatus(status)));
 }
 
 function normalizeDrafts(drafts) {

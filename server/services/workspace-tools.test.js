@@ -70,7 +70,7 @@ test('listWorkspaceTools reads project .mcp.json and preserves unsupported exist
   }
 });
 
-test('upsertWorkspaceMcpServer probes, writes .mcp.json, status, and removes same-name draft', async () => {
+test('upsertWorkspaceMcpServer probes, writes .mcp.json, and caches status without status.json', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
     await upsertWorkspaceMcpServer({
@@ -87,6 +87,7 @@ test('upsertWorkspaceMcpServer probes, writes .mcp.json, status, and removes sam
 
     const config = await readWorkspaceMcpConfig(workspacePath);
     const status = await readMcpStatus(workspacePath);
+    const { statusPath } = getWorkspaceToolsPaths(workspacePath);
 
     assert.deepEqual(config.mcpServers.docs, {
       type: 'http',
@@ -96,6 +97,7 @@ test('upsertWorkspaceMcpServer probes, writes .mcp.json, status, and removes sam
     assert.equal(status.servers.docs.status, 'healthy');
     assert.equal(status.servers.docs.toolCount, 1);
     assert.equal(status.servers.docs.checkedAt, '2026-05-05T00:00:00.000Z');
+    await assert.rejects(fs.access(statusPath), { code: 'ENOENT' });
   } finally {
     await cleanup();
   }
@@ -128,7 +130,7 @@ test('upsertWorkspaceMcpServer saves needs-value drafts without writing .mcp.jso
   }
 });
 
-test('upsertWorkspaceMcpServer stores probe failures but does not write failing server config', async () => {
+test('upsertWorkspaceMcpServer caches probe failures but does not write failing server config', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
     await assert.rejects(
@@ -153,16 +155,18 @@ test('upsertWorkspaceMcpServer stores probe failures but does not write failing 
 
     const config = await readWorkspaceMcpConfig(workspacePath);
     const status = await readMcpStatus(workspacePath);
+    const { statusPath } = getWorkspaceToolsPaths(workspacePath);
 
     assert.deepEqual(config.mcpServers, {});
     assert.equal(status.servers.broken.status, 'probe_failed');
     assert.equal(status.servers.broken.phase, 'network');
+    await assert.rejects(fs.access(statusPath), { code: 'ENOENT' });
   } finally {
     await cleanup();
   }
 });
 
-test('probeWorkspaceMcpServer records real probe result without writing config', async () => {
+test('probeWorkspaceMcpServer caches real probe result without writing config or status.json', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
     const result = await probeWorkspaceMcpServer({
@@ -177,16 +181,18 @@ test('probeWorkspaceMcpServer records real probe result without writing config',
     });
     const config = await readWorkspaceMcpConfig(workspacePath);
     const status = await readMcpStatus(workspacePath);
+    const { statusPath } = getWorkspaceToolsPaths(workspacePath);
 
     assert.equal(result.status, 'healthy');
     assert.deepEqual(config.mcpServers, {});
     assert.equal(status.servers['probe-only'].toolCount, 1);
+    await assert.rejects(fs.access(statusPath), { code: 'ENOENT' });
   } finally {
     await cleanup();
   }
 });
 
-test('removeWorkspaceMcpServer deletes config, status, and draft metadata', async () => {
+test('removeWorkspaceMcpServer deletes config, cached status, and draft metadata', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
     await upsertWorkspaceMcpServer({
