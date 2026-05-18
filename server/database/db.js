@@ -433,6 +433,14 @@ const userDb = {
     }
   },
 
+  getUserByIdAnyStatus: (userId) => {
+    try {
+      return db.prepare('SELECT id, username, created_at, last_login, is_active, is_system_admin FROM users WHERE id = ?').get(userId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
   getFirstUser: () => {
     try {
       const row = db.prepare('SELECT id, username, created_at, last_login, is_system_admin FROM users WHERE is_active = 1 LIMIT 1').get();

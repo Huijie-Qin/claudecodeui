@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import express from 'express';
 
+import { createAdminRouter } from './admin.js';
+
 async function requestJson(
   router,
   requestPath,
@@ -37,64 +39,63 @@ async function requestJson(
   });
 }
 
+function createFakeMultitenancy(workspaces) {
+  return {
+    tenants: {
+      getTenantById: (tenantId) => ({ id: tenantId, code: 'team', name: 'Team', status: 'active' }),
+      listTenants: () => [],
+    },
+    memberships: {
+      upsertMembership: ({ tenantId, userId, role, permission, status }) => ({
+        tenantId,
+        userId,
+        role,
+        permission,
+        status,
+      }),
+    },
+    workspaces: {
+      getWorkspaceByTenantSlug: ({ tenantId, ownerUserId, slug }) => workspaces.find((workspace) => (
+        workspace.tenant_id === tenantId
+        && workspace.owner_user_id === ownerUserId
+        && workspace.slug === slug
+      )) || null,
+      createWorkspace: ({ tenantId, ownerUserId, slug, displayName, path: workspacePath }) => {
+        const workspace = {
+          id: workspaces.length + 1,
+          tenant_id: tenantId,
+          owner_user_id: ownerUserId,
+          slug,
+          display_name: displayName,
+          path: workspacePath,
+        };
+        workspaces.push(workspace);
+        return workspace;
+      },
+    },
+  };
+}
+
 test('admin tenant activation preinstalls MCP presets only when creating the default workspace', async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'admin-default-workspace-'));
   const previousRoot = process.env.WORKSPACES_ROOT;
   process.env.WORKSPACES_ROOT = workspaceRoot;
 
   try {
-    const { createAdminRouter } = await import('./admin.js?admin-default-workspace-test');
     const workspaces = [];
     const preinstallCalls = [];
-    const multitenancy = {
-      tenants: {
-        getTenantById: (tenantId) => ({ id: tenantId, code: 'team', name: 'Team' }),
-        listTenants: () => [],
-      },
-      memberships: {
-        upsertMembership: ({ tenantId, userId, role, permission, status }) => ({
-          tenantId,
-          userId,
-          role,
-          permission,
-          status,
-        }),
-      },
-      workspaces: {
-        getWorkspaceByTenantSlug: ({ tenantId, ownerUserId, slug }) => workspaces.find((workspace) => (
-          workspace.tenant_id === tenantId
-          && workspace.owner_user_id === ownerUserId
-          && workspace.slug === slug
-        )) || null,
-        createWorkspace: ({ tenantId, ownerUserId, slug, displayName, path: workspacePath }) => {
-          const workspace = {
-            id: workspaces.length + 1,
-            tenant_id: tenantId,
-            owner_user_id: ownerUserId,
-            slug,
-            display_name: displayName,
-            path: workspacePath,
-          };
-          workspaces.push(workspace);
-          return workspace;
-        },
-      },
-    };
-    const users = {
-      getUserById: (userId) => ({ id: userId, username: 'new-user' }),
-      listUsers: () => [],
-    };
     const router = createAdminRouter(
-      multitenancy,
-      users,
+      createFakeMultitenancy(workspaces),
+      {
+        getUserByIdAnyStatus: (userId) => ({ id: userId, username: 'new-user', is_active: 1 }),
+        listUsers: () => [],
+      },
       {
         listRuntimes: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
         getSummary: async () => ({ total: 0 }),
         stopRuntime: async () => null,
       },
-      {
-        listAdminPresets: () => [],
-      },
+      { listAdminPresets: () => [] },
       {
         installPreinstalledWorkspaceMcpPresets: async (args) => {
           preinstallCalls.push(args);
@@ -115,9 +116,50 @@ test('admin tenant activation preinstalls MCP presets only when creating the def
     assert.equal(first.response.status, 200);
     assert.equal(second.response.status, 200);
     assert.equal(workspaces.length, 1);
+    assert.equal(workspaces[0].path, path.join(workspaceRoot, 'team', 'new-user', 'workspace'));
     assert.equal(preinstallCalls.length, 1);
     assert.equal(preinstallCalls[0].workspaceId, 1);
     assert.equal(preinstallCalls[0].workspaceDisplayName, 'workspace');
+  } finally {
+    if (previousRoot == null) {
+      delete process.env.WORKSPACES_ROOT;
+    } else {
+      process.env.WORKSPACES_ROOT = previousRoot;
+    }
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('admin tenant activation uses invited inactive username for default workspace path', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'admin-invited-workspace-'));
+  const previousRoot = process.env.WORKSPACES_ROOT;
+  process.env.WORKSPACES_ROOT = workspaceRoot;
+
+  try {
+    const workspaces = [];
+    const router = createAdminRouter(
+      createFakeMultitenancy(workspaces),
+      {
+        getUserById: () => null,
+        getUserByIdAnyStatus: (userId) => ({ id: userId, username: 'invited-user', is_active: 0 }),
+        listUsers: () => [],
+      },
+      {
+        listRuntimes: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
+        getSummary: async () => ({ total: 0 }),
+        stopRuntime: async () => null,
+      },
+      { listAdminPresets: () => [] },
+      { installPreinstalledWorkspaceMcpPresets: async () => ({ installed: [], errors: [] }) },
+    );
+
+    const result = await requestJson(router, '/tenants/3/users/7', {
+      method: 'PUT',
+      body: { role: 'member', permission: 'edit', status: 'active' },
+    });
+
+    assert.equal(result.response.status, 200);
+    assert.equal(workspaces[0].path, path.join(workspaceRoot, 'team', 'invited-user', 'workspace'));
   } finally {
     if (previousRoot == null) {
       delete process.env.WORKSPACES_ROOT;

@@ -48,6 +48,7 @@ function createFakeDeps() {
       return user;
     },
     updateLastLogin: () => {},
+    getUserById: (userId) => users.find((user) => user.id === userId && user.is_active !== 0) || null,
     getUserByUsername: (username) => users.find((user) => user.username === username && user.is_active !== 0) || null,
     getInvitationByTokenHash: (tokenHash) => {
       const invitation = invitations.find((row) => row.token_hash === tokenHash);
@@ -115,6 +116,7 @@ test('first registration creates a system admin bootstrap user', async () => {
   const { response, payload } = await createRequest(router, 'POST', '/api/auth/register', {
     username: 'admin',
     password: 'secret1',
+    gitEmail: 'admin@example.com',
   });
 
   assert.equal(response.status, 200);
@@ -128,6 +130,7 @@ test('first registration creates a default tenant with admin edit access', async
   await createRequest(router, 'POST', '/api/auth/register', {
     username: 'admin',
     password: 'secret1',
+    gitEmail: 'admin@example.com',
   });
 
   assert.deepEqual(deps.tenants, [{ id: 1, code: 'default', name: 'Default', status: 'active' }]);
@@ -143,10 +146,15 @@ test('first registration creates a default tenant with admin edit access', async
 test('later registration creates a normal user without tenant access', async () => {
   const deps = createFakeDeps();
   const router = createAuthRouter(deps);
-  await createRequest(router, 'POST', '/api/auth/register', { username: 'admin', password: 'secret1' });
+  await createRequest(router, 'POST', '/api/auth/register', {
+    username: 'admin',
+    password: 'secret1',
+    gitEmail: 'admin@example.com',
+  });
   const { response, payload } = await createRequest(router, 'POST', '/api/auth/register', {
     username: 'member',
     password: 'secret1',
+    gitEmail: 'member@example.com',
   });
 
   assert.equal(response.status, 200);
@@ -202,6 +210,7 @@ test('accepting an invitation activates the user and signs them in', async () =>
   const router = createAuthRouter(deps);
   const { response, payload } = await createRequest(router, 'POST', `/api/auth/invitations/${token}/accept`, {
     password: 'secret1',
+    gitEmail: 'member@example.com',
   });
 
   assert.equal(response.status, 200);
