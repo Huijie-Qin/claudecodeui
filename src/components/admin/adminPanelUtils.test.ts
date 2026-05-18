@@ -5,6 +5,7 @@ import {
   buildTenantMembershipPayload,
   normalizeTenantCode,
   isSystemAdminUser,
+  parseBatchUsernames,
 } from './adminPanelUtils';
 
 test('isSystemAdminUser accepts numeric and boolean admin flags', () => {
@@ -26,4 +27,11 @@ test('normalizeTenantCode creates lowercase hyphen tenant codes', () => {
   assert.equal(normalizeTenantCode(' Acme Team 01 '), 'acme-team-01');
   assert.equal(normalizeTenantCode('Foo_Bar!'), 'foo-bar');
   assert.equal(normalizeTenantCode('--Default--'), 'default');
+});
+
+test('parseBatchUsernames accepts common separators and removes duplicates', () => {
+  assert.deepEqual(
+    parseBatchUsernames('alice\nbob, carol; Alice  dave'),
+    ['alice', 'bob', 'carol', 'dave'],
+  );
 });

@@ -322,6 +322,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    createUsersBatch: (payload) =>
+      authenticatedFetch('/api/admin/users/batch', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     users: () => authenticatedFetch('/api/admin/users'),
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>
@@ -334,6 +339,11 @@ export const api = {
       }),
     upsertTenantUser: (tenantId, userId, payload) =>
       authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    upsertTenantUsersBatch: (payload) =>
+      authenticatedFetch('/api/admin/tenant-users/batch', {
         method: 'PUT',
         body: JSON.stringify(payload),
       }),

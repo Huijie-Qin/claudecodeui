@@ -140,6 +140,29 @@ function parsePositiveId(value, name) {
   return parsed;
 }
 
+function parsePositiveIdList(value, name) {
+  if (!Array.isArray(value)) {
+    const error = new Error(`${name} must be an array`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const seen = new Set();
+  return value.map((item) => parsePositiveId(item, name)).filter((item) => {
+    if (seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  });
+}
+
+function summarizeBatchResults(results) {
+  return {
+    total: results.length,
+    succeeded: results.filter((result) => result.success).length,
+    failed: results.filter((result) => !result.success).length,
+  };
+}
+
 function isDockerError(error) {
   return error?.code === 'DOCKER_UNAVAILABLE'
     || error?.code === 'DOCKER_ERROR'
@@ -162,6 +185,27 @@ export function createAdminRouter(
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
+
+  const upsertTenantUserAccess = async ({ tenantId, userId, body }) => {
+    const membership = multitenancy.memberships.upsertMembership({
+      tenantId,
+      userId,
+      role: body?.role || 'member',
+      permission: body?.permission || 'view',
+      status: body?.status || 'active',
+    });
+    const defaultWorkspace = membership.status === 'active'
+      ? await ensureDefaultRootWorkspace({
+        multitenancy,
+        users,
+        workspaceMcpTools,
+        tenantId,
+        userId,
+      })
+      : null;
+
+    return { membership, defaultWorkspace };
+  };
 
   router.get('/tenants', (req, res) => {
     res.json({ tenants: multitenancy.tenants.listTenants() });
@@ -231,6 +275,54 @@ export function createAdminRouter(
     }
   });
 
+  router.post('/users/batch', (req, res) => {
+    try {
+      if (typeof users.createInvitedUser !== 'function') {
+        return res.status(501).json({ error: 'Invited user creation is not available' });
+      }
+
+      const usernames = Array.isArray(req.body?.usernames)
+        ? req.body.usernames.map((username) => String(username || '').trim()).filter(Boolean)
+        : [];
+      const seenUsernames = new Set();
+      const dedupedUsernames = usernames.filter((username) => {
+        const key = username.toLowerCase();
+        if (seenUsernames.has(key)) return false;
+        seenUsernames.add(key);
+        return true;
+      });
+
+      if (dedupedUsernames.length === 0) {
+        return res.status(400).json({ error: 'At least one username is required' });
+      }
+
+      const results = dedupedUsernames.map((username) => {
+        try {
+          if (username.length < 3) {
+            throw new Error('Username must be at least 3 characters');
+          }
+
+          const payload = createInvitationPayload(req, users, { username });
+          if (!payload) {
+            throw new Error('Failed to create user invitation');
+          }
+
+          return { username, success: true, ...payload };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to create user invitation';
+          return { username, success: false, error: message };
+        }
+      });
+
+      return res.status(201).json({
+        results,
+        summary: summarizeBatchResults(results),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create user invitations');
+    }
+  });
+
   router.post('/users/:userId/invitation', (req, res) => {
     try {
       if (typeof users.createInvitationForUser !== 'function') {
@@ -274,25 +366,48 @@ export function createAdminRouter(
     try {
       const tenantId = Number(req.params.tenantId);
       const userId = Number(req.params.userId);
-      const membership = multitenancy.memberships.upsertMembership({
-        tenantId,
-        userId,
-        role: req.body?.role || 'member',
-        permission: req.body?.permission || 'view',
-        status: req.body?.status || 'active',
-      });
-      const defaultWorkspace = membership.status === 'active'
-        ? await ensureDefaultRootWorkspace({
-          multitenancy,
-          users,
-          workspaceMcpTools,
-          tenantId,
-          userId,
-        })
-        : null;
+      const { membership, defaultWorkspace } = await upsertTenantUserAccess({ tenantId, userId, body: req.body });
       res.json({ membership, defaultWorkspace });
     } catch (error) {
       sendRouteError(res, error, 'Failed to update tenant access');
+    }
+  });
+
+  router.put('/tenant-users/batch', async (req, res) => {
+    try {
+      const tenantIds = parsePositiveIdList(req.body?.tenantIds, 'tenantIds');
+      const userIds = parsePositiveIdList(req.body?.userIds, 'userIds');
+
+      if (tenantIds.length === 0 || userIds.length === 0) {
+        return res.status(400).json({ error: 'At least one tenant and one user are required' });
+      }
+
+      const operations = tenantIds.flatMap((tenantId) => userIds.map((userId) => ({ tenantId, userId })));
+      if (operations.length > 500) {
+        return res.status(400).json({ error: 'Batch tenant access updates are limited to 500 operations' });
+      }
+
+      const results = [];
+      for (const operation of operations) {
+        try {
+          const { membership, defaultWorkspace } = await upsertTenantUserAccess({
+            tenantId: operation.tenantId,
+            userId: operation.userId,
+            body: req.body,
+          });
+          results.push({ ...operation, success: true, membership, defaultWorkspace });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to update tenant access';
+          results.push({ ...operation, success: false, error: message });
+        }
+      }
+
+      return res.json({
+        results,
+        summary: summarizeBatchResults(results),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update tenant access');
     }
   });
 

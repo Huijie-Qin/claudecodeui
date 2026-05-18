@@ -17,6 +17,22 @@ export function buildTenantMembershipPayload(permission: TenantPermission) {
   };
 }
 
+export function parseBatchUsernames(value: string): string[] {
+  const seen = new Set<string>();
+
+  return value
+    .split(/[\s,;]+/g)
+    .map((username) => username.trim())
+    .filter((username) => {
+      if (!username || seen.has(username.toLowerCase())) {
+        return false;
+      }
+
+      seen.add(username.toLowerCase());
+      return true;
+    });
+}
+
 export function normalizeTenantCode(value: string): string {
   return value
     .trim()

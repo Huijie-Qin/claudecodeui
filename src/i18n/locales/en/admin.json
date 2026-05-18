@@ -67,7 +67,11 @@
     "deleteOwnUser": "You cannot delete your own user account",
     "deleteUser": "Failed to delete user",
     "selectTenantAndUser": "Select a tenant and a user",
+    "selectTenantsAndUsers": "Select at least one tenant and one user",
     "grantTenantAccess": "Failed to grant tenant access",
+    "batchUsersRequired": "Enter at least one username",
+    "batchCreateUserInvites": "Failed to create user invitations",
+    "batchGrantTenantAccess": "Failed to batch grant tenant access",
     "deleteTenantAccess": "Failed to delete tenant access"
   },
   "confirm": {
@@ -75,7 +79,25 @@
     "removeAccess": "Remove {{username}}'s access to {{tenantName}}?"
   },
   "toast": {
-    "grantTenantAccessSuccess": "Granted {{username}} access to {{tenantName}}"
+    "grantTenantAccessSuccess": "Granted {{username}} access to {{tenantName}}",
+    "batchCreateUsersSuccess": "Created {{succeeded}} invitations, {{failed}} failed",
+    "batchGrantTenantAccessSuccess": "Granted {{succeeded}} access entries, {{failed}} failed"
+  },
+  "batch": {
+    "createUsersTitle": "Batch create users",
+    "createUsersHint": "Paste usernames separated by new lines, spaces, commas, or semicolons.",
+    "usernames": "Usernames",
+    "usernamesPlaceholder": "alice\nbob\ncarol",
+    "createUsersButton": "Create invites",
+    "createUsersResult": "Batch invitation result",
+    "copyInviteLinks": "Copy links",
+    "grantTitle": "Batch grant tenant access",
+    "grantHint": "Select multiple users and tenants; every selected user receives access to every selected tenant.",
+    "searchUsers": "Search users",
+    "searchTenants": "Search tenants",
+    "noMatches": "No matches",
+    "grantButton": "Batch grant",
+    "summary": "{{succeeded}} succeeded, {{failed}} failed, {{total}} total"
   },
   "users": {
     "createTitle": "Create user",

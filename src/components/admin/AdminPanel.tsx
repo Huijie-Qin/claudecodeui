@@ -1,15 +1,29 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, Copy, Plus, RefreshCw, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
 import { useTenant } from '../../contexts/TenantContext';
 import { copyTextToClipboard } from '../../utils/clipboard';
-import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
+import {
+  Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  Input,
+} from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
 
-import { buildTenantMembershipPayload, normalizeTenantCode, type TenantPermission } from './adminPanelUtils';
+import {
+  buildTenantMembershipPayload,
+  normalizeTenantCode,
+  parseBatchUsernames,
+  type TenantPermission,
+} from './adminPanelUtils';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 
@@ -70,9 +84,48 @@ type AdminCreateUserPayload = {
   message?: string;
 };
 
+type AdminBatchSummary = {
+  total: number;
+  succeeded: number;
+  failed: number;
+};
+
+type AdminBatchCreateUserResult = {
+  username: string;
+  success: boolean;
+  user?: AdminUser;
+  invitation?: {
+    url?: string;
+    expires_at?: string;
+  };
+  error?: string;
+};
+
+type AdminBatchCreateUsersPayload = {
+  results?: AdminBatchCreateUserResult[];
+  summary?: AdminBatchSummary;
+  error?: string;
+  message?: string;
+};
+
 type AdminMembershipsPayload = {
   memberships?: AdminMembership[];
   error?: string;
+};
+
+type AdminBatchMembershipResult = {
+  tenantId: number;
+  userId: number;
+  success: boolean;
+  membership?: AdminMembership;
+  error?: string;
+};
+
+type AdminBatchMembershipsPayload = {
+  results?: AdminBatchMembershipResult[];
+  summary?: AdminBatchSummary;
+  error?: string;
+  message?: string;
 };
 
 type AdminErrorPayload = {
@@ -89,14 +142,12 @@ async function readError(response: Response, fallback: string): Promise<string> 
   const payload = await response.json().catch(() => ({} as AdminErrorPayload));
   return payload.error || payload.message || fallback;
 }
-
 function formatDateTime(value?: string | null, emptyLabel = 'Never'): string {
   if (!value) return emptyLabel;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
-
 function getUserStatusKey(user: AdminUser): string {
   if (user.is_active === 1 || user.invitation_status === 'active') return 'active';
   if (user.invitation_status === 'invited') return 'pendingInvite';
@@ -125,7 +176,19 @@ function translateStatus(t: TFunction, value: string): string {
 function translatePermission(t: TFunction, value: TenantPermission): string {
   return t(`permissions.${value}`, { defaultValue: value });
 }
+function toggleSelectedId(values: string[], id: number, checked: boolean): string[] {
+  const value = String(id);
+  if (checked) {
+    return values.includes(value) ? values : [...values, value];
+  }
 
+  return values.filter((item) => item !== value);
+}
+function matchesQuery(value: string, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return value.toLowerCase().includes(normalizedQuery);
+}
 export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const { t } = useTranslation('admin');
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
@@ -135,14 +198,25 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [tenantName, setTenantName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [createdInvite, setCreatedInvite] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
+  const [bulkUsernames, setBulkUsernames] = useState('');
+  const [batchCreatedInvites, setBatchCreatedInvites] = useState<AdminBatchCreateUserResult[]>([]);
+  const [batchCreateSummary, setBatchCreateSummary] = useState<AdminBatchSummary | null>(null);
   const [copiedInviteUrl, setCopiedInviteUrl] = useState(false);
+  const [copiedBatchInviteUrls, setCopiedBatchInviteUrls] = useState(false);
   const [copiedActivationUserId, setCopiedActivationUserId] = useState<number | null>(null);
   const [copyingActivationUserId, setCopyingActivationUserId] = useState<number | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
   const [deletingMembership, setDeletingMembership] = useState<string | null>(null);
   const [selectedTenantId, setSelectedTenantId] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
+  const [selectedBatchTenantIds, setSelectedBatchTenantIds] = useState<string[]>([]);
+  const [selectedBatchUserIds, setSelectedBatchUserIds] = useState<string[]>([]);
+  const [batchUserSearch, setBatchUserSearch] = useState('');
+  const [batchTenantSearch, setBatchTenantSearch] = useState('');
   const [permission, setPermission] = useState<TenantPermission>('edit');
+  const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
+  const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
+  const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
   const [activeTab, setActiveTab] = useState<'users' | 'tenants' | 'mcpPresets' | 'runtimes'>('users');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
@@ -268,12 +342,70 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
+  const createUserInvitesBatch = async () => {
+    const usernames = parseBatchUsernames(bulkUsernames);
+
+    setError(null);
+    setBatchCreatedInvites([]);
+    setBatchCreateSummary(null);
+    setCopiedBatchInviteUrls(false);
+    if (usernames.length === 0) {
+      setError(t('errors.batchUsersRequired'));
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const response = await api.admin.createUsersBatch({ usernames });
+      const payload = await response.json().catch(() => ({} as AdminBatchCreateUsersPayload)) as AdminBatchCreateUsersPayload;
+      if (!response.ok) {
+        setError(payload.error || payload.message || t('errors.batchCreateUserInvites'));
+        return;
+      }
+
+      const results = payload.results || [];
+      const summary = payload.summary || {
+        total: results.length,
+        succeeded: results.filter((result) => result.success).length,
+        failed: results.filter((result) => !result.success).length,
+      };
+
+      setBatchCreatedInvites(results);
+      setBatchCreateSummary(summary);
+      if (summary.succeeded > 0) {
+        setBulkUsernames('');
+        showToast(t('toast.batchCreateUsersSuccess', {
+          succeeded: summary.succeeded,
+          failed: summary.failed,
+        }), summary.failed > 0 ? 'error' : 'success');
+        await load();
+      } else {
+        showToast(t('errors.batchCreateUserInvites'), 'error');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const copyInviteLink = async () => {
     if (!createdInvite?.url) return;
     const copied = await copyTextToClipboard(createdInvite.url);
     setCopiedInviteUrl(copied);
     if (copied) {
       window.setTimeout(() => setCopiedInviteUrl(false), 1600);
+    }
+  };
+
+  const copyBatchInviteLinks = async () => {
+    const links = batchCreatedInvites
+      .filter((result) => result.success && result.invitation?.url)
+      .map((result) => `${result.username}: ${result.invitation?.url}`);
+    if (links.length === 0) return;
+
+    const copied = await copyTextToClipboard(links.join('\n'));
+    setCopiedBatchInviteUrls(copied);
+    if (copied) {
+      window.setTimeout(() => setCopiedBatchInviteUrls(false), 1600);
     }
   };
 
@@ -387,6 +519,65 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
+  const grantMembershipsBatch = async () => {
+    const tenantIds = selectedBatchTenantIds.map(Number).filter(Boolean);
+    const userIds = selectedBatchUserIds.map(Number).filter(Boolean);
+
+    setError(null);
+    setBatchGrantSummary(null);
+    setBatchGrantResults([]);
+    if (tenantIds.length === 0 || userIds.length === 0) {
+      const message = t('errors.selectTenantsAndUsers');
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const response = await api.admin.upsertTenantUsersBatch({
+        tenantIds,
+        userIds,
+        ...buildTenantMembershipPayload(batchPermission),
+      });
+      const payload = await response.json().catch(() => ({} as AdminBatchMembershipsPayload)) as AdminBatchMembershipsPayload;
+      if (!response.ok) {
+        const message = payload.error || payload.message || t('errors.batchGrantTenantAccess');
+        setError(message);
+        showToast(message, 'error');
+        return;
+      }
+
+      const results = payload.results || [];
+      const summary = payload.summary || {
+        total: results.length,
+        succeeded: results.filter((result) => result.success).length,
+        failed: results.filter((result) => !result.success).length,
+      };
+      setBatchGrantResults(results);
+      setBatchGrantSummary(summary);
+      showToast(t('toast.batchGrantTenantAccessSuccess', {
+        succeeded: summary.succeeded,
+        failed: summary.failed,
+      }), summary.failed > 0 ? 'error' : 'success');
+
+      if (summary.succeeded > 0) {
+        setSelectedBatchTenantIds([]);
+        setSelectedBatchUserIds([]);
+        setBatchPermission('edit');
+        await load();
+        await refreshTenants();
+      }
+    } catch (caughtError) {
+      console.error('[AdminPanel] Failed to batch grant tenant access:', caughtError);
+      const message = t('errors.batchGrantTenantAccess');
+      setError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const removeMembership = async (membership: AdminMembership) => {
     const confirmed = window.confirm(t('confirm.removeAccess', {
       username: membership.username,
@@ -410,6 +601,146 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       setDeletingMembership(null);
     }
   };
+
+  const selectClassName = 'h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+  const checklistClassName = 'h-40 overflow-y-auto rounded-md border border-input bg-background p-2 shadow-sm';
+  const collapsibleTriggerClassName = 'group flex w-full items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-left hover:bg-muted/40';
+  const filteredBatchUsers = users.filter((user) => matchesQuery(user.username, batchUserSearch));
+  const filteredBatchTenants = tenants.filter((tenant) => matchesQuery(`${tenant.name} ${tenant.code}`, batchTenantSearch));
+  const renderBatchGrantSection = () => (
+    <Collapsible className="space-y-3">
+      <CollapsibleTrigger className={collapsibleTriggerClassName}>
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-foreground">{t('batch.grantTitle')}</span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{t('batch.grantHint')}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <section className="space-y-3 pt-3">
+      <div className="grid items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px_120px]">
+        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+          <span className="text-xs leading-4 text-muted-foreground">
+            {t('fields.user')} · {selectedBatchUserIds.length}
+          </span>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              value={batchUserSearch}
+              onChange={(event) => setBatchUserSearch(event.target.value)}
+              placeholder={t('batch.searchUsers')}
+            />
+          </div>
+          <div className={checklistClassName}>
+            {users.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">{t('users.empty')}</div>
+            ) : filteredBatchUsers.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">{t('batch.noMatches')}</div>
+            ) : (
+              filteredBatchUsers.map((user) => (
+                <label
+                  key={user.id}
+                  className="flex min-h-8 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted/60"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-input accent-primary"
+                    checked={selectedBatchUserIds.includes(String(user.id))}
+                    onChange={(event) => setSelectedBatchUserIds((values) => (
+                      toggleSelectedId(values, user.id, event.target.checked)
+                    ))}
+                  />
+                  <span className="min-w-0 truncate">{user.username}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+          <span className="text-xs leading-4 text-muted-foreground">
+            {t('fields.tenant')} · {selectedBatchTenantIds.length}
+          </span>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              value={batchTenantSearch}
+              onChange={(event) => setBatchTenantSearch(event.target.value)}
+              placeholder={t('batch.searchTenants')}
+            />
+          </div>
+          <div className={checklistClassName}>
+            {tenants.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">{t('tenants.empty')}</div>
+            ) : filteredBatchTenants.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">{t('batch.noMatches')}</div>
+            ) : (
+              filteredBatchTenants.map((tenant) => (
+                <label
+                  key={tenant.id}
+                  className="flex min-h-8 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted/60"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-input accent-primary"
+                    checked={selectedBatchTenantIds.includes(String(tenant.id))}
+                    onChange={(event) => setSelectedBatchTenantIds((values) => (
+                      toggleSelectedId(values, tenant.id, event.target.checked)
+                    ))}
+                  />
+                  <span className="min-w-0 truncate">{tenant.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+        <label className="grid grid-rows-[16px_40px_160px] gap-2">
+          <span className="text-xs leading-4 text-muted-foreground">{t('fields.access')}</span>
+          <select
+            className={selectClassName}
+            value={batchPermission}
+            onChange={(event) => setBatchPermission(event.target.value as TenantPermission)}
+          >
+            <option value="edit">{t('permissions.edit')}</option>
+            <option value="view">{t('permissions.view')}</option>
+          </select>
+          <span aria-hidden="true" />
+        </label>
+        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
+          <Button className="self-end" onClick={grantMembershipsBatch} disabled={isSaving}>
+            {t('batch.grantButton')}
+          </Button>
+        </div>
+      </div>
+      {batchGrantSummary ? (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          {t('batch.summary', {
+            total: batchGrantSummary.total,
+            succeeded: batchGrantSummary.succeeded,
+            failed: batchGrantSummary.failed,
+          })}
+        </div>
+      ) : null}
+      {batchGrantResults.some((result) => !result.success) ? (
+        <div className="max-h-24 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {batchGrantResults.filter((result) => !result.success).map((result) => {
+            const tenant = tenants.find((item) => item.id === result.tenantId);
+            const user = users.find((item) => item.id === result.userId);
+            return (
+              <div key={`${result.tenantId}:${result.userId}`}>
+                {(user?.username || result.userId)} / {(tenant?.name || result.tenantId)}: {result.error}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+        </section>
+      </CollapsibleContent>
+    </Collapsible>
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -491,6 +822,80 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                 </div>
               </section>
 
+              <Collapsible className="space-y-3">
+                <CollapsibleTrigger className={collapsibleTriggerClassName}>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">{t('batch.createUsersTitle')}</span>
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">{t('batch.createUsersHint')}</span>
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <section className="space-y-3 pt-3">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <label className="space-y-1">
+                        <span className="text-xs text-muted-foreground">{t('batch.usernames')}</span>
+                        <textarea
+                          className="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={bulkUsernames}
+                          onChange={(event) => setBulkUsernames(event.target.value)}
+                          placeholder={t('batch.usernamesPlaceholder')}
+                          autoCapitalize="none"
+                          autoComplete="off"
+                        />
+                      </label>
+                      <Button className="self-end" onClick={createUserInvitesBatch} disabled={isSaving}>
+                        <UserPlus className="h-4 w-4" />
+                        {t('batch.createUsersButton')}
+                      </Button>
+                    </div>
+                  </section>
+                </CollapsibleContent>
+              </Collapsible>
+
+              {batchCreateSummary ? (
+                <section className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-medium text-foreground">{t('batch.createUsersResult')}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {t('batch.summary', {
+                          total: batchCreateSummary.total,
+                          succeeded: batchCreateSummary.succeeded,
+                          failed: batchCreateSummary.failed,
+                        })}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void copyBatchInviteLinks()}
+                      disabled={!batchCreatedInvites.some((result) => result.success && result.invitation?.url)}
+                    >
+                      {copiedBatchInviteUrls ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {copiedBatchInviteUrls ? t('common.copied') : t('batch.copyInviteLinks')}
+                    </Button>
+                  </div>
+                  <div className="max-h-36 overflow-auto rounded-md border border-border bg-background">
+                    {batchCreatedInvites.map((result) => (
+                      <div
+                        key={result.username}
+                        className="grid gap-2 border-b border-border px-3 py-2 text-xs last:border-b-0 sm:grid-cols-[140px_minmax(0,1fr)]"
+                      >
+                        <span className={result.success ? 'font-medium text-foreground' : 'font-medium text-destructive'}>
+                          {result.username}
+                        </span>
+                        {result.success && result.invitation?.url ? (
+                          <span className="truncate font-mono text-muted-foreground">{result.invitation.url}</span>
+                        ) : (
+                          <span className="text-destructive">{result.error || t('errors.batchCreateUserInvites')}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               {createdInvite ? (
                 <section className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -546,7 +951,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">{t('fields.access')}</span>
+                    <span className="text-xs leading-4 text-muted-foreground">{t('fields.access')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={permission}
@@ -561,6 +966,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   </Button>
                 </div>
               </section>
+
+              {renderBatchGrantSection()}
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -713,7 +1120,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     </select>
                   </label>
                   <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">{t('fields.access')}</span>
+                    <span className="text-xs leading-4 text-muted-foreground">{t('fields.access')}</span>
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={permission}
@@ -728,6 +1135,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   </Button>
                 </div>
               </section>
+
+              {renderBatchGrantSection()}
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">

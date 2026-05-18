@@ -67,7 +67,11 @@
     "deleteOwnUser": "不能删除自己的用户账号",
     "deleteUser": "删除用户失败",
     "selectTenantAndUser": "请选择租户和用户",
+    "selectTenantsAndUsers": "请至少选择一个租户和一个用户",
     "grantTenantAccess": "授予租户权限失败",
+    "batchUsersRequired": "请输入至少一个用户名",
+    "batchCreateUserInvites": "批量创建用户邀请失败",
+    "batchGrantTenantAccess": "批量授予租户权限失败",
     "deleteTenantAccess": "删除租户权限失败"
   },
   "confirm": {
@@ -75,7 +79,25 @@
     "removeAccess": "移除 {{username}} 对 {{tenantName}} 的访问权限？"
   },
   "toast": {
-    "grantTenantAccessSuccess": "已授权 {{username}} 访问 {{tenantName}}"
+    "grantTenantAccessSuccess": "已授权 {{username}} 访问 {{tenantName}}",
+    "batchCreateUsersSuccess": "已创建 {{succeeded}} 个邀请，{{failed}} 个失败",
+    "batchGrantTenantAccessSuccess": "已授予 {{succeeded}} 条权限，{{failed}} 条失败"
+  },
+  "batch": {
+    "createUsersTitle": "批量创建用户",
+    "createUsersHint": "粘贴用户名，可用换行、空格、逗号或分号分隔。",
+    "usernames": "用户名列表",
+    "usernamesPlaceholder": "alice\nbob\ncarol",
+    "createUsersButton": "批量创建邀请",
+    "createUsersResult": "批量邀请结果",
+    "copyInviteLinks": "复制链接",
+    "grantTitle": "批量授予租户权限",
+    "grantHint": "可同时选择多个用户和多个租户；每个选中用户都会获得每个选中租户的权限。",
+    "searchUsers": "搜索用户",
+    "searchTenants": "搜索租户",
+    "noMatches": "无匹配项",
+    "grantButton": "批量授权",
+    "summary": "成功 {{succeeded}}，失败 {{failed}}，总计 {{total}}"
   },
   "users": {
     "createTitle": "创建用户",

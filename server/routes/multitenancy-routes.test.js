@@ -181,6 +181,46 @@ test('admin router creates invited users and returns an invitation URL', async (
   assert.equal(new RegExp(seen.invitation.tokenHash).test(payload.invitation.url), false);
 });
 
+test('admin router batch creates invited users with per-user results', async () => {
+  const created = [];
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {},
+    },
+    {
+      createInvitedUser: ({ username, tokenHash, createdByUserId, expiresAt }) => {
+        if (username === 'taken') {
+          const error = new Error('UNIQUE constraint failed: users.username');
+          error.code = 'SQLITE_CONSTRAINT_UNIQUE';
+          throw error;
+        }
+
+        created.push({ username, tokenHash, createdByUserId, expiresAt });
+        return {
+          user: { id: created.length + 10, username, is_active: 0, is_system_admin: 0 },
+          invitation: { id: created.length, user_id: created.length + 10, expires_at: expiresAt },
+        };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/users/batch', {
+    method: 'POST',
+    body: { usernames: ['alice', 'taken', 'ALICE', 'bo'] },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(payload.summary, { total: 3, succeeded: 1, failed: 2 });
+  assert.deepEqual(payload.results.map((result) => result.username), ['alice', 'taken', 'bo']);
+  assert.equal(payload.results[0].success, true);
+  assert.match(payload.results[0].invitation.url, /^http:\/\/127\.0\.0\.1:\d+\/invite\/.+/);
+  assert.equal(payload.results[1].success, false);
+  assert.equal(payload.results[2].error, 'Username must be at least 3 characters');
+  assert.deepEqual(created.map((entry) => entry.username), ['alice']);
+});
+
 test('admin router creates activation links for inactive users', async () => {
   const seen = {};
   const router = createAdminRouter(
@@ -265,6 +305,53 @@ test('admin router lists and deletes tenant access', async () => {
   });
   assert.equal(deleteResult.response.status, 200);
   assert.deepEqual(seen.deleted, { tenantId: 2, userId: 12 });
+});
+
+test('admin router batch grants tenant access for user and tenant selections', async () => {
+  const seen = [];
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {
+        upsertMembership: (membership) => {
+          seen.push(membership);
+          return {
+            tenant_id: membership.tenantId,
+            user_id: membership.userId,
+            role: membership.role,
+            permission: membership.permission,
+            status: membership.status,
+          };
+        },
+      },
+    },
+    {
+      getUserByIdAnyStatus: (userId) => ({ id: userId, username: `user-${userId}`, is_active: 1 }),
+    },
+    {
+      listRuntimes: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
+      getSummary: async () => ({ total: 0 }),
+      stopRuntime: async () => null,
+    },
+    { listAdminPresets: () => [] },
+    { installPreinstalledWorkspaceMcpPresets: async () => ({ installed: [], errors: [] }) },
+  );
+
+  const { response, payload } = await requestJson(router, '/tenant-users/batch', {
+    method: 'PUT',
+    body: { tenantIds: [2, 3, 2], userIds: [12, 13], permission: 'edit', status: 'inactive' },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.summary, { total: 4, succeeded: 4, failed: 0 });
+  assert.deepEqual(seen.map(({ tenantId, userId }) => [tenantId, userId]), [
+    [2, 12],
+    [2, 13],
+    [3, 12],
+    [3, 13],
+  ]);
+  assert.equal(seen.every((membership) => membership.permission === 'edit'), true);
 });
 
 test('workspace share route lets owners replace ACL entries', async () => {
