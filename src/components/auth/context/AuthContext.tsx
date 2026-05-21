@@ -207,6 +207,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [checkOnboardingStatus, setSession],
   );
 
+  const resetPassword = useCallback<AuthContextValue['resetPassword']>(
+    async (resetToken, password) => {
+      try {
+        setError(null);
+        const response = await api.auth.resetPassword(resetToken, password);
+        const payload = await parseJsonSafely<AuthSessionPayload>(response);
+
+        if (!response.ok || !payload?.token || !payload.user) {
+          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+          setError(message);
+          return { success: false, error: message };
+        }
+
+        setSession(payload.user, payload.token);
+        setNeedsSetup(false);
+        await checkOnboardingStatus();
+        return { success: true };
+      } catch (caughtError) {
+        console.error('Password reset error:', caughtError);
+        setError(AUTH_ERROR_MESSAGES.networkError);
+        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+      }
+    },
+    [checkOnboardingStatus, setSession],
+  );
+
   const logout = useCallback(() => {
     if (IS_PLATFORM) {
       return;
@@ -233,6 +259,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       login,
       register,
       acceptInvitation,
+      resetPassword,
       logout,
       refreshOnboardingStatus,
     }),
@@ -246,6 +273,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       needsSetup,
       refreshOnboardingStatus,
       register,
+      resetPassword,
       token,
       user,
     ],

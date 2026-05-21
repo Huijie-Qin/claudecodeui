@@ -251,6 +251,37 @@ test('admin router creates activation links for inactive users', async () => {
   assert.equal(seen.invitation.createdByUserId, 7);
 });
 
+test('admin router creates password reset links for active users', async () => {
+  const seen = {};
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: {},
+    },
+    {
+      createPasswordResetForUser: ({ userId, tokenHash, createdByUserId, expiresAt }) => {
+        seen.passwordReset = { userId, tokenHash, createdByUserId, expiresAt };
+        return {
+          user: { id: userId, username: 'member', is_active: 1, is_system_admin: 0 },
+          passwordReset: { id: 2, user_id: userId, expires_at: expiresAt },
+        };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/users/12/password-reset', {
+    method: 'POST',
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(payload.user.username, 'member');
+  assert.match(payload.passwordReset.url, /^http:\/\/127\.0\.0\.1:\d+\/reset-password\/.+/);
+  assert.equal(seen.passwordReset.userId, 12);
+  assert.equal(seen.passwordReset.createdByUserId, 7);
+  assert.equal(new RegExp(seen.passwordReset.tokenHash).test(payload.passwordReset.url), false);
+});
+
 test('admin router deletes users but rejects deleting the current account', async () => {
   const deleted = [];
   const router = createAdminRouter(

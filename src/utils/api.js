@@ -70,6 +70,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password, gitEmail }),
     }),
+    passwordReset: (token) => fetch(`/api/auth/password-resets/${encodeURIComponent(token)}`),
+    resetPassword: (token, password) => fetch(`/api/auth/password-resets/${encodeURIComponent(token)}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }),
     user: () => authenticatedFetch('/api/auth/user'),
     logout: (token) => fetch('/api/auth/logout', {
       method: 'POST',
@@ -331,6 +337,10 @@ export const api = {
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>
       authenticatedFetch(`/api/admin/users/${userId}/invitation`, {
+        method: 'POST',
+      }),
+    createUserPasswordResetLink: (userId) =>
+      authenticatedFetch(`/api/admin/users/${userId}/password-reset`, {
         method: 'POST',
       }),
     deleteUser: (userId) =>

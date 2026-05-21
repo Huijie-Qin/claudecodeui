@@ -34,6 +34,7 @@ function createFakeDeps() {
   const tenants = [];
   const memberships = [];
   const invitations = [];
+  const passwordResets = [];
   const fakeUserDb = {
     hasUsers: () => users.length > 0,
     createUser: (username, passwordHash, options = {}) => {
@@ -71,6 +72,31 @@ function createFakeDeps() {
       user.is_active = 1;
       return user;
     },
+    getPasswordResetByTokenHash: (tokenHash) => {
+      const passwordReset = passwordResets.find((row) => row.token_hash === tokenHash);
+      if (!passwordReset) return null;
+      const user = users.find((row) => row.id === passwordReset.user_id);
+      return {
+        ...passwordReset,
+        username: user?.username,
+        is_active: user?.is_active,
+        is_system_admin: user?.is_system_admin,
+      };
+    },
+    resetPasswordWithToken: ({ tokenHash, passwordHash }) => {
+      const passwordReset = passwordResets.find((row) => row.token_hash === tokenHash);
+      if (!passwordReset || passwordReset.used_at || passwordReset.revoked_at) return null;
+      const user = users.find((row) => row.id === passwordReset.user_id);
+      if (!user) return null;
+      passwordReset.used_at = new Date().toISOString();
+      passwordResets
+        .filter((row) => row.user_id === user.id && row !== passwordReset && !row.used_at && !row.revoked_at)
+        .forEach((row) => {
+          row.revoked_at = new Date().toISOString();
+        });
+      user.password_hash = passwordHash;
+      return user;
+    },
   };
 
   return {
@@ -78,6 +104,7 @@ function createFakeDeps() {
     tenants,
     memberships,
     invitations,
+    passwordResets,
     userDb: fakeUserDb,
     multitenancy: {
       tenants: {
@@ -219,4 +246,77 @@ test('accepting an invitation activates the user and signs them in', async () =>
   assert.equal(payload.token, 'token-1');
   assert.equal(deps.users[0].is_active, 1);
   assert.notEqual(deps.users[0].password_hash, '');
+});
+
+test('password reset lookup returns the active username', async () => {
+  const deps = createFakeDeps();
+  const token = 'reset-token';
+  deps.users.push({
+    id: 1,
+    username: 'member',
+    password_hash: 'old-hash',
+    is_system_admin: 0,
+    is_active: 1,
+  });
+  deps.passwordResets.push({
+    id: 1,
+    user_id: 1,
+    token_hash: invitationTokenHash(token),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    used_at: null,
+    revoked_at: null,
+  });
+
+  const router = createAuthRouter(deps);
+  const { response, payload } = await createRequest(router, 'GET', `/api/auth/password-resets/${token}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.passwordReset.username, 'member');
+});
+
+test('resetting a password uses the link and signs the user in', async () => {
+  const deps = createFakeDeps();
+  const token = 'reset-token';
+  deps.users.push({
+    id: 1,
+    username: 'member',
+    password_hash: 'old-hash',
+    is_system_admin: 0,
+    is_active: 1,
+  });
+  deps.passwordResets.push(
+    {
+      id: 1,
+      user_id: 1,
+      token_hash: invitationTokenHash(token),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      used_at: null,
+      revoked_at: null,
+    },
+    {
+      id: 2,
+      user_id: 1,
+      token_hash: invitationTokenHash('older-token'),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      used_at: null,
+      revoked_at: null,
+    },
+  );
+
+  const router = createAuthRouter(deps);
+  const { response, payload } = await createRequest(router, 'POST', `/api/auth/password-resets/${token}/reset`, {
+    password: 'secret2',
+  });
+  const reuse = await createRequest(router, 'POST', `/api/auth/password-resets/${token}/reset`, {
+    password: 'secret3',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.success, true);
+  assert.equal(payload.user.username, 'member');
+  assert.equal(payload.token, 'token-1');
+  assert.notEqual(deps.users[0].password_hash, 'old-hash');
+  assert.ok(deps.passwordResets[0].used_at);
+  assert.ok(deps.passwordResets[1].revoked_at);
+  assert.equal(reuse.response.status, 410);
 });

@@ -37,6 +37,10 @@ function hashInvitationToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function hashPasswordResetToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 function getInvitationFailure(invitation) {
   if (!invitation) {
     return { statusCode: 404, message: 'Invitation not found' };
@@ -53,6 +57,31 @@ function getInvitationFailure(invitation) {
   const expiresAt = Date.parse(invitation.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
     return { statusCode: 410, message: 'Invitation has expired' };
+  }
+
+  return null;
+}
+
+function getPasswordResetFailure(passwordReset) {
+  if (!passwordReset) {
+    return { statusCode: 404, message: 'Password reset link not found' };
+  }
+
+  if (passwordReset.used_at) {
+    return { statusCode: 410, message: 'Password reset link has already been used' };
+  }
+
+  if (passwordReset.revoked_at) {
+    return { statusCode: 410, message: 'Password reset link has been revoked' };
+  }
+
+  if (passwordReset.is_active !== 1) {
+    return { statusCode: 410, message: 'User account is not active' };
+  }
+
+  const expiresAt = Date.parse(passwordReset.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return { statusCode: 410, message: 'Password reset link has expired' };
   }
 
   return null;
@@ -280,6 +309,80 @@ export function createAuthRouter({
       });
     } catch (error) {
       console.error('Invitation acceptance error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.get('/password-resets/:token', (req, res) => {
+    try {
+      if (typeof userDb.getPasswordResetByTokenHash !== 'function') {
+        return res.status(404).json({ error: 'Password reset link not found' });
+      }
+
+      const passwordReset = userDb.getPasswordResetByTokenHash(hashPasswordResetToken(req.params.token));
+      const failure = getPasswordResetFailure(passwordReset);
+      if (failure) {
+        return res.status(failure.statusCode).json({ error: failure.message });
+      }
+
+      return res.json({
+        passwordReset: {
+          username: passwordReset.username,
+          expires_at: passwordReset.expires_at,
+        },
+      });
+    } catch (error) {
+      console.error('Password reset lookup error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  router.post('/password-resets/:token/reset', async (req, res) => {
+    try {
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ error: 'Password is required' });
+      }
+
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
+
+      if (
+        typeof userDb.getPasswordResetByTokenHash !== 'function'
+        || typeof userDb.resetPasswordWithToken !== 'function'
+      ) {
+        return res.status(404).json({ error: 'Password reset link not found' });
+      }
+
+      const tokenHash = hashPasswordResetToken(req.params.token);
+      const passwordReset = userDb.getPasswordResetByTokenHash(tokenHash);
+      const failure = getPasswordResetFailure(passwordReset);
+      if (failure) {
+        return res.status(failure.statusCode).json({ error: failure.message });
+      }
+
+      const saltRounds = 12;
+      const passwordHash = await bcrypt.hash(password, saltRounds);
+      const user = userDb.resetPasswordWithToken({ tokenHash, passwordHash });
+      if (!user) {
+        return res.status(410).json({ error: 'Password reset link is no longer available' });
+      }
+
+      const token = generateToken(user);
+      userDb.updateLastLogin(user.id);
+
+      return res.json({
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          is_system_admin: user.is_system_admin,
+        },
+        token,
+      });
+    } catch (error) {
+      console.error('Password reset error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

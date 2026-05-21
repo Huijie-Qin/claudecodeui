@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import AuthLoadingScreen from './AuthLoadingScreen';
 import InviteAcceptForm from './InviteAcceptForm';
 import LoginForm from './LoginForm';
+import PasswordResetForm from './PasswordResetForm';
 import SetupForm from './SetupForm';
 
 type ProtectedRouteProps = {
@@ -15,11 +16,19 @@ type ProtectedRouteProps = {
 };
 
 function getInvitationTokenFromLocation(): string | null {
+  return getTokenFromLocation(/^\/invite\/([^/?#]+)/);
+}
+
+function getPasswordResetTokenFromLocation(): string | null {
+  return getTokenFromLocation(/^\/reset-password\/([^/?#]+)/);
+}
+
+function getTokenFromLocation(pattern: RegExp): string | null {
   const basename = window.__ROUTER_BASENAME__ || '';
   const pathname = basename && window.location.pathname.startsWith(basename)
     ? window.location.pathname.slice(basename.length) || '/'
     : window.location.pathname;
-  const match = pathname.match(/^\/invite\/([^/?#]+)/);
+  const match = pathname.match(pattern);
   if (!match?.[1]) return null;
 
   try {
@@ -33,6 +42,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, isLoading, needsSetup } = useAuth();
   const { currentTenant, isLoadingTenants, needsTenantSelection } = useTenant();
   const invitationToken = getInvitationTokenFromLocation();
+  const passwordResetToken = getPasswordResetTokenFromLocation();
 
   if (isLoading) {
     return <AuthLoadingScreen />;
@@ -40,6 +50,10 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (invitationToken && !user) {
     return <InviteAcceptForm token={invitationToken} />;
+  }
+
+  if (passwordResetToken) {
+    return <PasswordResetForm token={passwordResetToken} />;
   }
 
   if (invitationToken && user) {

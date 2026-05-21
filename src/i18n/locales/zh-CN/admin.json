@@ -64,6 +64,7 @@
     "usernameMinLength": "用户名至少需要 3 个字符",
     "createUserInvite": "创建用户邀请失败",
     "createActivationLink": "创建激活链接失败",
+    "createPasswordResetLink": "创建密码重置链接失败",
     "deleteOwnUser": "不能删除自己的用户账号",
     "deleteUser": "删除用户失败",
     "selectTenantAndUser": "请选择租户和用户",
@@ -112,7 +113,9 @@
     "lastLogin": "上次登录 {{time}}",
     "inviteExpires": "邀请过期时间 {{time}}",
     "created": "创建时间 {{time}}",
-    "activationLink": "激活链接"
+    "activationLink": "激活链接",
+    "passwordResetLink": "重置密码",
+    "passwordResetLinkTitle": "密码重置链接"
   },
   "tenants": {
     "createTitle": "创建租户",

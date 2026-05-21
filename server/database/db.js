@@ -14,6 +14,9 @@ import {
   USER_INVITATIONS_TABLE_SQL,
   USER_INVITATIONS_TOKEN_INDEX_SQL,
   USER_INVITATIONS_USER_INDEX_SQL,
+  USER_PASSWORD_RESETS_TABLE_SQL,
+  USER_PASSWORD_RESETS_TOKEN_INDEX_SQL,
+  USER_PASSWORD_RESETS_USER_INDEX_SQL,
   SESSION_NAMES_TABLE_SQL,
   SESSION_NAMES_LOOKUP_INDEX_SQL,
   CODEHUB_REPOSITORIES_TABLE_SQL,
@@ -143,6 +146,9 @@ const runMigrations = () => {
     db.exec(USER_INVITATIONS_TABLE_SQL);
     db.exec(USER_INVITATIONS_TOKEN_INDEX_SQL);
     db.exec(USER_INVITATIONS_USER_INDEX_SQL);
+    db.exec(USER_PASSWORD_RESETS_TABLE_SQL);
+    db.exec(USER_PASSWORD_RESETS_TOKEN_INDEX_SQL);
+    db.exec(USER_PASSWORD_RESETS_USER_INDEX_SQL);
     db.exec(APP_CONFIG_TABLE_SQL);
     db.exec(SESSION_NAMES_TABLE_SQL);
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
@@ -527,6 +533,77 @@ const userDb = {
     }
   },
 
+  createPasswordResetForUser: ({ userId, tokenHash, createdByUserId, expiresAt }) => {
+    try {
+      const createReset = db.transaction(() => {
+        const user = db.prepare(`
+          SELECT id, username, is_active, is_system_admin
+          FROM users
+          WHERE id = ?
+        `).get(userId);
+
+        if (!user) {
+          return null;
+        }
+
+        if (user.is_active !== 1) {
+          throw new Error('User is not active');
+        }
+
+        db.prepare(`
+          UPDATE user_password_resets
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE user_id = ?
+            AND used_at IS NULL
+            AND revoked_at IS NULL
+        `).run(user.id);
+
+        const resetResult = db.prepare(`
+          INSERT INTO user_password_resets (user_id, token_hash, created_by_user_id, expires_at)
+          VALUES (?, ?, ?, ?)
+        `).run(user.id, tokenHash, createdByUserId, expiresAt);
+
+        return {
+          user,
+          passwordReset: {
+            id: resetResult.lastInsertRowid,
+            user_id: user.id,
+            expires_at: expiresAt,
+          },
+        };
+      });
+
+      return createReset();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getPasswordResetByTokenHash: (tokenHash) => {
+    try {
+      return db.prepare(`
+        SELECT
+          upr.id,
+          upr.user_id,
+          upr.token_hash,
+          upr.created_by_user_id,
+          upr.expires_at,
+          upr.used_at,
+          upr.revoked_at,
+          upr.created_at,
+          u.username,
+          u.is_active,
+          u.is_system_admin
+        FROM user_password_resets upr
+        JOIN users u ON u.id = upr.user_id
+        WHERE upr.token_hash = ?
+        LIMIT 1
+      `).get(tokenHash);
+    } catch (err) {
+      throw err;
+    }
+  },
+
   deleteUser: (userId) => {
     try {
       const result = db.prepare('DELETE FROM users WHERE id = ?').run(userId);
@@ -568,6 +645,51 @@ const userDb = {
       });
 
       return accept();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  resetPasswordWithToken: ({ tokenHash, passwordHash }) => {
+    try {
+      const resetPassword = db.transaction(() => {
+        const passwordReset = userDb.getPasswordResetByTokenHash(tokenHash);
+        if (!passwordReset) {
+          return null;
+        }
+
+        const resetUpdate = db.prepare(`
+          UPDATE user_password_resets
+          SET used_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND used_at IS NULL
+            AND revoked_at IS NULL
+        `).run(passwordReset.id);
+
+        if (resetUpdate.changes === 0) {
+          return null;
+        }
+
+        db.prepare('UPDATE users SET password_hash = ?, is_active = 1 WHERE id = ?')
+          .run(passwordHash, passwordReset.user_id);
+
+        db.prepare(`
+          UPDATE user_password_resets
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE user_id = ?
+            AND id != ?
+            AND used_at IS NULL
+            AND revoked_at IS NULL
+        `).run(passwordReset.user_id, passwordReset.id);
+
+        return db.prepare(`
+          SELECT id, username, created_at, last_login, is_system_admin
+          FROM users
+          WHERE id = ? AND is_active = 1
+        `).get(passwordReset.user_id);
+      });
+
+      return resetPassword();
     } catch (err) {
       throw err;
     }

@@ -44,6 +44,22 @@ export const USER_INVITATIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS user_invit
 export const USER_INVITATIONS_TOKEN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_invitations_token_hash ON user_invitations(token_hash);`;
 export const USER_INVITATIONS_USER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_invitations_user_status ON user_invitations(user_id, accepted_at, revoked_at);`;
 
+export const USER_PASSWORD_RESETS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS user_password_resets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_by_user_id INTEGER NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME,
+  revoked_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);`;
+
+export const USER_PASSWORD_RESETS_TOKEN_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_password_resets_token_hash ON user_password_resets(token_hash);`;
+export const USER_PASSWORD_RESETS_USER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_user_password_resets_user_status ON user_password_resets(user_id, used_at, revoked_at);`;
+
 export const SESSION_NAMES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_names (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
@@ -98,6 +114,12 @@ ${USER_INVITATIONS_TABLE_SQL}
 ${USER_INVITATIONS_TOKEN_INDEX_SQL}
 
 ${USER_INVITATIONS_USER_INDEX_SQL}
+
+${USER_PASSWORD_RESETS_TABLE_SQL}
+
+${USER_PASSWORD_RESETS_TOKEN_INDEX_SQL}
+
+${USER_PASSWORD_RESETS_USER_INDEX_SQL}
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

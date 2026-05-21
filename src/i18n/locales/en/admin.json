@@ -64,6 +64,7 @@
     "usernameMinLength": "Username must be at least 3 characters",
     "createUserInvite": "Failed to create user invitation",
     "createActivationLink": "Failed to create activation link",
+    "createPasswordResetLink": "Failed to create password reset link",
     "deleteOwnUser": "You cannot delete your own user account",
     "deleteUser": "Failed to delete user",
     "selectTenantAndUser": "Select a tenant and a user",
@@ -112,7 +113,9 @@
     "lastLogin": "Last login {{time}}",
     "inviteExpires": "Invite expires {{time}}",
     "created": "Created {{time}}",
-    "activationLink": "Activation Link"
+    "activationLink": "Activation Link",
+    "passwordResetLink": "Reset Password",
+    "passwordResetLinkTitle": "Password reset link"
   },
   "tenants": {
     "createTitle": "Create tenant",

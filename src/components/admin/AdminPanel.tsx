@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, ChevronDown, Copy, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
@@ -77,6 +77,16 @@ type AdminUsersPayload = {
 type AdminCreateUserPayload = {
   user?: AdminUser;
   invitation?: {
+    url?: string;
+    expires_at?: string;
+  };
+  error?: string;
+  message?: string;
+};
+
+type AdminPasswordResetPayload = {
+  user?: AdminUser;
+  passwordReset?: {
     url?: string;
     expires_at?: string;
   };
@@ -198,13 +208,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [tenantName, setTenantName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [createdInvite, setCreatedInvite] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
+  const [createdPasswordReset, setCreatedPasswordReset] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
   const [bulkUsernames, setBulkUsernames] = useState('');
   const [batchCreatedInvites, setBatchCreatedInvites] = useState<AdminBatchCreateUserResult[]>([]);
   const [batchCreateSummary, setBatchCreateSummary] = useState<AdminBatchSummary | null>(null);
   const [copiedInviteUrl, setCopiedInviteUrl] = useState(false);
+  const [copiedPasswordResetUrl, setCopiedPasswordResetUrl] = useState(false);
   const [copiedBatchInviteUrls, setCopiedBatchInviteUrls] = useState(false);
   const [copiedActivationUserId, setCopiedActivationUserId] = useState<number | null>(null);
+  const [copiedPasswordResetUserId, setCopiedPasswordResetUserId] = useState<number | null>(null);
   const [copyingActivationUserId, setCopyingActivationUserId] = useState<number | null>(null);
+  const [copyingPasswordResetUserId, setCopyingPasswordResetUserId] = useState<number | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
   const [deletingMembership, setDeletingMembership] = useState<string | null>(null);
   const [selectedTenantId, setSelectedTenantId] = useState('');
@@ -396,6 +410,15 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
+  const copyPasswordResetLink = async () => {
+    if (!createdPasswordReset?.url) return;
+    const copied = await copyTextToClipboard(createdPasswordReset.url);
+    setCopiedPasswordResetUrl(copied);
+    if (copied) {
+      window.setTimeout(() => setCopiedPasswordResetUrl(false), 1600);
+    }
+  };
+
   const copyBatchInviteLinks = async () => {
     const links = batchCreatedInvites
       .filter((result) => result.success && result.invitation?.url)
@@ -441,6 +464,40 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
+  const copyPasswordResetLinkForUser = async (targetUser: AdminUser) => {
+    setError(null);
+    setCopyingPasswordResetUserId(targetUser.id);
+    setCopiedPasswordResetUserId(null);
+    setCreatedPasswordReset(null);
+    setCopiedPasswordResetUrl(false);
+
+    try {
+      const response = await api.admin.createUserPasswordResetLink(targetUser.id);
+      const payload = await response.json().catch(() => ({} as AdminPasswordResetPayload)) as AdminPasswordResetPayload;
+      if (!response.ok || !payload.passwordReset?.url) {
+        setError(payload.error || payload.message || t('errors.createPasswordResetLink'));
+        return;
+      }
+
+      const copied = await copyTextToClipboard(payload.passwordReset.url);
+      setCreatedPasswordReset({
+        username: payload.user?.username || targetUser.username,
+        url: payload.passwordReset.url,
+        expiresAt: payload.passwordReset.expires_at,
+      });
+      setCopiedPasswordResetUrl(copied);
+
+      if (copied) {
+        setCopiedPasswordResetUserId(targetUser.id);
+        window.setTimeout(() => setCopiedPasswordResetUserId(null), 1600);
+      }
+
+      await load();
+    } finally {
+      setCopyingPasswordResetUserId(null);
+    }
+  };
+
   const deleteUser = async (targetUser: AdminUser) => {
     if (targetUser.id === currentUserId) {
       setError(t('errors.deleteOwnUser'));
@@ -462,6 +519,9 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
       if (createdInvite?.username === targetUser.username) {
         setCreatedInvite(null);
+      }
+      if (createdPasswordReset?.username === targetUser.username) {
+        setCreatedPasswordReset(null);
       }
 
       await load();
@@ -917,6 +977,27 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                 </section>
               ) : null}
 
+              {createdPasswordReset ? (
+                <section className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-medium text-foreground">{t('users.passwordResetLinkTitle')}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {createdPasswordReset.username}
+                        {createdPasswordReset.expiresAt
+                          ? ` - ${t('users.expires', { time: formatDateTime(createdPasswordReset.expiresAt, t('common.never')) })}`
+                          : ''}
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => void copyPasswordResetLink()}>
+                      {copiedPasswordResetUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {copiedPasswordResetUrl ? t('common.copied') : t('common.copy')}
+                    </Button>
+                  </div>
+                  <Input value={createdPasswordReset.url} readOnly className="font-mono text-xs" />
+                </section>
+              ) : null}
+
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('users.grantAccessTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
@@ -1031,6 +1112,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                             >
                               {copiedActivationUserId === user.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                               {copiedActivationUserId === user.id ? t('common.copied') : t('users.activationLink')}
+                            </Button>
+                          ) : null}
+                          {user.is_active === 1 ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void copyPasswordResetLinkForUser(user)}
+                              disabled={copyingPasswordResetUserId === user.id}
+                            >
+                              {copiedPasswordResetUserId === user.id ? <Check className="h-4 w-4" /> : <KeyRound className="h-4 w-4" />}
+                              {copiedPasswordResetUserId === user.id ? t('common.copied') : t('users.passwordResetLink')}
                             </Button>
                           ) : null}
                           <Button

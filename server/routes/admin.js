@@ -11,6 +11,7 @@ import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -34,6 +35,14 @@ function hashInvitationToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function createPasswordResetToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function hashPasswordResetToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 function buildInvitationUrl(req, token) {
   const origin = req.get('origin')?.trim()?.replace(/\/$/, '');
   if (origin && /^https?:\/\//i.test(origin)) {
@@ -45,6 +54,19 @@ function buildInvitationUrl(req, token) {
   const protocol = forwardedProto || req.protocol;
   const host = forwardedHost || req.get('host');
   return `${protocol}://${host}/invite/${encodeURIComponent(token)}`;
+}
+
+function buildPasswordResetUrl(req, token) {
+  const origin = req.get('origin')?.trim()?.replace(/\/$/, '');
+  if (origin && /^https?:\/\//i.test(origin)) {
+    return `${origin}/reset-password/${encodeURIComponent(token)}`;
+  }
+
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const protocol = forwardedProto || req.protocol;
+  const host = forwardedHost || req.get('host');
+  return `${protocol}://${host}/reset-password/${encodeURIComponent(token)}`;
 }
 
 function createInvitationPayload(req, users, { userId, username }) {
@@ -160,6 +182,30 @@ function summarizeBatchResults(results) {
     total: results.length,
     succeeded: results.filter((result) => result.success).length,
     failed: results.filter((result) => !result.success).length,
+  };
+}
+
+function createPasswordResetPayload(req, users, { userId }) {
+  const resetToken = createPasswordResetToken();
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+
+  const result = users.createPasswordResetForUser({
+    userId,
+    tokenHash: hashPasswordResetToken(resetToken),
+    createdByUserId: req.user.id,
+    expiresAt,
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    user: result.user,
+    passwordReset: {
+      url: buildPasswordResetUrl(req, resetToken),
+      expires_at: result.passwordReset?.expires_at || expiresAt,
+    },
   };
 }
 
@@ -337,6 +383,23 @@ export function createAdminRouter(
       return res.status(201).json(payload);
     } catch (error) {
       return sendRouteError(res, error, 'Failed to create activation link');
+    }
+  });
+
+  router.post('/users/:userId/password-reset', (req, res) => {
+    try {
+      if (typeof users.createPasswordResetForUser !== 'function') {
+        return res.status(501).json({ error: 'Password reset link creation is not available' });
+      }
+
+      const payload = createPasswordResetPayload(req, users, { userId: Number(req.params.userId) });
+      if (!payload) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      return res.status(201).json(payload);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create password reset link');
     }
   });
 

@@ -42,6 +42,7 @@ export type AuthContextValue = {
   login: (username: string, password: string) => Promise<AuthActionResult>;
   register: (username: string, password: string, gitEmail: string) => Promise<AuthActionResult>;
   acceptInvitation: (token: string, password: string, gitEmail: string) => Promise<AuthActionResult>;
+  resetPassword: (token: string, password: string) => Promise<AuthActionResult>;
   logout: () => void;
   refreshOnboardingStatus: () => Promise<void>;
 };
