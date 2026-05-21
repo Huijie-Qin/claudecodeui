@@ -1,4 +1,5 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
+
 import {
   agentSessionRuntimeManager,
   DockerCliClient,
@@ -115,6 +116,24 @@ function buildSummary(rows) {
     staleActive: 0,
     totalLiveMemoryBytes: 0,
   });
+}
+
+function normalizePageLimit(value, fallback = 50, max = 200) {
+  if (value == null || String(value).trim() === '') return fallback;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error('limit must be a positive integer');
+  }
+  return Math.min(limit, max);
+}
+
+function normalizePageOffset(value) {
+  if (value == null || String(value).trim() === '') return 0;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error('offset must be a non-negative integer');
+  }
+  return offset;
 }
 
 export function resolveRuntimeMonitorConfig(env = process.env) {
@@ -272,25 +291,39 @@ export function createRuntimeMonitorService({
 
   async function enrichResult(rows, metadata = {}, filters = {}) {
     let enrichedRows = await enrichRows(rows);
-    const unfilteredTotal = metadata.total ?? enrichedRows.length;
+    const unfilteredTotal = metadata.unfilteredTotal ?? metadata.total ?? enrichedRows.length;
     const hasDockerStateFilter = Boolean(filters.dockerState);
     if (hasDockerStateFilter) {
       enrichedRows = enrichedRows.filter((row) => row.dockerState === filters.dockerState);
     }
+    const total = hasDockerStateFilter ? enrichedRows.length : (metadata.total ?? enrichedRows.length);
+    const limit = metadata.limit ?? enrichedRows.length;
+    const offset = metadata.offset ?? 0;
+    const pageRows = enrichedRows.slice(offset, offset + limit);
+
     return {
-      rows: enrichedRows,
-      total: hasDockerStateFilter ? enrichedRows.length : unfilteredTotal,
+      rows: pageRows,
+      total,
       unfilteredTotal,
-      limit: metadata.limit ?? enrichedRows.length,
-      offset: metadata.offset ?? 0,
+      limit,
+      offset,
       summary: buildSummary(enrichedRows),
     };
   }
 
   async function listRuntimes(filters = {}) {
-    const result = multitenancy.runtimes.listForMonitor(filters);
+    const limit = normalizePageLimit(filters.limit);
+    const offset = normalizePageOffset(filters.offset);
+    const result = typeof multitenancy.runtimes.listAllForMonitor === 'function'
+      ? multitenancy.runtimes.listAllForMonitor(filters)
+      : multitenancy.runtimes.listForMonitor(filters);
     const rows = Array.isArray(result) ? result : result.rows;
-    return enrichResult(rows ?? [], result, filters);
+    return enrichResult(rows ?? [], {
+      ...result,
+      unfilteredTotal: result?.total ?? rows?.length ?? 0,
+      limit,
+      offset,
+    }, filters);
   }
 
   async function getRuntime(runtimeId) {

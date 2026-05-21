@@ -590,3 +590,90 @@ test('reports filtered total and unfiltered page total when dockerState filter i
   assert.equal(result.unfilteredTotal, 2);
   assert.deepEqual(result.rows.map((row) => row.runtimeId), ['runtime-missing']);
 });
+
+test('listRuntimes filters docker state before paginating the full monitor set', async () => {
+  const inspected = [];
+  const rows = [
+    {
+      runtime_id: 'runtime-running',
+      tenant_id: 1,
+      tenant_code: 'default',
+      tenant_name: 'Default',
+      user_id: 2,
+      username: 'alice',
+      workspace_id: 3,
+      workspace_slug: 'running',
+      workspace_display_name: 'Running',
+      provider: 'claude',
+      status: 'idle',
+      container_name: 'container-running',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:58:00.000Z',
+      updated_at: '2026-05-04T01:59:00.000Z',
+    },
+    {
+      runtime_id: 'runtime-missing-1',
+      tenant_id: 1,
+      tenant_code: 'default',
+      tenant_name: 'Default',
+      user_id: 2,
+      username: 'alice',
+      workspace_id: 4,
+      workspace_slug: 'missing-1',
+      workspace_display_name: 'Missing 1',
+      provider: 'claude',
+      status: 'idle',
+      container_name: 'container-missing-1',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:57:00.000Z',
+      updated_at: '2026-05-04T01:58:00.000Z',
+    },
+    {
+      runtime_id: 'runtime-missing-2',
+      tenant_id: 1,
+      tenant_code: 'default',
+      tenant_name: 'Default',
+      user_id: 2,
+      username: 'alice',
+      workspace_id: 5,
+      workspace_slug: 'missing-2',
+      workspace_display_name: 'Missing 2',
+      provider: 'claude',
+      status: 'idle',
+      container_name: 'container-missing-2',
+      image: 'cloudcli/test:claude',
+      last_used_at: '2026-05-04T01:56:00.000Z',
+      updated_at: '2026-05-04T01:57:00.000Z',
+    },
+  ];
+  const service = createRuntimeMonitorService({
+    now: () => new Date('2026-05-04T02:00:00.000Z'),
+    multitenancy: {
+      runtimes: {
+        listAllForMonitor: (filters) => {
+          assert.deepEqual(filters, { dockerState: 'missing', limit: 1, offset: 1 });
+          return { rows, total: rows.length };
+        },
+      },
+    },
+    docker: {
+      inspectContainer: async (name) => {
+        inspected.push(name);
+        return name === 'container-running'
+          ? { exists: true, running: true, status: 'running' }
+          : null;
+      },
+      statsContainers: async () => new Map(),
+    },
+  });
+
+  const result = await service.listRuntimes({ dockerState: 'missing', limit: 1, offset: 1 });
+
+  assert.deepEqual(inspected, ['container-running', 'container-missing-1', 'container-missing-2']);
+  assert.equal(result.total, 2);
+  assert.equal(result.unfilteredTotal, 3);
+  assert.equal(result.limit, 1);
+  assert.equal(result.offset, 1);
+  assert.deepEqual(result.rows.map((row) => row.runtimeId), ['runtime-missing-2']);
+  assert.equal(result.summary.missing, 2);
+});

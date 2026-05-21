@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Search, Square } from 'lucide-react';
+import { ChevronLeft, ChevronRight, RefreshCw, Search, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../shared/view/ui';
@@ -46,6 +46,9 @@ type RuntimeSummary = {
 type RuntimePayload = {
   rows?: RuntimeRow[];
   total?: number;
+  unfilteredTotal?: number;
+  limit?: number;
+  offset?: number;
   summary?: RuntimeSummary;
   error?: string;
   message?: string;
@@ -58,6 +61,8 @@ type RuntimeErrorPayload = {
 
 const SELECT_CLASS_NAME =
   'h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+const DEFAULT_PAGE_SIZE = 100;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 function statusClassName(status: string): string {
   if (status === 'active' || status === 'running') {
@@ -102,6 +107,41 @@ function formatCpu(value: number | null): string {
   return `${value.toFixed(1)}%`;
 }
 
+function compactIdentifier(value: string | null | undefined, maxLength = 48): string {
+  if (!value) return '-';
+  if (value.length <= maxLength) return value;
+
+  const headLength = Math.max(12, Math.floor(maxLength * 0.62));
+  const tailLength = Math.max(8, maxLength - headLength - 1);
+  return `${value.slice(0, headLength)}…${value.slice(-tailLength)}`;
+}
+
+function RuntimeIdentifier({ label, value, tone = 'default' }: {
+  label?: string;
+  value: string | null | undefined;
+  tone?: 'default' | 'muted';
+}) {
+  const displayValue = compactIdentifier(value);
+  const textClassName = tone === 'muted' ? 'text-muted-foreground' : 'text-foreground';
+
+  return (
+    <div className={`truncate font-mono ${textClassName}`} title={value || undefined} aria-label={value || undefined}>
+      {label ? <span className="mr-1 font-sans text-muted-foreground">{label}</span> : null}
+      {displayValue}
+    </div>
+  );
+}
+
+function toPositiveInteger(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function toNonNegativeInteger(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
 export default function RuntimeMonitorTab() {
   const { t } = useTranslation('admin');
   const [filters, setFilters] = useState<RuntimeMonitorFilters>({ status: '', dockerState: '', q: '', limit: 100 });
@@ -118,6 +158,14 @@ export default function RuntimeMonitorTab() {
   const stoppingRuntimeIdsRef = useRef<Set<string>>(new Set());
 
   const queryKey = useMemo(() => buildRuntimeQueryString(filters), [filters]);
+  const pageSize = toPositiveInteger(filters.limit, DEFAULT_PAGE_SIZE);
+  const offset = toNonNegativeInteger(filters.offset);
+  const currentPage = Math.floor(offset / pageSize) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const visibleStart = total === 0 ? 0 : Math.min(offset + 1, total);
+  const visibleEnd = total === 0 ? 0 : Math.min(offset + rows.length, total);
+  const canGoPrevious = offset > 0 && !isLoading;
+  const canGoNext = offset + pageSize < total && !isLoading;
   filtersRef.current = filters;
   currentQueryKeyRef.current = queryKey;
 
@@ -192,9 +240,22 @@ export default function RuntimeMonitorTab() {
       const payload = await response.json() as RuntimePayload;
       if (!isLatestLoad(requestId, requestQueryKey)) return;
 
+      const payloadTotal = payload.total || 0;
+      const requestLimit = toPositiveInteger(requestFilters.limit, DEFAULT_PAGE_SIZE);
+      const requestOffset = toNonNegativeInteger(requestFilters.offset);
+      if (payloadTotal === 0 && requestOffset > 0) {
+        updateFilters((current) => ({ ...current, offset: 0 }));
+        return;
+      }
+      if (payloadTotal > 0 && requestOffset >= payloadTotal) {
+        const lastPageOffset = Math.floor((payloadTotal - 1) / requestLimit) * requestLimit;
+        updateFilters((current) => ({ ...current, offset: lastPageOffset }));
+        return;
+      }
+
       setRows(payload.rows || []);
       setSummary(payload.summary || null);
-      setTotal(payload.total || 0);
+      setTotal(payloadTotal);
     } catch (caughtError) {
       if (!isLatestLoad(requestId, requestQueryKey)) return;
 
@@ -205,7 +266,7 @@ export default function RuntimeMonitorTab() {
         setIsLoading(false);
       }
     }
-  }, [isLatestLoad, t]);
+  }, [isLatestLoad, t, updateFilters]);
 
   useEffect(() => {
     void load();
@@ -237,6 +298,13 @@ export default function RuntimeMonitorTab() {
     }
   };
 
+  const updatePageOffset = (nextOffset: number) => {
+    updateFilters((current) => ({
+      ...current,
+      offset: Math.max(0, nextOffset),
+    }));
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid gap-2 sm:grid-cols-5">
@@ -247,11 +315,11 @@ export default function RuntimeMonitorTab() {
         <SummaryTile label={t('runtimes.summary.liveMemory')} value={formatBytes(summary?.totalLiveMemoryBytes)} />
       </div>
 
-      <div className="grid gap-2 lg:grid-cols-[150px_150px_minmax(280px,1fr)_auto]">
+      <div className="grid gap-2 lg:grid-cols-[150px_150px_minmax(240px,1fr)_120px_auto]">
         <select
           className={SELECT_CLASS_NAME}
           value={filters.status || ''}
-          onChange={(event) => updateFilters((current) => ({ ...current, status: event.target.value }))}
+          onChange={(event) => updateFilters((current) => ({ ...current, status: event.target.value, offset: 0 }))}
         >
           <option value="">{t('runtimes.filters.allStatuses')}</option>
           <option value="active">{t('statuses.active')}</option>
@@ -262,7 +330,7 @@ export default function RuntimeMonitorTab() {
         <select
           className={SELECT_CLASS_NAME}
           value={filters.dockerState || ''}
-          onChange={(event) => updateFilters((current) => ({ ...current, dockerState: event.target.value }))}
+          onChange={(event) => updateFilters((current) => ({ ...current, dockerState: event.target.value, offset: 0 }))}
         >
           <option value="">{t('runtimes.filters.allDocker')}</option>
           <option value="running">{t('statuses.running')}</option>
@@ -275,10 +343,27 @@ export default function RuntimeMonitorTab() {
           <Input
             className="h-9 pl-9"
             value={filters.q || ''}
-            onChange={(event) => updateFilters((current) => ({ ...current, q: event.target.value }))}
+            onChange={(event) => updateFilters((current) => ({ ...current, q: event.target.value, offset: 0 }))}
             placeholder={t('runtimes.filters.searchPlaceholder')}
           />
         </label>
+        <select
+          className={SELECT_CLASS_NAME}
+          value={pageSize}
+          onChange={(event) => updateFilters((current) => ({
+            ...current,
+            limit: Number(event.target.value),
+            offset: 0,
+          }))}
+          aria-label={t('runtimes.pagination.pageSize', { defaultValue: 'Rows per page' })}
+          title={t('runtimes.pagination.pageSize', { defaultValue: 'Rows per page' })}
+        >
+          {PAGE_SIZE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option} / page
+            </option>
+          ))}
+        </select>
         <Button
           variant="ghost"
           size="icon"
@@ -325,9 +410,11 @@ export default function RuntimeMonitorTab() {
 
               return (
                 <tr key={row.runtimeId} className="border-b border-border last:border-b-0">
-                  <td className="max-w-60 px-3 py-2">
-                    <div className="truncate font-medium text-foreground">{row.providerSessionId || row.runtimeId}</div>
-                    <div className="truncate text-xs text-muted-foreground">{row.provider} - {row.containerName}</div>
+                  <td className="max-w-72 px-3 py-2">
+                    <RuntimeIdentifier value={row.providerSessionId || row.runtimeId} />
+                    <div className="mt-0.5 text-xs">
+                      <RuntimeIdentifier label={`${row.provider}:`} value={row.containerName} tone="muted" />
+                    </div>
                   </td>
                   <td className="max-w-44 px-3 py-2">
                     <div className="truncate font-medium text-foreground">{row.tenant.name}</div>
@@ -366,6 +453,44 @@ export default function RuntimeMonitorTab() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          {t('runtimes.pagination.range', {
+            start: visibleStart,
+            end: visibleEnd,
+            total,
+            defaultValue: `Showing ${visibleStart}-${visibleEnd} of ${total}`,
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!canGoPrevious}
+            onClick={() => updatePageOffset(Math.max(0, offset - pageSize))}
+          >
+            <ChevronLeft className="h-4 w-4" />
+            {t('runtimes.pagination.previous', { defaultValue: 'Previous' })}
+          </Button>
+          <span className="min-w-24 text-center">
+            {t('runtimes.pagination.page', {
+              page: currentPage,
+              pageCount,
+              defaultValue: `Page ${currentPage} of ${pageCount}`,
+            })}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!canGoNext}
+            onClick={() => updatePageOffset(offset + pageSize)}
+          >
+            {t('runtimes.pagination.next', { defaultValue: 'Next' })}
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );

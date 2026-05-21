@@ -1715,6 +1715,79 @@ export function createMultitenancyDb(database = db) {
         };
       },
 
+      listAllForMonitor: (filters = {}) => {
+        const normalized = normalizeRuntimeMonitorFilters({
+          ...filters,
+          limit: filters.limit ?? 50,
+          offset: filters.offset ?? 0,
+        });
+        const whereClauses = [
+          "r.status != 'deleted'",
+        ];
+        const params = [];
+
+        if (normalized.tenantId !== null) {
+          whereClauses.push('r.tenant_id = ?');
+          params.push(normalized.tenantId);
+        }
+        if (normalized.userId !== null) {
+          whereClauses.push('r.user_id = ?');
+          params.push(normalized.userId);
+        }
+        if (normalized.workspaceId !== null) {
+          whereClauses.push('r.workspace_id = ?');
+          params.push(normalized.workspaceId);
+        }
+        if (normalized.provider !== null) {
+          whereClauses.push('r.provider = ?');
+          params.push(normalized.provider);
+        }
+        if (normalized.status !== null) {
+          whereClauses.push('r.status = ?');
+          params.push(normalized.status);
+        }
+        if (normalized.q !== null) {
+          whereClauses.push(`(
+            lower(r.runtime_id) LIKE ?
+            OR lower(COALESCE(r.provider_session_id, '')) LIKE ?
+            OR lower(r.container_name) LIKE ?
+            OR lower(r.image) LIKE ?
+            OR lower(r.workspace_host_path) LIKE ?
+            OR lower(r.runtime_home_path) LIKE ?
+            OR lower(t.code) LIKE ?
+            OR lower(t.name) LIKE ?
+            OR lower(u.username) LIKE ?
+            OR lower(w.slug) LIKE ?
+            OR lower(w.display_name) LIKE ?
+            OR lower(w.path) LIKE ?
+          )`);
+          params.push(...Array(12).fill(normalized.q));
+        }
+
+        const whereSql = whereClauses.join('\n            AND ');
+        const rows = database.prepare(`
+          SELECT
+            r.*,
+            t.code AS tenant_code,
+            t.name AS tenant_name,
+            u.username,
+            w.slug AS workspace_slug,
+            w.display_name AS workspace_display_name,
+            w.path AS workspace_path
+          FROM agent_session_runtime r
+          JOIN tenants t ON t.id = r.tenant_id
+          JOIN users u ON u.id = r.user_id
+          JOIN workspaces w ON w.id = r.workspace_id
+          WHERE ${whereSql}
+          ORDER BY r.updated_at DESC, r.id DESC
+        `).all(...params);
+
+        return {
+          rows,
+          total: rows.length,
+        };
+      },
+
       getMonitorRowByRuntimeId: (runtimeId) => {
         return database.prepare(`
           SELECT
