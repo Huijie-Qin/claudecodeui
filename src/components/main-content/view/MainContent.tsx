@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
+
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
@@ -9,10 +10,11 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
+import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
+
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
-import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;

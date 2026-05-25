@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+
 import { api } from '../../../utils/api';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
@@ -104,10 +105,12 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
 
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
+      return true;
     } catch (error) {
       const message = getErrorMessage(error);
       console.error('Error saving file:', error);
       setSaveError(message);
+      return false;
     } finally {
       setSaving(false);
     }
