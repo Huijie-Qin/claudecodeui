@@ -6,7 +6,7 @@ import JSZip from 'jszip';
 
 const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
-const DEFAULT_LIST_PAGE_SIZE = 200;
+const DEFAULT_LIST_PAGE_SIZE = 20;
 const MARKET_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
 const MARKET_ENDPOINT_PREFIX = '/data-agent';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
@@ -892,7 +892,7 @@ function createMarketAuthHeaders({ endpoint, method, payloadText }) {
 
   const timestamp = String(Date.now());
   const endpointPath = new URL(endpoint, 'http://skill-market.local').pathname;
-  const builder = `${String(method || 'GET').toUpperCase()}&${endpointPath}${payloadText || ''}&appid ${appid}&timestamp${timestamp}`;
+  const builder = `${String(method || 'GET').toUpperCase()}&${endpointPath}&&${payloadText || ''}&appid=${appid}&timestamp=${timestamp}`;
   const signature = crypto
     .createHmac('sha256', Buffer.from(authKey, 'hex'))
     .update(builder)

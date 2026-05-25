@@ -43,7 +43,7 @@ The signature is:
 
 ```text
 payload = JSON.stringify(requestBody)
-builder = 'POST&' + requestPath + payload + '&appid ' + appid + '&timestamp' + timestamp
+builder = method.toUpperCase() + '&' + requestPath + '&&' + payload + '&appid=' + appid + '&timestamp=' + timestamp
 signature = Base64(HMAC-SHA256(builder, Hex.parse(authKey)))
 ```
 
@@ -70,7 +70,7 @@ Request:
   },
   "pageInfo": {
     "page": 1,
-    "pageSize": 200
+    "pageSize": 20
   }
 }
 ```

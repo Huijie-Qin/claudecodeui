@@ -692,7 +692,7 @@ function createExpectedAuthorization({
 }) {
   const timestamp = String(actualAuthorization).match(/timestamp=([^,]+)/)?.[1];
   assert.ok(timestamp, 'authorization timestamp is required');
-  const builder = `POST&${endpoint}${payloadText}&appid ${appid}&timestamp${timestamp}`;
+  const builder = `POST&${endpoint}&&${payloadText}&appid=${appid}&timestamp=${timestamp}`;
   const signature = crypto
     .createHmac('sha256', Buffer.from(authKey, 'hex'))
     .update(builder)
