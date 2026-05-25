@@ -6,6 +6,7 @@ import express from 'express';
 import { createSkillMarketRouter } from './skill-market.js';
 
 const TEST_TENANT_CODE = 'tenant-code';
+const TEST_USERNAME = 'test-user';
 
 async function requestJson(
   router,
@@ -49,6 +50,7 @@ function createRouter({
   publishMarketSkill,
   submitMarketSkill,
   tenants,
+  users,
   viewMarketSkillFile,
 } = {}) {
   return createSkillMarketRouter({
@@ -64,6 +66,9 @@ function createRouter({
     },
     tenants: tenants || {
       getTenantById: (tenantId) => ({ id: tenantId, code: TEST_TENANT_CODE, status: 'active' }),
+    },
+    users: users || {
+      getUserById: (userId) => ({ id: userId, username: TEST_USERNAME }),
     },
     marketService: {
       listSkillMarket: listSkillMarket || (async () => [{ name: 'bug-hunter' }]),
@@ -128,8 +133,9 @@ test('GET /skills returns market inventory for view access', async () => {
     searchContent: '',
     page: undefined,
     pageSize: undefined,
-    currentUsername: undefined,
+    currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.deepEqual(payload, {
     workspaceId: 10,
@@ -159,8 +165,9 @@ test('GET /skills/:name returns skill detail without requiring edit access', asy
   assert.deepEqual(seen.detailArgs, {
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
-    currentUsername: undefined,
+    currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.equal(payload.canManage, true);
   assert.deepEqual(payload.skill.files, [{ path: 'SKILL.md', size: 12 }]);
@@ -190,6 +197,7 @@ test('GET /skills/:name/files passes the selected file path to the view API', as
     name: 'bug-hunter',
     filePath: 'references/checklist.md',
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.deepEqual(payload.file, { path: 'references/checklist.md', content: '# Checklist', size: 11 });
 });
@@ -215,6 +223,7 @@ test('POST /skills/:name/download requires edit access and imports to Files', as
     name: 'bug-hunter',
     overwrite: false,
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.deepEqual(payload.skill, { name: 'bug-hunter', imported: true });
 });
@@ -242,8 +251,9 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
   assert.deepEqual(seen.submitArgs, {
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
-    currentUsername: undefined,
+    currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.equal(payload.submittedFileCount, 3);
 });
@@ -273,8 +283,9 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
   });
   assert.deepEqual(seen.listArgs, {
     workspacePath: '/tmp/workspace',
-    currentUsername: undefined,
+    currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
   });
   assert.equal(payload.removed, 'bug-hunter');
   assert.deepEqual(payload.skills, [{ name: 'bug-hunter' }]);

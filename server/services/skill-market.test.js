@@ -22,13 +22,14 @@ let previousMarketApiUrl;
 let previousMarketAuthAppid;
 let previousMarketAuthKey;
 const TEST_TENANT_CODE = 'tenant-code';
+const TEST_ACCOUNT_ID = 'j00939207';
 
 async function makeWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-market-'));
 }
 
 function withTenant(options = {}) {
-  return { tenantCode: TEST_TENANT_CODE, ...options };
+  return { tenantCode: TEST_TENANT_CODE, accountId: TEST_ACCOUNT_ID, ...options };
 }
 
 const TEST_SKILLS = [
@@ -107,6 +108,7 @@ function createSkillMarketMockServer({ dataPath }) {
     const body = parseJson(bodyBuffer.toString('utf8'));
 
     assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/api/skill/skillList') {
       const submissions = await readMockSubmissions(dataPath);
@@ -469,6 +471,7 @@ test('submitMarketSkill signs update requests without including the file in the 
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
 
     assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/update') {
       updateBodyIncludesFile = bodyBuffer.toString('latin1').includes('name="file"');

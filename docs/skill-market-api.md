@@ -33,6 +33,12 @@ Every remote Skill Market request also includes the current tenant code from the
 X-Data-Agent-Tenant: {tenants.code}
 ```
 
+Every remote Skill Market request includes the current account username from the CCUI `users` table:
+
+```text
+X-Account-Id: {users.username}
+```
+
 The signature is:
 
 ```text

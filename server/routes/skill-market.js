@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { tenantContext } from '../middleware/tenant-context.js';
 import { workspaceAccess } from '../services/workspace-access.js';
@@ -16,6 +17,7 @@ export function createSkillMarketRouter({
   marketService = skillMarketService,
   tenantMiddleware = tenantContext,
   tenants = multitenancyDb.tenants,
+  users = userDb,
 } = {}) {
   const router = express.Router();
   router.use(tenantMiddleware);
@@ -24,13 +26,15 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const skills = await marketService.listSkillMarket({
         workspacePath: workspace.path,
         searchContent: req.query?.searchContent ?? req.query?.q ?? '',
         page: req.query?.page,
         pageSize: req.query?.pageSize,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -48,11 +52,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const skill = await marketService.getSkillMarketDetail({
         workspacePath: workspace.path,
         name: req.params.name,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -70,11 +76,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const file = await marketService.viewMarketSkillFile({
         workspacePath: workspace.path,
         name: req.params.name,
         filePath: req.query?.filePath,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -92,11 +100,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const skill = await marketService.downloadMarketSkill({
         workspacePath: workspace.path,
         name: req.params.name,
         overwrite: req.body?.overwrite === true || req.query?.overwrite === 'true',
         tenantCode,
+        accountId,
       });
 
       return res.status(201).json({
@@ -114,11 +124,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
         workspacePath: workspace.path,
         name: req.params.name,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -136,11 +148,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const result = await marketService.getMarketSkillPublishPreview({
         workspacePath: workspace.path,
         name: req.params.name,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -158,11 +172,13 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
         workspacePath: workspace.path,
         name: req.params.name,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -180,14 +196,16 @@ export function createSkillMarketRouter({
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
       const result = await marketService.removeMarketSkill({
         workspacePath: workspace.path,
         name: req.params.name,
       });
       const skills = await marketService.listSkillMarket({
         workspacePath: workspace.path,
-        currentUsername: req.user?.username,
+        currentUsername: accountId,
         tenantCode,
+        accountId,
       });
 
       return res.json({
@@ -242,6 +260,23 @@ function resolveTenantCode(req, tenants) {
   }
 
   const error = new Error('Tenant code is required');
+  error.statusCode = 400;
+  throw error;
+}
+
+function resolveAccountId(req, users) {
+  const accountId = req.user?.username;
+  if (accountId) {
+    return String(accountId);
+  }
+
+  const userId = getRequestUserId(req);
+  const user = users?.getUserById?.(userId);
+  if (user?.username) {
+    return String(user.username);
+  }
+
+  const error = new Error('User username is required');
   error.statusCode = 400;
   throw error;
 }
