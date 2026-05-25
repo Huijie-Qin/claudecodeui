@@ -392,7 +392,7 @@ export const api = {
   },
 
   skillMarket: {
-    list: (workspaceId, { searchContent = '', page = 1, pageSize = 200 } = {}) => {
+    list: (workspaceId, { searchContent = '', page = 1, pageSize = 20 } = {}) => {
       const params = new URLSearchParams();
       if (searchContent) params.set('searchContent', searchContent);
       if (page) params.set('page', String(page));

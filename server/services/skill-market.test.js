@@ -21,7 +21,6 @@ let previousMarketBaseUrl;
 let previousMarketApiUrl;
 let previousMarketAuthAppid;
 let previousMarketAuthKey;
-let previousFetch;
 const TEST_TENANT_CODE = 'tenant-code';
 const TEST_ACCOUNT_ID = 'j00939207';
 
@@ -151,7 +150,7 @@ function createSkillMarketMockServer({ dataPath }) {
     }
 
     if (endpoint === '/api/skill/update') {
-      assert.equal(req.headers['x-test-original-method'], 'UPDATE');
+      assert.equal(req.method, 'POST');
       const fields = parseMultipartFields(bodyBuffer, req.headers['content-type']);
       const id = fields.id || parseJson(fields.data)?.id;
       const files = parseJson(fields.files) || [];
@@ -192,9 +191,6 @@ function createSkillMarketMockServer({ dataPath }) {
 }
 
 test.before(async () => {
-  previousFetch = globalThis.fetch;
-  globalThis.fetch = fetchThroughNodeTestServer;
-
   const dataDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-market-api-'));
   marketDataPath = path.join(dataDirectory, 'submissions.json');
   marketServer = createSkillMarketMockServer({ dataPath: marketDataPath });
@@ -231,7 +227,6 @@ test.after(async () => {
   }
   restoreEnv('SKILL_MARKET_AUTH_APPID', previousMarketAuthAppid);
   restoreEnv('SKILL_MARKET_AUTH_KEY', previousMarketAuthKey);
-  globalThis.fetch = previousFetch;
 
   if (marketServer) {
     await new Promise((resolve, reject) => {
@@ -268,14 +263,21 @@ test('importMarketSkill downloads the mock API skill into .claude/skills and rec
   assert.equal(detail.name, 'plan-slicer');
   assert.equal(detail.imported, true);
   assert.equal(detail.targetPath, '.claude/skills/plan-slicer');
+  await fs.writeFile(
+    path.join(workspacePath, '.claude', 'skills', 'plan-slicer', 'SKILL.md'),
+    '# Local Plan Slicer\n',
+    'utf8',
+  );
   const viewedFile = await viewMarketSkillFile(withTenant({
     workspacePath,
     name: 'plan-slicer',
     filePath: 'SKILL.md',
   }));
+  const localDetail = await getSkillMarketDetail(withTenant({ workspacePath, name: 'plan-slicer' }));
+  assert.equal(viewedFile.file.content, '# Local Plan Slicer\n');
   assert.equal(
-    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'plan-slicer', 'SKILL.md'), 'utf8'),
-    viewedFile.file.content,
+    localDetail.files.find((file) => file.path === 'SKILL.md')?.size,
+    Buffer.byteLength('# Local Plan Slicer\n', 'utf8'),
   );
   assert.deepEqual(
     JSON.parse(await fs.readFile(path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'), 'utf8')).imports['plan-slicer'],
@@ -480,12 +482,11 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/update') {
-      assert.equal(req.headers['x-test-original-method'], 'UPDATE');
+      assert.equal(req.method, 'POST');
       updateBodyIncludesFile = bodyBuffer.toString('latin1').includes('name="file"');
       assert.equal(
         req.headers.authorization,
         createExpectedAuthorization({
-          method: 'UPDATE',
           endpoint,
           payloadText: '',
           appid,
@@ -594,22 +595,6 @@ function restoreEnv(name, value) {
     return;
   }
   process.env[name] = value;
-}
-
-function fetchThroughNodeTestServer(input, init = {}) {
-  const method = String(init?.method || 'GET').toUpperCase();
-  if (method !== 'UPDATE') {
-    return previousFetch(input, init);
-  }
-
-  // Node's built-in HTTP test server rejects UPDATE before request handlers run.
-  const headers = new Headers(init.headers || {});
-  headers.set('x-test-original-method', 'UPDATE');
-  return previousFetch(input, {
-    ...init,
-    method: 'POST',
-    headers,
-  });
 }
 
 function normalizeMockEndpoint(endpoint) {

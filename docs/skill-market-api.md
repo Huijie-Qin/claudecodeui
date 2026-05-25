@@ -50,7 +50,7 @@ signature = Base64(HMAC-SHA256(builder, Hex.parse(authKey)))
 For the multipart `update` endpoint, the signature payload is empty. Its builder ends with:
 
 ```text
-UPDATE&/data-agent/api/skill/update&&&appid={appid}&timestamp={timestamp}
+POST&/data-agent/api/skill/update&&&appid={appid}&timestamp={timestamp}
 ```
 
 ## Remote Service
@@ -149,7 +149,7 @@ Request:
 
 CCUI calls this before importing or updating a local skill. If the response includes file data, CCUI writes it directly. If it returns a zip stream, CCUI extracts it. If neither is present, CCUI falls back to `preview` for each file.
 
-### `UPDATE /data-agent/api/skill/update`
+### `POST /data-agent/api/skill/update`
 
 Multipart form data. CCUI sends:
 
@@ -187,8 +187,9 @@ Response:
 ## CCUI Proxy Flow
 
 - The Skill Market dialog lists skills through `skillList`.
-- Selecting a skill calls `preview` once for the file tree, then calls `preview` again for the default `SKILL.md` content.
-- Clicking a file in the tree calls `preview` with that file path.
+- Selecting a skill that has not been imported calls `preview` once for the file tree, then calls `preview` again for the default `SKILL.md` content.
+- Selecting or opening files for an imported skill reads the workspace copy under `.claude/skills/{skillName}` instead of calling remote `preview`.
+- Clicking a file in the tree calls `preview` with that file path only when the skill is not imported.
 - Import calls `download` and writes into `Files/.claude/skills/{skillName}`.
 - Imported state is computed from local workspace files plus `.cloudcli/skills/market-imports.json`, not from the remote list response.
 - Update availability is computed by comparing remote `version` with the locally imported version.

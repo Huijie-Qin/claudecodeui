@@ -55,22 +55,38 @@ export async function listSkillMarket(options = {}) {
 export async function getSkillMarketDetail({ workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
-  const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode, accountId: remoteAccountId });
   const imports = await readMarketImports(workspacePath);
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
+  let directoryTree;
+  let files;
+
+  if (status.imported) {
+    const localFiles = await readSkillDirectoryFiles(getRuntimeSkillPath(workspacePath, remoteSkill.name));
+    directoryTree = buildDirectoryTreeFromFiles(localFiles);
+    files = summarizeSkillFiles(localFiles);
+  } else {
+    const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode, accountId: remoteAccountId });
+    directoryTree = preview.directoryTree;
+    files = flattenDirectoryTree(preview.directoryTree);
+  }
 
   return {
     ...remoteSkill,
     ...toLocalImportState(status, remoteSkill, currentUsername),
     targetPath: path.join('.claude', 'skills', remoteSkill.name).split(path.sep).join('/'),
-    directoryTree: preview.directoryTree,
-    files: flattenDirectoryTree(preview.directoryTree),
+    directoryTree,
+    files,
   };
 }
 
-export async function viewMarketSkillFile({ name, filePath, tenantCode, accountId }) {
+export async function viewMarketSkillFile({ workspacePath, name, filePath, tenantCode, accountId }) {
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
-  const file = await previewRemoteSkillFile(remoteSkill, filePath, { tenantCode, accountId });
+  const status = workspacePath
+    ? await getImportStatus(workspacePath, remoteSkill.name, await readMarketImports(workspacePath))
+    : { imported: false };
+  const file = status.imported
+    ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, remoteSkill.name), filePath)
+    : await previewRemoteSkillFile(remoteSkill, filePath, { tenantCode, accountId });
 
   return {
     skillId: remoteSkill.skillId,
@@ -170,7 +186,6 @@ export async function publishMarketSkill({
   const files = await readSkillDirectoryFiles(runtimePath);
   const updateForm = await buildSkillUpdateForm(remoteSkill, files);
   await requestMarketForm('/api/skill/update', updateForm, {
-    method: 'UPDATE',
     tenantCode,
     accountId: remoteAccountId,
   });
@@ -539,6 +554,27 @@ async function readSkillDirectoryFiles(skillDirectory) {
   return files.sort(sortFileEntries);
 }
 
+async function readLocalSkillFile(skillDirectory, filePath) {
+  const normalizedFilePath = normalizeRelativeFilePath(filePath);
+  const targetPath = resolveSkillFilePath(skillDirectory, normalizedFilePath);
+  let content;
+
+  try {
+    content = await fs.readFile(targetPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw createHttpError('Skill file was not found', 404);
+    }
+    throw error;
+  }
+
+  return {
+    path: normalizedFilePath,
+    content,
+    size: Buffer.byteLength(content, 'utf8'),
+  };
+}
+
 async function collectSkillDirectoryFiles(rootDirectory, currentDirectory, files) {
   const entries = await fs.readdir(currentDirectory, { withFileTypes: true });
 
@@ -678,6 +714,72 @@ function flattenDirectoryTree(nodes) {
   };
   visit(nodes);
   return files.sort(sortFileEntries);
+}
+
+function summarizeSkillFiles(files) {
+  return files
+    .map((file) => pruneUndefined({
+      path: file.path,
+      size: Number.isInteger(file.size) ? file.size : undefined,
+    }))
+    .sort(sortFileEntries);
+}
+
+function buildDirectoryTreeFromFiles(files) {
+  const root = [];
+  const sortedFiles = [...files].sort(sortFileEntries);
+
+  for (const file of sortedFiles) {
+    const parts = file.path.split('/').filter(Boolean);
+    let children = root;
+    let currentPath = '';
+
+    parts.forEach((part, index) => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      const isFile = index === parts.length - 1;
+
+      if (isFile) {
+        children.push(pruneUndefined({
+          name: part,
+          path: currentPath,
+          isDirectory: false,
+          size: Number.isInteger(file.size) ? file.size : undefined,
+        }));
+        return;
+      }
+
+      let directory = children.find((entry) => entry.isDirectory && entry.path === currentPath);
+      if (!directory) {
+        directory = {
+          name: part,
+          path: currentPath,
+          isDirectory: true,
+          children: [],
+        };
+        children.push(directory);
+      }
+      children = directory.children;
+    });
+  }
+
+  sortDirectoryTree(root);
+  return root;
+}
+
+function sortDirectoryTree(nodes) {
+  nodes.sort(sortDirectoryTreeEntries);
+  nodes.forEach((node) => {
+    if (node.isDirectory) {
+      sortDirectoryTree(node.children);
+    }
+  });
+}
+
+function sortDirectoryTreeEntries(left, right) {
+  if (left.isDirectory !== right.isDirectory) {
+    return left.isDirectory ? -1 : 1;
+  }
+  return sortPathNames(left.path, right.path);
 }
 
 function normalizeDownloadedFiles(files) {
