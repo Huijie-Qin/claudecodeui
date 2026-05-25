@@ -28,7 +28,8 @@ const convertMarkdownToPlainText = (markdown: string): string => {
   plainText = plainText.replace(/^[-*+]\s+/gm, '');
   plainText = plainText.replace(/^\d+\.\s+/gm, '');
   plainText = plainText.replace(/(\*\*|__)(.*?)\1/g, '$2');
-  plainText = plainText.replace(/(\*|_)(.*?)\1/g, '$2');
+  // Keep underscore characters intact for copy as text to avoid stripping literal underscores in user input.
+  plainText = plainText.replace(/\*(.*?)\*/g, '$1');
   plainText = plainText.replace(/~~(.*?)~~/g, '$1');
   plainText = plainText.replace(/<\/?[^>]+(>|$)/g, '');
   plainText = plainText.replace(/\n{3,}/g, '\n\n');
