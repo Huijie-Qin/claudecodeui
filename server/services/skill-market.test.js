@@ -21,6 +21,7 @@ let previousMarketBaseUrl;
 let previousMarketApiUrl;
 let previousMarketAuthAppid;
 let previousMarketAuthKey;
+let previousFetch;
 const TEST_TENANT_CODE = 'tenant-code';
 const TEST_ACCOUNT_ID = 'j00939207';
 
@@ -150,6 +151,7 @@ function createSkillMarketMockServer({ dataPath }) {
     }
 
     if (endpoint === '/api/skill/update') {
+      assert.equal(req.headers['x-test-original-method'], 'UPDATE');
       const fields = parseMultipartFields(bodyBuffer, req.headers['content-type']);
       const id = fields.id || parseJson(fields.data)?.id;
       const files = parseJson(fields.files) || [];
@@ -190,6 +192,9 @@ function createSkillMarketMockServer({ dataPath }) {
 }
 
 test.before(async () => {
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = fetchThroughNodeTestServer;
+
   const dataDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-market-api-'));
   marketDataPath = path.join(dataDirectory, 'submissions.json');
   marketServer = createSkillMarketMockServer({ dataPath: marketDataPath });
@@ -226,6 +231,7 @@ test.after(async () => {
   }
   restoreEnv('SKILL_MARKET_AUTH_APPID', previousMarketAuthAppid);
   restoreEnv('SKILL_MARKET_AUTH_KEY', previousMarketAuthKey);
+  globalThis.fetch = previousFetch;
 
   if (marketServer) {
     await new Promise((resolve, reject) => {
@@ -474,10 +480,12 @@ test('submitMarketSkill signs update requests without including the file in the 
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/update') {
+      assert.equal(req.headers['x-test-original-method'], 'UPDATE');
       updateBodyIncludesFile = bodyBuffer.toString('latin1').includes('name="file"');
       assert.equal(
         req.headers.authorization,
         createExpectedAuthorization({
+          method: 'UPDATE',
           endpoint,
           payloadText: JSON.stringify({ data: { id: 'auth-skill' } }),
           appid,
@@ -588,6 +596,22 @@ function restoreEnv(name, value) {
   process.env[name] = value;
 }
 
+function fetchThroughNodeTestServer(input, init = {}) {
+  const method = String(init?.method || 'GET').toUpperCase();
+  if (method !== 'UPDATE') {
+    return previousFetch(input, init);
+  }
+
+  // Node's built-in HTTP test server rejects UPDATE before request handlers run.
+  const headers = new Headers(init.headers || {});
+  headers.set('x-test-original-method', 'UPDATE');
+  return previousFetch(input, {
+    ...init,
+    method: 'POST',
+    headers,
+  });
+}
+
 function normalizeMockEndpoint(endpoint) {
   return String(endpoint || '').replace(/^\/data-agent(?=\/)/, '');
 }
@@ -684,6 +708,7 @@ function parseJson(value) {
 }
 
 function createExpectedAuthorization({
+  method = 'POST',
   endpoint,
   payloadText,
   appid,
@@ -692,7 +717,7 @@ function createExpectedAuthorization({
 }) {
   const timestamp = String(actualAuthorization).match(/timestamp=([^,]+)/)?.[1];
   assert.ok(timestamp, 'authorization timestamp is required');
-  const builder = `POST&${endpoint}&&${payloadText}&appid=${appid}&timestamp=${timestamp}`;
+  const builder = `${String(method).toUpperCase()}&${endpoint}&&${payloadText}&appid=${appid}&timestamp=${timestamp}`;
   const signature = crypto
     .createHmac('sha256', Buffer.from(authKey, 'hex'))
     .update(builder)

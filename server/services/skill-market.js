@@ -170,6 +170,7 @@ export async function publishMarketSkill({
   const files = await readSkillDirectoryFiles(runtimePath);
   const updateForm = await buildSkillUpdateForm(remoteSkill, files);
   await requestMarketForm('/api/skill/update', updateForm, {
+    method: 'UPDATE',
     tenantCode,
     accountId: remoteAccountId,
     authBody: {
@@ -383,15 +384,21 @@ async function requestMarketJson(endpoint, { method = 'GET', body, tenantCode, a
   return payload;
 }
 
-async function requestMarketForm(endpoint, formData, { authBody, tenantCode, accountId } = {}) {
+async function requestMarketForm(endpoint, formData, {
+  method = 'POST',
+  authBody,
+  tenantCode,
+  accountId,
+} = {}) {
   const baseUrl = getMarketApiUrl();
   const marketEndpoint = toMarketEndpoint(endpoint);
   const url = new URL(marketEndpoint, baseUrl);
+  const requestMethod = String(method || 'POST').toUpperCase();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MARKET_REQUEST_TIMEOUT_MS);
   const authHeaders = createMarketAuthHeaders({
     endpoint: marketEndpoint,
-    method: 'POST',
+    method: requestMethod,
     payloadText: authBody === undefined ? '' : JSON.stringify(authBody),
   });
   const headers = {
@@ -402,7 +409,7 @@ async function requestMarketForm(endpoint, formData, { authBody, tenantCode, acc
 
   try {
     const response = await fetch(url, {
-      method: 'POST',
+      method: requestMethod,
       headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: formData,
       signal: controller.signal,

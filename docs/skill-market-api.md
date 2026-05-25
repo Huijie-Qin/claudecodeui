@@ -153,7 +153,7 @@ Request:
 
 CCUI calls this before importing or updating a local skill. If the response includes file data, CCUI writes it directly. If it returns a zip stream, CCUI extracts it. If neither is present, CCUI falls back to `preview` for each file.
 
-### `POST /data-agent/api/skill/update`
+### `UPDATE /data-agent/api/skill/update`
 
 Multipart form data. CCUI sends:
 
