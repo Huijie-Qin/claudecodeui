@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
+import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
 import McpToolsPanel from '../../tools-market/McpToolsPanel';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -40,6 +41,7 @@ function MainContent({
   onShowSettings,
   externalMessageUpdate,
 }: MainContentProps) {
+  const [showSkillMarket, setShowSkillMarket] = React.useState(false);
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
@@ -100,6 +102,7 @@ function MainContent({
         disabledTabs={disabledTabs}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
+        onSkillMarketClick={() => setShowSkillMarket(true)}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -165,6 +168,15 @@ function MainContent({
           fillSpace={activeTab === 'files'}
         />
       </div>
+
+      {showSkillMarket && (
+        <SkillMarketDialog
+          open={showSkillMarket}
+          selectedProject={selectedProject}
+          isReadOnly={isViewOnlyWorkspace}
+          onClose={() => setShowSkillMarket(false)}
+        />
+      )}
     </div>
   );
 }

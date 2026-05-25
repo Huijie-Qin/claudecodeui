@@ -391,6 +391,48 @@ export const api = {
       }),
   },
 
+  skillMarket: {
+    list: (workspaceId, { searchContent = '', page = 1, pageSize = 200 } = {}) => {
+      const params = new URLSearchParams();
+      if (searchContent) params.set('searchContent', searchContent);
+      if (page) params.set('page', String(page));
+      if (pageSize) params.set('pageSize', String(pageSize));
+      const query = params.toString();
+      return authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills${query ? `?${query}` : ''}`, workspaceId));
+    },
+    detail: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}`, workspaceId)),
+    file: (workspaceId, name, filePath) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(
+        `/api/skill-market/skills/${encodeURIComponent(name)}/files?filePath=${encodeURIComponent(filePath)}`,
+        workspaceId,
+      )),
+    importSkill: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/download`, workspaceId), {
+        method: 'POST',
+        body: JSON.stringify({ overwrite: false }),
+      }),
+    updateImport: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/download`, workspaceId), {
+        method: 'POST',
+        body: JSON.stringify({ overwrite: true }),
+      }),
+    publishPreview: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-preview`, workspaceId)),
+    publishSkill: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
+        method: 'POST',
+      }),
+    submitSkill: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
+        method: 'POST',
+      }),
+    remove: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/import`, workspaceId), {
+        method: 'DELETE',
+      }),
+  },
+
   workspaceTools: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/tools`)),
     probeMcp: (workspaceId, payload) =>

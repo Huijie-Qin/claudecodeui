@@ -1,5 +1,8 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Sparkles } from 'lucide-react';
+
 import type { MainContentHeaderProps } from '../../types/types';
+
 import MobileMenuButton from './MobileMenuButton';
 import MainContentTabSwitcher from './MainContentTabSwitcher';
 import MainContentTitle from './MainContentTitle';
@@ -12,6 +15,7 @@ export default function MainContentHeader({
   disabledTabs,
   isMobile,
   onMenuClick,
+  onSkillMarketClick,
 }: MainContentHeaderProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -64,6 +68,15 @@ export default function MainContentHeader({
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-background to-transparent" />
           )}
         </div>
+        <button
+          type="button"
+          onClick={onSkillMarketClick}
+          disabled={!selectedProject.workspaceId}
+          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Sparkles className="h-4 w-4" />
+          <span className="hidden sm:inline">Skill 市场</span>
+        </button>
       </div>
     </div>
   );

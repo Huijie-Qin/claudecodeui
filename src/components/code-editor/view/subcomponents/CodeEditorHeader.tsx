@@ -1,4 +1,5 @@
-import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, X } from 'lucide-react';
+import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, UploadCloud, X } from 'lucide-react';
+
 import type { CodeEditorFile } from '../../types/types';
 
 type CodeEditorHeaderProps = {
@@ -10,10 +11,14 @@ type CodeEditorHeaderProps = {
   saving: boolean;
   saveSuccess: boolean;
   isReadOnly?: boolean;
+  skillSubmitting?: boolean;
+  skillSubmitSuccess?: boolean;
+  skillSubmitDisabled?: boolean;
   onToggleMarkdownPreview: () => void;
   onOpenSettings: () => void;
   onDownload: () => void;
   onSave: () => void;
+  onSubmitSkill?: () => void;
   onToggleFullscreen: () => void;
   onClose: () => void;
   labels: {
@@ -25,6 +30,9 @@ type CodeEditorHeaderProps = {
     save: string;
     saving: string;
     saved: string;
+    submitSkill: string;
+    submittingSkill: string;
+    skillSubmitted: string;
     fullscreen: string;
     exitFullscreen: string;
     close: string;
@@ -40,15 +48,24 @@ export default function CodeEditorHeader({
   saving,
   saveSuccess,
   isReadOnly = false,
+  skillSubmitting = false,
+  skillSubmitSuccess = false,
+  skillSubmitDisabled = false,
   onToggleMarkdownPreview,
   onOpenSettings,
   onDownload,
   onSave,
+  onSubmitSkill,
   onToggleFullscreen,
   onClose,
   labels,
 }: CodeEditorHeaderProps) {
   const saveTitle = isReadOnly ? 'Read-only' : saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
+  const submitSkillTitle = skillSubmitSuccess
+    ? labels.skillSubmitted
+    : skillSubmitting
+      ? labels.submittingSkill
+      : labels.submitSkill;
 
   return (
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
@@ -121,6 +138,29 @@ export default function CodeEditorHeader({
             <Save className="h-4 w-4" />
           )}
         </button>
+
+        {onSubmitSkill ? (
+          <button
+            type="button"
+            onClick={onSubmitSkill}
+            disabled={skillSubmitting || skillSubmitDisabled || isReadOnly}
+            className={`flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:opacity-50 ${
+              skillSubmitSuccess
+                ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+            }`}
+            title={submitSkillTitle}
+          >
+            {skillSubmitSuccess ? (
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <UploadCloud className={`h-4 w-4 ${skillSubmitting ? 'animate-pulse' : ''}`} />
+            )}
+            <span>{submitSkillTitle}</span>
+          </button>
+        ) : null}
 
         {!isSidebar && (
           <button
