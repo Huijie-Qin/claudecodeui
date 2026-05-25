@@ -1,38 +1,43 @@
 #!/usr/bin/env node
 // Load environment variables before other imports execute
 import './load-env.js';
-import fs from 'fs';
+import fs, {promises as fsPromises} from 'fs';
 import path from 'path';
-import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
+import {findAppRoot, getModuleDir} from './utils/runtime-paths.js';
 
-import { AppError, createNormalizedMessage } from '@/shared/utils.js';
-
-
-const __dirname = getModuleDir(import.meta.url);
-// The server source runs from /server, while the compiled output runs from /dist-server/server.
-// Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
-const APP_ROOT = findAppRoot(__dirname);
-const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
-
-import { c } from './utils/colors.js';
-
-console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
-
+import {AppError, createNormalizedMessage} from '@/shared/utils.js';
+import {c} from './utils/colors.js';
 import express from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
+import {WebSocket, WebSocketServer} from 'ws';
 import os from 'os';
 import http from 'http';
 import cors from 'cors';
-import { promises as fsPromises } from 'fs';
-import { spawn } from 'child_process';
+import {spawn} from 'child_process';
 import pty from 'node-pty';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, renameProject, deleteSession, deleteProject, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
-import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
-import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
-import { queryCodex, abortCodexSession, isCodexSessionActive, getActiveCodexSessions } from './openai-codex.js';
-import { spawnGemini, abortGeminiSession, isGeminiSessionActive, getActiveGeminiSessions } from './gemini-cli.js';
+import {
+    clearProjectDirectoryCache,
+    deleteProject,
+    deleteSession,
+    extractProjectDirectory,
+    getProjects,
+    getSessions,
+    renameProject,
+    searchConversations
+} from './projects.js';
+import {
+    abortClaudeSDKSession,
+    getActiveClaudeSDKSessions,
+    getPendingApprovalsForSession,
+    isClaudeSDKSessionActive,
+    queryClaudeSDK,
+    reconnectSessionWriter,
+    resolveToolApproval
+} from './claude-sdk.js';
+import {abortCursorSession, getActiveCursorSessions, isCursorSessionActive, spawnCursor} from './cursor-cli.js';
+import {abortCodexSession, getActiveCodexSessions, isCodexSessionActive, queryCodex} from './openai-codex.js';
+import {abortGeminiSession, getActiveGeminiSessions, isGeminiSessionActive, spawnGemini} from './gemini-cli.js';
 import sessionManager from './sessionManager.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
@@ -49,27 +54,42 @@ import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
-import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
+import projectsRoutes, {validateWorkspacePath, WORKSPACES_ROOT} from './routes/projects.js';
 import userRoutes from './routes/user.js';
 import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import providerRoutes from './modules/providers/provider.routes.js';
-import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
-import { multitenancyDb } from './database/multitenancy-db.js';
-import { configureWebPush } from './services/vapid-keys.js';
-import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
-import { resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext } from './middleware/tenant-context.js';
-import { canAccessHostFilesystem } from './services/host-filesystem-access.js';
-import { runtimeSweeper } from './services/runtime-sweeper.js';
-import { mapWorkspaceRowsToProjects } from './services/workspace-projects.js';
-import { workspaceAccess } from './services/workspace-access.js';
-import { handleWorkspaceError, resolveWorkspaceForRequest } from './services/workspace-request.js';
-import { moveWorkspaceItem } from './services/workspace-file-operations.js';
-import { IS_PLATFORM } from './constants/config.js';
-import { getConnectableHost } from '../shared/networkHosts.js';
+import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
+import {applyCustomSessionNames, initializeDatabase, sessionNamesDb} from './database/db.js';
+import {multitenancyDb} from './database/multitenancy-db.js';
+import {configureWebPush} from './services/vapid-keys.js';
+import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
+import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
+import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
+import {runtimeSweeper} from './services/runtime-sweeper.js';
+import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
+import {workspaceAccess} from './services/workspace-access.js';
+import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
+import {moveWorkspaceItem} from './services/workspace-file-operations.js';
+import {IS_PLATFORM} from './constants/config.js';
+import {getConnectableHost} from '../shared/networkHosts.js';
+import {
+    extractUrlsFromText,
+    normalizeDetectedUrl,
+    shouldAutoOpenUrlFromOutput,
+    stripAnsiSequences
+} from './utils/url-detection.js';
+
+
+const __dirname = getModuleDir(import.meta.url);
+// The server source runs from /server, while the compiled output runs from /dist-server/server.
+// Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
+const APP_ROOT = findAppRoot(__dirname);
+const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
+
+console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 
@@ -95,6 +115,92 @@ let projectsWatchers = [];
 let projectsWatcherDebounceTimer = null;
 const connectedClients = new Set();
 let isGetProjectsRunning = false; // Flag to prevent reentrant calls
+
+const CLOUDCLI_RUNTIME_ROOT_SEGMENT = 'claude';
+const CLOUDCLI_HOME_PREFIX = '/home/cloudcli/.claude/projects';
+
+function normalizeRuntimeRoot(inputPath) {
+  const fallback = path.join(os.homedir(), '.cloudcli', 'runtimes');
+  const rawPath = String(process.env.CLOUDCLI_RUNTIME_ROOT || inputPath || fallback || '').trim();
+  const trimmed = rawPath.replace(/^(["']).*\1$/g, (match) => match.slice(1, -1));
+
+  if (!trimmed) {
+    return fallback;
+  }
+  if (trimmed === '~') {
+    return os.homedir();
+  }
+  if (trimmed.startsWith('~/')) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+
+}
+
+function normalizeStringSegment(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.replace(/[\\\/]+/g, '-').replace(/^\s+|\s+$/g, '');
+}
+
+function resolveRuntimeMountedFilePath({ targetPath, tenantCode, userName, workspace }) {
+  const resolvedUserName = normalizeStringSegment(userName);
+  const workspaceName = workspace?.slug || workspace?.name || path.basename(workspace?.path || '');
+  if (!workspaceName) {
+    return null;
+  }
+
+  if (!targetPath || typeof targetPath !== 'string') {
+    return null;
+  }
+
+  const normalizedTargetPath = targetPath.replace(/\\/g, '/');
+  if (!normalizedTargetPath.startsWith(CLOUDCLI_HOME_PREFIX)) {
+    return null;
+  }
+
+  const resolvedTenantCode = normalizeStringSegment(tenantCode);
+  if (!resolvedUserName || resolvedUserName.length === 0) {
+    return null;
+  }
+  if (!resolvedTenantCode) {
+    return null;
+  }
+
+  const runtimeRoot = normalizeRuntimeRoot();
+  const runtimeProjectsRoot = path.resolve(
+    runtimeRoot,
+    CLOUDCLI_RUNTIME_ROOT_SEGMENT,
+    resolvedTenantCode,
+    resolvedUserName,
+    workspaceName,
+    'home',
+    '.claude',
+    'projects',
+  );
+  const normalizedSuffix = normalizedTargetPath
+    .slice(CLOUDCLI_HOME_PREFIX.length)
+    .replace(/^\/+/, '');
+  const resolvedPath = path.resolve(runtimeProjectsRoot, normalizedSuffix);
+
+  const runtimeProjectsRootWithSep = `${runtimeProjectsRoot}${path.sep}`;
+  if (resolvedPath !== runtimeProjectsRoot && !resolvedPath.startsWith(runtimeProjectsRootWithSep)) {
+    return null;
+  }
+
+  return resolvedPath;
+}
+
+function resolveTenantCode(req) {
+  const tenantId = req.tenant?.id ?? resolveTenantIdFromRequest(req);
+  if (!tenantId) {
+    return null;
+  }
+  const tenant = multitenancyDb.tenants.getTenantById(tenantId);
+    return tenant?.code || tenant?.slug || null;
+}
 
 function resolveEditableWorkspace(req, { projectName, requireEdit = true } = {}) {
   const tenantId = req.tenant?.id ?? resolveTenantIdFromRequest(req);
@@ -288,7 +394,6 @@ const server = http.createServer(app);
 const ptySessionsMap = new Map();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
-import { stripAnsiSequences, normalizeDetectedUrl, extractUrlsFromText, shouldAutoOpenUrlFromOutput } from './utils/url-detection.js';
 
 // Single WebSocket server that handles both paths
 const wss = new WebSocketServer({
@@ -1129,6 +1234,16 @@ function validatePathInProject(projectRoot, targetPath) {
 
 function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false } = {}) {
     const { workspace, accessRole } = resolveWorkspaceForRequest(req, { requireEdit });
+    const mappedPath = resolveRuntimeMountedFilePath({
+      targetPath,
+      tenantCode: req.tenant?.code ?? req.tenant?.slug ?? resolveTenantCode(req),
+      userName: req.user?.username ?? req.user?.name ?? req.user?.userName ?? req.user?.id,
+      workspace,
+    });
+    if (mappedPath) {
+      return { workspace, accessRole, resolvedPath: mappedPath };
+    }
+
     const validation = validatePathInProject(workspace.path, targetPath || '');
     if (!validation.valid) {
         const error = new Error(validation.error);
