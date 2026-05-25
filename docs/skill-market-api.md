@@ -155,8 +155,6 @@ Multipart form data. CCUI sends:
 
 - `file`: zip archive of the complete local skill directory.
 - `id`: skill id.
-- `data`: JSON string containing `{ "id": "skill id" }`.
-- `files`: JSON mirror of the files, used by the local mock service.
 
 Authorization for this endpoint signs an empty payload, not the multipart form body.
 

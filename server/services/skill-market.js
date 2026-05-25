@@ -608,9 +608,7 @@ async function buildSkillUpdateForm(remoteSkill, files) {
   });
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
   const formData = new FormData();
-  formData.append('data', JSON.stringify({ id: remoteSkill.id }));
   formData.append('id', String(remoteSkill.id));
-  formData.append('files', JSON.stringify(files));
   formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${remoteSkill.name}.zip`);
   return formData;
 }

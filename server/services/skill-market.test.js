@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import JSZip from 'jszip';
+
 import {
   getSkillMarketDetail,
   importMarketSkill,
@@ -151,13 +153,16 @@ function createSkillMarketMockServer({ dataPath }) {
 
     if (endpoint === '/api/skill/update') {
       assert.equal(req.method, 'POST');
-      const fields = parseMultipartFields(bodyBuffer, req.headers['content-type']);
-      const id = fields.id || parseJson(fields.data)?.id;
-      const files = parseJson(fields.files) || [];
+      const { fields, files: multipartFiles } = parseMultipartParts(bodyBuffer, req.headers['content-type']);
+      const id = fields.id;
+      const files = await readZipMultipartFile(multipartFiles.file?.content);
+      assert.ok(id);
+      assert.equal(fields.data, undefined);
+      assert.equal(fields.files, undefined);
       const submissions = await readMockSubmissions(dataPath);
       submissions[id] = {
         ...submissions[id],
-        pendingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])),
+        pendingFiles: files,
       };
       await writeMockSubmissions(dataPath, submissions);
       sendJson(res, { code: 0, message: 'success' });
@@ -471,7 +476,9 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
   const appid = 'auth-app';
   const authKey = '00112233445566778899aabbccddeeff';
   let checkedUpdateAuth = false;
+  let updateBodyIncludesData = false;
   let updateBodyIncludesFile = false;
+  let updateBodyIncludesFiles = false;
 
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
@@ -483,7 +490,10 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
 
     if (endpoint === '/data-agent/api/skill/update') {
       assert.equal(req.method, 'POST');
-      updateBodyIncludesFile = bodyBuffer.toString('latin1').includes('name="file"');
+      const updateBodyText = bodyBuffer.toString('latin1');
+      updateBodyIncludesData = updateBodyText.includes('name="data"');
+      updateBodyIncludesFile = updateBodyText.includes('name="file"');
+      updateBodyIncludesFiles = updateBodyText.includes('name="files"');
       assert.equal(
         req.headers.authorization,
         createExpectedAuthorization({
@@ -586,7 +596,9 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
   }
 
   assert.equal(checkedUpdateAuth, true);
+  assert.equal(updateBodyIncludesData, false);
   assert.equal(updateBodyIncludesFile, true);
+  assert.equal(updateBodyIncludesFiles, false);
 });
 
 function restoreEnv(name, value) {
@@ -665,22 +677,54 @@ function buildDirectoryTree(files) {
   return root;
 }
 
-function parseMultipartFields(buffer, contentType = '') {
+function parseMultipartParts(buffer, contentType = '') {
   const boundary = String(contentType).match(/boundary=(.+)$/)?.[1];
-  if (!boundary) return {};
+  if (!boundary) return { fields: {}, files: {} };
   const fields = {};
-  const body = buffer.toString('utf8');
-  body.split(`--${boundary}`).forEach((part) => {
-    const name = part.match(/name="([^"]+)"/)?.[1];
-    if (!name) return;
-    const separatorIndex = part.indexOf('\r\n\r\n');
-    if (separatorIndex === -1) return;
-    fields[name] = part
-      .slice(separatorIndex + 4)
-      .replace(/\r\n$/, '')
-      .replace(/--$/, '');
-  });
-  return fields;
+  const files = {};
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  const separatorBuffer = Buffer.from('\r\n\r\n');
+  let partStart = buffer.indexOf(boundaryBuffer);
+
+  while (partStart !== -1) {
+    partStart += boundaryBuffer.length;
+    if (buffer[partStart] === 45 && buffer[partStart + 1] === 45) break;
+    if (buffer[partStart] === 13 && buffer[partStart + 1] === 10) partStart += 2;
+
+    const headerEnd = buffer.indexOf(separatorBuffer, partStart);
+    if (headerEnd === -1) break;
+
+    const headers = buffer.subarray(partStart, headerEnd).toString('utf8');
+    const name = headers.match(/name="([^"]+)"/)?.[1];
+    const filename = headers.match(/filename="([^"]*)"/)?.[1];
+    const contentStart = headerEnd + separatorBuffer.length;
+    const nextBoundary = buffer.indexOf(Buffer.from(`\r\n--${boundary}`), contentStart);
+    if (!name || nextBoundary === -1) break;
+
+    const content = buffer.subarray(contentStart, nextBoundary);
+    if (filename !== undefined) {
+      files[name] = { filename, content };
+    } else {
+      fields[name] = content.toString('utf8');
+    }
+
+    partStart = buffer.indexOf(boundaryBuffer, nextBoundary + 2);
+  }
+
+  return { fields, files };
+}
+
+async function readZipMultipartFile(buffer) {
+  assert.ok(buffer, 'update multipart file is required');
+  const zip = await JSZip.loadAsync(buffer);
+  const files = {};
+  await Promise.all(
+    Object.values(zip.files).map(async (entry) => {
+      if (entry.dir) return;
+      files[entry.name] = await entry.async('string');
+    }),
+  );
+  return files;
 }
 
 function parseJson(value) {
