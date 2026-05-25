@@ -6,6 +6,8 @@ CCUI exposes `/api/skill-market/...` to the frontend. The CCUI backend then call
 SKILL_MARKET_BASE_URL=https://xxxxxx
 ```
 
+`SKILL_MARKET_BASE_URL` should contain only the scheme, host, and optional port. CCUI appends the remote Skill endpoints under `/data-agent/api/skill/...`. `http://` and `https://` are both supported.
+
 `SKILL_MARKET_API_URL` is still accepted as a compatibility fallback. Local mock development can use:
 
 ```text
@@ -23,6 +25,12 @@ When both values are blank, CCUI sends no authorization header. When configured,
 
 ```text
 Authorization: CLOUDSOA-HMAC-SHA256 appid={SKILL_MARKET_AUTH_APPID}, timestamp={timestamp}, signature="{signature}"
+```
+
+Every remote Skill Market request also includes the current tenant code from the CCUI `tenants` table:
+
+```text
+X-Data-Agent-Tenant: {tenants.code}
 ```
 
 The signature is:
@@ -45,7 +53,7 @@ For the multipart `update` endpoint, the signature payload intentionally exclude
 
 ## Remote Service
 
-### `POST /api/skill/skillList`
+### `POST /data-agent/api/skill/skillList`
 
 Request:
 
@@ -78,7 +86,7 @@ Skill fields used by CCUI:
 }
 ```
 
-### `POST /api/skill/preview`
+### `POST /data-agent/api/skill/preview`
 
 Request without `filePath` returns the tree:
 
@@ -124,7 +132,7 @@ Response:
 }
 ```
 
-### `POST /api/skill/download`
+### `POST /data-agent/api/skill/download`
 
 Request:
 
@@ -139,7 +147,7 @@ Request:
 
 CCUI calls this before importing or updating a local skill. If the response includes file data, CCUI writes it directly. If it returns a zip stream, CCUI extracts it. If neither is present, CCUI falls back to `preview` for each file.
 
-### `POST /api/skill/update`
+### `POST /data-agent/api/skill/update`
 
 Multipart form data. CCUI sends:
 
@@ -150,7 +158,7 @@ Multipart form data. CCUI sends:
 
 Authorization for this endpoint signs only `{ "data": { "id": "skill id" } }`, not the multipart file content.
 
-### `POST /api/skill/publish`
+### `POST /data-agent/api/skill/publish`
 
 Request:
 

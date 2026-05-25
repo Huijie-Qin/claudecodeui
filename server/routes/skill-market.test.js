@@ -5,6 +5,8 @@ import express from 'express';
 
 import { createSkillMarketRouter } from './skill-market.js';
 
+const TEST_TENANT_CODE = 'tenant-code';
+
 async function requestJson(
   router,
   path,
@@ -46,6 +48,7 @@ function createRouter({
   getMarketSkillPublishPreview,
   publishMarketSkill,
   submitMarketSkill,
+  tenants,
   viewMarketSkillFile,
 } = {}) {
   return createSkillMarketRouter({
@@ -58,6 +61,9 @@ function createRouter({
         workspace: { id: args.workspaceId, tenant_id: args.tenantId, path: '/tmp/workspace' },
         accessRole,
       })),
+    },
+    tenants: tenants || {
+      getTenantById: (tenantId) => ({ id: tenantId, code: TEST_TENANT_CODE, status: 'active' }),
     },
     marketService: {
       listSkillMarket: listSkillMarket || (async () => [{ name: 'bug-hunter' }]),
@@ -102,8 +108,8 @@ test('GET /skills returns market inventory for view access', async () => {
         accessRole: 'view',
       };
     },
-    listSkillMarket: async () => {
-      seen.listCalled = true;
+    listSkillMarket: async (args) => {
+      seen.listArgs = args;
       return [{ name: 'bug-hunter' }];
     },
   });
@@ -117,7 +123,14 @@ test('GET /skills returns market inventory for view access', async () => {
     workspaceId: 10,
     requireEdit: false,
   });
-  assert.equal(seen.listCalled, true);
+  assert.deepEqual(seen.listArgs, {
+    workspacePath: '/tmp/view-workspace',
+    searchContent: '',
+    page: undefined,
+    pageSize: undefined,
+    currentUsername: undefined,
+    tenantCode: TEST_TENANT_CODE,
+  });
   assert.deepEqual(payload, {
     workspaceId: 10,
     accessRole: 'view',
@@ -145,9 +158,10 @@ test('GET /skills/:name returns skill detail without requiring edit access', asy
   assert.equal(response.status, 200);
   assert.deepEqual(seen.detailArgs, {
     workspacePath: '/tmp/workspace',
-        name: 'bug-hunter',
-        currentUsername: undefined,
-      });
+    name: 'bug-hunter',
+    currentUsername: undefined,
+    tenantCode: TEST_TENANT_CODE,
+  });
   assert.equal(payload.canManage, true);
   assert.deepEqual(payload.skill.files, [{ path: 'SKILL.md', size: 12 }]);
 });
@@ -175,6 +189,7 @@ test('GET /skills/:name/files passes the selected file path to the view API', as
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     filePath: 'references/checklist.md',
+    tenantCode: TEST_TENANT_CODE,
   });
   assert.deepEqual(payload.file, { path: 'references/checklist.md', content: '# Checklist', size: 11 });
 });
@@ -199,6 +214,7 @@ test('POST /skills/:name/download requires edit access and imports to Files', as
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     overwrite: false,
+    tenantCode: TEST_TENANT_CODE,
   });
   assert.deepEqual(payload.skill, { name: 'bug-hunter', imported: true });
 });
@@ -227,6 +243,7 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     currentUsername: undefined,
+    tenantCode: TEST_TENANT_CODE,
   });
   assert.equal(payload.submittedFileCount, 3);
 });
@@ -239,8 +256,8 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
       seen.removeArgs = args;
       return { removed: 'bug-hunter' };
     },
-    listSkillMarket: async () => {
-      seen.listCalled = true;
+    listSkillMarket: async (args) => {
+      seen.listArgs = args;
       return [{ name: 'bug-hunter' }];
     },
   });
@@ -254,7 +271,11 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
   });
-  assert.equal(seen.listCalled, true);
+  assert.deepEqual(seen.listArgs, {
+    workspacePath: '/tmp/workspace',
+    currentUsername: undefined,
+    tenantCode: TEST_TENANT_CODE,
+  });
   assert.equal(payload.removed, 'bug-hunter');
   assert.deepEqual(payload.skills, [{ name: 'bug-hunter' }]);
 });

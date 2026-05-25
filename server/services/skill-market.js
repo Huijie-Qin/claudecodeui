@@ -8,6 +8,8 @@ const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
 const DEFAULT_LIST_PAGE_SIZE = 200;
 const MARKET_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
+const MARKET_ENDPOINT_PREFIX = '/data-agent';
+const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 
 export function getSkillMarketPaths(workspacePath) {
   return {
@@ -24,8 +26,9 @@ export async function listSkillMarket(options = {}) {
     page = 1,
     pageSize = DEFAULT_LIST_PAGE_SIZE,
     currentUsername,
+    tenantCode,
   } = normalizedOptions;
-  const remoteSkills = await fetchRemoteSkillList({ searchContent, page, pageSize });
+  const remoteSkills = await fetchRemoteSkillList({ searchContent, page, pageSize, tenantCode });
 
   if (!workspacePath) {
     return remoteSkills;
@@ -40,9 +43,9 @@ export async function listSkillMarket(options = {}) {
   );
 }
 
-export async function getSkillMarketDetail({ workspacePath, name, currentUsername }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name);
-  const preview = await previewRemoteSkill(remoteSkill);
+export async function getSkillMarketDetail({ workspacePath, name, currentUsername, tenantCode }) {
+  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode });
+  const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode });
   const imports = await readMarketImports(workspacePath);
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
 
@@ -55,9 +58,9 @@ export async function getSkillMarketDetail({ workspacePath, name, currentUsernam
   };
 }
 
-export async function viewMarketSkillFile({ name, filePath }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name);
-  const file = await previewRemoteSkillFile(remoteSkill, filePath);
+export async function viewMarketSkillFile({ name, filePath, tenantCode }) {
+  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode });
+  const file = await previewRemoteSkillFile(remoteSkill, filePath, { tenantCode });
 
   return {
     skillId: remoteSkill.skillId,
@@ -71,8 +74,9 @@ export async function downloadMarketSkill({
   name,
   overwrite = false,
   now = () => new Date(),
+  tenantCode,
 }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name);
+  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode });
   const skillName = remoteSkill.name;
   const imports = await readMarketImports(workspacePath);
   const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
@@ -85,7 +89,7 @@ export async function downloadMarketSkill({
     throw createHttpError(`A .claude/skills/${skillName} directory already exists`, 409);
   }
 
-  const files = await downloadRemoteSkillFiles(remoteSkill);
+  const files = await downloadRemoteSkillFiles(remoteSkill, { tenantCode });
   if (overwrite) {
     await fs.rm(runtimePath, { recursive: true, force: true });
   }
@@ -112,18 +116,18 @@ export async function downloadMarketSkill({
     },
   });
 
-  return getSkillMarketDetail({ workspacePath, name: skillName });
+  return getSkillMarketDetail({ workspacePath, name: skillName, tenantCode });
 }
 
-export async function getMarketSkillPublishPreview({ workspacePath, name, currentUsername }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name);
+export async function getMarketSkillPublishPreview({ workspacePath, name, currentUsername, tenantCode }) {
+  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode });
   const imports = await readMarketImports(workspacePath);
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
   const runtimePath = getRuntimeSkillPath(workspacePath, remoteSkill.name);
   const localFiles = await readSkillDirectoryFiles(runtimePath);
-  const remoteFiles = await readRemoteSkillFiles(remoteSkill);
+  const remoteFiles = await readRemoteSkillFiles(remoteSkill, { tenantCode });
   const changes = compareSkillFiles(remoteFiles, localFiles);
 
   return {
@@ -141,8 +145,9 @@ export async function publishMarketSkill({
   name,
   currentUsername,
   now = () => new Date(),
+  tenantCode,
 }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name);
+  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode });
   const imports = await readMarketImports(workspacePath);
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
@@ -151,6 +156,7 @@ export async function publishMarketSkill({
   const files = await readSkillDirectoryFiles(runtimePath);
   const updateForm = await buildSkillUpdateForm(remoteSkill, files);
   await requestMarketForm('/api/skill/update', updateForm, {
+    tenantCode,
     authBody: {
       data: {
         id: remoteSkill.id,
@@ -160,6 +166,7 @@ export async function publishMarketSkill({
 
   const publishPayload = await requestMarketJson('/api/skill/publish', {
     method: 'POST',
+    tenantCode,
     body: {
       data: {
         id: remoteSkill.id,
@@ -193,6 +200,7 @@ export async function publishMarketSkill({
       workspacePath,
       name: remoteSkill.name,
       currentUsername,
+      tenantCode,
     }),
     publishedAt,
     publishedVersion,
@@ -224,9 +232,15 @@ export async function removeMarketSkill({ workspacePath, name }) {
 
 export const importMarketSkill = downloadMarketSkill;
 
-async function fetchRemoteSkillList({ searchContent = '', page = 1, pageSize = DEFAULT_LIST_PAGE_SIZE } = {}) {
+async function fetchRemoteSkillList({
+  searchContent = '',
+  page = 1,
+  pageSize = DEFAULT_LIST_PAGE_SIZE,
+  tenantCode,
+} = {}) {
   const payload = await requestMarketJson('/api/skill/skillList', {
     method: 'POST',
+    tenantCode,
     body: {
       data: {
         searchContent,
@@ -243,13 +257,13 @@ async function fetchRemoteSkillList({ searchContent = '', page = 1, pageSize = D
     .filter((skill) => skill.published === true);
 }
 
-async function fetchRemoteSkillDetail(skillRef) {
+async function fetchRemoteSkillDetail(skillRef, { tenantCode } = {}) {
   const normalizedRef = String(skillRef || '').trim().toLowerCase();
   const sanitizedRef = safeNormalizeSkillFolderName(skillRef);
-  let skills = await fetchRemoteSkillList({ searchContent: '' });
+  let skills = await fetchRemoteSkillList({ searchContent: '', tenantCode });
   let remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
   if (!remoteSkill && normalizedRef) {
-    skills = await fetchRemoteSkillList({ searchContent: normalizedRef });
+    skills = await fetchRemoteSkillList({ searchContent: normalizedRef, tenantCode });
     remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
   }
 
@@ -269,7 +283,7 @@ function findRemoteSkill(skills, normalizedRef, sanitizedRef) {
   ));
 }
 
-async function previewRemoteSkill(remoteSkill, filePath) {
+async function previewRemoteSkill(remoteSkill, filePath, { tenantCode } = {}) {
   const data = {
     id: remoteSkill.id,
     nspPath: remoteSkill.nspPath,
@@ -281,14 +295,15 @@ async function previewRemoteSkill(remoteSkill, filePath) {
 
   const payload = await requestMarketJson('/api/skill/preview', {
     method: 'POST',
+    tenantCode,
     body: { data },
   });
   return normalizePreviewPayload(payload.data);
 }
 
-async function previewRemoteSkillFile(remoteSkill, filePath) {
+async function previewRemoteSkillFile(remoteSkill, filePath, { tenantCode } = {}) {
   const normalizedFilePath = normalizeRelativeFilePath(filePath);
-  const preview = await previewRemoteSkill(remoteSkill, normalizedFilePath);
+  const preview = await previewRemoteSkill(remoteSkill, normalizedFilePath, { tenantCode });
   const content = typeof preview.fileContent === 'string' ? preview.fileContent : '';
   return {
     path: normalizedFilePath,
@@ -297,18 +312,19 @@ async function previewRemoteSkillFile(remoteSkill, filePath) {
   };
 }
 
-async function readRemoteSkillFiles(remoteSkill) {
-  const preview = await previewRemoteSkill(remoteSkill);
+async function readRemoteSkillFiles(remoteSkill, { tenantCode } = {}) {
+  const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode });
   const fileEntries = flattenDirectoryTree(preview.directoryTree);
   const files = await Promise.all(
-    fileEntries.map((file) => previewRemoteSkillFile(remoteSkill, file.path)),
+    fileEntries.map((file) => previewRemoteSkillFile(remoteSkill, file.path, { tenantCode })),
   );
   return files.sort(sortFileEntries);
 }
 
-async function downloadRemoteSkillFiles(remoteSkill) {
+async function downloadRemoteSkillFiles(remoteSkill, { tenantCode } = {}) {
   const { response, payload } = await requestMarketMaybeJson('/api/skill/download', {
     method: 'POST',
+    tenantCode,
     body: {
       data: {
         id: remoteSkill.id,
@@ -334,33 +350,38 @@ async function downloadRemoteSkillFiles(remoteSkill) {
   }
 
   return Object.fromEntries(
-    (await readRemoteSkillFiles(remoteSkill)).map((file) => [file.path, file.content]),
+    (await readRemoteSkillFiles(remoteSkill, { tenantCode })).map((file) => [file.path, file.content]),
   );
 }
 
-async function requestMarketJson(endpoint, { method = 'GET', body } = {}) {
-  const { payload } = await requestMarketMaybeJson(endpoint, { method, body });
+async function requestMarketJson(endpoint, { method = 'GET', body, tenantCode } = {}) {
+  const { payload } = await requestMarketMaybeJson(endpoint, { method, body, tenantCode });
   if (!payload) {
     throw createHttpError('Skill market API returned a non-JSON response', 502);
   }
   return payload;
 }
 
-async function requestMarketForm(endpoint, formData, { authBody } = {}) {
+async function requestMarketForm(endpoint, formData, { authBody, tenantCode } = {}) {
   const baseUrl = getMarketApiUrl();
-  const url = new URL(endpoint, baseUrl);
+  const marketEndpoint = toMarketEndpoint(endpoint);
+  const url = new URL(marketEndpoint, baseUrl);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MARKET_REQUEST_TIMEOUT_MS);
   const authHeaders = createMarketAuthHeaders({
-    endpoint,
+    endpoint: marketEndpoint,
     method: 'POST',
     payloadText: authBody === undefined ? '' : JSON.stringify(authBody),
   });
+  const headers = {
+    ...createMarketTenantHeaders(tenantCode),
+    ...authHeaders,
+  };
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: Object.keys(authHeaders).length > 0 ? authHeaders : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: formData,
       signal: controller.signal,
     });
@@ -375,16 +396,18 @@ async function requestMarketForm(endpoint, formData, { authBody } = {}) {
   }
 }
 
-async function requestMarketMaybeJson(endpoint, { method = 'GET', body } = {}) {
+async function requestMarketMaybeJson(endpoint, { method = 'GET', body, tenantCode } = {}) {
   const baseUrl = getMarketApiUrl();
-  const url = new URL(endpoint, baseUrl);
+  const marketEndpoint = toMarketEndpoint(endpoint);
+  const url = new URL(marketEndpoint, baseUrl);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MARKET_REQUEST_TIMEOUT_MS);
   const payloadText = body === undefined ? '' : JSON.stringify(body);
   const headers = {
     ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    ...createMarketTenantHeaders(tenantCode),
     ...createMarketAuthHeaders({
-      endpoint,
+      endpoint: marketEndpoint,
       method,
       payloadText,
     }),
@@ -809,6 +832,21 @@ function getMarketApiUrl() {
     || process.env.SKILL_MARKET_API_URL
     || DEFAULT_MARKET_API_URL
   ).replace(/\/+$/, '/');
+}
+
+function toMarketEndpoint(endpoint) {
+  const normalizedEndpoint = String(endpoint || '').startsWith('/')
+    ? String(endpoint || '')
+    : `/${endpoint || ''}`;
+  if (normalizedEndpoint === MARKET_ENDPOINT_PREFIX || normalizedEndpoint.startsWith(`${MARKET_ENDPOINT_PREFIX}/`)) {
+    return normalizedEndpoint;
+  }
+  return `${MARKET_ENDPOINT_PREFIX}${normalizedEndpoint}`;
+}
+
+function createMarketTenantHeaders(tenantCode) {
+  const normalizedTenantCode = String(tenantCode || '').trim();
+  return normalizedTenantCode ? { [DATA_AGENT_TENANT_HEADER]: normalizedTenantCode } : {};
 }
 
 function createMarketAuthHeaders({ endpoint, method, payloadText }) {

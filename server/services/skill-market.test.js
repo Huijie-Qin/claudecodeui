@@ -21,9 +21,14 @@ let previousMarketBaseUrl;
 let previousMarketApiUrl;
 let previousMarketAuthAppid;
 let previousMarketAuthKey;
+const TEST_TENANT_CODE = 'tenant-code';
 
 async function makeWorkspace() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-market-'));
+}
+
+function withTenant(options = {}) {
+  return { tenantCode: TEST_TENANT_CODE, ...options };
 }
 
 const TEST_SKILLS = [
@@ -98,8 +103,10 @@ const TEST_SKILLS = [
 function createSkillMarketMockServer({ dataPath }) {
   return http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
-    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    const endpoint = normalizeMockEndpoint(new URL(req.url || '/', 'http://127.0.0.1').pathname);
     const body = parseJson(bodyBuffer.toString('utf8'));
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
 
     if (endpoint === '/api/skill/skillList') {
       const submissions = await readMockSubmissions(dataPath);
@@ -227,11 +234,11 @@ test.after(async () => {
 
 test('listSkillMarket enriches remote skills with local import and version state', async () => {
   const workspacePath = await makeWorkspace();
-  await importMarketSkill({ workspacePath, name: 'bug-hunter' });
+  await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
 
-  const skills = await listSkillMarket(workspacePath);
+  const skills = await listSkillMarket(withTenant({ workspacePath }));
   const bugHunter = skills.find((skill) => skill.name === 'bug-hunter');
-  const detail = await getSkillMarketDetail({ workspacePath, name: 'bug-hunter' });
+  const detail = await getSkillMarketDetail(withTenant({ workspacePath, name: 'bug-hunter' }));
 
   assert.ok(skills.length >= 6);
   assert.ok(bugHunter);
@@ -244,20 +251,20 @@ test('listSkillMarket enriches remote skills with local import and version state
 test('importMarketSkill downloads the mock API skill into .claude/skills and records metadata', async () => {
   const workspacePath = await makeWorkspace();
 
-  const detail = await importMarketSkill({
+  const detail = await importMarketSkill(withTenant({
     workspacePath,
     name: 'plan-slicer',
     now: () => new Date('2026-05-14T00:00:00.000Z'),
-  });
+  }));
 
   assert.equal(detail.name, 'plan-slicer');
   assert.equal(detail.imported, true);
   assert.equal(detail.targetPath, '.claude/skills/plan-slicer');
-  const viewedFile = await viewMarketSkillFile({
+  const viewedFile = await viewMarketSkillFile(withTenant({
     workspacePath,
     name: 'plan-slicer',
     filePath: 'SKILL.md',
-  });
+  }));
   assert.equal(
     await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'plan-slicer', 'SKILL.md'), 'utf8'),
     viewedFile.file.content,
@@ -281,44 +288,44 @@ test('importMarketSkill downloads the mock API skill into .claude/skills and rec
 
 test('submitMarketSkill submits the complete imported skill directory', async () => {
   const workspacePath = await makeWorkspace();
-  await importMarketSkill({ workspacePath, name: 'test-writer' });
+  await importMarketSkill(withTenant({ workspacePath, name: 'test-writer' }));
 
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'test-writer');
   await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Custom Test Writer\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'test-cases.md'), '# Custom Cases\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'extra.md'), '# Extra File\n', 'utf8');
 
-  const submitted = await submitMarketSkill({
+  const submitted = await submitMarketSkill(withTenant({
     workspacePath,
     name: 'test-writer',
     currentUsername: 'j00939207',
     now: () => new Date('2026-05-14T01:00:00.000Z'),
-  });
+  }));
 
   assert.equal(submitted.submittedFileCount, 3);
   assert.equal(submitted.skill.updatedAt, submitted.publishedAt);
   assert.equal(submitted.publishedVersion, 2);
   assert.equal(
-    (await viewMarketSkillFile({
+    (await viewMarketSkillFile(withTenant({
       workspacePath,
       name: 'test-writer',
       filePath: 'references/test-cases.md',
-    })).file.content,
+    }))).file.content,
     '# Custom Cases\n',
   );
   assert.equal(
-    (await viewMarketSkillFile({
+    (await viewMarketSkillFile(withTenant({
       workspacePath,
       name: 'test-writer',
       filePath: 'references/extra.md',
-    })).file.content,
+    }))).file.content,
     '# Extra File\n',
   );
 });
 
 test('submitMarketSkill preserves empty file content instead of falling back to the mock source', async () => {
   const workspacePath = await makeWorkspace();
-  await importMarketSkill({ workspacePath, name: 'bug-hunter' });
+  await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
 
   await fs.writeFile(
     path.join(workspacePath, '.claude', 'skills', 'bug-hunter', 'SKILL.md'),
@@ -326,17 +333,17 @@ test('submitMarketSkill preserves empty file content instead of falling back to 
     'utf8',
   );
 
-  await submitMarketSkill({
+  await submitMarketSkill(withTenant({
     workspacePath,
     name: 'bug-hunter',
     currentUsername: 'j00939207',
-  });
+  }));
 
-  const viewedFile = await viewMarketSkillFile({
+  const viewedFile = await viewMarketSkillFile(withTenant({
     workspacePath,
     name: 'bug-hunter',
     filePath: 'SKILL.md',
-  });
+  }));
 
   assert.equal(viewedFile.file.content, '');
 });
@@ -344,36 +351,36 @@ test('submitMarketSkill preserves empty file content instead of falling back to 
 test('submitMarketSkill rejects stale local skills when the remote version has advanced', async () => {
   const staleWorkspacePath = await makeWorkspace();
   const updaterWorkspacePath = await makeWorkspace();
-  await importMarketSkill({ workspacePath: staleWorkspacePath, name: 'bug-hunter' });
-  await importMarketSkill({ workspacePath: updaterWorkspacePath, name: 'bug-hunter' });
+  await importMarketSkill(withTenant({ workspacePath: staleWorkspacePath, name: 'bug-hunter' }));
+  await importMarketSkill(withTenant({ workspacePath: updaterWorkspacePath, name: 'bug-hunter' }));
 
   await fs.writeFile(
     path.join(updaterWorkspacePath, '.claude', 'skills', 'bug-hunter', 'SKILL.md'),
     '# Remote Update\n',
     'utf8',
   );
-  await submitMarketSkill({
+  await submitMarketSkill(withTenant({
     workspacePath: updaterWorkspacePath,
     name: 'bug-hunter',
     currentUsername: 'j00939207',
-  });
+  }));
 
-  const staleDetail = await getSkillMarketDetail({
+  const staleDetail = await getSkillMarketDetail(withTenant({
     workspacePath: staleWorkspacePath,
     name: 'bug-hunter',
     currentUsername: 'j00939207',
-  });
+  }));
   assert.equal(staleDetail.importedVersion, 1);
   assert.equal(staleDetail.version, 2);
   assert.equal(staleDetail.updateAvailable, true);
   assert.equal(staleDetail.canPublish, true);
 
   await assert.rejects(
-    submitMarketSkill({
+    submitMarketSkill(withTenant({
       workspacePath: staleWorkspacePath,
       name: 'bug-hunter',
       currentUsername: 'j00939207',
-    }),
+    })),
     /Update the local skill before publishing/,
   );
 });
@@ -382,17 +389,17 @@ test('submitMarketSkill requires a market-imported local skill', async () => {
   const workspacePath = await makeWorkspace();
 
   await assert.rejects(
-    submitMarketSkill({
+    submitMarketSkill(withTenant({
       workspacePath,
       name: 'bug-hunter',
-    }),
+    })),
     /has not been imported/,
   );
 });
 
 test('removeMarketSkill only removes skills imported from the market', async () => {
   const workspacePath = await makeWorkspace();
-  await importMarketSkill({ workspacePath, name: 'bug-hunter' });
+  await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
 
   await removeMarketSkill({ workspacePath, name: 'bug-hunter' });
 
@@ -400,7 +407,7 @@ test('removeMarketSkill only removes skills imported from the market', async () 
     fs.access(path.join(workspacePath, '.claude', 'skills', 'bug-hunter')),
     /ENOENT/,
   );
-  const detail = await getSkillMarketDetail({ workspacePath, name: 'bug-hunter' });
+  const detail = await getSkillMarketDetail(withTenant({ workspacePath, name: 'bug-hunter' }));
   assert.equal(detail.imported, false);
 });
 
@@ -410,12 +417,12 @@ test('manual same-name runtime directories are conflicts instead of removable im
   await fs.mkdir(manualPath, { recursive: true });
   await fs.writeFile(path.join(manualPath, 'SKILL.md'), '# Manual Skill', 'utf8');
 
-  const detail = await getSkillMarketDetail({ workspacePath, name: 'frontend-polisher' });
+  const detail = await getSkillMarketDetail(withTenant({ workspacePath, name: 'frontend-polisher' }));
 
   assert.equal(detail.imported, false);
   assert.equal(detail.conflict, true);
   await assert.rejects(
-    importMarketSkill({ workspacePath, name: 'frontend-polisher' }),
+    importMarketSkill(withTenant({ workspacePath, name: 'frontend-polisher' })),
     /already exists/,
   );
   await assert.rejects(
@@ -461,7 +468,9 @@ test('submitMarketSkill signs update requests without including the file in the 
     const bodyText = bodyBuffer.toString('utf8');
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
 
-    if (endpoint === '/api/skill/update') {
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+
+    if (endpoint === '/data-agent/api/skill/update') {
       updateBodyIncludesFile = bodyBuffer.toString('latin1').includes('name="file"');
       assert.equal(
         req.headers.authorization,
@@ -489,7 +498,7 @@ test('submitMarketSkill signs update requests without including the file in the 
       }),
     );
 
-    if (endpoint === '/api/skill/skillList') {
+    if (endpoint === '/data-agent/api/skill/skillList') {
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -505,7 +514,7 @@ test('submitMarketSkill signs update requests without including the file in the 
       });
       return;
     }
-    if (endpoint === '/api/skill/preview') {
+    if (endpoint === '/data-agent/api/skill/preview') {
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -519,7 +528,7 @@ test('submitMarketSkill signs update requests without including the file in the 
       });
       return;
     }
-    if (endpoint === '/api/skill/publish') {
+    if (endpoint === '/data-agent/api/skill/publish') {
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -549,11 +558,11 @@ test('submitMarketSkill signs update requests without including the file in the 
     process.env.SKILL_MARKET_AUTH_APPID = appid;
     process.env.SKILL_MARKET_AUTH_KEY = authKey;
 
-    await submitMarketSkill({
+    await submitMarketSkill(withTenant({
       workspacePath,
       name: 'auth-skill',
       currentUsername: 'creator',
-    });
+    }));
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
@@ -574,6 +583,10 @@ function restoreEnv(name, value) {
     return;
   }
   process.env[name] = value;
+}
+
+function normalizeMockEndpoint(endpoint) {
+  return String(endpoint || '').replace(/^\/data-agent(?=\/)/, '');
 }
 
 function findTestSkill(id) {
