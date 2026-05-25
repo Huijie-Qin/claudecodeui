@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { userDb as defaultUserDb } from '../database/db.js';
@@ -7,12 +8,15 @@ import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 import { createWorkspaceMcpToolsService } from './workspace-mcp-tools.js';
 import { buildTenantWorkspacePath } from './workspace-projects.js';
-import { resolveWorkspacesRoot } from './workspace-root.js';
 
 export const ROOT_WORKSPACE_NAME = 'workspace';
 
 const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
 const SOURCE_SKILLS_PATH = path.join(APP_ROOT, 'default_files');
+
+function getWorkspacesRoot() {
+  return process.env.WORKSPACES_ROOT || os.homedir();
+}
 
 async function pathExists(targetPath) {
   try {
@@ -73,7 +77,7 @@ export async function ensureDefaultRootWorkspace({
       ? users.getUserById(userId)
       : null;
   const workspacePath = buildTenantWorkspacePath({
-    workspacesRoot: resolveWorkspacesRoot(),
+    workspacesRoot: getWorkspacesRoot(),
     tenantCode: tenant?.code,
     username: user?.username,
     tenantId,

@@ -1,12 +1,12 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import os from 'os';
 
 import express from 'express';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
-import { resolveWorkspacesRoot } from '../services/workspace-root.js';
 
 const router = express.Router();
 
@@ -15,9 +15,8 @@ function sanitizeGitError(message, token) {
   return message.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '***');
 }
 
-// Configure allowed workspace root. Root-user containers default to /workspace
-// because /root is intentionally blocked as a system directory.
-export const WORKSPACES_ROOT = resolveWorkspacesRoot();
+// Configure allowed workspace root (defaults to user's home directory)
+export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
 
 // System-critical paths that should never be used as workspace directories
 export const FORBIDDEN_PATHS = [
