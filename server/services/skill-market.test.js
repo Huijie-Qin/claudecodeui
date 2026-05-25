@@ -440,7 +440,7 @@ test('manual same-name runtime directories are conflicts instead of removable im
   assert.equal(await fs.readFile(path.join(manualPath, 'SKILL.md'), 'utf8'), '# Manual Skill');
 });
 
-test('submitMarketSkill signs update requests without including the file in the auth payload', async () => {
+test('submitMarketSkill signs update requests without an auth body', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'auth-skill');
   await fs.mkdir(skillPath, { recursive: true });
@@ -487,7 +487,7 @@ test('submitMarketSkill signs update requests without including the file in the 
         createExpectedAuthorization({
           method: 'UPDATE',
           endpoint,
-          payloadText: JSON.stringify({ data: { id: 'auth-skill' } }),
+          payloadText: '',
           appid,
           authKey,
           actualAuthorization: req.headers.authorization,

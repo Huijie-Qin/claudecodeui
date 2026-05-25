@@ -173,11 +173,6 @@ export async function publishMarketSkill({
     method: 'UPDATE',
     tenantCode,
     accountId: remoteAccountId,
-    authBody: {
-      data: {
-        id: remoteSkill.id,
-      },
-    },
   });
 
   const publishPayload = await requestMarketJson('/api/skill/publish', {

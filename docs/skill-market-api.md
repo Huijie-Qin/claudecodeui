@@ -47,14 +47,10 @@ builder = method.toUpperCase() + '&' + requestPath + '&&' + payload + '&appid=' 
 signature = Base64(HMAC-SHA256(builder, Hex.parse(authKey)))
 ```
 
-For the multipart `update` endpoint, the signature payload intentionally excludes the uploaded `file`; CCUI signs:
+For the multipart `update` endpoint, the signature payload is empty. Its builder ends with:
 
-```json
-{
-  "data": {
-    "id": "skill id"
-  }
-}
+```text
+UPDATE&/data-agent/api/skill/update&&&appid={appid}&timestamp={timestamp}
 ```
 
 ## Remote Service
@@ -162,7 +158,7 @@ Multipart form data. CCUI sends:
 - `data`: JSON string containing `{ "id": "skill id" }`.
 - `files`: JSON mirror of the files, used by the local mock service.
 
-Authorization for this endpoint signs only `{ "data": { "id": "skill id" } }`, not the multipart file content.
+Authorization for this endpoint signs an empty payload, not the multipart form body.
 
 ### `POST /data-agent/api/skill/publish`
 
