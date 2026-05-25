@@ -23,12 +23,43 @@ export const useEditorSidebar = ({
 
   const handleFileOpen = useCallback(
     (filePath: string, diffInfo: CodeEditorDiffInfo | null = null) => {
-      const normalizedPath = filePath.replace(/\\/g, '/');
-      const fileName = normalizedPath.split('/').pop() || filePath;
+      const workspacePath = (
+        selectedProject?.fullPath || selectedProject?.path || ''
+      ).replace(/\\/g, '/');
+      const workspaceName = workspacePath.split('/').filter(Boolean).pop() || '';
+
+      const normalizedPath = filePath
+        .trim()
+        .replace(/^['"`]+|['"`]+$/g, '')
+        .replace(/\\/g, '/');
+
+      const normalizedWorkspacePath = workspacePath.replace(/\/+$/, '');
+      const normalizedNormalizedPath = normalizedPath.replace(/^\/+/, '');
+      const hasWorkspaceNamePrefix =
+        workspaceName &&
+        (normalizedNormalizedPath === workspaceName ||
+          normalizedNormalizedPath.startsWith(`${workspaceName}/`));
+      const normalizedFromContainerPrefix = normalizedPath.replace(
+        /^\/workspace\/?/,
+        '',
+      );
+
+      const resolvedPath =
+        normalizedWorkspacePath &&
+        normalizedPath.startsWith('/workspace/') &&
+        normalizedFromContainerPrefix
+          ? hasWorkspaceNamePrefix
+            ? `${normalizedWorkspacePath}/${normalizedFromContainerPrefix
+                .slice(workspaceName.length)
+                .replace(/^\/+/, '')}`
+            : `${normalizedWorkspacePath}/${normalizedFromContainerPrefix}`
+          : normalizedPath;
+
+      const fileName = resolvedPath.split('/').pop() || resolvedPath;
 
       setEditingFile({
         name: fileName,
-        path: filePath,
+        path: resolvedPath,
         projectName: selectedProject?.name,
         workspaceId: selectedProject?.workspaceId,
         diffInfo,
