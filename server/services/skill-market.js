@@ -535,9 +535,6 @@ async function readSkillDirectoryFiles(skillDirectory) {
   if (files.length === 0) {
     throw createHttpError('Imported skill directory is empty', 400);
   }
-  if (!files.some((file) => file.path.toLowerCase() === 'skill.md')) {
-    throw createHttpError('Imported skill must include SKILL.md', 400);
-  }
 
   return files.sort(sortFileEntries);
 }
