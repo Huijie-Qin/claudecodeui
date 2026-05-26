@@ -1,9 +1,11 @@
-import { useTranslation } from 'react-i18next';
-import { useCallback, useRef } from 'react';
+import { useMemo } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
+import { useTranslation } from 'react-i18next';
+
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
+
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 
@@ -97,33 +99,21 @@ export default function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
-  const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
-  const allocatedKeysRef = useRef<Set<string>>(new Set());
-  const generatedMessageKeyCounterRef = useRef(0);
   const shouldShowLoadAllImmediately = hasMoreMessages && !isLoadingMoreMessages && !allMessagesLoaded && !isLoadingSessionMessages && chatMessages.length > 0;
-  // Keep keys stable across prepends so existing MessageComponent instances retain local state.
-  const getMessageKey = useCallback((message: ChatMessage) => {
-    const existingKey = messageKeyMapRef.current.get(message);
-    if (existingKey) {
-      return existingKey;
-    }
+  const keyedVisibleMessages = useMemo(() => {
+    const occurrenceCounts = new Map<string, number>();
 
-    const intrinsicKey = getIntrinsicMessageKey(message);
-    let candidateKey = intrinsicKey;
+    return visibleMessages.map((message, index) => {
+      const baseKey = getIntrinsicMessageKey(message) || `message-fallback-${index}`;
+      const occurrenceIndex = occurrenceCounts.get(baseKey) || 0;
+      occurrenceCounts.set(baseKey, occurrenceIndex + 1);
 
-    if (!candidateKey || allocatedKeysRef.current.has(candidateKey)) {
-      do {
-        generatedMessageKeyCounterRef.current += 1;
-        candidateKey = intrinsicKey
-          ? `${intrinsicKey}-${generatedMessageKeyCounterRef.current}`
-          : `message-generated-${generatedMessageKeyCounterRef.current}`;
-      } while (allocatedKeysRef.current.has(candidateKey));
-    }
-
-    allocatedKeysRef.current.add(candidateKey);
-    messageKeyMapRef.current.set(message, candidateKey);
-    return candidateKey;
-  }, []);
+      return {
+        message,
+        key: occurrenceIndex === 0 ? baseKey : `${baseKey}-duplicate-${occurrenceIndex}`,
+      };
+    });
+  }, [visibleMessages]);
 
   return (
     <div
@@ -237,11 +227,11 @@ export default function ChatMessagesPane({
             </div>
           )}
 
-          {visibleMessages.map((message, index) => {
-            const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
+          {keyedVisibleMessages.map(({ message, key }, index) => {
+            const prevMessage = index > 0 ? keyedVisibleMessages[index - 1].message : null;
             return (
               <MessageComponent
-                key={getMessageKey(message)}
+                key={key}
                 message={message}
                 prevMessage={prevMessage}
                 createDiff={createDiff}

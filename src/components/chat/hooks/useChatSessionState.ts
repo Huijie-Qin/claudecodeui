@@ -194,6 +194,28 @@ export function useChatSessionState({
     return all;
   }, [storeMessages, viewHiddenCount, pendingUserMessage, selectedSession?.id]);
 
+  const latestMessageScrollSignature = useMemo(() => {
+    const latestMessage = chatMessages[chatMessages.length - 1];
+    if (!latestMessage) return '0';
+
+    const contentLength = typeof latestMessage.content === 'string' ? latestMessage.content.length : 0;
+    const reasoningLength = typeof latestMessage.reasoning === 'string' ? latestMessage.reasoning.length : 0;
+    const toolResultContent = latestMessage.toolResult?.content;
+    const toolResultLength = typeof toolResultContent === 'string'
+      ? toolResultContent.length
+      : JSON.stringify(toolResultContent ?? '').length;
+    const identity = latestMessage.id || latestMessage.messageId || latestMessage.toolId || latestMessage.timestamp;
+
+    return [
+      chatMessages.length,
+      identity,
+      contentLength,
+      reasoningLength,
+      toolResultLength,
+      latestMessage.isStreaming ? 'streaming' : 'settled',
+    ].join(':');
+  }, [chatMessages]);
+
   /* ---------------------------------------------------------------- */
   /*  addMessage / clearMessages / rewindMessages                     */
   /* ---------------------------------------------------------------- */
@@ -602,8 +624,11 @@ export function useChatSessionState({
     if (searchScrollActiveRef.current) return;
 
     if (autoScrollToBottom) {
-      if (!isUserScrolledUp) setTimeout(() => scrollToBottom(), 50);
-      return;
+      if (!isUserScrolledUp) {
+        const timeoutId = setTimeout(() => scrollToBottom(), 50);
+        return () => clearTimeout(timeoutId);
+      }
+      return undefined;
     }
 
     const container = scrollContainerRef.current;
@@ -612,7 +637,8 @@ export function useChatSessionState({
     const newHeight = container.scrollHeight;
     const heightDiff = newHeight - prevHeight;
     if (heightDiff > 0 && prevTop > 0) container.scrollTop = prevTop + heightDiff;
-  }, [autoScrollToBottom, chatMessages.length, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+    return undefined;
+  }, [autoScrollToBottom, chatMessages.length, latestMessageScrollSignature, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
