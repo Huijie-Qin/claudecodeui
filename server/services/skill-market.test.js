@@ -914,13 +914,20 @@ function parseMultipartParts(buffer, contentType = '') {
 async function readZipMultipartFile(buffer) {
   assert.ok(buffer, 'update multipart file is required');
   const zip = await JSZip.loadAsync(buffer);
+  const topLevelEntries = new Set();
   const files = {};
   await Promise.all(
     Object.values(zip.files).map(async (entry) => {
       if (entry.dir) return;
-      files[entry.name] = await entry.async('string');
+      const [topLevelEntry, ...fileParts] = entry.name.split('/').filter(Boolean);
+      if (topLevelEntry) topLevelEntries.add(topLevelEntry);
+      const filePath = fileParts.join('/');
+      if (filePath) {
+        files[filePath] = await entry.async('string');
+      }
     }),
   );
+  assert.equal(topLevelEntries.size, 1, 'zip file must contain exactly one top-level folder');
   return files;
 }
 

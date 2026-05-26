@@ -923,13 +923,14 @@ async function buildSkillSaveForm(skillName, files) {
 }
 
 async function buildSkillArchiveForm(skillName, files) {
+  const archiveRoot = normalizeSkillFolderName(skillName);
   const zip = new JSZip();
   files.forEach((file) => {
-    zip.file(file.path, file.content);
+    zip.file(`${archiveRoot}/${file.path}`, file.content);
   });
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
   const formData = new FormData();
-  formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${skillName}.zip`);
+  formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${archiveRoot}.zip`);
   return formData;
 }
 
