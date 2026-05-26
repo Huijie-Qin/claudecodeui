@@ -578,6 +578,7 @@ function PublishSkillDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation('codeEditor');
   const changes = preview.changes ?? [];
   const hasChanges = changes.length > 0;
 
@@ -585,16 +586,16 @@ function PublishSkillDialog({
     <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/50 p-4">
       <div className="flex max-h-[90vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
         <div className="border-b border-border px-4 py-3">
-          <h3 className="text-base font-semibold text-foreground">Publish Skill Update</h3>
+          <h3 className="text-base font-semibold text-foreground">{t('skillMarket.publishDialog.title')}</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Review the complete skill diff, then type yes to publish.
+            {t('skillMarket.publishDialog.description')}
           </p>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {!hasChanges ? (
             <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-              No file changes were found.
+              {t('skillMarket.publishDialog.noChanges')}
             </div>
           ) : (
             <div className="grid gap-3">
@@ -607,7 +608,7 @@ function PublishSkillDialog({
 
         <div className="border-t border-border p-4">
           <label className="block text-sm font-medium text-foreground" htmlFor="skill-publish-confirmation">
-            Type yes to confirm
+            {t('skillMarket.publishDialog.confirmLabel')}
           </label>
           <input
             id="skill-publish-confirmation"
@@ -623,7 +624,7 @@ function PublishSkillDialog({
               disabled={publishing}
               className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent disabled:opacity-50"
             >
-              Cancel
+              {t('skillMarket.publishDialog.cancel')}
             </button>
             <button
               type="button"
@@ -631,7 +632,7 @@ function PublishSkillDialog({
               disabled={publishing || !hasChanges || confirmation !== 'yes'}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
             >
-              {publishing ? 'Publishing...' : 'Publish Update'}
+              {publishing ? t('actions.publishingSkill') : t('actions.publishSkill')}
             </button>
           </div>
         </div>
@@ -649,22 +650,24 @@ function SkillUpdateRequiredDialog({
   remoteVersion: number | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('codeEditor');
+
   return (
     <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
         <div className="border-b border-border px-4 py-3">
-          <h3 className="text-base font-semibold text-foreground">Remote Update Required</h3>
+          <h3 className="text-base font-semibold text-foreground">{t('skillMarket.updateRequiredDialog.title')}</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            This skill has a newer remote version. Update the local skill before publishing your changes.
+            {t('skillMarket.updateRequiredDialog.description')}
           </p>
         </div>
         <div className="grid gap-2 px-4 py-3 text-sm">
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted px-3 py-2">
-            <span className="text-muted-foreground">Local version</span>
+            <span className="text-muted-foreground">{t('skillMarket.updateRequiredDialog.localVersion')}</span>
             <span className="font-mono text-foreground">{importedVersion ?? '-'}</span>
           </div>
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted px-3 py-2">
-            <span className="text-muted-foreground">Remote version</span>
+            <span className="text-muted-foreground">{t('skillMarket.updateRequiredDialog.remoteVersion')}</span>
             <span className="font-mono text-foreground">{remoteVersion ?? '-'}</span>
           </div>
         </div>
@@ -674,7 +677,7 @@ function SkillUpdateRequiredDialog({
             onClick={onClose}
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
           >
-            OK
+            {t('skillMarket.updateRequiredDialog.ok')}
           </button>
         </div>
       </div>
@@ -695,6 +698,7 @@ type SideBySideDiffRow = {
 };
 
 function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
+  const { t } = useTranslation('codeEditor');
   const rows = createSideBySideDiffRows(change);
 
   return (
@@ -702,14 +706,14 @@ function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted px-3 py-2">
         <span className="truncate font-mono text-xs text-foreground">{change.path}</span>
         <span className={getDiffStatusClassName(change.status)}>
-          {change.status}
+          {t(`skillMarket.diff.status.${change.status}`)}
         </span>
       </div>
       <div className="overflow-auto bg-background">
         <div className="min-w-[920px]">
           <div className="grid grid-cols-2 border-b border-border bg-muted/70 text-xs font-medium text-muted-foreground">
-            <div className="border-r border-border px-3 py-2">Current remote</div>
-            <div className="px-3 py-2">Local workspace</div>
+            <div className="border-r border-border px-3 py-2">{t('skillMarket.diff.currentRemote')}</div>
+            <div className="px-3 py-2">{t('skillMarket.diff.localWorkspace')}</div>
           </div>
           <div className="font-mono text-xs leading-5">
             {rows.map((row) => (

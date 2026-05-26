@@ -399,8 +399,12 @@ export default function SkillMarketDialog({
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                         {typeof skill.version === 'number' ? <span>v{skill.version}</span> : null}
-                        {skill.importedVersion !== undefined ? <span>local v{skill.importedVersion}</span> : null}
-                        {skill.createUserId ? <span>owner {skill.createUserId}</span> : null}
+                        {skill.importedVersion !== undefined ? (
+                          <span>{t('skillMarketDialog.listLocalVersion', { version: skill.importedVersion })}</span>
+                        ) : null}
+                        {skill.createUserId ? (
+                          <span>{t('skillMarketDialog.owner', { name: skill.createUserId })}</span>
+                        ) : null}
                       </div>
                     </button>
                   ))}
@@ -454,14 +458,24 @@ export default function SkillMarketDialog({
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="truncate text-sm font-semibold text-foreground">{selectedDisplayName || t('skillMarketDialog.noSelection', 'No skill selected')}</h3>
                     {detail ? <SkillStatusBadge skill={detail} /> : null}
-                    {detail?.updateAvailable ? <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">Update available</span> : null}
+                    {detail?.updateAvailable ? (
+                      <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        {t('skillMarketDialog.updateAvailable', 'Update available')}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{detail?.description}</p>
                   {detail ? (
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      {typeof detail.version === 'number' ? <span>Market v{detail.version}</span> : null}
-                      {detail.importedVersion !== undefined ? <span>Local v{detail.importedVersion}</span> : null}
-                      {detail.createUserId ? <span>Creator {detail.createUserId}</span> : null}
+                      {typeof detail.version === 'number' ? (
+                        <span>{t('skillMarketDialog.marketVersion', { version: detail.version })}</span>
+                      ) : null}
+                      {detail.importedVersion !== undefined ? (
+                        <span>{t('skillMarketDialog.localVersion', { version: detail.importedVersion })}</span>
+                      ) : null}
+                      {detail.createUserId ? (
+                        <span>{t('skillMarketDialog.creator', { name: detail.createUserId })}</span>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

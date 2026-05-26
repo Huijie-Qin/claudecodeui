@@ -96,7 +96,53 @@
     "createProjectDesktop": "点击侧边栏中的文件夹图标以创建新项目",
     "newSession": "新会话",
     "untitledSession": "未命名会话",
-    "projectFiles": "项目文件"
+    "projectFiles": "项目文件",
+    "skillMarket": "技能市场"
+  },
+  "skillMarketDialog": {
+    "title": "技能市场",
+    "workspaceUnavailable": "当前工作区不支持技能市场。",
+    "loadFailed": "技能市场加载失败。",
+    "fileFailed": "技能文件加载失败。",
+    "detailFailed": "技能详情加载失败。",
+    "importFailed": "技能导入失败。",
+    "imported": "已导入到 Files/.claude/skills。",
+    "updateFailed": "已导入技能更新失败。",
+    "updated": "已用市场最新版本更新本地技能。",
+    "removeFailed": "技能移除失败。",
+    "removed": "已从 Files/.claude/skills 移除。",
+    "search": "搜索技能...",
+    "loading": "加载中...",
+    "empty": "没有匹配的技能。",
+    "directory": "目录",
+    "loadingDetail": "正在加载详情...",
+    "noFiles": "暂无文件。",
+    "noSelection": "未选择技能",
+    "import": "导入",
+    "update": "更新",
+    "remove": "移除",
+    "conflict": "同名 .claude/skills 目录已存在，但不是从技能市场导入的。",
+    "readOnly": "当前工作区为只读。",
+    "noFileSelected": "未选择文件",
+    "loadingFile": "加载中",
+    "loadingFileContent": "正在加载文件内容...",
+    "filePlaceholder": "选择文件后查看内容。",
+    "updateAvailable": "有可用更新",
+    "marketVersion": "市场版本 v{{version}}",
+    "localVersion": "本地版本 v{{version}}",
+    "listLocalVersion": "本地 v{{version}}",
+    "creator": "创建者 {{name}}",
+    "owner": "创建者 {{name}}",
+    "removeDialog": {
+      "title": "移除技能",
+      "description": "此操作会从 Files/.claude/skills 移除已导入技能，不会删除远端技能。",
+      "confirm": "移除"
+    },
+    "status": {
+      "imported": "已导入",
+      "conflict": "冲突",
+      "available": "可导入"
+    }
   },
   "skillsMarket": {
     "title": "技能",
@@ -107,14 +153,14 @@
     "errorTitle": "技能加载失败",
     "retry": "重试",
     "emptyTitle": "暂无已安装技能",
-    "emptyDescription": "当前 workspace 还没有 project 级别的技能。",
+    "emptyDescription": "当前工作区还没有项目级技能。",
     "emptySearchTitle": "没有匹配的技能",
-    "emptySearchDescription": "当前搜索没有匹配的 workspace 技能。",
+    "emptySearchDescription": "当前搜索没有匹配的工作区技能。",
     "detailTitle": "技能详情",
     "detailEmpty": "未选择技能。",
     "parseError": "解析错误",
     "filters": {
-      "workspace": "Workspace"
+      "workspace": "工作区"
     },
     "summary": {
       "total": "总数",
@@ -138,15 +184,15 @@
       "sourceType": "来源",
       "sourceUrl": "来源 URL",
       "sourceFileName": "来源文件",
-      "resolvedCommit": "Commit",
+      "resolvedCommit": "提交",
       "sourceSubdir": "来源子目录",
       "runtimePath": "运行路径",
       "sourcePath": "源码路径",
       "parseError": "解析错误"
     },
     "installModal": {
-      "title": "安装 workspace 技能",
-      "description": "安装前先预览 GitHub 技能或上传本地 ZIP，确认后写入当前 workspace。",
+      "title": "安装工作区技能",
+      "description": "安装前先预览 GitHub 技能或上传本地 ZIP，确认后写入当前工作区。",
       "githubTab": "GitHub",
       "localTab": "本地 ZIP",
       "githubUrl": "GitHub 技能 URL",

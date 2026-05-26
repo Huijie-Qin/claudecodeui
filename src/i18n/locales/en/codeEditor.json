@@ -18,6 +18,9 @@
     "save": "Save",
     "saving": "Saving...",
     "saved": "Saved!",
+    "publishSkill": "Publish Update",
+    "publishingSkill": "Publishing...",
+    "skillPublished": "Skill Published",
     "exitFullscreen": "Exit fullscreen",
     "fullscreen": "Fullscreen",
     "close": "Close",
@@ -32,5 +35,34 @@
   "binaryFile": {
     "title": "Binary File",
     "message": "The file \"{{fileName}}\" cannot be displayed in the text editor because it is a binary file."
+  },
+  "skillMarket": {
+    "loadFailed": "Failed to load skill publish state.",
+    "saveBeforeSubmitFailed": "Current file save failed. Skill update was not published.",
+    "previewFailed": "Failed to load skill update diff.",
+    "publishFailed": "Failed to publish skill update.",
+    "publishDialog": {
+      "title": "Publish Skill Update",
+      "description": "Review the complete skill diff, then type yes to publish.",
+      "noChanges": "No file changes were found.",
+      "confirmLabel": "Type yes to confirm",
+      "cancel": "Cancel"
+    },
+    "updateRequiredDialog": {
+      "title": "Remote Update Required",
+      "description": "This skill has a newer remote version. Update the local skill before publishing your changes.",
+      "localVersion": "Local version",
+      "remoteVersion": "Remote version",
+      "ok": "OK"
+    },
+    "diff": {
+      "currentRemote": "Current remote",
+      "localWorkspace": "Local workspace",
+      "status": {
+        "added": "Added",
+        "modified": "Modified",
+        "deleted": "Deleted"
+      }
+    }
   }
 }
