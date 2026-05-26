@@ -3,6 +3,8 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Project } from '../../../types/app';
 import type { CodeEditorDiffInfo, CodeEditorFile } from '../types/types';
 
+type FileOpenSource = 'files' | 'chat';
+
 type UseEditorSidebarOptions = {
   selectedProject: Project | null;
   isMobile: boolean;
@@ -22,7 +24,7 @@ export const useEditorSidebar = ({
   const resizeHandleRef = useRef<HTMLDivElement | null>(null);
 
   const handleFileOpen = useCallback(
-    (filePath: string, diffInfo: CodeEditorDiffInfo | null = null) => {
+    (filePath: string, diffInfo: CodeEditorDiffInfo | null = null, source: FileOpenSource = 'chat') => {
       const workspacePath = (
         selectedProject?.fullPath || selectedProject?.path || ''
       ).replace(/\\/g, '/');
@@ -32,13 +34,21 @@ export const useEditorSidebar = ({
         .trim()
         .replace(/^['"`]+|['"`]+$/g, '')
         .replace(/\\/g, '/');
-
+      const sanitizedNormalizedPath = normalizedPath.replace(/\/+/g, '/');
+      const normalizedPathNoTrailingSlash = sanitizedNormalizedPath.replace(/\/+$/, '');
+      const normalizedNormalizedPath = normalizedPathNoTrailingSlash.replace(/^\/+/, '');
       const normalizedWorkspacePath = workspacePath.replace(/\/+$/, '');
-      const normalizedNormalizedPath = normalizedPath.replace(/^\/+/, '');
       const hasWorkspaceNamePrefix =
-        workspaceName &&
-        (normalizedNormalizedPath === workspaceName ||
-          normalizedNormalizedPath.startsWith(`${workspaceName}/`));
+        Boolean(
+          workspaceName &&
+            (normalizedNormalizedPath === workspaceName ||
+              normalizedNormalizedPath.startsWith(`${workspaceName}/`)),
+        );
+      const hasWorkspacePathPrefix = Boolean(
+        normalizedWorkspacePath &&
+          (normalizedPathNoTrailingSlash === normalizedWorkspacePath ||
+            normalizedPathNoTrailingSlash.startsWith(`${normalizedWorkspacePath}/`)),
+      );
       const normalizedFromContainerPrefix = normalizedPath.replace(
         /^\/workspace\/?/,
         '',
@@ -55,17 +65,47 @@ export const useEditorSidebar = ({
             : `${normalizedWorkspacePath}/${normalizedFromContainerPrefix}`
           : normalizedPath;
 
+      const workspacePrefix = workspaceName ? `/${workspaceName}` : '';
+      const relativePathFromWorkspace = hasWorkspacePathPrefix
+        ? normalizedPathNoTrailingSlash.slice(normalizedWorkspacePath.length).replace(/^\/+/, '')
+        : '';
+      const workspaceDisplayPath = hasWorkspaceNamePrefix
+        ? `/${normalizedNormalizedPath}`
+        : hasWorkspacePathPrefix
+          ? `${workspacePrefix}${relativePathFromWorkspace ? `/${relativePathFromWorkspace}` : ''}`
+          : '';
+      const containerRootRelativePath = normalizedPathNoTrailingSlash
+        .replace(/^\/+workspace\/?/, '')
+        .replace(/^\/+/, '');
+      const filesDisplayPath = hasWorkspacePathPrefix
+        ? `/workspace${relativePathFromWorkspace ? `/${relativePathFromWorkspace}` : ''}`
+        : workspaceName
+          ? normalizedNormalizedPath === workspaceName
+            ? '/workspace'
+            : normalizedNormalizedPath.startsWith(`${workspaceName}/`)
+              ? `/workspace/${normalizedNormalizedPath.slice(workspaceName.length + 1)}`
+              : containerRootRelativePath.startsWith(`${workspaceName}/`)
+                ? `/workspace/${containerRootRelativePath.replace(`${workspaceName}/`, '')}`
+                : workspaceDisplayPath
+          : '';
+      const displayPath = source === 'files'
+        ? filesDisplayPath || workspaceDisplayPath || sanitizedNormalizedPath
+        : sanitizedNormalizedPath.startsWith('/workspace/')
+          ? sanitizedNormalizedPath
+          : workspaceDisplayPath || sanitizedNormalizedPath;
+
       const fileName = resolvedPath.split('/').pop() || resolvedPath;
 
       setEditingFile({
         name: fileName,
         path: resolvedPath,
+        displayPath,
         projectName: selectedProject?.name,
         workspaceId: selectedProject?.workspaceId,
         diffInfo,
       });
     },
-    [selectedProject?.name, selectedProject?.workspaceId],
+    [selectedProject?.fullPath, selectedProject?.name, selectedProject?.path, selectedProject?.workspaceId],
   );
 
   const handleCloseEditor = useCallback(() => {

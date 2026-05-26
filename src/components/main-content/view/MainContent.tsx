@@ -70,6 +70,18 @@ function MainContent({
     isMobile,
   });
 
+  const handleChatFileOpen = React.useCallback(
+    (filePath: string, diffInfo?: { old_string?: string; new_string?: string }) =>
+      handleFileOpen(filePath, diffInfo ?? null, 'chat'),
+    [handleFileOpen],
+  );
+
+  const handleFileManagerFileOpen = React.useCallback(
+    (filePath: string, diffInfo?: { old_string?: string; new_string?: string }) =>
+      handleFileOpen(filePath, diffInfo ?? null, 'files'),
+    [handleFileOpen],
+  );
+
   const handleActiveTabChange = React.useCallback(
     (nextTabAction: React.SetStateAction<AppTab>) => {
       const nextTab = typeof nextTabAction === 'function'
@@ -132,7 +144,7 @@ function MainContent({
                 ws={ws}
                 sendMessage={sendMessage}
                 latestMessage={latestMessage}
-                onFileOpen={handleFileOpen}
+                onFileOpen={handleChatFileOpen}
                 onInputFocusChange={onInputFocusChange}
                 onSessionActive={onSessionActive}
                 onSessionInactive={onSessionInactive}
@@ -157,7 +169,7 @@ function MainContent({
             <div className="h-full overflow-hidden">
               <FileTree
                 selectedProject={selectedProject}
-                onFileOpen={handleFileOpen}
+                onFileOpen={handleFileManagerFileOpen}
                 isReadOnly={isViewOnlyWorkspace}
               />
             </div>
