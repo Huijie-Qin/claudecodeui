@@ -168,12 +168,63 @@ export function createSkillMarketRouter({
     }
   });
 
+  router.get('/skills/:name/publish-state', async (req, res) => {
+    try {
+      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
+      const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
+      const skill = await marketService.getMarketSkillPublishState({
+        workspacePath: workspace.path,
+        name: req.params.name,
+        currentUsername: accountId,
+        tenantCode,
+        accountId,
+      });
+
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        canManage: isManageRole(accessRole),
+        skill: {
+          ...skill,
+          canUploadAndPublish: isManageRole(accessRole) && skill.canUploadAndPublish === true,
+        },
+      });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
   router.post('/skills/:name/publish', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
+        workspacePath: workspace.path,
+        name: req.params.name,
+        currentUsername: accountId,
+        tenantCode,
+        accountId,
+      });
+
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        canManage: true,
+        ...result,
+      });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
+  router.post('/skills/:name/upload-publish', async (req, res) => {
+    try {
+      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
+      const result = await marketService.uploadAndPublishLocalSkill({
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,

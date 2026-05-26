@@ -48,6 +48,7 @@ type MarketSkillPublishPreview = {
 
 type MarketSkillSubmitState = {
   skillName: string | null;
+  mode: 'update' | 'upload' | null;
   visible: boolean;
   updateAvailable: boolean;
   importedVersion: number | null;
@@ -79,6 +80,7 @@ export default function CodeEditor({
   const marketSkillName = useMemo(() => getImportedSkillNameFromPath(file.path), [file.path]);
   const [marketSkillSubmit, setMarketSkillSubmit] = useState<MarketSkillSubmitState>({
     skillName: null,
+    mode: null,
     visible: false,
     updateAvailable: false,
     importedVersion: null,
@@ -123,6 +125,7 @@ export default function CodeEditor({
     if (!marketSkillName || !file.workspaceId || isReadOnly) {
       setMarketSkillSubmit({
         skillName: marketSkillName,
+        mode: null,
         visible: false,
         updateAvailable: false,
         importedVersion: null,
@@ -143,6 +146,7 @@ export default function CodeEditor({
 
     setMarketSkillSubmit({
       skillName: marketSkillName,
+      mode: null,
       visible: false,
       updateAvailable: false,
       importedVersion: null,
@@ -157,13 +161,16 @@ export default function CodeEditor({
       preview: null,
     });
 
-    api.skillMarket.detail(file.workspaceId, marketSkillName)
+    api.skillMarket.publishState(file.workspaceId, marketSkillName)
       .then(async (response) => {
         const payload = await readApiPayload(response, t('skillMarket.loadFailed', 'Failed to load skill status.'));
         if (cancelled) return;
+        const canUploadAndPublish = payload.canManage !== false && payload.skill?.canUploadAndPublish === true;
+        const canPublishUpdate = payload.canManage !== false && payload.skill?.imported === true && payload.skill?.canPublish === true;
         setMarketSkillSubmit({
           skillName: marketSkillName,
-          visible: payload.canManage !== false && payload.skill?.imported === true && payload.skill?.canPublish === true,
+          mode: canUploadAndPublish ? 'upload' : canPublishUpdate ? 'update' : null,
+          visible: canUploadAndPublish || canPublishUpdate,
           updateAvailable: payload.skill?.updateAvailable === true,
           importedVersion: typeof payload.skill?.importedVersion === 'number' ? payload.skill.importedVersion : null,
           remoteVersion: typeof payload.skill?.version === 'number' ? payload.skill.version : null,
@@ -182,6 +189,7 @@ export default function CodeEditor({
         console.warn('Unable to load skill market status for editor file:', error);
         setMarketSkillSubmit({
           skillName: marketSkillName,
+          mode: null,
           visible: false,
           updateAvailable: false,
           importedVersion: null,
@@ -205,7 +213,7 @@ export default function CodeEditor({
   const handleSubmitMarketSkill = useCallback(async () => {
     if (!marketSkillName || !file.workspaceId || isReadOnly) return;
 
-    if (marketSkillSubmit.updateAvailable) {
+    if (marketSkillSubmit.mode === 'update' && marketSkillSubmit.updateAvailable) {
       setMarketSkillSubmit((current) => ({
         ...current,
         success: false,
@@ -237,6 +245,30 @@ export default function CodeEditor({
     }
 
     try {
+      if (marketSkillSubmit.mode === 'upload') {
+        await readApiPayload(
+          await api.skillMarket.uploadAndPublishSkill(file.workspaceId, marketSkillName),
+          t('skillMarket.uploadPublishFailed', 'Failed to upload and publish skill.'),
+        );
+        setMarketSkillSubmit((current) => ({
+          ...current,
+          mode: 'update',
+          submitting: false,
+          success: true,
+          error: null,
+          confirmOpen: false,
+          confirmation: '',
+          preview: null,
+        }));
+        window.setTimeout(() => {
+          setMarketSkillSubmit((current) => ({
+            ...current,
+            success: false,
+          }));
+        }, 2000);
+        return;
+      }
+
       const payload = await readApiPayload(
         await api.skillMarket.publishPreview(file.workspaceId, marketSkillName),
         t('skillMarket.previewFailed', 'Failed to load skill update diff.'),
@@ -258,7 +290,7 @@ export default function CodeEditor({
         error: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [file.workspaceId, handleSave, isReadOnly, marketSkillName, marketSkillSubmit.updateAvailable, t]);
+  }, [file.workspaceId, handleSave, isReadOnly, marketSkillName, marketSkillSubmit.mode, marketSkillSubmit.updateAvailable, t]);
 
   const handleConfirmPublishMarketSkill = useCallback(async () => {
     if (!marketSkillName || !file.workspaceId || marketSkillSubmit.confirmation !== 'yes') return;
@@ -477,9 +509,15 @@ export default function CodeEditor({
               save: t('actions.save'),
               saving: t('actions.saving'),
               saved: t('actions.saved'),
-              submitSkill: t('actions.publishSkill', 'Publish Update'),
-              submittingSkill: t('actions.publishingSkill', 'Publishing...'),
-              skillSubmitted: t('actions.skillPublished', 'Skill Published'),
+              submitSkill: marketSkillSubmit.mode === 'upload'
+                ? t('actions.uploadAndPublishSkill', 'Upload and Publish')
+                : t('actions.publishSkill', 'Publish Update'),
+              submittingSkill: marketSkillSubmit.mode === 'upload'
+                ? t('actions.uploadingAndPublishingSkill', 'Uploading...')
+                : t('actions.publishingSkill', 'Publishing...'),
+              skillSubmitted: marketSkillSubmit.mode === 'upload'
+                ? t('actions.skillUploadedAndPublished', 'Skill Published')
+                : t('actions.skillPublished', 'Skill Published'),
               fullscreen: t('actions.fullscreen'),
               exitFullscreen: t('actions.exitFullscreen'),
               close: t('actions.close'),

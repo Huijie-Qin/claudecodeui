@@ -21,6 +21,9 @@
     "publishSkill": "Publish Update",
     "publishingSkill": "Publishing...",
     "skillPublished": "Skill Published",
+    "uploadAndPublishSkill": "Upload and Publish",
+    "uploadingAndPublishingSkill": "Uploading...",
+    "skillUploadedAndPublished": "Skill Published",
     "exitFullscreen": "Exit fullscreen",
     "fullscreen": "Fullscreen",
     "close": "Close",
@@ -41,6 +44,7 @@
     "saveBeforeSubmitFailed": "Current file save failed. Skill update was not published.",
     "previewFailed": "Failed to load skill update diff.",
     "publishFailed": "Failed to publish skill update.",
+    "uploadPublishFailed": "Failed to upload and publish skill.",
     "publishDialog": {
       "title": "Publish Skill Update",
       "description": "Review the complete skill diff, then type yes to publish.",

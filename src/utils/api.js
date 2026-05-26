@@ -419,8 +419,14 @@ export const api = {
       }),
     publishPreview: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-preview`, workspaceId)),
+    publishState: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-state`, workspaceId)),
     publishSkill: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
+        method: 'POST',
+      }),
+    uploadAndPublishSkill: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/upload-publish`, workspaceId), {
         method: 'POST',
       }),
     submitSkill: (workspaceId, name) =>

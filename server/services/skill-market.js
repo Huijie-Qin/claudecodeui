@@ -177,6 +177,42 @@ export async function getMarketSkillPublishPreview({ workspacePath, name, curren
   };
 }
 
+export async function getMarketSkillPublishState({ workspacePath, name, currentUsername, tenantCode, accountId }) {
+  const skillName = normalizeSkillFolderName(name);
+  const imports = await readMarketImports(workspacePath);
+  const status = await getImportStatus(workspacePath, skillName, imports);
+
+  if (!status.runtimeExists) {
+    return {
+      name: skillName,
+      imported: false,
+      runtimeExists: false,
+      canUploadAndPublish: false,
+      canPublish: false,
+    };
+  }
+
+  if (!status.imported) {
+    return {
+      name: skillName,
+      displayName: skillName,
+      imported: false,
+      runtimeExists: true,
+      conflict: true,
+      canUploadAndPublish: true,
+      canPublish: false,
+    };
+  }
+
+  const remoteAccountId = accountId ?? currentUsername;
+  const remoteSkill = await fetchRemoteSkillDetail(skillName, { tenantCode, accountId: remoteAccountId });
+  return {
+    ...remoteSkill,
+    ...toLocalImportState(status, remoteSkill, currentUsername),
+    canUploadAndPublish: false,
+  };
+}
+
 export async function publishMarketSkill({
   workspacePath,
   name,
@@ -246,6 +282,92 @@ export async function publishMarketSkill({
 }
 
 export const submitMarketSkill = publishMarketSkill;
+
+export async function uploadAndPublishLocalSkill({
+  workspacePath,
+  name,
+  currentUsername,
+  now = () => new Date(),
+  tenantCode,
+  accountId,
+}) {
+  const skillName = normalizeSkillFolderName(name);
+  const remoteAccountId = accountId ?? currentUsername;
+  const imports = await readMarketImports(workspacePath);
+  const status = await getImportStatus(workspacePath, skillName, imports);
+
+  if (!status.runtimeExists) {
+    throw createHttpError(`Local skill "${skillName}" was not found`, 404);
+  }
+  if (status.imported) {
+    throw createHttpError(`Market skill "${skillName}" has already been imported`, 409);
+  }
+
+  const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
+  const files = await readSkillDirectoryFiles(runtimePath);
+  const savePayload = await requestMarketForm('/api/skill/save', await buildSkillSaveForm(skillName, files), {
+    tenantCode,
+    accountId: remoteAccountId,
+  });
+  const savedSkillId = extractSavedSkillId(savePayload);
+
+  const publishPayload = await requestMarketJson('/api/skill/publish', {
+    method: 'POST',
+    tenantCode,
+    accountId: remoteAccountId,
+    body: {
+      data: {
+        id: savedSkillId,
+      },
+    },
+  });
+
+  const publishedAt = now().toISOString();
+  const savedSkill = normalizeSavedSkillPayload(savePayload, {
+    id: savedSkillId,
+    name: skillName,
+    currentUsername,
+  });
+  const publishedVersion = normalizeVersion(publishPayload.data?.version)
+    ?? normalizeVersion(savedSkill.version)
+    ?? 1;
+
+  await writeMarketImports(workspacePath, {
+    version: 1,
+    imports: {
+      ...imports.imports,
+      [skillName]: {
+        name: skillName,
+        skillId: savedSkillId,
+        id: savedSkillId,
+        skillName: savedSkill.displayName,
+        nspPath: savedSkill.nspPath,
+        createUserId: savedSkill.createUserId,
+        version: publishedVersion,
+        source: 'skill-market-api',
+        importedAt: publishedAt,
+        updatedAt: publishedAt,
+      },
+    },
+  });
+
+  return {
+    skill: {
+      ...savedSkill,
+      name: skillName,
+      imported: true,
+      runtimeExists: true,
+      importedVersion: publishedVersion,
+      version: publishedVersion,
+      canPublish: true,
+      canUploadAndPublish: false,
+      updatedAt: publishedAt,
+    },
+    publishedAt,
+    publishedVersion,
+    submittedFileCount: files.length,
+  };
+}
 
 export async function removeMarketSkill({ workspacePath, name }) {
   const skillName = normalizeSkillFolderName(name);
@@ -791,14 +913,23 @@ async function collectSkillDirectoryFiles(rootDirectory, currentDirectory, files
 }
 
 async function buildSkillUpdateForm(remoteSkill, files) {
+  const formData = await buildSkillArchiveForm(remoteSkill.name, files);
+  formData.append('id', String(remoteSkill.id));
+  return formData;
+}
+
+async function buildSkillSaveForm(skillName, files) {
+  return buildSkillArchiveForm(skillName, files);
+}
+
+async function buildSkillArchiveForm(skillName, files) {
   const zip = new JSZip();
   files.forEach((file) => {
     zip.file(file.path, file.content);
   });
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
   const formData = new FormData();
-  formData.append('id', String(remoteSkill.id));
-  formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${remoteSkill.name}.zip`);
+  formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${skillName}.zip`);
   return formData;
 }
 
@@ -856,6 +987,38 @@ function normalizeRemoteSkillSummary(skill) {
     fileCount: Number.isInteger(skill.fileCount) ? skill.fileCount : undefined,
     sourceType: 'skill-market-api',
   });
+}
+
+function normalizeSavedSkillPayload(payload, { id, name, currentUsername }) {
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
+  const skill = data.skill && typeof data.skill === 'object' ? data.skill : data;
+  const displayName = String(skill.skillName ?? skill.displayName ?? skill.name ?? name).trim();
+
+  return pruneUndefined({
+    id,
+    skillId: id,
+    name,
+    displayName: displayName || name,
+    description: typeof skill.description === 'string' ? skill.description : '',
+    nspPath: typeof skill.nspPath === 'string' ? skill.nspPath : '',
+    createUserId: skill.createUserId === undefined || skill.createUserId === null
+      ? currentUsername
+      : String(skill.createUserId),
+    version: normalizeVersion(skill.version),
+    published: parseBoolean(skill.published),
+    sourceType: 'skill-market-api',
+  });
+}
+
+function extractSavedSkillId(payload) {
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
+  const skill = data.skill && typeof data.skill === 'object' ? data.skill : data;
+  const id = skill.id ?? skill.skillId ?? payload?.id ?? payload?.skillId;
+  const normalizedId = String(id ?? '').trim();
+  if (!normalizedId) {
+    throw createHttpError('Skill market save response did not include a skill id', 502);
+  }
+  return normalizedId;
 }
 
 function normalizePreviewPayload(data) {

@@ -10,10 +10,12 @@ import JSZip from 'jszip';
 
 import {
   getSkillMarketDetail,
+  getMarketSkillPublishState,
   importMarketSkill,
   listSkillMarket,
   removeMarketSkill,
   submitMarketSkill,
+  uploadAndPublishLocalSkill,
   viewMarketSkillFile,
 } from './skill-market.js';
 
@@ -446,6 +448,114 @@ test('manual same-name runtime directories are conflicts instead of removable im
     /has not been imported/,
   );
   assert.equal(await fs.readFile(path.join(manualPath, 'SKILL.md'), 'utf8'), '# Manual Skill');
+});
+
+test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'local-author');
+  await fs.mkdir(path.join(skillPath, 'references'), { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Author\n', 'utf8');
+  await fs.writeFile(path.join(skillPath, 'references', 'guide.md'), '# Guide\n', 'utf8');
+
+  const publishState = await getMarketSkillPublishState(withTenant({
+    workspacePath,
+    name: 'local-author',
+    currentUsername: TEST_ACCOUNT_ID,
+  }));
+  assert.equal(publishState.canUploadAndPublish, true);
+  assert.equal(publishState.imported, false);
+
+  let saveBodyIncludesId = false;
+  let saveBodyIncludesFile = false;
+  let savedFiles = null;
+  let publishedId = null;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/save') {
+      assert.equal(req.method, 'POST');
+      const { fields, files: multipartFiles } = parseMultipartParts(bodyBuffer, req.headers['content-type']);
+      saveBodyIncludesId = Object.prototype.hasOwnProperty.call(fields, 'id');
+      saveBodyIncludesFile = Boolean(multipartFiles.file);
+      savedFiles = await readZipMultipartFile(multipartFiles.file?.content);
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: {
+          id: 'saved-local-author',
+          skillName: 'Local Author',
+          nspPath: 'mock://skills/local-author',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+        },
+      });
+      return;
+    }
+
+    if (endpoint === '/data-agent/api/skill/publish') {
+      const body = parseJson(bodyBuffer.toString('utf8'));
+      publishedId = body?.data?.id;
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: {
+          version: 1,
+        },
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const result = await uploadAndPublishLocalSkill(withTenant({
+      workspacePath,
+      name: 'local-author',
+      currentUsername: TEST_ACCOUNT_ID,
+      now: () => new Date('2026-05-14T02:00:00.000Z'),
+    }));
+
+    assert.equal(result.publishedVersion, 1);
+    assert.equal(result.submittedFileCount, 2);
+    assert.equal(result.skill.id, 'saved-local-author');
+    assert.equal(result.skill.imported, true);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+
+  assert.equal(saveBodyIncludesId, false);
+  assert.equal(saveBodyIncludesFile, true);
+  assert.deepEqual(savedFiles, {
+    'SKILL.md': '# Local Author\n',
+    'references/guide.md': '# Guide\n',
+  });
+  assert.equal(publishedId, 'saved-local-author');
+
+  const imports = JSON.parse(await fs.readFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+    'utf8',
+  ));
+  assert.equal(imports.imports['local-author'].id, 'saved-local-author');
+  assert.equal(imports.imports['local-author'].version, 1);
 });
 
 test('submitMarketSkill signs update requests without an auth body', async () => {

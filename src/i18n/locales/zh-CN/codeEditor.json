@@ -21,6 +21,9 @@
     "publishSkill": "发布更新",
     "publishingSkill": "发布中...",
     "skillPublished": "技能已发布",
+    "uploadAndPublishSkill": "上传并发布",
+    "uploadingAndPublishingSkill": "上传中...",
+    "skillUploadedAndPublished": "技能已发布",
     "exitFullscreen": "退出全屏",
     "fullscreen": "全屏",
     "close": "关闭"
@@ -39,6 +42,7 @@
     "saveBeforeSubmitFailed": "当前文件保存失败，未发布技能更新。",
     "previewFailed": "技能更新差异加载失败。",
     "publishFailed": "技能更新发布失败。",
+    "uploadPublishFailed": "技能上传发布失败。",
     "publishDialog": {
       "title": "发布技能更新",
       "description": "请检查完整技能差异，输入 yes 后发布。",
