@@ -9,7 +9,7 @@ import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
-import type { Project } from '../../../types/app';
+import type { AppTab, Project } from '../../../types/app';
 import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
@@ -70,6 +70,21 @@ function MainContent({
     isMobile,
   });
 
+  const handleActiveTabChange = React.useCallback(
+    (nextTabAction: React.SetStateAction<AppTab>) => {
+      const nextTab = typeof nextTabAction === 'function'
+        ? nextTabAction(activeTab)
+        : nextTabAction;
+
+      if (nextTab !== activeTab) {
+        handleCloseEditor();
+      }
+
+      setActiveTab(nextTab);
+    },
+    [activeTab, handleCloseEditor, setActiveTab],
+  );
+
   useEffect(() => {
     const selectedProjectName = selectedProject?.name;
     const currentProjectName = currentProject?.name;
@@ -82,9 +97,9 @@ function MainContent({
   useEffect(() => {
     const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs);
     if (allowedTab !== activeTab) {
-      setActiveTab(allowedTab);
+      handleActiveTabChange(allowedTab);
     }
-  }, [activeTab, disabledTabs, setActiveTab]);
+  }, [activeTab, disabledTabs, handleActiveTabChange]);
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
@@ -98,7 +113,7 @@ function MainContent({
     <div className="flex h-full flex-col">
       <MainContentHeader
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleActiveTabChange}
         selectedProject={selectedProject}
         selectedSession={selectedSession}
         disabledTabs={disabledTabs}
