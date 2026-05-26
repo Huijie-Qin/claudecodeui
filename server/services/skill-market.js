@@ -6,11 +6,20 @@ import JSZip from 'jszip';
 
 const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
+const MARKET_RESPONSE_LOG_SNIPPET_CHARS = 500;
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const MARKET_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
 const MARKET_ENDPOINT_PREFIX = '/data-agent';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 const ACCOUNT_ID_HEADER = 'X-Account-Id';
+const MARKET_LOG_LEVELS = {
+  silent: 0,
+  error: 1,
+  warn: 2,
+  info: 3,
+  debug: 4,
+};
+let marketRequestSequence = 0;
 
 export function getSkillMarketPaths(workspacePath) {
   return {
@@ -387,9 +396,20 @@ async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } =
 }
 
 async function requestMarketJson(endpoint, { method = 'GET', body, tenantCode, accountId } = {}) {
-  const { payload } = await requestMarketMaybeJson(endpoint, { method, body, tenantCode, accountId });
+  const { response, payload, logContext } = await requestMarketMaybeJson(endpoint, { method, body, tenantCode, accountId });
   if (!payload) {
-    throw createHttpError('Skill market API returned a non-JSON response', 502);
+    const contentType = response.headers.get('content-type') || '';
+    const responseText = await response.text();
+    logMarketEvent('warn', 'non_json_response', {
+      ...logContext,
+      status: response.status,
+      contentType,
+      responseSnippet: formatResponseSnippet(responseText),
+    });
+    throw createHttpError(
+      `Skill market API returned a non-JSON response (${response.status} ${contentType || 'unknown content-type'})`,
+      502,
+    );
   }
   return payload;
 }
@@ -416,6 +436,18 @@ async function requestMarketForm(endpoint, formData, {
     ...createMarketAccountHeaders(accountId),
     ...authHeaders,
   };
+  const logContext = createMarketLogContext({
+    baseUrl,
+    endpoint: marketEndpoint,
+    method: requestMethod,
+    url,
+    tenantCode,
+    accountId,
+    authEnabled: Boolean(authHeaders.Authorization),
+    multipart: true,
+  });
+  logMarketEvent('debug', 'request_start', logContext);
+  const startTime = Date.now();
 
   try {
     const response = await fetch(url, {
@@ -425,11 +457,35 @@ async function requestMarketForm(endpoint, formData, {
       signal: controller.signal,
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : {};
-    assertMarketResponseOk(response, payload);
+    const contentType = response.headers.get('content-type') || '';
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch (error) {
+      logMarketEvent('warn', 'non_json_response', {
+        ...logContext,
+        status: response.status,
+        contentType,
+        elapsedMs: Date.now() - startTime,
+        responseSnippet: formatResponseSnippet(text),
+      });
+      throw createHttpError(
+        `Skill market API returned a non-JSON response (${response.status} ${contentType || 'unknown content-type'})`,
+        502,
+      );
+    }
+    logMarketEvent('debug', 'request_complete', {
+      ...logContext,
+      status: response.status,
+      contentType,
+      elapsedMs: Date.now() - startTime,
+      responseCode: payload?.code,
+      responseMessage: payload?.message,
+    });
+    assertMarketResponseOk(response, payload, logContext);
     return payload;
   } catch (error) {
-    throw normalizeMarketRequestError(error, baseUrl);
+    throw normalizeMarketRequestError(error, baseUrl, logContext);
   } finally {
     clearTimeout(timeout);
   }
@@ -452,6 +508,18 @@ async function requestMarketMaybeJson(endpoint, { method = 'GET', body, tenantCo
       payloadText,
     }),
   };
+  const logContext = createMarketLogContext({
+    baseUrl,
+    endpoint: marketEndpoint,
+    method,
+    url,
+    tenantCode,
+    accountId,
+    authEnabled: Boolean(headers.Authorization),
+    payloadBytes: Buffer.byteLength(payloadText, 'utf8'),
+  });
+  logMarketEvent('debug', 'request_start', logContext);
+  const startTime = Date.now();
 
   try {
     const response = await fetch(url, {
@@ -464,34 +532,155 @@ async function requestMarketMaybeJson(endpoint, { method = 'GET', body, tenantCo
     let payload = null;
     if (contentType.includes('application/json')) {
       const text = await response.text();
-      payload = text ? JSON.parse(text) : {};
-      assertMarketResponseOk(response, payload);
+      try {
+        payload = text ? JSON.parse(text) : {};
+      } catch (error) {
+        logMarketEvent('warn', 'invalid_json_response', {
+          ...logContext,
+          status: response.status,
+          contentType,
+          elapsedMs: Date.now() - startTime,
+          responseSnippet: formatResponseSnippet(text),
+        });
+        throw createHttpError('Skill market API returned invalid JSON', 502);
+      }
+      logMarketEvent('debug', 'request_complete', {
+        ...logContext,
+        status: response.status,
+        contentType,
+        elapsedMs: Date.now() - startTime,
+        responseCode: payload?.code,
+        responseMessage: payload?.message,
+      });
+      assertMarketResponseOk(response, payload, logContext);
     } else if (!response.ok) {
+      const text = await response.text();
+      logMarketEvent('warn', 'http_error_non_json_response', {
+        ...logContext,
+        status: response.status,
+        contentType,
+        elapsedMs: Date.now() - startTime,
+        responseSnippet: formatResponseSnippet(text),
+      });
       throw createHttpError(`Skill market API returned ${response.status}`, response.status);
+    } else {
+      logMarketEvent('debug', 'request_complete', {
+        ...logContext,
+        status: response.status,
+        contentType,
+        elapsedMs: Date.now() - startTime,
+        responseType: 'non-json',
+      });
     }
-    return { response, payload };
+    return { response, payload, logContext };
   } catch (error) {
-    throw normalizeMarketRequestError(error, baseUrl);
+    throw normalizeMarketRequestError(error, baseUrl, logContext);
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function assertMarketResponseOk(response, payload) {
+function assertMarketResponseOk(response, payload, logContext = {}) {
   if (!response.ok) {
+    logMarketEvent('warn', 'http_error_response', {
+      ...logContext,
+      status: response.status,
+      responseCode: payload?.code,
+      responseMessage: payload?.message || payload?.error,
+    });
     throw createHttpError(payload?.message || payload?.error || `Skill market API returned ${response.status}`, response.status);
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'code') && Number(payload.code) !== 0) {
+    logMarketEvent('warn', 'api_error_response', {
+      ...logContext,
+      status: response.status,
+      responseCode: payload?.code,
+      responseMessage: payload?.message,
+    });
     throw createHttpError(payload?.message || 'Skill market API returned an error', 502);
   }
 }
 
-function normalizeMarketRequestError(error, baseUrl) {
+function normalizeMarketRequestError(error, baseUrl, logContext = {}) {
   if (error?.statusCode) return error;
+  logMarketEvent('error', 'request_failed', {
+    ...logContext,
+    errorName: error?.name,
+    errorMessage: error?.message || String(error),
+  });
   const message = error?.name === 'AbortError'
     ? `Skill market API timed out at ${baseUrl}`
     : `Skill market API is unavailable at ${baseUrl}: ${error?.message || error}`;
   return createHttpError(message, 502);
+}
+
+function createMarketLogContext({
+  baseUrl,
+  endpoint,
+  method,
+  url,
+  tenantCode,
+  accountId,
+  authEnabled,
+  payloadBytes,
+  multipart,
+}) {
+  marketRequestSequence += 1;
+  return pruneUndefined({
+    requestId: `skill-market-${process.pid}-${marketRequestSequence}`,
+    method: String(method || 'GET').toUpperCase(),
+    endpoint,
+    url: sanitizeLogUrl(url),
+    baseUrl: sanitizeLogUrl(baseUrl),
+    tenant: tenantCode ? 'present' : 'missing',
+    accountId: maskIdentifier(accountId),
+    auth: authEnabled ? 'enabled' : 'disabled',
+    payloadBytes,
+    multipart: multipart === true ? true : undefined,
+  });
+}
+
+function logMarketEvent(level, event, details = {}) {
+  if (!shouldLogMarketLevel(level)) return;
+  const logger = level === 'debug'
+    ? console.debug
+    : level === 'info'
+      ? console.info
+      : level === 'warn'
+        ? console.warn
+        : console.error;
+  logger('[skill-market]', event, pruneUndefined(details));
+}
+
+function shouldLogMarketLevel(level) {
+  const configuredLevel = String(process.env.SKILL_MARKET_LOG_LEVEL || 'warn').trim().toLowerCase();
+  const threshold = MARKET_LOG_LEVELS[configuredLevel] ?? MARKET_LOG_LEVELS.warn;
+  return (MARKET_LOG_LEVELS[level] ?? MARKET_LOG_LEVELS.error) <= threshold;
+}
+
+function sanitizeLogUrl(value) {
+  try {
+    const parsedUrl = value instanceof URL ? new URL(value) : new URL(String(value));
+    parsedUrl.username = '';
+    parsedUrl.password = '';
+    return parsedUrl.toString();
+  } catch {
+    return String(value || '');
+  }
+}
+
+function maskIdentifier(value) {
+  const text = String(value || '').trim();
+  if (!text) return 'missing';
+  if (text.length <= 4) return '*'.repeat(text.length);
+  return `${text.slice(0, 2)}***${text.slice(-2)}`;
+}
+
+function formatResponseSnippet(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MARKET_RESPONSE_LOG_SNIPPET_CHARS);
 }
 
 async function readMarketImports(workspacePath) {

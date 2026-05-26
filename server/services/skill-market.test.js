@@ -601,6 +601,50 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
   assert.equal(updateBodyIncludesFiles, false);
 });
 
+test('listSkillMarket logs diagnostics for non-JSON responses', async () => {
+  const server = http.createServer(async (req, res) => {
+    assert.equal(new URL(req.url || '/', 'http://127.0.0.1').pathname, '/data-agent/api/skill/skillList');
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<html><body>gateway login page</body></html>');
+  });
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  const previousLogLevel = process.env.SKILL_MARKET_LOG_LEVEL;
+  const previousWarn = console.warn;
+  const warnings = [];
+
+  try {
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_LOG_LEVEL = 'warn';
+    console.warn = (...args) => warnings.push(args);
+
+    await assert.rejects(
+      listSkillMarket(withTenant()),
+      /non-JSON response/,
+    );
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    restoreEnv('SKILL_MARKET_LOG_LEVEL', previousLogLevel);
+    console.warn = previousWarn;
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+
+  const nonJsonLog = warnings.find((entry) => entry[0] === '[skill-market]' && entry[1] === 'non_json_response');
+  assert.ok(nonJsonLog);
+  assert.equal(nonJsonLog[2].status, 200);
+  assert.match(nonJsonLog[2].contentType, /text\/html/);
+  assert.match(nonJsonLog[2].url, /\/data-agent\/api\/skill\/skillList/);
+  assert.match(nonJsonLog[2].responseSnippet, /gateway login page/);
+});
+
 function restoreEnv(name, value) {
   if (value === undefined) {
     delete process.env[name];

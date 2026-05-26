@@ -8,6 +8,8 @@ SKILL_MARKET_BASE_URL=https://xxxxxx
 
 `SKILL_MARKET_BASE_URL` should contain only the scheme, host, and optional port. CCUI appends the remote Skill endpoints under `/data-agent/api/skill/...`. `http://` and `https://` are both supported.
 
+If a domain returns `Skill market API returned a non-JSON response`, check the CCUI server logs for `[skill-market] non_json_response`. The usual causes are that the domain points at an HTML frontend or gateway page, the reverse proxy is not forwarding `/data-agent/api/skill/...` to the Java service, the request is redirected to a login page, or the gateway returns an HTML error page for auth/signature failures.
+
 `SKILL_MARKET_API_URL` is still accepted as a compatibility fallback. Local mock development can use:
 
 ```text
@@ -20,6 +22,14 @@ Optional remote authorization:
 SKILL_MARKET_AUTH_APPID=
 SKILL_MARKET_AUTH_KEY=
 ```
+
+Optional logging:
+
+```text
+SKILL_MARKET_LOG_LEVEL=warn
+```
+
+Supported values are `silent`, `error`, `warn`, `info`, and `debug`. The default is `warn`. Warning/error logs include the final remote URL, method, endpoint, status, content-type, elapsed time when available, and a short non-JSON response snippet. Auth signatures and auth keys are never logged.
 
 When both values are blank, CCUI sends no authorization header. When configured, every remote Skill Market request includes:
 
