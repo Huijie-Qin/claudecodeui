@@ -645,6 +645,48 @@ test('listSkillMarket logs diagnostics for non-JSON responses', async () => {
   assert.match(nonJsonLog[2].responseSnippet, /gateway login page/);
 });
 
+test('listSkillMarket appends endpoints to SKILL_MARKET_BASE_URL without URL normalization', async () => {
+  const seenPaths = [];
+  const server = http.createServer(async (req, res) => {
+    seenPaths.push(new URL(req.url || '/', 'http://127.0.0.1').pathname);
+    sendJson(res, {
+      code: 0,
+      message: 'success',
+      data: [{
+        id: 'prefixed-skill',
+        skillName: 'prefixed-skill',
+        description: 'Skill behind a prefixed gateway path.',
+        nspPath: 'mock://skills/prefixed-skill',
+        createUserId: 'creator',
+        version: 1,
+        published: true,
+      }],
+    });
+  });
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+
+  try {
+    process.env.SKILL_MARKET_BASE_URL = `http://127.0.0.1:${server.address().port}/gateway`;
+    delete process.env.SKILL_MARKET_API_URL;
+
+    const skills = await listSkillMarket(withTenant());
+
+    assert.equal(skills[0].name, 'prefixed-skill');
+    assert.deepEqual(seenPaths, ['/gateway/data-agent/api/skill/skillList']);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 function restoreEnv(name, value) {
   if (value === undefined) {
     delete process.env[name];

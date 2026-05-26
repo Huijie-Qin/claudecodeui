@@ -6,7 +6,7 @@ CCUI exposes `/api/skill-market/...` to the frontend. The CCUI backend then call
 SKILL_MARKET_BASE_URL=https://xxxxxx
 ```
 
-`SKILL_MARKET_BASE_URL` should contain only the scheme, host, and optional port. CCUI appends the remote Skill endpoints under `/data-agent/api/skill/...`. `http://` and `https://` are both supported.
+CCUI appends the remote Skill endpoints under `/data-agent/api/skill/...` to `SKILL_MARKET_BASE_URL` exactly as configured, without trimming or URL normalization. `http://` and `https://` are both supported.
 
 If a domain returns `Skill market API returned a non-JSON response`, check the CCUI server logs for `[skill-market] non_json_response`. The usual causes are that the domain points at an HTML frontend or gateway page, the reverse proxy is not forwarding `/data-agent/api/skill/...` to the Java service, the request is redirected to a login page, or the gateway returns an HTML error page for auth/signature failures.
 

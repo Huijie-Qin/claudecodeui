@@ -422,7 +422,7 @@ async function requestMarketForm(endpoint, formData, {
 } = {}) {
   const baseUrl = getMarketApiUrl();
   const marketEndpoint = toMarketEndpoint(endpoint);
-  const url = new URL(marketEndpoint, baseUrl);
+  const url = `${baseUrl}${marketEndpoint}`;
   const requestMethod = String(method || 'POST').toUpperCase();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MARKET_REQUEST_TIMEOUT_MS);
@@ -494,7 +494,7 @@ async function requestMarketForm(endpoint, formData, {
 async function requestMarketMaybeJson(endpoint, { method = 'GET', body, tenantCode, accountId } = {}) {
   const baseUrl = getMarketApiUrl();
   const marketEndpoint = toMarketEndpoint(endpoint);
-  const url = new URL(marketEndpoint, baseUrl);
+  const url = `${baseUrl}${marketEndpoint}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MARKET_REQUEST_TIMEOUT_MS);
   const payloadText = body === undefined ? '' : JSON.stringify(body);
@@ -1142,7 +1142,7 @@ function getMarketApiUrl() {
     process.env.SKILL_MARKET_BASE_URL
     || process.env.SKILL_MARKET_API_URL
     || DEFAULT_MARKET_API_URL
-  ).replace(/\/+$/, '/');
+  );
 }
 
 function toMarketEndpoint(endpoint) {
