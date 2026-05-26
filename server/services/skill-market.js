@@ -293,8 +293,7 @@ async function fetchRemoteSkillList({
   });
 
   return normalizeSkillListPayload(payload.data)
-    .map(normalizeRemoteSkillSummary)
-    .filter((skill) => skill.published === true);
+    .map(normalizeRemoteSkillSummary);
 }
 
 async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
