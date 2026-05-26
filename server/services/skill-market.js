@@ -282,6 +282,7 @@ async function fetchRemoteSkillList({
     accountId,
     body: {
       data: {
+        hasPublishedVersion: true,
         searchContent,
       },
       pageInfo: {

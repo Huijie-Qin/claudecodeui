@@ -113,6 +113,7 @@ function createSkillMarketMockServer({ dataPath }) {
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/api/skill/skillList') {
+      assert.equal(body?.data?.hasPublishedVersion, true);
       const submissions = await readMockSubmissions(dataPath);
       sendJson(res, {
         code: 0,
