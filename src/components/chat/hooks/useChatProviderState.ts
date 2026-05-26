@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { authenticatedFetch } from '../../../utils/api';
 import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, GEMINI_MODELS } from '../../../../shared/modelConstants';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
+
+import { shouldKeepPendingPermissionRequest } from './permissionRequestRouting';
 
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
@@ -56,8 +59,9 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   }, [provider]);
 
   useEffect(() => {
+    const selectedSessionId = selectedSession?.id || null;
     setPendingPermissionRequests((previous) =>
-      previous.filter((request) => !request.sessionId || request.sessionId === selectedSession?.id),
+      previous.filter((request) => shouldKeepPendingPermissionRequest(request, selectedSessionId)),
     );
   }, [selectedSession?.id]);
 

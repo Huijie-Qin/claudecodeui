@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+
 import type { PermissionPanelProps } from '../../configs/permissionPanelRegistry';
 import type { Question } from '../../../types/types';
 
@@ -35,7 +36,7 @@ const normalizeQuestionList = (value: unknown): Question[] => {
 
     const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
     const options = rawOptions
-      .map((option) => {
+      .map((option: any) => {
         if (!option || typeof option !== 'object' || typeof (option as any).label !== 'string') {
           return null;
         }
@@ -44,7 +45,7 @@ const normalizeQuestionList = (value: unknown): Question[] => {
           description: typeof (option as any).description === 'string' ? (option as any).description : undefined,
         };
       })
-      .filter((option): option is { label: string; description?: string } => option !== null);
+      .filter((option: { label: string; description?: string } | null): option is { label: string; description?: string } => option !== null);
 
     return {
       question: typeof (q as any).question === 'string' ? (q as any).question : String((q as any).question || ''),

@@ -107,7 +107,7 @@ function normalizeAskUserQuestionInput(value: unknown): any[] {
 
       const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
       const options = rawOptions
-        .map((opt) => {
+        .map((opt: any) => {
           if (!opt || typeof opt !== 'object') {
             return null;
           }
@@ -119,7 +119,7 @@ function normalizeAskUserQuestionInput(value: unknown): any[] {
             description: typeof opt.description === 'string' ? opt.description : undefined,
           };
         })
-        .filter((opt): opt is { label: string; description?: string } => opt !== null);
+        .filter((opt: { label: string; description?: string } | null): opt is { label: string; description?: string } => opt !== null);
 
       return {
         question: typeof (q as any).question === 'string' ? (q as any).question : '',

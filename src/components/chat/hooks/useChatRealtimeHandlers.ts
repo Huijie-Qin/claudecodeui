@@ -9,6 +9,10 @@ import {
   scheduleProjectsRefresh,
   shouldRefreshProjectsForRealtimeMessage,
 } from './chatRealtimeRefresh';
+import {
+  getExplicitRealtimeSessionId,
+  resolvePermissionRequestRouting,
+} from './permissionRequestRouting';
 import { shouldAdoptCreatedSession } from './sessionCreatedRouting';
 import type { SessionStreamAccumulator } from './sessionStreamAccumulator';
 
@@ -184,7 +188,8 @@ export function useChatRealtimeHandlers({
     /*  NormalizedMessage handling (has `kind` field)                    */
     /* ---------------------------------------------------------------- */
 
-    const sid = msg.sessionId || activeViewSessionId;
+    const explicitSessionId = getExplicitRealtimeSessionId(msg);
+    const sid = explicitSessionId || activeViewSessionId;
     const isActiveViewSession = Boolean(sid && sid === activeViewSessionId);
 
     const clearStreamTimer = (sessionId: string) => {
@@ -329,6 +334,14 @@ export function useChatRealtimeHandlers({
 
       case 'permission_request': {
         if (!msg.requestId) break;
+        const permissionRouting = resolvePermissionRequestRouting({
+          messageSessionId: explicitSessionId,
+          activeViewSessionId,
+          selectedSessionId: selectedSession?.id || null,
+        });
+
+        if (!permissionRouting.shouldSurface) break;
+
         setPendingPermissionRequests((prev) => {
           if (prev.some((r: PendingPermissionRequest) => r.requestId === msg.requestId)) return prev;
           return [...prev, {
@@ -336,11 +349,11 @@ export function useChatRealtimeHandlers({
             toolName: msg.toolName || 'UnknownTool',
             input: msg.input,
             context: msg.context,
-            sessionId: sid || null,
+            sessionId: permissionRouting.sessionId || null,
             receivedAt: new Date(),
           }];
         });
-        if (isActiveViewSession) {
+        if (permissionRouting.sessionId && permissionRouting.sessionId === activeViewSessionId) {
           setIsLoading(true);
           setCanAbortSession(true);
           setClaudeStatus({

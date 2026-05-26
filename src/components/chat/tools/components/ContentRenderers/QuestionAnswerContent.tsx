@@ -24,7 +24,7 @@ const normalizeQuestions = (raw: unknown): Question[] => {
 
       const rawOptions = Array.isArray((q as any).options) ? (q as any).options : [];
       const options = rawOptions
-        .map((opt) => {
+        .map((opt: any) => {
           if (!opt || typeof opt !== 'object' || typeof (opt as any).label !== 'string') {
             return null;
           }
@@ -33,7 +33,7 @@ const normalizeQuestions = (raw: unknown): Question[] => {
             description: typeof (opt as any).description === 'string' ? (opt as any).description : undefined,
           };
         })
-        .filter((opt): opt is { label: string; description?: string } => opt !== null);
+        .filter((opt: { label: string; description?: string } | null): opt is { label: string; description?: string } => opt !== null);
 
       return {
         question: typeof (q as any).question === 'string' ? (q as any).question : String((q as any).question || ''),
