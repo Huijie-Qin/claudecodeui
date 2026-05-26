@@ -1142,7 +1142,7 @@ function getMarketApiUrl() {
     process.env.SKILL_MARKET_BASE_URL
     || process.env.SKILL_MARKET_API_URL
     || DEFAULT_MARKET_API_URL
-  );
+  ).replace(/\/+$/, '/');
 }
 
 function toMarketEndpoint(endpoint) {

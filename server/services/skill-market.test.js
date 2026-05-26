@@ -645,7 +645,7 @@ test('listSkillMarket logs diagnostics for non-JSON responses', async () => {
   assert.match(nonJsonLog[2].responseSnippet, /gateway login page/);
 });
 
-test('listSkillMarket appends endpoints to SKILL_MARKET_BASE_URL without URL normalization', async () => {
+test('listSkillMarket appends endpoints after preserving a normalized base URL trailing slash', async () => {
   const seenPaths = [];
   const server = http.createServer(async (req, res) => {
     seenPaths.push(new URL(req.url || '/', 'http://127.0.0.1').pathname);
@@ -671,13 +671,13 @@ test('listSkillMarket appends endpoints to SKILL_MARKET_BASE_URL without URL nor
   const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
 
   try {
-    process.env.SKILL_MARKET_BASE_URL = `http://127.0.0.1:${server.address().port}/gateway`;
+    process.env.SKILL_MARKET_BASE_URL = `http://127.0.0.1:${server.address().port}/gateway///`;
     delete process.env.SKILL_MARKET_API_URL;
 
     const skills = await listSkillMarket(withTenant());
 
     assert.equal(skills[0].name, 'prefixed-skill');
-    assert.deepEqual(seenPaths, ['/gateway/data-agent/api/skill/skillList']);
+    assert.deepEqual(seenPaths, ['/gateway//data-agent/api/skill/skillList']);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
