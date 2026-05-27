@@ -106,21 +106,25 @@ export const useEditorSidebar = ({
 
       const buildWorkspaceDisplayPath = (targetPath: string) => {
         const normalizedDisplayPath = targetPath.replace(/\/+$/g, '');
-        if (!normalizedWorkspacePath) {
-          if (normalizedDisplayPath === '/workspace' || normalizedDisplayPath.startsWith('/workspace/')) {
-            return normalizedDisplayPath;
-          }
+        if (!normalizedDisplayPath) {
           return '';
         }
-        if (normalizedDisplayPath === normalizedWorkspacePath) {
-          return '/workspace';
+        const targetPathParts = normalizedDisplayPath.split('/').filter(Boolean);
+
+        if (normalizedDisplayPath === '/workspace' || normalizedDisplayPath.startsWith('/workspace/')) {
+          return normalizedDisplayPath;
         }
-        if (normalizedDisplayPath.startsWith(`${normalizedWorkspacePath}/`)) {
-          return `/workspace/${normalizedDisplayPath.slice(normalizedWorkspacePath.length + 1)}`;
+
+        if (normalizedWorkspacePath) {
+          if (normalizedDisplayPath === normalizedWorkspacePath) {
+            return '/workspace';
+          }
+          if (normalizedDisplayPath.startsWith(`${normalizedWorkspacePath}/`)) {
+            return `/workspace/${normalizedDisplayPath.slice(normalizedWorkspacePath.length + 1)}`;
+          }
         }
 
         if (workspaceNameCandidates.length) {
-          const targetPathParts = normalizedDisplayPath.split('/').filter(Boolean);
           for (let candidateIndex = targetPathParts.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
             if (!workspaceNameCandidates.includes(targetPathParts[candidateIndex])) {
               continue;
@@ -128,16 +132,52 @@ export const useEditorSidebar = ({
             const displaySuffix = targetPathParts.slice(candidateIndex + 1).join('/');
             return displaySuffix ? `/workspace/${displaySuffix}` : '/workspace';
           }
-          return '';
         }
-        if (normalizedDisplayPath.startsWith('/workspace/')) {
-          return normalizedDisplayPath;
+
+        const workspacesIndex = targetPathParts.lastIndexOf('workspaces');
+        if (workspacesIndex !== -1 && targetPathParts.length > workspacesIndex + 3) {
+          const suffixParts = targetPathParts.slice(workspacesIndex + 4);
+          if (suffixParts.length > 0) {
+            return `/workspace/${suffixParts.join('/')}`;
+          }
+          return '/workspace';
         }
+
+        const claudeIndex = targetPathParts.lastIndexOf('.claude');
+        if (claudeIndex !== -1 && targetPathParts.length > claudeIndex) {
+          return `/workspace/${targetPathParts.slice(claudeIndex).join('/')}`;
+        }
+
         return '';
       };
 
       const workspaceDisplayPath = buildWorkspaceDisplayPath(resolvedPath);
-      const displayPath = workspaceDisplayPath || buildWorkspaceDisplayPath(cleanInputPath) || (source === 'files' ? '/' : resolvedPath);
+      const fallbackDisplayPath = (() => {
+        if (!cleanInputPath) {
+          return '/workspace';
+        }
+        if (!cleanInputPath.startsWith('/')) {
+          return `/workspace/${cleanInputPath}`;
+        }
+
+        const cleanInputPathParts = cleanInputPath.split('/').filter(Boolean);
+        const workspacesIndex = cleanInputPathParts.lastIndexOf('workspaces');
+        if (workspacesIndex !== -1 && cleanInputPathParts.length > workspacesIndex + 3) {
+          const suffixParts = cleanInputPathParts.slice(workspacesIndex + 4);
+          if (suffixParts.length > 0) {
+            return `/workspace/${suffixParts.join('/')}`;
+          }
+          return '/workspace';
+        }
+
+        const claudeIndex = cleanInputPathParts.lastIndexOf('.claude');
+        if (claudeIndex !== -1 && cleanInputPathParts.length > claudeIndex) {
+          return `/workspace/${cleanInputPathParts.slice(claudeIndex).join('/')}`;
+        }
+
+        return `/workspace/${cleanInputPathParts.pop() || ''}`.replace(/\/$/, '');
+      })();
+      const displayPath = workspaceDisplayPath || buildWorkspaceDisplayPath(cleanInputPath) || fallbackDisplayPath;
 
       const resolvedPathWithoutTrailingSlash = resolvedPath.replace(/\/+$/g, '');
       const fileName = resolvedPathWithoutTrailingSlash.split('/').pop() || resolvedPathWithoutTrailingSlash;
