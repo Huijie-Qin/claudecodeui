@@ -560,12 +560,15 @@ async function listImportedSkillSummariesMissingFromRemotePage({
 }
 
 async function fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId } = {}) {
-  try {
-    return await fetchRemoteSkillDetail(skillRef, { tenantCode, accountId });
-  } catch (error) {
-    if (isNotFoundError(error)) return null;
-    throw error;
-  }
+  const normalizedRef = String(skillRef || '').trim().toLowerCase();
+  if (!normalizedRef) return null;
+  const sanitizedRef = safeNormalizeSkillFolderName(skillRef);
+  const skills = await fetchRemoteSkillList({
+    searchContent: String(skillRef || '').trim(),
+    tenantCode,
+    accountId,
+  });
+  return findRemoteSkill(skills, normalizedRef, sanitizedRef) || null;
 }
 
 async function isRemoteSkillDeleted(skillRef, { tenantCode, accountId } = {}) {
