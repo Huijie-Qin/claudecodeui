@@ -579,6 +579,140 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
   assert.equal(imports.imports['local-author'].version, 1);
 });
 
+test('getMarketSkillPublishState marks imported skills as uploadable when the remote skill was deleted', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'deleted-remote');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Deleted Remote\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'deleted-remote', {
+    name: 'deleted-remote',
+    skillId: 'deleted-remote',
+    id: 'deleted-remote',
+    skillName: 'Deleted Remote',
+    nspPath: 'mock://skills/deleted-remote',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 3,
+    source: 'skill-market-api',
+  });
+
+  const state = await getMarketSkillPublishState(withTenant({
+    workspacePath,
+    name: 'deleted-remote',
+    currentUsername: TEST_ACCOUNT_ID,
+  }));
+
+  assert.equal(state.remoteDeleted, true);
+  assert.equal(state.imported, true);
+  assert.equal(state.canPublish, false);
+  assert.equal(state.canUploadAndPublish, true);
+  assert.equal(state.importedVersion, 3);
+});
+
+test('uploadAndPublishLocalSkill can republish a local skill whose remote binding was deleted', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'deleted-remote');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Republished Remote\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'deleted-remote', {
+    name: 'deleted-remote',
+    skillId: 'old-deleted-remote',
+    id: 'old-deleted-remote',
+    skillName: 'Deleted Remote',
+    nspPath: 'mock://skills/deleted-remote',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 3,
+    source: 'skill-market-api',
+    importedAt: '2026-05-14T00:00:00.000Z',
+  });
+
+  let savedFiles = null;
+  let publishedId = null;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [],
+      });
+      return;
+    }
+
+    if (endpoint === '/data-agent/api/skill/save') {
+      assert.equal(req.method, 'POST');
+      const { fields, files: multipartFiles } = parseMultipartParts(bodyBuffer, req.headers['content-type']);
+      assert.equal(Object.prototype.hasOwnProperty.call(fields, 'id'), false);
+      savedFiles = await readZipMultipartFile(multipartFiles.file?.content);
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: 'new-deleted-remote',
+      });
+      return;
+    }
+
+    if (endpoint === '/data-agent/api/skill/publish') {
+      const body = parseJson(bodyBuffer.toString('utf8'));
+      publishedId = body?.data?.id;
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: {
+          version: 1,
+        },
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const result = await uploadAndPublishLocalSkill(withTenant({
+      workspacePath,
+      name: 'deleted-remote',
+      currentUsername: TEST_ACCOUNT_ID,
+      now: () => new Date('2026-05-14T03:00:00.000Z'),
+    }));
+
+    assert.equal(result.skill.id, 'new-deleted-remote');
+    assert.equal(result.publishedVersion, 1);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+
+  assert.deepEqual(savedFiles, {
+    'SKILL.md': '# Republished Remote\n',
+  });
+  assert.equal(publishedId, 'new-deleted-remote');
+  const imports = JSON.parse(await fs.readFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+    'utf8',
+  ));
+  assert.equal(imports.imports['deleted-remote'].id, 'new-deleted-remote');
+  assert.equal(imports.imports['deleted-remote'].importedAt, '2026-05-14T00:00:00.000Z');
+  assert.equal(imports.imports['deleted-remote'].version, 1);
+});
+
 test('submitMarketSkill signs update requests without an auth body', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'auth-skill');
@@ -825,6 +959,20 @@ function restoreEnv(name, value) {
     return;
   }
   process.env[name] = value;
+}
+
+async function writeLegacyMarketImport(workspacePath, skillName, entry) {
+  await fs.mkdir(path.join(workspacePath, '.cloudcli', 'skills'), { recursive: true });
+  await fs.writeFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+    JSON.stringify({
+      version: 1,
+      imports: {
+        [skillName]: entry,
+      },
+    }),
+    'utf8',
+  );
 }
 
 function normalizeMockEndpoint(endpoint) {

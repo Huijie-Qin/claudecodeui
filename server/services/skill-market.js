@@ -54,18 +54,40 @@ export async function listSkillMarket(options = {}) {
   }
 
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  return Promise.all(
+  const enrichedRemoteSkills = await Promise.all(
     remoteSkills.map(async (skill) => ({
       ...skill,
       ...toLocalImportState(await getImportStatus(workspacePath, skill.name, imports), skill, currentUsername),
     })),
   );
+  const importedSkillSummaries = await listImportedSkillSummariesMissingFromRemotePage({
+    workspacePath,
+    imports,
+    remoteSkills: enrichedRemoteSkills,
+    currentUsername,
+    tenantCode,
+    accountId: remoteAccountId,
+    searchContent,
+  });
+  return [...enrichedRemoteSkills, ...importedSkillSummaries];
 }
 
 export async function getSkillMarketDetail({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
-  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  let remoteSkill;
+  try {
+    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      const skillName = normalizeSkillFolderName(name);
+      const status = await getImportStatus(workspacePath, skillName, imports);
+      if (status.imported) {
+        return getRemoteDeletedSkillDetail({ workspacePath, skillName, status });
+      }
+    }
+    throw error;
+  }
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   let directoryTree;
   let files;
@@ -90,9 +112,30 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
 }
 
 export async function viewMarketSkillFile({ workspaceId, workspacePath, name, filePath, tenantCode, accountId }) {
-  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
+  const imports = workspacePath
+    ? await readMarketImports({ workspaceId, workspacePath })
+    : { version: 1, imports: {} };
+  let remoteSkill;
+  try {
+    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
+  } catch (error) {
+    if (isNotFoundError(error) && workspacePath) {
+      const skillName = normalizeSkillFolderName(name);
+      const status = await getImportStatus(workspacePath, skillName, imports);
+      if (status.imported) {
+        const localFile = await readLocalSkillFile(getRuntimeSkillPath(workspacePath, skillName), filePath);
+        return {
+          skillId: status.metadataEntry?.skillId || status.metadataEntry?.id || skillName,
+          name: skillName,
+          remoteDeleted: true,
+          file: localFile,
+        };
+      }
+    }
+    throw error;
+  }
   const status = workspacePath
-    ? await getImportStatus(workspacePath, remoteSkill.name, await readMarketImports({ workspaceId, workspacePath }))
+    ? await getImportStatus(workspacePath, remoteSkill.name, imports)
     : { imported: false };
   const file = status.imported
     ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, remoteSkill.name), filePath)
@@ -159,8 +202,20 @@ export async function downloadMarketSkill({
 
 export async function getMarketSkillPublishPreview({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
-  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  let remoteSkill;
+  try {
+    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      const skillName = normalizeSkillFolderName(name);
+      const status = await getImportStatus(workspacePath, skillName, imports);
+      if (status.imported) {
+        throw createHttpError('Remote skill has been deleted. Upload and publish it again.', 409);
+      }
+    }
+    throw error;
+  }
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
@@ -207,7 +262,15 @@ export async function getMarketSkillPublishState({ workspaceId, workspacePath, n
   }
 
   const remoteAccountId = accountId ?? currentUsername;
-  const remoteSkill = await fetchRemoteSkillDetail(skillName, { tenantCode, accountId: remoteAccountId });
+  let remoteSkill;
+  try {
+    remoteSkill = await fetchRemoteSkillDetail(skillName, { tenantCode, accountId: remoteAccountId });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return toRemoteDeletedLocalImportState(skillName, status);
+    }
+    throw error;
+  }
   return {
     ...remoteSkill,
     ...toLocalImportState(status, remoteSkill, currentUsername),
@@ -225,8 +288,20 @@ export async function publishMarketSkill({
   accountId,
 }) {
   const remoteAccountId = accountId ?? currentUsername;
-  const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  let remoteSkill;
+  try {
+    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      const skillName = normalizeSkillFolderName(name);
+      const status = await getImportStatus(workspacePath, skillName, imports);
+      if (status.imported) {
+        throw createHttpError('Remote skill has been deleted. Upload and publish it again.', 409);
+      }
+    }
+    throw error;
+  }
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
@@ -305,7 +380,13 @@ export async function uploadAndPublishLocalSkill({
     throw createHttpError(`Local skill "${skillName}" was not found`, 404);
   }
   if (status.imported) {
-    throw createHttpError(`Market skill "${skillName}" has already been imported`, 409);
+    const remoteDeleted = await isRemoteSkillDeleted(skillName, {
+      tenantCode,
+      accountId: remoteAccountId,
+    });
+    if (!remoteDeleted) {
+      throw createHttpError(`Market skill "${skillName}" has already been imported`, 409);
+    }
   }
 
   const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
@@ -350,7 +431,7 @@ export async function uploadAndPublishLocalSkill({
         createUserId: savedSkill.createUserId,
         version: publishedVersion,
         source: 'skill-market-api',
-        importedAt: publishedAt,
+        importedAt: imports.imports[skillName]?.importedAt || publishedAt,
         updatedAt: publishedAt,
       },
     },
@@ -438,6 +519,72 @@ async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) 
   }
 
   return remoteSkill;
+}
+
+async function listImportedSkillSummariesMissingFromRemotePage({
+  workspacePath,
+  imports,
+  remoteSkills,
+  currentUsername,
+  tenantCode,
+  accountId,
+  searchContent,
+}) {
+  const remoteSkillNames = new Set(remoteSkills.map((skill) => skill.name));
+  const summaries = [];
+
+  for (const [skillName] of Object.entries(imports.imports || {})) {
+    if (remoteSkillNames.has(skillName)) continue;
+
+    const status = await getImportStatus(workspacePath, skillName, imports);
+    if (!status.imported) continue;
+
+    const remoteSkill = await fetchRemoteSkillDetailOrNull(skillName, { tenantCode, accountId });
+    if (remoteSkill) {
+      if (matchesSkillSearch(remoteSkill, searchContent)) {
+        summaries.push({
+          ...remoteSkill,
+          ...toLocalImportState(status, remoteSkill, currentUsername),
+        });
+      }
+      continue;
+    }
+
+    const deletedSummary = toRemoteDeletedLocalImportState(skillName, status);
+    if (matchesSkillSearch(deletedSummary, searchContent)) {
+      summaries.push(deletedSummary);
+    }
+  }
+
+  return summaries.sort((left, right) => sortPathNames(left.name, right.name));
+}
+
+async function fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId } = {}) {
+  try {
+    return await fetchRemoteSkillDetail(skillRef, { tenantCode, accountId });
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+async function isRemoteSkillDeleted(skillRef, { tenantCode, accountId } = {}) {
+  return (await fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId })) === null;
+}
+
+function matchesSkillSearch(skill, searchContent = '') {
+  const query = String(searchContent || '').trim().toLowerCase();
+  if (!query) return true;
+  return [
+    skill.name,
+    skill.displayName,
+    skill.description,
+    skill.createUserId,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .includes(query);
 }
 
 function findRemoteSkill(skills, normalizedRef, sanitizedRef) {
@@ -1293,6 +1440,41 @@ function toLocalImportState(status, remoteSkill, currentUsername) {
   });
 }
 
+async function getRemoteDeletedSkillDetail({ workspacePath, skillName, status }) {
+  const localFiles = await readSkillDirectoryFiles(getRuntimeSkillPath(workspacePath, skillName));
+  return {
+    ...toRemoteDeletedLocalImportState(skillName, status),
+    targetPath: path.join('.claude', 'skills', skillName).split(path.sep).join('/'),
+    directoryTree: buildDirectoryTreeFromFiles(localFiles),
+    files: summarizeSkillFiles(localFiles),
+  };
+}
+
+function toRemoteDeletedLocalImportState(skillName, status) {
+  const metadata = status.metadataEntry || {};
+  const importedVersion = normalizeVersion(metadata.version);
+  return pruneUndefined({
+    id: metadata.id || metadata.skillId || skillName,
+    skillId: metadata.skillId || metadata.id || skillName,
+    name: metadata.name || skillName,
+    displayName: metadata.skillName || metadata.displayName || metadata.name || skillName,
+    description: '',
+    nspPath: metadata.nspPath || '',
+    createUserId: metadata.createUserId,
+    imported: status.imported,
+    runtimeExists: status.runtimeExists,
+    conflict: false,
+    remoteDeleted: true,
+    importedAt: status.importedAt,
+    updatedAt: status.updatedAt,
+    importedVersion,
+    updateAvailable: false,
+    canPublish: false,
+    canUploadAndPublish: Boolean(status.runtimeExists),
+    sourceType: 'skill-market-api',
+  });
+}
+
 function ensurePublishAllowed(remoteSkill, status, currentUsername) {
   if (!status.imported) {
     throw createHttpError(`Market skill "${remoteSkill.name}" has not been imported`, status.runtimeExists ? 409 : 404);
@@ -1465,4 +1647,8 @@ function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function isNotFoundError(error) {
+  return Number(error?.statusCode || error?.status) === 404;
 }

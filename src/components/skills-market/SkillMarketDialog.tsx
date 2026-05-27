@@ -39,6 +39,7 @@ type MarketSkillSummary = {
   imported?: boolean;
   runtimeExists?: boolean;
   conflict?: boolean;
+  remoteDeleted?: boolean;
   updateAvailable?: boolean;
   canPublish?: boolean;
   importedAt?: string;
@@ -515,6 +516,11 @@ export default function SkillMarketDialog({
                   {t('skillMarketDialog.conflict', 'A same-name .claude/skills directory already exists but was not imported from the market.')}
                 </div>
               ) : null}
+              {detail?.remoteDeleted ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {t('skillMarketDialog.remoteDeleted', 'This skill was deleted from the remote market. The local files are still available in Files/.claude/skills.')}
+                </div>
+              ) : null}
               {isReadOnly ? (
                 <div className="mt-3 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
                   {t('skillMarketDialog.readOnly', 'This workspace is read-only.')}
@@ -612,12 +618,16 @@ export default function SkillMarketDialog({
 
 function SkillStatusBadge({ skill }: { skill: MarketSkillSummary }) {
   const { t } = useTranslation();
-  const label = skill.imported
+  const label = skill.remoteDeleted
+    ? t('skillMarketDialog.status.remoteDeleted', 'Remote deleted')
+    : skill.imported
     ? t('skillMarketDialog.status.imported', 'Imported')
     : skill.conflict
       ? t('skillMarketDialog.status.conflict', 'Conflict')
       : t('skillMarketDialog.status.available', 'Available');
-  const tone = skill.imported
+  const tone = skill.remoteDeleted
+    ? 'border-amber-200 bg-amber-50 text-amber-700'
+    : skill.imported
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : skill.conflict
       ? 'border-amber-200 bg-amber-50 text-amber-700'
