@@ -201,7 +201,7 @@ Response:
 - Import calls `download` and writes into `Files/.claude/skills/{skillName}`.
 - Imported state is computed from local workspace files plus the `workspace_skill_market_imports` database table, not from the remote list response.
 - Update availability is computed by comparing remote `version` with the locally imported version.
-- If an imported skill no longer exists in the `skillList` response for the relevant `searchContent`, CCUI marks it as `remoteDeleted`; the local Files copy remains readable and can be uploaded/published again as a new remote skill.
+- If an imported skill no longer exists in the `skillList` response when `data.searchContent` is set to the imported remote skill `id`, CCUI marks it as `remoteDeleted`; the local Files copy remains readable and can be uploaded/published again as a new remote skill.
 - Update overwrites the local imported skill with the latest remote content.
 - Publishing is only shown when the current CCUI username equals the remote `createUserId`.
 - Publishing first shows a full-skill file diff and requires typing `yes`; CCUI then calls `update` followed by `publish`.

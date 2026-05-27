@@ -75,20 +75,25 @@ export async function listSkillMarket(options = {}) {
 export async function getSkillMarketDetail({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
+  const lookupRef = requestedStatus.imported
+    ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
+    : name;
   let remoteSkill;
   try {
-    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+    remoteSkill = await fetchRemoteSkillDetail(lookupRef, { tenantCode, accountId: remoteAccountId });
   } catch (error) {
     if (isNotFoundError(error)) {
-      const skillName = normalizeSkillFolderName(name);
-      const status = await getImportStatus(workspacePath, skillName, imports);
-      if (status.imported) {
-        return getRemoteDeletedSkillDetail({ workspacePath, skillName, status });
+      if (requestedStatus.imported) {
+        return getRemoteDeletedSkillDetail({ workspacePath, skillName: requestedSkillName, status: requestedStatus });
       }
     }
     throw error;
   }
-  const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
+  const status = remoteSkill.name === requestedSkillName
+    ? requestedStatus
+    : await getImportStatus(workspacePath, remoteSkill.name, imports);
   let directoryTree;
   let files;
 
@@ -115,18 +120,23 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
   const imports = workspacePath
     ? await readMarketImports({ workspaceId, workspacePath })
     : { version: 1, imports: {} };
+  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedStatus = workspacePath
+    ? await getImportStatus(workspacePath, requestedSkillName, imports)
+    : { imported: false };
+  const lookupRef = requestedStatus.imported
+    ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
+    : name;
   let remoteSkill;
   try {
-    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
+    remoteSkill = await fetchRemoteSkillDetail(lookupRef, { tenantCode, accountId });
   } catch (error) {
     if (isNotFoundError(error) && workspacePath) {
-      const skillName = normalizeSkillFolderName(name);
-      const status = await getImportStatus(workspacePath, skillName, imports);
-      if (status.imported) {
-        const localFile = await readLocalSkillFile(getRuntimeSkillPath(workspacePath, skillName), filePath);
+      if (requestedStatus.imported) {
+        const localFile = await readLocalSkillFile(getRuntimeSkillPath(workspacePath, requestedSkillName), filePath);
         return {
-          skillId: status.metadataEntry?.skillId || status.metadataEntry?.id || skillName,
-          name: skillName,
+          skillId: requestedStatus.metadataEntry?.skillId || requestedStatus.metadataEntry?.id || requestedSkillName,
+          name: requestedSkillName,
           remoteDeleted: true,
           file: localFile,
         };
@@ -135,7 +145,9 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
     throw error;
   }
   const status = workspacePath
-    ? await getImportStatus(workspacePath, remoteSkill.name, imports)
+    ? remoteSkill.name === requestedSkillName
+      ? requestedStatus
+      : await getImportStatus(workspacePath, remoteSkill.name, imports)
     : { imported: false };
   const file = status.imported
     ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, remoteSkill.name), filePath)
@@ -203,20 +215,25 @@ export async function downloadMarketSkill({
 export async function getMarketSkillPublishPreview({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
+  const lookupRef = requestedStatus.imported
+    ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
+    : name;
   let remoteSkill;
   try {
-    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+    remoteSkill = await fetchRemoteSkillDetail(lookupRef, { tenantCode, accountId: remoteAccountId });
   } catch (error) {
     if (isNotFoundError(error)) {
-      const skillName = normalizeSkillFolderName(name);
-      const status = await getImportStatus(workspacePath, skillName, imports);
-      if (status.imported) {
+      if (requestedStatus.imported) {
         throw createHttpError('Remote skill has been deleted. Upload and publish it again.', 409);
       }
     }
     throw error;
   }
-  const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
+  const status = remoteSkill.name === requestedSkillName
+    ? requestedStatus
+    : await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
   const runtimePath = getRuntimeSkillPath(workspacePath, remoteSkill.name);
@@ -264,7 +281,10 @@ export async function getMarketSkillPublishState({ workspaceId, workspacePath, n
   const remoteAccountId = accountId ?? currentUsername;
   let remoteSkill;
   try {
-    remoteSkill = await fetchRemoteSkillDetail(skillName, { tenantCode, accountId: remoteAccountId });
+    remoteSkill = await fetchRemoteSkillDetail(getRemoteSkillLookupRef(skillName, status.metadataEntry), {
+      tenantCode,
+      accountId: remoteAccountId,
+    });
   } catch (error) {
     if (isNotFoundError(error)) {
       return toRemoteDeletedLocalImportState(skillName, status);
@@ -289,20 +309,25 @@ export async function publishMarketSkill({
 }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
+  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
+  const lookupRef = requestedStatus.imported
+    ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
+    : name;
   let remoteSkill;
   try {
-    remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
+    remoteSkill = await fetchRemoteSkillDetail(lookupRef, { tenantCode, accountId: remoteAccountId });
   } catch (error) {
     if (isNotFoundError(error)) {
-      const skillName = normalizeSkillFolderName(name);
-      const status = await getImportStatus(workspacePath, skillName, imports);
-      if (status.imported) {
+      if (requestedStatus.imported) {
         throw createHttpError('Remote skill has been deleted. Upload and publish it again.', 409);
       }
     }
     throw error;
   }
-  const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
+  const status = remoteSkill.name === requestedSkillName
+    ? requestedStatus
+    : await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
   const runtimePath = getRuntimeSkillPath(workspacePath, remoteSkill.name);
@@ -380,7 +405,7 @@ export async function uploadAndPublishLocalSkill({
     throw createHttpError(`Local skill "${skillName}" was not found`, 404);
   }
   if (status.imported) {
-    const remoteDeleted = await isRemoteSkillDeleted(skillName, {
+    const remoteDeleted = await isRemoteSkillDeleted(getRemoteSkillLookupRef(skillName, status.metadataEntry), {
       tenantCode,
       accountId: remoteAccountId,
     });
@@ -533,13 +558,16 @@ async function listImportedSkillSummariesMissingFromRemotePage({
   const remoteSkillNames = new Set(remoteSkills.map((skill) => skill.name));
   const summaries = [];
 
-  for (const [skillName] of Object.entries(imports.imports || {})) {
+  for (const [skillName, metadataEntry] of Object.entries(imports.imports || {})) {
     if (remoteSkillNames.has(skillName)) continue;
 
     const status = await getImportStatus(workspacePath, skillName, imports);
     if (!status.imported) continue;
 
-    const remoteSkill = await fetchRemoteSkillDetailOrNull(skillName, { tenantCode, accountId });
+    const remoteSkill = await fetchRemoteSkillDetailOrNull(
+      getRemoteSkillLookupRef(skillName, metadataEntry),
+      { tenantCode, accountId },
+    );
     if (remoteSkill) {
       if (matchesSkillSearch(remoteSkill, searchContent)) {
         summaries.push({
@@ -573,6 +601,10 @@ async function fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId } 
 
 async function isRemoteSkillDeleted(skillRef, { tenantCode, accountId } = {}) {
   return (await fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId })) === null;
+}
+
+function getRemoteSkillLookupRef(skillName, metadataEntry = {}) {
+  return String(metadataEntry?.id || metadataEntry?.skillId || skillName || '').trim();
 }
 
 function matchesSkillSearch(skill, searchContent = '') {

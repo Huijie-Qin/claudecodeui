@@ -586,8 +586,8 @@ test('getMarketSkillPublishState marks imported skills as uploadable when the re
   await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Deleted Remote\n', 'utf8');
   await writeLegacyMarketImport(workspacePath, 'deleted-remote', {
     name: 'deleted-remote',
-    skillId: 'deleted-remote',
-    id: 'deleted-remote',
+    skillId: 'remote-deleted-id',
+    id: 'remote-deleted-id',
     skillName: 'Deleted Remote',
     nspPath: 'mock://skills/deleted-remote',
     createUserId: TEST_ACCOUNT_ID,
@@ -595,17 +595,59 @@ test('getMarketSkillPublishState marks imported skills as uploadable when the re
     source: 'skill-market-api',
   });
 
-  const state = await getMarketSkillPublishState(withTenant({
-    workspacePath,
-    name: 'deleted-remote',
-    currentUsername: TEST_ACCOUNT_ID,
-  }));
+  const seenSearchContents = [];
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      const body = parseJson(bodyBuffer.toString('utf8'));
+      seenSearchContents.push(body?.data?.searchContent);
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [],
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  let state;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    state = await getMarketSkillPublishState(withTenant({
+      workspacePath,
+      name: 'deleted-remote',
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 
   assert.equal(state.remoteDeleted, true);
   assert.equal(state.imported, true);
   assert.equal(state.canPublish, false);
   assert.equal(state.canUploadAndPublish, true);
   assert.equal(state.importedVersion, 3);
+  assert.deepEqual(seenSearchContents, ['', 'remote-deleted-id']);
 });
 
 test('uploadAndPublishLocalSkill can republish a local skill whose remote binding was deleted', async () => {
@@ -627,6 +669,7 @@ test('uploadAndPublishLocalSkill can republish a local skill whose remote bindin
 
   let savedFiles = null;
   let publishedId = null;
+  const seenSearchContents = [];
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
@@ -635,6 +678,8 @@ test('uploadAndPublishLocalSkill can republish a local skill whose remote bindin
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/skillList') {
+      const body = parseJson(bodyBuffer.toString('utf8'));
+      seenSearchContents.push(body?.data?.searchContent);
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -711,6 +756,7 @@ test('uploadAndPublishLocalSkill can republish a local skill whose remote bindin
   assert.equal(imports.imports['deleted-remote'].id, 'new-deleted-remote');
   assert.equal(imports.imports['deleted-remote'].importedAt, '2026-05-14T00:00:00.000Z');
   assert.equal(imports.imports['deleted-remote'].version, 1);
+  assert.deepEqual(seenSearchContents, ['old-deleted-remote']);
 });
 
 test('submitMarketSkill signs update requests without an auth body', async () => {
