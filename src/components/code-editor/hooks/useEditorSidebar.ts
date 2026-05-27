@@ -29,9 +29,16 @@ export const useEditorSidebar = ({
         selectedProject?.fullPath || selectedProject?.path || ''
       ).replace(/\\/g, '/');
       const workspaceName = workspacePath.split('/').filter(Boolean).pop() || '';
+      const workspaceNameCandidates = Array.from(
+        new Set(
+          [
+            workspaceName,
+            selectedProject?.name || '',
+          ].filter(Boolean),
+        ),
+      );
 
       const normalizedWorkspacePath = workspacePath.replace(/\/+$/g, '');
-      const workspaceNamePrefix = workspaceName ? `${workspaceName}` : '';
 
       const cleanInputPath = String(filePath || '')
         .trim()
@@ -41,15 +48,18 @@ export const useEditorSidebar = ({
       const normalizedPathNoTrailingSlash = cleanInputPath.replace(/\/+$/g, '');
 
       const stripWorkspaceNamePrefix = (candidatePath: string) => {
-        if (!workspaceNamePrefix) {
+        if (!workspaceNameCandidates.length) {
           return null;
         }
         const trimmed = candidatePath.replace(/^\/+/, '');
-        if (trimmed === workspaceNamePrefix) {
-          return '';
-        }
-        if (trimmed.startsWith(`${workspaceNamePrefix}/`)) {
-          return trimmed.slice(workspaceNamePrefix.length + 1);
+          if (workspaceNameCandidates.includes(trimmed)) {
+            return '';
+          }
+          const matchedPrefix = workspaceNameCandidates.find((candidate) => trimmed.startsWith(`${candidate}/`));
+        if (matchedPrefix) {
+          return trimmed === matchedPrefix
+            ? ''
+            : trimmed.slice(matchedPrefix.length + 1);
         }
         return null;
       };
@@ -95,22 +105,39 @@ export const useEditorSidebar = ({
       })();
 
       const buildWorkspaceDisplayPath = (targetPath: string) => {
+        const normalizedDisplayPath = targetPath.replace(/\/+$/g, '');
         if (!normalizedWorkspacePath) {
-          return targetPath;
+          if (normalizedDisplayPath === '/workspace' || normalizedDisplayPath.startsWith('/workspace/')) {
+            return normalizedDisplayPath;
+          }
+          return '';
         }
-        if (targetPath === normalizedWorkspacePath) {
+        if (normalizedDisplayPath === normalizedWorkspacePath) {
           return '/workspace';
         }
-        if (targetPath.startsWith(`${normalizedWorkspacePath}/`)) {
-          return `/workspace/${targetPath.slice(normalizedWorkspacePath.length + 1)}`;
+        if (normalizedDisplayPath.startsWith(`${normalizedWorkspacePath}/`)) {
+          return `/workspace/${normalizedDisplayPath.slice(normalizedWorkspacePath.length + 1)}`;
+        }
+
+        if (workspaceNameCandidates.length) {
+          const targetPathParts = normalizedDisplayPath.split('/').filter(Boolean);
+          for (let candidateIndex = targetPathParts.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+            if (!workspaceNameCandidates.includes(targetPathParts[candidateIndex])) {
+              continue;
+            }
+            const displaySuffix = targetPathParts.slice(candidateIndex + 1).join('/');
+            return displaySuffix ? `/workspace/${displaySuffix}` : '/workspace';
+          }
+          return '';
+        }
+        if (normalizedDisplayPath.startsWith('/workspace/')) {
+          return normalizedDisplayPath;
         }
         return '';
       };
 
       const workspaceDisplayPath = buildWorkspaceDisplayPath(resolvedPath);
-      const displayPath = source === 'files'
-        ? workspaceDisplayPath || cleanInputPath || '/'
-        : workspaceDisplayPath || resolvedPath;
+      const displayPath = workspaceDisplayPath || buildWorkspaceDisplayPath(cleanInputPath) || (source === 'files' ? '/' : resolvedPath);
 
       const resolvedPathWithoutTrailingSlash = resolvedPath.replace(/\/+$/g, '');
       const fileName = resolvedPathWithoutTrailingSlash.split('/').pop() || resolvedPathWithoutTrailingSlash;
