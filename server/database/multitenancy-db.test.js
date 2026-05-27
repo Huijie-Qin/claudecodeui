@@ -129,6 +129,56 @@ test('workspace ACL grants access only inside the same tenant', () => {
   assert.deepEqual(mt.workspaces.listVisibleWorkspaces({ tenantId: tenant.id, userId: outsiderId }), []);
 });
 
+test('skill market imports are stored per workspace in the database', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'app',
+    displayName: 'App',
+    path: '/tmp/cloudcli/team/owner/app',
+  });
+
+  const imports = mt.skillMarketImports.replaceForWorkspace({
+    workspaceId: workspace.id,
+    imports: {
+      '中文技能': {
+        name: '中文技能',
+        skillId: 'cn-skill',
+        id: 'remote-cn-skill',
+        skillName: '中文技能',
+        nspPath: 'mock://skills/cn-skill',
+        createUserId: 'owner',
+        version: 3,
+        source: 'skill-market-api',
+        importedAt: '2026-05-14T00:00:00.000Z',
+        updatedAt: '2026-05-14T01:00:00.000Z',
+      },
+    },
+  });
+
+  assert.equal(imports.length, 1);
+  assert.deepEqual(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), [{
+    name: '中文技能',
+    skillId: 'cn-skill',
+    id: 'remote-cn-skill',
+    skillName: '中文技能',
+    nspPath: 'mock://skills/cn-skill',
+    createUserId: 'owner',
+    version: 3,
+    source: 'skill-market-api',
+    importedAt: '2026-05-14T00:00:00.000Z',
+    updatedAt: '2026-05-14T01:00:00.000Z',
+  }]);
+
+  assert.equal(mt.skillMarketImports.deleteForWorkspace({ workspaceId: workspace.id, skillName: '中文技能' }), true);
+  assert.deepEqual(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), []);
+});
+
 test('mcp presets are isolated per tenant and can be filtered to published presets', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

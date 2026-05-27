@@ -268,6 +268,54 @@ function hydrateMcpHelperScriptRow(row) {
   };
 }
 
+function hydrateSkillMarketImportRow(row) {
+  if (!row) return null;
+  return {
+    name: row.skill_name,
+    skillId: row.skill_id,
+    id: row.remote_id,
+    skillName: row.display_name,
+    nspPath: row.nsp_path || '',
+    createUserId: row.create_user_id || undefined,
+    version: Number(row.version || 0),
+    source: row.source || 'skill-market-api',
+    importedAt: row.imported_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizeSkillMarketImportEntry(skillName, entry = {}) {
+  const name = requireNonEmptyString(entry.name || skillName, 'skillName');
+  const skillId = requireNonEmptyString(entry.skillId || entry.id || entry.remoteId || name, 'skillId');
+  const remoteId = requireNonEmptyString(entry.id || entry.remoteId || entry.skillId || skillId, 'id');
+  const displayName = requireNonEmptyString(entry.skillName || entry.displayName || entry.name || name, 'displayName');
+  const version = Number(entry.version ?? 0);
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error('version must be a non-negative integer');
+  }
+
+  return {
+    name,
+    skillId,
+    remoteId,
+    displayName,
+    nspPath: typeof entry.nspPath === 'string' ? entry.nspPath : '',
+    createUserId: entry.createUserId == null || entry.createUserId === ''
+      ? null
+      : String(entry.createUserId),
+    version,
+    source: typeof entry.source === 'string' && entry.source.trim()
+      ? entry.source.trim()
+      : 'skill-market-api',
+    importedAt: typeof entry.importedAt === 'string' && entry.importedAt.trim()
+      ? entry.importedAt.trim()
+      : null,
+    updatedAt: typeof entry.updatedAt === 'string' && entry.updatedAt.trim()
+      ? entry.updatedAt.trim()
+      : null,
+  };
+}
+
 export function createMultitenancyDb(database = db) {
   const assertActiveTenantMember = (tenantId, userId) => {
     const row = database.prepare(`
@@ -454,6 +502,51 @@ export function createMultitenancyDb(database = db) {
     }
 
     return changed;
+  });
+
+  const replaceSkillMarketImportsTransaction = database.transaction(({ workspaceId, imports }) => {
+    const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+    const importEntries = imports && typeof imports === 'object' && !Array.isArray(imports)
+      ? Object.entries(imports)
+      : [];
+
+    database.prepare('DELETE FROM workspace_skill_market_imports WHERE workspace_id = ?').run(normalizedWorkspaceId);
+
+    const insertImport = database.prepare(`
+      INSERT INTO workspace_skill_market_imports (
+        workspace_id,
+        skill_name,
+        skill_id,
+        remote_id,
+        display_name,
+        nsp_path,
+        create_user_id,
+        version,
+        source,
+        imported_at,
+        updated_at
+      )
+      VALUES (
+        @workspaceId,
+        @name,
+        @skillId,
+        @remoteId,
+        @displayName,
+        @nspPath,
+        @createUserId,
+        @version,
+        @source,
+        COALESCE(@importedAt, CURRENT_TIMESTAMP),
+        COALESCE(@updatedAt, CURRENT_TIMESTAMP)
+      )
+    `);
+
+    for (const [skillName, entry] of importEntries) {
+      insertImport.run({
+        workspaceId: normalizedWorkspaceId,
+        ...normalizeSkillMarketImportEntry(skillName, entry),
+      });
+    }
   });
 
   return {
@@ -1292,6 +1385,41 @@ export function createMultitenancyDb(database = db) {
             ${whereStatus}
           ORDER BY p.display_name ASC, p.id ASC
         `).all(normalizedWorkspaceId).map(hydrateMcpInstallRow);
+      },
+    },
+
+    skillMarketImports: {
+      listForWorkspace: ({ workspaceId }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        return database.prepare(`
+          SELECT *
+          FROM workspace_skill_market_imports
+          WHERE workspace_id = ?
+          ORDER BY skill_name COLLATE NOCASE ASC
+        `).all(normalizedWorkspaceId).map(hydrateSkillMarketImportRow);
+      },
+
+      replaceForWorkspace: ({ workspaceId, imports }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        replaceSkillMarketImportsTransaction({ workspaceId: normalizedWorkspaceId, imports });
+        return database.prepare(`
+          SELECT *
+          FROM workspace_skill_market_imports
+          WHERE workspace_id = ?
+          ORDER BY skill_name COLLATE NOCASE ASC
+        `).all(normalizedWorkspaceId).map(hydrateSkillMarketImportRow);
+      },
+
+      deleteForWorkspace: ({ workspaceId, skillName }) => {
+        const result = database.prepare(`
+          DELETE FROM workspace_skill_market_imports
+          WHERE workspace_id = ?
+            AND skill_name = ?
+        `).run(
+          requirePositiveInteger(workspaceId, 'workspaceId'),
+          requireNonEmptyString(skillName, 'skillName'),
+        );
+        return result.changes > 0;
       },
     },
 

@@ -129,6 +129,7 @@ test('GET /skills returns market inventory for view access', async () => {
     requireEdit: false,
   });
   assert.deepEqual(seen.listArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/view-workspace',
     searchContent: '',
     page: undefined,
@@ -163,6 +164,7 @@ test('GET /skills/:name returns skill detail without requiring edit access', asy
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.detailArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     currentUsername: TEST_USERNAME,
@@ -193,6 +195,7 @@ test('GET /skills/:name/files passes the selected file path to the view API', as
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.fileArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     filePath: 'references/checklist.md',
@@ -219,6 +222,7 @@ test('POST /skills/:name/download requires edit access and imports to Files', as
 
   assert.equal(response.status, 201);
   assert.deepEqual(seen.downloadArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     overwrite: false,
@@ -249,6 +253,7 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.submitArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     currentUsername: TEST_USERNAME,
@@ -278,10 +283,12 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.removeArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
   });
   assert.deepEqual(seen.listArgs, {
+    workspaceId: 10,
     workspacePath: '/tmp/workspace',
     currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,

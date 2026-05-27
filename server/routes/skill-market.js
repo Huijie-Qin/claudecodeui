@@ -28,6 +28,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const skills = await marketService.listSkillMarket({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         searchContent: req.query?.searchContent ?? req.query?.q ?? '',
         page: req.query?.page,
@@ -54,6 +55,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const skill = await marketService.getSkillMarketDetail({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -78,6 +80,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const file = await marketService.viewMarketSkillFile({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         filePath: req.query?.filePath,
@@ -102,6 +105,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const skill = await marketService.downloadMarketSkill({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         overwrite: req.body?.overwrite === true || req.query?.overwrite === 'true',
@@ -126,6 +130,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -150,6 +155,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.getMarketSkillPublishPreview({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -174,6 +180,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const skill = await marketService.getMarketSkillPublishState({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -201,6 +208,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -225,6 +233,7 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.uploadAndPublishLocalSkill({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
@@ -249,10 +258,12 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.removeMarketSkill({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
       });
       const skills = await marketService.listSkillMarket({
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
         currentUsername: accountId,
         tenantCode,

@@ -31,6 +31,7 @@ export function getSkillMarketPaths(workspacePath) {
 export async function listSkillMarket(options = {}) {
   const normalizedOptions = typeof options === 'string' ? { workspacePath: options } : options;
   const {
+    workspaceId,
     workspacePath,
     searchContent = '',
     page = 1,
@@ -52,7 +53,7 @@ export async function listSkillMarket(options = {}) {
     return remoteSkills;
   }
 
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   return Promise.all(
     remoteSkills.map(async (skill) => ({
       ...skill,
@@ -61,10 +62,10 @@ export async function listSkillMarket(options = {}) {
   );
 }
 
-export async function getSkillMarketDetail({ workspacePath, name, currentUsername, tenantCode, accountId }) {
+export async function getSkillMarketDetail({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   let directoryTree;
   let files;
@@ -88,10 +89,10 @@ export async function getSkillMarketDetail({ workspacePath, name, currentUsernam
   };
 }
 
-export async function viewMarketSkillFile({ workspacePath, name, filePath, tenantCode, accountId }) {
+export async function viewMarketSkillFile({ workspaceId, workspacePath, name, filePath, tenantCode, accountId }) {
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
   const status = workspacePath
-    ? await getImportStatus(workspacePath, remoteSkill.name, await readMarketImports(workspacePath))
+    ? await getImportStatus(workspacePath, remoteSkill.name, await readMarketImports({ workspaceId, workspacePath }))
     : { imported: false };
   const file = status.imported
     ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, remoteSkill.name), filePath)
@@ -105,6 +106,7 @@ export async function viewMarketSkillFile({ workspacePath, name, filePath, tenan
 }
 
 export async function downloadMarketSkill({
+  workspaceId,
   workspacePath,
   name,
   overwrite = false,
@@ -114,7 +116,7 @@ export async function downloadMarketSkill({
 }) {
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
   const skillName = remoteSkill.name;
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
   const status = await getImportStatus(workspacePath, skillName, imports);
 
@@ -132,7 +134,7 @@ export async function downloadMarketSkill({
   await writeDownloadedFiles(runtimePath, files);
 
   const timestamp = now().toISOString();
-  await writeMarketImports(workspacePath, {
+  await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
       ...imports.imports,
@@ -152,13 +154,13 @@ export async function downloadMarketSkill({
     },
   });
 
-  return getSkillMarketDetail({ workspacePath, name: skillName, tenantCode, accountId });
+  return getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
 }
 
-export async function getMarketSkillPublishPreview({ workspacePath, name, currentUsername, tenantCode, accountId }) {
+export async function getMarketSkillPublishPreview({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
@@ -177,9 +179,9 @@ export async function getMarketSkillPublishPreview({ workspacePath, name, curren
   };
 }
 
-export async function getMarketSkillPublishState({ workspacePath, name, currentUsername, tenantCode, accountId }) {
+export async function getMarketSkillPublishState({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const skillName = normalizeSkillFolderName(name);
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, skillName, imports);
 
   if (!status.runtimeExists) {
@@ -214,6 +216,7 @@ export async function getMarketSkillPublishState({ workspacePath, name, currentU
 }
 
 export async function publishMarketSkill({
+  workspaceId,
   workspacePath,
   name,
   currentUsername,
@@ -223,7 +226,7 @@ export async function publishMarketSkill({
 }) {
   const remoteAccountId = accountId ?? currentUsername;
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId: remoteAccountId });
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, remoteSkill.name, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
@@ -248,7 +251,7 @@ export async function publishMarketSkill({
 
   const publishedAt = now().toISOString();
   const publishedVersion = normalizeVersion(publishPayload.data?.version) ?? (remoteSkill.version + 1);
-  await writeMarketImports(workspacePath, {
+  await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
       ...imports.imports,
@@ -270,6 +273,7 @@ export async function publishMarketSkill({
   return {
     skill: await getSkillMarketDetail({
       workspacePath,
+      workspaceId,
       name: remoteSkill.name,
       currentUsername,
       tenantCode,
@@ -284,6 +288,7 @@ export async function publishMarketSkill({
 export const submitMarketSkill = publishMarketSkill;
 
 export async function uploadAndPublishLocalSkill({
+  workspaceId,
   workspacePath,
   name,
   currentUsername,
@@ -293,7 +298,7 @@ export async function uploadAndPublishLocalSkill({
 }) {
   const skillName = normalizeSkillFolderName(name);
   const remoteAccountId = accountId ?? currentUsername;
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, skillName, imports);
 
   if (!status.runtimeExists) {
@@ -332,7 +337,7 @@ export async function uploadAndPublishLocalSkill({
     ?? normalizeVersion(savedSkill.version)
     ?? 1;
 
-  await writeMarketImports(workspacePath, {
+  await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
       ...imports.imports,
@@ -369,9 +374,9 @@ export async function uploadAndPublishLocalSkill({
   };
 }
 
-export async function removeMarketSkill({ workspacePath, name }) {
+export async function removeMarketSkill({ workspaceId, workspacePath, name }) {
   const skillName = normalizeSkillFolderName(name);
-  const imports = await readMarketImports(workspacePath);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
   if (!imports.imports?.[skillName]) {
     throw createHttpError(`Market skill "${skillName}" has not been imported`, 404);
   }
@@ -379,7 +384,7 @@ export async function removeMarketSkill({ workspacePath, name }) {
   await fs.rm(getRuntimeSkillPath(workspacePath, skillName), { recursive: true, force: true });
   const nextImports = { ...imports.imports };
   delete nextImports[skillName];
-  await writeMarketImports(workspacePath, {
+  await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: nextImports,
   });
@@ -805,14 +810,83 @@ function formatResponseSnippet(text) {
     .slice(0, MARKET_RESPONSE_LOG_SNIPPET_CHARS);
 }
 
-async function readMarketImports(workspacePath) {
+async function readMarketImports({ workspaceId, workspacePath } = {}) {
+  if (workspaceId) {
+    const importsDb = await getSkillMarketImportsDb();
+    const dbMetadata = importsRowsToMetadata(importsDb.listForWorkspace({ workspaceId }));
+    const legacyMetadata = workspacePath
+      ? await readLegacyMarketImports(workspacePath)
+      : { version: 1, imports: {} };
+    const legacyImports = legacyMetadata.imports || {};
+
+    if (Object.keys(legacyImports).length > 0) {
+      const mergedMetadata = normalizeImports({
+        version: 1,
+        imports: {
+          ...legacyImports,
+          ...dbMetadata.imports,
+        },
+      });
+      importsDb.replaceForWorkspace({ workspaceId, imports: mergedMetadata.imports });
+      await removeLegacyMarketImportsFile(workspacePath);
+      return mergedMetadata;
+    }
+
+    return dbMetadata;
+  }
+
+  return workspacePath
+    ? readLegacyMarketImports(workspacePath)
+    : { version: 1, imports: {} };
+}
+
+async function writeMarketImports({ workspaceId, workspacePath } = {}, metadata) {
+  const normalizedMetadata = normalizeImports(metadata);
+  if (workspaceId) {
+    const importsDb = await getSkillMarketImportsDb();
+    importsDb.replaceForWorkspace({ workspaceId, imports: normalizedMetadata.imports });
+    if (workspacePath) {
+      await removeLegacyMarketImportsFile(workspacePath);
+    }
+    return;
+  }
+
+  if (!workspacePath) return;
+  const { importsPath } = getSkillMarketPaths(workspacePath);
+  await writeJsonAtomic(importsPath, normalizedMetadata);
+}
+
+async function getSkillMarketImportsDb() {
+  const { multitenancyDb } = await import('../database/multitenancy-db.js');
+  return multitenancyDb.skillMarketImports;
+}
+
+function importsRowsToMetadata(rows) {
+  return normalizeImports({
+    version: 1,
+    imports: Object.fromEntries((rows || []).map((entry) => [entry.name, entry])),
+  });
+}
+
+async function readLegacyMarketImports(workspacePath) {
   const { importsPath } = getSkillMarketPaths(workspacePath);
   return readJsonOrDefault(importsPath, { version: 1, imports: {} }, normalizeImports);
 }
 
-async function writeMarketImports(workspacePath, metadata) {
+async function removeLegacyMarketImportsFile(workspacePath) {
   const { importsPath } = getSkillMarketPaths(workspacePath);
-  await writeJsonAtomic(importsPath, normalizeImports(metadata));
+  await fs.rm(importsPath, { force: true });
+  await removeEmptyDirectory(path.dirname(importsPath));
+  await removeEmptyDirectory(path.dirname(path.dirname(importsPath)));
+}
+
+async function removeEmptyDirectory(directory) {
+  try {
+    await fs.rmdir(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTEMPTY' || error?.code === 'EEXIST') return;
+    throw error;
+  }
 }
 
 async function readJsonOrDefault(filePath, defaultValue, normalize) {

@@ -199,7 +199,7 @@ Response:
 - Selecting or opening files for an imported skill reads the workspace copy under `.claude/skills/{skillName}` instead of calling remote `preview`.
 - Clicking a file in the tree calls `preview` with that file path only when the skill is not imported.
 - Import calls `download` and writes into `Files/.claude/skills/{skillName}`.
-- Imported state is computed from local workspace files plus `.cloudcli/skills/market-imports.json`, not from the remote list response.
+- Imported state is computed from local workspace files plus the `workspace_skill_market_imports` database table, not from the remote list response.
 - Update availability is computed by comparing remote `version` with the locally imported version.
 - Update overwrites the local imported skill with the latest remote content.
 - Publishing is only shown when the current CCUI username equals the remote `createUserId`.

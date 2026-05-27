@@ -128,6 +128,25 @@ CREATE TABLE IF NOT EXISTS workspace_mcp_preset_installs (
 CREATE INDEX IF NOT EXISTS idx_workspace_mcp_preset_installs_preset
   ON workspace_mcp_preset_installs(preset_id, status);
 
+CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (
+  workspace_id INTEGER NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  remote_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  nsp_path TEXT NOT NULL DEFAULT '',
+  create_user_id TEXT,
+  version INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'skill-market-api',
+  imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, skill_name),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_skill_market_imports_remote
+  ON workspace_skill_market_imports(remote_id);
+
 CREATE TABLE IF NOT EXISTS tenant_join_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id INTEGER NOT NULL,
