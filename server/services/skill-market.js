@@ -1261,7 +1261,7 @@ function normalizeRelativeFilePath(filePath) {
 function normalizeSkillFolderName(value) {
   const normalized = safeNormalizeSkillFolderName(value);
   if (!normalized) {
-    throw createHttpError('Skill name must include at least one letter or number', 400);
+    throw createHttpError('Skill name is required', 400);
   }
   return normalized;
 }
@@ -1270,10 +1270,15 @@ function safeNormalizeSkillFolderName(value) {
   const normalized = String(value || '')
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[^a-z0-9]+/, '')
-    .replace(/[^a-z0-9]+$/, '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.\s-]+/, '')
+    .replace(/[.\s-]+$/, '')
     .slice(0, 80);
+  if (normalized === '.' || normalized === '..') {
+    return null;
+  }
   return normalized || null;
 }
 

@@ -103,6 +103,16 @@ const TEST_SKILLS = [
       'references/test-cases.md': '# Test Cases\n',
     },
   },
+  {
+    id: 'cn-skill',
+    skillName: '中文技能',
+    description: 'Validate non-ASCII skill names.',
+    nspPath: 'mock://skills/cn-skill',
+    createUserId: 'j00939207',
+    files: {
+      'SKILL.md': '# 中文技能\n',
+    },
+  },
 ];
 
 function createSkillMarketMockServer({ dataPath }) {
@@ -301,6 +311,23 @@ test('importMarketSkill downloads the mock API skill into .claude/skills and rec
       importedAt: '2026-05-14T00:00:00.000Z',
       updatedAt: '2026-05-14T00:00:00.000Z',
     },
+  );
+});
+
+test('importMarketSkill supports skill names without ASCII letters or numbers', async () => {
+  const workspacePath = await makeWorkspace();
+
+  const detail = await importMarketSkill(withTenant({
+    workspacePath,
+    name: '中文技能',
+  }));
+
+  assert.equal(detail.name, '中文技能');
+  assert.equal(detail.imported, true);
+  assert.equal(detail.targetPath, '.claude/skills/中文技能');
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', '中文技能', 'SKILL.md'), 'utf8'),
+    '# 中文技能\n',
   );
 });
 
