@@ -4,6 +4,7 @@
   "tabs": {
     "users": "用户",
     "tenants": "租户权限",
+    "claudeEnv": "Claude 环境",
     "mcpPresets": "MCP Server 预置",
     "runtimes": "运行时监控"
   },
@@ -69,10 +70,13 @@
     "deleteUser": "删除用户失败",
     "selectTenantAndUser": "请选择租户和用户",
     "selectTenantsAndUsers": "请至少选择一个租户和一个用户",
+    "selectClaudeEnvUsers": "请至少选择一个用户",
+    "claudeEnvRequired": "ANTHROPIC_BASE_URL 和 ANTHROPIC_MODEL 为必填项",
     "grantTenantAccess": "授予租户权限失败",
     "batchUsersRequired": "请输入至少一个用户名",
     "batchCreateUserInvites": "批量创建用户邀请失败",
     "batchGrantTenantAccess": "批量授予租户权限失败",
+    "batchUpdateClaudeEnv": "批量更新 Claude 环境失败",
     "deleteTenantAccess": "删除租户权限失败"
   },
   "confirm": {
@@ -82,7 +86,8 @@
   "toast": {
     "grantTenantAccessSuccess": "已授权 {{username}} 访问 {{tenantName}}",
     "batchCreateUsersSuccess": "已创建 {{succeeded}} 个邀请，{{failed}} 个失败",
-    "batchGrantTenantAccessSuccess": "已授予 {{succeeded}} 条权限，{{failed}} 条失败"
+    "batchGrantTenantAccessSuccess": "已授予 {{succeeded}} 条权限，{{failed}} 条失败",
+    "batchUpdateClaudeEnvSuccess": "已更新 {{succeeded}} 个用户，{{failed}} 个失败"
   },
   "batch": {
     "createUsersTitle": "批量创建用户",
@@ -116,6 +121,17 @@
     "activationLink": "激活链接",
     "passwordResetLink": "重置密码",
     "passwordResetLinkTitle": "密码重置链接"
+  },
+  "claudeEnv": {
+    "title": "Claude 环境变量",
+    "baseUrl": "ANTHROPIC_BASE_URL",
+    "baseUrlPlaceholder": "https://api.example.com",
+    "model": "ANTHROPIC_MODEL",
+    "modelPlaceholder": "glm-5.1",
+    "saveButton": "保存到用户",
+    "usersTitle": "已选择用户：{{count}}",
+    "selectAll": "选择全部用户",
+    "clearSelection": "清空选择"
   },
   "tenants": {
     "createTitle": "创建租户",

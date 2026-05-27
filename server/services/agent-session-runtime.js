@@ -15,13 +15,20 @@ import { sanitizePathSegment } from './workspace-projects.js';
 const execFileAsync = promisify(execFile);
 
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
+const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
+const CLAUDE_USER_CONFIG_ENV_NAMES = [
+  ANTHROPIC_BASE_URL_ENV_NAME,
+  ANTHROPIC_MODEL_ENV_NAME,
+];
 const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
-  'ANTHROPIC_BASE_URL',
+  ANTHROPIC_BASE_URL_ENV_NAME,
+  ANTHROPIC_MODEL_ENV_NAME,
   'ANTHROPIC_AUTH_TOKEN',
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -227,9 +234,19 @@ export function buildClaudeDockerWrapperScript({
   containerName,
   envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
   executable = 'claude',
+  defaultEnv = {},
 }) {
   const container = shellQuote(requireValue(containerName, 'containerName'));
   const binary = shellQuote(requireValue(executable, 'executable'));
+  const envAllowlistSet = new Set(envAllowlist);
+  const defaultEnvNameSet = new Set(CLAUDE_USER_CONFIG_ENV_NAMES);
+  const defaultEnvLines = Object.entries(normalizeContainerEnvRecord(defaultEnv))
+    .filter(([name]) => defaultEnvNameSet.has(name) && envAllowlistSet.has(name))
+    .map(([name, value]) => `[[ -z "\${${name}+x}" ]] && ${name}=${shellQuote(value)}`)
+    .join('\n');
+  const defaultEnvBlock = defaultEnvLines
+    ? `# Claude environment defaults written from user env or .env.\n${defaultEnvLines}\n\n`
+    : '';
   const envLines = envAllowlist.map((name) => {
     const envName = requireValue(name, 'envName');
     return `# allowlist: -e ${envName}\n[[ -n "\${${envName}+x}" ]] && DOCKER_ENV+=("-e" "${envName}=\${${envName}}")`;
@@ -238,7 +255,7 @@ export function buildClaudeDockerWrapperScript({
   return `#!/usr/bin/env bash
 set -euo pipefail
 
-DOCKER_ENV=()
+${defaultEnvBlock}DOCKER_ENV=()
 ${envLines}
 
 exec docker exec -i \\
@@ -306,6 +323,23 @@ function buildContainerEnvAllowlist(containerEnv = {}) {
   ]));
 }
 
+function readEnvValue(record, name) {
+  const value = record?.[name];
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
+  const defaults = {};
+  const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
+  for (const name of CLAUDE_USER_CONFIG_ENV_NAMES) {
+    const value = readEnvValue(normalizedContainerEnv, name) || readEnvValue(env, name);
+    if (value) {
+      defaults[name] = value;
+    }
+  }
+  return defaults;
+}
+
 function readUsernameForEnv(users, userId) {
   if (typeof users?.getUserById !== 'function') {
     return null;
@@ -331,6 +365,12 @@ function readUserContainerEnv(users, userId) {
   const env = normalizeContainerEnvRecord(users.getEnvForUser(userId));
   if (env[USER_KEY_ENV_NAME]) {
     output[USER_KEY_ENV_NAME] = env[USER_KEY_ENV_NAME];
+  }
+  for (const name of CLAUDE_USER_CONFIG_ENV_NAMES) {
+    const value = readEnvValue(env, name);
+    if (value) {
+      output[name] = value;
+    }
   }
   return output;
 }
@@ -551,6 +591,7 @@ export function createAgentSessionRuntimeManager({
       buildClaudeDockerWrapperScript({
         containerName: runtime.container_name,
         envAllowlist: buildContainerEnvAllowlist(runtime.userEnv),
+        defaultEnv: buildClaudeWrapperDefaultEnv(env, runtime.userEnv),
       }),
       { mode: 0o700 },
     );

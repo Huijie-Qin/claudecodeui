@@ -54,6 +54,7 @@ const c = {
 };
 
 const USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY = 'user_key_encryption_secret';
+const CLAUDE_ENV_NAMES = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'];
 
 // Use DATABASE_PATH environment variable if set, otherwise use default location
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'auth.db');
@@ -233,6 +234,23 @@ function decryptUserEnvForRuntime(env) {
   return decryptUserEnvRecord(env, {
     secretMaterial: getUserKeyEncryptionSecret(),
   });
+}
+
+function buildClaudeEnvUpdateResult(row, envPatch) {
+  const existingEnv = ensureUserEnvForRow(row);
+  const nextEnv = {
+    ...existingEnv,
+    ...envPatch,
+  };
+  const envJson = buildUserEnvJson(nextEnv);
+  db.prepare('UPDATE users SET env = ? WHERE id = ?').run(envJson, row.id);
+
+  return {
+    userId: row.id,
+    username: row.username,
+    success: true,
+    env: Object.fromEntries(CLAUDE_ENV_NAMES.map((name) => [name, nextEnv[name]])),
+  };
 }
 
 function encryptCodeHubToken(token) {
@@ -746,7 +764,38 @@ const userDb = {
     } catch (err) {
       throw err;
     }
-  }
+  },
+
+  updateClaudeEnvForUsers: ({ userIds, env }) => {
+    try {
+      const uniqueUserIds = Array.from(new Set(
+        (Array.isArray(userIds) ? userIds : [])
+          .map((userId) => Number(userId))
+          .filter((userId) => Number.isInteger(userId) && userId > 0),
+      ));
+      const envPatch = Object.fromEntries(
+        CLAUDE_ENV_NAMES
+          .filter((name) => env?.[name] != null)
+          .map((name) => [name, String(env[name])]),
+      );
+
+      const updateUsers = db.transaction(() => uniqueUserIds.map((userId) => {
+        const row = db
+          .prepare('SELECT id, username, env FROM users WHERE id = ?')
+          .get(userId);
+
+        if (!row) {
+          return { userId, success: false, error: 'User not found' };
+        }
+
+        return buildClaudeEnvUpdateResult(row, envPatch);
+      }));
+
+      return updateUsers();
+    } catch (err) {
+      throw err;
+    }
+  },
 };
 
 const codeHubDb = {

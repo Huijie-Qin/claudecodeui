@@ -128,8 +128,9 @@ function resolveToolApproval(requestId, decision) {
 }
 
 function resolveClaudeModel(options = {}) {
+  const runtimeEnvModel = options.executionEnv?.ANTHROPIC_MODEL?.trim();
   const envModel = process.env.ANTHROPIC_MODEL?.trim();
-  return envModel || options.model || CLAUDE_MODELS.DEFAULT;
+  return runtimeEnvModel || envModel || options.model || CLAUDE_MODELS.DEFAULT;
 }
 
 /**

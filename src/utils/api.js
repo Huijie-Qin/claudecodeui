@@ -333,6 +333,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    updateClaudeEnvBatch: (payload) =>
+      authenticatedFetch('/api/admin/users/claude-env/batch', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     users: () => authenticatedFetch('/api/admin/users'),
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>

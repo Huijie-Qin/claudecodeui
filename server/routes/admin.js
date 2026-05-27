@@ -12,6 +12,9 @@ import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_BATCH_USER_ENV_UPDATES = 500;
+const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
+const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -175,6 +178,56 @@ function parsePositiveIdList(value, name) {
     seen.add(item);
     return true;
   });
+}
+
+function parseClaudeBaseUrl(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    const error = new Error('ANTHROPIC_BASE_URL is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (normalized.length > 2048) {
+    const error = new Error('ANTHROPIC_BASE_URL must be 2048 characters or fewer');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    const error = new Error('ANTHROPIC_BASE_URL must be a valid URL');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    const error = new Error('ANTHROPIC_BASE_URL must use http or https');
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function parseClaudeModel(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    const error = new Error('ANTHROPIC_MODEL is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (normalized.length > 256) {
+    const error = new Error('ANTHROPIC_MODEL must be 256 characters or fewer');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    const error = new Error('ANTHROPIC_MODEL must not contain control characters');
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
 }
 
 function summarizeBatchResults(results) {
@@ -366,6 +419,35 @@ export function createAdminRouter(
       });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to create user invitations');
+    }
+  });
+
+  router.post('/users/claude-env/batch', (req, res) => {
+    try {
+      if (typeof users.updateClaudeEnvForUsers !== 'function') {
+        return res.status(501).json({ error: 'Claude environment updates are not available' });
+      }
+
+      const userIds = parsePositiveIdList(req.body?.userIds, 'userIds');
+      if (userIds.length === 0) {
+        return res.status(400).json({ error: 'At least one user is required' });
+      }
+      if (userIds.length > MAX_BATCH_USER_ENV_UPDATES) {
+        return res.status(400).json({ error: `Batch Claude environment updates are limited to ${MAX_BATCH_USER_ENV_UPDATES} users` });
+      }
+
+      const env = {
+        [ANTHROPIC_BASE_URL_ENV_NAME]: parseClaudeBaseUrl(req.body?.anthropicBaseUrl),
+        [ANTHROPIC_MODEL_ENV_NAME]: parseClaudeModel(req.body?.anthropicModel),
+      };
+      const results = users.updateClaudeEnvForUsers({ userIds, env });
+
+      return res.json({
+        results,
+        summary: summarizeBatchResults(results),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Claude environment');
     }
   });
 

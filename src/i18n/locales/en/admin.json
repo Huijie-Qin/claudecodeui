@@ -4,6 +4,7 @@
   "tabs": {
     "users": "Users",
     "tenants": "Tenant Access",
+    "claudeEnv": "Claude Env",
     "mcpPresets": "MCP Server Presets",
     "runtimes": "Runtime Monitor"
   },
@@ -69,10 +70,13 @@
     "deleteUser": "Failed to delete user",
     "selectTenantAndUser": "Select a tenant and a user",
     "selectTenantsAndUsers": "Select at least one tenant and one user",
+    "selectClaudeEnvUsers": "Select at least one user",
+    "claudeEnvRequired": "ANTHROPIC_BASE_URL and ANTHROPIC_MODEL are required",
     "grantTenantAccess": "Failed to grant tenant access",
     "batchUsersRequired": "Enter at least one username",
     "batchCreateUserInvites": "Failed to create user invitations",
     "batchGrantTenantAccess": "Failed to batch grant tenant access",
+    "batchUpdateClaudeEnv": "Failed to update Claude environment",
     "deleteTenantAccess": "Failed to delete tenant access"
   },
   "confirm": {
@@ -82,7 +86,8 @@
   "toast": {
     "grantTenantAccessSuccess": "Granted {{username}} access to {{tenantName}}",
     "batchCreateUsersSuccess": "Created {{succeeded}} invitations, {{failed}} failed",
-    "batchGrantTenantAccessSuccess": "Granted {{succeeded}} access entries, {{failed}} failed"
+    "batchGrantTenantAccessSuccess": "Granted {{succeeded}} access entries, {{failed}} failed",
+    "batchUpdateClaudeEnvSuccess": "Updated {{succeeded}} users, {{failed}} failed"
   },
   "batch": {
     "createUsersTitle": "Batch create users",
@@ -116,6 +121,17 @@
     "activationLink": "Activation Link",
     "passwordResetLink": "Reset Password",
     "passwordResetLinkTitle": "Password reset link"
+  },
+  "claudeEnv": {
+    "title": "Claude environment",
+    "baseUrl": "ANTHROPIC_BASE_URL",
+    "baseUrlPlaceholder": "https://api.example.com",
+    "model": "ANTHROPIC_MODEL",
+    "modelPlaceholder": "glm-5.1",
+    "saveButton": "Save to users",
+    "usersTitle": "Users selected: {{count}}",
+    "selectAll": "Select all users",
+    "clearSelection": "Clear selection"
   },
   "tenants": {
     "createTitle": "Create tenant",

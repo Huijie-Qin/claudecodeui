@@ -138,6 +138,20 @@ type AdminBatchMembershipsPayload = {
   message?: string;
 };
 
+type AdminBatchClaudeEnvResult = {
+  userId: number;
+  username?: string;
+  success: boolean;
+  error?: string;
+};
+
+type AdminBatchClaudeEnvPayload = {
+  results?: AdminBatchClaudeEnvResult[];
+  summary?: AdminBatchSummary;
+  error?: string;
+  message?: string;
+};
+
 type AdminErrorPayload = {
   error?: string;
   message?: string;
@@ -227,11 +241,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [selectedBatchUserIds, setSelectedBatchUserIds] = useState<string[]>([]);
   const [batchUserSearch, setBatchUserSearch] = useState('');
   const [batchTenantSearch, setBatchTenantSearch] = useState('');
+  const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
+  const [claudeEnvModel, setClaudeEnvModel] = useState('');
+  const [claudeEnvUserSearch, setClaudeEnvUserSearch] = useState('');
+  const [selectedClaudeEnvUserIds, setSelectedClaudeEnvUserIds] = useState<string[]>([]);
+  const [claudeEnvSummary, setClaudeEnvSummary] = useState<AdminBatchSummary | null>(null);
+  const [claudeEnvResults, setClaudeEnvResults] = useState<AdminBatchClaudeEnvResult[]>([]);
   const [permission, setPermission] = useState<TenantPermission>('edit');
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'tenants' | 'mcpPresets' | 'runtimes'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes'>('users');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -638,6 +658,68 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
+  const updateClaudeEnvBatch = async () => {
+    const userIds = selectedClaudeEnvUserIds.map(Number).filter(Boolean);
+    const anthropicBaseUrl = claudeEnvBaseUrl.trim();
+    const anthropicModel = claudeEnvModel.trim();
+
+    setError(null);
+    setClaudeEnvSummary(null);
+    setClaudeEnvResults([]);
+    if (userIds.length === 0) {
+      const message = t('errors.selectClaudeEnvUsers');
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+    if (!anthropicBaseUrl || !anthropicModel) {
+      const message = t('errors.claudeEnvRequired');
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const response = await api.admin.updateClaudeEnvBatch({
+        userIds,
+        anthropicBaseUrl,
+        anthropicModel,
+      });
+      const payload = await response.json().catch(() => ({} as AdminBatchClaudeEnvPayload)) as AdminBatchClaudeEnvPayload;
+      if (!response.ok) {
+        const message = payload.error || payload.message || t('errors.batchUpdateClaudeEnv');
+        setError(message);
+        showToast(message, 'error');
+        return;
+      }
+
+      const results = payload.results || [];
+      const summary = payload.summary || {
+        total: results.length,
+        succeeded: results.filter((result) => result.success).length,
+        failed: results.filter((result) => !result.success).length,
+      };
+      setClaudeEnvResults(results);
+      setClaudeEnvSummary(summary);
+      showToast(t('toast.batchUpdateClaudeEnvSuccess', {
+        succeeded: summary.succeeded,
+        failed: summary.failed,
+      }), summary.failed > 0 ? 'error' : 'success');
+
+      if (summary.succeeded > 0) {
+        setSelectedClaudeEnvUserIds([]);
+      }
+    } catch (caughtError) {
+      console.error('[AdminPanel] Failed to update Claude environment:', caughtError);
+      const message = t('errors.batchUpdateClaudeEnv');
+      setError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const removeMembership = async (membership: AdminMembership) => {
     const confirmed = window.confirm(t('confirm.removeAccess', {
       username: membership.username,
@@ -667,6 +749,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const collapsibleTriggerClassName = 'group flex w-full items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-left hover:bg-muted/40';
   const filteredBatchUsers = users.filter((user) => matchesQuery(user.username, batchUserSearch));
   const filteredBatchTenants = tenants.filter((tenant) => matchesQuery(`${tenant.name} ${tenant.code}`, batchTenantSearch));
+  const filteredClaudeEnvUsers = users.filter((user) => matchesQuery(user.username, claudeEnvUserSearch));
   const renderBatchGrantSection = () => (
     <Collapsible className="space-y-3">
       <CollapsibleTrigger className={collapsibleTriggerClassName}>
@@ -829,7 +912,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             </div>
           </div>
 
-          <div className="flex gap-1 border-b border-border px-5 py-2">
+          <div className="flex flex-wrap gap-1 border-b border-border px-5 py-2">
             <Button
               variant={activeTab === 'users' ? 'default' : 'ghost'}
               size="sm"
@@ -843,6 +926,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               onClick={() => setActiveTab('tenants')}
             >
               {t('tabs.tenants')}
+            </Button>
+            <Button
+              variant={activeTab === 'claudeEnv' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('claudeEnv')}
+            >
+              {t('tabs.claudeEnv')}
             </Button>
             <Button
               variant={activeTab === 'mcpPresets' ? 'default' : 'ghost'}
@@ -1140,6 +1230,129 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   )}
                 </div>
               </section>
+
+              {error ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {activeTab === 'claudeEnv' ? (
+            <div className="space-y-5 overflow-y-auto px-5 py-4">
+              <section className="space-y-3">
+                <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,280px)]">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">{t('claudeEnv.baseUrl')}</span>
+                      <Input
+                        value={claudeEnvBaseUrl}
+                        onChange={(event) => setClaudeEnvBaseUrl(event.target.value)}
+                        placeholder={t('claudeEnv.baseUrlPlaceholder')}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">{t('claudeEnv.model')}</span>
+                      <Input
+                        value={claudeEnvModel}
+                        onChange={(event) => setClaudeEnvModel(event.target.value)}
+                        placeholder={t('claudeEnv.modelPlaceholder')}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                      />
+                    </label>
+                  </div>
+                  <Button className="self-end" onClick={updateClaudeEnvBatch} disabled={isSaving}>
+                    <Check className="h-4 w-4" />
+                    {t('claudeEnv.saveButton')}
+                  </Button>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-medium text-foreground">
+                    {t('claudeEnv.usersTitle', { count: selectedClaudeEnvUserIds.length })}
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedClaudeEnvUserIds(users.map((user) => String(user.id)))}
+                      disabled={users.length === 0}
+                    >
+                      {t('claudeEnv.selectAll')}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedClaudeEnvUserIds([])}
+                      disabled={selectedClaudeEnvUserIds.length === 0}
+                    >
+                      {t('claudeEnv.clearSelection')}
+                    </Button>
+                  </div>
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="pl-9"
+                    value={claudeEnvUserSearch}
+                    onChange={(event) => setClaudeEnvUserSearch(event.target.value)}
+                    placeholder={t('batch.searchUsers')}
+                  />
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-md border border-input bg-background p-2 shadow-sm">
+                  {users.length === 0 ? (
+                    <div className="px-2 py-3 text-sm text-muted-foreground">{t('users.empty')}</div>
+                  ) : filteredClaudeEnvUsers.length === 0 ? (
+                    <div className="px-2 py-3 text-sm text-muted-foreground">{t('batch.noMatches')}</div>
+                  ) : (
+                    filteredClaudeEnvUsers.map((user) => (
+                      <label
+                        key={user.id}
+                        className="flex min-h-8 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted/60"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-input accent-primary"
+                          checked={selectedClaudeEnvUserIds.includes(String(user.id))}
+                          onChange={(event) => setSelectedClaudeEnvUserIds((values) => (
+                            toggleSelectedId(values, user.id, event.target.checked)
+                          ))}
+                        />
+                        <span className="min-w-0 truncate">{user.username}</span>
+                        <span className={`ml-auto rounded px-2 py-0.5 text-xs ${getUserStatusClassName(user)}`}>
+                          {t(`statuses.${getUserStatusKey(user)}`)}
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              {claudeEnvSummary ? (
+                <section className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                  {t('batch.summary', {
+                    total: claudeEnvSummary.total,
+                    succeeded: claudeEnvSummary.succeeded,
+                    failed: claudeEnvSummary.failed,
+                  })}
+                </section>
+              ) : null}
+              {claudeEnvResults.some((result) => !result.success) ? (
+                <section className="max-h-24 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  {claudeEnvResults.filter((result) => !result.success).map((result) => (
+                    <div key={result.userId}>
+                      {(result.username || result.userId)}: {result.error}
+                    </div>
+                  ))}
+                </section>
+              ) : null}
 
               {error ? (
                 <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
