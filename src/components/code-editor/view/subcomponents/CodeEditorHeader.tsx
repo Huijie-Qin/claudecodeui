@@ -67,6 +67,51 @@ export default function CodeEditorHeader({
       ? labels.submittingSkill
       : labels.submitSkill;
 
+  const displayedPath = (() => {
+    const normalizedPath = String(file.displayPath || file.path || '')
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .trim()
+      .replace(/\/+$/g, '');
+
+    if (!normalizedPath) {
+      return '/';
+    }
+    if (normalizedPath === '/workspace') {
+      return '/workspace';
+    }
+    if (normalizedPath.startsWith('/workspace/')) {
+      return normalizedPath;
+    }
+
+    const pathParts = normalizedPath.split('/').filter(Boolean);
+
+    const workspacesIndex = pathParts.lastIndexOf('workspaces');
+    if (workspacesIndex !== -1 && pathParts.length > workspacesIndex + 3) {
+      const suffix = pathParts.slice(workspacesIndex + 4).join('/');
+      return suffix ? `/workspace/${suffix}` : '/workspace';
+    }
+
+    const claudeIndex = pathParts.lastIndexOf('.claude');
+    if (claudeIndex !== -1 && pathParts.length > claudeIndex) {
+      return `/workspace/${pathParts.slice(claudeIndex).join('/')}`;
+    }
+
+    if (file.projectName && pathParts.includes(file.projectName)) {
+      const workspaceIndex = pathParts.lastIndexOf(file.projectName);
+      if (workspaceIndex !== -1 && pathParts.length > workspaceIndex) {
+        const suffix = pathParts.slice(workspaceIndex + 1).join('/');
+        return suffix ? `/workspace/${suffix}` : '/workspace';
+      }
+    }
+
+    if (!normalizedPath.startsWith('/')) {
+      return `/workspace/${normalizedPath}`;
+    }
+
+    return normalizedPath;
+  })();
+
   return (
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
       {/* File info - can shrink */}
@@ -80,7 +125,9 @@ export default function CodeEditorHeader({
               </span>
             )}
           </div>
-          <p className="truncate text-xs text-gray-500 dark:text-gray-400">{file.path}</p>
+          <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+            {displayedPath}
+          </p>
         </div>
       </div>
 
