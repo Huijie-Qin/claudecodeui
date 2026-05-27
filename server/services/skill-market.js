@@ -1012,9 +1012,13 @@ function normalizeSavedSkillPayload(payload, { id, name, currentUsername }) {
 }
 
 function extractSavedSkillId(payload) {
-  const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
-  const skill = data.skill && typeof data.skill === 'object' ? data.skill : data;
-  const id = skill.id ?? skill.skillId ?? payload?.id ?? payload?.skillId;
+  const data = payload?.data;
+  const skill = data && typeof data === 'object'
+    ? (data.skill && typeof data.skill === 'object' ? data.skill : data)
+    : {};
+  const id = typeof data === 'string' || typeof data === 'number'
+    ? data
+    : skill.id ?? skill.skillId ?? payload?.id ?? payload?.skillId;
   const normalizedId = String(id ?? '').trim();
   if (!normalizedId) {
     throw createHttpError('Skill market save response did not include a skill id', 502);

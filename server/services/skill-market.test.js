@@ -485,13 +485,7 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
       sendJson(res, {
         code: 0,
         message: 'success',
-        data: {
-          id: 'saved-local-author',
-          skillName: 'Local Author',
-          nspPath: 'mock://skills/local-author',
-          createUserId: TEST_ACCOUNT_ID,
-          version: 1,
-        },
+        data: 'saved-local-author',
       });
       return;
     }
