@@ -30,71 +30,90 @@ export const useEditorSidebar = ({
       ).replace(/\\/g, '/');
       const workspaceName = workspacePath.split('/').filter(Boolean).pop() || '';
 
-      const normalizedPath = filePath
+      const normalizedWorkspacePath = workspacePath.replace(/\/+$/g, '');
+      const workspaceNamePrefix = workspaceName ? `${workspaceName}` : '';
+
+      const cleanInputPath = String(filePath || '')
         .trim()
         .replace(/^['"`]+|['"`]+$/g, '')
-        .replace(/\\/g, '/');
-      const sanitizedNormalizedPath = normalizedPath.replace(/\/+/g, '/');
-      const normalizedPathNoTrailingSlash = sanitizedNormalizedPath.replace(/\/+$/, '');
-      const normalizedNormalizedPath = normalizedPathNoTrailingSlash.replace(/^\/+/, '');
-      const normalizedWorkspacePath = workspacePath.replace(/\/+$/, '');
-      const hasWorkspaceNamePrefix =
-        Boolean(
-          workspaceName &&
-            (normalizedNormalizedPath === workspaceName ||
-              normalizedNormalizedPath.startsWith(`${workspaceName}/`)),
-        );
-      const hasWorkspacePathPrefix = Boolean(
-        normalizedWorkspacePath &&
+        .replace(/\\/g, '/')
+        .replace(/\/+/g, '/');
+      const normalizedPathNoTrailingSlash = cleanInputPath.replace(/\/+$/g, '');
+
+      const stripWorkspaceNamePrefix = (candidatePath: string) => {
+        if (!workspaceNamePrefix) {
+          return null;
+        }
+        const trimmed = candidatePath.replace(/^\/+/, '');
+        if (trimmed === workspaceNamePrefix) {
+          return '';
+        }
+        if (trimmed.startsWith(`${workspaceNamePrefix}/`)) {
+          return trimmed.slice(workspaceNamePrefix.length + 1);
+        }
+        return null;
+      };
+
+      const resolvedPath = (() => {
+        if (!normalizedPathNoTrailingSlash) {
+          return normalizedPathNoTrailingSlash;
+        }
+
+        if (
+          normalizedWorkspacePath &&
           (normalizedPathNoTrailingSlash === normalizedWorkspacePath ||
-            normalizedPathNoTrailingSlash.startsWith(`${normalizedWorkspacePath}/`)),
-      );
-      const normalizedFromContainerPrefix = normalizedPath.replace(
-        /^\/workspace\/?/,
-        '',
-      );
+            normalizedPathNoTrailingSlash.startsWith(`${normalizedWorkspacePath}/`))
+        ) {
+          return normalizedPathNoTrailingSlash;
+        }
 
-      const resolvedPath =
-        normalizedWorkspacePath &&
-        normalizedPath.startsWith('/workspace/') &&
-        normalizedFromContainerPrefix
-          ? hasWorkspaceNamePrefix
-            ? `${normalizedWorkspacePath}/${normalizedFromContainerPrefix
-                .slice(workspaceName.length)
-                .replace(/^\/+/, '')}`
-            : `${normalizedWorkspacePath}/${normalizedFromContainerPrefix}`
-          : normalizedPath;
+        if (normalizedPathNoTrailingSlash.startsWith('/workspace/')) {
+          if (!normalizedWorkspacePath) {
+            return normalizedPathNoTrailingSlash;
+          }
+          return `${normalizedWorkspacePath}/${normalizedPathNoTrailingSlash.slice('/workspace/'.length)}`;
+        }
 
-      const workspacePrefix = workspaceName ? `/${workspaceName}` : '';
-      const relativePathFromWorkspace = hasWorkspacePathPrefix
-        ? normalizedPathNoTrailingSlash.slice(normalizedWorkspacePath.length).replace(/^\/+/, '')
-        : '';
-      const workspaceDisplayPath = hasWorkspaceNamePrefix
-        ? `/${normalizedNormalizedPath}`
-        : hasWorkspacePathPrefix
-          ? `${workspacePrefix}${relativePathFromWorkspace ? `/${relativePathFromWorkspace}` : ''}`
-          : '';
-      const containerRootRelativePath = normalizedPathNoTrailingSlash
-        .replace(/^\/+workspace\/?/, '')
-        .replace(/^\/+/, '');
-      const filesDisplayPath = hasWorkspacePathPrefix
-        ? `/workspace${relativePathFromWorkspace ? `/${relativePathFromWorkspace}` : ''}`
-        : workspaceName
-          ? normalizedNormalizedPath === workspaceName
-            ? '/workspace'
-            : normalizedNormalizedPath.startsWith(`${workspaceName}/`)
-              ? `/workspace/${normalizedNormalizedPath.slice(workspaceName.length + 1)}`
-              : containerRootRelativePath.startsWith(`${workspaceName}/`)
-                ? `/workspace/${containerRootRelativePath.replace(`${workspaceName}/`, '')}`
-                : workspaceDisplayPath
-          : '';
+        const workspaceRelative = stripWorkspaceNamePrefix(normalizedPathNoTrailingSlash);
+        if (workspaceRelative !== null) {
+          if (!normalizedWorkspacePath) {
+            return normalizedPathNoTrailingSlash;
+          }
+          return workspaceRelative
+            ? `${normalizedWorkspacePath}/${workspaceRelative}`
+            : normalizedWorkspacePath;
+        }
+
+        if (!normalizedPathNoTrailingSlash.startsWith('/') && normalizedWorkspacePath) {
+          const relativePath = normalizedPathNoTrailingSlash.replace(/^\.\/+/, '');
+          return relativePath
+            ? `${normalizedWorkspacePath}/${relativePath}`
+            : normalizedWorkspacePath;
+        }
+
+        return cleanInputPath;
+      })();
+
+      const buildWorkspaceDisplayPath = (targetPath: string) => {
+        if (!normalizedWorkspacePath) {
+          return targetPath;
+        }
+        if (targetPath === normalizedWorkspacePath) {
+          return '/workspace';
+        }
+        if (targetPath.startsWith(`${normalizedWorkspacePath}/`)) {
+          return `/workspace/${targetPath.slice(normalizedWorkspacePath.length + 1)}`;
+        }
+        return '';
+      };
+
+      const workspaceDisplayPath = buildWorkspaceDisplayPath(resolvedPath);
       const displayPath = source === 'files'
-        ? filesDisplayPath || workspaceDisplayPath || sanitizedNormalizedPath
-        : sanitizedNormalizedPath.startsWith('/workspace/')
-          ? sanitizedNormalizedPath
-          : workspaceDisplayPath || sanitizedNormalizedPath;
+        ? workspaceDisplayPath || cleanInputPath || '/'
+        : workspaceDisplayPath || resolvedPath;
 
-      const fileName = resolvedPath.split('/').pop() || resolvedPath;
+      const resolvedPathWithoutTrailingSlash = resolvedPath.replace(/\/+$/g, '');
+      const fileName = resolvedPathWithoutTrailingSlash.split('/').pop() || resolvedPathWithoutTrailingSlash;
 
       setEditingFile({
         name: fileName,
