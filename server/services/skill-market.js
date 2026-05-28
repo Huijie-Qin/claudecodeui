@@ -245,7 +245,11 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
 
   const runtimePath = getRuntimeSkillPath(workspacePath, status.skillName);
   const localFiles = await readSkillDirectoryFiles(runtimePath);
-  const remoteFiles = await readRemoteSkillFiles(remoteSkill, { tenantCode, accountId: remoteAccountId });
+  const remoteFiles = await readRemoteSkillFiles(remoteSkill, {
+    tenantCode,
+    accountId: remoteAccountId,
+    skillRootName: status.skillName,
+  });
   const changes = compareSkillFiles(remoteFiles, localFiles);
 
   return {
@@ -709,11 +713,18 @@ async function previewRemoteSkillFile(remoteSkill, filePath, { tenantCode, accou
   };
 }
 
-async function readRemoteSkillFiles(remoteSkill, { tenantCode, accountId } = {}) {
+async function readRemoteSkillFiles(remoteSkill, { tenantCode, accountId, skillRootName } = {}) {
   const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode, accountId });
   const fileEntries = flattenDirectoryTree(preview.directoryTree);
+  const archiveRoot = inferSkillArchiveRoot(fileEntries, remoteSkill, skillRootName);
   const files = await Promise.all(
-    fileEntries.map((file) => previewRemoteSkillFile(remoteSkill, file.path, { tenantCode, accountId })),
+    fileEntries.map(async (file) => {
+      const remoteFile = await previewRemoteSkillFile(remoteSkill, file.path, { tenantCode, accountId });
+      return {
+        ...remoteFile,
+        path: stripSkillArchiveRoot(remoteFile.path, archiveRoot),
+      };
+    }),
   );
   return files.sort(sortFileEntries);
 }
@@ -732,7 +743,9 @@ async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } =
   });
 
   if (payload) {
-    const files = normalizeDownloadedFiles(payload.data?.files ?? payload.data?.skill?.files ?? payload.data);
+    const files = normalizeDownloadedFiles(payload.data?.files ?? payload.data?.skill?.files ?? payload.data, {
+      remoteSkill,
+    });
     if (Object.keys(files).length > 0) {
       return files;
     }
@@ -741,7 +754,7 @@ async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } =
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('zip') || contentType.includes('octet-stream')) {
     const zipBuffer = Buffer.from(await response.arrayBuffer());
-    const files = await readZipFiles(zipBuffer);
+    const files = await readZipFiles(zipBuffer, { remoteSkill });
     if (Object.keys(files).length > 0) {
       return files;
     }
@@ -1239,17 +1252,20 @@ async function buildSkillArchiveForm(skillName, files) {
   return formData;
 }
 
-async function readZipFiles(buffer) {
+async function readZipFiles(buffer, { remoteSkill, skillRootName } = {}) {
   const zip = await JSZip.loadAsync(buffer);
-  const files = {};
+  const fileEntries = [];
   await Promise.all(
     Object.values(zip.files).map(async (entry) => {
       if (entry.dir) return;
       const normalizedPath = normalizeRelativeFilePath(entry.name);
-      files[normalizedPath] = await entry.async('string');
+      fileEntries.push({
+        path: normalizedPath,
+        content: await entry.async('string'),
+      });
     }),
   );
-  return files;
+  return filesToContentMap(normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName));
 }
 
 function normalizeSkillListPayload(data) {
@@ -1442,28 +1458,95 @@ function sortDirectoryTreeEntries(left, right) {
   return sortPathNames(left.path, right.path);
 }
 
-function normalizeDownloadedFiles(files) {
+function normalizeDownloadedFiles(files, { remoteSkill, skillRootName } = {}) {
+  let fileEntries = [];
+
   if (Array.isArray(files)) {
-    return Object.fromEntries(
-      files
-        .filter((file) => file && typeof file === 'object')
-        .map((file) => [
-          normalizeRelativeFilePath(file.path),
-          typeof file.content === 'string' ? file.content : '',
-        ]),
+    fileEntries = files
+      .filter((file) => file && typeof file === 'object')
+      .map((file) => ({
+        path: normalizeRelativeFilePath(file.path),
+        content: typeof file.content === 'string' ? file.content : '',
+      }));
+    return filesToContentMap(
+      normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName),
     );
   }
 
   if (isPlainObject(files)) {
-    return Object.fromEntries(
-      Object.entries(files).map(([filePath, content]) => [
-        normalizeRelativeFilePath(filePath),
-        typeof content === 'string' ? content : '',
-      ]),
+    fileEntries = Object.entries(files).map(([filePath, content]) => ({
+      path: normalizeRelativeFilePath(filePath),
+      content: typeof content === 'string' ? content : '',
+    }));
+    return filesToContentMap(
+      normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName),
     );
   }
 
   return {};
+}
+
+function normalizeSkillFilePaths(files, remoteSkill, skillRootName) {
+  const archiveRoot = inferSkillArchiveRoot(files, remoteSkill, skillRootName);
+  return files.map((file) => ({
+    ...file,
+    path: stripSkillArchiveRoot(file.path, archiveRoot),
+  }));
+}
+
+function inferSkillArchiveRoot(files, remoteSkill, skillRootName) {
+  const normalizedFiles = (files || [])
+    .map((file) => normalizeRelativeFilePath(file.path))
+    .map((filePath) => filePath.split('/').filter(Boolean));
+  if (normalizedFiles.length === 0) return null;
+  if (normalizedFiles.some((parts) => parts.length < 2)) return null;
+
+  const archiveRoot = normalizedFiles[0][0];
+  if (!archiveRoot || normalizedFiles.some((parts) => parts[0] !== archiveRoot)) {
+    return null;
+  }
+
+  const normalizedArchiveRoot = safeNormalizeSkillFolderName(archiveRoot);
+  if (!normalizedArchiveRoot) return null;
+
+  const candidates = new Set(
+    [
+      skillRootName,
+      remoteSkill?.name,
+      remoteSkill?.displayName,
+      remoteSkill?.id,
+      remoteSkill?.skillId,
+    ]
+      .map(safeNormalizeSkillFolderName)
+      .filter(Boolean),
+  );
+
+  return candidates.has(normalizedArchiveRoot) ? archiveRoot : null;
+}
+
+function stripSkillArchiveRoot(filePath, archiveRoot) {
+  const normalizedFilePath = normalizeRelativeFilePath(filePath);
+  if (!archiveRoot) return normalizedFilePath;
+
+  const parts = normalizedFilePath.split('/').filter(Boolean);
+  const normalizedArchiveRoot = safeNormalizeSkillFolderName(archiveRoot);
+  if (
+    parts.length > 1
+    && normalizedArchiveRoot
+    && safeNormalizeSkillFolderName(parts[0]) === normalizedArchiveRoot
+  ) {
+    return parts.slice(1).join('/');
+  }
+  return normalizedFilePath;
+}
+
+function filesToContentMap(files) {
+  return Object.fromEntries(
+    files.map((file) => [
+      file.path,
+      typeof file.content === 'string' ? file.content : '',
+    ]),
+  );
 }
 
 function compareSkillFiles(remoteFiles, localFiles) {
