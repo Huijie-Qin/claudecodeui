@@ -24,6 +24,7 @@ import {
   parseBatchUsernames,
   type TenantPermission,
 } from './adminPanelUtils';
+import AnalyticsDashboardTab from './AnalyticsDashboardTab';
 import McpPresetsTab from './McpPresetsTab';
 import PlatformAnalyticsTab from './PlatformAnalyticsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
@@ -922,7 +923,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               size="sm"
               onClick={() => setActiveTab('analytics')}
             >
-              {t('tabs.analytics')}
+              {t('tabs.analytics', { defaultValue: '统计面板' })}
             </Button>
             <Button
               variant={activeTab === 'users' ? 'default' : 'ghost'}
@@ -963,7 +964,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
           {activeTab === 'analytics' ? (
             <div className="overflow-y-auto px-5 py-4">
-              <PlatformAnalyticsTab />
+              <AnalyticsDashboardTab />
             </div>
           ) : null}
 

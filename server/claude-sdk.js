@@ -333,6 +333,56 @@ function extractTokenBudget(resultMessage) {
 }
 
 /**
+ * Extracts per-turn token usage from SDK result messages for durable analytics.
+ * @param {Object} resultMessage - SDK result message
+ * @returns {Object|null} Token usage object or null
+ */
+function extractTokenUsage(resultMessage) {
+  if (resultMessage.type !== 'result' || !resultMessage.modelUsage) {
+    return null;
+  }
+
+  const modelKey = Object.keys(resultMessage.modelUsage)[0];
+  const modelData = resultMessage.modelUsage[modelKey];
+  if (!modelData) {
+    return null;
+  }
+
+  const inputTokens = modelData.inputTokens || modelData.input_tokens || 0;
+  const outputTokens = modelData.outputTokens || modelData.output_tokens || 0;
+  const cacheReadTokens = modelData.cacheReadInputTokens || modelData.cache_read_input_tokens || 0;
+  const cacheCreationTokens = modelData.cacheCreationInputTokens || modelData.cache_creation_input_tokens || 0;
+  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+  const cumulativeInputTokens = modelData.cumulativeInputTokens || modelData.cumulative_input_tokens || 0;
+  const cumulativeOutputTokens = modelData.cumulativeOutputTokens || modelData.cumulative_output_tokens || 0;
+  const cumulativeCacheReadTokens = modelData.cumulativeCacheReadInputTokens || modelData.cumulative_cache_read_input_tokens || 0;
+  const cumulativeCacheCreationTokens = modelData.cumulativeCacheCreationInputTokens || modelData.cumulative_cache_creation_input_tokens || 0;
+
+  if (totalTokens === 0 && cumulativeInputTokens + cumulativeOutputTokens + cumulativeCacheReadTokens + cumulativeCacheCreationTokens === 0) {
+    return null;
+  }
+
+  return {
+    model: modelKey,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    cacheTokens: cacheReadTokens + cacheCreationTokens,
+    totalTokens,
+    cumulativeInputTokens,
+    cumulativeOutputTokens,
+    cumulativeCacheReadTokens,
+    cumulativeCacheCreationTokens,
+    cumulativeCacheTokens: cumulativeCacheReadTokens + cumulativeCacheCreationTokens,
+    cumulativeTotalTokens: cumulativeInputTokens
+      + cumulativeOutputTokens
+      + cumulativeCacheReadTokens
+      + cumulativeCacheCreationTokens,
+  };
+}
+
+/**
  * Handles image processing for SDK queries
  * Saves base64 images to temporary files and returns modified prompt with file paths
  * @param {string} command - Original user prompt
@@ -709,7 +759,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
         }
         const tokenBudgetData = extractTokenBudget(message);
         if (tokenBudgetData) {
-          ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+          const tokenStatusMessage = createNormalizedMessage({
+            kind: 'status',
+            text: 'token_budget',
+            tokenBudget: tokenBudgetData,
+            tokenUsage: extractTokenUsage(message),
+            sessionId: capturedSessionId || sessionId || null,
+            provider: 'claude',
+          });
+          persistNormalizedMessages({
+            options: runtimeOptions,
+            provider: 'claude',
+            providerSessionId: persistenceSessionId,
+            runtimeId: runtimeOptions.runtimeId,
+            messages: [tokenStatusMessage],
+          });
+          ws.send(tokenStatusMessage);
         }
       }
     }

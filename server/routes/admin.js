@@ -9,6 +9,7 @@ import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.j
 import { mcpPresetService } from '../services/mcp-presets.js';
 import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
+import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -395,6 +396,30 @@ export function createAdminRouter(
       res.json({ analytics });
     } catch (error) {
       sendRouteError(res, error, 'Failed to load platform analytics');
+    }
+  });
+
+  router.get('/analytics/summary', (req, res) => {
+    try {
+      const summary = buildAdminAnalyticsSummary({ rangeDays: req.query?.rangeDays });
+      res.json(summary);
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load analytics summary');
+    }
+  });
+
+  router.get('/analytics/users', (req, res) => {
+    try {
+      const usersSummary = buildAdminAnalyticsUsers({
+        rangeDays: req.query?.rangeDays,
+        page: req.query?.page,
+        pageSize: req.query?.pageSize,
+        sortBy: req.query?.sortBy,
+        search: req.query?.search,
+      });
+      res.json(usersSummary);
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load analytics users');
     }
   });
 
