@@ -15,6 +15,7 @@ const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BATCH_USER_ENV_UPDATES = 500;
 const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
 const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
+const DAS_ENV_NAME = 'DAS';
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -182,11 +183,7 @@ function parsePositiveIdList(value, name) {
 
 function parseClaudeBaseUrl(value) {
   const normalized = String(value || '').trim();
-  if (!normalized) {
-    const error = new Error('ANTHROPIC_BASE_URL is required');
-    error.statusCode = 400;
-    throw error;
-  }
+  if (!normalized) return null;
   if (normalized.length > 2048) {
     const error = new Error('ANTHROPIC_BASE_URL must be 2048 characters or fewer');
     error.statusCode = 400;
@@ -212,11 +209,7 @@ function parseClaudeBaseUrl(value) {
 
 function parseClaudeModel(value) {
   const normalized = String(value || '').trim();
-  if (!normalized) {
-    const error = new Error('ANTHROPIC_MODEL is required');
-    error.statusCode = 400;
-    throw error;
-  }
+  if (!normalized) return null;
   if (normalized.length > 256) {
     const error = new Error('ANTHROPIC_MODEL must be 256 characters or fewer');
     error.statusCode = 400;
@@ -224,6 +217,22 @@ function parseClaudeModel(value) {
   }
   if (/[\u0000-\u001f\u007f]/.test(normalized)) {
     const error = new Error('ANTHROPIC_MODEL must not contain control characters');
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function parseClaudeEnvValue(value, name, { maxLength = 2048 } = {}) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  if (normalized.length > maxLength) {
+    const error = new Error(`${name} must be ${maxLength} characters or fewer`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    const error = new Error(`${name} must not contain control characters`);
     error.statusCode = 400;
     throw error;
   }
@@ -436,10 +445,16 @@ export function createAdminRouter(
         return res.status(400).json({ error: `Batch Claude environment updates are limited to ${MAX_BATCH_USER_ENV_UPDATES} users` });
       }
 
-      const env = {
-        [ANTHROPIC_BASE_URL_ENV_NAME]: parseClaudeBaseUrl(req.body?.anthropicBaseUrl),
-        [ANTHROPIC_MODEL_ENV_NAME]: parseClaudeModel(req.body?.anthropicModel),
-      };
+      const env = {};
+      const anthropicBaseUrl = parseClaudeBaseUrl(req.body?.anthropicBaseUrl);
+      const anthropicModel = parseClaudeModel(req.body?.anthropicModel);
+      const das = parseClaudeEnvValue(req.body?.das, DAS_ENV_NAME);
+      if (anthropicBaseUrl) env[ANTHROPIC_BASE_URL_ENV_NAME] = anthropicBaseUrl;
+      if (anthropicModel) env[ANTHROPIC_MODEL_ENV_NAME] = anthropicModel;
+      if (das) env[DAS_ENV_NAME] = das;
+      if (Object.keys(env).length === 0) {
+        return res.status(400).json({ error: 'At least one Claude environment value is required' });
+      }
       const results = users.updateClaudeEnvForUsers({ userIds, env });
 
       return res.json({

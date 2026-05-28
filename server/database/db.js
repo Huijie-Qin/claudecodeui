@@ -54,7 +54,7 @@ const c = {
 };
 
 const USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY = 'user_key_encryption_secret';
-const CLAUDE_ENV_NAMES = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'];
+const CLAUDE_ENV_NAMES = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'DAS'];
 
 // Use DATABASE_PATH environment variable if set, otherwise use default location
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'auth.db');

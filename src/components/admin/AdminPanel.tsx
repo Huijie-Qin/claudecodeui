@@ -243,6 +243,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchTenantSearch, setBatchTenantSearch] = useState('');
   const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
   const [claudeEnvModel, setClaudeEnvModel] = useState('');
+  const [claudeEnvDas, setClaudeEnvDas] = useState('');
   const [claudeEnvUserSearch, setClaudeEnvUserSearch] = useState('');
   const [selectedClaudeEnvUserIds, setSelectedClaudeEnvUserIds] = useState<string[]>([]);
   const [claudeEnvSummary, setClaudeEnvSummary] = useState<AdminBatchSummary | null>(null);
@@ -662,6 +663,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     const userIds = selectedClaudeEnvUserIds.map(Number).filter(Boolean);
     const anthropicBaseUrl = claudeEnvBaseUrl.trim();
     const anthropicModel = claudeEnvModel.trim();
+    const das = claudeEnvDas.trim();
 
     setError(null);
     setClaudeEnvSummary(null);
@@ -672,7 +674,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       showToast(message, 'error');
       return;
     }
-    if (!anthropicBaseUrl || !anthropicModel) {
+    if (!anthropicBaseUrl && !anthropicModel && !das) {
       const message = t('errors.claudeEnvRequired');
       setError(message);
       showToast(message, 'error');
@@ -683,8 +685,9 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     try {
       const response = await api.admin.updateClaudeEnvBatch({
         userIds,
-        anthropicBaseUrl,
-        anthropicModel,
+        ...(anthropicBaseUrl ? { anthropicBaseUrl } : {}),
+        ...(anthropicModel ? { anthropicModel } : {}),
+        ...(das ? { das } : {}),
       });
       const payload = await response.json().catch(() => ({} as AdminBatchClaudeEnvPayload)) as AdminBatchClaudeEnvPayload;
       if (!response.ok) {
@@ -1244,7 +1247,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,280px)]">
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <label className="space-y-1">
                       <span className="text-xs text-muted-foreground">{t('claudeEnv.baseUrl')}</span>
                       <Input
@@ -1261,6 +1264,16 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                         value={claudeEnvModel}
                         onChange={(event) => setClaudeEnvModel(event.target.value)}
                         placeholder={t('claudeEnv.modelPlaceholder')}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">{t('claudeEnv.das')}</span>
+                      <Input
+                        value={claudeEnvDas}
+                        onChange={(event) => setClaudeEnvDas(event.target.value)}
+                        placeholder={t('claudeEnv.dasPlaceholder')}
                         autoCapitalize="none"
                         autoComplete="off"
                       />

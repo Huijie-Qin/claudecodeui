@@ -17,9 +17,11 @@ const execFileAsync = promisify(execFile);
 const W3_NAME_ENV_NAME = 'W3_NAME';
 const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
 const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
+const DAS_ENV_NAME = 'DAS';
 const CLAUDE_USER_CONFIG_ENV_NAMES = [
   ANTHROPIC_BASE_URL_ENV_NAME,
   ANTHROPIC_MODEL_ENV_NAME,
+  DAS_ENV_NAME,
 ];
 const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
@@ -29,6 +31,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL_ENV_NAME,
   ANTHROPIC_MODEL_ENV_NAME,
+  DAS_ENV_NAME,
   'ANTHROPIC_AUTH_TOKEN',
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -306,6 +309,9 @@ function normalizeContainerEnvRecord(value) {
 function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   const output = {};
   for (const name of WRAPPER_HOST_ENV_ALLOWLIST) {
+    if (name === DAS_ENV_NAME) {
+      continue;
+    }
     if (env[name] != null) {
       output[name] = String(env[name]);
     }
@@ -332,7 +338,8 @@ function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
   const defaults = {};
   const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
   for (const name of CLAUDE_USER_CONFIG_ENV_NAMES) {
-    const value = readEnvValue(normalizedContainerEnv, name) || readEnvValue(env, name);
+    const value = readEnvValue(normalizedContainerEnv, name)
+      || (name === DAS_ENV_NAME ? null : readEnvValue(env, name));
     if (value) {
       defaults[name] = value;
     }
