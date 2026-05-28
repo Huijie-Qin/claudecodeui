@@ -579,6 +579,90 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
   assert.equal(imports.imports['local-author'].version, 1);
 });
 
+test('listSkillMarket deduplicates uploaded skills by remote id when names differ', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'local-folder');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Folder\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'local-folder', {
+    name: 'local-folder',
+    skillId: 'remote-uploaded-id',
+    id: 'remote-uploaded-id',
+    skillName: 'Local Folder',
+    nspPath: 'mock://skills/remote-uploaded-id',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 1,
+    source: 'skill-market-api',
+  });
+
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    const body = parseJson(bodyBuffer.toString('utf8'));
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      assert.equal(body?.data?.searchContent, '');
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [{
+          id: 'remote-uploaded-id',
+          skillName: 'Remote Uploaded Display',
+          description: 'Uploaded through the skill microservice.',
+          nspPath: 'mock://skills/remote-uploaded-id',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+          published: true,
+        }],
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const skills = await listSkillMarket(withTenant({
+      workspacePath,
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+    const detail = await getSkillMarketDetail(withTenant({
+      workspacePath,
+      name: 'local-folder',
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0].id, 'remote-uploaded-id');
+    assert.equal(skills[0].name, 'local-folder');
+    assert.equal(skills[0].displayName, 'Remote Uploaded Display');
+    assert.equal(skills[0].imported, true);
+    assert.equal(skills[0].importedVersion, 1);
+    assert.equal(detail.name, 'local-folder');
+    assert.equal(detail.targetPath, '.claude/skills/local-folder');
+    assert.equal(detail.files[0].path, 'SKILL.md');
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test('getMarketSkillPublishState marks imported skills as uploadable when the remote skill was deleted', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'deleted-remote');

@@ -55,10 +55,14 @@ export async function listSkillMarket(options = {}) {
 
   const imports = await readMarketImports({ workspaceId, workspacePath });
   const enrichedRemoteSkills = await Promise.all(
-    remoteSkills.map(async (skill) => ({
-      ...skill,
-      ...toLocalImportState(await getImportStatus(workspacePath, skill.name, imports), skill, currentUsername),
-    })),
+    remoteSkills.map(async (skill) => {
+      const status = await getImportStatusForRemoteSkill(workspacePath, skill, imports);
+      return {
+        ...skill,
+        ...(status.imported ? { name: status.skillName } : {}),
+        ...toLocalImportState(status, skill, currentUsername),
+      };
+    }),
   );
   const importedSkillSummaries = await listImportedSkillSummariesMissingFromRemotePage({
     workspacePath,
@@ -93,12 +97,13 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
   }
   const status = remoteSkill.name === requestedSkillName
     ? requestedStatus
-    : await getImportStatus(workspacePath, remoteSkill.name, imports);
+    : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
+  const runtimeSkillName = status.imported ? status.skillName : remoteSkill.name;
   let directoryTree;
   let files;
 
   if (status.imported) {
-    const localFiles = await readSkillDirectoryFiles(getRuntimeSkillPath(workspacePath, remoteSkill.name));
+    const localFiles = await readSkillDirectoryFiles(getRuntimeSkillPath(workspacePath, runtimeSkillName));
     directoryTree = buildDirectoryTreeFromFiles(localFiles);
     files = summarizeSkillFiles(localFiles);
   } else {
@@ -109,8 +114,9 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
 
   return {
     ...remoteSkill,
+    ...(status.imported ? { name: runtimeSkillName } : {}),
     ...toLocalImportState(status, remoteSkill, currentUsername),
-    targetPath: path.join('.claude', 'skills', remoteSkill.name).split(path.sep).join('/'),
+    targetPath: path.join('.claude', 'skills', runtimeSkillName).split(path.sep).join('/'),
     directoryTree,
     files,
   };
@@ -147,15 +153,16 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
   const status = workspacePath
     ? remoteSkill.name === requestedSkillName
       ? requestedStatus
-      : await getImportStatus(workspacePath, remoteSkill.name, imports)
+      : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports)
     : { imported: false };
+  const runtimeSkillName = status.imported ? status.skillName : remoteSkill.name;
   const file = status.imported
-    ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, remoteSkill.name), filePath)
+    ? await readLocalSkillFile(getRuntimeSkillPath(workspacePath, runtimeSkillName), filePath)
     : await previewRemoteSkillFile(remoteSkill, filePath, { tenantCode, accountId });
 
   return {
     skillId: remoteSkill.skillId,
-    name: remoteSkill.name,
+    name: runtimeSkillName,
     file,
   };
 }
@@ -233,17 +240,17 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
   }
   const status = remoteSkill.name === requestedSkillName
     ? requestedStatus
-    : await getImportStatus(workspacePath, remoteSkill.name, imports);
+    : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
-  const runtimePath = getRuntimeSkillPath(workspacePath, remoteSkill.name);
+  const runtimePath = getRuntimeSkillPath(workspacePath, status.skillName);
   const localFiles = await readSkillDirectoryFiles(runtimePath);
   const remoteFiles = await readRemoteSkillFiles(remoteSkill, { tenantCode, accountId: remoteAccountId });
   const changes = compareSkillFiles(remoteFiles, localFiles);
 
   return {
     skill: {
-      name: remoteSkill.name,
+      name: status.skillName,
       displayName: remoteSkill.displayName,
       version: remoteSkill.version,
     },
@@ -293,6 +300,7 @@ export async function getMarketSkillPublishState({ workspaceId, workspacePath, n
   }
   return {
     ...remoteSkill,
+    name: skillName,
     ...toLocalImportState(status, remoteSkill, currentUsername),
     canUploadAndPublish: false,
   };
@@ -327,10 +335,11 @@ export async function publishMarketSkill({
   }
   const status = remoteSkill.name === requestedSkillName
     ? requestedStatus
-    : await getImportStatus(workspacePath, remoteSkill.name, imports);
+    : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
-  const runtimePath = getRuntimeSkillPath(workspacePath, remoteSkill.name);
+  const importSkillName = status.skillName || remoteSkill.name;
+  const runtimePath = getRuntimeSkillPath(workspacePath, importSkillName);
   const files = await readSkillDirectoryFiles(runtimePath);
   const updateForm = await buildSkillUpdateForm(remoteSkill, files);
   await requestMarketForm('/api/skill/update', updateForm, {
@@ -355,9 +364,9 @@ export async function publishMarketSkill({
     version: 1,
     imports: {
       ...imports.imports,
-      [remoteSkill.name]: {
-        ...imports.imports[remoteSkill.name],
-        name: remoteSkill.name,
+      [importSkillName]: {
+        ...imports.imports[importSkillName],
+        name: importSkillName,
         skillId: remoteSkill.skillId,
         id: remoteSkill.id,
         skillName: remoteSkill.displayName,
@@ -374,7 +383,7 @@ export async function publishMarketSkill({
     skill: await getSkillMarketDetail({
       workspacePath,
       workspaceId,
-      name: remoteSkill.name,
+      name: importSkillName,
       currentUsername,
       tenantCode,
       accountId: remoteAccountId,
@@ -555,11 +564,14 @@ async function listImportedSkillSummariesMissingFromRemotePage({
   accountId,
   searchContent,
 }) {
-  const remoteSkillNames = new Set(remoteSkills.map((skill) => skill.name));
   const summaries = [];
 
   for (const [skillName, metadataEntry] of Object.entries(imports.imports || {})) {
-    if (remoteSkillNames.has(skillName)) continue;
+    const remoteMatch = remoteSkills.some((remoteSkill) => (
+      remoteSkill.name === skillName
+      || getImportEntryForRemoteSkill(remoteSkill, imports)?.skillName === skillName
+    ));
+    if (remoteMatch) continue;
 
     const status = await getImportStatus(workspacePath, skillName, imports);
     if (!status.imported) continue;
@@ -605,6 +617,42 @@ async function isRemoteSkillDeleted(skillRef, { tenantCode, accountId } = {}) {
 
 function getRemoteSkillLookupRef(skillName, metadataEntry = {}) {
   return String(metadataEntry?.id || metadataEntry?.skillId || skillName || '').trim();
+}
+
+async function getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports) {
+  const importEntry = getImportEntryForRemoteSkill(remoteSkill, imports);
+  return getImportStatus(workspacePath, importEntry?.skillName || remoteSkill.name, imports);
+}
+
+function getImportEntryForRemoteSkill(remoteSkill, imports) {
+  const namedEntry = imports.imports?.[remoteSkill.name];
+  if (namedEntry) {
+    return {
+      skillName: remoteSkill.name,
+      metadataEntry: namedEntry,
+    };
+  }
+
+  const remoteIds = new Set(
+    [remoteSkill.id, remoteSkill.skillId]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (remoteIds.size === 0) return null;
+
+  for (const [skillName, metadataEntry] of Object.entries(imports.imports || {})) {
+    const metadataIds = [metadataEntry?.id, metadataEntry?.skillId]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    if (metadataIds.some((id) => remoteIds.has(id))) {
+      return {
+        skillName,
+        metadataEntry,
+      };
+    }
+  }
+
+  return null;
 }
 
 function matchesSkillSearch(skill, searchContent = '') {
@@ -1092,6 +1140,7 @@ async function getImportStatus(workspacePath, name, metadata) {
   const runtimeExists = await pathExists(runtimePath);
   const metadataEntry = metadata.imports?.[name] || null;
   return {
+    skillName: name,
     imported: Boolean(metadataEntry && runtimeExists),
     runtimeExists,
     conflict: Boolean(runtimeExists && !metadataEntry),
