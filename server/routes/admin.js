@@ -7,6 +7,7 @@ import { userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
+import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
@@ -156,6 +157,29 @@ function buildRuntimeFilters(query = {}) {
   );
 }
 
+function parseAnalyticsDays(value) {
+  if (value == null || value === '') return 30;
+  const parsed = Number(value);
+  if (![7, 30, 90].includes(parsed)) {
+    const error = new Error('days must be one of: 7, 30, 90');
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
+function parseAnalyticsTenantIds(value) {
+  if (value == null || value === '') return [];
+  return String(value)
+    .split(',')
+    .map((item) => Number(item))
+    .filter((item, index, values) => (
+      Number.isInteger(item) &&
+      item > 0 &&
+      values.indexOf(item) === index
+    ));
+}
+
 function parsePositiveId(value, name) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -290,6 +314,7 @@ export function createAdminRouter(
   runtimeMonitor = runtimeMonitorService,
   mcpPresets = mcpPresetService,
   workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
+  platformAnalytics = platformAnalyticsService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -358,6 +383,18 @@ export function createAdminRouter(
       res.json({ memberships });
     } catch (error) {
       sendRouteError(res, error, 'Failed to list tenant access');
+    }
+  });
+
+  router.get('/analytics', (req, res) => {
+    try {
+      const analytics = platformAnalytics.getOverview({
+        days: parseAnalyticsDays(req.query?.days),
+        tenantIds: parseAnalyticsTenantIds(req.query?.tenantIds),
+      });
+      res.json({ analytics });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load platform analytics');
     }
   });
 

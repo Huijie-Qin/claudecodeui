@@ -25,6 +25,7 @@ import {
   type TenantPermission,
 } from './adminPanelUtils';
 import McpPresetsTab from './McpPresetsTab';
+import PlatformAnalyticsTab from './PlatformAnalyticsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 
 type AdminTenant = {
@@ -252,7 +253,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes'>('users');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes'>('analytics');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -917,6 +918,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
           <div className="flex flex-wrap gap-1 border-b border-border px-5 py-2">
             <Button
+              variant={activeTab === 'analytics' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('analytics')}
+            >
+              {t('tabs.analytics')}
+            </Button>
+            <Button
               variant={activeTab === 'users' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab('users')}
@@ -952,6 +960,12 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               {t('tabs.runtimes')}
             </Button>
           </div>
+
+          {activeTab === 'analytics' ? (
+            <div className="overflow-y-auto px-5 py-4">
+              <PlatformAnalyticsTab />
+            </div>
+          ) : null}
 
           {activeTab === 'users' ? (
             <div className="space-y-5 overflow-y-auto px-5 py-4">

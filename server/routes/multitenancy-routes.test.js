@@ -338,6 +338,49 @@ test('admin router lists and deletes tenant access', async () => {
   assert.deepEqual(seen.deleted, { tenantId: 2, userId: 12 });
 });
 
+test('admin router returns platform analytics for system admins', async () => {
+  const seen = {};
+  const router = createAdminRouter(
+    { tenants: { listTenants: () => [] }, memberships: {} },
+    {},
+    {},
+    {},
+    {},
+    {
+      getOverview: ({ days }) => {
+        seen.days = days;
+        return { days, overview: { totalUsers: 3 } };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/analytics?days=7', {
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(seen.days, 7);
+  assert.deepEqual(payload.analytics, { days: 7, overview: { totalUsers: 3 } });
+});
+
+test('admin router validates platform analytics day window', async () => {
+  const router = createAdminRouter(
+    { tenants: { listTenants: () => [] }, memberships: {} },
+    {},
+    {},
+    {},
+    {},
+    { getOverview: () => ({}) },
+  );
+
+  const { response, payload } = await requestJson(router, '/analytics?days=13', {
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, 'days must be one of: 7, 30, 90');
+});
+
 test('admin router batch grants tenant access for user and tenant selections', async () => {
   const seen = [];
   const router = createAdminRouter(

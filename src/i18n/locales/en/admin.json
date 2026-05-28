@@ -2,6 +2,7 @@
   "title": "System administration",
   "subtitle": "Tenants, users, internal MCP presets, and runtimes",
   "tabs": {
+    "analytics": "Analytics",
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
@@ -144,6 +145,70 @@
     "listTitle": "Tenants",
     "empty": "No tenants",
     "noAuthorizedUsers": "No authorized users"
+  },
+  "analytics": {
+    "title": "Platform analytics",
+    "description": "Operational view of adoption, activity, tenant usage, and runtime health.",
+    "days": "{{count}}d",
+    "exportHtml": "Export HTML",
+    "exportTitle": "Platform analytics - last {{days}} days",
+    "generatedAt": "Updated {{time}}",
+    "loading": "Loading analytics...",
+    "empty": "No analytics data",
+    "dailyActivity": "Daily activity",
+    "topUsers": "Top users",
+    "tenantUsage": "Tenant usage",
+    "tenantFilter": {
+      "title": "Tenant filter",
+      "all": "Viewing all tenants",
+      "selected": "Viewing {{count}} tenants",
+      "clear": "Clear selection",
+      "search": "Search tenants",
+      "empty": "No matching tenants"
+    },
+    "metrics": {
+      "users": "Total users",
+      "activeUsers": "{{count}} active - {{rate}} activated",
+      "active30d": "30d active users",
+      "active7d": "{{count}} active in 7d",
+      "sessions": "Sessions in window",
+      "totalSessions": "{{count}} total sessions",
+      "messages": "Messages in window",
+      "totalMessages": "{{count}} total messages",
+      "userMessages": "User messages",
+      "assistantMessages": "{{count}} assistant messages",
+      "systemMessagesLabel": "System messages",
+      "systemMessages": "{{count}} system messages",
+      "systemMessagesHelp": "Tool, thinking, and status events",
+      "tokens": "Tokens",
+      "activeDays": "{{count}} active days",
+      "lastUsed": "Last used",
+      "tenants": "Active tenants",
+      "workspaces": "{{count}} active workspaces",
+      "runtimes": "Live runtimes",
+      "failedRuntimes": "{{count}} failed runtimes",
+      "memberships": "Active access entries",
+      "pendingInvites": "{{count}} pending invites",
+      "generatedAt": "Report time",
+      "reportWindow": "Last {{count}} days"
+    },
+    "table": {
+      "sessions": "Sessions",
+      "messages": "Total messages",
+      "userMessages": "User messages",
+      "assistantMessages": "Assistant messages",
+      "systemMessages": "System messages",
+      "tokens": "Tokens",
+      "activeDays": "Active days",
+      "lastUsed": "Last used",
+      "sessionsMessages": "{{sessions}} sessions / {{messages}} messages",
+      "liveRuntimes": "{{count}} live runtimes",
+      "userFootnote": "User {{userMessages}} / assistant {{assistantMessages}} / system {{systemMessages}} / {{tokens}} tokens / {{activeDays}} active days / last used {{lastUsed}}",
+      "tenantFootnote": "{{users}} users / {{workspaces}} workspaces / {{sessions}} sessions / {{messages}} messages / {{runtimes}} live runtimes"
+    },
+    "errors": {
+      "load": "Failed to load platform analytics"
+    }
   },
   "mcp": {
     "title": "MCP Server Presets",

@@ -2,6 +2,7 @@
   "title": "系统管理",
   "subtitle": "租户、用户、内部 MCP 预置和运行时",
   "tabs": {
+    "analytics": "统计面板",
     "users": "用户",
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
@@ -144,6 +145,70 @@
     "listTitle": "租户",
     "empty": "暂无租户",
     "noAuthorizedUsers": "暂无授权用户"
+  },
+  "analytics": {
+    "title": "平台统计",
+    "description": "从运营视角查看用户激活、活跃、租户使用、会话消息和运行时健康度。",
+    "days": "{{count}}天",
+    "exportHtml": "导出 HTML",
+    "exportTitle": "平台统计 - 最近 {{days}} 天",
+    "generatedAt": "更新于 {{time}}",
+    "loading": "正在加载统计数据...",
+    "empty": "暂无统计数据",
+    "dailyActivity": "每日活跃",
+    "topUsers": "高活跃用户",
+    "tenantUsage": "租户使用情况",
+    "tenantFilter": {
+      "title": "租户筛选",
+      "all": "当前查看全部租户",
+      "selected": "当前查看 {{count}} 个租户",
+      "clear": "清除选择",
+      "search": "搜索租户",
+      "empty": "没有匹配的租户"
+    },
+    "metrics": {
+      "users": "总用户数",
+      "activeUsers": "{{count}} 已激活 - 激活率 {{rate}}",
+      "active30d": "30 天活跃用户",
+      "active7d": "7 天活跃 {{count}}",
+      "sessions": "窗口内会话",
+      "totalSessions": "累计 {{count}} 个会话",
+      "messages": "窗口内消息",
+      "totalMessages": "累计 {{count}} 条消息",
+      "userMessages": "用户消息",
+      "assistantMessages": "{{count}} 条助手消息",
+      "systemMessagesLabel": "系统消息",
+      "systemMessages": "{{count}} 条系统消息",
+      "systemMessagesHelp": "工具、思考和状态事件",
+      "tokens": "Token 数",
+      "activeDays": "{{count}} 个活跃天",
+      "lastUsed": "最后使用时间",
+      "tenants": "活跃租户",
+      "workspaces": "{{count}} 个活跃工作区",
+      "runtimes": "在线运行时",
+      "failedRuntimes": "{{count}} 个失败运行时",
+      "memberships": "有效授权关系",
+      "pendingInvites": "{{count}} 个待接受邀请",
+      "generatedAt": "报表时间",
+      "reportWindow": "最近 {{count}} 天"
+    },
+    "table": {
+      "sessions": "会话数",
+      "messages": "总消息数",
+      "userMessages": "用户消息",
+      "assistantMessages": "助手消息",
+      "systemMessages": "系统消息",
+      "tokens": "Token 数",
+      "activeDays": "活跃天数",
+      "lastUsed": "最后使用时间",
+      "sessionsMessages": "{{sessions}} 会话 / {{messages}} 消息",
+      "liveRuntimes": "{{count}} 个在线运行时",
+      "userFootnote": "用户 {{userMessages}} / 助手 {{assistantMessages}} / 系统 {{systemMessages}} / {{tokens}} tokens / {{activeDays}} 活跃天 / 最后使用 {{lastUsed}}",
+      "tenantFootnote": "{{users}} 用户 / {{workspaces}} 工作区 / {{sessions}} 会话 / {{messages}} 消息 / {{runtimes}} 在线运行时"
+    },
+    "errors": {
+      "load": "加载平台统计失败"
+    }
   },
   "mcp": {
     "title": "MCP Server 预置",

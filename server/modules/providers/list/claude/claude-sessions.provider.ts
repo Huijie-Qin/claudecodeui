@@ -225,6 +225,15 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (conversationRole === 'assistant' && raw.message?.content) {
+      let didAttachUsage = false;
+      const attachUsage = () => {
+        if (didAttachUsage || !raw.message?.usage) {
+          return {};
+        }
+        didAttachUsage = true;
+        return { usage: raw.message.usage };
+      };
+
       if (Array.isArray(raw.message.content)) {
         let partIndex = 0;
         for (const part of raw.message.content) {
@@ -242,6 +251,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               kind: 'text',
               role: 'assistant',
               content,
+              ...attachUsage(),
             }));
           } else if (part.type === 'tool_use') {
             messages.push(createNormalizedMessage({
@@ -279,6 +289,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           kind: 'text',
           role: 'assistant',
           content,
+          ...attachUsage(),
         }));
       }
       return messages;

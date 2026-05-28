@@ -276,6 +276,13 @@ export const api = {
 
   admin: {
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    analytics: (days = 30, tenantIds = []) => {
+      const params = new URLSearchParams({ days: String(days) });
+      if (Array.isArray(tenantIds) && tenantIds.length > 0) {
+        params.set('tenantIds', tenantIds.map(String).join(','));
+      }
+      return authenticatedFetch(`/api/admin/analytics?${params.toString()}`);
+    },
     mcpPresets: (tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
     createMcpPreset: (payload) =>
