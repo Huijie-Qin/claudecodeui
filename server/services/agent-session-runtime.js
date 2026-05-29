@@ -27,6 +27,7 @@ const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
+const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL_ENV_NAME,
@@ -122,6 +123,13 @@ export function resolveClaudeExecutionMode(env = process.env) {
     return mode;
   }
   throw new Error('CLAUDE_EXECUTION_MODE must be local or docker');
+}
+
+export function parseDockerPythonPackages(value) {
+  return String(value || '')
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export function buildRuntimePaths({
@@ -430,26 +438,20 @@ export class DockerCliClient {
     await execFileAsync('docker', ['stop', '-t', '1', containerName]);
   }
 
-  async installPythonRequests(containerName) {
+  async installPythonPackages(containerName, packages = []) {
+    const requestedPackages = Array.isArray(packages)
+      ? packages.map((entry) => String(entry).trim()).filter(Boolean)
+      : parseDockerPythonPackages(packages);
+    if (requestedPackages.length === 0) {
+      return;
+    }
+
     const execArgs = [
       'exec',
       '-e',
       'HOME=/home/cloudcli',
       requireValue(containerName, 'containerName'),
     ];
-    const verifyRequests = () => execFileAsync('docker', [
-      ...execArgs,
-      'python3',
-      '-c',
-      'import requests',
-    ]);
-
-    try {
-      await verifyRequests();
-      return;
-    } catch {
-      // Install into the writable runtime home when the image does not already provide requests.
-    }
 
     await execFileAsync('docker', [
       ...execArgs,
@@ -460,9 +462,8 @@ export class DockerCliClient {
       '--user',
       '--no-cache-dir',
       '--disable-pip-version-check',
-      'requests',
+      ...requestedPackages,
     ]);
-    await verifyRequests();
   }
 
   async statsContainers(containerNames) {
@@ -623,8 +624,9 @@ export function createAgentSessionRuntimeManager({
       cpus: env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS,
     });
     await docker.runDetached(args);
-    if (typeof docker.installPythonRequests === 'function') {
-      await docker.installPythonRequests(runtime.container_name);
+    const pythonPackages = parseDockerPythonPackages(env[DOCKER_PYTHON_PACKAGES_ENV_NAME]);
+    if (pythonPackages.length > 0 && typeof docker.installPythonPackages === 'function') {
+      await docker.installPythonPackages(runtime.container_name, pythonPackages);
     }
   }
 

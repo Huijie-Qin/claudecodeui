@@ -11,6 +11,7 @@ import {
   buildRuntimePaths,
   createAgentSessionRuntimeManager,
   ensureRuntimeHomeWritable,
+  parseDockerPythonPackages,
   resolveClaudeExecutionMode,
 } from './agent-session-runtime.js';
 import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
@@ -28,6 +29,16 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
     () => resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'podman' }),
     /CLAUDE_EXECUTION_MODE must be local or docker/,
   );
+});
+
+test('parseDockerPythonPackages accepts comma and whitespace separated package names', () => {
+  assert.deepEqual(parseDockerPythonPackages('requests, httpx pyyaml\nrich'), [
+    'requests',
+    'httpx',
+    'pyyaml',
+    'rich',
+  ]);
+  assert.deepEqual(parseDockerPythonPackages('  ,  '), []);
 });
 
 test('runtime paths stay under the configured runtime root', () => {
@@ -201,7 +212,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
 
   const createdRuntimes = [];
   const dockerCalls = [];
-  const pythonRequestsInstalls = [];
+  const pythonPackageInstalls = [];
   const encryptedUserKey = 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
   let envUserId = null;
   let usernameUserId = null;
@@ -210,6 +221,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests, httpx',
       ANTHROPIC_API_KEY: 'key-1',
       HTTP_PROXY: 'http://proxy.example:8080',
       HTTPS_PROXY: 'http://secure-proxy.example:8443',
@@ -263,8 +275,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       runDetached: async (args) => {
         dockerCalls.push(args);
       },
-      installPythonRequests: async (containerName) => {
-        pythonRequestsInstalls.push(containerName);
+      installPythonPackages: async (containerName, packages) => {
+        pythonPackageInstalls.push({ containerName, packages });
       },
     },
   });
@@ -282,7 +294,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.projectPath, '/workspace');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
-  assert.deepEqual(pythonRequestsInstalls, [createdRuntimes[0].containerName]);
+  assert.deepEqual(pythonPackageInstalls, [{
+    containerName: createdRuntimes[0].containerName,
+    packages: ['requests', 'httpx'],
+  }]);
   assert.equal(usernameUserId, 4);
   assert.equal(envUserId, 4);
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
