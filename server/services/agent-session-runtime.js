@@ -430,6 +430,41 @@ export class DockerCliClient {
     await execFileAsync('docker', ['stop', '-t', '1', containerName]);
   }
 
+  async installPythonRequests(containerName) {
+    const execArgs = [
+      'exec',
+      '-e',
+      'HOME=/home/cloudcli',
+      requireValue(containerName, 'containerName'),
+    ];
+    const verifyRequests = () => execFileAsync('docker', [
+      ...execArgs,
+      'python3',
+      '-c',
+      'import requests',
+    ]);
+
+    try {
+      await verifyRequests();
+      return;
+    } catch {
+      // Install into the writable runtime home when the image does not already provide requests.
+    }
+
+    await execFileAsync('docker', [
+      ...execArgs,
+      'python3',
+      '-m',
+      'pip',
+      'install',
+      '--user',
+      '--no-cache-dir',
+      '--disable-pip-version-check',
+      'requests',
+    ]);
+    await verifyRequests();
+  }
+
   async statsContainers(containerNames) {
     const names = Array.isArray(containerNames)
       ? containerNames.filter(Boolean)
@@ -588,6 +623,9 @@ export function createAgentSessionRuntimeManager({
       cpus: env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS,
     });
     await docker.runDetached(args);
+    if (typeof docker.installPythonRequests === 'function') {
+      await docker.installPythonRequests(runtime.container_name);
+    }
   }
 
   async function writeWrapper({ runtime, wrapperDir }) {

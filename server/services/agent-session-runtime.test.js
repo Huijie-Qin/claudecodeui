@@ -201,6 +201,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
 
   const createdRuntimes = [];
   const dockerCalls = [];
+  const pythonRequestsInstalls = [];
   const encryptedUserKey = 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
   let envUserId = null;
   let usernameUserId = null;
@@ -262,6 +263,9 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       runDetached: async (args) => {
         dockerCalls.push(args);
       },
+      installPythonRequests: async (containerName) => {
+        pythonRequestsInstalls.push(containerName);
+      },
     },
   });
 
@@ -278,6 +282,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.projectPath, '/workspace');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
+  assert.deepEqual(pythonRequestsInstalls, [createdRuntimes[0].containerName]);
   assert.equal(usernameUserId, 4);
   assert.equal(envUserId, 4);
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
