@@ -372,10 +372,12 @@ export function useSessionStore() {
     const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
       const stream = slot.realtimeMessages[idx];
+      const completedAt = new Date().toISOString();
       slot.realtimeMessages = [...slot.realtimeMessages];
       slot.realtimeMessages[idx] = {
         ...stream,
         id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: completedAt,
         kind: 'text',
         role: 'assistant',
       };

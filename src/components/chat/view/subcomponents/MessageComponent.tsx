@@ -107,6 +107,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
   const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
+  const isPlainAssistantResponse = Boolean(
+    message.type === 'assistant' &&
+    !message.isToolUse &&
+    !message.isThinking &&
+    !message.isInteractivePrompt
+  );
+  const shouldShowAssistantTimestamp = isPlainAssistantResponse && !message.isStreaming;
+  const shouldShowFooterTimestamp = !message.isStreaming && (shouldShowAssistantTimestamp || !isGrouped);
+  const shouldShowAssistantFooter = shouldShowAssistantCopyControl || shouldShowFooterTimestamp;
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -195,23 +204,22 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </div>
                 </div>
 
-                {message.toolInput && (
-                  <ToolRenderer
-                    toolName={message.toolName || 'UnknownTool'}
-                    toolInput={message.toolInput}
-                    toolResult={message.toolResult}
-                    toolId={message.toolId}
-                    mode="input"
-                    onFileOpen={onFileOpen}
-                    createDiff={createDiff}
-                    selectedProject={selectedProject}
-                    autoExpandTools={autoExpandTools}
-                    showRawParameters={showRawParameters}
-                    rawToolInput={typeof message.toolInput === 'string' ? message.toolInput : undefined}
-                    isSubagentContainer={message.isSubagentContainer}
-                    subagentState={message.subagentState}
-                  />
-                )}
+                <ToolRenderer
+                  toolName={message.toolName || 'UnknownTool'}
+                  toolInput={message.toolInput ?? {}}
+                  toolResult={message.toolResult}
+                  toolId={message.toolId}
+                  mode="input"
+                  onFileOpen={onFileOpen}
+                  createDiff={createDiff}
+                  selectedProject={selectedProject}
+                  autoExpandTools={autoExpandTools}
+                  showRawParameters={showRawParameters}
+                  rawToolInput={typeof message.toolInput === 'string' ? message.toolInput : undefined}
+                  toolCompletedAt={message.toolCompletedAt}
+                  isSubagentContainer={message.isSubagentContainer}
+                  subagentState={message.subagentState}
+                />
 
                 {/* Tool Result Section */}
                 {message.toolResult && !shouldHideToolResult(message.toolName || 'UnknownTool', message.toolResult) && (
@@ -459,12 +467,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {(shouldShowAssistantCopyControl || !isGrouped) && (
+            {shouldShowAssistantFooter && (
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
                 )}
-                {!isGrouped && <span>{formattedTime}</span>}
+                {shouldShowFooterTimestamp && <span>{formattedTime}</span>}
               </div>
             )}
           </div>

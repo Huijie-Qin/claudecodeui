@@ -7,3 +7,5 @@ export * from './ContentRenderers';
 export * from './InteractiveRenderers';
 export { ToolStatusBadge } from './ToolStatusBadge';
 export type { ToolStatus } from './ToolStatusBadge';
+export { ToolCompletionTimeBadge } from './ToolCompletionTimeBadge';
+export { ToolCompletionTimeBadge } from './ToolCompletionTimeBadge';

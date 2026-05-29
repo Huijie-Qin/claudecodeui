@@ -5,7 +5,7 @@ import type { SubagentChildTool } from '../types/types';
 import { isClaudePermissionErrorContent } from '../utils/chatPermissions';
 
 import { getToolConfig } from './configs/toolConfigs';
-import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer } from './components';
+import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, ToolCompletionTimeBadge } from './components';
 import { PlanDisplay } from './components/PlanDisplay';
 import { ToolStatusBadge } from './components/ToolStatusBadge';
 import type { ToolStatus } from './components/ToolStatusBadge';
@@ -28,6 +28,7 @@ interface ToolRendererProps {
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   rawToolInput?: string;
+  toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
   subagentState?: {
     childTools: SubagentChildTool[];
@@ -75,6 +76,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   autoExpandTools = false,
   showRawParameters = false,
   rawToolInput,
+  toolCompletedAt,
   isSubagentContainer,
   subagentState
 }) => {
@@ -95,6 +97,14 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     () => mode === 'input' ? deriveToolStatus(toolResult) : undefined,
     [mode, toolResult],
   );
+  const completionTime = mode === 'input'
+    ? (
+        <ToolCompletionTimeBadge
+          completedAt={toolCompletedAt}
+          isComplete={Boolean(toolResult)}
+        />
+      )
+    : undefined;
 
   const handleAction = useCallback(() => {
     if (displayConfig?.action === 'open-file' && onFileOpen) {
@@ -110,6 +120,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
       <SubagentContainer
         toolInput={toolInput}
         toolResult={toolResult}
+        completionTime={completionTime}
         subagentState={subagentState}
       />
     );
@@ -137,6 +148,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         colorScheme={displayConfig.colorScheme}
         resultId={mode === 'input' ? `tool-result-${toolId}` : undefined}
         status={toolStatus !== 'completed' ? toolStatus : undefined}
+        completionTime={completionTime}
       />
     );
   }
@@ -164,6 +176,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         rawContent={rawToolInput}
         toolName={toolName}
         toolId={toolId}
+        completionTime={completionTime}
       />
     );
   }
@@ -279,6 +292,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         showRawParameters={mode === 'input' && showRawParameters}
         rawContent={rawToolInput}
         toolCategory={getToolCategory(toolName)}
+        meta={completionTime}
       >
         {contentComponent}
       </CollapsibleDisplay>

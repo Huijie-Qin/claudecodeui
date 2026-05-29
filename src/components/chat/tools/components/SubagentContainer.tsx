@@ -1,11 +1,14 @@
 import React from 'react';
-import type { SubagentChildTool } from '../../types/types';
-import { CollapsibleSection } from './CollapsibleSection';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
+import type { SubagentChildTool } from '../../types/types';
+
+import { CollapsibleSection } from './CollapsibleSection';
 
 interface SubagentContainerProps {
   toolInput: unknown;
   toolResult?: { content?: unknown; isError?: boolean } | null;
+  completionTime?: React.ReactNode;
   subagentState: {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
@@ -43,6 +46,7 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
 export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   toolInput,
   toolResult,
+  completionTime,
   subagentState,
 }) => {
   const parsedInput = typeof toolInput === 'string' ? (() => {
@@ -63,6 +67,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         title={title}
         toolName="Task"
         open={false}
+        meta={completionTime}
       >
         {/* Prompt/request to the subagent */}
         {prompt && (

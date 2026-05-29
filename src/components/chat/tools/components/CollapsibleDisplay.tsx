@@ -1,5 +1,7 @@
 import React from 'react';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
+
 import { CollapsibleSection } from './CollapsibleSection';
 
 interface CollapsibleDisplayProps {
@@ -7,6 +9,7 @@ interface CollapsibleDisplayProps {
   toolId?: string;
   title: string;
   defaultOpen?: boolean;
+  meta?: React.ReactNode;
   action?: React.ReactNode;
   badge?: React.ReactNode;
   onTitleClick?: () => void;
@@ -33,6 +36,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
   toolName,
   title,
   defaultOpen = false,
+  meta,
   action,
   badge,
   onTitleClick,
@@ -50,6 +54,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
         title={title}
         toolName={toolName}
         open={defaultOpen}
+        meta={meta}
         action={action}
         badge={badge}
         onTitleClick={onTitleClick}

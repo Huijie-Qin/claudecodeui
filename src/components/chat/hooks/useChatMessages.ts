@@ -7,12 +7,75 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 
+type TimestampValue = string | number | Date;
+
 const getMessageIdentity = (msg: NormalizedMessage): Pick<ChatMessage, 'id' | 'messageId' | 'rowid' | 'sequence'> => ({
   id: msg.id,
   messageId: msg.id,
   rowid: msg.rowid,
   sequence: msg.sequence,
 });
+
+function timestampToMs(value: unknown): number | null {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+
+  return null;
+}
+
+function asTimestampValue(value: unknown): TimestampValue | undefined {
+  return timestampToMs(value) !== null && (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    value instanceof Date
+  )
+    ? value
+    : undefined;
+}
+
+function readTimestampField(value: unknown): TimestampValue | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  return asTimestampValue(record.timestamp) ||
+    asTimestampValue(record.completedAt) ||
+    asTimestampValue(record.completed_at) ||
+    asTimestampValue(record.endTime) ||
+    asTimestampValue(record.endedAt);
+}
+
+function findNextTimestamp(messages: NormalizedMessage[], currentIndex: number, afterTimestamp: unknown): string | undefined {
+  const afterMs = timestampToMs(afterTimestamp);
+  if (afterMs === null) {
+    return undefined;
+  }
+
+  for (let index = currentIndex + 1; index < messages.length; index++) {
+    const candidate = messages[index];
+    if (!candidate) {
+      continue;
+    }
+    const candidateMs = timestampToMs(candidate.timestamp);
+    if (candidateMs !== null && candidateMs >= afterMs) {
+      return candidate.timestamp;
+    }
+  }
+
+  return undefined;
+}
 
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
@@ -32,7 +95,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     }
   }
 
-  for (const msg of messages) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const msg = messages[messageIndex];
+
     switch (msg.kind) {
       case 'text': {
         const content = msg.content || '';
@@ -74,7 +139,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       }
 
       case 'tool_use': {
-        const tr = msg.toolResult || (msg.toolId ? toolResultMap.get(msg.toolId) : null);
+        const mappedToolResult = msg.toolId ? toolResultMap.get(msg.toolId) : null;
+        const inlineToolResult = msg.toolResult as (NonNullable<NormalizedMessage['toolResult']> & Record<string, unknown>) | undefined;
+        const tr = inlineToolResult || mappedToolResult;
+        const explicitCompletedAt = mappedToolResult?.timestamp ||
+          readTimestampField(inlineToolResult) ||
+          readTimestampField((tr as any)?.toolUseResult);
+        const toolCompletedAt = explicitCompletedAt ||
+          (tr ? findNextTimestamp(messages, messageIndex, msg.timestamp) : undefined);
         const isSubagentContainer = msg.toolName === 'Task';
 
         // Build child tools from subagentTools
@@ -96,6 +168,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
               isError: Boolean(tr.isError),
               toolUseResult: (tr as any).toolUseResult,
+              timestamp: toolCompletedAt,
             }
           : null;
 
@@ -109,6 +182,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           toolInput: typeof msg.toolInput === 'string' ? msg.toolInput : JSON.stringify(msg.toolInput ?? '', null, 2),
           toolId: msg.toolId,
           toolResult,
+          toolCompletedAt,
           isSubagentContainer,
           subagentState: isSubagentContainer
             ? {

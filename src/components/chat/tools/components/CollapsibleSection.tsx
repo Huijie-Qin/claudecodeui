@@ -1,4 +1,5 @@
 import React from 'react';
+
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 
@@ -6,6 +7,7 @@ interface CollapsibleSectionProps {
   title: string;
   toolName?: string;
   open?: boolean;
+  meta?: React.ReactNode;
   action?: React.ReactNode;
   badge?: React.ReactNode;
   onTitleClick?: () => void;
@@ -20,6 +22,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   title,
   toolName,
   open = false,
+  meta,
   action,
   badge,
   onTitleClick,
@@ -47,12 +50,15 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
           {toolName && (
             <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
           )}
-          <button
-            onClick={onTitleClick}
-            className="flex-1 truncate text-left font-mono text-primary transition-colors hover:text-primary/80 hover:underline"
-          >
-            {title}
-          </button>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <button
+              onClick={onTitleClick}
+              className="min-w-0 truncate text-left font-mono text-primary transition-colors hover:text-primary/80 hover:underline"
+            >
+              {title}
+            </button>
+            {meta}
+          </span>
           {badge && <span className="ml-auto flex-shrink-0">{badge}</span>}
           {action && <span className="ml-1 flex-shrink-0">{action}</span>}
         </div>
@@ -72,7 +78,10 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
           {toolName && (
             <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
           )}
-          <span className="flex-1 truncate text-left">{title}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="min-w-0 truncate text-left">{title}</span>
+            {meta}
+          </span>
           {badge && <span className="ml-auto flex-shrink-0">{badge}</span>}
           {action && <span className="ml-1 flex-shrink-0">{action}</span>}
         </CollapsibleTrigger>
