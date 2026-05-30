@@ -1221,9 +1221,13 @@ export default function AnalyticsDashboardTab() {
             </div>
           </Section>
 
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-            <Section title="问数趋势">
-              <TrendChart data={summary.dailyTrend} />
+          <Section title="用户趋势">
+            <TrendChart data={summary.dailyTrend} />
+          </Section>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <Section title="失败原因">
+              <FailureReasons reasons={summary.failureReasons} />
             </Section>
             <Section title="问数漏斗">
               <FunnelView items={summary.funnel} />
@@ -1253,14 +1257,9 @@ export default function AnalyticsDashboardTab() {
             </Section>
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.55fr)]">
-            <Section title="用户使用明细">
-              <UserAnalyticsPanel rangeDays={rangeDays} />
-            </Section>
-            <Section title="失败原因">
-              <FailureReasons reasons={summary.failureReasons} />
-            </Section>
-          </div>
+          <Section title="用户使用明细">
+            <UserAnalyticsPanel rangeDays={rangeDays} />
+          </Section>
 
           <div className="grid gap-5 xl:grid-cols-2">
             <Section
