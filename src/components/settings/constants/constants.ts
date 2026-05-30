@@ -8,7 +8,6 @@ import type {
 } from '../types/types';
 
 export const SETTINGS_MAIN_TABS: SettingsMainTab[] = [
-  'agents',
   'appearance',
   'git',
   'codehub',

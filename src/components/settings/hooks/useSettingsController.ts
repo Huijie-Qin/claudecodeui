@@ -54,15 +54,16 @@ type NotificationPreferencesResponse = {
 
 type ActiveLoginProvider = AgentProvider | '';
 
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance', 'git', 'codehub', 'api', 'tasks', 'notifications', 'plugins', 'about'];
+const DEFAULT_MAIN_TAB: SettingsMainTab = 'appearance';
+const KNOWN_MAIN_TABS: SettingsMainTab[] = ['appearance', 'git', 'codehub', 'api', 'tasks', 'notifications', 'plugins', 'about'];
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".
   if (tab === 'tools') {
-    return 'agents';
+    return DEFAULT_MAIN_TAB;
   }
 
-  return KNOWN_MAIN_TABS.includes(tab as SettingsMainTab) ? (tab as SettingsMainTab) : 'agents';
+  return KNOWN_MAIN_TABS.includes(tab as SettingsMainTab) ? (tab as SettingsMainTab) : DEFAULT_MAIN_TAB;
 };
 
 const parseJson = <T>(value: string | null, fallback: T): T => {

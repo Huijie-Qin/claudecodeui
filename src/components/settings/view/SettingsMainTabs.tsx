@@ -16,7 +16,6 @@ type MainTabConfig = {
 };
 
 const TAB_CONFIG: MainTabConfig[] = [
-  { id: 'agents', labelKey: 'mainTabs.agents' },
   { id: 'appearance', labelKey: 'mainTabs.appearance' },
   { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
   { id: 'codehub', labelKey: 'mainTabs.codeHub', icon: GitBranch },

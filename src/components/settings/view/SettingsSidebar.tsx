@@ -1,4 +1,4 @@
-import { Bell, Bot, GitBranch, Info, Key, ListChecks, Palette, Puzzle } from 'lucide-react';
+import { Bell, GitBranch, Key, ListChecks, Palette, Puzzle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
@@ -13,11 +13,10 @@ type SettingsSidebarProps = {
 type NavItem = {
   id: SettingsMainTab;
   labelKey: string;
-  icon: typeof Bot;
+  icon: typeof Palette;
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'agents', labelKey: 'mainTabs.agents', icon: Bot },
   { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
   { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
   { id: 'codehub', labelKey: 'mainTabs.codeHub', icon: GitBranch },
