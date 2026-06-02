@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronsUpDown, LogOut, Search, Settings, Shield } from 'lucide-react';
+import { Check, ChevronsUpDown, LogOut, Search, Settings, Shield } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '../../../../constants/config';
@@ -101,15 +101,6 @@ export default function SidebarFooter({
               aria-label={t('tenantSwitcher.switch')}
             >
               <div className="border-b border-border p-2">
-                <div className="mb-2 flex items-center justify-between gap-2 px-1">
-                  <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                    <span className="truncate">{t('tenantSwitcher.switch')}</span>
-                  </div>
-                  <span className="flex-shrink-0 text-[11px] text-muted-foreground">
-                    {filteredTenants.length}/{tenants.length}
-                  </span>
-                </div>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <input
