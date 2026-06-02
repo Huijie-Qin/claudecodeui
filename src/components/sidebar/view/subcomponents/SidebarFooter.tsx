@@ -1,4 +1,5 @@
-import { Settings, ArrowUpCircle, Bug, Shield, Building2, LogOut } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Building2, Check, ChevronsUpDown, LogOut, Search, Settings, Shield } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '../../../../constants/config';
@@ -26,37 +27,182 @@ export default function SidebarFooter({
   t,
 }: SidebarFooterProps) {
   const { logout } = useAuth();
-  const showTenantSwitcher = shouldShowTenantSwitcher(tenants) && currentTenant && onTenantSwitch;
+  const showTenantSwitcher = Boolean(shouldShowTenantSwitcher(tenants) && currentTenant && onTenantSwitch);
   const showLogout = !IS_PLATFORM;
+  const [isTenantMenuOpen, setIsTenantMenuOpen] = useState(false);
+  const [tenantSearch, setTenantSearch] = useState('');
+  const tenantSwitcherRef = useRef<HTMLDivElement>(null);
+  const tenantSearchInputRef = useRef<HTMLInputElement>(null);
+  const currentTenantPermission = getTenantPermissionLabel(t, currentTenant);
+  const filteredTenants = useMemo(() => {
+    const query = tenantSearch.trim().toLowerCase();
+    if (!query) return tenants;
+
+    return tenants.filter((tenant) => (
+      `${tenant.name} ${tenant.code} ${tenant.permission}`.toLowerCase().includes(query)
+    ));
+  }, [tenantSearch, tenants]);
+
+  useEffect(() => {
+    if (!isTenantMenuOpen) return undefined;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!tenantSwitcherRef.current?.contains(event.target as Node)) {
+        setIsTenantMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsTenantMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isTenantMenuOpen]);
+
+  useEffect(() => {
+    if (isTenantMenuOpen) {
+      tenantSearchInputRef.current?.focus();
+    }
+  }, [isTenantMenuOpen]);
+
+  useEffect(() => {
+    if (!showTenantSwitcher) {
+      setIsTenantMenuOpen(false);
+      setTenantSearch('');
+    }
+  }, [showTenantSwitcher]);
 
   const handleTenantChange = (tenantId: string) => {
     const tenant = resolveTenantSelection(tenants, tenantId);
     if (tenant && tenant.id !== currentTenant?.id) {
       onTenantSwitch?.(tenant);
     }
+    setIsTenantMenuOpen(false);
+    setTenantSearch('');
   };
 
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       <div className="nav-divider" />
 
-      {showTenantSwitcher && (
-        <div className="px-2 py-1.5">
-          <label className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground">
-            <Building2 className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="sr-only">Tenant</span>
-            <select
-              className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
-              value={String(currentTenant.id)}
-              onChange={(event) => handleTenantChange(event.target.value)}
+      {showTenantSwitcher && currentTenant && (
+        <div ref={tenantSwitcherRef} className="relative px-2 py-2">
+          {isTenantMenuOpen && (
+            <div
+              className="absolute bottom-full left-2 right-2 z-50 mb-2 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
+              role="listbox"
+              aria-label={t('tenantSwitcher.switch')}
             >
-              {tenants.map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              <div className="border-b border-border p-2">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Building2 className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                    <span className="truncate">{t('tenantSwitcher.switch')}</span>
+                  </div>
+                  <span className="flex-shrink-0 text-[11px] text-muted-foreground">
+                    {filteredTenants.length}/{tenants.length}
+                  </span>
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    ref={tenantSearchInputRef}
+                    className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
+                    value={tenantSearch}
+                    onChange={(event) => setTenantSearch(event.target.value)}
+                    placeholder={t('tenantSwitcher.search')}
+                    type="search"
+                  />
+                </div>
+              </div>
+              <div className="max-h-64 overflow-y-auto p-1.5">
+                {filteredTenants.length === 0 ? (
+                  <div className="px-3 py-5 text-center text-xs text-muted-foreground">
+                    {t('tenantSwitcher.noMatches')}
+                  </div>
+                ) : (
+                  filteredTenants.map((tenant) => {
+                    const isSelected = tenant.id === currentTenant.id;
+                    return (
+                      <button
+                        key={tenant.id}
+                        className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors ${
+                          isSelected
+                            ? 'bg-primary/10 text-primary'
+                            : 'text-foreground hover:bg-accent/70'
+                        }`}
+                        onClick={() => handleTenantChange(String(tenant.id))}
+                        role="option"
+                        aria-selected={isSelected}
+                        type="button"
+                      >
+                        <span className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-xs font-semibold ${
+                          isSelected
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                        >
+                          {getTenantInitial(tenant)}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium">
+                              {tenant.name}
+                            </span>
+                            <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              tenant.permission === 'edit'
+                                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                            }`}
+                            >
+                              {getTenantPermissionLabel(t, tenant)}
+                            </span>
+                          </span>
+                          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                            {tenant.code}
+                          </span>
+                        </span>
+                        <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                          {isSelected ? <Check className="h-3.5 w-3.5" /> : null}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          <button
+            className="group flex h-9 w-full items-center gap-2 rounded-lg border border-transparent bg-muted/50 px-2.5 text-left text-muted-foreground transition-colors hover:border-primary/20 hover:bg-accent/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            onClick={() => setIsTenantMenuOpen((value) => !value)}
+            aria-expanded={isTenantMenuOpen}
+            aria-haspopup="listbox"
+            aria-label={t('tenantSwitcher.switch')}
+            type="button"
+          >
+            <span className="h-2 w-2 flex-shrink-0 rounded-full bg-emerald-500 ring ring-emerald-500/15" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-foreground">
+                {currentTenant.name}
+              </span>
+            </span>
+            <span className="hidden flex-shrink-0 rounded bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border/70 md:inline-flex">
+              {currentTenantPermission}
+            </span>
+            <ChevronsUpDown className={`h-3.5 w-3.5 flex-shrink-0 transition-colors ${
+              isTenantMenuOpen ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
+            }`}
+            />
+            <span className="sr-only">{t('tenantSwitcher.switch')}</span>
+          </button>
         </div>
       )}
 
@@ -135,4 +281,12 @@ export default function SidebarFooter({
       )}
     </div>
   );
+}
+
+function getTenantInitial(tenant?: Tenant | null): string {
+  return (tenant?.name || tenant?.code || '?').trim().slice(0, 1).toUpperCase();
+}
+
+function getTenantPermissionLabel(t: TFunction, tenant?: Tenant | null): string {
+  return tenant?.permission === 'edit' ? t('tenantSwitcher.edit') : t('tenantSwitcher.view');
 }

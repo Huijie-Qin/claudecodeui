@@ -69,6 +69,13 @@
     "reportIssue": "Report Issue",
     "starOnGithub": "Star on GitHub"
   },
+  "tenantSwitcher": {
+    "switch": "Switch tenant",
+    "search": "Search tenants",
+    "noMatches": "No matching tenants",
+    "edit": "Edit",
+    "view": "View"
+  },
   "branding": {
     "openSource": "Open Source"
   },

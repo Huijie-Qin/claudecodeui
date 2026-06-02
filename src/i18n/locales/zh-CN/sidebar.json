@@ -69,6 +69,13 @@
     "reportIssue": "报告问题",
     "starOnGithub": "在GitHub上加星"
   },
+  "tenantSwitcher": {
+    "switch": "切换租户",
+    "search": "搜索租户",
+    "noMatches": "没有匹配的租户",
+    "edit": "可编辑",
+    "view": "只读"
+  },
   "branding": {
     "openSource": "开源"
   },
