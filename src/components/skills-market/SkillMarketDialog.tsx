@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   FileText,
   Folder,
@@ -396,7 +397,7 @@ export default function SkillMarketDialog({
                           <div className="truncate text-sm font-medium text-foreground">{skill.displayName || skill.name}</div>
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{skill.description}</p>
                         </div>
-                        <SkillStatusBadge skill={skill} />
+                        {skill.conflict ? <ConflictWarningIcon /> : <SkillStatusBadge skill={skill} />}
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                         {typeof skill.version === 'number' ? <span>v{skill.version}</span> : null}
@@ -622,20 +623,40 @@ function SkillStatusBadge({ skill }: { skill: MarketSkillSummary }) {
     ? t('skillMarketDialog.status.remoteDeleted', 'Remote deleted')
     : skill.imported
     ? t('skillMarketDialog.status.imported', 'Imported')
-    : skill.conflict
-      ? t('skillMarketDialog.status.conflict', 'Conflict')
-      : t('skillMarketDialog.status.available', 'Available');
+    : t('skillMarketDialog.status.available', 'Available');
   const tone = skill.remoteDeleted
     ? 'border-amber-200 bg-amber-50 text-amber-700'
     : skill.imported
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : skill.conflict
-      ? 'border-amber-200 bg-amber-50 text-amber-700'
-      : 'border-border bg-muted text-muted-foreground';
+    : 'border-border bg-muted text-muted-foreground';
 
   return (
     <span className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium ${tone}`}>
       {label}
+    </span>
+  );
+}
+
+function ConflictWarningIcon() {
+  const { t } = useTranslation();
+  const message = t(
+    'skillMarketDialog.conflict',
+    'A same-name .claude/skills directory already exists but was not imported from the market.',
+  );
+
+  return (
+    <span
+      className="group relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-700"
+      aria-label={message}
+      title={message}
+    >
+      <AlertTriangle className="h-4 w-4" />
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-64 rounded-md border border-border bg-popover px-3 py-2 text-left text-xs leading-5 text-popover-foreground shadow-lg group-hover:block"
+      >
+        {message}
+      </span>
     </span>
   );
 }
