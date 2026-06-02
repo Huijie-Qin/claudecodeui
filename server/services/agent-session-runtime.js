@@ -626,7 +626,22 @@ export function createAgentSessionRuntimeManager({
     await docker.runDetached(args);
     const pythonPackages = parseDockerPythonPackages(env[DOCKER_PYTHON_PACKAGES_ENV_NAME]);
     if (pythonPackages.length > 0 && typeof docker.installPythonPackages === 'function') {
-      await docker.installPythonPackages(runtime.container_name, pythonPackages);
+      try {
+        const installPromise = docker.installPythonPackages(runtime.container_name, pythonPackages);
+        if (installPromise && typeof installPromise.catch === 'function') {
+          installPromise.catch((error) => {
+            console.warn(
+              `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
+              error,
+            );
+          });
+        }
+      } catch (error) {
+        console.warn(
+          `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
+          error,
+        );
+      }
     }
   }
 

@@ -327,6 +327,86 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });
 
+test('docker mode does not wait for configured Python package installation', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-async-python-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  await fs.mkdir(workspacePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const createdRuntimes = [];
+  let installStarted = false;
+  let installFinished = false;
+  let releaseInstall;
+  let installPromise;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: (runtime) => {
+          createdRuntimes.push(runtime);
+          return {
+            runtime_id: runtime.runtimeId,
+            tenant_id: runtime.tenantId,
+            workspace_id: runtime.workspaceId,
+            user_id: runtime.userId,
+            provider: runtime.provider,
+            container_name: runtime.containerName,
+            image: runtime.image,
+            workspace_host_path: runtime.workspaceHostPath,
+            runtime_home_path: runtime.runtimeHomePath,
+            status: 'pending',
+          };
+        },
+        findByProviderSession: () => null,
+        updateStatus: (input) => ({
+          runtime_id: createdRuntimes[0].runtimeId,
+          container_name: createdRuntimes[0].containerName,
+          image: createdRuntimes[0].image,
+          workspace_host_path: createdRuntimes[0].workspaceHostPath,
+          runtime_home_path: createdRuntimes[0].runtimeHomePath,
+          status: input.status,
+        }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => null,
+      runDetached: async () => undefined,
+      installPythonPackages: () => {
+        installStarted = true;
+        installPromise = new Promise((resolve) => {
+          releaseInstall = resolve;
+        }).then(() => {
+          installFinished = true;
+        });
+        return installPromise;
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+  });
+
+  assert.equal(runtime.mode, 'docker');
+  assert.equal(runtime.cwd, workspaceRealPath);
+  assert.equal(installStarted, true);
+  assert.equal(installFinished, false);
+
+  releaseInstall();
+  await installPromise;
+  assert.equal(installFinished, true);
+});
+
 test('docker mode resumes an existing runtime home for provider session id', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-resume-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
