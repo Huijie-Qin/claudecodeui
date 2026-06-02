@@ -147,9 +147,6 @@ export default function SidebarFooter({
                               {tenant.name}
                             </span>
                           </span>
-                          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                            {tenant.code}
-                          </span>
                         </span>
                         <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
                           {isSelected ? <Check className="h-3.5 w-3.5" /> : null}
