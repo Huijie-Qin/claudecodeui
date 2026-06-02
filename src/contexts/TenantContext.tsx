@@ -64,10 +64,15 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       const saved = localStorage.getItem(CURRENT_TENANT_STORAGE_KEY);
       const chosen = chooseInitialTenant(saved, nextTenants);
       setCurrentTenant((previous) => {
-        if (previous && nextTenants.some((tenant) => tenant.id === previous.id)) {
-          return previous;
+        const nextTenant = previous && nextTenants.some((tenant) => tenant.id === previous.id)
+          ? previous
+          : chosen;
+        if (nextTenant) {
+          localStorage.setItem(CURRENT_TENANT_STORAGE_KEY, String(nextTenant.id));
+        } else {
+          localStorage.removeItem(CURRENT_TENANT_STORAGE_KEY);
         }
-        return chosen;
+        return nextTenant;
       });
     } finally {
       setIsLoadingTenants(false);
