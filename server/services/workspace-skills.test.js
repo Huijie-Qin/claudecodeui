@@ -392,6 +392,37 @@ test('previewLocalSkillUpload extracts a single uploaded skill archive into a re
   });
 });
 
+test('previewLocalSkillUpload accepts relaxed skill names', async () => {
+  const workspacePath = await makeWorkspace();
+  const archiveBuffer = await makeZip({
+    'relaxed-name/SKILL.md': [
+      '---',
+      'name: 1 local.skill_',
+      'description: Uses a relaxed skill name.',
+      '---',
+    ].join('\n'),
+  });
+
+  const preview = await previewLocalSkillUpload({
+    workspacePath,
+    archiveBuffer,
+    originalName: 'relaxed-name.zip',
+    idFactory: () => 'relaxed-preview',
+  });
+
+  assert.equal(preview.name, '1 local.skill_');
+  assert.equal(preview.displayName, '1 local.skill_');
+
+  await installGithubSkill({
+    workspacePath,
+    previewId: 'relaxed-preview',
+  });
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', '1 local.skill_', 'SKILL.md'), 'utf8'),
+    ['---', 'name: 1 local.skill_', 'description: Uses a relaxed skill name.', '---'].join('\n'),
+  );
+});
+
 test('installGithubSkill copies source, writes metadata, and materializes enabled skills', async () => {
   const workspacePath = await makeWorkspace();
   const archive = await makeZip({

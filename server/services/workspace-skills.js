@@ -697,7 +697,7 @@ async function listRelativeFiles(rootDirectory) {
       if (entry.isDirectory()) {
         await visit(entryPath);
       } else if (entry.isFile()) {
-        files.push(path.relative(rootDirectory, entryPath));
+        files.push(path.relative(rootDirectory, entryPath).replace(/\\/g, '/'));
       }
     }
   }
@@ -746,8 +746,17 @@ async function writeJsonFile(filePath, value) {
 }
 
 async function ensureValidSkillName(name) {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(name)) {
-    throw createHttpError('Skill name must use letters, numbers, dots, underscores, or hyphens', 400);
+  const skillName = firstString(name);
+  if (!skillName) {
+    throw createHttpError('Skill name is required', 400);
+  }
+  if (
+    skillName === '.'
+    || skillName === '..'
+    || /[\\/]/.test(skillName)
+    || /[\x00-\x1F\x7F]/.test(skillName)
+  ) {
+    throw createHttpError('Skill name contains invalid path characters', 400);
   }
 }
 
