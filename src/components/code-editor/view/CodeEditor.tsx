@@ -583,7 +583,7 @@ export default function CodeEditor({
 function getImportedSkillNameFromPath(filePath: string) {
   const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
   const claudeIndex = parts.findIndex((part, index) => (
-    part === '.claude' && parts[index + 1] === 'skills'
+    part.toLowerCase() === '.claude' && parts[index + 1]?.toLowerCase() === 'skills'
   ));
 
   if (claudeIndex === -1 || !parts[claudeIndex + 2] || parts.length < claudeIndex + 4) {

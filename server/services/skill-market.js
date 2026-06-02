@@ -79,7 +79,7 @@ export async function listSkillMarket(options = {}) {
 export async function getSkillMarketDetail({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
   const lookupRef = requestedStatus.imported
     ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
@@ -126,7 +126,7 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
   const imports = workspacePath
     ? await readMarketImports({ workspaceId, workspacePath })
     : { version: 1, imports: {} };
-  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const requestedStatus = workspacePath
     ? await getImportStatus(workspacePath, requestedSkillName, imports)
     : { imported: false };
@@ -222,7 +222,7 @@ export async function downloadMarketSkill({
 export async function getMarketSkillPublishPreview({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
   const lookupRef = requestedStatus.imported
     ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
@@ -263,7 +263,7 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
 }
 
 export async function getMarketSkillPublishState({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
-  const skillName = normalizeSkillFolderName(name);
+  const skillName = normalizeRuntimeSkillFolderName(name);
   const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, skillName, imports);
 
@@ -321,7 +321,7 @@ export async function publishMarketSkill({
 }) {
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  const requestedSkillName = normalizeSkillFolderName(name);
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const requestedStatus = await getImportStatus(workspacePath, requestedSkillName, imports);
   const lookupRef = requestedStatus.imported
     ? getRemoteSkillLookupRef(requestedSkillName, requestedStatus.metadataEntry)
@@ -345,7 +345,7 @@ export async function publishMarketSkill({
   const importSkillName = status.skillName || remoteSkill.name;
   const runtimePath = getRuntimeSkillPath(workspacePath, importSkillName);
   const files = await readSkillDirectoryFiles(runtimePath);
-  const updateForm = await buildSkillUpdateForm(remoteSkill, files);
+  const updateForm = await buildSkillUpdateForm(remoteSkill, files, importSkillName);
   await requestMarketForm('/api/skill/update', updateForm, {
     tenantCode,
     accountId: remoteAccountId,
@@ -409,7 +409,7 @@ export async function uploadAndPublishLocalSkill({
   tenantCode,
   accountId,
 }) {
-  const skillName = normalizeSkillFolderName(name);
+  const skillName = normalizeRuntimeSkillFolderName(name);
   const remoteAccountId = accountId ?? currentUsername;
   const imports = await readMarketImports({ workspaceId, workspacePath });
   const status = await getImportStatus(workspacePath, skillName, imports);
@@ -494,7 +494,7 @@ export async function uploadAndPublishLocalSkill({
 }
 
 export async function removeMarketSkill({ workspaceId, workspacePath, name }) {
-  const skillName = normalizeSkillFolderName(name);
+  const skillName = normalizeRuntimeSkillFolderName(name);
   const imports = await readMarketImports({ workspaceId, workspacePath });
   if (!imports.imports?.[skillName]) {
     throw createHttpError(`Market skill "${skillName}" has not been imported`, 404);
@@ -1230,8 +1230,8 @@ async function collectSkillDirectoryFiles(rootDirectory, currentDirectory, files
   }
 }
 
-async function buildSkillUpdateForm(remoteSkill, files) {
-  const formData = await buildSkillArchiveForm(remoteSkill.name, files);
+async function buildSkillUpdateForm(remoteSkill, files, skillName = remoteSkill.name) {
+  const formData = await buildSkillArchiveForm(skillName, files);
   formData.append('id', String(remoteSkill.id));
   return formData;
 }
@@ -1241,7 +1241,7 @@ async function buildSkillSaveForm(skillName, files) {
 }
 
 async function buildSkillArchiveForm(skillName, files) {
-  const archiveRoot = normalizeSkillFolderName(skillName);
+  const archiveRoot = normalizeRuntimeSkillFolderName(skillName);
   const zip = new JSZip();
   files.forEach((file) => {
     zip.file(`${archiveRoot}/${file.path}`, file.content);
@@ -1657,7 +1657,7 @@ function ensurePublishAllowed(remoteSkill, status, currentUsername) {
 
 function getRuntimeSkillPath(workspacePath, name) {
   const { runtimeRoot } = getSkillMarketPaths(workspacePath);
-  return path.join(runtimeRoot, normalizeSkillFolderName(name));
+  return path.join(runtimeRoot, normalizeRuntimeSkillFolderName(name));
 }
 
 function resolveSkillFilePath(skillDirectory, filePath) {
@@ -1689,10 +1689,18 @@ function normalizeSkillFolderName(value) {
   return normalized;
 }
 
-function safeNormalizeSkillFolderName(value) {
-  const normalized = String(value || '')
-    .trim()
-    .toLowerCase()
+function normalizeRuntimeSkillFolderName(value) {
+  const normalized = safeNormalizeSkillFolderName(value, { preserveCase: true });
+  if (!normalized) {
+    throw createHttpError('Skill name is required', 400);
+  }
+  return normalized;
+}
+
+function safeNormalizeSkillFolderName(value, { preserveCase = false } = {}) {
+  const raw = String(value || '')
+    .trim();
+  const normalized = (preserveCase ? raw : raw.toLowerCase())
     .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')

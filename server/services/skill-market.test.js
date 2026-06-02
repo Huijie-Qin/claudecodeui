@@ -478,18 +478,19 @@ test('manual same-name runtime directories are conflicts instead of removable im
   assert.equal(await fs.readFile(path.join(manualPath, 'SKILL.md'), 'utf8'), '# Manual Skill');
 });
 
-test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', async () => {
+test('uploadAndPublishLocalSkill saves and publishes a local non-market skill with uppercase name', async () => {
   const workspacePath = await makeWorkspace();
-  const skillPath = path.join(workspacePath, '.claude', 'skills', 'local-author');
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'LocalAuthor');
   await fs.mkdir(path.join(skillPath, 'references'), { recursive: true });
   await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Author\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'guide.md'), '# Guide\n', 'utf8');
 
   const publishState = await getMarketSkillPublishState(withTenant({
     workspacePath,
-    name: 'local-author',
+    name: 'LocalAuthor',
     currentUsername: TEST_ACCOUNT_ID,
   }));
+  assert.equal(publishState.name, 'LocalAuthor');
   assert.equal(publishState.canUploadAndPublish, true);
   assert.equal(publishState.imported, false);
 
@@ -547,7 +548,7 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
 
     const result = await uploadAndPublishLocalSkill(withTenant({
       workspacePath,
-      name: 'local-author',
+      name: 'LocalAuthor',
       currentUsername: TEST_ACCOUNT_ID,
       now: () => new Date('2026-05-14T02:00:00.000Z'),
     }));
@@ -555,6 +556,7 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
     assert.equal(result.publishedVersion, 1);
     assert.equal(result.submittedFileCount, 2);
     assert.equal(result.skill.id, 'saved-local-author');
+    assert.equal(result.skill.name, 'LocalAuthor');
     assert.equal(result.skill.imported, true);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
@@ -576,8 +578,8 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill', 
     path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
     'utf8',
   ));
-  assert.equal(imports.imports['local-author'].id, 'saved-local-author');
-  assert.equal(imports.imports['local-author'].version, 1);
+  assert.equal(imports.imports.LocalAuthor.id, 'saved-local-author');
+  assert.equal(imports.imports.LocalAuthor.version, 1);
 });
 
 test('listSkillMarket deduplicates uploaded skills by remote id when names differ', async () => {
