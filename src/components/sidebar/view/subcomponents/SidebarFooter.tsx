@@ -33,7 +33,6 @@ export default function SidebarFooter({
   const [tenantSearch, setTenantSearch] = useState('');
   const tenantSwitcherRef = useRef<HTMLDivElement>(null);
   const tenantSearchInputRef = useRef<HTMLInputElement>(null);
-  const currentTenantPermission = getTenantPermissionLabel(t, currentTenant);
   const filteredTenants = useMemo(() => {
     const query = tenantSearch.trim().toLowerCase();
     if (!query) return tenants;
@@ -147,14 +146,6 @@ export default function SidebarFooter({
                             <span className="truncate text-xs font-medium">
                               {tenant.name}
                             </span>
-                            <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                              tenant.permission === 'edit'
-                                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                            }`}
-                            >
-                              {getTenantPermissionLabel(t, tenant)}
-                            </span>
                           </span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                             {tenant.code}
@@ -184,9 +175,6 @@ export default function SidebarFooter({
               <span className="block truncate text-sm font-medium text-foreground">
                 {currentTenant.name}
               </span>
-            </span>
-            <span className="hidden flex-shrink-0 rounded bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border/70 md:inline-flex">
-              {currentTenantPermission}
             </span>
             <ChevronsUpDown className={`h-3.5 w-3.5 flex-shrink-0 transition-colors ${
               isTenantMenuOpen ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
@@ -276,8 +264,4 @@ export default function SidebarFooter({
 
 function getTenantInitial(tenant?: Tenant | null): string {
   return (tenant?.name || tenant?.code || '?').trim().slice(0, 1).toUpperCase();
-}
-
-function getTenantPermissionLabel(t: TFunction, tenant?: Tenant | null): string {
-  return tenant?.permission === 'edit' ? t('tenantSwitcher.edit') : t('tenantSwitcher.view');
 }
