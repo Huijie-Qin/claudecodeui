@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
 type SkillMarketDialogProps = {
@@ -552,13 +553,11 @@ export default function SkillMarketDialog({
                   </span>
                 ) : null}
               </div>
-              <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-background p-4 font-mono text-sm leading-6 text-foreground">
-                {fileLoading
-                  ? t('skillMarketDialog.loadingFileContent', 'Loading file content...')
-                  : selectedFilePath
-                    ? fileContent
-                    : t('skillMarketDialog.filePlaceholder', 'Select a file to view its content.')}
-              </pre>
+              <SkillFilePreview
+                content={fileContent}
+                filePath={selectedFilePath}
+                isLoading={fileLoading}
+              />
             </div>
           </main>
         </div>
@@ -670,6 +669,48 @@ function CenteredState({ icon, text }: { icon: ReactNode; text: string }) {
       </div>
     </div>
   );
+}
+
+function SkillFilePreview({
+  content,
+  filePath,
+  isLoading,
+}: {
+  content: string;
+  filePath: string | null;
+  isLoading: boolean;
+}) {
+  const { t } = useTranslation();
+
+  if (isLoading || !filePath) {
+    return (
+      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-background p-4 font-mono text-sm leading-6 text-foreground">
+        {isLoading
+          ? t('skillMarketDialog.loadingFileContent', 'Loading file content...')
+          : t('skillMarketDialog.filePlaceholder', 'Select a file to view its content.')}
+      </pre>
+    );
+  }
+
+  if (isMarkdownFile(filePath)) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-gray-900">
+        <div className="prose prose-sm mx-auto max-w-4xl px-8 py-6 dark:prose-invert prose-headings:font-semibold prose-a:text-blue-600 prose-code:text-sm prose-pre:bg-gray-900 prose-img:rounded-lg dark:prose-a:text-blue-400">
+          <MarkdownPreview content={content} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-background p-4 font-mono text-sm leading-6 text-foreground">
+      {content}
+    </pre>
+  );
+}
+
+function isMarkdownFile(filePath: string): boolean {
+  return /\.(md|markdown|mdown|mkdn|mdx)$/i.test(filePath);
 }
 
 function findDefaultFile(files: MarketSkillFile[], preferredFilePath?: string | null) {
