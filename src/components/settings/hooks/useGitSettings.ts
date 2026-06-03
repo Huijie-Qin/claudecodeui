@@ -4,6 +4,7 @@ import { authenticatedFetch } from '../../../utils/api';
 type GitConfigResponse = {
   gitName?: string;
   gitEmail?: string;
+  gitTokenConfigured?: boolean;
   error?: string;
 };
 
@@ -12,6 +13,8 @@ type SaveStatus = 'success' | 'error' | null;
 export function useGitSettings() {
   const [gitName, setGitName] = useState('');
   const [gitEmail, setGitEmail] = useState('');
+  const [gitToken, setGitToken] = useState('');
+  const [gitTokenConfigured, setGitTokenConfigured] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>(null);
@@ -36,6 +39,8 @@ export function useGitSettings() {
       const data = await response.json() as GitConfigResponse;
       setGitName(data.gitName || '');
       setGitEmail(data.gitEmail || '');
+      setGitToken('');
+      setGitTokenConfigured(data.gitTokenConfigured === true);
     } catch (error) {
       console.error('Error loading git config:', error);
     } finally {
@@ -49,10 +54,17 @@ export function useGitSettings() {
       const response = await authenticatedFetch('/api/user/git-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gitName, gitEmail }),
+        body: JSON.stringify({
+          gitName,
+          gitEmail,
+          ...(gitToken.trim() ? { gitToken: gitToken.trim() } : {}),
+        }),
       });
 
       if (response.ok) {
+        const data = await response.json() as GitConfigResponse;
+        setGitToken('');
+        setGitTokenConfigured(data.gitTokenConfigured === true);
         setSaveStatus('success');
         clearStatusTimerRef.current = window.setTimeout(() => {
           setSaveStatus(null);
@@ -70,7 +82,7 @@ export function useGitSettings() {
     } finally {
       setIsSaving(false);
     }
-  }, [gitEmail, gitName]);
+  }, [gitEmail, gitName, gitToken]);
 
   useEffect(() => {
     void loadGitConfig();
@@ -87,6 +99,9 @@ export function useGitSettings() {
     setGitName,
     gitEmail,
     setGitEmail,
+    gitToken,
+    setGitToken,
+    gitTokenConfigured,
     isLoading,
     isSaving,
     saveStatus,

@@ -222,6 +222,14 @@
       "label": "Git Email",
       "help": "Your email for git commits"
     },
+    "token": {
+      "label": "git_token",
+      "placeholder": "Personal access token",
+      "help": "Passed to Docker exec as PRIVATE_TOKEN. Leave blank if you do not need a token.",
+      "configured": "A git_token is saved. Enter a new token to replace it.",
+      "show": "Show git_token",
+      "hide": "Hide git_token"
+    },
     "actions": {
       "save": "Save Configuration",
       "saving": "Saving..."

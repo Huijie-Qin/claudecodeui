@@ -222,6 +222,14 @@
       "label": "Git 邮箱",
       "help": "您的 git 提交邮箱"
     },
+    "token": {
+      "label": "git_token",
+      "placeholder": "个人访问令牌",
+      "help": "执行 Docker exec 时会作为 PRIVATE_TOKEN 传入容器环境变量。不需要 Token 时可留空。",
+      "configured": "已保存 git_token。输入新 Token 可替换已保存的值。",
+      "show": "显示 git_token",
+      "hide": "隐藏 git_token"
+    },
     "actions": {
       "save": "保存配置",
       "saving": "保存中..."

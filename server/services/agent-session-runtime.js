@@ -28,12 +28,15 @@ const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
+const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
+const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
 const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL_ENV_NAME,
   ANTHROPIC_MODEL_ENV_NAME,
   DAS_ENV_NAME,
   'ANTHROPIC_AUTH_TOKEN',
+  PRIVATE_TOKEN_ENV_NAME,
   'HTTP_PROXY',
   'HTTPS_PROXY',
   'NO_PROXY',
@@ -205,6 +208,7 @@ export function buildDockerRunArgs({
   cpus = DEFAULT_DOCKER_CPUS,
 }) {
   const containerEnvArgs = Object.entries(normalizeContainerEnvRecord(containerEnv))
+    .filter(([key]) => !DOCKER_RUN_ENV_DENYLIST.has(key))
     .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
 
   return [
@@ -374,6 +378,14 @@ function readUserContainerEnv(users, userId) {
   const output = {
     [W3_NAME_ENV_NAME]: username,
   };
+
+  if (typeof users?.getGitTokenForUser === 'function') {
+    const gitToken = readEnvValue({ [PRIVATE_TOKEN_ENV_NAME]: users.getGitTokenForUser(userId) }, PRIVATE_TOKEN_ENV_NAME);
+    if (gitToken) {
+      output[PRIVATE_TOKEN_ENV_NAME] = gitToken;
+    }
+  }
+
   if (typeof users?.getEnvForUser !== 'function') {
     return output;
   }

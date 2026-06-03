@@ -33,6 +33,7 @@ router.get('/git-config', authenticateToken, async (req, res) => {
 
     const gitName = (gitConfig?.git_name?.trim()) || defaultGitName || null;
     const gitEmail = (gitConfig?.git_email?.trim()) || defaultGitEmail || null;
+    const gitTokenConfigured = gitConfig?.git_token_configured === true;
     const needsDbSync = !gitConfig || gitName !== (gitConfig?.git_name || null) || gitEmail !== (gitConfig?.git_email || null);
 
     if (needsDbSync && (gitName || gitEmail)) {
@@ -42,7 +43,8 @@ router.get('/git-config', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       gitName,
-      gitEmail
+      gitEmail,
+      gitTokenConfigured
     });
   } catch (error) {
     console.error('Error getting git config:', error);
@@ -55,6 +57,7 @@ router.post('/git-config', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { gitName, gitEmail } = req.body;
+    const gitToken = req.body?.gitToken ?? req.body?.git_token;
 
     if (!gitName || !gitEmail) {
       return res.status(400).json({ error: 'Git name and email are required' });
@@ -66,7 +69,11 @@ router.post('/git-config', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    userDb.updateGitConfig(userId, gitName, gitEmail);
+    if (gitToken != null && String(gitToken).length > 4096) {
+      return res.status(400).json({ error: 'Git token must be 4096 characters or fewer' });
+    }
+
+    userDb.updateGitConfig(userId, gitName, gitEmail, gitToken);
 
     try {
       await spawnAsync('git', ['config', '--global', 'user.name', gitName]);
@@ -79,7 +86,9 @@ router.post('/git-config', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       gitName,
-      gitEmail
+      gitEmail,
+      gitTokenConfigured: Boolean(gitToken && String(gitToken).trim())
+        || userDb.getGitConfig(userId)?.git_token_configured === true
     });
   } catch (error) {
     console.error('Error updating git config:', error);

@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_system_admin BOOLEAN DEFAULT 0,
   git_name TEXT,
   git_email TEXT,
+  git_token TEXT,
   has_completed_onboarding BOOLEAN DEFAULT 0,
   env TEXT DEFAULT '{}'
 );

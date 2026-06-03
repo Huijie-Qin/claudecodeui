@@ -124,6 +124,11 @@ const runMigrations = () => {
       db.exec('ALTER TABLE users ADD COLUMN git_email TEXT');
     }
 
+    if (!columnNames.includes('git_token')) {
+      console.log('Running migration: Adding git_token column');
+      db.exec('ALTER TABLE users ADD COLUMN git_token TEXT');
+    }
+
     if (!columnNames.includes('has_completed_onboarding')) {
       console.log('Running migration: Adding has_completed_onboarding column');
       db.exec('ALTER TABLE users ADD COLUMN has_completed_onboarding BOOLEAN DEFAULT 0');
@@ -260,6 +265,19 @@ function encryptCodeHubToken(token) {
 }
 
 function decryptCodeHubToken(tokenEncrypted) {
+  return decryptSecretString(tokenEncrypted, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+}
+
+function encryptGitToken(token) {
+  return encryptSecretString(token, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+}
+
+function decryptGitToken(tokenEncrypted) {
+  if (!tokenEncrypted) return null;
   return decryptSecretString(tokenEncrypted, {
     secretMaterial: getUserKeyEncryptionSecret(),
   });
@@ -713,8 +731,15 @@ const userDb = {
     }
   },
 
-  updateGitConfig: (userId, gitName, gitEmail) => {
+  updateGitConfig: (userId, gitName, gitEmail, gitToken) => {
     try {
+      const normalizedToken = typeof gitToken === 'string' ? gitToken.trim() : null;
+      if (normalizedToken) {
+        const stmt = db.prepare('UPDATE users SET git_name = ?, git_email = ?, git_token = ? WHERE id = ?');
+        stmt.run(gitName, gitEmail, encryptGitToken(normalizedToken), userId);
+        return;
+      }
+
       const stmt = db.prepare('UPDATE users SET git_name = ?, git_email = ? WHERE id = ?');
       stmt.run(gitName, gitEmail, userId);
     } catch (err) {
@@ -724,8 +749,22 @@ const userDb = {
 
   getGitConfig: (userId) => {
     try {
-      const row = db.prepare('SELECT git_name, git_email FROM users WHERE id = ?').get(userId);
-      return row;
+      const row = db.prepare('SELECT git_name, git_email, git_token FROM users WHERE id = ?').get(userId);
+      if (!row) return row;
+      return {
+        git_name: row.git_name,
+        git_email: row.git_email,
+        git_token_configured: Boolean(row.git_token),
+      };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getGitTokenForUser: (userId) => {
+    try {
+      const row = db.prepare('SELECT git_token FROM users WHERE id = ?').get(userId);
+      return decryptGitToken(row?.git_token);
     } catch (err) {
       throw err;
     }
