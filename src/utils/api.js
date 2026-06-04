@@ -396,6 +396,24 @@ export const api = {
       }),
   },
 
+  scheduledTasks: {
+    list: (workspaceId) => authenticatedFetch(withTenantAndWorkspaceParam('/api/scheduled-tasks', workspaceId)),
+    create: (payload) =>
+      authenticatedFetch(withTenantParam('/api/scheduled-tasks'), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    update: (taskId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/scheduled-tasks/${encodeURIComponent(String(taskId))}`), {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    remove: (taskId) =>
+      authenticatedFetch(withTenantParam(`/api/scheduled-tasks/${encodeURIComponent(String(taskId))}`), {
+        method: 'DELETE',
+      }),
+  },
+
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
     previewGithub: (workspaceId, url) =>

@@ -25,6 +25,15 @@ export interface ProjectSession {
   updated_at?: string;
   lastActivity?: string;
   messageCount?: number;
+  isScheduledTaskSession?: boolean;
+  scheduledTask?: {
+    id?: number;
+    name?: string;
+    enabled?: boolean;
+    provider?: LLMProvider;
+    nextRunAt?: string | null;
+    [key: string]: unknown;
+  };
   __provider?: LLMProvider;
   __projectName?: string;
   [key: string]: unknown;

@@ -60,15 +60,17 @@ import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
+import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
-import {applyCustomSessionNames, initializeDatabase, sessionNamesDb} from './database/db.js';
+import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
 import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
+import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
@@ -448,6 +450,8 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
+const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
+app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
@@ -530,6 +534,9 @@ app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+
+// Scheduled session task route (protected)
+app.use('/api/scheduled-tasks', authenticateToken, scheduledTasksRoutes);
 
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
@@ -682,6 +689,11 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
                     __provider: 'claude',
                     __workspaceId: workspace.id,
                 }));
+            applyScheduledSessionTaskFlags(sessions, 'claude', {
+                tenantId: req.tenant.id,
+                userId: req.user?.id ?? req.user?.userId,
+                workspaceId: workspace.id,
+            });
 
             res.json({
                 sessions,
@@ -1870,6 +1882,7 @@ function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
 
     ws.userId = request?.user?.id ?? request?.user?.userId ?? null;
+    ws.tenantId = request?.tenant?.id ?? null;
 
     // Add to connected clients for project updates
     connectedClients.add(ws);
@@ -2813,6 +2826,7 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
         runtimeSweeper.start();
+        scheduledSessionTasks.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -2856,6 +2870,7 @@ async function startServer() {
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
             runtimeSweeper.stop();
+            scheduledSessionTasks.stop();
             await stopAllPlugins();
             process.exit(0);
         };

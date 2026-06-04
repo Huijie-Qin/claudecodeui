@@ -1,5 +1,6 @@
-import { Check, Clock, Edit2, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, Clock, Edit2, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
 import { formatTimeAgo } from '../../../../utils/dateUtils';
@@ -47,6 +48,7 @@ export default function SidebarSessionItem({
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
+  const isScheduledTaskSession = session.isScheduledTaskSession === true;
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -82,7 +84,19 @@ export default function SidebarSessionItem({
         >
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+                {isScheduledTaskSession && (
+                  <Badge
+                    variant="secondary"
+                    className="shrink-0 gap-1 px-1 py-0 text-[10px]"
+                    title={typeof session.scheduledTask?.name === 'string' ? session.scheduledTask.name : 'Scheduled task session'}
+                  >
+                    <CalendarClock className="h-2.5 w-2.5" />
+                    定时
+                  </Badge>
+                )}
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
@@ -122,7 +136,19 @@ export default function SidebarSessionItem({
         >
           <div className="flex w-full min-w-0 items-start gap-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+                {isScheduledTaskSession && (
+                  <Badge
+                    variant="secondary"
+                    className="shrink-0 gap-1 px-1 py-0 text-[10px]"
+                    title={typeof session.scheduledTask?.name === 'string' ? session.scheduledTask.name : 'Scheduled task session'}
+                  >
+                    <CalendarClock className="h-2.5 w-2.5" />
+                    定时
+                  </Badge>
+                )}
+              </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
