@@ -241,4 +241,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_messages_provider_message
   WHERE provider_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_session_messages_history
   ON agent_session_messages(tenant_id, user_id, workspace_id, provider, provider_session_id, sequence);
+
+CREATE TABLE IF NOT EXISTS scheduled_session_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'cursor', 'gemini')),
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  interval_minutes INTEGER NOT NULL CHECK (interval_minutes >= 1),
+  next_run_at TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  model TEXT,
+  permission_mode TEXT,
+  tools_settings_json TEXT,
+  last_run_at TEXT,
+  last_session_id TEXT,
+  last_error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_session_tasks_due
+  ON scheduled_session_tasks(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_session_tasks_owner
+  ON scheduled_session_tasks(tenant_id, workspace_id, user_id, updated_at DESC);
 `;

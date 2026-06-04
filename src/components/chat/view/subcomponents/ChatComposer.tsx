@@ -11,7 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
+import { MessageSquareIcon, XIcon, ArrowDownIcon, Clock3Icon } from 'lucide-react';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
@@ -100,6 +100,7 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  onOpenScheduledTasks?: () => void;
 }
 
 export default function ChatComposer({
@@ -150,6 +151,7 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  onOpenScheduledTasks,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -320,6 +322,15 @@ export default function ChatComposer({
                 </span>
               )}
             </PromptInputButton>
+
+            {onOpenScheduledTasks ? (
+              <PromptInputButton
+                tooltip={{ content: t('input.scheduledTasks', { defaultValue: 'Scheduled tasks' }) }}
+                onClick={onOpenScheduledTasks}
+              >
+                <Clock3Icon />
+              </PromptInputButton>
+            ) : null}
 
             {hasInput && (
               <PromptInputButton

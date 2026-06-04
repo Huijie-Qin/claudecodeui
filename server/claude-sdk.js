@@ -12,11 +12,20 @@
  * - WebSocket message streaming
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
+
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
 import { CLAUDE_MODELS } from '../shared/modelConstants.js';
+
+import {
+  CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES,
+  applyClaudeNativeSchedulingEnvironmentPolicy,
+  assertClaudeNativeSchedulingCommandAllowed,
+  isClaudeNativeSchedulingDisabled,
+} from './services/claude-native-scheduling-policy.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -45,6 +54,7 @@ const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEO
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 
 function parseDisabledTools(value) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -236,7 +246,9 @@ function mapCliOptionsToSDK(options = {}) {
 
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
-  sdkOptions.env = executionEnv ? { ...executionEnv } : { ...process.env };
+  sdkOptions.env = applyClaudeNativeSchedulingEnvironmentPolicy(
+    executionEnv ? { ...executionEnv } : { ...process.env },
+  );
 
   // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
   // The SDK 0.2.113+ looks for a bundled native binary optional dep by default;
@@ -275,6 +287,7 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.disallowedTools = uniqueTools([
     ...getConfiguredDisabledTools(options),
+    ...(isClaudeNativeSchedulingDisabled(sdkOptions.env) ? CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES : []),
   ]);
 
   // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
@@ -568,6 +581,8 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @returns {Promise<void>}
  */
 async function queryClaudeSDK(command, options = {}, ws) {
+  assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
+
   const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
   const pendingProviderSessionId = sessionId ? null : `pending:${createRequestId()}`;
@@ -678,6 +693,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
     };
 
     sdkOptions.canUseTool = async (toolName, input, context) => {
+      if (isClaudeNativeSchedulingDisabled(sdkOptions.env) && CLAUDE_NATIVE_SCHEDULING_TOOLS.has(toolName)) {
+        return {
+          behavior: 'deny',
+          message: 'Claude Code native scheduling is disabled in CCUI. Use CCUI scheduled tasks instead.',
+        };
+      }
+
       if (isToolDisabled(toolName, input, sdkOptions.disallowedTools)) {
         return {
           behavior: 'deny',
