@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, ChevronDown, Copy, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogTitle,
   Input,
+  Tooltip,
 } from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
 
@@ -215,6 +216,28 @@ function matchesQuery(value: string, query: string): boolean {
   if (!normalizedQuery) return true;
   return value.toLowerCase().includes(normalizedQuery);
 }
+
+function findUsersByUsernames(usernames: string[], users: AdminUser[]) {
+  const usersByName = new Map(users.map((user) => [user.username.toLowerCase(), user]));
+  const matchedUsers: AdminUser[] = [];
+  const missingUsernames: string[] = [];
+
+  for (const username of usernames) {
+    const user = usersByName.get(username.toLowerCase());
+    if (user) {
+      matchedUsers.push(user);
+    } else {
+      missingUsernames.push(username);
+    }
+  }
+
+  return { matchedUsers, missingUsernames };
+}
+
+function dedupeIdStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
 export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const { t } = useTranslation('admin');
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
@@ -241,6 +264,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedBatchTenantIds, setSelectedBatchTenantIds] = useState<string[]>([]);
   const [selectedBatchUserIds, setSelectedBatchUserIds] = useState<string[]>([]);
+  const [batchGrantUsernames, setBatchGrantUsernames] = useState('');
+  const [batchGrantMissingUsernames, setBatchGrantMissingUsernames] = useState<string[]>([]);
   const [batchUserSearch, setBatchUserSearch] = useState('');
   const [batchTenantSearch, setBatchTenantSearch] = useState('');
   const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
@@ -248,6 +273,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [claudeEnvDas, setClaudeEnvDas] = useState('');
   const [claudeEnvUserSearch, setClaudeEnvUserSearch] = useState('');
   const [selectedClaudeEnvUserIds, setSelectedClaudeEnvUserIds] = useState<string[]>([]);
+  const [claudeEnvUsernames, setClaudeEnvUsernames] = useState('');
+  const [claudeEnvMissingUsernames, setClaudeEnvMissingUsernames] = useState<string[]>([]);
   const [claudeEnvSummary, setClaudeEnvSummary] = useState<AdminBatchSummary | null>(null);
   const [claudeEnvResults, setClaudeEnvResults] = useState<AdminBatchClaudeEnvResult[]>([]);
   const [permission, setPermission] = useState<TenantPermission>('edit');
@@ -604,11 +631,25 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
   const grantMembershipsBatch = async () => {
     const tenantIds = selectedBatchTenantIds.map(Number).filter(Boolean);
-    const userIds = selectedBatchUserIds.map(Number).filter(Boolean);
+    const pastedUsernames = parseBatchUsernames(batchGrantUsernames);
+    const { matchedUsers, missingUsernames } = findUsersByUsernames(pastedUsernames, users);
+    const userIds = dedupeIdStrings([
+      ...selectedBatchUserIds,
+      ...matchedUsers.map((user) => String(user.id)),
+    ]).map(Number).filter(Boolean);
 
     setError(null);
     setBatchGrantSummary(null);
     setBatchGrantResults([]);
+    setBatchGrantMissingUsernames([]);
+    if (missingUsernames.length > 0) {
+      const message = t('errors.batchGrantMissingUsers', { usernames: missingUsernames.join(', ') });
+      setBatchGrantMissingUsernames(missingUsernames);
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+
     if (tenantIds.length === 0 || userIds.length === 0) {
       const message = t('errors.selectTenantsAndUsers');
       setError(message);
@@ -647,6 +688,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       if (summary.succeeded > 0) {
         setSelectedBatchTenantIds([]);
         setSelectedBatchUserIds([]);
+        setBatchGrantUsernames('');
+        setBatchGrantMissingUsernames([]);
         setBatchPermission('edit');
         await load();
         await refreshTenants();
@@ -662,7 +705,12 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   };
 
   const updateClaudeEnvBatch = async () => {
-    const userIds = selectedClaudeEnvUserIds.map(Number).filter(Boolean);
+    const pastedUsernames = parseBatchUsernames(claudeEnvUsernames);
+    const { matchedUsers, missingUsernames } = findUsersByUsernames(pastedUsernames, users);
+    const userIds = dedupeIdStrings([
+      ...selectedClaudeEnvUserIds,
+      ...matchedUsers.map((user) => String(user.id)),
+    ]).map(Number).filter(Boolean);
     const anthropicBaseUrl = claudeEnvBaseUrl.trim();
     const anthropicModel = claudeEnvModel.trim();
     const das = claudeEnvDas.trim();
@@ -670,6 +718,15 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     setError(null);
     setClaudeEnvSummary(null);
     setClaudeEnvResults([]);
+    setClaudeEnvMissingUsernames([]);
+    if (missingUsernames.length > 0) {
+      const message = t('errors.claudeEnvMissingUsers');
+      setClaudeEnvMissingUsernames(missingUsernames);
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+
     if (userIds.length === 0) {
       const message = t('errors.selectClaudeEnvUsers');
       setError(message);
@@ -714,6 +771,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
 
       if (summary.succeeded > 0) {
         setSelectedClaudeEnvUserIds([]);
+        setClaudeEnvUsernames('');
+        setClaudeEnvMissingUsernames([]);
       }
     } catch (caughtError) {
       console.error('[AdminPanel] Failed to update Claude environment:', caughtError);
@@ -755,6 +814,18 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const filteredBatchUsers = users.filter((user) => matchesQuery(user.username, batchUserSearch));
   const filteredBatchTenants = tenants.filter((tenant) => matchesQuery(`${tenant.name} ${tenant.code}`, batchTenantSearch));
   const filteredClaudeEnvUsers = users.filter((user) => matchesQuery(user.username, claudeEnvUserSearch));
+  const pastedBatchGrantUsernames = parseBatchUsernames(batchGrantUsernames);
+  const { matchedUsers: pastedBatchGrantUsers } = findUsersByUsernames(pastedBatchGrantUsernames, users);
+  const batchGrantUserCount = dedupeIdStrings([
+    ...selectedBatchUserIds,
+    ...pastedBatchGrantUsers.map((user) => String(user.id)),
+  ]).length;
+  const pastedClaudeEnvUsernames = parseBatchUsernames(claudeEnvUsernames);
+  const { matchedUsers: pastedClaudeEnvUsers } = findUsersByUsernames(pastedClaudeEnvUsernames, users);
+  const claudeEnvUserCount = dedupeIdStrings([
+    ...selectedClaudeEnvUserIds,
+    ...pastedClaudeEnvUsers.map((user) => String(user.id)),
+  ]).length;
   const renderBatchGrantSection = () => (
     <Collapsible className="space-y-3">
       <CollapsibleTrigger className={collapsibleTriggerClassName}>
@@ -766,11 +837,23 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <section className="space-y-3 pt-3">
-      <div className="grid items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px_120px]">
-        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+      <div className="grid items-stretch gap-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_140px_120px]">
+        <div className="space-y-2">
           <span className="text-xs leading-4 text-muted-foreground">
-            {t('fields.user')} · {selectedBatchUserIds.length}
+            {t('fields.user')} · {batchGrantUserCount}
           </span>
+          <textarea
+            className="h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={batchGrantUsernames}
+            onChange={(event) => {
+              setBatchGrantUsernames(event.target.value);
+              setBatchGrantMissingUsernames([]);
+            }}
+            placeholder={t('batch.grantUsernamesPlaceholder')}
+            autoCapitalize="none"
+            autoComplete="off"
+          />
+          <p className="text-xs leading-4 text-muted-foreground">{t('batch.grantUsernamesHint')}</p>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -780,7 +863,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               placeholder={t('batch.searchUsers')}
             />
           </div>
-          <div className={checklistClassName}>
+          <div className="h-28 overflow-y-auto rounded-md border border-input bg-background p-2 shadow-sm">
             {users.length === 0 ? (
               <div className="px-2 py-3 text-sm text-muted-foreground">{t('users.empty')}</div>
             ) : filteredBatchUsers.length === 0 ? (
@@ -805,7 +888,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             )}
           </div>
         </div>
-        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+        <div className="grid grid-rows-[16px_40px_minmax(160px,1fr)] gap-2">
           <span className="text-xs leading-4 text-muted-foreground">
             {t('fields.tenant')} · {selectedBatchTenantIds.length}
           </span>
@@ -843,7 +926,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             )}
           </div>
         </div>
-        <label className="grid grid-rows-[16px_40px_160px] gap-2">
+        <label className="grid grid-rows-[16px_40px_minmax(160px,1fr)] gap-2">
           <span className="text-xs leading-4 text-muted-foreground">{t('fields.access')}</span>
           <select
             className={selectClassName}
@@ -855,7 +938,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           </select>
           <span aria-hidden="true" />
         </label>
-        <div className="grid grid-rows-[16px_40px_160px] gap-2">
+        <div className="grid grid-rows-[16px_40px_minmax(160px,1fr)] gap-2">
           <span aria-hidden="true" />
           <span aria-hidden="true" />
           <Button className="self-end" onClick={grantMembershipsBatch} disabled={isSaving}>
@@ -863,6 +946,14 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           </Button>
         </div>
       </div>
+      {batchGrantMissingUsernames.length > 0 ? (
+        <div className="max-h-24 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {t('batch.missingUsers', {
+            count: batchGrantMissingUsernames.length,
+            usernames: batchGrantMissingUsernames.join(', '),
+          })}
+        </div>
+      ) : null}
       {batchGrantSummary ? (
         <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
           {t('batch.summary', {
@@ -1284,6 +1375,38 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                       />
                     </label>
                     <label className="space-y-1">
+                      <span className="text-xs text-muted-foreground">{t('claudeEnv.authToken')}</span>
+                      <div className="relative">
+                        <Input
+                          className="pr-10"
+                          type={isClaudeEnvAuthTokenVisible ? 'text' : 'password'}
+                          value={claudeEnvAuthToken}
+                          onChange={(event) => setClaudeEnvAuthToken(event.target.value)}
+                          placeholder={t('claudeEnv.authTokenPlaceholder')}
+                          autoCapitalize="none"
+                          autoComplete="off"
+                        />
+                        <div className="absolute inset-y-0 right-1 flex items-center">
+                          <Tooltip
+                            content={t(isClaudeEnvAuthTokenVisible ? 'claudeEnv.hideAuthToken' : 'claudeEnv.showAuthToken')}
+                            position="top"
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              aria-label={t(isClaudeEnvAuthTokenVisible ? 'claudeEnv.hideAuthToken' : 'claudeEnv.showAuthToken')}
+                              aria-pressed={isClaudeEnvAuthTokenVisible}
+                              onClick={() => setIsClaudeEnvAuthTokenVisible((visible) => !visible)}
+                            >
+                              {isClaudeEnvAuthTokenVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    </label>
+                    <label className="space-y-1">
                       <span className="text-xs text-muted-foreground">{t('claudeEnv.das')}</span>
                       <Input
                         value={claudeEnvDas}
@@ -1304,13 +1427,17 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-medium text-foreground">
-                    {t('claudeEnv.usersTitle', { count: selectedClaudeEnvUserIds.length })}
+                    {t('claudeEnv.usersTitle', { count: claudeEnvUserCount })}
                   </h3>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setSelectedClaudeEnvUserIds(users.map((user) => String(user.id)))}
+                      onClick={() => {
+                        setSelectedClaudeEnvUserIds(users.map((user) => String(user.id)));
+                        setClaudeEnvUsernames('');
+                        setClaudeEnvMissingUsernames([]);
+                      }}
                       disabled={users.length === 0}
                     >
                       {t('claudeEnv.selectAll')}
@@ -1318,13 +1445,32 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setSelectedClaudeEnvUserIds([])}
-                      disabled={selectedClaudeEnvUserIds.length === 0}
+                      onClick={() => {
+                        setSelectedClaudeEnvUserIds([]);
+                        setClaudeEnvUsernames('');
+                        setClaudeEnvMissingUsernames([]);
+                      }}
+                      disabled={claudeEnvUserCount === 0}
                     >
                       {t('claudeEnv.clearSelection')}
                     </Button>
                   </div>
                 </div>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">{t('claudeEnv.usernames')}</span>
+                  <textarea
+                    className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={claudeEnvUsernames}
+                    onChange={(event) => {
+                      setClaudeEnvUsernames(event.target.value);
+                      setClaudeEnvMissingUsernames([]);
+                    }}
+                    placeholder={t('claudeEnv.usernamesPlaceholder')}
+                    autoCapitalize="none"
+                    autoComplete="off"
+                  />
+                  <span className="block text-xs leading-4 text-muted-foreground">{t('claudeEnv.usernamesHint')}</span>
+                </label>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -1361,6 +1507,14 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     ))
                   )}
                 </div>
+                {claudeEnvMissingUsernames.length > 0 ? (
+                  <div className="max-h-24 overflow-auto rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    {t('claudeEnv.missingUsers', {
+                      count: claudeEnvMissingUsernames.length,
+                      usernames: claudeEnvMissingUsernames.join(', '),
+                    })}
+                  </div>
+                ) : null}
               </section>
 
               {claudeEnvSummary ? (

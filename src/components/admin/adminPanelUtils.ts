@@ -21,7 +21,7 @@ export function parseBatchUsernames(value: string): string[] {
   const seen = new Set<string>();
 
   return value
-    .split(/[\s,;]+/g)
+    .split(/[\s,;，；、]+/g)
     .map((username) => username.trim())
     .filter((username) => {
       if (!username || seen.has(username.toLowerCase())) {
