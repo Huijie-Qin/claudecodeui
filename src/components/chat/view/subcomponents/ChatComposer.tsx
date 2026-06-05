@@ -11,7 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
+import { MessageSquareIcon, XIcon, ArrowDownIcon, ShieldCheckIcon } from 'lucide-react';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
@@ -100,6 +100,8 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  autoAttendMode: boolean;
+  onToggleAutoAttendMode: () => void;
 }
 
 export default function ChatComposer({
@@ -150,6 +152,8 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  autoAttendMode,
+  onToggleAutoAttendMode,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -320,6 +324,26 @@ export default function ChatComposer({
                 </span>
               )}
             </PromptInputButton>
+
+            {provider === 'claude' && (
+              <PromptInputButton
+                tooltip={{
+                  content: autoAttendMode
+                    ? t('input.autoAttendModeOn', {
+                        defaultValue: 'Auto attend mode is on: AskUserQuestion is disabled',
+                      })
+                    : t('input.autoAttendModeOff', {
+                        defaultValue: 'Auto attend mode is off',
+                      }),
+                }}
+                aria-label={t('input.autoAttendMode', { defaultValue: 'Auto attend mode' })}
+                aria-pressed={autoAttendMode}
+                onClick={onToggleAutoAttendMode}
+                className={autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''}
+              >
+                <ShieldCheckIcon />
+              </PromptInputButton>
+            )}
 
             {hasInput && (
               <PromptInputButton

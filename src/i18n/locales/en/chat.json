@@ -138,7 +138,10 @@
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
-    "scrollToBottom": "Scroll to bottom"
+    "scrollToBottom": "Scroll to bottom",
+    "autoAttendMode": "Auto attend mode",
+    "autoAttendModeOn": "Auto attend mode is on: AskUserQuestion is disabled",
+    "autoAttendModeOff": "Auto attend mode is off"
   },
   "thinkingMode": {
     "selector": {

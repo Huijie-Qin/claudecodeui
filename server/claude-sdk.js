@@ -143,6 +143,7 @@ function mapCliOptionsToSDK(options = {}) {
     sessionId,
     cwd,
     permissionMode,
+    autoAttendMode,
     pathToClaudeCodeExecutable,
     executionEnv,
     settingSources,
@@ -189,7 +190,7 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = [];
+  sdkOptions.disallowedTools = autoAttendMode ? ['AskUserQuestion'] : [];
 
   // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
   // The provider adapter converts those stream_event payloads into UI stream_delta events.
@@ -592,6 +593,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
     };
 
     sdkOptions.canUseTool = async (toolName, input, context) => {
+      if (runtimeOptions.autoAttendMode && toolName === 'AskUserQuestion') {
+        return {
+          behavior: 'deny',
+          message: 'AskUserQuestion is disabled while auto attend mode is enabled',
+        };
+      }
+
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
