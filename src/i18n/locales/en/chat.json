@@ -140,6 +140,7 @@
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
     "autoAttendMode": "Auto attend",
+    "autoAttendModeLabel": "Auto attend: when enabled, questions are not confirmed with the user",
     "autoAttendModeHint": "When enabled, questions are not confirmed with the user"
   },
   "thinkingMode": {

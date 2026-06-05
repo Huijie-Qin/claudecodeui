@@ -335,9 +335,16 @@ export default function ChatComposer({
                 aria-label={t('input.autoAttendMode', { defaultValue: 'Auto attend mode' })}
                 aria-pressed={autoAttendMode}
                 onClick={onToggleAutoAttendMode}
-                className={autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''}
+                className={`w-auto gap-1.5 px-2 text-xs font-medium ${
+                  autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''
+                }`}
               >
                 <ShieldCheckIcon />
+                <span className="whitespace-nowrap">
+                  {t('input.autoAttendModeLabel', {
+                    defaultValue: 'Auto attend: when enabled, questions are not confirmed with the user',
+                  })}
+                </span>
               </PromptInputButton>
             )}
 
