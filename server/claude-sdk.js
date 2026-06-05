@@ -42,8 +42,92 @@ const abortedSessions = new Set();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+
+function parseDisabledTools(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return [];
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((tool) => typeof tool === 'string').map((tool) => tool.trim()).filter(Boolean);
+      }
+    } catch (error) {
+      console.warn(`Unable to parse ${CLAUDE_DISABLED_TOOLS_ENV} JSON array:`, error?.message || error);
+    }
+  }
+
+  return trimmed.split(/[,\n]+/).map((tool) => tool.trim()).filter(Boolean);
+}
+
+function uniqueTools(tools) {
+  return Array.from(new Set(tools.filter((tool) => typeof tool === 'string' && tool.trim()).map((tool) => tool.trim())));
+}
+
+function getConfiguredDisabledTools(options = {}) {
+  return uniqueTools([
+    ...parseDisabledTools(process.env[CLAUDE_DISABLED_TOOLS_ENV]),
+    ...parseDisabledTools(options.executionEnv?.[CLAUDE_DISABLED_TOOLS_ENV]),
+  ]);
+}
+
+function getBashCommand(input) {
+  if (input && typeof input === 'object' && typeof input.command === 'string') {
+    return input.command.trim();
+  }
+
+  if (typeof input !== 'string' || !input.trim()) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(input);
+    return typeof parsed?.command === 'string' ? parsed.command.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildToolPermissionEntry(toolName, input) {
+  if (!toolName) {
+    return null;
+  }
+
+  if (toolName !== 'Bash') {
+    return toolName;
+  }
+
+  const command = getBashCommand(input);
+  if (!command) {
+    return toolName;
+  }
+
+  const tokens = command.split(/\s+/);
+  if (tokens.length === 0) {
+    return toolName;
+  }
+
+  if (tokens[0] === 'git' && tokens[1]) {
+    return `Bash(${tokens[0]} ${tokens[1]}:*)`;
+  }
+
+  return `Bash(${tokens[0]}:*)`;
+}
+
+function isToolDisabled(toolName, input, disabledTools) {
+  if (!Array.isArray(disabledTools) || disabledTools.length === 0) {
+    return false;
+  }
+
+  const permissionEntry = buildToolPermissionEntry(toolName, input);
+  return disabledTools.includes(toolName) || (permissionEntry ? disabledTools.includes(permissionEntry) : false);
+}
 
 function getToolInteractionMessage(toolName) {
   if (toolName === 'AskUserQuestion') {
@@ -190,7 +274,10 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = autoAttendMode ? ['AskUserQuestion'] : [];
+  sdkOptions.disallowedTools = uniqueTools([
+    ...getConfiguredDisabledTools(options),
+    ...(autoAttendMode ? ['AskUserQuestion'] : []),
+  ]);
 
   // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
   // The provider adapter converts those stream_event payloads into UI stream_delta events.
@@ -597,6 +684,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
         return {
           behavior: 'deny',
           message: 'AskUserQuestion is disabled while auto attend mode is enabled',
+        };
+      }
+
+      if (isToolDisabled(toolName, input, sdkOptions.disallowedTools)) {
+        return {
+          behavior: 'deny',
+          message: `${toolName} is disabled by configuration`,
         };
       }
 
