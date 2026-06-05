@@ -121,9 +121,8 @@
     "showAllCommands": "显示所有命令",
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
-    "autoAttendMode": "自动值守模式",
-    "autoAttendModeOn": "自动值守已开启：AskUserQuestion 已禁用",
-    "autoAttendModeOff": "自动值守已关闭"
+    "autoAttendMode": "自动值守",
+    "autoAttendModeHint": "开启后，不会向用户确认问题"
   },
   "thinkingMode": {
     "selector": {

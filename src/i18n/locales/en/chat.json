@@ -139,9 +139,8 @@
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
-    "autoAttendMode": "Auto attend mode",
-    "autoAttendModeOn": "Auto attend mode is on: AskUserQuestion is disabled",
-    "autoAttendModeOff": "Auto attend mode is off"
+    "autoAttendMode": "Auto attend",
+    "autoAttendModeHint": "When enabled, questions are not confirmed with the user"
   },
   "thinkingMode": {
     "selector": {

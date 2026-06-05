@@ -328,20 +328,19 @@ export default function ChatComposer({
             {provider === 'claude' && (
               <PromptInputButton
                 tooltip={{
-                  content: autoAttendMode
-                    ? t('input.autoAttendModeOn', {
-                        defaultValue: 'Auto attend mode is on: AskUserQuestion is disabled',
-                      })
-                    : t('input.autoAttendModeOff', {
-                        defaultValue: 'Auto attend mode is off',
-                      }),
+                  content: t('input.autoAttendModeHint', {
+                    defaultValue: 'When enabled, questions are not confirmed with the user',
+                  }),
                 }}
                 aria-label={t('input.autoAttendMode', { defaultValue: 'Auto attend mode' })}
                 aria-pressed={autoAttendMode}
                 onClick={onToggleAutoAttendMode}
-                className={autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''}
+                className={`w-auto gap-1.5 px-2 text-xs font-medium ${
+                  autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''
+                }`}
               >
                 <ShieldCheckIcon />
+                <span>{t('input.autoAttendMode', { defaultValue: 'Auto attend mode' })}</span>
               </PromptInputButton>
             )}
 
