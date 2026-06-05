@@ -122,7 +122,7 @@
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
     "autoAttendMode": "自动值守",
-    "autoAttendModeHint": "开启后，不会向用户确认问题"
+    "autoAttendModeHint": "开启后，不会向您进行问题确认"
   },
   "thinkingMode": {
     "selector": {
