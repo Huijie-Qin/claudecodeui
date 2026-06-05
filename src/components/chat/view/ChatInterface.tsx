@@ -173,8 +173,6 @@ function ChatInterface({
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
-    autoAttendMode,
-    toggleAutoAttendMode,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -416,8 +414,6 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
-          autoAttendMode={autoAttendMode}
-          onToggleAutoAttendMode={toggleAutoAttendMode}
         />
       </div>
 

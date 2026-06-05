@@ -11,7 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { MessageSquareIcon, XIcon, ArrowDownIcon, ShieldCheckIcon } from 'lucide-react';
+import { MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
@@ -100,8 +100,6 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
-  autoAttendMode: boolean;
-  onToggleAutoAttendMode: () => void;
 }
 
 export default function ChatComposer({
@@ -152,8 +150,6 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
-  autoAttendMode,
-  onToggleAutoAttendMode,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -324,29 +320,6 @@ export default function ChatComposer({
                 </span>
               )}
             </PromptInputButton>
-
-            {provider === 'claude' && (
-              <PromptInputButton
-                tooltip={{
-                  content: t('input.autoAttendModeHint', {
-                    defaultValue: 'When enabled, questions are not confirmed with the user',
-                  }),
-                }}
-                aria-label={t('input.autoAttendMode', { defaultValue: 'Auto attend mode' })}
-                aria-pressed={autoAttendMode}
-                onClick={onToggleAutoAttendMode}
-                className={`w-auto gap-1.5 px-2 text-xs font-medium ${
-                  autoAttendMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''
-                }`}
-              >
-                <ShieldCheckIcon />
-                <span className="whitespace-nowrap">
-                  {t('input.autoAttendModeLabel', {
-                    defaultValue: 'Auto attend: when enabled, questions are not confirmed with the user',
-                  })}
-                </span>
-              </PromptInputButton>
-            )}
 
             {hasInput && (
               <PromptInputButton

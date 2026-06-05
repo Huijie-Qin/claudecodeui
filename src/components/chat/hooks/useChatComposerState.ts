@@ -101,8 +101,6 @@ const getNotificationSessionSummary = (
   return normalizedFallback.length > 80 ? `${normalizedFallback.slice(0, 77)}...` : normalizedFallback;
 };
 
-const AUTO_ATTEND_MODE_STORAGE_KEY = 'autoAttendMode';
-
 export function useChatComposerState({
   selectedProject,
   selectedSession,
@@ -146,9 +144,6 @@ export function useChatComposerState({
   const [imageErrors, setImageErrors] = useState<Map<string, string>>(new Map());
   const [isTextareaExpanded, setIsTextareaExpanded] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('none');
-  const [autoAttendMode, setAutoAttendMode] = useState(
-    () => safeLocalStorage.getItem(AUTO_ATTEND_MODE_STORAGE_KEY) === 'true',
-  );
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputHighlightRef = useRef<HTMLDivElement>(null);
@@ -663,7 +658,6 @@ export function useChatComposerState({
             resume: Boolean(effectiveSessionId),
             toolsSettings,
             permissionMode,
-            autoAttendMode,
             model: claudeModel,
             sessionSummary,
             displayCommand: displayInput !== currentInput ? displayInput : undefined,
@@ -708,7 +702,6 @@ export function useChatComposerState({
       sendMessage,
       setCanAbortSession,
       addMessage,
-      autoAttendMode,
       setClaudeStatus,
       setIsLoading,
       setIsUserScrolledUp,
@@ -747,14 +740,6 @@ export function useChatComposerState({
       safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
     }
   }, [input, selectedProject]);
-
-  const toggleAutoAttendMode = useCallback(() => {
-    setAutoAttendMode((previous) => {
-      const next = !previous;
-      safeLocalStorage.setItem(AUTO_ATTEND_MODE_STORAGE_KEY, String(next));
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     if (!textareaRef.current) {
@@ -999,7 +984,5 @@ export function useChatComposerState({
     handleGrantToolPermission,
     handleInputFocusChange,
     isInputFocused,
-    autoAttendMode,
-    toggleAutoAttendMode,
   };
 }
