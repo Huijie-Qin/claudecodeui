@@ -35,6 +35,7 @@ type SidebarProjectItemProps = {
   onSaveProjectName: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
+  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -86,6 +87,7 @@ export default function SidebarProjectItem({
   onSaveProjectName,
   onDeleteProject,
   onSessionSelect,
+  onScheduledTaskOpen,
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
@@ -424,6 +426,7 @@ export default function SidebarProjectItem({
         onSaveEditingSession={onSaveEditingSession}
         onProjectSelect={onProjectSelect}
         onSessionSelect={onSessionSelect}
+        onScheduledTaskOpen={onScheduledTaskOpen}
         onDeleteSession={onDeleteSession}
         onLoadMoreSessions={onLoadMoreSessions}
         onNewSession={onNewSession}

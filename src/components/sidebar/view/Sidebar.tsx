@@ -25,6 +25,7 @@ function Sidebar({
   onProjectSelect,
   onShareProject,
   onSessionSelect,
+  onScheduledTaskOpen,
   onNewSession,
   onSessionDelete,
   onProjectDelete,
@@ -174,6 +175,7 @@ function Sidebar({
     },
     onDeleteProject: requestProjectDelete,
     onSessionSelect: handleSessionClick,
+    onScheduledTaskOpen,
     onDeleteSession: showDeleteSessionConfirmation,
     onLoadMoreSessions: (project) => {
       void loadMoreSessions(project);

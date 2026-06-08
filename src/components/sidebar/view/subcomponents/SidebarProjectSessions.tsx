@@ -21,6 +21,7 @@ type SidebarProjectSessionsProps = {
   onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
+  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -66,6 +67,7 @@ export default function SidebarProjectSessions({
   onSaveEditingSession,
   onProjectSelect,
   onSessionSelect,
+  onScheduledTaskOpen,
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
@@ -125,6 +127,7 @@ export default function SidebarProjectSessions({
             onSaveEditingSession={onSaveEditingSession}
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
+            onScheduledTaskOpen={onScheduledTaskOpen}
             onDeleteSession={onDeleteSession}
             t={t}
           />

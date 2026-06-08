@@ -174,7 +174,6 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
-    isInputFocused,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -292,6 +291,11 @@ function ChatInterface({
   const canCreateScheduledTask = !scheduledTaskSessionId;
   const scheduledTaskSessionName =
     selectedSession?.summary || selectedSession?.title || selectedSession?.name || scheduledTaskSessionId;
+  const scheduledTasksDisabledReason = canCreateScheduledTask
+    ? undefined
+    : t('input.scheduledTasksNewSessionOnly', {
+        defaultValue: 'Scheduled tasks can only be created from a new session',
+      });
 
   if (!selectedProject) {
     const selectedProviderLabel =
@@ -432,6 +436,7 @@ function ChatInterface({
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
           onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}
+          scheduledTasksDisabledReason={scheduledTasksDisabledReason}
         />
       </div>
 
