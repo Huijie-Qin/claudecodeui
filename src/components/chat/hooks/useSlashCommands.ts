@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import Fuse from 'fuse.js';
+
 import { authenticatedFetch } from '../../../utils/api';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type { Project } from '../../../types/app';
@@ -22,6 +23,7 @@ interface UseSlashCommandsOptions {
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
   textareaRef: RefObject<HTMLTextAreaElement>;
+  commandFilter?: (command: SlashCommand) => boolean;
 }
 
 const getCommandHistoryKey = (projectName: string) => `command_history_${projectName}`;
@@ -49,6 +51,7 @@ export function useSlashCommands({
   input,
   setInput,
   textareaRef,
+  commandFilter,
 }: UseSlashCommandsOptions) {
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [filteredCommands, setFilteredCommands] = useState<SlashCommand[]>([]);
@@ -109,8 +112,9 @@ export function useSlashCommands({
           })),
         ];
 
+        const selectableCommands = commandFilter ? allCommands.filter(commandFilter) : allCommands;
         const parsedHistory = readCommandHistory(selectedProject.name);
-        const sortedCommands = [...allCommands].sort((commandA, commandB) => {
+        const sortedCommands = [...selectableCommands].sort((commandA, commandB) => {
           const commandAUsage = parsedHistory[commandA.name] || 0;
           const commandBUsage = parsedHistory[commandB.name] || 0;
           return commandBUsage - commandAUsage;
@@ -124,7 +128,7 @@ export function useSlashCommands({
     };
 
     fetchCommands();
-  }, [selectedProject]);
+  }, [commandFilter, selectedProject]);
 
   useEffect(() => {
     if (!showCommandMenu) {
@@ -195,11 +199,22 @@ export function useSlashCommands({
 
   const insertSelectedCommand = useCallback(
     (command: SlashCommand) => {
-      const textBeforeSlash = input.slice(0, slashPosition);
-      const textAfterSlash = input.slice(slashPosition);
-      const spaceIndex = textAfterSlash.indexOf(' ');
-      const textAfterQuery = spaceIndex !== -1 ? textAfterSlash.slice(spaceIndex) : '';
-      const newInput = `${textBeforeSlash}${command.name} ${textAfterQuery}`;
+      let newInput: string;
+
+      if (slashPosition >= 0) {
+        const textBeforeSlash = input.slice(0, slashPosition);
+        const textAfterSlash = input.slice(slashPosition);
+        const spaceIndex = textAfterSlash.indexOf(' ');
+        const textAfterQuery = spaceIndex !== -1 ? textAfterSlash.slice(spaceIndex) : '';
+        newInput = `${textBeforeSlash}${command.name} ${textAfterQuery}`;
+      } else {
+        const cursorPosition = textareaRef.current?.selectionStart ?? input.length;
+        const textBeforeCursor = input.slice(0, cursorPosition);
+        const textAfterCursor = input.slice(cursorPosition);
+        const leadingSpace = textBeforeCursor && !/\s$/.test(textBeforeCursor) ? ' ' : '';
+        const trailingSpace = textAfterCursor && !/^\s/.test(textAfterCursor) ? ' ' : '';
+        newInput = `${textBeforeCursor}${leadingSpace}${command.name} ${trailingSpace}${textAfterCursor}`;
+      }
 
       trackCommandUsage(command);
       setInput(newInput);

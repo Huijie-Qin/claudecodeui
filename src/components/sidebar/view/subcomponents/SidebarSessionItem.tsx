@@ -1,5 +1,6 @@
 import { CalendarClock, Check, Clock, Edit2, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import type { MouseEvent } from 'react';
 
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -21,6 +22,7 @@ type SidebarSessionItemProps = {
   onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
+  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -43,12 +45,17 @@ export default function SidebarSessionItem({
   onSaveEditingSession,
   onProjectSelect,
   onSessionSelect,
+  onScheduledTaskOpen,
   onDeleteSession,
   t,
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
   const isScheduledTaskSession = session.isScheduledTaskSession === true;
+  const scheduledTaskTitle =
+    typeof session.scheduledTask?.name === 'string'
+      ? session.scheduledTask.name
+      : 'Scheduled task session';
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -61,6 +68,11 @@ export default function SidebarSessionItem({
 
   const requestDeleteSession = () => {
     onDeleteSession(project, session.id, sessionView.sessionName, session.__provider);
+  };
+
+  const openScheduledTask = (event: MouseEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    onScheduledTaskOpen?.(project, session);
   };
 
   return (
@@ -89,8 +101,13 @@ export default function SidebarSessionItem({
                 {isScheduledTaskSession && (
                   <Badge
                     variant="secondary"
-                    className="shrink-0 gap-1 px-1 py-0 text-[10px]"
-                    title={typeof session.scheduledTask?.name === 'string' ? session.scheduledTask.name : 'Scheduled task session'}
+                    className={cn(
+                      'shrink-0 gap-1 px-1 py-0 text-[10px]',
+                      onScheduledTaskOpen && 'cursor-pointer hover:bg-primary/10 hover:text-primary',
+                    )}
+                    role={onScheduledTaskOpen ? 'button' : undefined}
+                    onClick={onScheduledTaskOpen ? openScheduledTask : undefined}
+                    title={scheduledTaskTitle}
                   >
                     <CalendarClock className="h-2.5 w-2.5" />
                     定时
@@ -141,8 +158,13 @@ export default function SidebarSessionItem({
                 {isScheduledTaskSession && (
                   <Badge
                     variant="secondary"
-                    className="shrink-0 gap-1 px-1 py-0 text-[10px]"
-                    title={typeof session.scheduledTask?.name === 'string' ? session.scheduledTask.name : 'Scheduled task session'}
+                    className={cn(
+                      'shrink-0 gap-1 px-1 py-0 text-[10px]',
+                      onScheduledTaskOpen && 'cursor-pointer hover:bg-primary/10 hover:text-primary',
+                    )}
+                    role={onScheduledTaskOpen ? 'button' : undefined}
+                    onClick={onScheduledTaskOpen ? openScheduledTask : undefined}
+                    title={scheduledTaskTitle}
                   >
                     <CalendarClock className="h-2.5 w-2.5" />
                     定时
