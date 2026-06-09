@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
@@ -16,6 +16,7 @@ import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulato
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
+import ScheduledTasksDialog from './subcomponents/ScheduledTasksDialog';
 
 
 type PendingViewSession = {
@@ -55,6 +56,7 @@ function ChatInterface({
   const streamAccumulatorRef = useRef(createSessionStreamAccumulator());
   const streamTimersRef = useRef(new Map<string, number>());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
+  const [showScheduledTasks, setShowScheduledTasks] = useState(false);
 
   const resetStreamingState = useCallback(() => {
     for (const timerId of streamTimersRef.current.values()) {
@@ -172,7 +174,6 @@ function ChatInterface({
     handlePermissionDecision,
     handleGrantToolPermission,
     handleInputFocusChange,
-    isInputFocused,
   } = useChatComposerState({
     selectedProject,
     selectedSession,
@@ -275,6 +276,26 @@ function ChatInterface({
     pendingPermissionRequests,
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
+
+  const selectedModel = provider === 'cursor'
+    ? cursorModel
+    : provider === 'codex'
+      ? codexModel
+      : provider === 'gemini'
+        ? geminiModel
+        : claudeModel;
+  const scheduledTaskSessionId =
+    currentSessionId && !currentSessionId.startsWith('new-session-')
+      ? currentSessionId
+      : selectedSession?.id || null;
+  const canCreateScheduledTask = !scheduledTaskSessionId;
+  const scheduledTaskSessionName =
+    selectedSession?.summary || selectedSession?.title || selectedSession?.name || scheduledTaskSessionId;
+  const scheduledTasksDisabledReason = canCreateScheduledTask
+    ? undefined
+    : t('input.scheduledTasksNewSessionOnly', {
+        defaultValue: 'Scheduled tasks can only be created from a new session',
+      });
 
   if (!selectedProject) {
     const selectedProviderLabel =
@@ -414,8 +435,24 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}
+          scheduledTasksDisabledReason={scheduledTasksDisabledReason}
         />
       </div>
+
+      {selectedProject && showScheduledTasks ? (
+        <ScheduledTasksDialog
+          open={showScheduledTasks}
+          selectedProject={selectedProject}
+          provider={provider as LLMProvider}
+          model={selectedModel}
+          permissionMode={permissionMode}
+          initialPrompt={input}
+          selectedSessionId={null}
+          selectedSessionName={scheduledTaskSessionName}
+          onClose={() => setShowScheduledTasks(false)}
+        />
+      ) : null}
 
       <QuickSettingsPanel />
     </PermissionContext.Provider>

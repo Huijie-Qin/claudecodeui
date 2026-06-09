@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
 import AdminPanel from '../admin/AdminPanel';
+import ScheduledTasksDialog from '../chat/view/subcomponents/ScheduledTasksDialog';
 import { isSystemAdminUser } from '../admin/adminPanelUtils';
 import { useAuth } from '../auth/context/AuthContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
@@ -13,7 +14,16 @@ import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useModelResponseBrowserNotifications } from '../../hooks/useModelResponseBrowserNotifications';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
-import type { Tenant } from '../../types/app';
+import type { LLMProvider, Project, ProjectSession, Tenant } from '../../types/app';
+
+type ScheduledTaskEditorState = {
+  project: Project;
+  taskId: number;
+  provider: LLMProvider;
+};
+
+// Temporarily hide scheduled task operation entrypoints from the frontend.
+const SHOW_SCHEDULED_TASK_ACTIONS = false;
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -25,6 +35,7 @@ export default function AppContent() {
   const { ws, sendMessage, subscribeMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [scheduledTaskEditor, setScheduledTaskEditor] = useState<ScheduledTaskEditorState | null>(null);
   const isSystemAdmin = isSystemAdminUser(user);
 
   const {
@@ -67,6 +78,24 @@ export default function AppContent() {
       setSidebarOpen(false);
     }
   }, [isMobile, navigate, selectTenant, setSidebarOpen]);
+
+  const handleScheduledTaskOpen = useCallback((project: Project, session: ProjectSession) => {
+    const taskId = Number(session.scheduledTask?.id);
+    if (!Number.isFinite(taskId)) {
+      return;
+    }
+
+    setScheduledTaskEditor({
+      project,
+      taskId,
+      provider: session.scheduledTask?.provider || session.__provider || 'claude',
+    });
+    setActiveTab('chat');
+
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, setActiveTab, setSidebarOpen]);
 
   const handleNotificationNavigate = useCallback((targetSessionId: string) => {
     setActiveTab('chat');
@@ -179,6 +208,7 @@ export default function AppContent() {
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar
             {...sidebarSharedProps}
+            onScheduledTaskOpen={SHOW_SCHEDULED_TASK_ACTIONS ? handleScheduledTaskOpen : undefined}
             showAdminEntry={isSystemAdmin}
             onShowAdminPanel={() => setShowAdminPanel(true)}
             tenants={tenants}
@@ -212,6 +242,7 @@ export default function AppContent() {
           >
             <Sidebar
               {...sidebarSharedProps}
+              onScheduledTaskOpen={SHOW_SCHEDULED_TASK_ACTIONS ? handleScheduledTaskOpen : undefined}
               showAdminEntry={isSystemAdmin}
               onShowAdminPanel={() => setShowAdminPanel(true)}
               tenants={tenants}
@@ -248,6 +279,16 @@ export default function AppContent() {
       </div>
 
       <AdminPanel open={showAdminPanel} onOpenChange={setShowAdminPanel} />
+
+      {scheduledTaskEditor ? (
+        <ScheduledTasksDialog
+          open
+          selectedProject={scheduledTaskEditor.project}
+          provider={scheduledTaskEditor.provider}
+          initialTaskId={scheduledTaskEditor.taskId}
+          onClose={() => setScheduledTaskEditor(null)}
+        />
+      ) : null}
     </div>
   );
 }

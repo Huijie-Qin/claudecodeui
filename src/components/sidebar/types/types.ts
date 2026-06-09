@@ -29,6 +29,7 @@ export type SidebarProps = {
   onProjectSelect: (project: Project) => void;
   onShareProject?: (project: Project) => void;
   onSessionSelect: (session: ProjectSession) => void;
+  onScheduledTaskOpen?: (project: Project, session: ProjectSession) => void;
   onNewSession: (project: Project) => void;
   onSessionDelete?: (sessionId: string) => void;
   onProjectDelete?: (project: Project) => void;

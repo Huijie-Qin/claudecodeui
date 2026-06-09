@@ -1,4 +1,5 @@
 import path from 'path';
+import { scheduledTasksDb } from '../database/db.js';
 
 export function slugifyWorkspaceName(value) {
   return String(value || '')
@@ -85,14 +86,20 @@ export function resolveCloneDestinationPath({
   return path.join(workspaceRootPath, normalizedRepoName);
 }
 
-function mapSession(session, workspaceId) {
-  return {
+function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
+  const mapped = {
     id: session.provider_session_id,
     summary: session.summary || 'New Session',
     lastActivity: session.updated_at,
     __provider: session.provider,
     __workspaceId: workspaceId,
   };
+  const scheduledTask = scheduledTaskMap.get(session.provider_session_id);
+  if (scheduledTask) {
+    mapped.isScheduledTaskSession = true;
+    mapped.scheduledTask = scheduledTask;
+  }
+  return mapped;
 }
 
 export function mapWorkspaceRowsToProjects(rows, { tenantId, userId, listSessions }) {
@@ -101,6 +108,12 @@ export function mapWorkspaceRowsToProjects(rows, { tenantId, userId, listSession
       tenantId,
       workspaceId: row.id,
       userId,
+    });
+    const scheduledTaskMap = scheduledTasksDb.getSessionTaskMap({
+      tenantId,
+      workspaceId: row.id,
+      userId,
+      sessionIds: sessionRows.map((session) => session.provider_session_id),
     });
 
     return {
@@ -115,16 +128,16 @@ export function mapWorkspaceRowsToProjects(rows, { tenantId, userId, listSession
       isCustomName: true,
       sessions: sessionRows
         .filter((session) => session.provider === 'claude')
-        .map((session) => mapSession(session, row.id)),
+        .map((session) => mapSession(session, row.id, scheduledTaskMap)),
       codexSessions: sessionRows
         .filter((session) => session.provider === 'codex')
-        .map((session) => mapSession(session, row.id)),
+        .map((session) => mapSession(session, row.id, scheduledTaskMap)),
       cursorSessions: sessionRows
         .filter((session) => session.provider === 'cursor')
-        .map((session) => mapSession(session, row.id)),
+        .map((session) => mapSession(session, row.id, scheduledTaskMap)),
       geminiSessions: sessionRows
         .filter((session) => session.provider === 'gemini')
-        .map((session) => mapSession(session, row.id)),
+        .map((session) => mapSession(session, row.id, scheduledTaskMap)),
       sessionMeta: {
         hasMore: false,
         total: sessionRows.length,

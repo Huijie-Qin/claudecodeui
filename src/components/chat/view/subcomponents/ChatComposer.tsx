@@ -11,23 +11,28 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { MessageSquareIcon, XIcon, ArrowDownIcon } from 'lucide-react';
+import { ArrowDownIcon, Clock3Icon, MessageSquareIcon, XIcon } from 'lucide-react';
+
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputButton,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from '../../../../shared/view/ui';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
+
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import TokenUsagePie from './TokenUsagePie';
-import {
-  PromptInput,
-  PromptInputHeader,
-  PromptInputBody,
-  PromptInputTextarea,
-  PromptInputFooter,
-  PromptInputTools,
-  PromptInputButton,
-  PromptInputSubmit,
-} from '../../../../shared/view/ui';
+
+// Temporarily hide scheduled task operation entrypoints from the frontend.
+const SHOW_SCHEDULED_TASK_ACTIONS = false;
 
 interface MentionableFile {
   name: string;
@@ -100,6 +105,8 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  onOpenScheduledTasks?: () => void;
+  scheduledTasksDisabledReason?: string;
 }
 
 export default function ChatComposer({
@@ -150,6 +157,8 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  onOpenScheduledTasks,
+  scheduledTasksDisabledReason,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -321,11 +330,24 @@ export default function ChatComposer({
               )}
             </PromptInputButton>
 
+            {SHOW_SCHEDULED_TASK_ACTIONS && (onOpenScheduledTasks || scheduledTasksDisabledReason) ? (
+              <PromptInputButton
+                tooltip={{
+                  content: scheduledTasksDisabledReason || t('input.scheduledTasks', { defaultValue: 'Scheduled tasks' }),
+                }}
+                onClick={onOpenScheduledTasks ?? ((event) => event.preventDefault())}
+                aria-disabled={onOpenScheduledTasks ? undefined : true}
+                className={onOpenScheduledTasks ? undefined : 'cursor-not-allowed opacity-50'}
+              >
+                <Clock3Icon />
+              </PromptInputButton>
+            ) : null}
+
             {hasInput && (
               <PromptInputButton
                 tooltip={{ content: t('input.clearInput', { defaultValue: 'Clear input' }) }}
                 onClick={onClearInput}
-                className="hidden sm:No-flex"
+                className="hidden sm:flex"
               >
                 <XIcon />
               </PromptInputButton>

@@ -1,7 +1,7 @@
 import type { Tenant } from '../../types/app';
 
 export function shouldShowTenantSwitcher(tenants: Tenant[]): boolean {
-  return tenants.length > 1;
+  return tenants.length > 0;
 }
 
 export function resolveTenantSelection(tenants: Tenant[], tenantId: string): Tenant | null {

@@ -12,11 +12,20 @@
  * - WebSocket message streaming
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
+
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
 import { CLAUDE_MODELS } from '../shared/modelConstants.js';
+
+import {
+  CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES,
+  applyClaudeNativeSchedulingEnvironmentPolicy,
+  assertClaudeNativeSchedulingCommandAllowed,
+  isClaudeNativeSchedulingDisabled,
+} from './services/claude-native-scheduling-policy.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -42,8 +51,93 @@ const abortedSessions = new Set();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
+
+function parseDisabledTools(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return [];
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((tool) => typeof tool === 'string').map((tool) => tool.trim()).filter(Boolean);
+      }
+    } catch (error) {
+      console.warn(`Unable to parse ${CLAUDE_DISABLED_TOOLS_ENV} JSON array:`, error?.message || error);
+    }
+  }
+
+  return trimmed.split(/[,\n]+/).map((tool) => tool.trim()).filter(Boolean);
+}
+
+function uniqueTools(tools) {
+  return Array.from(new Set(tools.filter((tool) => typeof tool === 'string' && tool.trim()).map((tool) => tool.trim())));
+}
+
+function getConfiguredDisabledTools(options = {}) {
+  return uniqueTools([
+    ...parseDisabledTools(process.env[CLAUDE_DISABLED_TOOLS_ENV]),
+    ...parseDisabledTools(options.executionEnv?.[CLAUDE_DISABLED_TOOLS_ENV]),
+  ]);
+}
+
+function getBashCommand(input) {
+  if (input && typeof input === 'object' && typeof input.command === 'string') {
+    return input.command.trim();
+  }
+
+  if (typeof input !== 'string' || !input.trim()) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(input);
+    return typeof parsed?.command === 'string' ? parsed.command.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildToolPermissionEntry(toolName, input) {
+  if (!toolName) {
+    return null;
+  }
+
+  if (toolName !== 'Bash') {
+    return toolName;
+  }
+
+  const command = getBashCommand(input);
+  if (!command) {
+    return toolName;
+  }
+
+  const tokens = command.split(/\s+/);
+  if (tokens.length === 0) {
+    return toolName;
+  }
+
+  if (tokens[0] === 'git' && tokens[1]) {
+    return `Bash(${tokens[0]} ${tokens[1]}:*)`;
+  }
+
+  return `Bash(${tokens[0]}:*)`;
+}
+
+function isToolDisabled(toolName, input, disabledTools) {
+  if (!Array.isArray(disabledTools) || disabledTools.length === 0) {
+    return false;
+  }
+
+  const permissionEntry = buildToolPermissionEntry(toolName, input);
+  return disabledTools.includes(toolName) || (permissionEntry ? disabledTools.includes(permissionEntry) : false);
+}
 
 function getToolInteractionMessage(toolName) {
   if (toolName === 'AskUserQuestion') {
@@ -152,7 +246,9 @@ function mapCliOptionsToSDK(options = {}) {
 
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
-  sdkOptions.env = executionEnv ? { ...executionEnv } : { ...process.env };
+  sdkOptions.env = applyClaudeNativeSchedulingEnvironmentPolicy(
+    executionEnv ? { ...executionEnv } : { ...process.env },
+  );
 
   // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
   // The SDK 0.2.113+ looks for a bundled native binary optional dep by default;
@@ -189,7 +285,10 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = [];
+  sdkOptions.disallowedTools = uniqueTools([
+    ...getConfiguredDisabledTools(options),
+    ...(isClaudeNativeSchedulingDisabled(sdkOptions.env) ? CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES : []),
+  ]);
 
   // Claude Agent SDK emits token-level partial assistant events only when this is enabled.
   // The provider adapter converts those stream_event payloads into UI stream_delta events.
@@ -482,6 +581,8 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @returns {Promise<void>}
  */
 async function queryClaudeSDK(command, options = {}, ws) {
+  assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
+
   const { sessionId, sessionSummary } = options;
   let capturedSessionId = sessionId;
   const pendingProviderSessionId = sessionId ? null : `pending:${createRequestId()}`;
@@ -592,6 +693,20 @@ async function queryClaudeSDK(command, options = {}, ws) {
     };
 
     sdkOptions.canUseTool = async (toolName, input, context) => {
+      if (isClaudeNativeSchedulingDisabled(sdkOptions.env) && CLAUDE_NATIVE_SCHEDULING_TOOLS.has(toolName)) {
+        return {
+          behavior: 'deny',
+          message: 'Claude Code native scheduling is disabled in CCUI. Use CCUI scheduled tasks instead.',
+        };
+      }
+
+      if (isToolDisabled(toolName, input, sdkOptions.disallowedTools)) {
+        return {
+          behavior: 'deny',
+          message: `${toolName} is disabled by configuration`,
+        };
+      }
+
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {

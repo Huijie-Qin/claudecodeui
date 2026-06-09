@@ -10,9 +10,9 @@ const tenants: Tenant[] = [
   { id: 2, code: 'team', name: 'Team', permission: 'view' },
 ];
 
-test('shouldShowTenantSwitcher only shows when there are multiple tenants', () => {
+test('shouldShowTenantSwitcher shows when the user has tenant access', () => {
   assert.equal(shouldShowTenantSwitcher([]), false);
-  assert.equal(shouldShowTenantSwitcher([tenants[0]]), false);
+  assert.equal(shouldShowTenantSwitcher([tenants[0]]), true);
   assert.equal(shouldShowTenantSwitcher(tenants), true);
 });
 

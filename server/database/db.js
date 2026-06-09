@@ -1299,6 +1299,87 @@ function applyCustomSessionNames(sessions, provider) {
   }
 }
 
+const scheduledTasksDb = {
+  getSessionTaskMap: ({ tenantId, userId, workspaceId = null, provider = null, sessionIds = [] } = {}) => {
+    const normalizedSessionIds = Array.isArray(sessionIds)
+      ? sessionIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim())
+      : [];
+
+    if (!normalizedSessionIds.length) {
+      return new Map();
+    }
+
+    const params = [tenantId, userId, ...normalizedSessionIds];
+    let workspaceClause = '';
+    let providerClause = '';
+
+    if (workspaceId != null) {
+      workspaceClause = 'AND workspace_id = ?';
+      params.push(workspaceId);
+    }
+
+    if (provider != null) {
+      providerClause = 'AND provider = ?';
+      params.push(provider);
+    }
+
+    const placeholders = normalizedSessionIds.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT
+        last_session_id,
+        id,
+        name,
+        enabled,
+        provider,
+        next_run_at
+      FROM scheduled_session_tasks
+      WHERE tenant_id = ?
+        AND user_id = ?
+        AND last_session_id IN (${placeholders})
+        ${workspaceClause}
+        ${providerClause}
+      ORDER BY enabled DESC, updated_at DESC, id DESC
+    `).all(...params);
+
+    const result = new Map();
+    for (const row of rows) {
+      if (!result.has(row.last_session_id)) {
+        result.set(row.last_session_id, {
+          id: row.id,
+          name: row.name,
+          enabled: Boolean(row.enabled),
+          provider: row.provider,
+          nextRunAt: row.next_run_at,
+        });
+      }
+    }
+    return result;
+  },
+};
+
+function applyScheduledSessionTaskFlags(sessions, provider, { tenantId = null, userId = null, workspaceId = null } = {}) {
+  if (!sessions?.length || !tenantId || !userId) return;
+  try {
+    const ids = sessions.map((session) => session.id);
+    const taskMap = scheduledTasksDb.getSessionTaskMap({
+      tenantId,
+      userId,
+      workspaceId,
+      provider,
+      sessionIds: ids,
+    });
+    for (const session of sessions) {
+      const task = taskMap.get(session.id);
+      if (task) {
+        session.isScheduledTaskSession = true;
+        session.scheduledTask = task;
+      }
+    }
+  } catch (error) {
+    console.warn(`[DB] Failed to apply scheduled session flags for ${provider}:`, error.message);
+  }
+}
+
 // App config database operations
 const appConfigDb = {
   get: (key) => {
@@ -1356,6 +1437,8 @@ export {
   pushSubscriptionsDb,
   sessionNamesDb,
   applyCustomSessionNames,
+  scheduledTasksDb,
+  applyScheduledSessionTaskFlags,
   appConfigDb,
   githubTokensDb // Backward compatibility
 };
