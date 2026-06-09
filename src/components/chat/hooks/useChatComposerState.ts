@@ -237,21 +237,7 @@ export function useChatComposerState({
   );
 
   const handleCustomCommand = useCallback(async (result: CommandExecutionResult, displayInput?: string) => {
-    const { content, hasBashCommands } = result;
-
-    if (hasBashCommands) {
-      const confirmed = window.confirm(
-        'This command contains bash commands that will be executed. Do you want to proceed?',
-      );
-      if (!confirmed) {
-        addMessage({
-          type: 'assistant',
-          content: 'Command execution cancelled',
-          timestamp: Date.now(),
-        });
-        return;
-      }
-    }
+    const { content } = result;
 
     const commandContent = content || '';
     pendingDisplayInputRef.current = displayInput?.trim() ? displayInput : null;
@@ -264,7 +250,7 @@ export function useChatComposerState({
         handleSubmitRef.current(createFakeSubmitEvent());
       }
     }, 0);
-  }, [addMessage]);
+  }, []);
 
   const executeCommand = useCallback(
     async (command: SlashCommand, rawInput?: string) => {
