@@ -17,7 +17,9 @@ const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BATCH_USER_ENV_UPDATES = 500;
 const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
 const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
+const ANTHROPIC_AUTH_TOKEN_ENV_NAME = 'ANTHROPIC_AUTH_TOKEN';
 const DAS_ENV_NAME = 'DAS';
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function requireSystemAdmin(req, res, next) {
   if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
@@ -206,62 +208,63 @@ function parsePositiveIdList(value, name) {
   });
 }
 
-function parseClaudeBaseUrl(value) {
-  const normalized = String(value || '').trim();
-  if (!normalized) return null;
-  if (normalized.length > 2048) {
-    const error = new Error('ANTHROPIC_BASE_URL must be 2048 characters or fewer');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    const error = new Error('ANTHROPIC_BASE_URL must be a valid URL');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    const error = new Error('ANTHROPIC_BASE_URL must use http or https');
-    error.statusCode = 400;
-    throw error;
-  }
-  return normalized;
+function buildLegacyClaudeEnvPatch(body = {}) {
+  const env = {};
+  if (body.anthropicBaseUrl != null) env[ANTHROPIC_BASE_URL_ENV_NAME] = body.anthropicBaseUrl;
+  if (body.anthropicModel != null) env[ANTHROPIC_MODEL_ENV_NAME] = body.anthropicModel;
+  if (body.anthropicAuthToken != null) env[ANTHROPIC_AUTH_TOKEN_ENV_NAME] = body.anthropicAuthToken;
+  if (body.das != null) env[DAS_ENV_NAME] = body.das;
+  return env;
 }
 
-function parseClaudeModel(value) {
-  const normalized = String(value || '').trim();
-  if (!normalized) return null;
-  if (normalized.length > 256) {
-    const error = new Error('ANTHROPIC_MODEL must be 256 characters or fewer');
+function parseClaudeEnvPatch(body = {}) {
+  const rawEnv = body.env && typeof body.env === 'object' && !Array.isArray(body.env)
+    ? body.env
+    : buildLegacyClaudeEnvPatch(body);
+  const env = {};
+
+  for (const [rawName, rawValue] of Object.entries(rawEnv)) {
+    const name = String(rawName || '').trim();
+    if (!name) {
+      const error = new Error('Claude environment field names are required');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!ENV_NAME_PATTERN.test(name)) {
+      const error = new Error('Claude environment field names must use shell-safe syntax');
+      error.statusCode = 400;
+      throw error;
+    }
+    env[name] = rawValue == null ? '' : String(rawValue);
+  }
+
+  if (Object.keys(env).length === 0) {
+    const error = new Error('At least one Claude environment field name is required');
     error.statusCode = 400;
     throw error;
   }
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
-    const error = new Error('ANTHROPIC_MODEL must not contain control characters');
-    error.statusCode = 400;
-    throw error;
-  }
-  return normalized;
+
+  return env;
 }
 
-function parseClaudeEnvValue(value, name, { maxLength = 2048 } = {}) {
-  const normalized = String(value || '').trim();
-  if (!normalized) return null;
-  if (normalized.length > maxLength) {
-    const error = new Error(`${name} must be ${maxLength} characters or fewer`);
-    error.statusCode = 400;
-    throw error;
-  }
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
-    const error = new Error(`${name} must not contain control characters`);
-    error.statusCode = 400;
-    throw error;
-  }
-  return normalized;
+function parseClaudeEnvVisibility(body = {}, env = {}) {
+  const rawVisibility = body.visibility && typeof body.visibility === 'object' && !Array.isArray(body.visibility)
+    ? body.visibility
+    : {};
+
+  return Object.fromEntries(
+    Object.keys(env).map((name) => [name, rawVisibility[name] === true]),
+  );
+}
+
+function parseClaudeEnvEncrypted(body = {}, env = {}) {
+  const rawEncrypted = body.encrypted && typeof body.encrypted === 'object' && !Array.isArray(body.encrypted)
+    ? body.encrypted
+    : {};
+
+  return Object.fromEntries(
+    Object.keys(env).map((name) => [name, rawEncrypted[name] === true]),
+  );
 }
 
 function summarizeBatchResults(results) {
@@ -370,6 +373,18 @@ export function createAdminRouter(
   router.get('/users', (req, res) => {
     const rows = users.listUsers ? users.listUsers() : [];
     res.json({ users: rows });
+  });
+
+  router.get('/users/claude-env', (req, res) => {
+    try {
+      if (typeof users.listClaudeEnvForUsers !== 'function') {
+        return res.status(501).json({ error: 'Claude environment list is not available' });
+      }
+
+      return res.json({ users: users.listClaudeEnvForUsers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Claude environment');
+    }
   });
 
   router.get('/memberships', (req, res) => {
@@ -507,17 +522,10 @@ export function createAdminRouter(
         return res.status(400).json({ error: `Batch Claude environment updates are limited to ${MAX_BATCH_USER_ENV_UPDATES} users` });
       }
 
-      const env = {};
-      const anthropicBaseUrl = parseClaudeBaseUrl(req.body?.anthropicBaseUrl);
-      const anthropicModel = parseClaudeModel(req.body?.anthropicModel);
-      const das = parseClaudeEnvValue(req.body?.das, DAS_ENV_NAME);
-      if (anthropicBaseUrl) env[ANTHROPIC_BASE_URL_ENV_NAME] = anthropicBaseUrl;
-      if (anthropicModel) env[ANTHROPIC_MODEL_ENV_NAME] = anthropicModel;
-      if (das) env[DAS_ENV_NAME] = das;
-      if (Object.keys(env).length === 0) {
-        return res.status(400).json({ error: 'At least one Claude environment value is required' });
-      }
-      const results = users.updateClaudeEnvForUsers({ userIds, env });
+      const env = parseClaudeEnvPatch(req.body);
+      const visibility = parseClaudeEnvVisibility(req.body, env);
+      const encrypted = parseClaudeEnvEncrypted(req.body, env);
+      const results = users.updateClaudeEnvForUsers({ userIds, env, visibility, encrypted });
 
       return res.json({
         results,

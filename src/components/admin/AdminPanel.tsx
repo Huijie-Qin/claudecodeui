@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, ChevronDown, Copy, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, ChevronDown, Copy, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
@@ -27,7 +27,6 @@ import {
 } from './adminPanelUtils';
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
 import McpPresetsTab from './McpPresetsTab';
-import PlatformAnalyticsTab from './PlatformAnalyticsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 
 type AdminTenant = {
@@ -155,6 +154,26 @@ type AdminBatchClaudeEnvPayload = {
   message?: string;
 };
 
+type AdminClaudeEnvEntry = {
+  name: string;
+  configured: boolean;
+  visible: boolean;
+  value?: string;
+  encrypted?: boolean;
+};
+
+type AdminClaudeEnvUser = {
+  userId: number;
+  username: string;
+  env: AdminClaudeEnvEntry[];
+};
+
+type AdminClaudeEnvListPayload = {
+  users?: AdminClaudeEnvUser[];
+  error?: string;
+  message?: string;
+};
+
 type AdminErrorPayload = {
   error?: string;
   message?: string;
@@ -164,6 +183,54 @@ type AdminToast = {
   message: string;
   type: 'success' | 'error';
 } | null;
+
+type ClaudeEnvRow = {
+  id: string;
+  name: string;
+  value: string;
+  isVisible: boolean;
+  isEncrypted: boolean;
+};
+
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+let claudeEnvRowId = 0;
+
+function createClaudeEnvRow(values: Partial<Omit<ClaudeEnvRow, 'id'>> = {}): ClaudeEnvRow {
+  claudeEnvRowId += 1;
+  return {
+    id: `claude-env-row-${claudeEnvRowId}`,
+    name: values.name ?? '',
+    value: values.value ?? '',
+    isVisible: values.isVisible ?? false,
+    isEncrypted: values.isEncrypted ?? false,
+  };
+}
+
+function buildClaudeEnvPayload(rows: ClaudeEnvRow[]): {
+  env: Record<string, string>;
+  visibility: Record<string, boolean>;
+  encrypted: Record<string, boolean>;
+} {
+  const env: Record<string, string> = {};
+  const visibility: Record<string, boolean> = {};
+  const encrypted: Record<string, boolean> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (!name) {
+      const error = new Error('fieldNameRequired');
+      throw error;
+    }
+    if (!ENV_NAME_PATTERN.test(name)) {
+      const error = new Error('fieldNameInvalid');
+      throw error;
+    }
+    env[name] = row.value ?? '';
+    visibility[name] = row.isVisible;
+    encrypted[name] = row.isEncrypted;
+  }
+  return { env, visibility, encrypted };
+}
 
 async function readError(response: Response, fallback: string): Promise<string> {
   const payload = await response.json().catch(() => ({} as AdminErrorPayload));
@@ -268,15 +335,15 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchGrantMissingUsernames, setBatchGrantMissingUsernames] = useState<string[]>([]);
   const [batchUserSearch, setBatchUserSearch] = useState('');
   const [batchTenantSearch, setBatchTenantSearch] = useState('');
-  const [claudeEnvBaseUrl, setClaudeEnvBaseUrl] = useState('');
-  const [claudeEnvModel, setClaudeEnvModel] = useState('');
-  const [claudeEnvDas, setClaudeEnvDas] = useState('');
+  const [claudeEnvRows, setClaudeEnvRows] = useState<ClaudeEnvRow[]>(() => [createClaudeEnvRow()]);
   const [claudeEnvUserSearch, setClaudeEnvUserSearch] = useState('');
   const [selectedClaudeEnvUserIds, setSelectedClaudeEnvUserIds] = useState<string[]>([]);
   const [claudeEnvUsernames, setClaudeEnvUsernames] = useState('');
   const [claudeEnvMissingUsernames, setClaudeEnvMissingUsernames] = useState<string[]>([]);
   const [claudeEnvSummary, setClaudeEnvSummary] = useState<AdminBatchSummary | null>(null);
   const [claudeEnvResults, setClaudeEnvResults] = useState<AdminBatchClaudeEnvResult[]>([]);
+  const [claudeEnvUsers, setClaudeEnvUsers] = useState<AdminClaudeEnvUser[]>([]);
+  const [isLoadingClaudeEnvUsers, setIsLoadingClaudeEnvUsers] = useState(false);
   const [permission, setPermission] = useState<TenantPermission>('edit');
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
@@ -341,11 +408,30 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   }, [t]);
 
+  const loadClaudeEnvUsers = useCallback(async () => {
+    setIsLoadingClaudeEnvUsers(true);
+    try {
+      const response = await api.admin.claudeEnvUsers();
+      const payload = await response.json().catch(() => ({} as AdminClaudeEnvListPayload)) as AdminClaudeEnvListPayload;
+      if (!response.ok) {
+        setError(payload.error || payload.message || t('errors.loadClaudeEnvUsers'));
+        return;
+      }
+      setClaudeEnvUsers(payload.users || []);
+    } catch (caughtError) {
+      console.error('[AdminPanel] Failed to load Claude environment users:', caughtError);
+      setError(t('errors.loadClaudeEnvUsers'));
+    } finally {
+      setIsLoadingClaudeEnvUsers(false);
+    }
+  }, [t]);
+
   useEffect(() => {
     if (open) {
       void load();
+      void loadClaudeEnvUsers();
     }
-  }, [load, open]);
+  }, [load, loadClaudeEnvUsers, open]);
 
   const createTenant = async () => {
     const code = normalizeTenantCode(tenantCode);
@@ -711,10 +797,6 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       ...selectedClaudeEnvUserIds,
       ...matchedUsers.map((user) => String(user.id)),
     ]).map(Number).filter(Boolean);
-    const anthropicBaseUrl = claudeEnvBaseUrl.trim();
-    const anthropicModel = claudeEnvModel.trim();
-    const das = claudeEnvDas.trim();
-
     setError(null);
     setClaudeEnvSummary(null);
     setClaudeEnvResults([]);
@@ -733,7 +815,23 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       showToast(message, 'error');
       return;
     }
-    if (!anthropicBaseUrl && !anthropicModel && !das) {
+
+    let envPayload: {
+      env: Record<string, string>;
+      visibility: Record<string, boolean>;
+      encrypted: Record<string, boolean>;
+    };
+    try {
+      envPayload = buildClaudeEnvPayload(claudeEnvRows);
+    } catch (caughtError) {
+      const message = caughtError instanceof Error && caughtError.message === 'fieldNameInvalid'
+        ? t('errors.claudeEnvFieldNameInvalid')
+        : t('errors.claudeEnvFieldNameRequired');
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+    if (Object.keys(envPayload.env).length === 0) {
       const message = t('errors.claudeEnvRequired');
       setError(message);
       showToast(message, 'error');
@@ -744,9 +842,9 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     try {
       const response = await api.admin.updateClaudeEnvBatch({
         userIds,
-        ...(anthropicBaseUrl ? { anthropicBaseUrl } : {}),
-        ...(anthropicModel ? { anthropicModel } : {}),
-        ...(das ? { das } : {}),
+        env: envPayload.env,
+        visibility: envPayload.visibility,
+        encrypted: envPayload.encrypted,
       });
       const payload = await response.json().catch(() => ({} as AdminBatchClaudeEnvPayload)) as AdminBatchClaudeEnvPayload;
       if (!response.ok) {
@@ -773,6 +871,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
         setSelectedClaudeEnvUserIds([]);
         setClaudeEnvUsernames('');
         setClaudeEnvMissingUsernames([]);
+        await loadClaudeEnvUsers();
       }
     } catch (caughtError) {
       console.error('[AdminPanel] Failed to update Claude environment:', caughtError);
@@ -1351,76 +1450,110 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           {activeTab === 'claudeEnv' ? (
             <div className="space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
-                <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,280px)]">
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <label className="space-y-1">
-                      <span className="text-xs text-muted-foreground">{t('claudeEnv.baseUrl')}</span>
-                      <Input
-                        value={claudeEnvBaseUrl}
-                        onChange={(event) => setClaudeEnvBaseUrl(event.target.value)}
-                        placeholder={t('claudeEnv.baseUrlPlaceholder')}
-                        autoCapitalize="none"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs text-muted-foreground">{t('claudeEnv.model')}</span>
-                      <Input
-                        value={claudeEnvModel}
-                        onChange={(event) => setClaudeEnvModel(event.target.value)}
-                        placeholder={t('claudeEnv.modelPlaceholder')}
-                        autoCapitalize="none"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs text-muted-foreground">{t('claudeEnv.authToken')}</span>
-                      <div className="relative">
-                        <Input
-                          className="pr-10"
-                          type={isClaudeEnvAuthTokenVisible ? 'text' : 'password'}
-                          value={claudeEnvAuthToken}
-                          onChange={(event) => setClaudeEnvAuthToken(event.target.value)}
-                          placeholder={t('claudeEnv.authTokenPlaceholder')}
-                          autoCapitalize="none"
-                          autoComplete="off"
-                        />
-                        <div className="absolute inset-y-0 right-1 flex items-center">
-                          <Tooltip
-                            content={t(isClaudeEnvAuthTokenVisible ? 'claudeEnv.hideAuthToken' : 'claudeEnv.showAuthToken')}
-                            position="top"
-                          >
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                              aria-label={t(isClaudeEnvAuthTokenVisible ? 'claudeEnv.hideAuthToken' : 'claudeEnv.showAuthToken')}
-                              aria-pressed={isClaudeEnvAuthTokenVisible}
-                              onClick={() => setIsClaudeEnvAuthTokenVisible((visible) => !visible)}
-                            >
-                              {isClaudeEnvAuthTokenVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                            </Button>
-                          </Tooltip>
-                        </div>
-                      </div>
-                    </label>
-                    <label className="space-y-1">
-                      <span className="text-xs text-muted-foreground">{t('claudeEnv.das')}</span>
-                      <Input
-                        value={claudeEnvDas}
-                        onChange={(event) => setClaudeEnvDas(event.target.value)}
-                        placeholder={t('claudeEnv.dasPlaceholder')}
-                        autoCapitalize="none"
-                        autoComplete="off"
-                      />
-                    </label>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
+                  <div className="flex items-center gap-2">
+                    <Tooltip content={t('claudeEnv.addRow')} position="top">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label={t('claudeEnv.addRow')}
+                        onClick={() => setClaudeEnvRows((rows) => [...rows, createClaudeEnvRow()])}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </Tooltip>
+                    <Button onClick={updateClaudeEnvBatch} disabled={isSaving}>
+                      <Check className="h-4 w-4" />
+                      {t('claudeEnv.saveButton')}
+                    </Button>
                   </div>
-                  <Button className="self-end" onClick={updateClaudeEnvBatch} disabled={isSaving}>
-                    <Check className="h-4 w-4" />
-                    {t('claudeEnv.saveButton')}
-                  </Button>
+                </div>
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="w-full min-w-[860px] table-fixed text-sm">
+                    <thead className="bg-muted/40 text-xs text-muted-foreground">
+                      <tr>
+                        <th className="w-[28%] px-3 py-2 text-left font-medium">{t('claudeEnv.fieldName')}</th>
+                        <th className="px-3 py-2 text-left font-medium">{t('claudeEnv.fieldValue')}</th>
+                        <th className="w-28 px-3 py-2 text-center font-medium">{t('claudeEnv.visible')}</th>
+                        <th className="w-32 px-3 py-2 text-center font-medium">{t('claudeEnv.encrypted')}</th>
+                        <th className="w-20 px-3 py-2 text-center font-medium">{t('common.delete')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {claudeEnvRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-4 text-center text-sm text-muted-foreground">
+                            {t('claudeEnv.emptyRows')}
+                          </td>
+                        </tr>
+                      ) : (
+                        claudeEnvRows.map((row) => (
+                          <tr key={row.id} className="border-t border-border">
+                            <td className="px-3 py-2 align-middle">
+                              <Input
+                                value={row.name}
+                                onChange={(event) => setClaudeEnvRows((rows) => rows.map((item) => (
+                                  item.id === row.id ? { ...item, name: event.target.value } : item
+                                )))}
+                                placeholder={t('claudeEnv.fieldNamePlaceholder')}
+                                autoCapitalize="none"
+                                autoComplete="off"
+                              />
+                            </td>
+                            <td className="px-3 py-2 align-middle">
+                              <Input
+                                value={row.value}
+                                onChange={(event) => setClaudeEnvRows((rows) => rows.map((item) => (
+                                  item.id === row.id ? { ...item, value: event.target.value } : item
+                                )))}
+                                placeholder={t('claudeEnv.fieldValuePlaceholder')}
+                                autoCapitalize="none"
+                                autoComplete="off"
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-center align-middle">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-input accent-primary"
+                                checked={row.isVisible}
+                                aria-label={t('claudeEnv.visible')}
+                                onChange={(event) => setClaudeEnvRows((rows) => rows.map((item) => (
+                                  item.id === row.id ? { ...item, isVisible: event.target.checked } : item
+                                )))}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-center align-middle">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-input accent-primary"
+                                checked={row.isEncrypted}
+                                aria-label={t('claudeEnv.encrypted')}
+                                onChange={(event) => setClaudeEnvRows((rows) => rows.map((item) => (
+                                  item.id === row.id ? { ...item, isEncrypted: event.target.checked } : item
+                                )))}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-center align-middle">
+                              <Tooltip content={t('claudeEnv.deleteRow')} position="top">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  aria-label={t('claudeEnv.deleteRow')}
+                                  onClick={() => setClaudeEnvRows((rows) => rows.filter((item) => item.id !== row.id))}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </Tooltip>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </section>
 
@@ -1515,6 +1648,52 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     })}
                   </div>
                 ) : null}
+              </section>
+
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.allUsersTitle')}</h3>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void loadClaudeEnvUsers()}
+                    disabled={isLoadingClaudeEnvUsers}
+                    aria-label={t('common.refresh')}
+                  >
+                    <RefreshCw className={isLoadingClaudeEnvUsers ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                  </Button>
+                </div>
+                <div className="max-h-80 overflow-auto rounded-md border border-border">
+                  {claudeEnvUsers.length === 0 ? (
+                    <div className="px-3 py-4 text-sm text-muted-foreground">{t('claudeEnv.noUserEnv')}</div>
+                  ) : (
+                    claudeEnvUsers.map((envUser) => (
+                      <div key={envUser.userId} className="border-b border-border px-3 py-3 last:border-b-0">
+                        <div className="font-medium text-foreground">{envUser.username}</div>
+                        {envUser.env.length === 0 ? (
+                          <div className="mt-1 text-xs text-muted-foreground">{t('claudeEnv.noEnvFields')}</div>
+                        ) : (
+                          <div className="mt-2 grid gap-2">
+                            {envUser.env.map((entry) => (
+                              <div
+                                key={`${envUser.userId}:${entry.name}`}
+                                className="grid gap-2 rounded border border-border bg-muted/20 px-3 py-2 text-xs sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto]"
+                              >
+                                <span className="truncate font-mono text-foreground">{entry.name}</span>
+                                <span className={entry.visible ? 'truncate font-mono text-muted-foreground' : 'text-muted-foreground'}>
+                                  {entry.visible ? (entry.value ?? '') : t('claudeEnv.hiddenValue')}
+                                </span>
+                                <span className={entry.visible ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}>
+                                  {entry.visible ? t('claudeEnv.visibleYes') : t('claudeEnv.visibleNo')}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
               </section>
 
               {claudeEnvSummary ? (

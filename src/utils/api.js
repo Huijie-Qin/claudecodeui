@@ -361,6 +361,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    claudeEnvUsers: () => authenticatedFetch('/api/admin/users/claude-env'),
     users: () => authenticatedFetch('/api/admin/users'),
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>

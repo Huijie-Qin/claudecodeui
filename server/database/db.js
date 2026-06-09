@@ -32,6 +32,7 @@ import {
   ensureUserKeyEnvRecord,
   parseUserEnvJson,
   serializeUserEnvRecord,
+  USER_KEY_ENV_NAME,
 } from './user-env.js';
 
 const __dirname = getModuleDir(import.meta.url);
@@ -54,8 +55,7 @@ const c = {
 };
 
 const USER_KEY_ENCRYPTION_SECRET_CONFIG_KEY = 'user_key_encryption_secret';
-const CLAUDE_ENV_NAMES = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'DAS'];
-
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Use DATABASE_PATH environment variable if set, otherwise use default location
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'auth.db');
 
@@ -142,6 +142,16 @@ const runMigrations = () => {
     if (!columnNames.includes('env')) {
       console.log('Running migration: Adding env column');
       db.exec("ALTER TABLE users ADD COLUMN env TEXT DEFAULT '{}'");
+    }
+
+    if (!columnNames.includes('env_visibility')) {
+      console.log('Running migration: Adding env_visibility column');
+      db.exec("ALTER TABLE users ADD COLUMN env_visibility TEXT DEFAULT '{}'");
+    }
+
+    if (!columnNames.includes('env_encrypted')) {
+      console.log('Running migration: Adding env_encrypted column');
+      db.exec("ALTER TABLE users ADD COLUMN env_encrypted TEXT DEFAULT '{}'");
     }
 
     backfillExistingUserEnvRecords();
@@ -235,28 +245,167 @@ function ensureUserEnvForRow(row) {
   return env;
 }
 
-function decryptUserEnvForRuntime(env) {
-  return decryptUserEnvRecord(env, {
-    secretMaterial: getUserKeyEncryptionSecret(),
-  });
+function normalizeUserEnvEncryptedRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => ENV_NAME_PATTERN.test(String(key)))
+      .map(([key, entry]) => [String(key), entry === true]),
+  );
 }
 
-function buildClaudeEnvUpdateResult(row, envPatch) {
+function parseUserEnvEncryptedJson(value) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return normalizeUserEnvEncryptedRecord(value);
+  }
+
+  try {
+    return normalizeUserEnvEncryptedRecord(JSON.parse(String(value)));
+  } catch {
+    return {};
+  }
+}
+
+function serializeUserEnvEncryptedRecord(value) {
+  return JSON.stringify(normalizeUserEnvEncryptedRecord(value));
+}
+
+function buildUserEnvUpdateResult(env = {}, encrypted = {}) {
+  const secretMaterial = getUserKeyEncryptionSecret();
+  const encryptedKeys = parseUserEnvEncryptedJson(encrypted);
+
+  return Object.fromEntries(
+    Object.entries(env).map(([name, value]) => {
+      if (name === USER_KEY_ENV_NAME) {
+        return [name, value];
+      }
+
+      if (encryptedKeys[name] === true) {
+        return [name, encryptSecretString(String(value), { secretMaterial })];
+      }
+
+      return [name, String(value)];
+    }),
+  );
+}
+
+function buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch = {}, encryptedPatch = {}) {
   const existingEnv = ensureUserEnvForRow(row);
+  const existingVisibility = parseUserEnvVisibilityJson(row.env_visibility);
+  const existingEncrypted = parseUserEnvEncryptedJson(row.env_encrypted);
+  const preparedPatch = buildUserEnvUpdateResult(envPatch, encryptedPatch);
   const nextEnv = {
     ...existingEnv,
-    ...envPatch,
+    ...preparedPatch,
+  };
+  const nextVisibility = {
+    ...existingVisibility,
+    ...visibilityPatch,
+  };
+  const nextEncrypted = {
+    ...existingEncrypted,
+    ...Object.fromEntries(Object.keys(envPatch).map((name) => [name, encryptedPatch?.[name] === true])),
   };
   const envJson = buildUserEnvJson(nextEnv);
+  const visibilityJson = serializeUserEnvVisibilityRecord(nextVisibility);
+  const encryptedJson = serializeUserEnvEncryptedRecord(nextEncrypted);
   db.prepare('UPDATE users SET env = ? WHERE id = ?').run(envJson, row.id);
+  db.prepare('UPDATE users SET env_visibility = ? WHERE id = ?').run(visibilityJson, row.id);
+  db.prepare('UPDATE users SET env_encrypted = ? WHERE id = ?').run(encryptedJson, row.id);
 
   return {
     userId: row.id,
     username: row.username,
     success: true,
-    env: Object.fromEntries(CLAUDE_ENV_NAMES.map((name) => [name, nextEnv[name]])),
+    env: Object.fromEntries(Object.keys(envPatch).map((name) => [name, nextEnv[name]])),
   };
 }
+
+function buildClaudeEnvListEntry(row) {
+  const env = decryptUserEnvForRuntime(ensureUserEnvForRow(row) || {}, parseUserEnvEncryptedJson(row.env_encrypted));
+  const visibility = parseUserEnvVisibilityJson(row.env_visibility);
+  const encryptedFields = parseUserEnvEncryptedJson(row.env_encrypted);
+
+  return {
+    userId: row.id,
+    username: row.username,
+    env: Object.entries(env)
+      .filter(([name]) => name !== USER_KEY_ENV_NAME)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => {
+        const visible = visibility[name] === true;
+        return {
+          name,
+          configured: true,
+          visible,
+          encrypted: encryptedFields[name] === true,
+          ...(visible ? { value } : {}),
+        };
+      }),
+  };
+}
+
+function decryptUserEnvForRuntime(env, encrypted = {}) {
+  const decrypted = decryptUserEnvRecord(env, {
+    secretMaterial: getUserKeyEncryptionSecret(),
+  });
+
+  const encryptedNames = parseUserEnvEncryptedJson(encrypted);
+
+  return Object.fromEntries(
+    Object.entries(decrypted).map(([name, value]) => {
+      if (name === USER_KEY_ENV_NAME || encryptedNames[name] !== true) {
+        return [name, value];
+      }
+
+      try {
+        return [name, decryptSecretString(value, { secretMaterial: getUserKeyEncryptionSecret() })];
+      } catch {
+        return [name, value];
+      }
+    }),
+  );
+}
+
+function normalizeUserEnvVisibilityRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => ENV_NAME_PATTERN.test(String(key)))
+      .map(([key, entry]) => [String(key), entry === true]),
+  );
+}
+
+function parseUserEnvVisibilityJson(value) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return normalizeUserEnvVisibilityRecord(value);
+  }
+
+  try {
+    return normalizeUserEnvVisibilityRecord(JSON.parse(String(value)));
+  } catch {
+    return {};
+  }
+}
+
+function serializeUserEnvVisibilityRecord(value) {
+  return JSON.stringify(normalizeUserEnvVisibilityRecord(value));
+}
+
 
 function encryptCodeHubToken(token) {
   return encryptSecretString(token, {
@@ -799,13 +948,32 @@ const userDb = {
 
   getEnvForUser: (userId) => {
     try {
-      return decryptUserEnvForRuntime(userDb.ensureEnvForUser(userId) || {});
+      const row = db.prepare('SELECT id, env, env_encrypted FROM users WHERE id = ?').get(userId);
+      if (!row) {
+        return {};
+      }
+
+      const env = ensureUserEnvForRow({ id: row.id, env: row.env });
+      const encrypted = parseUserEnvEncryptedJson(row.env_encrypted);
+      return decryptUserEnvForRuntime(env || {}, encrypted);
     } catch (err) {
       throw err;
     }
   },
 
-  updateClaudeEnvForUsers: ({ userIds, env }) => {
+  listClaudeEnvForUsers: () => {
+    try {
+      return db.prepare(`
+        SELECT id, username, env, env_visibility, env_encrypted
+        FROM users
+        ORDER BY username COLLATE NOCASE ASC
+      `).all().map(buildClaudeEnvListEntry);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  updateClaudeEnvForUsers: ({ userIds, env, visibility, encrypted }) => {
     try {
       const uniqueUserIds = Array.from(new Set(
         (Array.isArray(userIds) ? userIds : [])
@@ -813,21 +981,27 @@ const userDb = {
           .filter((userId) => Number.isInteger(userId) && userId > 0),
       ));
       const envPatch = Object.fromEntries(
-        CLAUDE_ENV_NAMES
-          .filter((name) => env?.[name] != null)
-          .map((name) => [name, String(env[name])]),
+        Object.entries(env || {})
+          .filter(([name, value]) => name && value != null)
+          .map(([name, value]) => [String(name), String(value)]),
+      );
+      const visibilityPatch = Object.fromEntries(
+        Object.keys(envPatch).map((name) => [name, visibility?.[name] === true]),
+      );
+      const encryptedPatch = Object.fromEntries(
+        Object.keys(envPatch).map((name) => [name, encrypted?.[name] === true]),
       );
 
       const updateUsers = db.transaction(() => uniqueUserIds.map((userId) => {
         const row = db
-          .prepare('SELECT id, username, env FROM users WHERE id = ?')
+          .prepare('SELECT id, username, env, env_visibility, env_encrypted FROM users WHERE id = ?')
           .get(userId);
 
         if (!row) {
           return { userId, success: false, error: 'User not found' };
         }
 
-        return buildClaudeEnvUpdateResult(row, envPatch);
+        return buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch, encryptedPatch);
       }));
 
       return updateUsers();

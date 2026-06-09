@@ -17,8 +17,9 @@ const execFileAsync = promisify(execFile);
 const W3_NAME_ENV_NAME = 'W3_NAME';
 const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
 const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
+const ANTHROPIC_AUTH_TOKEN_ENV_NAME = 'ANTHROPIC_AUTH_TOKEN';
 const DAS_ENV_NAME = 'DAS';
-const CLAUDE_USER_CONFIG_ENV_NAMES = [
+const CLAUDE_WRAPPER_DEFAULT_ENV_NAMES = [
   ANTHROPIC_BASE_URL_ENV_NAME,
   ANTHROPIC_MODEL_ENV_NAME,
   DAS_ENV_NAME,
@@ -30,12 +31,21 @@ const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
 const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
+const RUNTIME_PROCESS_ENV_ALLOWLIST = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  ...NPM_PROXY_ENV_NAMES,
+];
 const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL_ENV_NAME,
   ANTHROPIC_MODEL_ENV_NAME,
   DAS_ENV_NAME,
-  'ANTHROPIC_AUTH_TOKEN',
+  ANTHROPIC_AUTH_TOKEN_ENV_NAME,
   PRIVATE_TOKEN_ENV_NAME,
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -254,7 +264,7 @@ export function buildClaudeDockerWrapperScript({
   const container = shellQuote(requireValue(containerName, 'containerName'));
   const binary = shellQuote(requireValue(executable, 'executable'));
   const envAllowlistSet = new Set(envAllowlist);
-  const defaultEnvNameSet = new Set(CLAUDE_USER_CONFIG_ENV_NAMES);
+  const defaultEnvNameSet = new Set(CLAUDE_WRAPPER_DEFAULT_ENV_NAMES);
   const defaultEnvLines = Object.entries(normalizeContainerEnvRecord(defaultEnv))
     .filter(([name]) => defaultEnvNameSet.has(name) && envAllowlistSet.has(name))
     .map(([name, value]) => `[[ -z "\${${name}+x}" ]] && ${name}=${shellQuote(value)}`)
@@ -334,6 +344,16 @@ function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   return output;
 }
 
+function buildRuntimeProcessEnv(env = process.env) {
+  const output = {};
+  for (const name of RUNTIME_PROCESS_ENV_ALLOWLIST) {
+    if (env[name] != null) {
+      output[name] = String(env[name]);
+    }
+  }
+  return normalizeContainerEnvRecord(output);
+}
+
 function buildContainerEnvAllowlist(containerEnv = {}) {
   return Array.from(new Set([
     ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -349,7 +369,7 @@ function readEnvValue(record, name) {
 function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
   const defaults = {};
   const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
-  for (const name of CLAUDE_USER_CONFIG_ENV_NAMES) {
+  for (const name of CLAUDE_WRAPPER_DEFAULT_ENV_NAMES) {
     const value = readEnvValue(normalizedContainerEnv, name)
       || (name === DAS_ENV_NAME ? null : readEnvValue(env, name));
     if (value) {
@@ -393,11 +413,11 @@ function readUserContainerEnv(users, userId) {
   if (env[USER_KEY_ENV_NAME]) {
     output[USER_KEY_ENV_NAME] = env[USER_KEY_ENV_NAME];
   }
-  for (const name of CLAUDE_USER_CONFIG_ENV_NAMES) {
-    const value = readEnvValue(env, name);
-    if (value) {
-      output[name] = value;
+  for (const [name, value] of Object.entries(env)) {
+    if (name === USER_KEY_ENV_NAME || name === W3_NAME_ENV_NAME || name === PRIVATE_TOKEN_ENV_NAME) {
+      continue;
     }
+    output[name] = value;
   }
   return output;
 }
@@ -774,8 +794,12 @@ export function createAgentSessionRuntimeManager({
 
   async function activateRuntimeContext({ runtimeContext, workspaceHostPath }) {
     const userEnv = normalizeContainerEnvRecord(runtimeContext.userEnv);
+    const containerEnv = {
+      ...buildRuntimeProcessEnv(env),
+      ...userEnv,
+    };
     await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
-    await ensureContainer(runtimeContext.runtime, userEnv);
+    await ensureContainer(runtimeContext.runtime, containerEnv);
     const wrapperPath = await writeWrapper({
       ...runtimeContext,
       runtime: {
@@ -809,6 +833,9 @@ export function createAgentSessionRuntimeManager({
     async prepareClaudeRuntime(options = {}) {
       const mode = resolveClaudeExecutionMode(env);
       if (mode === 'local') {
+        const userEnv = options.userId == null
+          ? {}
+          : readUserContainerEnv(users, requirePositiveInteger(options.userId, 'userId'));
         return {
           mode: 'local',
           cwd: options.cwd,
@@ -816,6 +843,7 @@ export function createAgentSessionRuntimeManager({
           hostWorkspacePath: options.cwd || options.projectPath,
           pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
           settingSources: ['project', 'user', 'local'],
+          ...(Object.keys(userEnv).length > 0 ? { executionEnv: { ...env, ...userEnv } } : {}),
         };
       }
 

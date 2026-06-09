@@ -104,7 +104,9 @@ CREATE TABLE IF NOT EXISTS users (
   git_email TEXT,
   git_token TEXT,
   has_completed_onboarding BOOLEAN DEFAULT 0,
-  env TEXT DEFAULT '{}'
+  env TEXT DEFAULT '{}',
+  env_visibility TEXT DEFAULT '{}',
+  env_encrypted TEXT DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
