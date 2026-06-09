@@ -22,6 +22,9 @@ type ScheduledTaskEditorState = {
   provider: LLMProvider;
 };
 
+// Temporarily hide scheduled task operation entrypoints from the frontend.
+const SHOW_SCHEDULED_TASK_ACTIONS = false;
+
 export default function AppContent() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId?: string }>();
@@ -205,7 +208,7 @@ export default function AppContent() {
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar
             {...sidebarSharedProps}
-            onScheduledTaskOpen={handleScheduledTaskOpen}
+            onScheduledTaskOpen={SHOW_SCHEDULED_TASK_ACTIONS ? handleScheduledTaskOpen : undefined}
             showAdminEntry={isSystemAdmin}
             onShowAdminPanel={() => setShowAdminPanel(true)}
             tenants={tenants}
@@ -239,7 +242,7 @@ export default function AppContent() {
           >
             <Sidebar
               {...sidebarSharedProps}
-              onScheduledTaskOpen={handleScheduledTaskOpen}
+              onScheduledTaskOpen={SHOW_SCHEDULED_TASK_ACTIONS ? handleScheduledTaskOpen : undefined}
               showAdminEntry={isSystemAdmin}
               onShowAdminPanel={() => setShowAdminPanel(true)}
               tenants={tenants}
