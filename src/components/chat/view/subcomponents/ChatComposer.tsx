@@ -31,6 +31,9 @@ import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import TokenUsagePie from './TokenUsagePie';
 
+// Temporarily hide scheduled task operation entrypoints from the frontend.
+const SHOW_SCHEDULED_TASK_ACTIONS = false;
+
 interface MentionableFile {
   name: string;
   path: string;
@@ -327,7 +330,7 @@ export default function ChatComposer({
               )}
             </PromptInputButton>
 
-            {onOpenScheduledTasks || scheduledTasksDisabledReason ? (
+            {SHOW_SCHEDULED_TASK_ACTIONS && (onOpenScheduledTasks || scheduledTasksDisabledReason) ? (
               <PromptInputButton
                 tooltip={{
                   content: scheduledTasksDisabledReason || t('input.scheduledTasks', { defaultValue: 'Scheduled tasks' }),
