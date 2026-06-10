@@ -19,20 +19,8 @@ type SqlCheckRule = {
 };
 
 type SqlCheckRulesPayload = {
-  response?: unknown;
-  rules?: unknown;
-  data?: unknown;
+  response?: SqlCheckRule[];
   error?: string;
-};
-
-type SqlCheckRuleLike = {
-  rule_id?: unknown;
-  ruleId?: unknown;
-  id?: unknown;
-  name?: unknown;
-  displayName?: unknown;
-  desc?: unknown;
-  description?: unknown;
 };
 
 type SqlCheckConfigPayload = {
@@ -46,49 +34,18 @@ type SqlCheckConfigTabProps = {
   currentTenantId?: number;
 };
 
-function extractRuleList(payload: SqlCheckRulesPayload | unknown[]): unknown[] {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-  if (Array.isArray(payload?.response)) return payload.response;
-  if (Array.isArray(payload?.rules)) return payload.rules;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
+function normalizeRules(payload: SqlCheckRulesPayload): SqlCheckRule[] {
+  return (payload.response || [])
+    .map((rule) => ({
+      rule_id: String(rule.rule_id || '').trim(),
+      name: String(rule.name || rule.rule_id || '').trim(),
+      desc: String(rule.desc || '').trim(),
+    }))
+    .filter((rule) => rule.rule_id && rule.name);
 }
 
-function normalizeSingleRule(rawRule: unknown): SqlCheckRule | null {
-  if (!rawRule || typeof rawRule !== 'object') {
-    return null;
-  }
-
-  const rule = rawRule as SqlCheckRuleLike;
-  const ruleId = String(rule.rule_id || rule.ruleId || rule.id || '').trim();
-  if (!ruleId) return null;
-
-  const name = String(rule.name || rule.displayName || ruleId).trim() || ruleId;
-  const desc = String(rule.desc || rule.description || '').trim();
-
-  return {
-    rule_id: ruleId,
-    name,
-    desc,
-  };
-}
-
-function normalizeRules(payload: SqlCheckRulesPayload | unknown[]): SqlCheckRule[] {
-  return extractRuleList(payload)
-    .map(normalizeSingleRule)
-    .filter((rule): rule is SqlCheckRule => !!rule && Boolean(rule.rule_id) && Boolean(rule.name));
-}
-
-function getPayloadError(payload: unknown, fallback: string) {
-  if (payload && typeof payload === 'object' && 'error' in payload) {
-    const error = (payload as { error?: unknown }).error;
-    if (typeof error === 'string' && error.trim()) {
-      return error;
-    }
-  }
-  return fallback;
+function getPayloadError(payload: { error?: string } | null, fallback: string) {
+  return payload?.error || fallback;
 }
 
 function toggleRuleId(ruleIds: string[], ruleId: string, checked: boolean) {
@@ -122,7 +79,7 @@ export default function SqlCheckConfigTab({ tenants, currentTenantId }: SqlCheck
     setError(null);
     try {
       const response = await api.sqlCheck.rules();
-      const payload = await response.json().catch(() => ({} as SqlCheckRulesPayload | unknown[])) as SqlCheckRulesPayload | unknown[];
+      const payload = await response.json().catch(() => ({} as SqlCheckRulesPayload)) as SqlCheckRulesPayload;
       if (!response.ok) {
         setError(getPayloadError(payload, t('sqlCheck.errors.loadRules')));
         return;

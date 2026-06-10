@@ -49,45 +49,7 @@ const withWorkspaceParam = (url, workspaceId) => {
 const withTenantAndWorkspaceParam = (url, workspaceId) =>
   withTenantParam(withWorkspaceParam(url, workspaceId));
 
-const normalizedSqlCheckBaseUrl = String(SQL_CHECK_BASE_URL || '').replace(/\/+$/, '');
-
-const buildSqlCheckRuleUrls = () => {
-  const base = normalizedSqlCheckBaseUrl;
-  if (!base) {
-    return ['/rules', '/sql-check/rules'];
-  }
-  if (/\/sql-check$/i.test(base)) {
-    return [
-      `${base}/rules`,
-      `${base}/sql-check/rules`,
-    ];
-  }
-  return [
-    `${base}/sql-check/rules`,
-    `${base}/rules`,
-  ];
-};
-
-const hasJsonLikeBody = async (response) => {
-  try {
-    const text = (await response.clone().text()).trim();
-    if (!text) return false;
-    if (text.startsWith('<')) return false;
-    return text.startsWith('{') || text.startsWith('[') || text.startsWith('"');
-  } catch {
-    return false;
-  }
-};
-
-const shouldUseRuleResponse = async (response) => {
-  if (!response.ok && response.status !== 404) {
-    return true;
-  }
-  if (response.status === 404) {
-    return false;
-  }
-  return hasJsonLikeBody(response);
-};
+const sqlCheckUrl = (path) => `${SQL_CHECK_BASE_URL}${path}`;
 
 // API endpoints
 export const api = {
@@ -435,26 +397,7 @@ export const api = {
   },
 
   sqlCheck: {
-    rules: async () => {
-      const urls = buildSqlCheckRuleUrls();
-      let lastResponse = null;
-      for (let index = 0; index < urls.length; index += 1) {
-        const url = urls[index];
-        try {
-          const response = await fetch(url);
-          if (await shouldUseRuleResponse(response) || index === urls.length - 1) {
-            return response;
-          }
-          lastResponse = response;
-        } catch (error) {
-          if (index === urls.length - 1) {
-            throw error;
-          }
-          lastResponse = null;
-        }
-      }
-      return lastResponse;
-    },
+    rules: () => fetch(sqlCheckUrl('/sql-check/rules')),
     workspaceConfig: (workspaceId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`)),
     updateWorkspaceConfig: (workspaceId, payload) =>
