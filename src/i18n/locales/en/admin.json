@@ -7,6 +7,7 @@
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
     "mcpPresets": "MCP Server Presets",
+    "sqlCheck": "SQL Check",
     "runtimes": "Runtime Monitor"
   },
   "common": {
@@ -145,6 +146,24 @@
     "listTitle": "Tenants",
     "empty": "No tenants",
     "noAuthorizedUsers": "No authorized users"
+  },
+  "sqlCheck": {
+    "title": "SQL Check",
+    "description": "Configure SQL check rules per tenant.",
+    "save": "Save rules",
+    "saved": "SQL Check configuration saved.",
+    "loading": "Loading SQL Check...",
+    "empty": "No SQL Check rules are available.",
+    "noMatches": "No matching rules.",
+    "noneSelected": "No rules selected.",
+    "searchPlaceholder": "Search rules by name...",
+    "selectedCount": "{{count}} selected",
+    "configuredRules": "Configured rules",
+    "errors": {
+      "loadRules": "Failed to load SQL Check rules",
+      "loadConfig": "Failed to load SQL Check configuration",
+      "saveConfig": "Failed to save SQL Check configuration"
+    }
   },
   "analytics": {
     "title": "Platform analytics",

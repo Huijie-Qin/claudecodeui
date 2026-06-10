@@ -22,6 +22,7 @@
     "shell": "Shell",
     "files": "Files",
     "mcpTools": "MCP Tools",
+    "sqlCheck": "SQL Check",
     "skills": "Skills",
     "tools": "Tools",
     "git": "Source Control",
@@ -98,6 +99,35 @@
     "untitledSession": "Untitled Session",
     "projectFiles": "Project Files",
     "skillMarket": "Skill Market"
+  },
+  "sqlCheck": {
+    "title": "SQL Check",
+    "description": "Tenant-managed SQL check rules.",
+    "custom": "Custom",
+    "save": "Save",
+    "saved": "Saved SQL Check configuration.",
+    "loading": "Loading SQL Check...",
+    "empty": "No SQL Check rules are available.",
+    "noMatches": "No matching rules.",
+    "noneSelected": "No rules selected.",
+    "searchPlaceholder": "Search rules by name...",
+    "selectedCount": "{{count}} selected",
+    "configuredRules": "Configured rules",
+    "effectiveConfig": "Effective SQL Check",
+    "summary": {
+      "tenant": "Tenant rules",
+      "effective": "Effective rules"
+    },
+    "source": {
+      "tenant": "Using tenant configuration",
+      "user": "Using custom configuration"
+    },
+    "errors": {
+      "loadRules": "Failed to load SQL Check rules.",
+      "loadConfig": "Failed to load SQL Check configuration.",
+      "saveConfig": "Failed to save SQL Check configuration.",
+      "workspaceUnavailable": "Current workspace does not support SQL Check."
+    }
   },
   "skillMarketDialog": {
     "title": "Skill Market",

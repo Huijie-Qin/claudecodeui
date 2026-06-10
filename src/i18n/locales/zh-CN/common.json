@@ -22,6 +22,7 @@
     "shell": "终端",
     "files": "文件",
     "mcpTools": "MCP Tools",
+    "sqlCheck": "SQL Check",
     "skills": "技能",
     "tools": "工具",
     "git": "源代码管理",
@@ -98,6 +99,35 @@
     "untitledSession": "未命名会话",
     "projectFiles": "项目文件",
     "skillMarket": "技能市场"
+  },
+  "sqlCheck": {
+    "title": "SQL Check",
+    "description": "租户统一管理的 SQL 检查规则。",
+    "custom": "自定义",
+    "save": "保存",
+    "saved": "SQL Check 配置已保存。",
+    "loading": "正在加载 SQL Check...",
+    "empty": "暂无可用 SQL Check 规则。",
+    "noMatches": "没有匹配的规则。",
+    "noneSelected": "未选择规则。",
+    "searchPlaceholder": "按规则名称搜索...",
+    "selectedCount": "已选 {{count}} 条",
+    "configuredRules": "已配置规则",
+    "effectiveConfig": "当前生效 SQL Check",
+    "summary": {
+      "tenant": "租户规则",
+      "effective": "生效规则"
+    },
+    "source": {
+      "tenant": "使用租户配置",
+      "user": "使用自定义配置"
+    },
+    "errors": {
+      "loadRules": "加载 SQL Check 规则失败。",
+      "loadConfig": "加载 SQL Check 配置失败。",
+      "saveConfig": "保存 SQL Check 配置失败。",
+      "workspaceUnavailable": "当前 workspace 不支持 SQL Check。"
+    }
   },
   "skillMarketDialog": {
     "title": "技能市场",

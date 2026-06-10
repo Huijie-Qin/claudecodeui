@@ -179,6 +179,63 @@ test('skill market imports are stored per workspace in the database', () => {
   assert.deepEqual(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), []);
 });
 
+test('sql check configuration resolves tenant defaults and user overrides', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+
+  const tenantConfig = mt.sqlCheck.replaceTenantConfig({
+    tenantId: tenant.id,
+    ruleIds: ['require_where', 'limit_rows', 'require_where'],
+  });
+  assert.deepEqual(tenantConfig.ruleIds, ['require_where', 'limit_rows']);
+  assert.deepEqual(mt.sqlCheck.getTenantConfig(tenant.id), {
+    tenantId: tenant.id,
+    ruleIds: ['require_where', 'limit_rows'],
+  });
+
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    customEnabled: false,
+    userRuleIds: [],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'tenant',
+  });
+
+  assert.deepEqual(mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  }), {
+    tenantId: tenant.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, userId: ownerId }).effectiveRuleIds, ['limit_rows']);
+
+  mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    userId: ownerId,
+    customEnabled: false,
+    ruleIds: ['limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    customEnabled: false,
+    userRuleIds: [],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'tenant',
+  });
+});
+
 test('mcp presets are isolated per tenant and can be filtered to published presets', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

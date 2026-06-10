@@ -4,6 +4,7 @@ import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
 import McpToolsPanel from '../../tools-market/McpToolsPanel';
+import SqlCheckPanel from '../../sql-check/SqlCheckPanel';
 import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
@@ -178,6 +179,12 @@ function MainContent({
           {activeTab === 'mcp-tools' && (
             <div className="h-full overflow-hidden">
               <McpToolsPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
+            </div>
+          )}
+
+          {activeTab === 'sql-check' && (
+            <div className="h-full overflow-hidden">
+              <SqlCheckPanel selectedProject={selectedProject} />
             </div>
           )}
         </div>

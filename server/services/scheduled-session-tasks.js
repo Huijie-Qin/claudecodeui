@@ -6,8 +6,10 @@ import { spawnGemini } from '../gemini-cli.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
 import { expandLeadingSkillCommand } from './skill-command-expander.js';
+import { getNextCronRunAt, normalizeCronExpression } from './cron-schedule.js';
 
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
+const VALID_SCHEDULE_TYPES = new Set(['interval', 'cron']);
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const MAX_DUE_TASKS_PER_TICK = 10;
 const PENDING_SESSION_PREFIX = 'scheduled-task-';
@@ -35,6 +37,16 @@ function normalizeProvider(provider) {
   const normalized = String(provider || 'claude').trim().toLowerCase();
   if (!VALID_PROVIDERS.has(normalized)) {
     const error = new Error('provider must be one of claude, codex, cursor, gemini');
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function normalizeScheduleType(scheduleType) {
+  const normalized = String(scheduleType || 'interval').trim().toLowerCase();
+  if (!VALID_SCHEDULE_TYPES.has(normalized)) {
+    const error = new Error('scheduleType must be one of interval, cron');
     error.statusCode = 400;
     throw error;
   }
@@ -81,6 +93,8 @@ function mapTaskRow(row) {
     provider: row.provider,
     name: row.name,
     prompt: row.prompt,
+    scheduleType: row.schedule_type || 'interval',
+    scheduleCron: row.schedule_cron || null,
     intervalMinutes: row.interval_minutes,
     nextRunAt: row.next_run_at,
     enabled: Boolean(row.enabled),
@@ -97,6 +111,54 @@ function mapTaskRow(row) {
 
 function addIntervalFromNow(intervalMinutes) {
   return new Date(Date.now() + intervalMinutes * 60_000).toISOString();
+}
+
+function computeNextRunAtForSchedule({ scheduleType, scheduleCron, intervalMinutes, nextRunAt, startAfterAt }) {
+  if (scheduleType === 'cron') {
+    const normalizedCron = normalizeCronExpression(scheduleCron);
+    const startAfter = startAfterAt || nextRunAt || new Date().toISOString();
+    const startAfterDate = new Date(normalizeDate(startAfter, 'startAfterAt'));
+    return getNextCronRunAt(normalizedCron, startAfterDate, { inclusive: true }).toISOString();
+  }
+
+  return normalizeDate(nextRunAt, 'nextRunAt');
+}
+
+function normalizeTaskSchedule({ scheduleType = null, scheduleCron = null, intervalMinutes, nextRunAt, startAfterAt }) {
+  const inferredScheduleType = scheduleType == null || scheduleType === ''
+    ? (scheduleCron ? 'cron' : 'interval')
+    : scheduleType;
+  const normalizedScheduleType = normalizeScheduleType(inferredScheduleType);
+  if (normalizedScheduleType === 'cron') {
+    const normalizedCron = normalizeCronExpression(scheduleCron);
+    return {
+      scheduleType: 'cron',
+      scheduleCron: normalizedCron,
+      intervalMinutes: intervalMinutes == null ? 60 : requirePositiveInteger(intervalMinutes, 'intervalMinutes'),
+      nextRunAt: computeNextRunAtForSchedule({
+        scheduleType: 'cron',
+        scheduleCron: normalizedCron,
+        intervalMinutes,
+        nextRunAt,
+        startAfterAt,
+      }),
+    };
+  }
+
+  return {
+    scheduleType: 'interval',
+    scheduleCron: null,
+    intervalMinutes: requirePositiveInteger(intervalMinutes, 'intervalMinutes'),
+    nextRunAt: normalizeDate(nextRunAt, 'nextRunAt'),
+  };
+}
+
+function computeNextRunAtAfterClaim(row) {
+  if ((row.schedule_type || 'interval') === 'cron' && row.schedule_cron) {
+    return getNextCronRunAt(row.schedule_cron, new Date()).toISOString();
+  }
+
+  return addIntervalFromNow(row.interval_minutes);
 }
 
 function isPendingScheduledSessionId(sessionId) {
@@ -233,7 +295,24 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       ));
     },
 
-    create({ tenantId, workspaceId, userId, provider, name, prompt, intervalMinutes, nextRunAt, enabled = true, model = null, permissionMode = null, toolsSettings = null, sessionId = null }) {
+    create({
+      tenantId,
+      workspaceId,
+      userId,
+      provider,
+      name,
+      prompt,
+      scheduleType = 'interval',
+      scheduleCron = null,
+      intervalMinutes,
+      nextRunAt,
+      startAfterAt = null,
+      enabled = true,
+      model = null,
+      permissionMode = null,
+      toolsSettings = null,
+      sessionId = null,
+    }) {
       if (sessionId) {
         const error = new Error('Scheduled tasks can only be created from a new session');
         error.statusCode = 400;
@@ -246,8 +325,13 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       const normalizedProvider = normalizeProvider(provider);
       const normalizedName = requireNonEmptyString(name, 'name');
       const normalizedPrompt = requireNonEmptyString(prompt, 'prompt');
-      const normalizedIntervalMinutes = requirePositiveInteger(intervalMinutes, 'intervalMinutes');
-      const normalizedNextRunAt = normalizeDate(nextRunAt, 'nextRunAt');
+      const normalizedSchedule = normalizeTaskSchedule({
+        scheduleType,
+        scheduleCron,
+        intervalMinutes,
+        nextRunAt,
+        startAfterAt,
+      });
       const normalizedSessionId = null;
 
       const result = db.prepare(`
@@ -258,6 +342,8 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           provider,
           name,
           prompt,
+          schedule_type,
+          schedule_cron,
           interval_minutes,
           next_run_at,
           enabled,
@@ -266,7 +352,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           tools_settings_json,
           last_session_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         normalizedTenantId,
         normalizedWorkspaceId,
@@ -274,8 +360,10 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         normalizedProvider,
         normalizedName,
         normalizedPrompt,
-        normalizedIntervalMinutes,
-        normalizedNextRunAt,
+        normalizedSchedule.scheduleType,
+        normalizedSchedule.scheduleCron,
+        normalizedSchedule.intervalMinutes,
+        normalizedSchedule.nextRunAt,
         enabled ? 1 : 0,
         model ? String(model).trim() : null,
         permissionMode ? String(permissionMode).trim() : null,
@@ -332,14 +420,37 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         throw error;
       }
 
+      const hasSchedulePatch = [
+        'scheduleType',
+        'scheduleCron',
+        'intervalMinutes',
+        'nextRunAt',
+        'startAfterAt',
+      ].some((key) => patch[key] !== undefined);
+
+      const normalizedSchedule = hasSchedulePatch
+        ? normalizeTaskSchedule({
+            scheduleType: patch.scheduleType !== undefined ? patch.scheduleType : existing.scheduleType,
+            scheduleCron: patch.scheduleCron !== undefined ? patch.scheduleCron : existing.scheduleCron,
+            intervalMinutes: patch.intervalMinutes !== undefined ? patch.intervalMinutes : existing.intervalMinutes,
+            nextRunAt: patch.nextRunAt !== undefined ? patch.nextRunAt : existing.nextRunAt,
+            startAfterAt: patch.startAfterAt,
+          })
+        : {
+            scheduleType: existing.scheduleType || 'interval',
+            scheduleCron: existing.scheduleCron || null,
+            intervalMinutes: existing.intervalMinutes,
+            nextRunAt: existing.nextRunAt,
+          };
+
       const next = {
         provider: patch.provider !== undefined ? normalizeProvider(patch.provider) : existing.provider,
         name: patch.name !== undefined ? requireNonEmptyString(patch.name, 'name') : existing.name,
         prompt: patch.prompt !== undefined ? requireNonEmptyString(patch.prompt, 'prompt') : existing.prompt,
-        intervalMinutes: patch.intervalMinutes !== undefined
-          ? requirePositiveInteger(patch.intervalMinutes, 'intervalMinutes')
-          : existing.intervalMinutes,
-        nextRunAt: patch.nextRunAt !== undefined ? normalizeDate(patch.nextRunAt, 'nextRunAt') : existing.nextRunAt,
+        scheduleType: normalizedSchedule.scheduleType,
+        scheduleCron: normalizedSchedule.scheduleCron,
+        intervalMinutes: normalizedSchedule.intervalMinutes,
+        nextRunAt: normalizedSchedule.nextRunAt,
         enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : existing.enabled,
         model: patch.model !== undefined && patch.model !== null && String(patch.model).trim()
           ? String(patch.model).trim()
@@ -355,6 +466,8 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         SET provider = ?,
             name = ?,
             prompt = ?,
+            schedule_type = ?,
+            schedule_cron = ?,
             interval_minutes = ?,
             next_run_at = ?,
             enabled = ?,
@@ -369,6 +482,8 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         next.provider,
         next.name,
         next.prompt,
+        next.scheduleType,
+        next.scheduleCron,
         next.intervalMinutes,
         next.nextRunAt,
         next.enabled ? 1 : 0,
@@ -453,7 +568,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           SET next_run_at = ?,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).run(addIntervalFromNow(row.interval_minutes), row.id);
+        `).run(computeNextRunAtAfterClaim(row), row.id);
       }
 
       return rows;

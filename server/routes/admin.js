@@ -654,6 +654,33 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/tenants/:tenantId/sql-check', (req, res) => {
+    try {
+      if (typeof multitenancy.sqlCheck?.getTenantConfig !== 'function') {
+        return res.status(501).json({ error: 'SQL check configuration is not available' });
+      }
+
+      const tenantId = parsePositiveId(req.params.tenantId, 'tenantId');
+      return res.json(multitenancy.sqlCheck.getTenantConfig(tenantId));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load SQL check configuration');
+    }
+  });
+
+  router.put('/tenants/:tenantId/sql-check', (req, res) => {
+    try {
+      if (typeof multitenancy.sqlCheck?.replaceTenantConfig !== 'function') {
+        return res.status(501).json({ error: 'SQL check configuration is not available' });
+      }
+
+      const tenantId = parsePositiveId(req.params.tenantId, 'tenantId');
+      const ruleIds = req.body?.ruleIds ?? req.body?.rule_ids;
+      return res.json(multitenancy.sqlCheck.replaceTenantConfig({ tenantId, ruleIds }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to save SQL check configuration');
+    }
+  });
+
   router.get('/mcp-presets', (req, res) => {
     try {
       const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');

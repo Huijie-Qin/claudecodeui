@@ -5,7 +5,8 @@ export type WorkspaceAccessRole = 'owner' | 'view' | 'edit';
 export type AppTab =
   | 'chat'
   | 'files'
-  | 'mcp-tools';
+  | 'mcp-tools'
+  | 'sql-check';
 
 export interface Tenant {
   id: number;
@@ -31,6 +32,8 @@ export interface ProjectSession {
     name?: string;
     enabled?: boolean;
     provider?: LLMProvider;
+    scheduleType?: 'interval' | 'cron';
+    scheduleCron?: string | null;
     nextRunAt?: string | null;
     [key: string]: unknown;
   };

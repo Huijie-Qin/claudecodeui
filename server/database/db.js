@@ -176,6 +176,21 @@ function runMultitenancyMigrations() {
     db.exec("ALTER TABLE mcp_server_presets ADD COLUMN preinstall_scope TEXT NOT NULL DEFAULT 'none'");
   }
 
+  const scheduledTaskColumns = db
+    .prepare("PRAGMA table_info(scheduled_session_tasks)")
+    .all()
+    .map((col) => col.name);
+
+  if (!scheduledTaskColumns.includes('schedule_type')) {
+    console.log('Running migration: Adding scheduled_session_tasks.schedule_type column');
+    db.exec("ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_type TEXT NOT NULL DEFAULT 'interval'");
+  }
+
+  if (!scheduledTaskColumns.includes('schedule_cron')) {
+    console.log('Running migration: Adding scheduled_session_tasks.schedule_cron column');
+    db.exec('ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_cron TEXT');
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_preinstall
       ON mcp_server_presets(tenant_id, preinstall_scope, status)
@@ -1292,6 +1307,8 @@ const scheduledTasksDb = {
         name,
         enabled,
         provider,
+        schedule_type,
+        schedule_cron,
         next_run_at
       FROM scheduled_session_tasks
       WHERE tenant_id = ?
@@ -1310,6 +1327,8 @@ const scheduledTasksDb = {
           name: row.name,
           enabled: Boolean(row.enabled),
           provider: row.provider,
+          scheduleType: row.schedule_type || 'interval',
+          scheduleCron: row.schedule_cron || null,
           nextRunAt: row.next_run_at,
         });
       }

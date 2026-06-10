@@ -1,4 +1,4 @@
-import { IS_PLATFORM } from "../constants/config";
+import { IS_PLATFORM, SQL_CHECK_BASE_URL } from "../constants/config";
 import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
 
 // Utility function for authenticated API calls
@@ -48,6 +48,8 @@ const withWorkspaceParam = (url, workspaceId) => {
 
 const withTenantAndWorkspaceParam = (url, workspaceId) =>
   withTenantParam(withWorkspaceParam(url, workspaceId));
+
+const sqlCheckUrl = (path) => `${SQL_CHECK_BASE_URL}${path}`;
 
 // API endpoints
 export const api = {
@@ -384,6 +386,24 @@ export const api = {
     deleteTenantUser: (tenantId, userId) =>
       authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
         method: 'DELETE',
+      }),
+    sqlCheckTenantConfig: (tenantId) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/sql-check`),
+    updateSqlCheckTenantConfig: (tenantId, ruleIds) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/sql-check`, {
+        method: 'PUT',
+        body: JSON.stringify({ ruleIds }),
+      }),
+  },
+
+  sqlCheck: {
+    rules: () => fetch(sqlCheckUrl('/sql-check/rules')),
+    workspaceConfig: (workspaceId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`)),
+    updateWorkspaceConfig: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`), {
+        method: 'PUT',
+        body: JSON.stringify(payload),
       }),
   },
 

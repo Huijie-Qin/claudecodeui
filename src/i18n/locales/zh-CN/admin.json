@@ -7,6 +7,7 @@
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
     "mcpPresets": "MCP Server 预置",
+    "sqlCheck": "SQL Check",
     "runtimes": "运行时监控"
   },
   "common": {
@@ -145,6 +146,24 @@
     "listTitle": "租户",
     "empty": "暂无租户",
     "noAuthorizedUsers": "暂无授权用户"
+  },
+  "sqlCheck": {
+    "title": "SQL Check",
+    "description": "按租户配置 SQL 检查规则。",
+    "save": "保存规则",
+    "saved": "SQL Check 配置已保存。",
+    "loading": "正在加载 SQL Check...",
+    "empty": "暂无可用 SQL Check 规则。",
+    "noMatches": "没有匹配的规则。",
+    "noneSelected": "未选择规则。",
+    "searchPlaceholder": "按规则名称搜索...",
+    "selectedCount": "已选 {{count}} 条",
+    "configuredRules": "已配置规则",
+    "errors": {
+      "loadRules": "加载 SQL Check 规则失败",
+      "loadConfig": "加载 SQL Check 配置失败",
+      "saveConfig": "保存 SQL Check 配置失败"
+    }
   },
   "analytics": {
     "title": "平台统计",
