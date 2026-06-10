@@ -14,8 +14,51 @@ type SqlCheckRule = {
 
 type SqlCheckRulesPayload = {
   response?: SqlCheckRule[];
+  rules?: unknown;
+  data?: unknown;
   error?: string;
 };
+
+type SqlCheckRuleLike = {
+  rule_id?: unknown;
+  ruleId?: unknown;
+  id?: unknown;
+  name?: unknown;
+  displayName?: unknown;
+  desc?: unknown;
+  description?: unknown;
+};
+
+type SqlCheckRulesPayloadContainer = SqlCheckRulesPayload | unknown[];
+
+function extractRuleList(payload: SqlCheckRulesPayloadContainer): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.response)) return payload.response;
+  if (Array.isArray(payload?.rules)) return payload.rules;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function normalizeSingleRule(rawRule: unknown): SqlCheckRule | null {
+  if (!rawRule || typeof rawRule !== 'object') {
+    return null;
+  }
+
+  const rule = rawRule as SqlCheckRuleLike;
+  const ruleId = String(rule.rule_id || rule.ruleId || rule.id || '').trim();
+  if (!ruleId) {
+    return null;
+  }
+
+  const name = String(rule.name || rule.displayName || ruleId).trim() || ruleId;
+  const desc = String(rule.desc || rule.description || '').trim();
+
+  return {
+    rule_id: ruleId,
+    name,
+    desc,
+  };
+}
 
 type WorkspaceSqlCheckConfig = {
   workspaceId?: number;
@@ -34,18 +77,20 @@ type SqlCheckPanelProps = {
   selectedProject: Project;
 };
 
-function normalizeRules(payload: SqlCheckRulesPayload): SqlCheckRule[] {
-  return (payload.response || [])
-    .map((rule) => ({
-      rule_id: String(rule.rule_id || '').trim(),
-      name: String(rule.name || rule.rule_id || '').trim(),
-      desc: String(rule.desc || '').trim(),
-    }))
-    .filter((rule) => rule.rule_id && rule.name);
+function normalizeRules(payload: SqlCheckRulesPayloadContainer): SqlCheckRule[] {
+  return extractRuleList(payload)
+    .map(normalizeSingleRule)
+    .filter((rule): rule is SqlCheckRule => !!rule && Boolean(rule.rule_id) && Boolean(rule.name));
 }
 
-function payloadError(payload: { error?: string } | null, fallback: string) {
-  return payload?.error || fallback;
+function payloadError(payload: unknown, fallback: string) {
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    const nextError = (payload as { error?: unknown }).error;
+    if (typeof nextError === 'string' && nextError.trim()) {
+      return nextError;
+    }
+  }
+  return fallback;
 }
 
 function toggleRuleId(ruleIds: string[], ruleId: string, checked: boolean) {
@@ -90,7 +135,7 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     setError(null);
     try {
       const response = await api.sqlCheck.rules();
-      const payload = await response.json().catch(() => ({} as SqlCheckRulesPayload)) as SqlCheckRulesPayload;
+      const payload = await response.json().catch(() => ({} as SqlCheckRulesPayloadContainer)) as SqlCheckRulesPayloadContainer;
       if (!response.ok) {
         setError(payloadError(payload, t('sqlCheck.errors.loadRules')));
         return;
