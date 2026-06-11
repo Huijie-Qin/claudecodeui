@@ -121,7 +121,7 @@
     "import": "导入",
     "update": "更新",
     "remove": "移除",
-    "conflict": "同名 .claude/skills 目录已存在，但不是从技能市场导入的。",
+    "conflict": "同名skill目录已存在，不可导入",
     "remoteDeleted": "该技能已从远端市场删除，本地文件仍保留在 Files/.claude/skills。",
     "readOnly": "当前工作区为只读。",
     "noFileSelected": "未选择文件",

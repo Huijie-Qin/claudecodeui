@@ -315,6 +315,156 @@ test('importMarketSkill downloads the mock API skill into .claude/skills and rec
   );
 });
 
+test('importMarketSkill uses the downloaded skill archive root as the local directory', async () => {
+  const workspacePath = await makeWorkspace();
+  const displayName = 'SQL\u751f\u6210';
+  const remoteFiles = {
+    'sql-generator/SKILL.md': '# SQL Generator\n',
+    'sql-generator/references/query.md': '# Query Notes\n',
+  };
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    const body = parseJson(bodyBuffer.toString('utf8'));
+
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [{
+          id: 'sql-skill',
+          skillName: displayName,
+          description: 'Generate SQL from natural language.',
+          nspPath: 'mock://skills/sql-generator',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+          published: true,
+        }],
+      });
+      return;
+    }
+
+    if (endpoint === '/data-agent/api/skill/preview') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: {
+          directoryTree: buildDirectoryTree(remoteFiles),
+          fileContent: body?.data?.filePath ? remoteFiles[body.data.filePath] ?? '' : undefined,
+        },
+      });
+      return;
+    }
+
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: {
+          files: Object.entries(remoteFiles).map(([filePath, content]) => ({ path: filePath, content })),
+        },
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const previewDetail = await getSkillMarketDetail(withTenant({
+      workspacePath,
+      name: displayName,
+    }));
+    assert.equal(previewDetail.targetPath, '.claude/skills/sql-generator');
+
+    const detail = await importMarketSkill(withTenant({
+      workspacePath,
+      name: displayName,
+      now: () => new Date('2026-05-14T00:00:00.000Z'),
+    }));
+
+    assert.equal(detail.name, 'sql-generator');
+    assert.equal(detail.targetPath, '.claude/skills/sql-generator');
+    assert.equal(
+      await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'sql-generator', 'SKILL.md'), 'utf8'),
+      '# SQL Generator\n',
+    );
+    await assert.rejects(
+      fs.access(path.join(workspacePath, '.claude', 'skills', 'sql\u751f\u6210', 'sql-generator')),
+      /ENOENT/,
+    );
+
+    const imports = JSON.parse(await fs.readFile(
+      path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+      'utf8',
+    ));
+    assert.equal(imports.imports['sql-generator'].id, 'sql-skill');
+    assert.equal(imports.imports['sql-generator'].skillName, displayName);
+
+    const oldSkillName = 'sql\u751f\u6210';
+    await fs.rm(path.join(workspacePath, '.claude', 'skills', 'sql-generator'), { recursive: true, force: true });
+    await fs.mkdir(path.join(workspacePath, '.claude', 'skills', oldSkillName, 'sql-generator'), { recursive: true });
+    await fs.writeFile(
+      path.join(workspacePath, '.claude', 'skills', oldSkillName, 'sql-generator', 'SKILL.md'),
+      '# Old Nested SQL Generator\n',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+      JSON.stringify({
+        version: 1,
+        imports: {
+          [oldSkillName]: {
+            id: 'sql-skill',
+            skillId: 'sql-skill',
+            name: oldSkillName,
+            skillName: displayName,
+            nspPath: 'mock://skills/sql-generator',
+            version: 1,
+            source: 'skill-market-api',
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    await importMarketSkill(withTenant({
+      workspacePath,
+      name: displayName,
+      overwrite: true,
+    }));
+    await assert.rejects(
+      fs.access(path.join(workspacePath, '.claude', 'skills', oldSkillName)),
+      /ENOENT/,
+    );
+    const migratedImports = JSON.parse(await fs.readFile(
+      path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+      'utf8',
+    ));
+    assert.equal(migratedImports.imports[oldSkillName], undefined);
+    assert.equal(migratedImports.imports['sql-generator'].id, 'sql-skill');
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test('importMarketSkill supports skill names without ASCII letters or numbers', async () => {
   const workspacePath = await makeWorkspace();
 

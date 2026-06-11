@@ -121,7 +121,7 @@
     "import": "Import",
     "update": "Update",
     "remove": "Remove",
-    "conflict": "A same-name .claude/skills directory already exists but was not imported from the market.",
+    "conflict": "同名skill目录已存在，不可导入",
     "remoteDeleted": "This skill was deleted from the remote market. The local files are still available in Files/.claude/skills.",
     "readOnly": "This workspace is read-only.",
     "noFileSelected": "No file selected",
