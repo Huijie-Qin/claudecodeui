@@ -140,7 +140,9 @@ export const api = {
   searchConversationsUrl: (query, limit = 50) => {
     const token = localStorage.getItem('auth-token');
     const params = new URLSearchParams({ q: query, limit: String(limit) });
+    const tenantId = getCurrentTenantId();
     if (token) params.set('token', token);
+    if (tenantId) params.set('tenantId', tenantId);
     return `/api/search/conversations?${params.toString()}`;
   },
   createWorkspace: (workspaceData) =>
