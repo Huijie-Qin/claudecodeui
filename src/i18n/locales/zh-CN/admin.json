@@ -239,6 +239,7 @@
     "toolsCount": "{{count}} 个工具",
     "docker": "Docker",
     "publishNotice": "已发布的预置会出现在工作区 MCP 工具页中。安装仍是一键完成，并且不需要用户侧配置。",
+    "confirmDelete": "确认删除 MCP 预置“{{name}}”？此操作不可撤销。",
     "fields": {
       "displayName": "显示名称",
       "displayNamePlaceholder": "知识检索 MCP",
@@ -260,6 +261,8 @@
       "title": "私有 helper 脚本",
       "description": "存储在工作区之外。工作区用户无法在文件列表中浏览此文件。",
       "upload": "上传脚本",
+      "delete": "删除脚本",
+      "confirmDelete": "确认删除 helper 脚本“{{fileName}}”？",
       "current": "当前脚本：{{fileName}}（{{sizeKb}} KB）",
       "none": "尚未上传 helper 脚本。",
       "saveFirst": "请先保存预置，再上传 helper 脚本。"
@@ -269,7 +272,8 @@
       "testing": "测试中",
       "test": "测试",
       "publish": "发布",
-      "disable": "禁用"
+      "disable": "禁用",
+      "delete": "删除"
     },
     "validation": {
       "title": "最近校验",
@@ -289,6 +293,10 @@
       "headersFormat": "Header 必须是 JSON，或每行一个键值对",
       "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
     },
+    "tools": {
+      "title": "已发现工具",
+      "parameters": "参数"
+    },
     "errors": {
       "load": "加载 MCP 预置失败",
       "save": "保存 MCP 预置失败",
@@ -296,7 +304,9 @@
       "test": "测试 MCP 预置失败",
       "publish": "发布 MCP 预置失败",
       "uploadHelper": "上传 helper 脚本失败",
-      "disable": "禁用 MCP 预置失败"
+      "deleteHelper": "删除 helper 脚本失败",
+      "disable": "禁用 MCP 预置失败",
+      "delete": "删除 MCP 预置失败"
     }
   },
   "runtimes": {

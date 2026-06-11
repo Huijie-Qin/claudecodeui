@@ -104,6 +104,7 @@
     "title": "SQL Check",
     "description": "租户统一管理的 SQL 检查规则。",
     "custom": "自定义",
+    "restoreDefault": "恢复默认",
     "save": "保存",
     "saved": "SQL Check 配置已保存。",
     "loading": "正在加载 SQL Check...",
@@ -116,7 +117,7 @@
     "effectiveConfig": "当前生效 SQL Check",
     "summary": {
       "tenant": "租户规则",
-      "effective": "生效规则"
+      "custom": "自定义规则"
     },
     "source": {
       "tenant": "使用租户配置",
@@ -287,7 +288,8 @@
       "phase": "探测阶段",
       "probeError": "探测错误",
       "missingValues": "缺少值",
-      "exposedTools": "暴露工具"
+      "exposedTools": "暴露工具",
+      "parameters": "参数"
     },
     "dialog": {
       "title": "连接 HTTP MCP Server",
@@ -359,7 +361,8 @@
       "runtimePolicy": "运行时策略",
       "toolsTitle": "包含的工具",
       "toolsEmpty": "这个 MCP Server 暂未发布工具列表。",
-      "noToolDescription": "暂无描述。"
+      "noToolDescription": "暂无描述。",
+      "parameters": "参数"
     }
   },
   "fileTree": {

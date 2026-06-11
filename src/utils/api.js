@@ -309,6 +309,10 @@ export const api = {
         body: formData,
       });
     },
+    deleteMcpPresetHelperScript: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}/helper-script?tenantId=${encodeURIComponent(String(tenantId))}`, {
+        method: 'DELETE',
+      }),
     publishMcpPreset: (presetId, tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets/${presetId}/publish`, {
         method: 'POST',
@@ -318,6 +322,10 @@ export const api = {
       authenticatedFetch(`/api/admin/mcp-presets/${presetId}/disable`, {
         method: 'POST',
         body: JSON.stringify({ tenantId }),
+      }),
+    deleteMcpPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}?tenantId=${encodeURIComponent(String(tenantId))}`, {
+        method: 'DELETE',
       }),
     runtimes: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes${buildRuntimeQueryString(filters)}`),

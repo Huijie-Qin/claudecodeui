@@ -27,7 +27,7 @@ export type AdminMcpPreset = {
   lastTestError?: string | null;
   lastTestedAt?: string | null;
   toolCount: number;
-  tools?: Array<{ name: string; description?: string }>;
+  tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
   helperScript?: {
     fileName: string;
     sizeBytes: number;
@@ -90,6 +90,16 @@ export function useAdminMcpPresets(tenantId?: number) {
     void load();
   }, [load]);
 
+  const replacePreset = useCallback((nextPreset: AdminMcpPreset) => {
+    setPresets((current) => current.map((preset) => (
+      preset.id === nextPreset.id ? nextPreset : preset
+    )));
+  }, []);
+
+  const clearLatestTestResultForPreset = useCallback((presetId: number) => {
+    setLatestTestResult((current) => (current?.presetId === presetId ? null : current));
+  }, []);
+
   const savePreset = useCallback(async (values: McpPresetFormValues, presetId?: number | null) => {
     setIsSaving(true);
     setError(null);
@@ -106,12 +116,15 @@ export function useAdminMcpPresets(tenantId?: number) {
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
+      if (presetId) {
+        clearLatestTestResultForPreset(presetId);
+      }
       await load();
       return data.preset;
     } finally {
       setIsSaving(false);
     }
-  }, [load, t]);
+  }, [clearLatestTestResultForPreset, load, t]);
 
   const testPreset = useCallback(async (presetId: number, values?: McpPresetFormValues) => {
     if (!tenantId) return null;
@@ -228,12 +241,32 @@ export function useAdminMcpPresets(tenantId?: number) {
         return null;
       }
       const data = await response.json() as { preset: AdminMcpPreset };
-      await load();
+      replacePreset(data.preset);
+      clearLatestTestResultForPreset(presetId);
       return data.preset;
     } finally {
       setIsSaving(false);
     }
-  }, [load, tenantId, t]);
+  }, [clearLatestTestResultForPreset, replacePreset, tenantId, t]);
+
+  const deleteHelperScript = useCallback(async (presetId: number) => {
+    if (!tenantId) return null;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await api.admin.deleteMcpPresetHelperScript(presetId, tenantId);
+      if (!response.ok) {
+        setError(await readError(response, t('mcp.errors.deleteHelper')));
+        return null;
+      }
+      const data = await response.json() as { preset: AdminMcpPreset };
+      replacePreset(data.preset);
+      clearLatestTestResultForPreset(presetId);
+      return data.preset;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [clearLatestTestResultForPreset, replacePreset, tenantId, t]);
 
   const disablePreset = useCallback(async (presetId: number) => {
     if (!tenantId) return null;
@@ -253,6 +286,29 @@ export function useAdminMcpPresets(tenantId?: number) {
     }
   }, [load, tenantId, t]);
 
+  const deletePreset = useCallback(async (presetId: number) => {
+    if (!tenantId) return false;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await api.admin.deleteMcpPreset(presetId, tenantId);
+      if (!response.ok) {
+        setError(await readError(response, t('mcp.errors.delete')));
+        return false;
+      }
+      const data = await response.json().catch(() => ({ deleted: true } as { deleted?: boolean }));
+      if (data.deleted === false) {
+        setError(t('mcp.errors.delete'));
+        return false;
+      }
+      setPresets((current) => current.filter((preset) => preset.id !== presetId));
+      clearLatestTestResultForPreset(presetId);
+      return true;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [clearLatestTestResultForPreset, tenantId, t]);
+
   return {
     presets,
     error,
@@ -266,5 +322,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     publishPreset,
     disablePreset,
     uploadHelperScript,
+    deleteHelperScript,
+    deletePreset,
   };
 }

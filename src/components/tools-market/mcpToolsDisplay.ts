@@ -10,6 +10,7 @@ export type PresetCardBadge = {
 export type PresetToolDetail = {
   name: string;
   description: string;
+  inputSchema?: Record<string, unknown>;
 };
 
 export function getPresetCardBadges(
@@ -28,5 +29,6 @@ export function getPresetToolDetails(preset: WorkspaceMcpPreset): PresetToolDeta
     .map((tool) => ({
       name: tool.name,
       description: tool.description?.trim() ?? '',
+      inputSchema: tool.inputSchema,
     }));
 }

@@ -32,9 +32,18 @@ test('filterWorkspaceTools searches probe tool names and configuration values', 
       status: 'healthy',
       transport: 'http',
       url: 'https://docs.example.com/mcp',
-      tools: [{ name: 'lookup_docs', description: 'Lookup docs' }],
+      tools: [{
+        name: 'lookup_docs',
+        description: 'Lookup docs',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            docId: { type: 'string' },
+          },
+        },
+      }],
     },
-  ], 'lookup');
+  ], 'docId');
 
   assert.equal(result.length, 1);
   assert.equal(result[0].name, 'docs');

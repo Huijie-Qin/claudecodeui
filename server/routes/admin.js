@@ -780,6 +780,20 @@ export function createAdminRouter(
     });
   });
 
+  router.delete('/mcp-presets/:presetId/helper-script', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = mcpPresets.deleteHelperScript({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete helper script');
+    }
+  });
+
   router.post('/mcp-presets/:presetId/disable', (req, res) => {
     try {
       const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');

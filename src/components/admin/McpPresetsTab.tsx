@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Upload } from 'lucide-react';
+import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../shared/view/ui';
+import { McpToolParameters } from '../mcp/McpToolParameters';
 
 import {
   normalizeMcpPresetName,
@@ -64,6 +65,8 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     publishPreset,
     disablePreset,
     uploadHelperScript,
+    deleteHelperScript,
+    deletePreset,
   } = useAdminMcpPresets(tenantId || undefined);
 
   useEffect(() => {
@@ -136,6 +139,30 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     const saved = await uploadHelperScript(selectedPreset.id, file);
     if (saved) {
       selectPreset(saved);
+    }
+  };
+
+  const handleHelperScriptDelete = async () => {
+    if (!selectedPreset?.helperScript) return;
+    const confirmed = window.confirm(t('mcp.helperScript.confirmDelete', {
+      fileName: selectedPreset.helperScript.fileName,
+    }));
+    if (!confirmed) return;
+    const saved = await deleteHelperScript(selectedPreset.id);
+    if (saved) {
+      selectPreset(saved);
+    }
+  };
+
+  const handlePresetDelete = async () => {
+    if (!selectedPreset) return;
+    const confirmed = window.confirm(t('mcp.confirmDelete', {
+      name: selectedPreset.displayName || selectedPreset.name,
+    }));
+    if (!confirmed) return;
+    const deleted = await deletePreset(selectedPreset.id);
+    if (deleted) {
+      startNew();
     }
   };
 
@@ -279,27 +306,42 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                     {t('mcp.helperScript.description')}
                   </div>
                 </div>
-                <label>
-                  <input
-                    type="file"
-                    accept=".py,.sh,.js,.mjs,.cjs,.txt"
-                    className="sr-only"
-                    disabled={!selectedPreset || isSaving || isTestingSelectedPreset}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] || null;
-                      event.target.value = '';
-                      void handleHelperScriptUpload(file);
-                    }}
-                  />
-                  <span
-                    className={`inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm ${
-                      !selectedPreset || isSaving || isTestingSelectedPreset ? 'pointer-events-none opacity-50' : 'hover:bg-accent'
-                    }`}
-                  >
-                    <Upload className="h-4 w-4" />
-                    {t('mcp.helperScript.upload')}
-                  </span>
-                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label>
+                    <input
+                      type="file"
+                      accept=".py,.sh,.js,.mjs,.cjs,.txt"
+                      className="sr-only"
+                      disabled={!selectedPreset || isSaving || isTestingSelectedPreset}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] || null;
+                        event.target.value = '';
+                        void handleHelperScriptUpload(file);
+                      }}
+                    />
+                    <span
+                      className={`inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm ${
+                        !selectedPreset || isSaving || isTestingSelectedPreset ? 'pointer-events-none opacity-50' : 'hover:bg-accent'
+                      }`}
+                    >
+                      <Upload className="h-4 w-4" />
+                      {t('mcp.helperScript.upload')}
+                    </span>
+                  </label>
+                  {selectedPreset?.helperScript ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleHelperScriptDelete()}
+                      disabled={isSaving || isTestingSelectedPreset}
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {t('mcp.helperScript.delete')}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <div className="text-xs text-muted-foreground">
                 {selectedPreset?.helperScript ? (
@@ -387,7 +429,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                     </div>
                   ) : null}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
                     onClick={() => void publishPreset(selectedPreset.id)}
@@ -403,6 +445,14 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   >
                     {t('mcp.buttons.disable')}
                   </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => void handlePresetDelete()}
+                    disabled={isSaving || isTestingSelectedPreset}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {t('mcp.buttons.delete')}
+                  </Button>
                 </div>
               </div>
               <ValidationFeedback
@@ -410,6 +460,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                 latestResult={selectedTestResult}
                 isTesting={isTestingSelectedPreset}
               />
+              <AdminPresetToolList preset={selectedPreset} />
             </div>
           ) : null}
         </div>
@@ -490,6 +541,32 @@ function ValidationFeedback({
               })
             : error || t('mcp.validation.serverFailed')}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminPresetToolList({ preset }: { preset: AdminMcpPreset }) {
+  const { t } = useTranslation('admin');
+  const tools = (preset.tools ?? []).filter((tool) => tool.name?.trim());
+
+  if (tools.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <div className="text-xs font-semibold uppercase text-muted-foreground">{t('mcp.tools.title')}</div>
+      <div className="mt-2 grid gap-2">
+        {tools.map((tool) => (
+          <div key={tool.name} className="rounded-md border border-border bg-background px-3 py-2">
+            <div className="break-words font-mono text-xs font-semibold text-foreground">{tool.name}</div>
+            {tool.description ? (
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">{tool.description}</p>
+            ) : null}
+            <McpToolParameters inputSchema={tool.inputSchema} label={t('mcp.tools.parameters')} />
+          </div>
+        ))}
       </div>
     </div>
   );

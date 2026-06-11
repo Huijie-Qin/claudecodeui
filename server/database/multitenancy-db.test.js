@@ -214,6 +214,7 @@ test('sql check configuration resolves tenant defaults and user overrides', () =
     workspaceId: workspace.id,
     userId: ownerId,
     tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: false,
     customEnabled: false,
     userRuleIds: [],
     effectiveRuleIds: ['require_where', 'limit_rows'],
@@ -239,6 +240,7 @@ test('sql check configuration resolves tenant defaults and user overrides', () =
     workspaceId: otherWorkspace.id,
     userId: ownerId,
     tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: false,
     customEnabled: false,
     userRuleIds: [],
     effectiveRuleIds: ['require_where', 'limit_rows'],
@@ -257,10 +259,30 @@ test('sql check configuration resolves tenant defaults and user overrides', () =
     workspaceId: workspace.id,
     userId: ownerId,
     tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: true,
     customEnabled: false,
-    userRuleIds: [],
+    userRuleIds: ['limit_rows'],
     effectiveRuleIds: ['require_where', 'limit_rows'],
     source: 'tenant',
+  });
+
+  mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['require_where', 'limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: true,
+    customEnabled: true,
+    userRuleIds: ['require_where', 'limit_rows'],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'user',
   });
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, RotateCcw, Search, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../shared/view/ui';
@@ -23,6 +23,7 @@ type WorkspaceSqlCheckConfig = {
   tenantId?: number;
   userId?: number;
   tenantRuleIds?: string[];
+  hasUserPreference?: boolean;
   customEnabled?: boolean;
   userRuleIds?: string[];
   effectiveRuleIds?: string[];
@@ -82,7 +83,7 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     };
     setConfig(nextConfig);
     setDraftCustomEnabled(nextConfig.customEnabled === true);
-    setDraftRuleIds(nextConfig.customEnabled ? nextConfig.userRuleIds : nextConfig.tenantRuleIds);
+    setDraftRuleIds(nextConfig.hasUserPreference ? nextConfig.userRuleIds : nextConfig.tenantRuleIds);
   }, []);
 
   const loadRules = useCallback(async () => {
@@ -147,6 +148,7 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     return rules.filter((rule) => rule.name.toLowerCase().includes(normalizedQuery));
   }, [query, rules]);
   const tenantRules = normalizeRuleIds(config?.tenantRuleIds);
+  const customRules = config?.hasUserPreference || draftCustomEnabled ? draftRuleIds : [];
   const effectiveRules = displayedRuleIds;
   const isLoading = isLoadingRules || isLoadingConfig;
 
@@ -160,9 +162,15 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
 
   const handleCustomToggle = (checked: boolean) => {
     setDraftCustomEnabled(checked);
-    setDraftRuleIds(checked
-      ? (config?.customEnabled ? normalizeRuleIds(config.userRuleIds) : tenantRules)
-      : tenantRules);
+    if (checked && !config?.hasUserPreference && draftRuleIds.length === 0) {
+      setDraftRuleIds(tenantRules);
+    }
+    setSuccess(null);
+  };
+
+  const handleRestoreDefault = () => {
+    setDraftCustomEnabled(true);
+    setDraftRuleIds(tenantRules);
     setSuccess(null);
   };
 
@@ -226,7 +234,7 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
 
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border">
         <SummaryTile label={t('sqlCheck.summary.tenant')} value={tenantRules.length} />
-        <SummaryTile label={t('sqlCheck.summary.effective')} value={effectiveRules.length} />
+        <SummaryTile label={t('sqlCheck.summary.custom')} value={customRules.length} />
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -255,6 +263,14 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
             <Button onClick={handleSave} disabled={!workspaceId || isLoading || isSaving}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
               {t('buttons.save')}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRestoreDefault}
+              disabled={!workspaceId || isLoading || isSaving}
+            >
+              <RotateCcw className="h-4 w-4" />
+              {t('sqlCheck.restoreDefault')}
             </Button>
           </div>
 

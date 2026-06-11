@@ -621,7 +621,7 @@ export function createMultitenancyDb(database = db) {
     const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
     const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
     const enabled = customEnabled === true || customEnabled === 1 ? 1 : 0;
-    const normalizedRuleIds = enabled ? normalizeSqlCheckRuleIds(ruleIds) : [];
+    const normalizedRuleIds = normalizeSqlCheckRuleIds(ruleIds);
 
     database.prepare(`
       INSERT INTO user_sql_check_preferences (tenant_id, workspace_id, user_id, custom_enabled)
@@ -633,18 +633,20 @@ export function createMultitenancyDb(database = db) {
         updated_at = CURRENT_TIMESTAMP
     `).run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, enabled);
 
-    database.prepare(`
-      DELETE FROM user_sql_check_rules
-      WHERE workspace_id = ? AND user_id = ?
-    `).run(normalizedWorkspaceId, normalizedUserId);
+    if (enabled === 1) {
+      database.prepare(`
+        DELETE FROM user_sql_check_rules
+        WHERE workspace_id = ? AND user_id = ?
+      `).run(normalizedWorkspaceId, normalizedUserId);
 
-    const insertRule = database.prepare(`
-      INSERT INTO user_sql_check_rules (tenant_id, workspace_id, user_id, rule_id, sort_order)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    normalizedRuleIds.forEach((ruleId, index) => {
-      insertRule.run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, ruleId, index);
-    });
+      const insertRule = database.prepare(`
+        INSERT INTO user_sql_check_rules (tenant_id, workspace_id, user_id, rule_id, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      normalizedRuleIds.forEach((ruleId, index) => {
+        insertRule.run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, ruleId, index);
+      });
+    }
 
     return {
       customEnabled: enabled === 1,
@@ -666,6 +668,7 @@ export function createMultitenancyDb(database = db) {
       tenantId: normalizedTenantId,
       workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
+      hasUserPreference: Boolean(preference),
       customEnabled: preference?.custom_enabled === 1,
       ruleIds: listUserSqlCheckRuleIds({ workspaceId: normalizedWorkspaceId, userId: normalizedUserId }),
     };
@@ -690,6 +693,7 @@ export function createMultitenancyDb(database = db) {
       workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
       tenantRuleIds,
+      hasUserPreference: userPreference.hasUserPreference,
       customEnabled: userPreference.customEnabled,
       userRuleIds: userPreference.ruleIds,
       effectiveRuleIds,

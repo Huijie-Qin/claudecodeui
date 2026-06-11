@@ -11,6 +11,7 @@ export type WorkspaceToolStatus =
 export type WorkspaceMcpProbeTool = {
   name: string;
   description?: string;
+  inputSchema?: Record<string, unknown>;
 };
 
 export type WorkspaceMcpProbe = {
@@ -125,9 +126,21 @@ function getToolSearchText(tool: WorkspaceTool): string {
     tool.url,
     tool.probe?.phase,
     tool.probe?.error,
-    ...(tool.tools ?? []).map((entry) => `${entry.name} ${entry.description ?? ''}`),
+    ...(tool.tools ?? []).map((entry) => `${entry.name} ${entry.description ?? ''} ${formatSearchableSchema(entry.inputSchema)}`),
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+function formatSearchableSchema(schema?: Record<string, unknown>): string {
+  if (!schema || Object.keys(schema).length === 0) {
+    return '';
+  }
+
+  try {
+    return JSON.stringify(schema);
+  } catch {
+    return '';
+  }
 }

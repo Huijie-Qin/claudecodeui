@@ -111,6 +111,10 @@ test('admin mcp preset routes create and publish presets through the service', a
         seen.publish = { tenantId, presetId, userId };
         return { id: presetId, status: 'published' };
       },
+      deletePreset: ({ tenantId, presetId }) => {
+        seen.delete = { tenantId, presetId };
+        return true;
+      },
       testPreset: ({ tenantId, presetId, userId, input }) => {
         seen.test = { tenantId, presetId, userId, input };
         return {
@@ -153,6 +157,10 @@ test('admin mcp preset routes create and publish presets through the service', a
     },
     user: { id: 9, is_system_admin: 1 },
   });
+  const deleted = await requestJson(router, '/mcp-presets/2?tenantId=7', {
+    method: 'DELETE',
+    user: { id: 9, is_system_admin: 1 },
+  });
 
   assert.equal(list.response.status, 200);
   assert.deepEqual(seen.list, { tenantId: 7 });
@@ -165,6 +173,9 @@ test('admin mcp preset routes create and publish presets through the service', a
   assert.equal(tested.response.status, 200);
   assert.equal(tested.payload.transient, true);
   assert.equal(seen.test.input.url, 'https://mcp.internal/broken');
+  assert.equal(deleted.response.status, 200);
+  assert.deepEqual(seen.delete, { tenantId: 7, presetId: 2 });
+  assert.equal(deleted.payload.deleted, true);
 });
 
 test('admin mcp preset routes upload helper scripts through the service', async () => {
@@ -182,6 +193,13 @@ test('admin mcp preset routes upload helper scripts through the service', async 
           },
         };
       },
+      deleteHelperScript: ({ tenantId, presetId, userId }) => {
+        seen.deleteHelper = { tenantId, presetId, userId };
+        return {
+          id: presetId,
+          helperScript: null,
+        };
+      },
     },
   });
   const formData = new FormData();
@@ -190,6 +208,10 @@ test('admin mcp preset routes upload helper scripts through the service', async 
 
   const { response, payload } = await requestFormData(router, '/mcp-presets/2/helper-script', {
     formData,
+    user: { id: 9, is_system_admin: 1 },
+  });
+  const deleted = await requestJson(router, '/mcp-presets/2/helper-script?tenantId=7', {
+    method: 'DELETE',
     user: { id: 9, is_system_admin: 1 },
   });
 
@@ -206,4 +228,7 @@ test('admin mcp preset routes upload helper scripts through the service', async 
     sizeBytes: 16,
     sha256: 'abc123',
   });
+  assert.equal(deleted.response.status, 200);
+  assert.deepEqual(seen.deleteHelper, { tenantId: 7, presetId: 2, userId: 9 });
+  assert.equal(deleted.payload.preset.helperScript, null);
 });

@@ -104,6 +104,7 @@
     "title": "SQL Check",
     "description": "Tenant-managed SQL check rules.",
     "custom": "Custom",
+    "restoreDefault": "Restore default",
     "save": "Save",
     "saved": "Saved SQL Check configuration.",
     "loading": "Loading SQL Check...",
@@ -116,7 +117,7 @@
     "effectiveConfig": "Effective SQL Check",
     "summary": {
       "tenant": "Tenant rules",
-      "effective": "Effective rules"
+      "custom": "Custom rules"
     },
     "source": {
       "tenant": "Using tenant configuration",
@@ -287,7 +288,8 @@
       "phase": "Probe phase",
       "probeError": "Probe error",
       "missingValues": "Missing values",
-      "exposedTools": "Exposed tools"
+      "exposedTools": "Exposed tools",
+      "parameters": "Parameters"
     },
     "dialog": {
       "title": "Connect HTTP MCP Server",
@@ -359,7 +361,8 @@
       "runtimePolicy": "Runtime policy",
       "toolsTitle": "Included tools",
       "toolsEmpty": "No tools were published for this MCP server.",
-      "noToolDescription": "No description provided."
+      "noToolDescription": "No description provided.",
+      "parameters": "Parameters"
     }
   },
   "fileTree": {

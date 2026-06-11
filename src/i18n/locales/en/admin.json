@@ -240,6 +240,7 @@
     "docker": "Docker",
     "preinstallBadge": "Preinstall",
     "publishNotice": "Published presets become available on the workspace MCP Tools page. Install remains one-click and requires no user-side configuration.",
+    "confirmDelete": "Delete MCP preset \"{{name}}\"? This cannot be undone.",
     "fields": {
       "displayName": "Display name",
       "displayNamePlaceholder": "Knowledge Retrieval MCP",
@@ -263,6 +264,8 @@
       "title": "Private helper script",
       "description": "Stored outside the workspace. Workspace users cannot browse this file from Files.",
       "upload": "Upload script",
+      "delete": "Delete script",
+      "confirmDelete": "Delete helper script \"{{fileName}}\"?",
       "current": "Current script: {{fileName}} ({{sizeKb}} KB)",
       "none": "No helper script uploaded.",
       "saveFirst": "Save the preset before uploading a helper script."
@@ -272,7 +275,8 @@
       "testing": "Testing",
       "test": "Test",
       "publish": "Publish",
-      "disable": "Disable"
+      "disable": "Disable",
+      "delete": "Delete"
     },
     "validation": {
       "title": "Latest validation",
@@ -292,6 +296,10 @@
       "headersFormat": "Headers must be JSON or one key/value pair per line",
       "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax"
     },
+    "tools": {
+      "title": "Discovered tools",
+      "parameters": "Parameters"
+    },
     "errors": {
       "load": "Failed to load MCP presets",
       "save": "Failed to save MCP preset",
@@ -299,7 +307,9 @@
       "test": "Failed to test MCP preset",
       "publish": "Failed to publish MCP preset",
       "uploadHelper": "Failed to upload helper script",
-      "disable": "Failed to disable MCP preset"
+      "deleteHelper": "Failed to delete helper script",
+      "disable": "Failed to disable MCP preset",
+      "delete": "Failed to delete MCP preset"
     }
   },
   "runtimes": {

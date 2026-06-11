@@ -266,6 +266,60 @@ test('admin preset publish rejects healthy servers with no discovered tools', as
   );
 });
 
+test('admin preset helper script can be deleted and clears stale validation state', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  const service = createMcpPresetService({ multitenancy });
+
+  const preset = service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: {
+      name: 'with_helper',
+      displayName: 'With Helper MCP',
+      type: 'http',
+      url: 'https://mcp.internal/helper',
+      headersHelper: 'python3 auth.py',
+    },
+  });
+  const uploaded = service.uploadHelperScript({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+    originalName: 'auth.py',
+    content: 'print("{}")\n',
+  });
+  multitenancy.mcpPresets.recordPresetTest({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    status: 'healthy',
+    toolCount: 1,
+    tools: [{ name: 'lookup' }],
+    dockerCompatible: true,
+    updatedByUserId: adminId,
+  });
+  multitenancy.mcpPresets.publishPreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    updatedByUserId: adminId,
+  });
+
+  const deleted = service.deleteHelperScript({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+  });
+
+  assert.equal(uploaded.helperScript.fileName, 'auth.py');
+  assert.equal(deleted.helperScript, null);
+  assert.equal(deleted.status, 'draft');
+  assert.equal(deleted.lastTestStatus, null);
+  assert.equal(deleted.toolCount, 0);
+  assert.equal(multitenancy.mcpPresetHelperScripts.getScript({ tenantId: tenant.id, presetId: preset.id }), null);
+});
+
 test('admin preset test validates current form input and persists discovered tools', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
@@ -284,7 +338,18 @@ test('admin preset test validates current form input and persists discovered too
         phase: 'tools_list',
         error: config.url.includes('/broken') ? 'Not found' : '',
         toolCount: config.url.includes('/broken') ? 0 : 2,
-        tools: config.url.includes('/broken') ? [] : [{ name: 'search_docs' }, { name: 'read_doc' }],
+      tools: config.url.includes('/broken') ? [] : [
+        {
+          name: 'search_docs',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+          },
+        },
+        { name: 'read_doc' },
+      ],
       };
     },
   });
@@ -324,6 +389,25 @@ test('admin preset test validates current form input and persists discovered too
   assert.equal(stored.config.headersHelper, '/opt/bin/get-form-headers.sh');
   assert.equal(stored.last_test_status, 'failed');
   assert.equal(stored.tool_count, 0);
+
+  const healthy = await service.testPreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+    input: {
+      name: 'knowledge',
+      displayName: 'Knowledge MCP',
+      description: 'Search internal docs',
+      type: 'http',
+      url: 'https://mcp.internal/knowledge',
+    },
+  });
+  assert.deepEqual(healthy.tools[0].inputSchema, {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+    },
+  });
 });
 
 test('workspace presets omit legacy published rows without healthy tools', async () => {

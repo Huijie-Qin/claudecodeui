@@ -46,14 +46,32 @@ test('preset cards expose only user-facing badges', () => {
 test('preset details list tool names and descriptions', () => {
   const tools = getPresetToolDetails(createPreset({
     tools: [
-      { name: 'query_business_metrics', description: 'Run approved metric lookups.' },
+      {
+        name: 'query_business_metrics',
+        description: 'Run approved metric lookups.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            metric: { type: 'string' },
+          },
+        },
+      },
       { name: 'lookup_customer_segment' },
       { name: '  ' },
     ],
   }));
 
   assert.deepEqual(tools, [
-    { name: 'query_business_metrics', description: 'Run approved metric lookups.' },
-    { name: 'lookup_customer_segment', description: '' },
+    {
+      name: 'query_business_metrics',
+      description: 'Run approved metric lookups.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          metric: { type: 'string' },
+        },
+      },
+    },
+    { name: 'lookup_customer_segment', description: '', inputSchema: undefined },
   ]);
 });

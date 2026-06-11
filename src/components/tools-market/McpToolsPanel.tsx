@@ -14,6 +14,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 
+import { McpToolParameters } from '../mcp/McpToolParameters';
+
 import {
   useWorkspaceMcpTools,
   type WorkspaceMcpPreset,
@@ -425,6 +427,7 @@ function ToolList({ tools }: { tools: ReturnType<typeof getPresetToolDetails> })
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
                 {tool.description || t('mcpTools.detail.noToolDescription')}
               </p>
+              <McpToolParameters inputSchema={tool.inputSchema} label={t('mcpTools.detail.parameters')} />
             </div>
           ))}
         </div>

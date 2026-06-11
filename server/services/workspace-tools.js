@@ -754,6 +754,7 @@ function normalizeProbeTools(value) {
       return pruneUndefined({
         name,
         description: firstString(tool.description),
+        inputSchema: readPlainObject(tool.inputSchema) || readPlainObject(tool.input_schema) || readPlainObject(tool.parameters) || undefined,
       });
     })
     .filter(Boolean)
