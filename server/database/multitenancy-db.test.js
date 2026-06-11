@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 
 import { DATABASE_SCHEMA_SQL } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import { runMultitenancyMigrationsForDatabase } from './multitenancy-migrations.js';
 import { createMultitenancyDb } from './multitenancy-db.js';
 
 function createTestDb() {
@@ -234,6 +235,62 @@ test('sql check configuration resolves tenant defaults and user overrides', () =
     effectiveRuleIds: ['require_where', 'limit_rows'],
     source: 'tenant',
   });
+});
+
+test('sql check custom flag is added to legacy user preference tables', () => {
+  const database = createTestDb();
+  database.exec(`
+    DROP TABLE user_sql_check_rules;
+    DROP TABLE user_sql_check_preferences;
+
+    CREATE TABLE user_sql_check_preferences (
+      tenant_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (tenant_id, user_id),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE user_sql_check_rules (
+      tenant_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      rule_id TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (tenant_id, user_id, rule_id),
+      FOREIGN KEY (tenant_id, user_id) REFERENCES user_sql_check_preferences(tenant_id, user_id) ON DELETE CASCADE,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  runMultitenancyMigrationsForDatabase(database);
+
+  const preferenceColumns = database
+    .prepare('PRAGMA table_info(user_sql_check_preferences)')
+    .all()
+    .map((col) => col.name);
+  assert.equal(preferenceColumns.includes('custom_enabled'), true);
+
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'sql-owner');
+  const tenant = mt.tenants.createTenant({ code: 'sqlteam', name: 'SQL Team' });
+
+  mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  });
+
+  const saved = database
+    .prepare('SELECT custom_enabled FROM user_sql_check_preferences WHERE tenant_id = ? AND user_id = ?')
+    .get(tenant.id, ownerId);
+
+  assert.equal(saved.custom_enabled, 1);
 });
 
 test('mcp presets are isolated per tenant and can be filtered to published presets', () => {
