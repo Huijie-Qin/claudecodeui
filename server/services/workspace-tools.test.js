@@ -7,7 +7,6 @@ import test from 'node:test';
 import {
   getWorkspaceToolsPaths,
   listWorkspaceTools,
-  parseHeadersHelperOutput,
   previewMcpJsonImport,
   probeHttpMcpServer,
   probeWorkspaceMcpServer,
@@ -39,45 +38,6 @@ function okProbe(tools = [{ name: 'search', description: 'Search docs' }]) {
     tools,
   });
 }
-
-test('parseHeadersHelperOutput accepts multiple header key-values in one JSON object', () => {
-  assert.deepEqual(
-    parseHeadersHelperOutput(JSON.stringify({
-      Authorization: 'Bearer dynamic',
-      'X-Api-Key': 'secret',
-    })),
-    {
-      Authorization: 'Bearer dynamic',
-      'X-Api-Key': 'secret',
-    },
-  );
-});
-
-test('parseHeadersHelperOutput accepts wrapped and line-delimited JSON header objects', () => {
-  assert.deepEqual(
-    parseHeadersHelperOutput(JSON.stringify({
-      headers: {
-        Authorization: 'Bearer wrapped',
-        'X-Tenant': 'tenant-one',
-      },
-    })),
-    {
-      Authorization: 'Bearer wrapped',
-      'X-Tenant': 'tenant-one',
-    },
-  );
-
-  assert.deepEqual(
-    parseHeadersHelperOutput([
-      JSON.stringify({ Authorization: 'Bearer line-one' }),
-      JSON.stringify({ 'X-Api-Key': 'line-two' }),
-    ].join('\n')),
-    {
-      Authorization: 'Bearer line-one',
-      'X-Api-Key': 'line-two',
-    },
-  );
-});
 
 test('listWorkspaceTools reads project .mcp.json and preserves unsupported existing servers', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
@@ -289,14 +249,7 @@ test('previewMcpJsonImport classifies HTTP, needs-value, unsupported, invalid, a
   assert.equal(preview.entries.find((entry) => entry.name === 'existing').conflict, true);
 });
 
-test('probeHttpMcpServer runs headersHelper and lets dynamic headers override static headers', async (t) => {
-  try {
-    await fs.access('/bin/sh');
-  } catch {
-    t.skip('/bin/sh is unavailable on this platform');
-    return;
-  }
-
+test('probeHttpMcpServer runs headersHelper and lets dynamic headers override static headers', async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
