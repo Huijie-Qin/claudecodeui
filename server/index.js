@@ -402,11 +402,19 @@ const server = http.createServer(app);
 const ptySessionsMap = new Map();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, 10) || 30 * 60 * 1000;
+const GRACEFUL_SHUTDOWN_POLL_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_POLL_MS, 10) || 1000;
+let isShuttingDown = false;
 
 // Single WebSocket server that handles both paths
 const wss = new WebSocketServer({
     server,
     verifyClient: (info) => {
+        if (isShuttingDown) {
+            console.log('[WARN] Rejecting WebSocket connection while server is draining');
+            return false;
+        }
+
         console.log('WebSocket connection attempt to:', info.req.url);
 
         // Platform mode: always allow connection
@@ -475,6 +483,15 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
+    if (isShuttingDown) {
+        res.status(503).json({
+            status: 'draining',
+            timestamp: new Date().toISOString(),
+            installMode
+        });
+        return;
+    }
+
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -3001,6 +3018,117 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
+function getActiveWorkSummary() {
+    return {
+        claude: getActiveClaudeSDKSessions().length,
+        codex: getActiveCodexSessions().length,
+        cursor: getActiveCursorSessions().length,
+        gemini: getActiveGeminiSessions().length,
+        shell: ptySessionsMap.size
+    };
+}
+
+function getActiveWorkCount(summary = getActiveWorkSummary()) {
+    return Object.values(summary).reduce((total, count) => total + count, 0);
+}
+
+function waitForActiveWorkToDrain(timeoutMs) {
+    const startedAt = Date.now();
+
+    return new Promise((resolve) => {
+        const poll = () => {
+            const summary = getActiveWorkSummary();
+            const activeCount = getActiveWorkCount(summary);
+
+            if (activeCount === 0) {
+                resolve({drained: true, summary});
+                return;
+            }
+
+            if (Date.now() - startedAt >= timeoutMs) {
+                resolve({drained: false, summary});
+                return;
+            }
+
+            console.log('[Shutdown] Waiting for active work to finish:', summary);
+            setTimeout(poll, GRACEFUL_SHUTDOWN_POLL_MS).unref?.();
+        };
+
+        poll();
+    });
+}
+
+async function closeProjectsWatchers() {
+    const watchers = projectsWatchers;
+    projectsWatchers = [];
+
+    if (projectsWatcherDebounceTimer) {
+        clearTimeout(projectsWatcherDebounceTimer);
+        projectsWatcherDebounceTimer = null;
+    }
+
+    await Promise.allSettled(watchers.map((watcher) => watcher.close()));
+}
+
+function closeHttpServer() {
+    return new Promise((resolve) => {
+        server.close((error) => {
+            if (error) {
+                console.error('[Shutdown] Error closing HTTP server:', error);
+            }
+            resolve();
+        });
+    });
+}
+
+function closeWebSockets() {
+    for (const client of wss.clients) {
+        if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+            client.close(1012, 'Server restarting');
+        }
+    }
+
+    return new Promise((resolve) => {
+        wss.close((error) => {
+            if (error) {
+                console.error('[Shutdown] Error closing WebSocket server:', error);
+            }
+            resolve();
+        });
+    });
+}
+
+async function gracefulShutdown(signal) {
+    if (isShuttingDown) {
+        return;
+    }
+
+    isShuttingDown = true;
+    console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
+
+    runtimeSweeper.stop();
+    closeHttpServer().catch((error) => {
+        console.error('[Shutdown] Failed to close HTTP server:', error);
+    });
+
+    try {
+        const result = await waitForActiveWorkToDrain(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+        if (result.drained) {
+            console.log('[Shutdown] Active work drained');
+        } else {
+            console.warn('[Shutdown] Grace period expired with active work remaining:', result.summary);
+        }
+
+        await closeProjectsWatchers();
+        await closeWebSockets();
+        await stopAllPlugins();
+        process.exit(0);
+    } catch (error) {
+        console.error('[Shutdown] Graceful shutdown failed:', error);
+        process.exit(1);
+    }
+}
+
 // Initialize database and start server
 async function startServer() {
     try {
@@ -3046,6 +3174,10 @@ async function startServer() {
             startEnabledPluginServers().catch(err => {
                 console.error('[Plugins] Error during startup:', err.message);
             });
+
+            if (typeof process.send === 'function') {
+                process.send('ready');
+            }
         });
 
         // Clean up plugin processes on shutdown
