@@ -15,6 +15,8 @@ import { sanitizePathSegment } from './workspace-projects.js';
 const execFileAsync = promisify(execFile);
 
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const TENANT_ID_ENV_NAME = 'TENANT_ID';
+const WORKSPACE_ID_ENV_NAME = 'WORKSPACE_ID';
 const ANTHROPIC_BASE_URL_ENV_NAME = 'ANTHROPIC_BASE_URL';
 const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
 const DAS_ENV_NAME = 'DAS';
@@ -42,6 +44,8 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'no_proxy',
   USER_KEY_ENV_NAME,
   W3_NAME_ENV_NAME,
+  TENANT_ID_ENV_NAME,
+  WORKSPACE_ID_ENV_NAME,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -814,6 +818,8 @@ export function createAgentSessionRuntimeManager({
       const userEnv = {
         ...readUserContainerEnv(users, userId),
         ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
+        [TENANT_ID_ENV_NAME]: String(tenantId),
+        [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
       };
       const pathSegments = readRuntimePathSegments({
         tenantId,
