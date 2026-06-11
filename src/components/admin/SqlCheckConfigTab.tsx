@@ -197,6 +197,10 @@ export default function SqlCheckConfigTab({ tenants, currentTenantId }: SqlCheck
           >
             <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
           </Button>
+          <Button onClick={handleSave} disabled={!tenantId || isSaving || isLoading}>
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            {t('sqlCheck.save')}
+          </Button>
         </div>
       </div>
 
@@ -287,12 +291,6 @@ export default function SqlCheckConfigTab({ tenants, currentTenantId }: SqlCheck
                 ))}
               </div>
             )}
-          </div>
-          <div className="border-t border-border p-4">
-            <Button className="w-full" onClick={handleSave} disabled={!tenantId || isSaving || isLoading}>
-              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              {t('sqlCheck.save')}
-            </Button>
           </div>
         </aside>
       </div>
