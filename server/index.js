@@ -65,7 +65,7 @@ import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
-import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb} from './database/db.js';
+import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
@@ -77,6 +77,10 @@ import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
+import {
+    assertWorkspaceUploadFitsQuota,
+    getWorkspaceStorageQuota
+} from './services/workspace-storage-quota.js';
 import {IS_PLATFORM} from './constants/config.js';
 import {getConnectableHost} from '../shared/networkHosts.js';
 import {
@@ -1377,6 +1381,23 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
     }
 });
 
+app.get('/api/projects/:projectName/files/quota', authenticateToken, async (req, res) => {
+    try {
+        const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: false });
+        const quota = await getWorkspaceStorageQuota({ workspace, userStore: userDb });
+        res.json({
+            success: true,
+            ...quota,
+        });
+    } catch (error) {
+        console.error('[ERROR] File quota error:', error.message);
+        if (error.statusCode) {
+            return handleWorkspaceError(res, error);
+        }
+        return res.status(500).json({ error: error.message });
+    }
+});
+
 // ============================================================================
 // FILE OPERATIONS API ENDPOINTS
 // ============================================================================
@@ -1788,6 +1809,20 @@ const uploadFilesHandler = async (req, res) => {
 
             const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
             const projectRoot = workspace.path;
+            const uploadBytes = req.files.reduce((total, file) => total + (Number(file.size) || 0), 0);
+            const quota = await getWorkspaceStorageQuota({ workspace, userStore: userDb });
+
+            try {
+                assertWorkspaceUploadFitsQuota(quota, uploadBytes);
+            } catch (quotaError) {
+                for (const file of req.files) {
+                    await fsPromises.unlink(file.path).catch(() => {});
+                }
+                return res.status(quotaError.statusCode || 413).json({
+                    error: quotaError.message,
+                    ...quotaError.details,
+                });
+            }
 
             console.log('[DEBUG] Project root:', projectRoot);
 
@@ -2903,14 +2938,6 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
         for (const entry of entries) {
             // Debug: log all entries including hidden files
 
-
-            // Skip heavy build directories and VCS directories
-            if (entry.name === 'node_modules' ||
-                entry.name === 'dist' ||
-                entry.name === 'build' ||
-                entry.name === '.git' ||
-                entry.name === '.svn' ||
-                entry.name === '.hg') continue;
 
             const itemPath = path.join(dirPath, entry.name);
             const item = {

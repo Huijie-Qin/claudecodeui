@@ -161,6 +161,8 @@ export const api = {
     }),
   getFiles: (projectName, options = {}, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files`, workspaceId), options),
+  getFileQuota: (projectName, workspaceId, options = {}) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/quota`, workspaceId), options),
 
   // File operations
   createFile: (projectName, { path, type, name, workspaceId }) =>

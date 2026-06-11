@@ -22,6 +22,14 @@ export interface FileTreeImageSelection {
   projectName: string;
 }
 
+export interface WorkspaceStorageQuota {
+  limitMb: number;
+  limitBytes: number;
+  usedBytes: number;
+  remainingBytes: number;
+  exceeded: boolean;
+}
+
 export interface FileIconData {
   icon: LucideIcon;
   color: string;

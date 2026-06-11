@@ -389,12 +389,16 @@
     "newFolder": "新建文件夹 (Cmd+Shift+N)",
     "refresh": "刷新",
     "collapseAll": "全部折叠",
+    "storageUsage": "{{used}} MB / {{total}} MB",
+    "storageLoading": "正在计算空间...",
+    "storageExceeded": "请清理当前文件空间，或者联系管理员进行扩容",
     "upload": {
       "overwriteTitle": "检测到重复文件",
       "overwriteWarning": "以下文件已存在于目标文件夹中，将被覆盖：",
       "overwriteMore": "...还有 {{count}} 个",
       "overwriteConfirm": "继续上传",
-      "overwriteCancel": "取消"
+      "overwriteCancel": "取消",
+      "quotaExceeded": "当前上传大小 {{uploadSize}} MB，剩余空间 {{remainingSize}} MB，无法上传。请联系管理员进行扩容。"
     },
     "context": {
       "rename": "重命名",

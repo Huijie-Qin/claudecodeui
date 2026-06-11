@@ -6,10 +6,11 @@ import { cn } from '../../../lib/utils';
 import { ICON_SIZE_CLASS, getFileIconData } from '../constants/fileIcons';
 import { useExpandedDirectories } from '../hooks/useExpandedDirectories';
 import { useFileTreeData } from '../hooks/useFileTreeData';
-import { useFileTreeOperations } from '../hooks/useFileTreeOperations';
+import { getFileTreeDisplayPath, useFileTreeOperations } from '../hooks/useFileTreeOperations';
 import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
+import { useWorkspaceStorageQuota } from '../hooks/useWorkspaceStorageQuota';
 import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
 import { Project } from '../../../types/app';
@@ -49,6 +50,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   }, [toast]);
 
   const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
+  const { quota, loading: quotaLoading, refreshQuota } = useWorkspaceStorageQuota(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
@@ -56,10 +58,15 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     expandDirectories,
   });
 
+  const refreshWorkspaceFiles = useCallback(() => {
+    refreshFiles();
+    refreshQuota();
+  }, [refreshFiles, refreshQuota]);
+
   // File operations
   const operations = useFileTreeOperations({
     selectedProject,
-    onRefresh: refreshFiles,
+    onRefresh: refreshWorkspaceFiles,
     showToast,
     isReadOnly,
   });
@@ -67,10 +74,15 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   // File upload (drag and drop)
   const upload = useFileTreeUpload({
     selectedProject,
-    onRefresh: refreshFiles,
+    onRefresh: refreshWorkspaceFiles,
     showToast,
     isReadOnly,
     projectFiles: files,
+    quota,
+    getUploadQuotaErrorMessage: (uploadMb, remainingMb) => t('fileTree.upload.quotaExceeded', {
+      uploadSize: uploadMb,
+      remainingSize: remainingMb,
+    }),
   });
 
   // Focus input when creating new item
@@ -154,10 +166,12 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         onNewFolder={isReadOnly ? undefined : () => operations.handleStartCreate('', 'directory')}
         onUpload={isReadOnly ? undefined : () => upload.openFilePicker('')}
         onUploadFolder={isReadOnly ? undefined : () => upload.openFolderPicker('')}
-        onRefresh={refreshFiles}
+        onRefresh={refreshWorkspaceFiles}
         onCollapseAll={collapseAll}
         loading={loading}
         operationLoading={operations.operationLoading || upload.operationLoading}
+        quota={quota}
+        quotaLoading={quotaLoading}
       />
 
       <input
@@ -230,7 +244,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           onMove={isReadOnly ? undefined : operations.handleStartMove}
           onUpload={isReadOnly ? undefined : upload.openFilePicker}
           onUploadFolder={isReadOnly ? undefined : upload.openFolderPicker}
-          onRefresh={refreshFiles}
+          onRefresh={refreshWorkspaceFiles}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}
           renameValue={operations.renameValue}
@@ -360,7 +374,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
                 })}
               </h3>
               <p className="mt-1 truncate text-sm text-muted-foreground">
-                {operations.moveDialog.item.path}
+                {getFileTreeDisplayPath(operations.moveDialog.item.path, selectedProject)}
               </p>
             </div>
             <label className="mb-2 block text-sm font-medium text-foreground">

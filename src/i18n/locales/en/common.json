@@ -389,12 +389,16 @@
     "newFolder": "New Folder (Cmd+Shift+N)",
     "refresh": "Refresh",
     "collapseAll": "Collapse All",
+    "storageUsage": "{{used}} MB / {{total}} MB",
+    "storageLoading": "Calculating space...",
+    "storageExceeded": "Please clean up the current file space, or contact the administrator for expansion",
     "upload": {
       "overwriteTitle": "Overwrite existing files?",
       "overwriteWarning": "The following files already exist in the target folder and will be overwritten:",
       "overwriteMore": "...and {{count}} more",
       "overwriteConfirm": "Continue upload",
-      "overwriteCancel": "Cancel"
+      "overwriteCancel": "Cancel",
+      "quotaExceeded": "Upload size {{uploadSize}} MB exceeds remaining workspace space {{remainingSize}} MB. Please contact the administrator for expansion."
     },
     "context": {
       "rename": "Rename",

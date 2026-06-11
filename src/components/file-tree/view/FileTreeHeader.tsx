@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Eye, FileText, FolderPlus, FolderUp, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import { Button, Input } from '../../../shared/view/ui';
 import { cn } from '../../../lib/utils';
-import type { FileTreeViewMode } from '../types/types';
+import type { FileTreeViewMode, WorkspaceStorageQuota } from '../types/types';
 
 type FileTreeHeaderProps = {
   viewMode: FileTreeViewMode;
@@ -20,7 +21,13 @@ type FileTreeHeaderProps = {
   // Loading state
   loading?: boolean;
   operationLoading?: boolean;
+  quota?: WorkspaceStorageQuota | null;
+  quotaLoading?: boolean;
 };
+
+function formatQuotaMb(bytes: number) {
+  return (bytes / (1024 * 1024)).toFixed(2);
+}
 
 export default function FileTreeHeader({
   viewMode,
@@ -35,6 +42,8 @@ export default function FileTreeHeader({
   onCollapseAll,
   loading,
   operationLoading,
+  quota,
+  quotaLoading,
 }: FileTreeHeaderProps) {
   const { t } = useTranslation();
   const [isUploadMenuOpen, setIsUploadMenuOpen] = useState(false);
@@ -79,7 +88,29 @@ export default function FileTreeHeader({
     <div className="space-y-2 border-b border-border px-3 pb-2 pt-3">
       {/* Title and Toolbar */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-foreground">{t('fileTree.files')}</h3>
+        <div>
+          <h3 className="text-sm font-medium text-foreground">{t('fileTree.files')}</h3>
+          <div className={cn(
+            'mt-0.5 text-xs',
+            quota?.exceeded ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground',
+          )}>
+            {quota ? (
+              <>
+                {t('fileTree.storageUsage', '{{used}} / {{total}} MB', {
+                  used: formatQuotaMb(quota.usedBytes),
+                  total: formatQuotaMb(quota.limitBytes),
+                })}
+                {quota.exceeded ? (
+                  <span className="ml-2">
+                    {t('fileTree.storageExceeded', 'Please clean up the current file space, or contact the administrator for expansion')}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              quotaLoading ? t('fileTree.storageLoading', 'Calculating space...') : null
+            )}
+          </div>
+        </div>
         <div className="flex items-center gap-0.5">
           {/* Action buttons */}
           {onNewFile && (

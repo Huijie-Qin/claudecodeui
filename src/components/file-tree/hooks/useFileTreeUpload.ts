@@ -1,7 +1,7 @@
 import { useCallback, useState, useRef } from 'react';
 
 import type { Project } from '../../../types/app';
-import type { FileTreeNode } from '../types/types';
+import type { FileTreeNode, WorkspaceStorageQuota } from '../types/types';
 import { api } from '../../../utils/api';
 import { FILE_TREE_DROP_TARGET_ATTRIBUTE } from '../constants/constants';
 import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
@@ -12,6 +12,8 @@ type UseFileTreeUploadOptions = {
   showToast: (message: string, type: 'success' | 'error') => void;
   isReadOnly?: boolean;
   projectFiles: FileTreeNode[];
+  quota?: WorkspaceStorageQuota | null;
+  getUploadQuotaErrorMessage?: (uploadMb: string, remainingMb: string) => string;
 };
 
 type UploadOverwriteDialogState = {
@@ -136,12 +138,22 @@ function resolveDirectoryDropTarget(eventTarget: EventTarget | null) {
   return dropTargetElement?.getAttribute(FILE_TREE_DROP_TARGET_ATTRIBUTE) || '';
 }
 
+function getFilesTotalBytes(files: File[]) {
+  return files.reduce((total, file) => total + file.size, 0);
+}
+
+function formatMb(bytes: number) {
+  return (bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, '');
+}
+
 export const useFileTreeUpload = ({
   selectedProject,
   onRefresh,
   showToast,
   isReadOnly = false,
   projectFiles,
+  quota,
+  getUploadQuotaErrorMessage,
 }: UseFileTreeUploadOptions) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -215,6 +227,18 @@ export const useFileTreeUpload = ({
       return;
     }
 
+    const uploadBytes = getFilesTotalBytes(files);
+    if (quota && quota.usedBytes + uploadBytes > quota.limitBytes) {
+      const uploadMb = formatMb(uploadBytes);
+      const remainingMb = formatMb(quota.remainingBytes);
+      showToast(
+        getUploadQuotaErrorMessage?.(uploadMb, remainingMb)
+          || `Upload size ${uploadMb} MB exceeds remaining workspace space ${remainingMb} MB.`,
+        'error',
+      );
+      return;
+    }
+
     const projectRoot = getProjectRoot(selectedProject);
     const existingPaths = new Set<string>();
     collectAllPaths(projectFiles, existingPaths);
@@ -264,7 +288,7 @@ export const useFileTreeUpload = ({
     }
 
     await performUpload(files, targetPath);
-  }, [isReadOnly, selectedProject, projectFiles, performUpload]);
+  }, [isReadOnly, selectedProject, quota, projectFiles, performUpload, showToast, getUploadQuotaErrorMessage]);
 
   const handleConfirmOverwrite = useCallback(async () => {
     const pendingUpload = pendingUploadRef.current;
