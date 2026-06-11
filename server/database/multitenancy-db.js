@@ -589,15 +589,15 @@ export function createMultitenancyDb(database = db) {
     `).all(normalizedTenantId).map((row) => row.rule_id);
   };
 
-  const listUserSqlCheckRuleIds = ({ tenantId, userId }) => {
-    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+  const listUserSqlCheckRuleIds = ({ workspaceId, userId }) => {
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
     const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
     return database.prepare(`
       SELECT rule_id
       FROM user_sql_check_rules
-      WHERE tenant_id = ? AND user_id = ?
+      WHERE workspace_id = ? AND user_id = ?
       ORDER BY sort_order ASC, rule_id COLLATE NOCASE ASC
-    `).all(normalizedTenantId, normalizedUserId).map((row) => row.rule_id);
+    `).all(normalizedWorkspaceId, normalizedUserId).map((row) => row.rule_id);
   };
 
   const replaceTenantSqlCheckRulesTransaction = database.transaction(({ tenantId, ruleIds }) => {
@@ -616,63 +616,69 @@ export function createMultitenancyDb(database = db) {
     return listTenantSqlCheckRuleIds(normalizedTenantId);
   });
 
-  const setUserSqlCheckPreferenceTransaction = database.transaction(({ tenantId, userId, customEnabled, ruleIds }) => {
+  const setUserSqlCheckPreferenceTransaction = database.transaction(({ tenantId, workspaceId, userId, customEnabled, ruleIds }) => {
     const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
     const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
     const enabled = customEnabled === true || customEnabled === 1 ? 1 : 0;
     const normalizedRuleIds = enabled ? normalizeSqlCheckRuleIds(ruleIds) : [];
 
     database.prepare(`
-      INSERT INTO user_sql_check_preferences (tenant_id, user_id, custom_enabled)
-      VALUES (?, ?, ?)
-      ON CONFLICT(tenant_id, user_id)
+      INSERT INTO user_sql_check_preferences (tenant_id, workspace_id, user_id, custom_enabled)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(workspace_id, user_id)
       DO UPDATE SET
+        tenant_id = excluded.tenant_id,
         custom_enabled = excluded.custom_enabled,
         updated_at = CURRENT_TIMESTAMP
-    `).run(normalizedTenantId, normalizedUserId, enabled);
+    `).run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, enabled);
 
     database.prepare(`
       DELETE FROM user_sql_check_rules
-      WHERE tenant_id = ? AND user_id = ?
-    `).run(normalizedTenantId, normalizedUserId);
+      WHERE workspace_id = ? AND user_id = ?
+    `).run(normalizedWorkspaceId, normalizedUserId);
 
     const insertRule = database.prepare(`
-      INSERT INTO user_sql_check_rules (tenant_id, user_id, rule_id, sort_order)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO user_sql_check_rules (tenant_id, workspace_id, user_id, rule_id, sort_order)
+      VALUES (?, ?, ?, ?, ?)
     `);
     normalizedRuleIds.forEach((ruleId, index) => {
-      insertRule.run(normalizedTenantId, normalizedUserId, ruleId, index);
+      insertRule.run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, ruleId, index);
     });
 
     return {
       customEnabled: enabled === 1,
-      ruleIds: listUserSqlCheckRuleIds({ tenantId: normalizedTenantId, userId: normalizedUserId }),
+      ruleIds: listUserSqlCheckRuleIds({ workspaceId: normalizedWorkspaceId, userId: normalizedUserId }),
     };
   });
 
-  const getUserSqlCheckPreference = ({ tenantId, userId }) => {
+  const getUserSqlCheckPreference = ({ tenantId, workspaceId, userId }) => {
     const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
     const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
     const preference = database.prepare(`
       SELECT custom_enabled
       FROM user_sql_check_preferences
-      WHERE tenant_id = ? AND user_id = ?
-    `).get(normalizedTenantId, normalizedUserId);
+      WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
+    `).get(normalizedTenantId, normalizedWorkspaceId, normalizedUserId);
 
     return {
       tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
       customEnabled: preference?.custom_enabled === 1,
-      ruleIds: listUserSqlCheckRuleIds({ tenantId: normalizedTenantId, userId: normalizedUserId }),
+      ruleIds: listUserSqlCheckRuleIds({ workspaceId: normalizedWorkspaceId, userId: normalizedUserId }),
     };
   };
 
-  const resolveUserSqlCheckConfig = ({ tenantId, userId }) => {
+  const resolveUserSqlCheckConfig = ({ tenantId, workspaceId, userId }) => {
     const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
     const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
     const tenantRuleIds = listTenantSqlCheckRuleIds(normalizedTenantId);
     const userPreference = getUserSqlCheckPreference({
       tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
     });
     const effectiveRuleIds = userPreference.customEnabled
@@ -681,6 +687,7 @@ export function createMultitenancyDb(database = db) {
 
     return {
       tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
       tenantRuleIds,
       customEnabled: userPreference.customEnabled,
@@ -1063,11 +1070,13 @@ export function createMultitenancyDb(database = db) {
 
       getUserPreference: getUserSqlCheckPreference,
 
-      setUserPreference: ({ tenantId, userId, customEnabled, ruleIds = [] }) => {
+      setUserPreference: ({ tenantId, workspaceId, userId, customEnabled, ruleIds = [] }) => {
         const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
         const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
         const saved = setUserSqlCheckPreferenceTransaction({
           tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
           userId: normalizedUserId,
           customEnabled,
           ruleIds,
@@ -1075,6 +1084,7 @@ export function createMultitenancyDb(database = db) {
 
         return {
           tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
           userId: normalizedUserId,
           customEnabled: saved.customEnabled,
           ruleIds: saved.ruleIds,

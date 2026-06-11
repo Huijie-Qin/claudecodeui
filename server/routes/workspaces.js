@@ -84,6 +84,7 @@ export function createWorkspacesRouter({
         canManage: true,
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
+          workspaceId: workspace.id,
           userId: req.user.id,
         }),
       });
@@ -106,6 +107,7 @@ export function createWorkspacesRouter({
       });
       multitenancy.sqlCheck.setUserPreference({
         tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
         userId: req.user.id,
         customEnabled: req.body?.customEnabled ?? req.body?.custom_enabled ?? false,
         ruleIds: req.body?.ruleIds ?? req.body?.rule_ids ?? [],
@@ -117,6 +119,7 @@ export function createWorkspacesRouter({
         canManage: true,
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
+          workspaceId: workspace.id,
           userId: req.user.id,
         }),
       });

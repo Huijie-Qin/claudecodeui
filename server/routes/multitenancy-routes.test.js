@@ -509,6 +509,7 @@ test('workspace sql check route resolves tenant config and stores user overrides
   const seen = { access: [] };
   const config = {
     tenantId: 2,
+    workspaceId: 10,
     userId: 1,
     tenantRuleIds: ['require_where'],
     customEnabled: false,
@@ -556,6 +557,7 @@ test('workspace sql check route resolves tenant config and stores user overrides
   assert.equal(saved.response.status, 200);
   assert.deepEqual(seen.saved, {
     tenantId: 2,
+    workspaceId: 10,
     userId: 1,
     customEnabled: true,
     ruleIds: ['limit_rows'],
