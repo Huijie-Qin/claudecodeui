@@ -649,32 +649,22 @@ async function resolveHeadersHelper(config) {
     throw createHttpError(describeHeadersHelperFailure(error), 400);
   }
 
-  let parsed;
+  let headers;
   try {
-    parsed = JSON.parse(stdout.trim());
-  } catch {
+    headers = parseHeadersHelperOutput(stdout);
+  } catch (error) {
     logMcpProbe('headers_helper_invalid_stdout', {
       name: config.name || null,
       url: config.url || null,
       stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
       stdoutSnippet: probeLogSnippet(stdout),
     });
+    if (error?.statusCode) {
+      throw error;
+    }
     throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
   }
 
-  const record = readPlainObject(parsed);
-  if (!record) {
-    throw createHttpError('headersHelper must write a JSON object of string header values', 400);
-  }
-
-  const headers = {};
-  for (const [key, value] of Object.entries(record)) {
-    const headerName = firstString(key);
-    if (!headerName || typeof value !== 'string') {
-      throw createHttpError('headersHelper must write a JSON object of string header values', 400);
-    }
-    headers[headerName] = value;
-  }
   logMcpProbe('headers_helper_parsed', {
     name: config.name || null,
     url: config.url || null,
@@ -961,6 +951,58 @@ function readStringRecord(value) {
       .filter(([key, entry]) => firstString(key) && typeof entry === 'string')
       .map(([key, entry]) => [key, entry]),
   );
+}
+
+function normalizeHeadersHelperPayload(payload) {
+  const outerRecord = readPlainObject(payload);
+  const record = readPlainObject(outerRecord?.headers) || outerRecord;
+  if (!record) {
+    throw createHttpError('headersHelper must write a JSON object of string header values', 400);
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(record)) {
+    const headerName = firstString(key);
+    if (!headerName || typeof value !== 'string') {
+      throw createHttpError('headersHelper must write a JSON object of string header values', 400);
+    }
+    headers[headerName] = value;
+  }
+
+  return headers;
+}
+
+export function parseHeadersHelperOutput(stdout) {
+  const trimmed = typeof stdout === 'string' ? stdout.trim() : '';
+  if (!trimmed) {
+    throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
+  }
+
+  try {
+    return normalizeHeadersHelperPayload(JSON.parse(trimmed));
+  } catch (error) {
+    if (error?.statusCode) {
+      throw error;
+    }
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length <= 1) {
+    throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
+  }
+
+  try {
+    return lines.reduce((headers, line) => ({
+      ...headers,
+      ...normalizeHeadersHelperPayload(JSON.parse(line)),
+    }), {});
+  } catch (error) {
+    if (error?.statusCode) throw error;
+    throw createHttpError('headersHelper must write a valid JSON object to stdout', 400);
+  }
 }
 
 function readRpcError(error) {
