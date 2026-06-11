@@ -7,6 +7,7 @@
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
     "mcpPresets": "MCP Server 预置",
+    "sqlCheck": "SQL Check",
     "runtimes": "运行时监控"
   },
   "common": {
@@ -167,6 +168,24 @@
     "empty": "暂无租户",
     "noAuthorizedUsers": "暂无授权用户"
   },
+  "sqlCheck": {
+    "title": "SQL Check",
+    "description": "按租户配置 SQL 检查规则。",
+    "save": "保存规则",
+    "saved": "SQL Check 配置已保存。",
+    "loading": "正在加载 SQL Check...",
+    "empty": "暂无可用 SQL Check 规则。",
+    "noMatches": "没有匹配的规则。",
+    "noneSelected": "未选择规则。",
+    "searchPlaceholder": "按规则名称搜索...",
+    "selectedCount": "已选 {{count}} 条",
+    "configuredRules": "已配置规则",
+    "errors": {
+      "loadRules": "加载 SQL Check 规则失败",
+      "loadConfig": "加载 SQL Check 配置失败",
+      "saveConfig": "保存 SQL Check 配置失败"
+    }
+  },
   "analytics": {
     "title": "平台统计",
     "description": "从运营视角查看用户激活、活跃、租户使用、会话消息和运行时健康度。",
@@ -241,6 +260,7 @@
     "toolsCount": "{{count}} 个工具",
     "docker": "Docker",
     "publishNotice": "已发布的预置会出现在工作区 MCP 工具页中。安装仍是一键完成，并且不需要用户侧配置。",
+    "confirmDelete": "确认删除 MCP 预置“{{name}}”？此操作不可撤销。",
     "fields": {
       "displayName": "显示名称",
       "displayNamePlaceholder": "知识检索 MCP",
@@ -262,6 +282,8 @@
       "title": "私有 helper 脚本",
       "description": "存储在工作区之外。工作区用户无法在文件列表中浏览此文件。",
       "upload": "上传脚本",
+      "delete": "删除脚本",
+      "confirmDelete": "确认删除 helper 脚本“{{fileName}}”？",
       "current": "当前脚本：{{fileName}}（{{sizeKb}} KB）",
       "none": "尚未上传 helper 脚本。",
       "saveFirst": "请先保存预置，再上传 helper 脚本。"
@@ -271,7 +293,8 @@
       "testing": "测试中",
       "test": "测试",
       "publish": "发布",
-      "disable": "禁用"
+      "disable": "禁用",
+      "delete": "删除"
     },
     "validation": {
       "title": "最近校验",
@@ -291,6 +314,10 @@
       "headersFormat": "Header 必须是 JSON，或每行一个键值对",
       "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
     },
+    "tools": {
+      "title": "已发现工具",
+      "parameters": "参数"
+    },
     "errors": {
       "load": "加载 MCP 预置失败",
       "save": "保存 MCP 预置失败",
@@ -298,7 +325,9 @@
       "test": "测试 MCP 预置失败",
       "publish": "发布 MCP 预置失败",
       "uploadHelper": "上传 helper 脚本失败",
-      "disable": "禁用 MCP 预置失败"
+      "deleteHelper": "删除 helper 脚本失败",
+      "disable": "禁用 MCP 预置失败",
+      "delete": "删除 MCP 预置失败"
     }
   },
   "runtimes": {

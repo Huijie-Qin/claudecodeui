@@ -147,6 +147,50 @@ CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (
 CREATE INDEX IF NOT EXISTS idx_workspace_skill_market_imports_remote
   ON workspace_skill_market_imports(remote_id);
 
+CREATE TABLE IF NOT EXISTS tenant_sql_check_rules (
+  tenant_id INTEGER NOT NULL,
+  rule_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tenant_id, rule_id),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_sql_check_rules_tenant_order
+  ON tenant_sql_check_rules(tenant_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS user_sql_check_preferences (
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  custom_enabled INTEGER NOT NULL DEFAULT 0 CHECK (custom_enabled IN (0, 1)),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, user_id),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_sql_check_rules (
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  rule_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, user_id, rule_id),
+  FOREIGN KEY (workspace_id, user_id) REFERENCES user_sql_check_preferences(workspace_id, user_id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_sql_check_rules_owner_order
+  ON user_sql_check_rules(workspace_id, user_id, sort_order);
+
 CREATE TABLE IF NOT EXISTS tenant_join_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id INTEGER NOT NULL,
@@ -250,6 +294,8 @@ CREATE TABLE IF NOT EXISTS scheduled_session_tasks (
   provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'cursor', 'gemini')),
   name TEXT NOT NULL,
   prompt TEXT NOT NULL,
+  schedule_type TEXT NOT NULL DEFAULT 'interval' CHECK (schedule_type IN ('interval', 'cron')),
+  schedule_cron TEXT,
   interval_minutes INTEGER NOT NULL CHECK (interval_minutes >= 1),
   next_run_at TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,

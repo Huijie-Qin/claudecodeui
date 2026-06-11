@@ -4,6 +4,8 @@
  */
 export const IS_PLATFORM = import.meta.env.VITE_IS_PLATFORM === 'true';
 
+export const SQL_CHECK_BASE_URL = String(import.meta.env.SQL_CHECK_BASE_URL || '').replace(/\/+$/, '');
+
 /**
  * For empty shell instances where no project is provided, 
  * we use a default project object to ensure the shell can still function. 

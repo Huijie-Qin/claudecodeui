@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent } from 'react';
+import type { ChangeEvent, Dispatch, KeyboardEvent, SetStateAction } from 'react';
 import { CalendarClock, ChevronDown, ChevronRight, Edit2, Loader2, MessageSquare, Pause, Play, Save, Trash2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../utils/api';
 import type { LLMProvider, Project } from '../../../../types/app';
 import { Button, Dialog, DialogContent, DialogTitle } from '../../../../shared/view/ui';
+import { type MentionableFile, useFileMentions } from '../../hooks/useFileMentions';
 import { type SlashCommand, useSlashCommands } from '../../hooks/useSlashCommands';
 
 import CommandMenu from './CommandMenu';
@@ -14,6 +16,8 @@ type ScheduledTask = {
   provider: LLMProvider;
   name: string;
   prompt: string;
+  scheduleType?: ScheduleType;
+  scheduleCron?: string | null;
   intervalMinutes: number;
   nextRunAt: string;
   enabled: boolean;
@@ -26,9 +30,20 @@ type ScheduledTask = {
   updatedAt?: string | null;
 };
 
+type ScheduleType = 'interval' | 'cron';
+type ScheduleMode = 'interval' | 'cron' | 'visual';
+type VisualFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
+
 type TaskEditForm = {
   name: string;
   prompt: string;
+  scheduleMode: ScheduleMode;
+  scheduleCron: string;
+  visualFrequency: VisualFrequency;
+  visualMinute: number;
+  visualHour: number;
+  visualWeekday: number;
+  visualMonthDay: number;
   intervalMinutes: number;
   nextRunAt: string;
   enabled: boolean;
@@ -52,6 +67,38 @@ type ErrorPayload = {
   message?: string;
 };
 
+type TranslationFunction = ReturnType<typeof useTranslation>['t'];
+
+type ScheduleControlValues = Pick<
+  TaskEditForm,
+  | 'scheduleMode'
+  | 'scheduleCron'
+  | 'visualFrequency'
+  | 'visualMinute'
+  | 'visualHour'
+  | 'visualWeekday'
+  | 'visualMonthDay'
+  | 'intervalMinutes'
+  | 'nextRunAt'
+>;
+
+const WEEKDAYS = [
+  { value: 1, labelKey: 'scheduledTasks.weekdays.mon', defaultLabel: 'Mon' },
+  { value: 2, labelKey: 'scheduledTasks.weekdays.tue', defaultLabel: 'Tue' },
+  { value: 3, labelKey: 'scheduledTasks.weekdays.wed', defaultLabel: 'Wed' },
+  { value: 4, labelKey: 'scheduledTasks.weekdays.thu', defaultLabel: 'Thu' },
+  { value: 5, labelKey: 'scheduledTasks.weekdays.fri', defaultLabel: 'Fri' },
+  { value: 6, labelKey: 'scheduledTasks.weekdays.sat', defaultLabel: 'Sat' },
+  { value: 0, labelKey: 'scheduledTasks.weekdays.sun', defaultLabel: 'Sun' },
+];
+
+const VISUAL_FREQUENCIES: Array<{ value: VisualFrequency; labelKey: string; defaultLabel: string }> = [
+  { value: 'hourly', labelKey: 'scheduledTasks.frequencies.hourly', defaultLabel: 'Hourly' },
+  { value: 'daily', labelKey: 'scheduledTasks.frequencies.daily', defaultLabel: 'Daily' },
+  { value: 'weekly', labelKey: 'scheduledTasks.frequencies.weekly', defaultLabel: 'Weekly' },
+  { value: 'monthly', labelKey: 'scheduledTasks.frequencies.monthly', defaultLabel: 'Monthly' },
+];
+
 function pad(value: number) {
   return String(value).padStart(2, '0');
 }
@@ -68,21 +115,139 @@ function toLocalInputValue(value?: string | null) {
   ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function normalizeCronInput(value: string) {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function isValidCronCandidate(value: string) {
+  const fields = normalizeCronInput(value).split(/\s+/);
+  return fields.length === 5 && fields.every(Boolean);
+}
+
+function buildVisualCron({
+  visualFrequency,
+  visualMinute,
+  visualHour,
+  visualWeekday,
+  visualMonthDay,
+}: Pick<TaskEditForm, 'visualFrequency' | 'visualMinute' | 'visualHour' | 'visualWeekday' | 'visualMonthDay'>) {
+  const minute = clampNumber(visualMinute, 0, 59);
+  const hour = clampNumber(visualHour, 0, 23);
+  const weekday = clampNumber(visualWeekday, 0, 6);
+  const monthDay = clampNumber(visualMonthDay, 1, 31);
+
+  if (visualFrequency === 'hourly') return `${minute} * * * *`;
+  if (visualFrequency === 'daily') return `${minute} ${hour} * * *`;
+  if (visualFrequency === 'weekly') return `${minute} ${hour} * * ${weekday}`;
+  return `${minute} ${hour} ${monthDay} * *`;
+}
+
+function inferVisualCron(cron?: string | null): Pick<TaskEditForm, 'scheduleMode' | 'visualFrequency' | 'visualMinute' | 'visualHour' | 'visualWeekday' | 'visualMonthDay'> {
+  const fields = normalizeCronInput(cron || '').split(/\s+/);
+  const fallback = {
+    scheduleMode: 'cron' as ScheduleMode,
+    visualFrequency: 'hourly' as VisualFrequency,
+    visualMinute: 0,
+    visualHour: 9,
+    visualWeekday: 1,
+    visualMonthDay: 1,
+  };
+
+  if (fields.length !== 5) return fallback;
+  const [minuteField, hourField, dayField, monthField, weekdayField] = fields;
+  const minute = Number(minuteField);
+  const hour = Number(hourField);
+  const day = Number(dayField);
+  const weekday = Number(weekdayField);
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59 || monthField !== '*') return fallback;
+
+  if (hourField === '*' && dayField === '*' && weekdayField === '*') {
+    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'hourly', visualMinute: minute };
+  }
+  if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && dayField === '*' && weekdayField === '*') {
+    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'daily', visualMinute: minute, visualHour: hour };
+  }
+  if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && dayField === '*' && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) {
+    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'weekly', visualMinute: minute, visualHour: hour, visualWeekday: weekday };
+  }
+  if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && Number.isInteger(day) && day >= 1 && day <= 31 && weekdayField === '*') {
+    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'monthly', visualMinute: minute, visualHour: hour, visualMonthDay: day };
+  }
+  return fallback;
+}
+
+function buildSchedulePayload(
+  values: Pick<TaskEditForm, 'scheduleMode' | 'scheduleCron' | 'visualFrequency' | 'visualMinute' | 'visualHour' | 'visualWeekday' | 'visualMonthDay' | 'intervalMinutes' | 'nextRunAt'>,
+  messages = {
+    firstRunInvalid: 'First run must be a valid date/time',
+    startAfterInvalid: 'Start after must be a valid date/time',
+  },
+) {
+  const nextRunDate = new Date(values.nextRunAt);
+  if (Number.isNaN(nextRunDate.getTime())) {
+    throw new Error(values.scheduleMode === 'interval' ? messages.firstRunInvalid : messages.startAfterInvalid);
+  }
+
+  if (values.scheduleMode === 'interval') {
+    return {
+      scheduleType: 'interval' as ScheduleType,
+      scheduleCron: null,
+      intervalMinutes: Math.max(1, Number(values.intervalMinutes) || 1),
+      nextRunAt: nextRunDate.toISOString(),
+    };
+  }
+
+  const cron = normalizeCronInput(values.scheduleMode === 'visual' ? buildVisualCron(values) : values.scheduleCron);
+  return {
+    scheduleType: 'cron' as ScheduleType,
+    scheduleCron: cron,
+    intervalMinutes: Math.max(1, Number(values.intervalMinutes) || 1),
+    startAfterAt: nextRunDate.toISOString(),
+  };
+}
+
 function buildTaskEditForm(task: ScheduledTask): TaskEditForm {
+  const scheduleType = task.scheduleType || 'interval';
+  const visualSchedule = inferVisualCron(task.scheduleCron);
   return {
     name: task.name || '',
     prompt: task.prompt || '',
+    scheduleMode: scheduleType === 'cron' ? visualSchedule.scheduleMode : 'interval',
+    scheduleCron: task.scheduleCron || '',
+    visualFrequency: visualSchedule.visualFrequency,
+    visualMinute: visualSchedule.visualMinute,
+    visualHour: visualSchedule.visualHour,
+    visualWeekday: visualSchedule.visualWeekday,
+    visualMonthDay: visualSchedule.visualMonthDay,
     intervalMinutes: Math.max(1, Number(task.intervalMinutes) || 1),
     nextRunAt: toLocalInputValue(task.nextRunAt),
     enabled: task.enabled,
   };
 }
 
-function formatDateTime(value?: string | null) {
-  if (!value) return 'Never';
+function formatDateTime(value?: string | null, neverLabel = 'Never') {
+  if (!value) return neverLabel;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatScheduleSummary(
+  task: Pick<ScheduledTask, 'scheduleType' | 'scheduleCron' | 'intervalMinutes'>,
+  t: TranslationFunction,
+) {
+  if ((task.scheduleType || 'interval') === 'cron' && task.scheduleCron) {
+    return t('scheduledTasks.summary.cron', { defaultValue: 'Cron {{expression}}', expression: task.scheduleCron });
+  }
+  return t('scheduledTasks.summary.everyMinutes', {
+    defaultValue: 'Every {{count}} min',
+    count: task.intervalMinutes,
+  });
 }
 
 function DetailRow({ label, value, tone = 'default' }: { label: string; value?: string | null; tone?: 'default' | 'error' }) {
@@ -92,6 +257,307 @@ function DetailRow({ label, value, tone = 'default' }: { label: string; value?: 
       <dd className={`mt-0.5 break-words text-xs ${tone === 'error' ? 'text-destructive' : 'text-foreground'}`}>
         {value || '-'}
       </dd>
+    </div>
+  );
+}
+
+function FileMentionDropdown({
+  show,
+  files,
+  selectedIndex,
+  onSelect,
+}: {
+  show: boolean;
+  files: MentionableFile[];
+  selectedIndex: number;
+  onSelect: (file: MentionableFile) => void;
+}) {
+  if (!show || files.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-card shadow-lg">
+      {files.map((file, index) => (
+        <button
+          key={file.path}
+          type="button"
+          className={`block w-full border-b border-border/40 px-3 py-2 text-left last:border-b-0 ${
+            index === selectedIndex
+              ? 'bg-primary/10 text-primary'
+              : 'text-foreground hover:bg-accent/60'
+          }`}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onSelect(file);
+          }}
+        >
+          <span className="block truncate text-sm font-medium">{file.name}</span>
+          <span className="block truncate font-mono text-xs text-muted-foreground">{file.path}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ScheduleControls({
+  values,
+  onChange,
+  disabled = false,
+}: {
+  values: ScheduleControlValues;
+  onChange: (values: ScheduleControlValues) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation('chat');
+  const update = (patch: Partial<ScheduleControlValues>) => onChange({ ...values, ...patch });
+  const generatedCron = buildVisualCron(values);
+  const cronValue = values.scheduleMode === 'visual' ? generatedCron : values.scheduleCron;
+
+  return (
+    <div className="rounded-md border border-border bg-muted/20 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-xs font-medium text-muted-foreground">
+          {t('scheduledTasks.labels.schedule', { defaultValue: 'Schedule' })}
+        </span>
+        <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+          {(['interval', 'cron', 'visual'] as ScheduleMode[]).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                values.scheduleMode === mode
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+              }`}
+              onClick={() => update({ scheduleMode: mode })}
+              disabled={disabled}
+            >
+              {mode === 'interval'
+                ? t('scheduledTasks.modes.interval', { defaultValue: 'Interval' })
+                : mode === 'cron'
+                  ? t('scheduledTasks.modes.cron', { defaultValue: 'Cron' })
+                  : t('scheduledTasks.modes.visual', { defaultValue: 'Visual' })}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {values.scheduleMode === 'interval' ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
+          <label className="space-y-1">
+            <span className="text-xs text-muted-foreground">
+              {t('scheduledTasks.labels.everyMinutes', { defaultValue: 'Every minutes' })}
+            </span>
+            <input
+              type="number"
+              min={1}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={values.intervalMinutes}
+              onChange={(event) => update({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })}
+              disabled={disabled}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-muted-foreground">
+              {t('scheduledTasks.labels.firstRun', { defaultValue: 'First run' })}
+            </span>
+            <input
+              type="datetime-local"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={values.nextRunAt}
+              onChange={(event) => update({ nextRunAt: event.target.value })}
+              disabled={disabled}
+            />
+          </label>
+        </div>
+      ) : null}
+
+      {values.scheduleMode === 'cron' ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_220px]">
+          <label className="space-y-1">
+            <span className="text-xs text-muted-foreground">
+              {t('scheduledTasks.labels.cronExpression', { defaultValue: 'Cron expression' })}
+            </span>
+            <input
+              className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={values.scheduleCron}
+              onChange={(event) => update({ scheduleCron: event.target.value })}
+              placeholder="30 9 * * *"
+              disabled={disabled}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs text-muted-foreground">
+              {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
+            </span>
+            <input
+              type="datetime-local"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={values.nextRunAt}
+              onChange={(event) => update({ nextRunAt: event.target.value })}
+              disabled={disabled}
+            />
+          </label>
+        </div>
+      ) : null}
+
+      {values.scheduleMode === 'visual' ? (
+        <div className="mt-3 grid gap-3">
+          <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.repeat', { defaultValue: 'Repeat' })}
+              </span>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={values.visualFrequency}
+                onChange={(event) => update({ visualFrequency: event.target.value as VisualFrequency })}
+                disabled={disabled}
+              >
+                {VISUAL_FREQUENCIES.map((frequency) => (
+                  <option key={frequency.value} value={frequency.value}>
+                    {t(frequency.labelKey, { defaultValue: frequency.defaultLabel })}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.minuteWithValue', {
+                  defaultValue: 'Minute: {{minute}}',
+                  minute: pad(values.visualMinute),
+                })}
+              </span>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={59}
+                  className="w-full"
+                  value={values.visualMinute}
+                  onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
+                  disabled={disabled}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={59}
+                  className="h-10 w-20 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={values.visualMinute}
+                  onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
+                  disabled={disabled}
+                />
+              </div>
+            </label>
+          </div>
+
+          {values.visualFrequency !== 'hourly' ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">
+                  {t('scheduledTasks.labels.hour', { defaultValue: 'Hour' })}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={values.visualHour}
+                  onChange={(event) => update({ visualHour: clampNumber(Number(event.target.value), 0, 23) })}
+                  disabled={disabled}
+                />
+              </label>
+
+              {values.visualFrequency === 'weekly' ? (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.weekday', { defaultValue: 'Weekday' })}
+                  </span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualWeekday}
+                    onChange={(event) => update({ visualWeekday: Number(event.target.value) })}
+                    disabled={disabled}
+                  >
+                    {WEEKDAYS.map((weekday) => (
+                      <option key={weekday.value} value={weekday.value}>
+                        {t(weekday.labelKey, { defaultValue: weekday.defaultLabel })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {values.visualFrequency === 'monthly' ? (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.dayOfMonth', { defaultValue: 'Day of month' })}
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualMonthDay}
+                    onChange={(event) => update({ visualMonthDay: clampNumber(Number(event.target.value), 1, 31) })}
+                    disabled={disabled}
+                  />
+                </label>
+              ) : null}
+
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">
+                  {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
+                </span>
+                <input
+                  type="datetime-local"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={values.nextRunAt}
+                  onChange={(event) => update({ nextRunAt: event.target.value })}
+                  disabled={disabled}
+                />
+              </label>
+            </div>
+          ) : (
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
+              </span>
+              <input
+                type="datetime-local"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={values.nextRunAt}
+                onChange={(event) => update({ nextRunAt: event.target.value })}
+                disabled={disabled}
+              />
+            </label>
+          )}
+
+          <div className="rounded-md bg-background px-3 py-2 font-mono text-xs text-muted-foreground">
+            {generatedCron}
+          </div>
+        </div>
+      ) : null}
+
+      {values.scheduleMode !== 'interval' ? (
+        <div className="mt-2 rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
+          {t('scheduledTasks.cronHelp', {
+            defaultValue: 'Cron runs use the server scheduler. Next run is calculated from the start time.',
+          })}
+          {cronValue && !isValidCronCandidate(cronValue) ? (
+            <span className="ml-1 text-destructive">
+              {t('scheduledTasks.cronInvalid', { defaultValue: 'Use 5 cron fields.' })}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -131,9 +597,17 @@ export default function ScheduledTasksDialog({
   selectedSessionName = null,
   onClose,
 }: ScheduledTasksDialogProps) {
+  const { t } = useTranslation('chat');
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('interval');
+  const [scheduleCron, setScheduleCron] = useState('');
+  const [visualFrequency, setVisualFrequency] = useState<VisualFrequency>('hourly');
+  const [visualMinute, setVisualMinute] = useState(0);
+  const [visualHour, setVisualHour] = useState(9);
+  const [visualWeekday, setVisualWeekday] = useState(1);
+  const [visualMonthDay, setVisualMonthDay] = useState(1);
   const [intervalMinutes, setIntervalMinutes] = useState(60);
   const [nextRunAt, setNextRunAt] = useState(() => toLocalInputValue());
   const [enabled, setEnabled] = useState(true);
@@ -145,19 +619,30 @@ export default function ScheduledTasksDialog({
   const [taskEditForm, setTaskEditForm] = useState<TaskEditForm | null>(null);
   const [isUpdatingTask, setIsUpdatingTask] = useState(false);
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const editPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const initialEditStartedRef = useRef<number | null>(null);
   const isTaskDetailMode = initialTaskId !== null && initialTaskId !== undefined;
+  const neverLabel = t('scheduledTasks.never', { defaultValue: 'Never' });
 
   const canSave = useMemo(
-    () => Boolean(name.trim() && prompt.trim() && intervalMinutes >= 1 && selectedProject.workspaceId && !isSaving),
-    [intervalMinutes, isSaving, name, prompt, selectedProject.workspaceId],
+    () => {
+      const scheduleIsValid = scheduleMode === 'interval'
+        ? intervalMinutes >= 1
+        : isValidCronCandidate(scheduleMode === 'visual'
+            ? buildVisualCron({ visualFrequency, visualMinute, visualHour, visualWeekday, visualMonthDay })
+            : scheduleCron);
+      return Boolean(name.trim() && prompt.trim() && scheduleIsValid && nextRunAt && selectedProject.workspaceId && !isSaving);
+    },
+    [intervalMinutes, isSaving, name, nextRunAt, prompt, scheduleCron, scheduleMode, selectedProject.workspaceId, visualFrequency, visualHour, visualMinute, visualMonthDay, visualWeekday],
   );
 
   const canSaveTaskEdit = useMemo(
     () => Boolean(
       taskEditForm?.name.trim()
         && taskEditForm.prompt.trim()
-        && taskEditForm.intervalMinutes >= 1
+        && (taskEditForm.scheduleMode === 'interval'
+          ? taskEditForm.intervalMinutes >= 1
+          : isValidCronCandidate(taskEditForm.scheduleMode === 'visual' ? buildVisualCron(taskEditForm) : taskEditForm.scheduleCron))
         && taskEditForm.nextRunAt
         && !isUpdatingTask,
     ),
@@ -172,6 +657,17 @@ export default function ScheduledTasksDialog({
   const isScheduledPromptCommand = useCallback((command: SlashCommand) => {
     const namespace = String(command.namespace || '');
     return command.metadata?.type === 'skill' || namespace.includes('skill');
+  }, []);
+
+  const setTaskEditPrompt = useCallback<Dispatch<SetStateAction<string>>>((nextValue) => {
+    setTaskEditForm((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextPrompt = typeof nextValue === 'function' ? nextValue(current.prompt) : nextValue;
+      return { ...current, prompt: nextPrompt };
+    });
   }, []);
 
   const {
@@ -193,22 +689,83 @@ export default function ScheduledTasksDialog({
     commandFilter: isScheduledPromptCommand,
   });
 
+  const {
+    showFileDropdown,
+    filteredFiles,
+    selectedFileIndex,
+    selectFile,
+    setCursorPosition,
+    handleFileMentionsKeyDown,
+  } = useFileMentions({
+    selectedProject,
+    input: prompt,
+    setInput: setPrompt,
+    textareaRef: promptTextareaRef,
+  });
+
+  const {
+    slashCommandsCount: editSlashCommandsCount,
+    filteredCommands: editFilteredCommands,
+    frequentCommands: editFrequentCommands,
+    showCommandMenu: showEditCommandMenu,
+    selectedCommandIndex: selectedEditCommandIndex,
+    resetCommandMenuState: resetEditCommandMenuState,
+    handleCommandSelect: handleEditCommandSelect,
+    handleToggleCommandMenu: handleEditToggleCommandMenu,
+    handleCommandInputChange: handleEditCommandInputChange,
+    handleCommandMenuKeyDown: handleEditCommandMenuKeyDown,
+  } = useSlashCommands({
+    selectedProject,
+    input: taskEditForm?.prompt || '',
+    setInput: setTaskEditPrompt,
+    textareaRef: editPromptTextareaRef,
+    commandFilter: isScheduledPromptCommand,
+  });
+
+  const {
+    showFileDropdown: showEditFileDropdown,
+    filteredFiles: editFilteredFiles,
+    selectedFileIndex: selectedEditFileIndex,
+    selectFile: selectEditFile,
+    setCursorPosition: setEditCursorPosition,
+    handleFileMentionsKeyDown: handleEditFileMentionsKeyDown,
+  } = useFileMentions({
+    selectedProject,
+    input: taskEditForm?.prompt || '',
+    setInput: setTaskEditPrompt,
+    textareaRef: editPromptTextareaRef,
+  });
+
   const promptTextareaRect = promptTextareaRef.current?.getBoundingClientRect();
   const commandMenuPosition = {
     top: promptTextareaRect ? Math.max(16, promptTextareaRect.top - 316) : 0,
     left: promptTextareaRect ? promptTextareaRect.left : 16,
     bottom: promptTextareaRect ? window.innerHeight - promptTextareaRect.top + 8 : 90,
   };
+  const editPromptTextareaRect = editPromptTextareaRef.current?.getBoundingClientRect();
+  const editCommandMenuPosition = {
+    top: editPromptTextareaRect ? Math.max(16, editPromptTextareaRect.top - 316) : 0,
+    left: editPromptTextareaRect ? editPromptTextareaRect.left : 16,
+    bottom: editPromptTextareaRect ? window.innerHeight - editPromptTextareaRect.top + 8 : 90,
+  };
 
   const resetForm = useCallback(() => {
     setName('');
     setPrompt(initialPrompt.trim());
+    setScheduleMode('interval');
+    setScheduleCron('');
+    setVisualFrequency('hourly');
+    setVisualMinute(0);
+    setVisualHour(9);
+    setVisualWeekday(1);
+    setVisualMonthDay(1);
     setIntervalMinutes(60);
     setNextRunAt(toLocalInputValue());
     setEnabled(true);
     setError(null);
     resetCommandMenuState();
-  }, [initialPrompt, resetCommandMenuState]);
+    resetEditCommandMenuState();
+  }, [initialPrompt, resetCommandMenuState, resetEditCommandMenuState]);
 
   const loadTasks = useCallback(async () => {
     if (!selectedProject.workspaceId) return;
@@ -217,7 +774,10 @@ export default function ScheduledTasksDialog({
     try {
       const response = await api.scheduledTasks.list(selectedProject.workspaceId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to load scheduled tasks'));
+        setError(await readError(
+          response,
+          t('scheduledTasks.errors.loadFailed', { defaultValue: 'Failed to load scheduled tasks' }),
+        ));
         return;
       }
       const payload = await response.json();
@@ -235,11 +795,11 @@ export default function ScheduledTasksDialog({
       }
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to load tasks:', caughtError);
-      setError('Failed to load scheduled tasks');
+      setError(t('scheduledTasks.errors.loadFailed', { defaultValue: 'Failed to load scheduled tasks' }));
     } finally {
       setIsLoading(false);
     }
-  }, [initialTaskId, isTaskDetailMode, selectedProject.workspaceId]);
+  }, [initialTaskId, isTaskDetailMode, selectedProject.workspaceId, t]);
 
   useEffect(() => {
     if (expandedTaskId && tasks.length > 0 && !tasks.some((task) => task.id === expandedTaskId)) {
@@ -266,20 +826,37 @@ export default function ScheduledTasksDialog({
 
   const createTask = async () => {
     if (!selectedProject.workspaceId) {
-      setError('Workspace is required');
+      setError(t('scheduledTasks.errors.workspaceRequired', { defaultValue: 'Workspace is required' }));
       return;
     }
 
     setIsSaving(true);
     setError(null);
     try {
+      const schedulePayload = buildSchedulePayload({
+        scheduleMode,
+        scheduleCron,
+        visualFrequency,
+        visualMinute,
+        visualHour,
+        visualWeekday,
+        visualMonthDay,
+        intervalMinutes,
+        nextRunAt,
+      }, {
+        firstRunInvalid: t('scheduledTasks.errors.firstRunInvalid', {
+          defaultValue: 'First run must be a valid date/time',
+        }),
+        startAfterInvalid: t('scheduledTasks.errors.startAfterInvalid', {
+          defaultValue: 'Start after must be a valid date/time',
+        }),
+      });
       const response = await api.scheduledTasks.create({
         workspaceId: selectedProject.workspaceId,
         provider,
         name: name.trim(),
         prompt: prompt.trim(),
-        intervalMinutes,
-        nextRunAt: new Date(nextRunAt).toISOString(),
+        ...schedulePayload,
         enabled,
         model: model || null,
         permissionMode: permissionMode || null,
@@ -288,7 +865,10 @@ export default function ScheduledTasksDialog({
       });
 
       if (!response.ok) {
-        setError(await readError(response, 'Failed to create scheduled task'));
+        setError(await readError(
+          response,
+          t('scheduledTasks.errors.createFailed', { defaultValue: 'Failed to create scheduled task' }),
+        ));
         return;
       }
 
@@ -301,7 +881,9 @@ export default function ScheduledTasksDialog({
       await (window as any).refreshProjects?.();
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to create task:', caughtError);
-      setError('Failed to create scheduled task');
+      setError(caughtError instanceof Error
+        ? caughtError.message
+        : t('scheduledTasks.errors.createFailed', { defaultValue: 'Failed to create scheduled task' }));
     } finally {
       setIsSaving(false);
     }
@@ -309,12 +891,14 @@ export default function ScheduledTasksDialog({
 
   const startEditingTask = (task: ScheduledTask) => {
     setError(null);
+    resetEditCommandMenuState();
     setExpandedTaskId(task.id);
     setEditingTaskId(task.id);
     setTaskEditForm(buildTaskEditForm(task));
   };
 
   const cancelTaskEdit = () => {
+    resetEditCommandMenuState();
     setEditingTaskId(null);
     setTaskEditForm(null);
   };
@@ -324,25 +908,29 @@ export default function ScheduledTasksDialog({
       return;
     }
 
-    const nextRunDate = new Date(taskEditForm.nextRunAt);
-    if (Number.isNaN(nextRunDate.getTime())) {
-      setError('Next run must be a valid date/time');
-      return;
-    }
-
     setIsUpdatingTask(true);
     setError(null);
     try {
+      const schedulePayload = buildSchedulePayload(taskEditForm, {
+        firstRunInvalid: t('scheduledTasks.errors.firstRunInvalid', {
+          defaultValue: 'First run must be a valid date/time',
+        }),
+        startAfterInvalid: t('scheduledTasks.errors.startAfterInvalid', {
+          defaultValue: 'Start after must be a valid date/time',
+        }),
+      });
       const response = await api.scheduledTasks.update(task.id, {
         name: taskEditForm.name.trim(),
         prompt: taskEditForm.prompt.trim(),
-        intervalMinutes: taskEditForm.intervalMinutes,
-        nextRunAt: nextRunDate.toISOString(),
+        ...schedulePayload,
         enabled: taskEditForm.enabled,
       });
 
       if (!response.ok) {
-        setError(await readError(response, 'Failed to update scheduled task'));
+        setError(await readError(
+          response,
+          t('scheduledTasks.errors.updateFailed', { defaultValue: 'Failed to update scheduled task' }),
+        ));
         return;
       }
 
@@ -350,10 +938,13 @@ export default function ScheduledTasksDialog({
       setExpandedTaskId(task.id);
       setEditingTaskId(null);
       setTaskEditForm(null);
+      resetEditCommandMenuState();
       await (window as any).refreshProjects?.();
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to update task:', caughtError);
-      setError('Failed to update scheduled task');
+      setError(caughtError instanceof Error
+        ? caughtError.message
+        : t('scheduledTasks.errors.updateFailed', { defaultValue: 'Failed to update scheduled task' }));
     } finally {
       setIsUpdatingTask(false);
     }
@@ -364,14 +955,17 @@ export default function ScheduledTasksDialog({
     try {
       const response = await api.scheduledTasks.update(task.id, { enabled: !task.enabled });
       if (!response.ok) {
-        setError(await readError(response, 'Failed to update scheduled task'));
+        setError(await readError(
+          response,
+          t('scheduledTasks.errors.updateFailed', { defaultValue: 'Failed to update scheduled task' }),
+        ));
         return;
       }
       await loadTasks();
       await (window as any).refreshProjects?.();
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to update task:', caughtError);
-      setError('Failed to update scheduled task');
+      setError(t('scheduledTasks.errors.updateFailed', { defaultValue: 'Failed to update scheduled task' }));
     }
   };
 
@@ -380,13 +974,17 @@ export default function ScheduledTasksDialog({
     try {
       const response = await api.scheduledTasks.remove(taskId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to delete scheduled task'));
+        setError(await readError(
+          response,
+          t('scheduledTasks.errors.deleteFailed', { defaultValue: 'Failed to delete scheduled task' }),
+        ));
         return;
       }
       if (expandedTaskId === taskId) {
         setExpandedTaskId(null);
       }
       if (editingTaskId === taskId) {
+        resetEditCommandMenuState();
         setEditingTaskId(null);
         setTaskEditForm(null);
       }
@@ -394,7 +992,7 @@ export default function ScheduledTasksDialog({
       await (window as any).refreshProjects?.();
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to delete task:', caughtError);
-      setError('Failed to delete scheduled task');
+      setError(t('scheduledTasks.errors.deleteFailed', { defaultValue: 'Failed to delete scheduled task' }));
     }
   };
 
@@ -402,6 +1000,7 @@ export default function ScheduledTasksDialog({
     const nextTaskId = expandedTaskId === taskId ? null : taskId;
     setExpandedTaskId(nextTaskId);
     if (nextTaskId === null && editingTaskId === taskId) {
+      resetEditCommandMenuState();
       setEditingTaskId(null);
       setTaskEditForm(null);
     }
@@ -409,18 +1008,42 @@ export default function ScheduledTasksDialog({
 
   const handlePromptChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
     const nextPrompt = event.target.value;
+    const cursorPosition = event.target.selectionStart;
     setPrompt(nextPrompt);
-    handleCommandInputChange(nextPrompt, event.target.selectionStart);
-  }, [handleCommandInputChange]);
+    setCursorPosition(cursorPosition);
+    handleCommandInputChange(nextPrompt, cursorPosition);
+  }, [handleCommandInputChange, setCursorPosition]);
 
   const handlePromptKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
-    handleCommandMenuKeyDown(event);
-  }, [handleCommandMenuKeyDown]);
+    if (handleCommandMenuKeyDown(event)) {
+      return;
+    }
+    handleFileMentionsKeyDown(event);
+  }, [handleCommandMenuKeyDown, handleFileMentionsKeyDown]);
+
+  const handleEditPromptChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextPrompt = event.target.value;
+    const cursorPosition = event.target.selectionStart;
+    setTaskEditPrompt(nextPrompt);
+    setEditCursorPosition(cursorPosition);
+    handleEditCommandInputChange(nextPrompt, cursorPosition);
+  }, [handleEditCommandInputChange, setEditCursorPosition, setTaskEditPrompt]);
+
+  const handleEditPromptKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (handleEditCommandMenuKeyDown(event)) {
+      return;
+    }
+    handleEditFileMentionsKeyDown(event);
+  }, [handleEditCommandMenuKeyDown, handleEditFileMentionsKeyDown]);
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) { resetCommandMenuState(); onClose(); } }}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) { resetCommandMenuState(); resetEditCommandMenuState(); onClose(); } }}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden p-0">
-        <DialogTitle>{isTaskDetailMode ? 'Scheduled task details' : 'Scheduled session tasks'}</DialogTitle>
+        <DialogTitle>
+          {isTaskDetailMode
+            ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
+            : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' })}
+        </DialogTitle>
         <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -428,14 +1051,21 @@ export default function ScheduledTasksDialog({
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-foreground">
-                {isTaskDetailMode ? 'Scheduled task details' : 'Scheduled session tasks'}
+                {isTaskDetailMode
+                  ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
+                  : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' })}
               </h2>
               <p className="truncate text-xs text-muted-foreground">
                 {selectedProject.displayName || selectedProject.name}
               </p>
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label={t('scheduledTasks.actions.close', { defaultValue: 'Close' })}
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -443,12 +1073,14 @@ export default function ScheduledTasksDialog({
         <div className="max-h-[calc(90vh-132px)] overflow-y-auto px-5 py-4">
           <div className={isTaskDetailMode ? 'hidden' : 'grid gap-3'}>
             <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">Task name</span>
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.taskName', { defaultValue: 'Task name' })}
+              </span>
               <input
                 className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Daily workspace check"
+                placeholder={t('scheduledTasks.placeholders.taskName', { defaultValue: 'Daily workspace check' })}
               />
             </label>
           </div>
@@ -456,7 +1088,7 @@ export default function ScheduledTasksDialog({
           <div className={isTaskDetailMode ? 'hidden' : 'mt-3 space-y-1'}>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs text-muted-foreground" htmlFor="scheduled-task-message">
-                Message
+                {t('scheduledTasks.labels.message', { defaultValue: 'Message' })}
               </label>
               <Button
                 type="button"
@@ -467,7 +1099,7 @@ export default function ScheduledTasksDialog({
                 disabled={slashCommandsCount === 0}
               >
                 <MessageSquare className="h-3.5 w-3.5" />
-                Skills
+                {t('scheduledTasks.actions.skills', { defaultValue: 'Skills' })}
                 {slashCommandsCount > 0 ? (
                   <span className="ml-0.5 rounded-sm bg-primary/10 px-1 text-[10px] text-primary">
                     {slashCommandsCount}
@@ -476,6 +1108,12 @@ export default function ScheduledTasksDialog({
               </Button>
             </div>
             <div className="relative">
+              <FileMentionDropdown
+                show={showFileDropdown}
+                files={filteredFiles}
+                selectedIndex={selectedFileIndex}
+                onSelect={selectFile}
+              />
               <CommandMenu
                 commands={filteredCommands}
                 selectedIndex={selectedCommandIndex}
@@ -492,45 +1130,58 @@ export default function ScheduledTasksDialog({
                 value={prompt}
                 onChange={handlePromptChange}
                 onKeyDown={handlePromptKeyDown}
-                placeholder="Ask the agent what to do when the task runs"
+                onClick={(event) => setCursorPosition(event.currentTarget.selectionStart)}
+                onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart)}
+                onSelect={(event) => setCursorPosition(event.currentTarget.selectionStart)}
+                placeholder={t('scheduledTasks.placeholders.message', {
+                  defaultValue: 'Ask the agent what to do when the task runs',
+                })}
               />
             </div>
           </div>
 
-          <div className={isTaskDetailMode ? 'hidden' : 'mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'}>
-            {selectedSessionId
-              ? `Bound session: ${selectedSessionName || selectedSessionId}`
-              : 'No session selected. The first run will create a session, then future runs will reuse it.'}
-          </div>
+          {selectedSessionId ? (
+            <div className={isTaskDetailMode ? 'hidden' : 'mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'}>
+              {t('scheduledTasks.boundSession', {
+                defaultValue: 'Bound session: {{session}}',
+                session: selectedSessionName || selectedSessionId,
+              })}
+            </div>
+          ) : null}
 
-          <div className={isTaskDetailMode ? 'hidden' : 'mt-3 grid gap-3 md:grid-cols-[160px_1fr_120px]'}>
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">Every minutes</span>
-              <input
-                type="number"
-                min={1}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={intervalMinutes}
-                onChange={(event) => setIntervalMinutes(Math.max(1, Number(event.target.value) || 1))}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">First run</span>
-              <input
-                type="datetime-local"
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={nextRunAt}
-                onChange={(event) => setNextRunAt(event.target.value)}
-              />
-            </label>
-            <label className="flex items-end gap-2 pb-2 text-sm text-foreground">
+          <div className={isTaskDetailMode ? 'hidden' : 'mt-3 space-y-3'}>
+            <ScheduleControls
+              values={{
+                scheduleMode,
+                scheduleCron,
+                visualFrequency,
+                visualMinute,
+                visualHour,
+                visualWeekday,
+                visualMonthDay,
+                intervalMinutes,
+                nextRunAt,
+              }}
+              onChange={(values) => {
+                setScheduleMode(values.scheduleMode);
+                setScheduleCron(values.scheduleCron);
+                setVisualFrequency(values.visualFrequency);
+                setVisualMinute(values.visualMinute);
+                setVisualHour(values.visualHour);
+                setVisualWeekday(values.visualWeekday);
+                setVisualMonthDay(values.visualMonthDay);
+                setIntervalMinutes(values.intervalMinutes);
+                setNextRunAt(values.nextRunAt);
+              }}
+            />
+            <label className="flex items-center gap-2 text-sm text-foreground">
               <input
                 type="checkbox"
                 className="h-4 w-4 rounded border-input"
                 checked={enabled}
                 onChange={(event) => setEnabled(event.target.checked)}
               />
-              Enabled
+              {t('scheduledTasks.labels.enabled', { defaultValue: 'Enabled' })}
             </label>
           </div>
 
@@ -543,21 +1194,25 @@ export default function ScheduledTasksDialog({
           <div className={isTaskDetailMode ? 'hidden' : 'mt-4 flex justify-end'}>
             <Button onClick={() => void createTask()} disabled={!canSave}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
-              Create task
+              {t('scheduledTasks.actions.createTask', { defaultValue: 'Create task' })}
             </Button>
           </div>
 
           <div className="mt-5 border-t border-border pt-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-medium text-foreground">
-                {isTaskDetailMode ? 'Task details' : 'Existing tasks'}
+                {isTaskDetailMode
+                  ? t('scheduledTasks.taskDetails', { defaultValue: 'Task details' })
+                  : t('scheduledTasks.existingTasks', { defaultValue: 'Existing tasks' })}
               </h3>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
             </div>
 
             {visibleTasks.length === 0 && !isLoading ? (
               <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                {isTaskDetailMode ? 'Scheduled task not found.' : 'No scheduled tasks yet.'}
+                {isTaskDetailMode
+                  ? t('scheduledTasks.notFound', { defaultValue: 'Scheduled task not found.' })
+                  : t('scheduledTasks.noTasks', { defaultValue: 'No scheduled tasks yet.' })}
               </div>
             ) : (
               <div className="divide-y divide-border rounded-md border border-border">
@@ -584,12 +1239,19 @@ export default function ScheduledTasksDialog({
                                   ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                                   : 'bg-muted text-muted-foreground'
                               }`}>
-                                {task.enabled ? 'Enabled' : 'Paused'}
+                                {task.enabled
+                                  ? t('scheduledTasks.status.enabled', { defaultValue: 'Enabled' })
+                                  : t('scheduledTasks.status.paused', { defaultValue: 'Paused' })}
                               </span>
                             </span>
                             <span className="mt-1 line-clamp-2 block text-xs text-muted-foreground">{task.prompt}</span>
                             <span className="mt-1 block text-xs text-muted-foreground">
-                              Every {task.intervalMinutes} min. Next: {formatDateTime(task.nextRunAt)}. Last: {formatDateTime(task.lastRunAt)}
+                              {t('scheduledTasks.summary.runInfo', {
+                                defaultValue: '{{schedule}}. Next: {{next}}. Last: {{last}}',
+                                schedule: formatScheduleSummary(task, t),
+                                next: formatDateTime(task.nextRunAt, neverLabel),
+                                last: formatDateTime(task.lastRunAt, neverLabel),
+                              })}
                             </span>
                             {task.lastError ? (
                               <span className="mt-1 block text-xs text-destructive">{task.lastError}</span>
@@ -604,7 +1266,7 @@ export default function ScheduledTasksDialog({
                             disabled={Boolean(taskEditValues)}
                           >
                             <Edit2 className="h-4 w-4" />
-                            Edit
+                            {t('scheduledTasks.actions.edit', { defaultValue: 'Edit' })}
                           </Button>
                           <Button
                             variant="outline"
@@ -613,13 +1275,15 @@ export default function ScheduledTasksDialog({
                             disabled={Boolean(taskEditValues)}
                           >
                             {task.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                            {task.enabled ? 'Pause' : 'Resume'}
+                            {task.enabled
+                              ? t('scheduledTasks.actions.pause', { defaultValue: 'Pause' })
+                              : t('scheduledTasks.actions.resume', { defaultValue: 'Resume' })}
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => void deleteTask(task.id)}
-                            aria-label="Delete task"
+                            aria-label={t('scheduledTasks.actions.deleteTask', { defaultValue: 'Delete task' })}
                             disabled={Boolean(taskEditValues)}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
@@ -632,7 +1296,9 @@ export default function ScheduledTasksDialog({
                           {taskEditValues ? (
                             <div className="grid gap-3">
                               <label className="space-y-1">
-                                <span className="text-xs text-muted-foreground">Task name</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {t('scheduledTasks.labels.taskName', { defaultValue: 'Task name' })}
+                                </span>
                                 <input
                                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   value={taskEditValues.name}
@@ -643,47 +1309,68 @@ export default function ScheduledTasksDialog({
                                 />
                               </label>
 
-                              <label className="space-y-1">
-                                <span className="text-xs text-muted-foreground">Message</span>
-                                <textarea
-                                  className="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                  value={taskEditValues.prompt}
-                                  onChange={(event) => {
-                                    setTaskEditForm((current) => current ? { ...current, prompt: event.target.value } : current);
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="text-xs text-muted-foreground" htmlFor="scheduled-task-edit-message">
+                                    {t('scheduledTasks.labels.message', { defaultValue: 'Message' })}
+                                  </label>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="relative h-7 gap-1.5 px-2 text-xs"
+                                    onClick={handleEditToggleCommandMenu}
+                                    disabled={editSlashCommandsCount === 0 || isUpdatingTask}
+                                  >
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                    {t('scheduledTasks.actions.skills', { defaultValue: 'Skills' })}
+                                    {editSlashCommandsCount > 0 ? (
+                                      <span className="ml-0.5 rounded-sm bg-primary/10 px-1 text-[10px] text-primary">
+                                        {editSlashCommandsCount}
+                                      </span>
+                                    ) : null}
+                                  </Button>
+                                </div>
+                                <div className="relative">
+                                  <FileMentionDropdown
+                                    show={showEditFileDropdown}
+                                    files={editFilteredFiles}
+                                    selectedIndex={selectedEditFileIndex}
+                                    onSelect={selectEditFile}
+                                  />
+                                  <CommandMenu
+                                    commands={editFilteredCommands}
+                                    selectedIndex={selectedEditCommandIndex}
+                                    onSelect={handleEditCommandSelect}
+                                    onClose={resetEditCommandMenuState}
+                                    position={editCommandMenuPosition}
+                                    isOpen={showEditCommandMenu}
+                                    frequentCommands={editFrequentCommands}
+                                  />
+                                  <textarea
+                                    id="scheduled-task-edit-message"
+                                    ref={editPromptTextareaRef}
+                                    className="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                    value={taskEditValues.prompt}
+                                    onChange={handleEditPromptChange}
+                                    onKeyDown={handleEditPromptKeyDown}
+                                    onClick={(event) => setEditCursorPosition(event.currentTarget.selectionStart)}
+                                    onKeyUp={(event) => setEditCursorPosition(event.currentTarget.selectionStart)}
+                                    onSelect={(event) => setEditCursorPosition(event.currentTarget.selectionStart)}
+                                    disabled={isUpdatingTask}
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="space-y-3">
+                                <ScheduleControls
+                                  values={taskEditValues}
+                                  onChange={(values) => {
+                                    setTaskEditForm((current) => current ? { ...current, ...values } : current);
                                   }}
                                   disabled={isUpdatingTask}
                                 />
-                              </label>
-
-                              <div className="grid gap-3 md:grid-cols-[160px_1fr_120px]">
-                                <label className="space-y-1">
-                                  <span className="text-xs text-muted-foreground">Every minutes</span>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                    value={taskEditValues.intervalMinutes}
-                                    onChange={(event) => {
-                                      setTaskEditForm((current) => current
-                                        ? { ...current, intervalMinutes: Math.max(1, Number(event.target.value) || 1) }
-                                        : current);
-                                    }}
-                                    disabled={isUpdatingTask}
-                                  />
-                                </label>
-                                <label className="space-y-1">
-                                  <span className="text-xs text-muted-foreground">Next run</span>
-                                  <input
-                                    type="datetime-local"
-                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                    value={taskEditValues.nextRunAt}
-                                    onChange={(event) => {
-                                      setTaskEditForm((current) => current ? { ...current, nextRunAt: event.target.value } : current);
-                                    }}
-                                    disabled={isUpdatingTask}
-                                  />
-                                </label>
-                                <label className="flex items-end gap-2 pb-2 text-sm text-foreground">
+                                <label className="flex items-center gap-2 text-sm text-foreground">
                                   <input
                                     type="checkbox"
                                     className="h-4 w-4 rounded border-input"
@@ -693,43 +1380,43 @@ export default function ScheduledTasksDialog({
                                     }}
                                     disabled={isUpdatingTask}
                                   />
-                                  Enabled
+                                  {t('scheduledTasks.labels.enabled', { defaultValue: 'Enabled' })}
                                 </label>
                               </div>
 
                               <div className="grid gap-3 sm:grid-cols-2">
-                                <DetailRow label="Session" value={task.lastSessionId} />
-                                <DetailRow label="Model" value={task.model} />
-                                <DetailRow label="Permission" value={task.permissionMode} />
-                                <DetailRow label="Last run" value={formatDateTime(task.lastRunAt)} />
-                                <DetailRow label="Created" value={formatDateTime(task.createdAt)} />
+                                <DetailRow label={t('scheduledTasks.labels.session', { defaultValue: 'Session' })} value={task.lastSessionId} />
+                                <DetailRow label={t('scheduledTasks.labels.model', { defaultValue: 'Model' })} value={task.model} />
+                                <DetailRow label={t('scheduledTasks.labels.permission', { defaultValue: 'Permission' })} value={task.permissionMode} />
+                                <DetailRow label={t('scheduledTasks.labels.lastRun', { defaultValue: 'Last run' })} value={formatDateTime(task.lastRunAt, neverLabel)} />
+                                <DetailRow label={t('scheduledTasks.labels.created', { defaultValue: 'Created' })} value={formatDateTime(task.createdAt, neverLabel)} />
                                 {task.lastError ? (
-                                  <DetailRow label="Last error" value={task.lastError} tone="error" />
+                                  <DetailRow label={t('scheduledTasks.labels.lastError', { defaultValue: 'Last error' })} value={task.lastError} tone="error" />
                                 ) : null}
                               </div>
 
                               <div className="flex justify-end gap-2">
                                 <Button variant="ghost" size="sm" onClick={cancelTaskEdit} disabled={isUpdatingTask}>
-                                  Cancel
+                                  {t('scheduledTasks.actions.cancel', { defaultValue: 'Cancel' })}
                                 </Button>
                                 <Button size="sm" onClick={() => void saveTaskEdit(task)} disabled={!canSaveTaskEdit}>
                                   {isUpdatingTask ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                                  Save changes
+                                  {t('scheduledTasks.actions.saveChanges', { defaultValue: 'Save changes' })}
                                 </Button>
                               </div>
                             </div>
                           ) : (
                             <dl className="grid gap-3 sm:grid-cols-2">
-                              <DetailRow label="Message" value={task.prompt} />
-                              <DetailRow label="Schedule" value={`Every ${task.intervalMinutes} min`} />
-                              <DetailRow label="Next run" value={formatDateTime(task.nextRunAt)} />
-                              <DetailRow label="Last run" value={formatDateTime(task.lastRunAt)} />
-                              <DetailRow label="Session" value={task.lastSessionId} />
-                              <DetailRow label="Model" value={task.model} />
-                              <DetailRow label="Permission" value={task.permissionMode} />
-                              <DetailRow label="Created" value={formatDateTime(task.createdAt)} />
+                              <DetailRow label={t('scheduledTasks.labels.message', { defaultValue: 'Message' })} value={task.prompt} />
+                              <DetailRow label={t('scheduledTasks.labels.schedule', { defaultValue: 'Schedule' })} value={formatScheduleSummary(task, t)} />
+                              <DetailRow label={t('scheduledTasks.labels.nextRun', { defaultValue: 'Next run' })} value={formatDateTime(task.nextRunAt, neverLabel)} />
+                              <DetailRow label={t('scheduledTasks.labels.lastRun', { defaultValue: 'Last run' })} value={formatDateTime(task.lastRunAt, neverLabel)} />
+                              <DetailRow label={t('scheduledTasks.labels.session', { defaultValue: 'Session' })} value={task.lastSessionId} />
+                              <DetailRow label={t('scheduledTasks.labels.model', { defaultValue: 'Model' })} value={task.model} />
+                              <DetailRow label={t('scheduledTasks.labels.permission', { defaultValue: 'Permission' })} value={task.permissionMode} />
+                              <DetailRow label={t('scheduledTasks.labels.created', { defaultValue: 'Created' })} value={formatDateTime(task.createdAt, neverLabel)} />
                               {task.lastError ? (
-                                <DetailRow label="Last error" value={task.lastError} tone="error" />
+                                <DetailRow label={t('scheduledTasks.labels.lastError', { defaultValue: 'Last error' })} value={task.lastError} tone="error" />
                               ) : null}
                             </dl>
                           )}

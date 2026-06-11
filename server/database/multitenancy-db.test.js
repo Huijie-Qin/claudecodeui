@@ -142,7 +142,6 @@ test('skill market imports are stored per workspace in the database', () => {
     displayName: 'App',
     path: '/tmp/cloudcli/team/owner/app',
   });
-
   const imports = mt.skillMarketImports.replaceForWorkspace({
     workspaceId: workspace.id,
     imports: {
@@ -177,6 +176,114 @@ test('skill market imports are stored per workspace in the database', () => {
 
   assert.equal(mt.skillMarketImports.deleteForWorkspace({ workspaceId: workspace.id, skillName: '中文技能' }), true);
   assert.deepEqual(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), []);
+});
+
+test('sql check configuration resolves tenant defaults and user overrides', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'app',
+    displayName: 'App',
+    path: '/tmp/cloudcli/team/owner/app',
+  });
+  const otherWorkspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'api',
+    displayName: 'API',
+    path: '/tmp/cloudcli/team/owner/api',
+  });
+
+  const tenantConfig = mt.sqlCheck.replaceTenantConfig({
+    tenantId: tenant.id,
+    ruleIds: ['require_where', 'limit_rows', 'require_where'],
+  });
+  assert.deepEqual(tenantConfig.ruleIds, ['require_where', 'limit_rows']);
+  assert.deepEqual(mt.sqlCheck.getTenantConfig(tenant.id), {
+    tenantId: tenant.id,
+    ruleIds: ['require_where', 'limit_rows'],
+  });
+
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: false,
+    customEnabled: false,
+    userRuleIds: [],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'tenant',
+  });
+
+  assert.deepEqual(mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  }), {
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId }).effectiveRuleIds, ['limit_rows']);
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: otherWorkspace.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    workspaceId: otherWorkspace.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: false,
+    customEnabled: false,
+    userRuleIds: [],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'tenant',
+  });
+
+  mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    customEnabled: false,
+    ruleIds: ['limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: true,
+    customEnabled: false,
+    userRuleIds: ['limit_rows'],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'tenant',
+  });
+
+  mt.sqlCheck.setUserPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    customEnabled: true,
+    ruleIds: ['require_where', 'limit_rows'],
+  });
+  assert.deepEqual(mt.sqlCheck.resolveUserConfig({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId }), {
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    tenantRuleIds: ['require_where', 'limit_rows'],
+    hasUserPreference: true,
+    customEnabled: true,
+    userRuleIds: ['require_where', 'limit_rows'],
+    effectiveRuleIds: ['require_where', 'limit_rows'],
+    source: 'user',
+  });
 });
 
 test('mcp presets are isolated per tenant and can be filtered to published presets', () => {

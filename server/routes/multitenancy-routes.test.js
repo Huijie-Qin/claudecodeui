@@ -428,6 +428,45 @@ test('admin router batch grants tenant access for user and tenant selections', a
   assert.equal(seen.every((membership) => membership.permission === 'edit'), true);
 });
 
+test('admin router reads and writes tenant sql check configuration', async () => {
+  const seen = {};
+  const router = createAdminRouter(
+    {
+      tenants: { listTenants: () => [] },
+      memberships: { upsertMembership: () => ({ status: 'active' }) },
+      sqlCheck: {
+        getTenantConfig: (tenantId) => ({ tenantId, ruleIds: ['require_where'] }),
+        replaceTenantConfig: ({ tenantId, ruleIds }) => {
+          seen.saved = { tenantId, ruleIds };
+          return { tenantId, ruleIds };
+        },
+      },
+    },
+    { listUsers: () => [] },
+    {
+      listRuntimes: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
+      getSummary: async () => ({ total: 0 }),
+      stopRuntime: async () => null,
+    },
+    { listAdminPresets: () => [] },
+    { installPreinstalledWorkspaceMcpPresets: async () => ({ installed: [], errors: [] }) },
+  );
+
+  const loaded = await requestJson(router, '/tenants/2/sql-check', {
+    user: { id: 7, is_system_admin: 1 },
+  });
+  const saved = await requestJson(router, '/tenants/2/sql-check', {
+    method: 'PUT',
+    body: { ruleIds: ['limit_rows', 'no_select_star'] },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(loaded.response.status, 200);
+  assert.deepEqual(loaded.payload, { tenantId: 2, ruleIds: ['require_where'] });
+  assert.equal(saved.response.status, 200);
+  assert.deepEqual(seen.saved, { tenantId: 2, ruleIds: ['limit_rows', 'no_select_star'] });
+});
+
 test('workspace share route lets owners replace ACL entries', async () => {
   const seen = {};
   const router = createWorkspacesRouter({
@@ -464,4 +503,65 @@ test('workspace share route lets owners replace ACL entries', async () => {
   assert.deepEqual(payload.acl, [{ userId: 3, permission: 'edit' }]);
   assert.equal(seen.replaceAcl.workspaceId, 10);
   assert.equal(seen.replaceAcl.ownerUserId, 1);
+});
+
+test('workspace sql check route resolves tenant config and stores user overrides', async () => {
+  const seen = { access: [] };
+  const config = {
+    tenantId: 2,
+    workspaceId: 10,
+    userId: 1,
+    tenantRuleIds: ['require_where'],
+    customEnabled: false,
+    userRuleIds: [],
+    effectiveRuleIds: ['require_where'],
+    source: 'tenant',
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: (args) => {
+        seen.access.push(args);
+        return {
+          workspace: { id: 10, tenant_id: 2, owner_user_id: 1 },
+          accessRole: 'view',
+        };
+      },
+    },
+    multitenancy: {
+      sqlCheck: {
+        resolveUserConfig: () => config,
+        setUserPreference: (args) => {
+          seen.saved = args;
+          config.customEnabled = true;
+          config.userRuleIds = args.ruleIds;
+          config.effectiveRuleIds = args.ruleIds;
+          config.source = 'user';
+          return { customEnabled: true, ruleIds: args.ruleIds };
+        },
+      },
+    },
+  });
+
+  const loaded = await requestJson(router, '/10/sql-check');
+  const saved = await requestJson(router, '/10/sql-check', {
+    method: 'PUT',
+    body: { customEnabled: true, ruleIds: ['limit_rows'] },
+  });
+
+  assert.equal(loaded.response.status, 200);
+  assert.deepEqual(loaded.payload.effectiveRuleIds, ['require_where']);
+  assert.equal(saved.response.status, 200);
+  assert.deepEqual(seen.saved, {
+    tenantId: 2,
+    workspaceId: 10,
+    userId: 1,
+    customEnabled: true,
+    ruleIds: ['limit_rows'],
+  });
+  assert.equal(seen.access.every((args) => args.requireEdit !== true), true);
+  assert.deepEqual(saved.payload.effectiveRuleIds, ['limit_rows']);
 });

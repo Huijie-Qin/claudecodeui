@@ -131,6 +131,8 @@ test('docker run args inject sanitized user environment values', () => {
     containerEnv: {
       USER_KEY: 'security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
       W3_NAME: 'alice',
+      TENANT_ID: '1',
+      WORKSPACE_ID: '3',
       'BAD-NAME': 'ignored',
     },
   });
@@ -138,6 +140,8 @@ test('docker run args inject sanitized user environment values', () => {
 
   assert.ok(joined.includes('-e USER_KEY=security:AAAAAAAAAAAAAAAAAAAAAAAA:BBBB:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'));
   assert.ok(joined.includes('-e W3_NAME=alice'));
+  assert.ok(joined.includes('-e TENANT_ID=1'));
+  assert.ok(joined.includes('-e WORKSPACE_ID=3'));
   assert.equal(joined.includes('BAD-NAME'), false);
 });
 
@@ -304,6 +308,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
   assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+  assert.equal(runtime.executionEnv.TENANT_ID, '3');
+  assert.equal(runtime.executionEnv.WORKSPACE_ID, '5');
   assert.equal(runtime.executionEnv.HTTP_PROXY, 'http://proxy.example:8080');
   assert.equal(runtime.executionEnv.HTTPS_PROXY, 'http://secure-proxy.example:8443');
   assert.equal(runtime.executionEnv.http_proxy, 'http://lower-proxy.example:8080');
@@ -311,6 +317,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
+  assert.ok(dockerCalls[0].join(' ').includes('TENANT_ID=3'));
+  assert.ok(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'));
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
@@ -323,6 +331,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e https_proxy/);
   assert.match(wrapper, /-e USER_KEY/);
   assert.match(wrapper, /-e W3_NAME/);
+  assert.match(wrapper, /-e TENANT_ID/);
+  assert.match(wrapper, /-e WORKSPACE_ID/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });

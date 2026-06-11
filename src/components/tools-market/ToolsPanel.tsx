@@ -14,6 +14,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 
+import { McpToolParameters } from '../mcp/McpToolParameters';
+
 import {
   useWorkspaceTools,
   type WorkspaceMcpImportPreview,
@@ -332,6 +334,7 @@ function ToolDetail({
                 {entry.description ? (
                   <div className="mt-1 text-xs leading-5 text-muted-foreground">{entry.description}</div>
                 ) : null}
+                <McpToolParameters inputSchema={entry.inputSchema} label={t('toolsMarket.detail.parameters')} />
               </div>
             ))}
           </div>

@@ -315,7 +315,17 @@ test('probeHttpMcpServer performs initialize and tools/list over HTTP JSON-RPC',
       result: {
         tools: [
           { name: 'zeta' },
-          { name: 'alpha', description: 'Alpha tool' },
+          {
+            name: 'alpha',
+            description: 'Alpha tool',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+              required: ['query'],
+            },
+          },
         ],
       },
     }), {
@@ -332,6 +342,13 @@ test('probeHttpMcpServer performs initialize and tools/list over HTTP JSON-RPC',
   assert.equal(result.status, 'healthy');
   assert.equal(result.toolCount, 2);
   assert.deepEqual(result.tools.map((tool) => tool.name), ['alpha', 'zeta']);
+  assert.deepEqual(result.tools[0].inputSchema, {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+    },
+    required: ['query'],
+  });
   assert.equal(calls[0].body.method, 'initialize');
   assert.equal(calls[2].body.method, 'tools/list');
   assert.equal(calls[2].headers['Mcp-Session-Id'], 'session-one');

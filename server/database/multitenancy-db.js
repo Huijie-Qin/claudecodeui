@@ -156,6 +156,36 @@ function normalizeOptionalPositiveInteger(value, name) {
   return requirePositiveInteger(Number(value), name);
 }
 
+function normalizeSqlCheckRuleId(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) {
+    throw new Error('ruleId must be a non-empty string');
+  }
+  if (normalized.length > 256) {
+    throw new Error('ruleId must be 256 characters or fewer');
+  }
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error('ruleId must not contain control characters');
+  }
+  return normalized;
+}
+
+function normalizeSqlCheckRuleIds(ruleIds) {
+  if (!Array.isArray(ruleIds)) {
+    throw new Error('ruleIds must be an array');
+  }
+
+  const seen = new Set();
+  const normalized = [];
+  for (const ruleId of ruleIds) {
+    const value = normalizeSqlCheckRuleId(ruleId);
+    if (seen.has(value)) continue;
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
 function normalizeRuntimeMonitorFilters(filters = {}) {
   return {
     tenantId: normalizeOptionalPositiveInteger(filters.tenantId, 'tenantId'),
@@ -549,6 +579,128 @@ export function createMultitenancyDb(database = db) {
     }
   });
 
+  const listTenantSqlCheckRuleIds = (tenantId) => {
+    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    return database.prepare(`
+      SELECT rule_id
+      FROM tenant_sql_check_rules
+      WHERE tenant_id = ?
+      ORDER BY sort_order ASC, rule_id COLLATE NOCASE ASC
+    `).all(normalizedTenantId).map((row) => row.rule_id);
+  };
+
+  const listUserSqlCheckRuleIds = ({ workspaceId, userId }) => {
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+    const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+    return database.prepare(`
+      SELECT rule_id
+      FROM user_sql_check_rules
+      WHERE workspace_id = ? AND user_id = ?
+      ORDER BY sort_order ASC, rule_id COLLATE NOCASE ASC
+    `).all(normalizedWorkspaceId, normalizedUserId).map((row) => row.rule_id);
+  };
+
+  const replaceTenantSqlCheckRulesTransaction = database.transaction(({ tenantId, ruleIds }) => {
+    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedRuleIds = normalizeSqlCheckRuleIds(ruleIds);
+    database.prepare('DELETE FROM tenant_sql_check_rules WHERE tenant_id = ?').run(normalizedTenantId);
+
+    const insertRule = database.prepare(`
+      INSERT INTO tenant_sql_check_rules (tenant_id, rule_id, sort_order)
+      VALUES (?, ?, ?)
+    `);
+    normalizedRuleIds.forEach((ruleId, index) => {
+      insertRule.run(normalizedTenantId, ruleId, index);
+    });
+
+    return listTenantSqlCheckRuleIds(normalizedTenantId);
+  });
+
+  const setUserSqlCheckPreferenceTransaction = database.transaction(({ tenantId, workspaceId, userId, customEnabled, ruleIds }) => {
+    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+    const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+    const enabled = customEnabled === true || customEnabled === 1 ? 1 : 0;
+    const normalizedRuleIds = normalizeSqlCheckRuleIds(ruleIds);
+
+    database.prepare(`
+      INSERT INTO user_sql_check_preferences (tenant_id, workspace_id, user_id, custom_enabled)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(workspace_id, user_id)
+      DO UPDATE SET
+        tenant_id = excluded.tenant_id,
+        custom_enabled = excluded.custom_enabled,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, enabled);
+
+    if (enabled === 1) {
+      database.prepare(`
+        DELETE FROM user_sql_check_rules
+        WHERE workspace_id = ? AND user_id = ?
+      `).run(normalizedWorkspaceId, normalizedUserId);
+
+      const insertRule = database.prepare(`
+        INSERT INTO user_sql_check_rules (tenant_id, workspace_id, user_id, rule_id, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      normalizedRuleIds.forEach((ruleId, index) => {
+        insertRule.run(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, ruleId, index);
+      });
+    }
+
+    return {
+      customEnabled: enabled === 1,
+      ruleIds: listUserSqlCheckRuleIds({ workspaceId: normalizedWorkspaceId, userId: normalizedUserId }),
+    };
+  });
+
+  const getUserSqlCheckPreference = ({ tenantId, workspaceId, userId }) => {
+    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+    const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+    const preference = database.prepare(`
+      SELECT custom_enabled
+      FROM user_sql_check_preferences
+      WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
+    `).get(normalizedTenantId, normalizedWorkspaceId, normalizedUserId);
+
+    return {
+      tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
+      userId: normalizedUserId,
+      hasUserPreference: Boolean(preference),
+      customEnabled: preference?.custom_enabled === 1,
+      ruleIds: listUserSqlCheckRuleIds({ workspaceId: normalizedWorkspaceId, userId: normalizedUserId }),
+    };
+  };
+
+  const resolveUserSqlCheckConfig = ({ tenantId, workspaceId, userId }) => {
+    const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+    const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+    const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+    const tenantRuleIds = listTenantSqlCheckRuleIds(normalizedTenantId);
+    const userPreference = getUserSqlCheckPreference({
+      tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
+      userId: normalizedUserId,
+    });
+    const effectiveRuleIds = userPreference.customEnabled
+      ? userPreference.ruleIds
+      : tenantRuleIds;
+
+    return {
+      tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
+      userId: normalizedUserId,
+      tenantRuleIds,
+      hasUserPreference: userPreference.hasUserPreference,
+      customEnabled: userPreference.customEnabled,
+      userRuleIds: userPreference.ruleIds,
+      effectiveRuleIds,
+      source: userPreference.customEnabled ? 'user' : 'tenant',
+    };
+  };
+
   return {
     tenants: {
       createTenant: ({ code, name, status = 'active' }) => {
@@ -901,6 +1053,49 @@ export function createMultitenancyDb(database = db) {
           requirePositiveInteger(userId, 'userId'),
         ) ?? null;
       },
+    },
+
+    sqlCheck: {
+      getTenantConfig: (tenantId) => {
+        const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+        return {
+          tenantId: normalizedTenantId,
+          ruleIds: listTenantSqlCheckRuleIds(normalizedTenantId),
+        };
+      },
+
+      replaceTenantConfig: ({ tenantId, ruleIds }) => {
+        const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+        return {
+          tenantId: normalizedTenantId,
+          ruleIds: replaceTenantSqlCheckRulesTransaction({ tenantId: normalizedTenantId, ruleIds }),
+        };
+      },
+
+      getUserPreference: getUserSqlCheckPreference,
+
+      setUserPreference: ({ tenantId, workspaceId, userId, customEnabled, ruleIds = [] }) => {
+        const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+        const saved = setUserSqlCheckPreferenceTransaction({
+          tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
+          userId: normalizedUserId,
+          customEnabled,
+          ruleIds,
+        });
+
+        return {
+          tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
+          userId: normalizedUserId,
+          customEnabled: saved.customEnabled,
+          ruleIds: saved.ruleIds,
+        };
+      },
+
+      resolveUserConfig: resolveUserSqlCheckConfig,
     },
 
     mcpPresets: {

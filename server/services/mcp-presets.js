@@ -508,6 +508,26 @@ export function createMcpPresetService({
       });
     },
 
+    deleteHelperScript: ({ tenantId, presetId, userId }) => {
+      const existing = getExistingPreset({ tenantId, presetId });
+      multitenancy.mcpPresetHelperScripts.deleteScript({
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+      });
+      const updated = multitenancy.mcpPresets.updatePreset({
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        name: existing.name,
+        displayName: existing.display_name,
+        description: existing.description || '',
+        config: existing.config,
+        preinstallScope: existing.preinstall_scope || 'none',
+        status: normalizeEditableStatus(existing.status, existing.status === 'disabled' ? 'disabled' : 'draft'),
+        updatedByUserId: requirePositiveInteger(userId, 'userId'),
+      });
+      return toAdminPreset(updated, null);
+    },
+
     uploadHelperScript: ({ tenantId, presetId, userId, originalName, content }) => {
       getExistingPreset({ tenantId, presetId });
       savePresetHelperScript({

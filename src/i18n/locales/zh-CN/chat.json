@@ -120,7 +120,9 @@
     "clickToChangeMode": "点击更改权限模式（或在输入框中按 Tab）",
     "showAllCommands": "显示所有命令",
     "clearInput": "清空输入",
-    "scrollToBottom": "滚动到底部"
+    "scrollToBottom": "滚动到底部",
+    "scheduledTasks": "定时任务",
+    "scheduledTasksNewSessionOnly": "定时任务只能从新会话创建"
   },
   "thinkingMode": {
     "selector": {
@@ -254,5 +256,92 @@
   },
   "tasks": {
     "nextTaskPrompt": "开始下一个任务"
+  },
+  "scheduledTasks": {
+    "title": "定时 session 任务",
+    "detailsTitle": "定时任务详情",
+    "taskDetails": "任务详情",
+    "existingTasks": "已有任务",
+    "notFound": "未找到定时任务。",
+    "noTasks": "还没有定时任务。",
+    "never": "从未",
+    "boundSession": "绑定 session：{{session}}",
+    "cronHelp": "Cron 会由服务端调度。下次运行时间会从开始时间计算。",
+    "cronInvalid": "请使用 5 段 cron 表达式。",
+    "labels": {
+      "taskName": "任务名称",
+      "message": "消息",
+      "schedule": "定时",
+      "everyMinutes": "每隔多少分钟",
+      "firstRun": "首次运行",
+      "cronExpression": "Cron 表达式",
+      "startAfter": "开始时间",
+      "repeat": "重复",
+      "minuteWithValue": "分钟：{{minute}}",
+      "hour": "小时",
+      "weekday": "星期",
+      "dayOfMonth": "每月日期",
+      "enabled": "启用",
+      "session": "Session",
+      "model": "模型",
+      "permission": "权限",
+      "nextRun": "下次运行",
+      "lastRun": "上次运行",
+      "created": "创建时间",
+      "lastError": "最近错误"
+    },
+    "placeholders": {
+      "taskName": "每日工作区检查",
+      "message": "输入任务运行时要发送给 agent 的消息"
+    },
+    "modes": {
+      "interval": "间隔",
+      "cron": "Cron",
+      "visual": "可视化"
+    },
+    "frequencies": {
+      "hourly": "每小时",
+      "daily": "每日",
+      "weekly": "每周",
+      "monthly": "每月"
+    },
+    "weekdays": {
+      "mon": "周一",
+      "tue": "周二",
+      "wed": "周三",
+      "thu": "周四",
+      "fri": "周五",
+      "sat": "周六",
+      "sun": "周日"
+    },
+    "status": {
+      "enabled": "已启用",
+      "paused": "已暂停"
+    },
+    "actions": {
+      "close": "关闭",
+      "skills": "Skills",
+      "createTask": "创建任务",
+      "edit": "编辑",
+      "pause": "暂停",
+      "resume": "恢复",
+      "deleteTask": "删除任务",
+      "cancel": "取消",
+      "saveChanges": "保存修改"
+    },
+    "summary": {
+      "cron": "Cron {{expression}}",
+      "everyMinutes": "每 {{count}} 分钟",
+      "runInfo": "{{schedule}}。下次：{{next}}。上次：{{last}}"
+    },
+    "errors": {
+      "loadFailed": "加载定时任务失败",
+      "createFailed": "创建定时任务失败",
+      "updateFailed": "更新定时任务失败",
+      "deleteFailed": "删除定时任务失败",
+      "workspaceRequired": "需要选择工作区",
+      "firstRunInvalid": "首次运行时间必须是有效日期时间",
+      "startAfterInvalid": "开始时间必须是有效日期时间"
+    }
   }
 }

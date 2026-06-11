@@ -66,6 +66,68 @@ export function createWorkspacesRouter({
     }
   });
 
+  router.get('/:workspaceId/sql-check', (req, res) => {
+    try {
+      if (typeof multitenancy.sqlCheck?.resolveUserConfig !== 'function') {
+        return res.status(501).json({ error: 'SQL check configuration is not available' });
+      }
+
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        canManage: true,
+        ...multitenancy.sqlCheck.resolveUserConfig({
+          tenantId: workspace.tenant_id,
+          workspaceId: workspace.id,
+          userId: req.user.id,
+        }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
+  router.put('/:workspaceId/sql-check', (req, res) => {
+    try {
+      if (typeof multitenancy.sqlCheck?.setUserPreference !== 'function') {
+        return res.status(501).json({ error: 'SQL check configuration is not available' });
+      }
+
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      multitenancy.sqlCheck.setUserPreference({
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+        userId: req.user.id,
+        customEnabled: req.body?.customEnabled ?? req.body?.custom_enabled ?? false,
+        ruleIds: req.body?.ruleIds ?? req.body?.rule_ids ?? [],
+      });
+
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        canManage: true,
+        ...multitenancy.sqlCheck.resolveUserConfig({
+          tenantId: workspace.tenant_id,
+          workspaceId: workspace.id,
+          userId: req.user.id,
+        }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
   return router;
 }
 

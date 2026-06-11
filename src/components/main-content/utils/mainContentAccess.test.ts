@@ -15,6 +15,7 @@ test('resolveAllowedWorkspaceTab falls back to files when active tab is disabled
   assert.equal(resolveAllowedWorkspaceTab('chat', disabledTabs), 'files');
   assert.equal(resolveAllowedWorkspaceTab('files', disabledTabs), 'files');
   assert.equal(resolveAllowedWorkspaceTab('mcp-tools', disabledTabs), 'mcp-tools');
+  assert.equal(resolveAllowedWorkspaceTab('sql-check', disabledTabs), 'sql-check');
 });
 
 test('resolveAllowedWorkspaceTab normalizes removed workspace tabs to chat', () => {
@@ -32,4 +33,11 @@ test('view-only workspaces can inspect MCP Tools inventory', () => {
 
   assert.equal(disabledTabs.has('mcp-tools'), false);
   assert.equal(resolveAllowedWorkspaceTab('mcp-tools', disabledTabs), 'mcp-tools');
+});
+
+test('view-only workspaces can inspect SQL Check configuration', () => {
+  const disabledTabs = getWorkspaceDisabledTabs('view');
+
+  assert.equal(disabledTabs.has('sql-check'), false);
+  assert.equal(resolveAllowedWorkspaceTab('sql-check', disabledTabs), 'sql-check');
 });

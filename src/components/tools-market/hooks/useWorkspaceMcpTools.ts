@@ -11,7 +11,7 @@ export type WorkspaceMcpPreset = {
   status: 'available' | 'connected' | 'probe_failed' | 'unverified';
   dockerCompatible: boolean;
   toolCount: number;
-  tools?: Array<{ name: string; description?: string }>;
+  tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
   installed: boolean;
   connectionStatus: 'available' | 'connected' | 'probe_failed' | 'unverified';
   probeStatus?: 'healthy' | 'probe_failed' | null;

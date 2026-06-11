@@ -138,7 +138,9 @@
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
     "clearInput": "Clear input",
-    "scrollToBottom": "Scroll to bottom"
+    "scrollToBottom": "Scroll to bottom",
+    "scheduledTasks": "Scheduled tasks",
+    "scheduledTasksNewSessionOnly": "Scheduled tasks can only be created from a new session"
   },
   "thinkingMode": {
     "selector": {
@@ -269,6 +271,93 @@
   },
   "projectSelection": {
     "startChatWithProvider": "Select a project to start chatting with {{provider}}"
+  },
+  "scheduledTasks": {
+    "title": "Scheduled session tasks",
+    "detailsTitle": "Scheduled task details",
+    "taskDetails": "Task details",
+    "existingTasks": "Existing tasks",
+    "notFound": "Scheduled task not found.",
+    "noTasks": "No scheduled tasks yet.",
+    "never": "Never",
+    "boundSession": "Bound session: {{session}}",
+    "cronHelp": "Cron runs use the server scheduler. Next run is calculated from the start time.",
+    "cronInvalid": "Use 5 cron fields.",
+    "labels": {
+      "taskName": "Task name",
+      "message": "Message",
+      "schedule": "Schedule",
+      "everyMinutes": "Every minutes",
+      "firstRun": "First run",
+      "cronExpression": "Cron expression",
+      "startAfter": "Start after",
+      "repeat": "Repeat",
+      "minuteWithValue": "Minute: {{minute}}",
+      "hour": "Hour",
+      "weekday": "Weekday",
+      "dayOfMonth": "Day of month",
+      "enabled": "Enabled",
+      "session": "Session",
+      "model": "Model",
+      "permission": "Permission",
+      "nextRun": "Next run",
+      "lastRun": "Last run",
+      "created": "Created",
+      "lastError": "Last error"
+    },
+    "placeholders": {
+      "taskName": "Daily workspace check",
+      "message": "Ask the agent what to do when the task runs"
+    },
+    "modes": {
+      "interval": "Interval",
+      "cron": "Cron",
+      "visual": "Visual"
+    },
+    "frequencies": {
+      "hourly": "Hourly",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "weekdays": {
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat",
+      "sun": "Sun"
+    },
+    "status": {
+      "enabled": "Enabled",
+      "paused": "Paused"
+    },
+    "actions": {
+      "close": "Close",
+      "skills": "Skills",
+      "createTask": "Create task",
+      "edit": "Edit",
+      "pause": "Pause",
+      "resume": "Resume",
+      "deleteTask": "Delete task",
+      "cancel": "Cancel",
+      "saveChanges": "Save changes"
+    },
+    "summary": {
+      "cron": "Cron {{expression}}",
+      "everyMinutes": "Every {{count}} min",
+      "runInfo": "{{schedule}}. Next: {{next}}. Last: {{last}}"
+    },
+    "errors": {
+      "loadFailed": "Failed to load scheduled tasks",
+      "createFailed": "Failed to create scheduled task",
+      "updateFailed": "Failed to update scheduled task",
+      "deleteFailed": "Failed to delete scheduled task",
+      "workspaceRequired": "Workspace is required",
+      "firstRunInvalid": "First run must be a valid date/time",
+      "startAfterInvalid": "Start after must be a valid date/time"
+    }
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"

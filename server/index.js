@@ -18,6 +18,7 @@ import mime from 'mime-types';
 
 import {
     clearProjectDirectoryCache,
+    createConversationSearchHelpers,
     deleteProject,
     deleteSession,
     extractProjectDirectory,
@@ -62,6 +63,7 @@ import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import providerRoutes from './modules/providers/provider.routes.js';
+import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
 import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
@@ -898,8 +900,146 @@ app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextI
     }
 });
 
+function extractSearchableConversationText(message) {
+    if (typeof message?.content === 'string') return message.content;
+    if (typeof message?.text === 'string') return message.text;
+    return '';
+}
+
+function truncateConversationSummary(text, fallback = 'New Session') {
+    if (typeof text !== 'string' || !text.trim()) return fallback;
+    const normalized = text.trim().replace(/\s+/g, ' ');
+    return normalized.length > 50 ? `${normalized.substring(0, 50)}...` : normalized;
+}
+
+async function searchTenantConversations({
+    query,
+    limit,
+    tenantId,
+    userId,
+    onProjectResult = null,
+    signal = null,
+}) {
+    const safeQuery = typeof query === 'string' ? query.trim() : '';
+    const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? limit : 50, 200));
+    const { terms, allWordsMatch, buildSnippet } = createConversationSearchHelpers(safeQuery);
+    if (terms.length === 0) return { results: [], totalMatches: 0, query: safeQuery };
+
+    const isAborted = () => signal?.aborted === true;
+    const results = [];
+    let totalMatches = 0;
+
+    const workspaceRows = multitenancyDb.workspaces.listVisibleWorkspaces({ tenantId, userId });
+    let scannedProjects = 0;
+    const totalProjects = workspaceRows.length;
+
+    for (const workspace of workspaceRows) {
+        if (totalMatches >= safeLimit || isAborted()) break;
+
+        const projectResult = {
+            projectName: workspace.slug,
+            projectDisplayName: workspace.display_name || workspace.slug,
+            sessions: [],
+        };
+
+        const sessionRows = multitenancyDb.sessions.listSessions({
+            tenantId,
+            workspaceId: workspace.id,
+            userId,
+        });
+
+        for (const session of sessionRows) {
+            if (totalMatches >= safeLimit || isAborted()) break;
+            if (!session?.provider || !session?.provider_session_id) continue;
+
+            let history;
+            try {
+                history = multitenancyDb.sessionMessages.listMessages({
+                    tenantId,
+                    workspaceId: workspace.id,
+                    userId,
+                    provider: session.provider,
+                    providerSessionId: session.provider_session_id,
+                    limit: null,
+                    offset: 0,
+                });
+            } catch (error) {
+                console.warn(`Skipping searchable history for ${session.provider}:${session.provider_session_id}:`, error.message);
+                continue;
+            }
+
+            let messages = history.messages || [];
+            if (history.total === 0) {
+                try {
+                    const fallbackHistory = await sessionsService.fetchHistory(session.provider, session.provider_session_id, {
+                        projectName: workspace.slug || '',
+                        projectPath: workspace.path || '',
+                        workspaceId: workspace.id,
+                        limit: null,
+                        offset: 0,
+                    });
+                    messages = fallbackHistory.messages || [];
+                } catch (error) {
+                    console.warn(`Skipping provider fallback history for ${session.provider}:${session.provider_session_id}:`, error.message);
+                }
+            }
+
+            const matches = [];
+            let firstUserText = '';
+
+            for (const message of messages) {
+                if (totalMatches >= safeLimit || isAborted()) break;
+
+                const role = message.role === 'user' || message.role === 'assistant'
+                    ? message.role
+                    : null;
+                if (!role) continue;
+
+                const text = extractSearchableConversationText(message);
+                if (!text) continue;
+                if (role === 'user' && !firstUserText) firstUserText = text;
+
+                const textLower = text.toLowerCase();
+                if (!allWordsMatch(textLower)) continue;
+
+                if (matches.length < 2) {
+                    const { snippet, highlights } = buildSnippet(text, textLower);
+                    matches.push({
+                        role,
+                        snippet,
+                        highlights,
+                        timestamp: message.timestamp || null,
+                        provider: session.provider,
+                        messageUuid: message.id || null,
+                    });
+                    totalMatches++;
+                }
+            }
+
+            if (matches.length > 0) {
+                projectResult.sessions.push({
+                    sessionId: session.provider_session_id,
+                    provider: session.provider,
+                    sessionSummary: truncateConversationSummary(session.summary || firstUserText),
+                    matches,
+                });
+            }
+        }
+
+        scannedProjects++;
+        if (projectResult.sessions.length > 0) {
+            results.push(projectResult);
+            onProjectResult?.({ projectResult, totalMatches, scannedProjects, totalProjects });
+        } else if (onProjectResult && scannedProjects % 10 === 0) {
+            onProjectResult({ projectResult: null, totalMatches, scannedProjects, totalProjects });
+        }
+    }
+
+    return { results, totalMatches, query: safeQuery };
+}
+
 // Search conversations content (SSE streaming)
-app.get('/api/search/conversations', authenticateToken, async (req, res) => {
+app.get('/api/search/conversations', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const parsedLimit = Number.parseInt(String(req.query.limit), 10);
     const limit = Number.isNaN(parsedLimit) ? 50 : Math.max(1, Math.min(parsedLimit, 100));
@@ -920,14 +1060,28 @@ app.get('/api/search/conversations', authenticateToken, async (req, res) => {
     req.on('close', () => { closed = true; abortController.abort(); });
 
     try {
-        await searchConversations(query, limit, ({ projectResult, totalMatches, scannedProjects, totalProjects }) => {
+        const emitSearchEvent = ({ projectResult, totalMatches, scannedProjects, totalProjects }) => {
             if (closed) return;
             if (projectResult) {
                 res.write(`event: result\ndata: ${JSON.stringify({ projectResult, totalMatches, scannedProjects, totalProjects })}\n\n`);
             } else {
                 res.write(`event: progress\ndata: ${JSON.stringify({ totalMatches, scannedProjects, totalProjects })}\n\n`);
             }
-        }, abortController.signal);
+        };
+
+        if (req.tenant) {
+            const userId = req.user?.id ?? req.user?.userId;
+            await searchTenantConversations({
+                query,
+                limit,
+                tenantId: req.tenant.id,
+                userId,
+                onProjectResult: emitSearchEvent,
+                signal: abortController.signal,
+            });
+        } else {
+            await searchConversations(query, limit, emitSearchEvent, abortController.signal);
+        }
         if (!closed) {
             res.write(`event: done\ndata: {}\n\n`);
         }

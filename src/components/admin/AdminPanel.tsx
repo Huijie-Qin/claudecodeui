@@ -28,6 +28,7 @@ import {
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
+import SqlCheckConfigTab from './SqlCheckConfigTab';
 
 type AdminTenant = {
   id: number;
@@ -348,7 +349,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes'>('users');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes' | 'sqlCheck'>('users');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -1137,6 +1138,13 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               {t('tabs.mcpPresets')}
             </Button>
             <Button
+              variant={activeTab === 'sqlCheck' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('sqlCheck')}
+            >
+              {t('tabs.sqlCheck')}
+            </Button>
+            <Button
               variant={activeTab === 'runtimes' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab('runtimes')}
@@ -1893,6 +1901,12 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           {activeTab === 'mcpPresets' ? (
             <div className="overflow-y-auto px-5 py-4">
               <McpPresetsTab tenants={tenants} currentTenantId={currentTenant?.id} />
+            </div>
+          ) : null}
+
+          {activeTab === 'sqlCheck' ? (
+            <div className="overflow-y-auto px-5 py-4">
+              <SqlCheckConfigTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : null}
 

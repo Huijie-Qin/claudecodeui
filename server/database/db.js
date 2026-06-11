@@ -170,6 +170,7 @@ const runMigrations = () => {
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
     db.exec(CODEHUB_REPOSITORIES_TABLE_SQL);
     db.exec(CODEHUB_REPOSITORIES_USER_INDEX_SQL);
+    migrateSqlCheckPreferencesToWorkspaceScope();
     db.exec(MULTITENANCY_SCHEMA_SQL);
     runMultitenancyMigrations();
 
@@ -191,17 +192,143 @@ function runMultitenancyMigrations() {
     db.exec("ALTER TABLE mcp_server_presets ADD COLUMN preinstall_scope TEXT NOT NULL DEFAULT 'none'");
   }
 
+  const scheduledTaskColumns = db
+    .prepare("PRAGMA table_info(scheduled_session_tasks)")
+    .all()
+    .map((col) => col.name);
+
+  if (!scheduledTaskColumns.includes('schedule_type')) {
+    console.log('Running migration: Adding scheduled_session_tasks.schedule_type column');
+    db.exec("ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_type TEXT NOT NULL DEFAULT 'interval'");
+  }
+
+  if (!scheduledTaskColumns.includes('schedule_cron')) {
+    console.log('Running migration: Adding scheduled_session_tasks.schedule_cron column');
+    db.exec('ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_cron TEXT');
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_preinstall
       ON mcp_server_presets(tenant_id, preinstall_scope, status)
   `);
+
+}
+
+function hasTable(tableName) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
+}
+
+function getColumnNames(tableName) {
+  return db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .map((col) => col.name);
+}
+
+function migrateSqlCheckPreferencesToWorkspaceScope() {
+  if (!hasTable('user_sql_check_preferences')) {
+    return;
+  }
+
+  const preferenceColumns = getColumnNames('user_sql_check_preferences');
+  if (preferenceColumns.includes('workspace_id')) {
+    return;
+  }
+
+  console.log('Running migration: Moving SQL check user preferences to workspace scope');
+  const hasRulesTable = hasTable('user_sql_check_rules');
+  const customEnabledExpression = preferenceColumns.includes('custom_enabled')
+    ? 'COALESCE(p.custom_enabled, 0)'
+    : '0';
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS user_sql_check_rules_legacy;
+      DROP TABLE IF EXISTS user_sql_check_preferences_legacy;
+    `);
+
+    if (hasRulesTable) {
+      db.exec('ALTER TABLE user_sql_check_rules RENAME TO user_sql_check_rules_legacy');
+    }
+    db.exec('ALTER TABLE user_sql_check_preferences RENAME TO user_sql_check_preferences_legacy');
+
+    db.exec(MULTITENANCY_SCHEMA_SQL);
+
+    db.exec(`
+      INSERT OR IGNORE INTO user_sql_check_preferences (
+        tenant_id,
+        workspace_id,
+        user_id,
+        custom_enabled,
+        created_at,
+        updated_at
+      )
+      SELECT
+        p.tenant_id,
+        w.id,
+        p.user_id,
+        ${customEnabledExpression},
+        p.created_at,
+        p.updated_at
+      FROM user_sql_check_preferences_legacy p
+      JOIN workspaces w
+        ON w.tenant_id = p.tenant_id
+       AND (
+          w.owner_user_id = p.user_id
+          OR EXISTS (
+            SELECT 1
+            FROM workspace_acl acl
+            WHERE acl.workspace_id = w.id
+              AND acl.user_id = p.user_id
+          )
+       )
+    `);
+
+    if (hasRulesTable) {
+      db.exec(`
+        INSERT OR IGNORE INTO user_sql_check_rules (
+          tenant_id,
+          workspace_id,
+          user_id,
+          rule_id,
+          sort_order,
+          created_at,
+          updated_at
+        )
+        SELECT
+          r.tenant_id,
+          p.workspace_id,
+          r.user_id,
+          r.rule_id,
+          r.sort_order,
+          r.created_at,
+          r.updated_at
+        FROM user_sql_check_rules_legacy r
+        JOIN user_sql_check_preferences p
+          ON p.tenant_id = r.tenant_id
+         AND p.user_id = r.user_id
+      `);
+    }
+
+    db.exec(`
+      DROP TABLE IF EXISTS user_sql_check_rules_legacy;
+      DROP TABLE IF EXISTS user_sql_check_preferences_legacy;
+    `);
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_user_sql_check_rules_owner_order
+        ON user_sql_check_rules(workspace_id, user_id, sort_order)
+    `);
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 // Initialize database with schema
 const initializeDatabase = async () => {
   try {
     db.exec(DATABASE_SCHEMA_SQL);
-    db.exec(MULTITENANCY_SCHEMA_SQL);
     console.log('Database initialized successfully');
     runMigrations();
   } catch (error) {
@@ -1505,6 +1632,8 @@ const scheduledTasksDb = {
         name,
         enabled,
         provider,
+        schedule_type,
+        schedule_cron,
         next_run_at
       FROM scheduled_session_tasks
       WHERE tenant_id = ?
@@ -1523,6 +1652,8 @@ const scheduledTasksDb = {
           name: row.name,
           enabled: Boolean(row.enabled),
           provider: row.provider,
+          scheduleType: row.schedule_type || 'interval',
+          scheduleCron: row.schedule_cron || null,
           nextRunAt: row.next_run_at,
         });
       }

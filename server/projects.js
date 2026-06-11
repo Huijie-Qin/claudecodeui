@@ -67,6 +67,64 @@ import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames } from './database/db.js';
 
+function createConversationSearchHelpers(query) {
+  const terms = String(query || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const allWordsMatch = (textLower) => {
+    if (typeof textLower !== 'string') return false;
+    return terms.every((term) => textLower.includes(term));
+  };
+
+  const buildSnippet = (text, textLower, snippetLen = 150) => {
+    let firstIndex = -1;
+    let firstWordLen = 0;
+    for (const term of terms) {
+      const index = textLower.indexOf(term);
+      if (index !== -1 && (firstIndex === -1 || index < firstIndex)) {
+        firstIndex = index;
+        firstWordLen = term.length;
+      }
+    }
+    if (firstIndex === -1) firstIndex = 0;
+
+    const halfLen = Math.floor(snippetLen / 2);
+    const start = Math.max(0, firstIndex - halfLen);
+    const end = Math.min(text.length, firstIndex + halfLen + firstWordLen);
+    let snippet = text.slice(start, end).replace(/\n/g, ' ');
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < text.length ? '...' : '';
+    snippet = prefix + snippet + suffix;
+
+    const snippetLower = snippet.toLowerCase();
+    const highlights = [];
+    for (const term of terms) {
+      let matchIndex = snippetLower.indexOf(term);
+      while (matchIndex !== -1) {
+        highlights.push({ start: matchIndex, end: matchIndex + term.length });
+        matchIndex = snippetLower.indexOf(term, matchIndex + Math.max(term.length, 1));
+      }
+    }
+
+    highlights.sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const h of highlights) {
+      const last = merged[merged.length - 1];
+      if (last && h.start <= last.end) {
+        last.end = Math.max(last.end, h.end);
+      } else {
+        merged.push({ ...h });
+      }
+    }
+    return { snippet, highlights: merged };
+  };
+
+  return { terms, allWordsMatch, buildSnippet };
+}
+
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
   try {
@@ -1876,8 +1934,8 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
   const config = await loadProjectConfig();
   const results = [];
   let totalMatches = 0;
-  const words = safeQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  if (words.length === 0) return { results: [], totalMatches: 0, query: safeQuery };
+  const { terms, allWordsMatch, buildSnippet } = createConversationSearchHelpers(safeQuery);
+  if (terms.length === 0) return { results: [], totalMatches: 0, query: safeQuery };
 
   const isAborted = () => signal?.aborted === true;
 
@@ -1906,53 +1964,6 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
         .join(' ');
     }
     return '';
-  };
-
-  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const wordPatterns = words.map(w => new RegExp(`(?<!\\p{L})${escapeRegex(w)}(?!\\p{L})`, 'u'));
-  const allWordsMatch = (textLower) => {
-    return wordPatterns.every(p => p.test(textLower));
-  };
-
-  const buildSnippet = (text, textLower, snippetLen = 150) => {
-    let firstIndex = -1;
-    let firstWordLen = 0;
-    for (const w of words) {
-      const re = new RegExp(`(?<!\\p{L})${escapeRegex(w)}(?!\\p{L})`, 'u');
-      const m = re.exec(textLower);
-      if (m && (firstIndex === -1 || m.index < firstIndex)) {
-        firstIndex = m.index;
-        firstWordLen = w.length;
-      }
-    }
-    if (firstIndex === -1) firstIndex = 0;
-    const halfLen = Math.floor(snippetLen / 2);
-    let start = Math.max(0, firstIndex - halfLen);
-    let end = Math.min(text.length, firstIndex + halfLen + firstWordLen);
-    let snippet = text.slice(start, end).replace(/\n/g, ' ');
-    const prefix = start > 0 ? '...' : '';
-    const suffix = end < text.length ? '...' : '';
-    snippet = prefix + snippet + suffix;
-    const snippetLower = snippet.toLowerCase();
-    const highlights = [];
-    for (const word of words) {
-      const re = new RegExp(`(?<!\\p{L})${escapeRegex(word)}(?!\\p{L})`, 'gu');
-      let match;
-      while ((match = re.exec(snippetLower)) !== null) {
-        highlights.push({ start: match.index, end: match.index + word.length });
-      }
-    }
-    highlights.sort((a, b) => a.start - b.start);
-    const merged = [];
-    for (const h of highlights) {
-      const last = merged[merged.length - 1];
-      if (last && h.start <= last.end) {
-        last.end = Math.max(last.end, h.end);
-      } else {
-        merged.push({ ...h });
-      }
-    }
-    return { snippet, highlights: merged };
   };
 
   try {
@@ -2101,7 +2112,7 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
         const actualProjectDir = await extractProjectDirectory(projectName);
         if (actualProjectDir && !isAborted() && totalMatches < safeLimit) {
           await searchCodexSessionsForProject(
-            actualProjectDir, projectResult, words, allWordsMatch, extractText, isSystemMessage,
+            actualProjectDir, projectResult, terms, allWordsMatch, extractText, isSystemMessage,
             buildSnippet, safeLimit, () => totalMatches, (n) => { totalMatches += n; }, isAborted
           );
         }
@@ -2114,7 +2125,7 @@ async function searchConversations(query, limit = 50, onProjectResult = null, si
         const actualProjectDir = await extractProjectDirectory(projectName);
         if (actualProjectDir && !isAborted() && totalMatches < safeLimit) {
           await searchGeminiSessionsForProject(
-            actualProjectDir, projectResult, words, allWordsMatch,
+            actualProjectDir, projectResult, terms, allWordsMatch,
             buildSnippet, safeLimit, () => totalMatches, (n) => { totalMatches += n; }
           );
         }
@@ -2557,5 +2568,6 @@ export {
   deleteCodexSession,
   getGeminiCliSessions,
   getGeminiCliSessionMessages,
+  createConversationSearchHelpers,
   searchConversations
 };
