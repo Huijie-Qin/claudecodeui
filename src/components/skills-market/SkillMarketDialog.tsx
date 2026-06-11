@@ -515,7 +515,7 @@ export default function SkillMarketDialog({
 
               {detail?.conflict ? (
                 <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  {t('skillMarketDialog.conflict', 'A same-name .claude/skills directory already exists but was not imported from the market.')}
+                  {t('skillMarketDialog.conflict', '同名skill目录已存在，不可导入')}
                 </div>
               ) : null}
               {detail?.remoteDeleted ? (
@@ -640,22 +640,15 @@ function ConflictWarningIcon() {
   const { t } = useTranslation();
   const message = t(
     'skillMarketDialog.conflict',
-    'A same-name .claude/skills directory already exists but was not imported from the market.',
+    '同名skill目录已存在，不可导入',
   );
 
   return (
     <span
-      className="group relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-700"
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-700"
       aria-label={message}
-      title={message}
     >
       <AlertTriangle className="h-4 w-4" />
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-64 rounded-md border border-border bg-popover px-3 py-2 text-left text-xs leading-5 text-popover-foreground shadow-lg group-hover:block"
-      >
-        {message}
-      </span>
     </span>
   );
 }

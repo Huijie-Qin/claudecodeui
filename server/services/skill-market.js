@@ -98,7 +98,7 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
   const status = remoteSkill.name === requestedSkillName
     ? requestedStatus
     : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
-  const runtimeSkillName = status.imported ? status.skillName : remoteSkill.name;
+  let runtimeSkillName = status.imported ? status.skillName : remoteSkill.name;
   let directoryTree;
   let files;
 
@@ -110,6 +110,7 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
     const preview = await previewRemoteSkill(remoteSkill, undefined, { tenantCode, accountId: remoteAccountId });
     directoryTree = preview.directoryTree;
     files = flattenDirectoryTree(preview.directoryTree);
+    runtimeSkillName = inferRuntimeSkillNameFromFileEntries(files) || runtimeSkillName;
   }
 
   return {
@@ -177,11 +178,29 @@ export async function downloadMarketSkill({
   accountId,
 }) {
   const remoteSkill = await fetchRemoteSkillDetail(name, { tenantCode, accountId });
-  const skillName = remoteSkill.name;
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
-  const status = await getImportStatus(workspacePath, skillName, imports);
+  const existingImportEntry = getImportEntryForRemoteSkill(remoteSkill, imports);
+  const existingStatus = existingImportEntry
+    ? await getImportStatus(workspacePath, existingImportEntry.skillName, imports)
+    : null;
 
+  if (existingStatus?.imported && !overwrite) {
+    throw createHttpError(`Skill "${existingStatus.skillName}" has already been imported`, 409);
+  }
+
+  const downloadedSkill = await downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+  const skillName = downloadedSkill.skillName || existingImportEntry?.skillName || remoteSkill.name;
+  const previousSkillName = existingImportEntry?.skillName && existingImportEntry.skillName !== skillName
+    ? existingImportEntry.skillName
+    : null;
+  const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
+  const status = existingStatus?.skillName === skillName
+    ? existingStatus
+    : await getImportStatus(workspacePath, skillName, imports);
+
+  if (previousSkillName && existingStatus?.imported && !overwrite) {
+    throw createHttpError(`Skill "${previousSkillName}" has already been imported`, 409);
+  }
   if (status.imported && !overwrite) {
     throw createHttpError(`Skill "${skillName}" has already been imported`, 409);
   }
@@ -189,19 +208,25 @@ export async function downloadMarketSkill({
     throw createHttpError(`A .claude/skills/${skillName} directory already exists`, 409);
   }
 
-  const files = await downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
   if (overwrite) {
     await fs.rm(runtimePath, { recursive: true, force: true });
+    if (previousSkillName && existingStatus?.imported) {
+      await fs.rm(getRuntimeSkillPath(workspacePath, previousSkillName), { recursive: true, force: true });
+    }
   }
-  await writeDownloadedFiles(runtimePath, files);
+  await writeDownloadedFiles(runtimePath, downloadedSkill.files);
 
   const timestamp = now().toISOString();
+  const nextImports = { ...imports.imports };
+  if (previousSkillName) {
+    delete nextImports[previousSkillName];
+  }
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
-      ...imports.imports,
+      ...nextImports,
       [skillName]: {
-        ...imports.imports[skillName],
+        ...nextImports[skillName],
         name: skillName,
         skillId: remoteSkill.skillId,
         id: remoteSkill.id,
@@ -743,26 +768,28 @@ async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } =
   });
 
   if (payload) {
-    const files = normalizeDownloadedFiles(payload.data?.files ?? payload.data?.skill?.files ?? payload.data, {
+    const downloadedSkill = normalizeDownloadedSkillPackage(payload.data?.files ?? payload.data?.skill?.files ?? payload.data, {
       remoteSkill,
     });
-    if (Object.keys(files).length > 0) {
-      return files;
+    if (Object.keys(downloadedSkill.files).length > 0) {
+      return downloadedSkill;
     }
   }
 
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('zip') || contentType.includes('octet-stream')) {
     const zipBuffer = Buffer.from(await response.arrayBuffer());
-    const files = await readZipFiles(zipBuffer, { remoteSkill });
-    if (Object.keys(files).length > 0) {
-      return files;
+    const downloadedSkill = await readZipFiles(zipBuffer, { remoteSkill });
+    if (Object.keys(downloadedSkill.files).length > 0) {
+      return downloadedSkill;
     }
   }
 
-  return Object.fromEntries(
-    (await readRemoteSkillFiles(remoteSkill, { tenantCode, accountId })).map((file) => [file.path, file.content]),
-  );
+  return {
+    files: Object.fromEntries(
+      (await readRemoteSkillFiles(remoteSkill, { tenantCode, accountId })).map((file) => [file.path, file.content]),
+    ),
+  };
 }
 
 async function requestMarketJson(endpoint, { method = 'GET', body, tenantCode, accountId } = {}) {
@@ -1265,7 +1292,7 @@ async function readZipFiles(buffer, { remoteSkill, skillRootName } = {}) {
       });
     }),
   );
-  return filesToContentMap(normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName));
+  return normalizeDownloadedSkillEntries(fileEntries, remoteSkill, skillRootName);
 }
 
 function normalizeSkillListPayload(data) {
@@ -1458,7 +1485,7 @@ function sortDirectoryTreeEntries(left, right) {
   return sortPathNames(left.path, right.path);
 }
 
-function normalizeDownloadedFiles(files, { remoteSkill, skillRootName } = {}) {
+function normalizeDownloadedSkillPackage(files, { remoteSkill, skillRootName } = {}) {
   let fileEntries = [];
 
   if (Array.isArray(files)) {
@@ -1468,9 +1495,7 @@ function normalizeDownloadedFiles(files, { remoteSkill, skillRootName } = {}) {
         path: normalizeRelativeFilePath(file.path),
         content: typeof file.content === 'string' ? file.content : '',
       }));
-    return filesToContentMap(
-      normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName),
-    );
+    return normalizeDownloadedSkillEntries(fileEntries, remoteSkill, skillRootName);
   }
 
   if (isPlainObject(files)) {
@@ -1478,12 +1503,22 @@ function normalizeDownloadedFiles(files, { remoteSkill, skillRootName } = {}) {
       path: normalizeRelativeFilePath(filePath),
       content: typeof content === 'string' ? content : '',
     }));
-    return filesToContentMap(
-      normalizeSkillFilePaths(fileEntries, remoteSkill, skillRootName),
-    );
+    return normalizeDownloadedSkillEntries(fileEntries, remoteSkill, skillRootName);
   }
 
-  return {};
+  return { files: {} };
+}
+
+function normalizeDownloadedSkillEntries(files, remoteSkill, skillRootName) {
+  const archiveRoot = inferDownloadedSkillArchiveRoot(files, remoteSkill, skillRootName);
+  const normalizedFiles = files.map((file) => ({
+    ...file,
+    path: stripSkillArchiveRoot(file.path, archiveRoot),
+  }));
+  return pruneUndefined({
+    files: filesToContentMap(normalizedFiles),
+    skillName: archiveRoot ? normalizeRuntimeSkillFolderName(archiveRoot) : undefined,
+  });
 }
 
 function normalizeSkillFilePaths(files, remoteSkill, skillRootName) {
@@ -1492,6 +1527,32 @@ function normalizeSkillFilePaths(files, remoteSkill, skillRootName) {
     ...file,
     path: stripSkillArchiveRoot(file.path, archiveRoot),
   }));
+}
+
+function inferRuntimeSkillNameFromFileEntries(files) {
+  const archiveRoot = inferDownloadedSkillArchiveRoot(files);
+  return archiveRoot ? normalizeRuntimeSkillFolderName(archiveRoot) : null;
+}
+
+function inferDownloadedSkillArchiveRoot(files, remoteSkill, skillRootName) {
+  const matchedArchiveRoot = inferSkillArchiveRoot(files, remoteSkill, skillRootName);
+  if (matchedArchiveRoot) return matchedArchiveRoot;
+
+  return inferCommonTopLevelDirectory(files);
+}
+
+function inferCommonTopLevelDirectory(files) {
+  const normalizedFiles = (files || [])
+    .map((file) => normalizeRelativeFilePath(file.path))
+    .map((filePath) => filePath.split('/').filter(Boolean));
+  if (normalizedFiles.length === 0) return null;
+  if (normalizedFiles.some((parts) => parts.length < 2)) return null;
+
+  const archiveRoot = normalizedFiles[0][0];
+  if (!archiveRoot || normalizedFiles.some((parts) => parts[0] !== archiveRoot)) {
+    return null;
+  }
+  return archiveRoot;
 }
 
 function inferSkillArchiveRoot(files, remoteSkill, skillRootName) {
