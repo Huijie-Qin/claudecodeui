@@ -439,6 +439,17 @@ function wrapperDirFromRuntimeHome(runtimeHomePath) {
   return path.join(path.dirname(runtimeHomePath), 'wrapper');
 }
 
+function resolveRuntimeDirectoryForCleanup(runtimeHomePath, runtimeRoot) {
+  const resolvedRoot = path.resolve(expandHome(runtimeRoot || DEFAULT_RUNTIME_ROOT));
+  const runtimeDir = path.resolve(path.dirname(expandHome(requireValue(runtimeHomePath, 'runtimeHomePath'))));
+
+  if (runtimeDir === resolvedRoot || !runtimeDir.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('runtime cleanup path must stay under CLOUDCLI_RUNTIME_ROOT');
+  }
+
+  return runtimeDir;
+}
+
 export class DockerCliClient {
   async inspectContainer(containerName) {
     try {
@@ -472,6 +483,17 @@ export class DockerCliClient {
 
   async stopContainer(containerName) {
     await execFileAsync('docker', ['stop', '-t', '1', containerName]);
+  }
+
+  async removeContainer(containerName) {
+    try {
+      await execFileAsync('docker', ['rm', '-f', containerName]);
+    } catch (error) {
+      if (error?.code === 1 || error?.stderr?.includes('No such object')) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async installPythonPackages(containerName, packages = []) {
@@ -959,6 +981,45 @@ export function createAgentSessionRuntimeManager({
         });
         return true;
       });
+    },
+
+    async cleanupWorkspaceRuntimes({ tenantId, workspaceId } = {}) {
+      if (!tenantId || !workspaceId || typeof multitenancy.runtimes?.listForWorkspace !== 'function') {
+        return { cleaned: 0, runtimes: [] };
+      }
+
+      const runtimes = multitenancy.runtimes.listForWorkspace({ tenantId, workspaceId, includeDeleted: true });
+      const cleaned = [];
+      for (const runtime of runtimes) {
+        await withRuntimeLock(runtime.runtime_id, async () => {
+          if (typeof docker.removeContainer === 'function') {
+            await docker.removeContainer(runtime.container_name);
+          } else {
+            const inspected = await docker.inspectContainer(runtime.container_name);
+            if (inspected?.running && typeof docker.stopContainer === 'function') {
+              await docker.stopContainer(runtime.container_name);
+            }
+          }
+
+          const runtimeDir = resolveRuntimeDirectoryForCleanup(
+            runtime.runtime_home_path,
+            env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+          );
+          await fs.rm(runtimeDir, { recursive: true, force: true });
+          activeRuntimeUses.delete(runtime.runtime_id);
+          multitenancy.runtimes.updateStatus?.({
+            runtimeId: runtime.runtime_id,
+            status: 'deleted',
+          });
+          cleaned.push({
+            runtimeId: runtime.runtime_id,
+            containerName: runtime.container_name,
+            runtimeDir,
+          });
+        });
+      }
+
+      return { cleaned: cleaned.length, runtimes: cleaned };
     },
   };
 }

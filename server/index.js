@@ -72,6 +72,7 @@ import {authenticateToken, authenticateWebSocket, validateApiKey} from './middle
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
 import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
+import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
@@ -245,6 +246,101 @@ function resolveEditableWorkspace(req, { projectName, requireEdit = true } = {})
     workspace,
     accessRole: workspace.accessRole,
   };
+}
+
+function parsePositiveRequestInteger(value) {
+    if (Array.isArray(value)) {
+        return parsePositiveRequestInteger(value[0]);
+    }
+    const parsed = Number.parseInt(String(value), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveWorkspaceDeleteContext(req, { projectName } = {}) {
+    if (req.tenant) {
+        return resolveEditableWorkspace(req, { projectName });
+    }
+
+    const workspaceId = parsePositiveRequestInteger(req.query?.workspaceId);
+    const userId = req.user?.id ?? req.user?.userId;
+    if (!workspaceId || !userId) {
+        return null;
+    }
+
+    const workspace = multitenancyDb.workspaces.getWorkspaceById(workspaceId);
+    if (!workspace || !['active', 'deleted'].includes(workspace.status)) {
+        return null;
+    }
+    if (projectName && workspace.slug !== projectName) {
+        return null;
+    }
+    if (workspace.status === 'deleted') {
+        if (Number(workspace.owner_user_id) === Number(userId)) {
+            return { workspace, accessRole: 'owner' };
+        }
+        const acl = multitenancyDb.workspaceAcl.getAclEntry(workspaceId, userId);
+        if (acl?.permission === 'edit') {
+            return { workspace, accessRole: 'edit' };
+        }
+        return null;
+    }
+
+    return workspaceAccess.requireWorkspace({
+        tenantId: workspace.tenant_id,
+        userId,
+        workspaceId,
+        requireEdit: true,
+    });
+}
+
+async function resolveWorkspaceDeleteTarget(workspacePath) {
+    const resolvedRoot = await fsPromises.realpath(WORKSPACES_ROOT);
+    const resolvedTarget = path.resolve(workspacePath);
+    let realTarget = resolvedTarget;
+
+    try {
+        realTarget = await fsPromises.realpath(resolvedTarget);
+    } catch (error) {
+        if (error?.code !== 'ENOENT') {
+            throw error;
+        }
+    }
+
+    const relativePath = path.relative(resolvedRoot, realTarget);
+    if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        const error = new Error('Workspace delete path must stay within WORKSPACES_ROOT');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    return resolvedTarget;
+}
+
+async function pruneEmptyWorkspaceParents(startPath) {
+    const resolvedRoot = await fsPromises.realpath(WORKSPACES_ROOT);
+    let current = path.dirname(path.resolve(startPath));
+
+    while (current && current !== resolvedRoot) {
+        const relativePath = path.relative(resolvedRoot, current);
+        if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+            return;
+        }
+
+        try {
+            await fsPromises.rmdir(current);
+        } catch {
+            return;
+        }
+        current = path.dirname(current);
+    }
+}
+
+async function deleteWorkspaceFilesystem(workspace) {
+    const deleteTarget = await resolveWorkspaceDeleteTarget(workspace.path);
+    await fsPromises.rm(deleteTarget, { recursive: true, force: true });
+    await pruneEmptyWorkspaceParents(deleteTarget);
+    clearProjectDirectoryCache();
+    return deleteTarget;
 }
 
 function attachTenantContextIfNeeded(req, res, next) {
@@ -884,16 +980,17 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, attachTenantContex
 
 // Delete project endpoint
 // force=true to allow removal even when sessions exist
-// deleteData=true to also delete session/memory files on disk (destructive)
+// deleteData=true to also delete legacy session/memory files on disk (destructive)
+// Platform workspaces always remove their Docker runtimes and workspace filesystem.
 app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
-        if (req.tenant) {
-            const { projectName } = req.params;
-            const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
-            const { workspace } = resolvedWorkspace ?? {};
-            if (!workspace) {
-                return res.status(404).json({ error: 'Project not found' });
-            }
+        const { projectName } = req.params;
+        const resolvedWorkspace = resolveWorkspaceDeleteContext(req, { projectName });
+        const { workspace } = resolvedWorkspace ?? {};
+        if (req.tenant && !workspace) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        if (workspace) {
             const force = req.query.force === 'true';
             const deleteData = req.query.deleteData === 'true';
 
@@ -905,12 +1002,22 @@ app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextI
                 }
             }
 
+            const runtimeCleanup = await agentSessionRuntimeManager.cleanupWorkspaceRuntimes({
+                tenantId: workspace.tenant_id,
+                workspaceId: workspace.id,
+            });
+            const deletedPath = await deleteWorkspaceFilesystem(workspace);
             multitenancyDb.workspaces.markDeleted({ workspaceId: workspace.id });
-            res.json({ success: true });
+            res.json({
+                success: true,
+                cleanup: {
+                    runtimes: runtimeCleanup.cleaned,
+                    workspacePath: deletedPath,
+                },
+            });
             return;
         }
 
-        const { projectName } = req.params;
         const force = req.query.force === 'true';
         const deleteData = req.query.deleteData === 'true';
         await deleteProject(projectName, force, deleteData);

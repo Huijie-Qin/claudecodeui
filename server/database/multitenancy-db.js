@@ -1923,6 +1923,20 @@ export function createMultitenancyDb(database = db) {
         `).get(...params) ?? null;
       },
 
+      listForWorkspace: ({ tenantId, workspaceId, includeDeleted = false }) => {
+        return database.prepare(`
+          SELECT *
+          FROM agent_session_runtime
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            ${includeDeleted ? '' : "AND status != 'deleted'"}
+          ORDER BY updated_at DESC, id DESC
+        `).all(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(workspaceId, 'workspaceId'),
+        );
+      },
+
       bindProviderSession: ({ runtimeId, providerSessionId }) => {
         const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
         const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
