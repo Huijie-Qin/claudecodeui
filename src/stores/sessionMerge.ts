@@ -1,6 +1,7 @@
 import type { NormalizedMessage } from './useSessionStore';
 
 const OPTIMISTIC_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+const OPTIMISTIC_USER_CLOCK_SKEW_MS = 2_000;
 
 function isLocalOptimisticUserText(message: NormalizedMessage): boolean {
   return message.id.startsWith('local_') &&
@@ -27,6 +28,8 @@ function isPersistedCopyOfOptimisticUserText(
   const serverTime = new Date(serverMessage.timestamp).getTime();
   const realtimeTime = new Date(realtimeMessage.timestamp).getTime();
   if (!Number.isFinite(serverTime) || !Number.isFinite(realtimeTime)) return false;
+
+  if (serverTime + OPTIMISTIC_USER_CLOCK_SKEW_MS < realtimeTime) return false;
 
   return Math.abs(serverTime - realtimeTime) <= OPTIMISTIC_USER_DEDUPE_WINDOW_MS;
 }
