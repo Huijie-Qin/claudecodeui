@@ -53,6 +53,7 @@ const pendingToolApprovals = new Map();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
+const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 
@@ -238,8 +239,10 @@ function mapCliOptionsToSDK(options = {}) {
     cwd,
     permissionMode,
     pathToClaudeCodeExecutable,
+    executableArgs,
     executionEnv,
     settingSources,
+    spawnClaudeCodeProcess,
   } = options;
 
   const sdkOptions = {};
@@ -255,6 +258,12 @@ function mapCliOptionsToSDK(options = {}) {
   // this fallback ensures users who installed via the official installer still work
   // even when npm prune --production has removed those optional deps.
   sdkOptions.pathToClaudeCodeExecutable = pathToClaudeCodeExecutable || process.env.CLAUDE_CLI_PATH || 'claude';
+  if (Array.isArray(executableArgs) && executableArgs.length > 0) {
+    sdkOptions.executableArgs = executableArgs;
+  }
+  if (spawnClaudeCodeProcess) {
+    sdkOptions.spawnClaudeCodeProcess = spawnClaudeCodeProcess;
+  }
 
   // Map working directory
   if (cwd) {
@@ -270,7 +279,7 @@ function mapCliOptionsToSDK(options = {}) {
 
   // Add plan mode default tools
   if (permissionMode === 'plan') {
-    const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
+    const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite'];
     for (const tool of planModeTools) {
       if (!allowedTools.includes(tool)) {
         allowedTools.push(tool);
@@ -286,6 +295,7 @@ function mapCliOptionsToSDK(options = {}) {
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
   sdkOptions.disallowedTools = uniqueTools([
+    ...DISABLED_CLAUDE_CODE_TOOLS,
     ...getConfiguredDisabledTools(options),
     ...(isClaudeNativeSchedulingDisabled(sdkOptions.env) ? CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES : []),
   ]);
@@ -624,6 +634,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
       cwd: runtimeContext.cwd || options.cwd,
       projectPath: runtimeContext.projectPath || options.projectPath,
       pathToClaudeCodeExecutable: runtimeContext.pathToClaudeCodeExecutable,
+      executableArgs: runtimeContext.executableArgs,
+      spawnClaudeCodeProcess: runtimeContext.spawnClaudeCodeProcess,
       executionEnv: runtimeContext.executionEnv,
       settingSources: runtimeContext.settingSources,
       runtimeId: runtimeContext.runtimeId,
@@ -656,6 +668,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       workspaceId: runtimeOptions.workspaceId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
+      env: runtimeOptions.executionEnv,
     });
     if (mcpServers) {
       sdkOptions.mcpServers = mcpServers;
@@ -774,7 +787,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
           if (!sdkOptions.allowedTools.includes(decision.rememberEntry)) {
             sdkOptions.allowedTools.push(decision.rememberEntry);
           }
-          if (Array.isArray(sdkOptions.disallowedTools)) {
+          if (Array.isArray(sdkOptions.disallowedTools) && !DISABLED_CLAUDE_CODE_TOOLS.includes(decision.rememberEntry)) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
@@ -1127,6 +1140,7 @@ export {
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
+  mapCliOptionsToSDK,
   resolveToolApproval,
   resolveClaudeModel,
   loadMcpConfig,
