@@ -6,6 +6,8 @@ import { authenticatedFetch } from '../../../utils/api';
 import { safeLocalStorage } from '../utils/chatStorage';
 import type { Project } from '../../../types/app';
 
+import { buildInputWithSelectedSlashCommand } from './useSlashCommands.utils';
+
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
 
 export interface SlashCommand {
@@ -59,6 +61,7 @@ export function useSlashCommands({
   const [commandQuery, setCommandQuery] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1);
   const [slashPosition, setSlashPosition] = useState(-1);
+  const [slashQueryEndPosition, setSlashQueryEndPosition] = useState(-1);
 
   const commandQueryTimerRef = useRef<number | null>(null);
 
@@ -72,6 +75,7 @@ export function useSlashCommands({
   const resetCommandMenuState = useCallback(() => {
     setShowCommandMenu(false);
     setSlashPosition(-1);
+    setSlashQueryEndPosition(-1);
     setCommandQuery('');
     setSelectedCommandIndex(-1);
     clearCommandQueryTimer();
@@ -199,29 +203,31 @@ export function useSlashCommands({
 
   const insertSelectedCommand = useCallback(
     (command: SlashCommand) => {
-      let newInput: string;
-
-      if (slashPosition >= 0) {
-        const textBeforeSlash = input.slice(0, slashPosition);
-        const textAfterSlash = input.slice(slashPosition);
-        const spaceIndex = textAfterSlash.indexOf(' ');
-        const textAfterQuery = spaceIndex !== -1 ? textAfterSlash.slice(spaceIndex) : '';
-        newInput = `${textBeforeSlash}${command.name} ${textAfterQuery}`;
-      } else {
-        const cursorPosition = textareaRef.current?.selectionStart ?? input.length;
-        const textBeforeCursor = input.slice(0, cursorPosition);
-        const textAfterCursor = input.slice(cursorPosition);
-        const leadingSpace = textBeforeCursor && !/\s$/.test(textBeforeCursor) ? ' ' : '';
-        const trailingSpace = textAfterCursor && !/^\s/.test(textAfterCursor) ? ' ' : '';
-        newInput = `${textBeforeCursor}${leadingSpace}${command.name} ${trailingSpace}${textAfterCursor}`;
-      }
+      const insertion = buildInputWithSelectedSlashCommand({
+        commandName: command.name,
+        cursorPosition: textareaRef.current?.selectionStart ?? input.length,
+        input,
+        replacementEndPosition: slashQueryEndPosition,
+        slashPosition,
+      });
 
       trackCommandUsage(command);
-      setInput(newInput);
+      setInput(insertion.value);
       resetCommandMenuState();
-      textareaRef.current?.focus();
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(insertion.cursorPosition, insertion.cursorPosition);
+      });
     },
-    [input, slashPosition, setInput, resetCommandMenuState, textareaRef, trackCommandUsage],
+    [
+      input,
+      slashPosition,
+      slashQueryEndPosition,
+      setInput,
+      resetCommandMenuState,
+      textareaRef,
+      trackCommandUsage,
+    ],
   );
 
   const handleCommandSelect = useCallback(
@@ -281,6 +287,7 @@ export function useSlashCommands({
       const query = match[2];
 
       setSlashPosition(slashPos);
+      setSlashQueryEndPosition(cursorPos);
       setShowCommandMenu(true);
       setSelectedCommandIndex(-1);
 
