@@ -1,17 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
-import { useUiPreferences } from '../../../hooks/useUiPreferences';
-import { useSidebarController } from '../hooks/useSidebarController';
+
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
+import { useUiPreferences } from '../../../hooks/useUiPreferences';
+import { cn } from '../../../lib/utils';
 import type { Project, LLMProvider } from '../../../types/app';
+import WorkspaceShareDialog from '../../workspace-share/WorkspaceShareDialog';
+import { useSidebarController } from '../hooks/useSidebarController';
 import type { MCPServerStatus, SidebarProps } from '../types/types';
+
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
-import WorkspaceShareDialog from '../../workspace-share/WorkspaceShareDialog';
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'cloudcli.sidebar.width';
+const DEFAULT_SIDEBAR_WIDTH = 288;
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 480;
+
+function clampSidebarWidth(width: number) {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
+}
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -50,6 +62,17 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const [shareProject, setShareProject] = useState<Project | null>(null);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') {
+      return DEFAULT_SIDEBAR_WIDTH;
+    }
+
+    const savedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+    return Number.isFinite(savedWidth)
+      ? clampSidebarWidth(savedWidth)
+      : DEFAULT_SIDEBAR_WIDTH;
+  });
 
   const {
     isSidebarCollapsed,
@@ -143,6 +166,59 @@ function Sidebar({
     setShareProject(project);
   };
 
+  const persistSidebarWidth = (width: number) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width));
+  };
+
+  const handleSidebarResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isMobile || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    let latestWidth = startWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    setIsResizingSidebar(true);
+    document.body.style.cursor = 'pointer';
+    document.body.style.userSelect = 'none';
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      latestWidth = clampSidebarWidth(startWidth + moveEvent.clientX - startX);
+      setSidebarWidth(latestWidth);
+    };
+
+    const stopResizing = () => {
+      setIsResizingSidebar(false);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      persistSidebarWidth(latestWidth);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResizing);
+      window.removeEventListener('pointercancel', stopResizing);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResizing);
+    window.addEventListener('pointercancel', stopResizing);
+  };
+
+  const adjustSidebarWidth = (delta: number) => {
+    setSidebarWidth((currentWidth) => {
+      const nextWidth = clampSidebarWidth(currentWidth + delta);
+      persistSidebarWidth(nextWidth);
+      return nextWidth;
+    });
+  };
+
   const projectListProps: SidebarProjectListProps = {
     projects,
     filteredProjects,
@@ -232,7 +308,14 @@ function Sidebar({
           t={t}
         />
       ) : (
-        <>
+        <div
+          className={cn('relative h-full', isResizingSidebar && 'select-none')}
+          style={isMobile ? undefined : {
+            width: sidebarWidth,
+            minWidth: MIN_SIDEBAR_WIDTH,
+            maxWidth: MAX_SIDEBAR_WIDTH,
+          }}
+        >
           <SidebarContent
             isPWA={isPWA}
             isMobile={isMobile}
@@ -287,7 +370,40 @@ function Sidebar({
             projectListProps={projectListProps}
             t={t}
           />
-        </>
+          {!isMobile && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_SIDEBAR_WIDTH}
+              aria-valuemax={MAX_SIDEBAR_WIDTH}
+              aria-valuenow={sidebarWidth}
+              tabIndex={0}
+              className={cn(
+                'absolute -right-1 top-0 z-20 flex h-full w-2 cursor-pointer touch-none items-center justify-center outline-none',
+                'after:h-full after:w-px after:bg-border/0 after:transition-colors hover:after:bg-primary/50 focus-visible:after:bg-primary/70',
+                isResizingSidebar && 'after:bg-primary/70',
+              )}
+              onPointerDown={handleSidebarResizeStart}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault();
+                  adjustSidebarWidth(-16);
+                } else if (event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  adjustSidebarWidth(16);
+                } else if (event.key === 'Home') {
+                  event.preventDefault();
+                  setSidebarWidth(MIN_SIDEBAR_WIDTH);
+                  persistSidebarWidth(MIN_SIDEBAR_WIDTH);
+                } else if (event.key === 'End') {
+                  event.preventDefault();
+                  setSidebarWidth(MAX_SIDEBAR_WIDTH);
+                  persistSidebarWidth(MAX_SIDEBAR_WIDTH);
+                }
+              }}
+            />
+          )}
+        </div>
       )}
 
     </>

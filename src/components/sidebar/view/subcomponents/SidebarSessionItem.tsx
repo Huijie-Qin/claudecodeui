@@ -97,7 +97,9 @@ export default function SidebarSessionItem({
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
-                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+                <div className="truncate text-xs font-medium text-foreground" title={sessionView.sessionName}>
+                  {sessionView.sessionName}
+                </div>
                 {isScheduledTaskSession && (
                   <Badge
                     variant="secondary"
@@ -154,7 +156,9 @@ export default function SidebarSessionItem({
           <div className="flex w-full min-w-0 items-start gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
-                <div className="truncate text-xs font-medium text-foreground">{sessionView.sessionName}</div>
+                <div className="truncate text-xs font-medium text-foreground" title={sessionView.sessionName}>
+                  {sessionView.sessionName}
+                </div>
                 {isScheduledTaskSession && (
                   <Badge
                     variant="secondary"

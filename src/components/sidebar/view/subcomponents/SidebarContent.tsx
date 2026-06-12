@@ -1,9 +1,11 @@
 import { type ReactNode } from 'react';
-import { Folder, MessageSquare, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { Folder, MessageSquare, Search } from 'lucide-react';
+
 import { ScrollArea } from '../../../../shared/view/ui';
 import type { Project, Tenant } from '../../../../types/app';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
+
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
@@ -93,10 +95,7 @@ export default function SidebarContent({
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
 
   return (
-    <div
-      className="flex h-full flex-col bg-background/80 backdrop-blur-sm md:w-72 md:select-none"
-      style={{}}
-    >
+    <div className="flex h-full w-full flex-col bg-background/80 backdrop-blur-sm md:select-none">
       <SidebarHeader
         isPWA={isPWA}
         isMobile={isMobile}
