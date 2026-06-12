@@ -82,6 +82,11 @@ import {
     assertWorkspaceUploadFitsQuota,
     getWorkspaceStorageQuota
 } from './services/workspace-storage-quota.js';
+import {
+    createSessionLimitExceededMessage,
+    isSessionLimitExceededError,
+    sessionConcurrencyLimiter
+} from './services/session-concurrency-limit.js';
 import {IS_PLATFORM} from './constants/config.js';
 import {getConnectableHost} from '../shared/networkHosts.js';
 import {
@@ -2190,6 +2195,36 @@ function authorizeCommandWorkspace(data, request, writer) {
     }
 }
 
+async function runLimitedProviderCommand({ data, provider, writer, run }) {
+    let lease;
+    try {
+        lease = sessionConcurrencyLimiter.acquire({
+            userId: data.options?.userId ?? writer.userId,
+        });
+    } catch (error) {
+        if (!isSessionLimitExceededError(error)) {
+            throw error;
+        }
+
+        writer.send(createNormalizedMessage({
+            kind: 'error',
+            content: createSessionLimitExceededMessage(error),
+            code: error.code,
+            provider,
+            sessionId: data.options?.sessionId || null,
+            currentConcurrentRequests: error.activeCount,
+            sessionLimit: error.limit,
+        }));
+        return;
+    }
+
+    try {
+        await run();
+    } finally {
+        lease?.release();
+    }
+}
+
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
@@ -2214,36 +2249,69 @@ function handleChatConnection(ws, request) {
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
 
                 // Use Claude Agents SDK
-                await queryClaudeSDK(data.command, data.options, writer);
+                await runLimitedProviderCommand({
+                    data,
+                    provider: 'claude',
+                    writer,
+                    run: () => queryClaudeSDK(data.command, data.options, writer),
+                });
             } else if (data.type === 'cursor-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnCursor(data.command, data.options, writer);
+                await runLimitedProviderCommand({
+                    data,
+                    provider: 'cursor',
+                    writer,
+                    run: () => spawnCursor(data.command, data.options, writer),
+                });
             } else if (data.type === 'codex-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await queryCodex(data.command, data.options, writer);
+                await runLimitedProviderCommand({
+                    data,
+                    provider: 'codex',
+                    writer,
+                    run: () => queryCodex(data.command, data.options, writer),
+                });
             } else if (data.type === 'gemini-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
                 console.log('🤖 Model:', data.options?.model || 'default');
-                await spawnGemini(data.command, data.options, writer);
+                await runLimitedProviderCommand({
+                    data,
+                    provider: 'gemini',
+                    writer,
+                    run: () => spawnGemini(data.command, data.options, writer),
+                });
             } else if (data.type === 'cursor-resume') {
                 // Backward compatibility: treat as cursor-command with resume and no prompt
                 console.log('[DEBUG] Cursor resume session (compat):', data.sessionId);
-                await spawnCursor('', {
-                    sessionId: data.sessionId,
-                    resume: true,
-                    cwd: data.options?.cwd
-                }, writer);
+                const resumeData = {
+                    ...data,
+                    options: {
+                        ...(data.options || {}),
+                        sessionId: data.sessionId,
+                        userId: writer.userId,
+                    },
+                };
+                await runLimitedProviderCommand({
+                    data: resumeData,
+                    provider: 'cursor',
+                    writer,
+                    run: () => spawnCursor('', {
+                        sessionId: data.sessionId,
+                        resume: true,
+                        cwd: data.options?.cwd
+                    }, writer),
+                });
             } else if (data.type === 'abort-session') {
                 console.log('[DEBUG] Abort session request:', data.sessionId);
                 const provider = data.provider || 'claude';
