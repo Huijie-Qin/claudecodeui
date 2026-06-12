@@ -18,8 +18,9 @@ import type { LLMProvider, Project, ProjectSession, Tenant } from '../../types/a
 
 type ScheduledTaskEditorState = {
   project: Project;
-  taskId: number;
+  taskId?: number | null;
   provider: LLMProvider;
+  mode: 'detail' | 'manage';
 };
 
 export default function AppContent() {
@@ -86,6 +87,7 @@ export default function AppContent() {
       project,
       taskId,
       provider: session.scheduledTask?.provider || session.__provider || 'claude',
+      mode: 'detail',
     });
     setActiveTab('chat');
 
@@ -93,6 +95,19 @@ export default function AppContent() {
       setSidebarOpen(false);
     }
   }, [isMobile, setActiveTab, setSidebarOpen]);
+
+  const handleWorkspaceScheduledTasksOpen = useCallback((project: Project) => {
+    setScheduledTaskEditor({
+      project,
+      taskId: null,
+      provider: 'claude',
+      mode: 'manage',
+    });
+
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, setSidebarOpen]);
 
   const handleNotificationNavigate = useCallback((targetSessionId: string) => {
     setActiveTab('chat');
@@ -206,6 +221,7 @@ export default function AppContent() {
           <Sidebar
             {...sidebarSharedProps}
             onScheduledTaskOpen={handleScheduledTaskOpen}
+            onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
             showAdminEntry={isSystemAdmin}
             onShowAdminPanel={() => setShowAdminPanel(true)}
             tenants={tenants}
@@ -240,6 +256,7 @@ export default function AppContent() {
             <Sidebar
               {...sidebarSharedProps}
               onScheduledTaskOpen={handleScheduledTaskOpen}
+              onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
               showAdminEntry={isSystemAdmin}
               onShowAdminPanel={() => setShowAdminPanel(true)}
               tenants={tenants}
@@ -282,7 +299,8 @@ export default function AppContent() {
           open
           selectedProject={scheduledTaskEditor.project}
           provider={scheduledTaskEditor.provider}
-          initialTaskId={scheduledTaskEditor.taskId}
+          initialTaskId={scheduledTaskEditor.mode === 'detail' ? scheduledTaskEditor.taskId : null}
+          mode={scheduledTaskEditor.mode === 'manage' ? 'manage' : undefined}
           onClose={() => setScheduledTaskEditor(null)}
         />
       ) : null}

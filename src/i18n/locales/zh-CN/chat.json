@@ -122,6 +122,7 @@
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
     "scheduledTasks": "定时任务",
+    "createScheduledTask": "创建定时任务",
     "scheduledTasksNewSessionOnly": "定时任务只能从新会话创建"
   },
   "thinkingMode": {
@@ -259,6 +260,7 @@
   },
   "scheduledTasks": {
     "title": "定时 session 任务",
+    "createTitle": "创建定时任务",
     "detailsTitle": "定时任务详情",
     "taskDetails": "任务详情",
     "existingTasks": "已有任务",
@@ -268,6 +270,8 @@
     "boundSession": "绑定 session：{{session}}",
     "cronHelp": "Cron 会由服务端调度。下次运行时间会从开始时间计算。",
     "cronInvalid": "请使用 5 段 cron 表达式。",
+    "nextRunsUnavailable": "请选择有效开始时间以预览运行时间。",
+    "confirmDelete": "确认删除定时任务「{{name}}」？此操作不可撤销。",
     "labels": {
       "taskName": "任务名称",
       "message": "消息",
@@ -285,6 +289,7 @@
       "session": "Session",
       "model": "模型",
       "permission": "权限",
+      "nextFiveRuns": "最近 5 次执行时间",
       "nextRun": "下次运行",
       "lastRun": "上次运行",
       "created": "创建时间",

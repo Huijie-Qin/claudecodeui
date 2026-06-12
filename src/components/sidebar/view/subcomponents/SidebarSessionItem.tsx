@@ -1,4 +1,4 @@
-import { CalendarClock, Check, Clock, Edit2, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, Clock, Edit2, Pause, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { MouseEvent } from 'react';
 
@@ -52,6 +52,8 @@ export default function SidebarSessionItem({
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
   const isScheduledTaskSession = session.isScheduledTaskSession === true;
+  const isScheduledTaskPaused = isScheduledTaskSession && session.scheduledTask?.enabled === false;
+  const canRenameSession = !isScheduledTaskSession;
   const scheduledTaskTitle =
     typeof session.scheduledTask?.name === 'string'
       ? session.scheduledTask.name
@@ -115,6 +117,16 @@ export default function SidebarSessionItem({
                     定时
                   </Badge>
                 )}
+                {isScheduledTaskPaused && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 gap-1 border-amber-500/30 bg-amber-500/10 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
+                    title="已暂停"
+                  >
+                    <Pause className="h-2.5 w-2.5" />
+                    暂停
+                  </Badge>
+                )}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
@@ -174,6 +186,16 @@ export default function SidebarSessionItem({
                     定时
                   </Badge>
                 )}
+                {isScheduledTaskPaused && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 gap-1 border-amber-500/30 bg-amber-500/10 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
+                    title="已暂停"
+                  >
+                    <Pause className="h-2.5 w-2.5" />
+                    暂停
+                  </Badge>
+                )}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
@@ -194,7 +216,7 @@ export default function SidebarSessionItem({
         </Button>
 
         <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-all duration-200 group-hover:opacity-100">
-            {editingSession === session.id ? (
+            {editingSession === session.id && canRenameSession ? (
               <>
                 <input
                   type="text"
@@ -235,16 +257,18 @@ export default function SidebarSessionItem({
               </>
             ) : (
               <>
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStartEditingSession(session.id, sessionView.sessionName);
-                  }}
-                  title={t('tooltips.editSessionName')}
-                >
-                  <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
-                </button>
+                {canRenameSession && (
+                  <button
+                    className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onStartEditingSession(session.id, sessionView.sessionName);
+                    }}
+                    title={t('tooltips.editSessionName')}
+                  >
+                    <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  </button>
+                )}
                 {!sessionView.isCursorSession && (
                   <button
                     className="flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"

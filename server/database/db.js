@@ -207,6 +207,12 @@ function runMultitenancyMigrations() {
     db.exec('ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_cron TEXT');
   }
 
+  if (!scheduledTaskColumns.includes('schedule_start_at')) {
+    console.log('Running migration: Adding scheduled_session_tasks.schedule_start_at column');
+    db.exec('ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_start_at TEXT');
+    db.exec('UPDATE scheduled_session_tasks SET schedule_start_at = next_run_at WHERE schedule_start_at IS NULL');
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_preinstall
       ON mcp_server_presets(tenant_id, preinstall_scope, status)
@@ -1634,6 +1640,7 @@ const scheduledTasksDb = {
         provider,
         schedule_type,
         schedule_cron,
+        schedule_start_at,
         next_run_at
       FROM scheduled_session_tasks
       WHERE tenant_id = ?
@@ -1654,6 +1661,7 @@ const scheduledTasksDb = {
           provider: row.provider,
           scheduleType: row.schedule_type || 'interval',
           scheduleCron: row.schedule_cron || null,
+          scheduleStartAt: row.schedule_start_at || row.next_run_at,
           nextRunAt: row.next_run_at,
         });
       }

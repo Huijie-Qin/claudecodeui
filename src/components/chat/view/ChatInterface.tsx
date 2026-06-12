@@ -450,6 +450,7 @@ function ChatInterface({
           initialPrompt={input}
           selectedSessionId={null}
           selectedSessionName={scheduledTaskSessionName}
+          mode="create"
           onClose={() => setShowScheduledTasks(false)}
         />
       ) : null}
