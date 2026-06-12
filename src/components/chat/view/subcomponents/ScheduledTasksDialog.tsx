@@ -33,6 +33,7 @@ type ScheduledTask = {
 
 type ScheduleType = 'interval' | 'cron';
 type ScheduleMode = 'interval' | 'cron' | 'visual';
+type ScheduledTasksDialogMode = 'create' | 'manage';
 type VisualFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 type TaskEditForm = {
@@ -60,6 +61,7 @@ type ScheduledTasksDialogProps = {
   initialTaskId?: number | null;
   selectedSessionId?: string | null;
   selectedSessionName?: string | null;
+  mode?: ScheduledTasksDialogMode;
   onClose: () => void;
 };
 
@@ -699,6 +701,7 @@ export default function ScheduledTasksDialog({
   initialTaskId = null,
   selectedSessionId = null,
   selectedSessionName = null,
+  mode = 'manage',
   onClose,
 }: ScheduledTasksDialogProps) {
   const { t } = useTranslation('chat');
@@ -726,7 +729,14 @@ export default function ScheduledTasksDialog({
   const editPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const initialEditStartedRef = useRef<number | null>(null);
   const isTaskDetailMode = initialTaskId !== null && initialTaskId !== undefined;
+  const showCreateForm = !isTaskDetailMode && mode === 'create';
+  const showTasksList = isTaskDetailMode || mode === 'manage';
   const neverLabel = t('scheduledTasks.never', { defaultValue: 'Never' });
+  const dialogTitle = isTaskDetailMode
+    ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
+    : showCreateForm
+      ? t('scheduledTasks.createTitle', { defaultValue: 'Create scheduled task' })
+      : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' });
 
   const canSave = useMemo(
     () => {
@@ -1152,9 +1162,7 @@ export default function ScheduledTasksDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) { resetCommandMenuState(); resetEditCommandMenuState(); onClose(); } }}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden p-0">
         <DialogTitle>
-          {isTaskDetailMode
-            ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
-            : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' })}
+          {dialogTitle}
         </DialogTitle>
         <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
@@ -1163,9 +1171,7 @@ export default function ScheduledTasksDialog({
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-foreground">
-                {isTaskDetailMode
-                  ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
-                  : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' })}
+                {dialogTitle}
               </h2>
               <p className="truncate text-xs text-muted-foreground">
                 {selectedProject.displayName || selectedProject.name}
@@ -1183,7 +1189,7 @@ export default function ScheduledTasksDialog({
         </div>
 
         <div className="max-h-[calc(90vh-132px)] overflow-y-auto px-5 py-4">
-          <div className={isTaskDetailMode ? 'hidden' : 'grid gap-3'}>
+          <div className={!showCreateForm ? 'hidden' : 'grid gap-3'}>
             <label className="space-y-1">
               <span className="text-xs text-muted-foreground">
                 {t('scheduledTasks.labels.taskName', { defaultValue: 'Task name' })}
@@ -1197,7 +1203,7 @@ export default function ScheduledTasksDialog({
             </label>
           </div>
 
-          <div className={isTaskDetailMode ? 'hidden' : 'mt-3 space-y-1'}>
+          <div className={!showCreateForm ? 'hidden' : 'mt-3 space-y-1'}>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs text-muted-foreground" htmlFor="scheduled-task-message">
                 {t('scheduledTasks.labels.message', { defaultValue: 'Message' })}
@@ -1253,7 +1259,7 @@ export default function ScheduledTasksDialog({
           </div>
 
           {selectedSessionId ? (
-            <div className={isTaskDetailMode ? 'hidden' : 'mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'}>
+            <div className={!showCreateForm ? 'hidden' : 'mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'}>
               {t('scheduledTasks.boundSession', {
                 defaultValue: 'Bound session: {{session}}',
                 session: selectedSessionName || selectedSessionId,
@@ -1261,7 +1267,7 @@ export default function ScheduledTasksDialog({
             </div>
           ) : null}
 
-          <div className={isTaskDetailMode ? 'hidden' : 'mt-3 space-y-3'}>
+          <div className={!showCreateForm ? 'hidden' : 'mt-3 space-y-3'}>
             <ScheduleControls
               values={{
                 scheduleMode,
@@ -1303,14 +1309,15 @@ export default function ScheduledTasksDialog({
             </div>
           ) : null}
 
-          <div className={isTaskDetailMode ? 'hidden' : 'mt-4 flex justify-end'}>
+          <div className={!showCreateForm ? 'hidden' : 'mt-4 flex justify-end'}>
             <Button onClick={() => void createTask()} disabled={!canSave}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
               {t('scheduledTasks.actions.createTask', { defaultValue: 'Create task' })}
             </Button>
           </div>
 
-          <div className="mt-5 border-t border-border pt-4">
+          {showTasksList ? (
+          <div className={showCreateForm ? 'mt-5 border-t border-border pt-4' : ''}>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-medium text-foreground">
                 {isTaskDetailMode
@@ -1542,6 +1549,7 @@ export default function ScheduledTasksDialog({
               </div>
             )}
           </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

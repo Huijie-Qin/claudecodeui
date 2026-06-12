@@ -330,7 +330,7 @@ export default function ChatComposer({
             {onOpenScheduledTasks || scheduledTasksDisabledReason ? (
               <PromptInputButton
                 tooltip={{
-                  content: scheduledTasksDisabledReason || t('input.scheduledTasks', { defaultValue: 'Scheduled tasks' }),
+                  content: scheduledTasksDisabledReason || t('input.createScheduledTask', { defaultValue: 'Create scheduled task' }),
                 }}
                 onClick={onOpenScheduledTasks ?? ((event) => event.preventDefault())}
                 aria-disabled={onOpenScheduledTasks ? undefined : true}

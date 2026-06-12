@@ -140,6 +140,7 @@
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
     "scheduledTasks": "Scheduled tasks",
+    "createScheduledTask": "Create scheduled task",
     "scheduledTasksNewSessionOnly": "Scheduled tasks can only be created from a new session"
   },
   "thinkingMode": {
@@ -274,6 +275,7 @@
   },
   "scheduledTasks": {
     "title": "Scheduled session tasks",
+    "createTitle": "Create scheduled task",
     "detailsTitle": "Scheduled task details",
     "taskDetails": "Task details",
     "existingTasks": "Existing tasks",

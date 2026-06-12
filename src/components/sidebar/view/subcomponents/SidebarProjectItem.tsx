@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -36,6 +36,7 @@ type SidebarProjectItemProps = {
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
+  onScheduledTasksListOpen?: (project: Project) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -88,6 +89,7 @@ export default function SidebarProjectItem({
   onDeleteProject,
   onSessionSelect,
   onScheduledTaskOpen,
+  onScheduledTasksListOpen,
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
@@ -109,6 +111,7 @@ export default function SidebarProjectItem({
 
   const toggleProject = () => onToggleProject(project.name);
   const toggleStarProject = () => onToggleStarProject(project.name);
+  const openScheduledTasksList = () => onScheduledTasksListOpen?.(project);
 
   const saveProjectName = () => {
     onSaveProjectName(project);
@@ -240,6 +243,17 @@ export default function SidebarProjectItem({
                             : 'text-gray-600 dark:text-gray-400',
                         )}
                       />
+                    </button>
+
+                    <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openScheduledTasksList();
+                      }}
+                      title={t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' })}
+                    >
+                      <CalendarClock className="h-4 w-4 text-primary" />
                     </button>
 
                     <button
@@ -378,6 +392,16 @@ export default function SidebarProjectItem({
                         : 'text-muted-foreground',
                     )}
                   />
+                </div>
+                <div
+                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-primary/80 transition-all duration-200 hover:bg-accent hover:text-primary"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openScheduledTasksList();
+                  }}
+                  title={t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' })}
+                >
+                  <CalendarClock className="h-3 w-3" />
                 </div>
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"

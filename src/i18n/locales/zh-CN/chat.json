@@ -122,6 +122,7 @@
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
     "scheduledTasks": "定时任务",
+    "createScheduledTask": "创建定时任务",
     "scheduledTasksNewSessionOnly": "定时任务只能从新会话创建"
   },
   "thinkingMode": {
@@ -259,6 +260,7 @@
   },
   "scheduledTasks": {
     "title": "定时 session 任务",
+    "createTitle": "创建定时任务",
     "detailsTitle": "定时任务详情",
     "taskDetails": "任务详情",
     "existingTasks": "已有任务",
