@@ -9,6 +9,7 @@ import type { Project } from '../../../types/app';
 import { buildInputWithSelectedSlashCommand } from './useSlashCommands.utils';
 
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
+const SLASH_COMMANDS_CHANGED_EVENT = 'cloudcli:slash-commands-changed';
 
 export interface SlashCommand {
   name: string;
@@ -81,58 +82,83 @@ export function useSlashCommands({
     clearCommandQueryTimer();
   }, [clearCommandQueryTimer]);
 
-  useEffect(() => {
-    const fetchCommands = async () => {
-      if (!selectedProject) {
-        setSlashCommands([]);
-        setFilteredCommands([]);
-        return;
+  const fetchCommands = useCallback(async () => {
+    if (!selectedProject) {
+      setSlashCommands([]);
+      setFilteredCommands([]);
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch('/api/commands/list', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectPath: selectedProject.path,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch commands');
       }
 
-      try {
-        const response = await authenticatedFetch('/api/commands/list', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            projectPath: selectedProject.path,
-          }),
-        });
+      const data = await response.json();
+      const allCommands: SlashCommand[] = [
+        ...((data.builtIn || []) as SlashCommand[]).map((command) => ({
+          ...command,
+          type: 'built-in',
+        })),
+        ...((data.custom || []) as SlashCommand[]).map((command) => ({
+          ...command,
+          type: 'custom',
+        })),
+      ];
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch commands');
-        }
+      const selectableCommands = commandFilter ? allCommands.filter(commandFilter) : allCommands;
+      const parsedHistory = readCommandHistory(selectedProject.name);
+      const sortedCommands = [...selectableCommands].sort((commandA, commandB) => {
+        const commandAUsage = parsedHistory[commandA.name] || 0;
+        const commandBUsage = parsedHistory[commandB.name] || 0;
+        return commandBUsage - commandAUsage;
+      });
 
-        const data = await response.json();
-        const allCommands: SlashCommand[] = [
-          ...((data.builtIn || []) as SlashCommand[]).map((command) => ({
-            ...command,
-            type: 'built-in',
-          })),
-          ...((data.custom || []) as SlashCommand[]).map((command) => ({
-            ...command,
-            type: 'custom',
-          })),
-        ];
+      setSlashCommands(sortedCommands);
+    } catch (error) {
+      console.error('Error fetching slash commands:', error);
+      setSlashCommands([]);
+    }
+  }, [commandFilter, selectedProject]);
 
-        const selectableCommands = commandFilter ? allCommands.filter(commandFilter) : allCommands;
-        const parsedHistory = readCommandHistory(selectedProject.name);
-        const sortedCommands = [...selectableCommands].sort((commandA, commandB) => {
-          const commandAUsage = parsedHistory[commandA.name] || 0;
-          const commandBUsage = parsedHistory[commandB.name] || 0;
-          return commandBUsage - commandAUsage;
-        });
+  useEffect(() => {
+    void fetchCommands();
+  }, [fetchCommands]);
 
-        setSlashCommands(sortedCommands);
-      } catch (error) {
-        console.error('Error fetching slash commands:', error);
-        setSlashCommands([]);
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const refreshCommands = () => {
+      void fetchCommands();
+    };
+    const refreshVisibleCommands = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchCommands();
       }
     };
 
-    fetchCommands();
-  }, [commandFilter, selectedProject]);
+    window.addEventListener(SLASH_COMMANDS_CHANGED_EVENT, refreshCommands);
+    window.addEventListener('focus', refreshCommands);
+    document.addEventListener('visibilitychange', refreshVisibleCommands);
+
+    return () => {
+      window.removeEventListener(SLASH_COMMANDS_CHANGED_EVENT, refreshCommands);
+      window.removeEventListener('focus', refreshCommands);
+      document.removeEventListener('visibilitychange', refreshVisibleCommands);
+    };
+  }, [fetchCommands]);
 
   useEffect(() => {
     if (!showCommandMenu) {
@@ -253,11 +279,12 @@ export function useSlashCommands({
     setSelectedCommandIndex(-1);
 
     if (isOpening) {
+      void fetchCommands();
       setFilteredCommands(slashCommands);
     }
 
     textareaRef.current?.focus();
-  }, [showCommandMenu, slashCommands, textareaRef]);
+  }, [fetchCommands, showCommandMenu, slashCommands, textareaRef]);
 
   const handleCommandInputChange = useCallback(
     (newValue: string, cursorPos: number) => {

@@ -18,6 +18,28 @@ const getErrorMessage = (error: unknown) => {
   return String(error);
 };
 
+const isSkillPath = (filePath: string) => {
+  const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
+  return normalizedPath.includes('/.claude/skills/')
+    || normalizedPath.startsWith('.claude/skills/')
+    || normalizedPath.includes('/.cloudcli/skills/sources/')
+    || normalizedPath.startsWith('.cloudcli/skills/sources/')
+    || normalizedPath.endsWith('/skill.md');
+};
+
+const notifySlashCommandsChanged = (filePath: string, workspaceId?: number) => {
+  if (typeof window === 'undefined' || !isSkillPath(filePath)) {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent('cloudcli:slash-commands-changed', {
+    detail: {
+      filePath,
+      workspaceId,
+    },
+  }));
+};
+
 export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }: UseCodeEditorDocumentParams) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -104,6 +126,7 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
       await response.json();
 
       setSaveSuccess(true);
+      notifySlashCommandsChanged(filePath, file.workspaceId);
       setTimeout(() => setSaveSuccess(false), 2000);
       return true;
     } catch (error) {
