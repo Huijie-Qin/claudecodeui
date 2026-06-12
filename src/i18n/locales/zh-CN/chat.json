@@ -268,6 +268,8 @@
     "boundSession": "绑定 session：{{session}}",
     "cronHelp": "Cron 会由服务端调度。下次运行时间会从开始时间计算。",
     "cronInvalid": "请使用 5 段 cron 表达式。",
+    "nextRunsUnavailable": "请选择有效开始时间以预览运行时间。",
+    "confirmDelete": "确认删除定时任务「{{name}}」？此操作不可撤销。",
     "labels": {
       "taskName": "任务名称",
       "message": "消息",
@@ -285,6 +287,7 @@
       "session": "Session",
       "model": "模型",
       "permission": "权限",
+      "nextFiveRuns": "最近 5 次执行时间",
       "nextRun": "下次运行",
       "lastRun": "上次运行",
       "created": "创建时间",

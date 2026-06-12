@@ -297,6 +297,7 @@ CREATE TABLE IF NOT EXISTS scheduled_session_tasks (
   schedule_type TEXT NOT NULL DEFAULT 'interval' CHECK (schedule_type IN ('interval', 'cron')),
   schedule_cron TEXT,
   interval_minutes INTEGER NOT NULL CHECK (interval_minutes >= 1),
+  schedule_start_at TEXT,
   next_run_at TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   model TEXT,

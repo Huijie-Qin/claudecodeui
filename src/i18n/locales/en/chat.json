@@ -283,6 +283,8 @@
     "boundSession": "Bound session: {{session}}",
     "cronHelp": "Cron runs use the server scheduler. Next run is calculated from the start time.",
     "cronInvalid": "Use 5 cron fields.",
+    "nextRunsUnavailable": "Choose a valid start time to preview runs.",
+    "confirmDelete": "Delete scheduled task \"{{name}}\"? This cannot be undone.",
     "labels": {
       "taskName": "Task name",
       "message": "Message",
@@ -300,6 +302,7 @@
       "session": "Session",
       "model": "Model",
       "permission": "Permission",
+      "nextFiveRuns": "Next 5 runs",
       "nextRun": "Next run",
       "lastRun": "Last run",
       "created": "Created",

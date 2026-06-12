@@ -34,6 +34,7 @@ export interface ProjectSession {
     provider?: LLMProvider;
     scheduleType?: 'interval' | 'cron';
     scheduleCron?: string | null;
+    scheduleStartAt?: string | null;
     nextRunAt?: string | null;
     [key: string]: unknown;
   };

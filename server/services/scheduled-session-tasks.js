@@ -96,6 +96,7 @@ function mapTaskRow(row) {
     scheduleType: row.schedule_type || 'interval',
     scheduleCron: row.schedule_cron || null,
     intervalMinutes: row.interval_minutes,
+    scheduleStartAt: row.schedule_start_at || row.next_run_at,
     nextRunAt: row.next_run_at,
     enabled: Boolean(row.enabled),
     model: row.model,
@@ -113,17 +114,6 @@ function addIntervalFromNow(intervalMinutes) {
   return new Date(Date.now() + intervalMinutes * 60_000).toISOString();
 }
 
-function computeNextRunAtForSchedule({ scheduleType, scheduleCron, intervalMinutes, nextRunAt, startAfterAt }) {
-  if (scheduleType === 'cron') {
-    const normalizedCron = normalizeCronExpression(scheduleCron);
-    const startAfter = startAfterAt || nextRunAt || new Date().toISOString();
-    const startAfterDate = new Date(normalizeDate(startAfter, 'startAfterAt'));
-    return getNextCronRunAt(normalizedCron, startAfterDate, { inclusive: true }).toISOString();
-  }
-
-  return normalizeDate(nextRunAt, 'nextRunAt');
-}
-
 function normalizeTaskSchedule({ scheduleType = null, scheduleCron = null, intervalMinutes, nextRunAt, startAfterAt }) {
   const inferredScheduleType = scheduleType == null || scheduleType === ''
     ? (scheduleCron ? 'cron' : 'interval')
@@ -131,25 +121,24 @@ function normalizeTaskSchedule({ scheduleType = null, scheduleCron = null, inter
   const normalizedScheduleType = normalizeScheduleType(inferredScheduleType);
   if (normalizedScheduleType === 'cron') {
     const normalizedCron = normalizeCronExpression(scheduleCron);
+    const scheduleStartAt = normalizeDate(startAfterAt || nextRunAt || new Date().toISOString(), 'startAfterAt');
+    const startAfterDate = new Date(scheduleStartAt);
     return {
       scheduleType: 'cron',
       scheduleCron: normalizedCron,
       intervalMinutes: intervalMinutes == null ? 60 : requirePositiveInteger(intervalMinutes, 'intervalMinutes'),
-      nextRunAt: computeNextRunAtForSchedule({
-        scheduleType: 'cron',
-        scheduleCron: normalizedCron,
-        intervalMinutes,
-        nextRunAt,
-        startAfterAt,
-      }),
+      scheduleStartAt,
+      nextRunAt: getNextCronRunAt(normalizedCron, startAfterDate, { inclusive: true }).toISOString(),
     };
   }
 
+  const normalizedNextRunAt = normalizeDate(nextRunAt, 'nextRunAt');
   return {
     scheduleType: 'interval',
     scheduleCron: null,
     intervalMinutes: requirePositiveInteger(intervalMinutes, 'intervalMinutes'),
-    nextRunAt: normalizeDate(nextRunAt, 'nextRunAt'),
+    scheduleStartAt: normalizedNextRunAt,
+    nextRunAt: normalizedNextRunAt,
   };
 }
 
@@ -345,6 +334,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           schedule_type,
           schedule_cron,
           interval_minutes,
+          schedule_start_at,
           next_run_at,
           enabled,
           model,
@@ -352,7 +342,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           tools_settings_json,
           last_session_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         normalizedTenantId,
         normalizedWorkspaceId,
@@ -363,6 +353,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         normalizedSchedule.scheduleType,
         normalizedSchedule.scheduleCron,
         normalizedSchedule.intervalMinutes,
+        normalizedSchedule.scheduleStartAt,
         normalizedSchedule.nextRunAt,
         enabled ? 1 : 0,
         model ? String(model).trim() : null,
@@ -434,12 +425,13 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
             scheduleCron: patch.scheduleCron !== undefined ? patch.scheduleCron : existing.scheduleCron,
             intervalMinutes: patch.intervalMinutes !== undefined ? patch.intervalMinutes : existing.intervalMinutes,
             nextRunAt: patch.nextRunAt !== undefined ? patch.nextRunAt : existing.nextRunAt,
-            startAfterAt: patch.startAfterAt,
+            startAfterAt: patch.startAfterAt !== undefined ? patch.startAfterAt : existing.scheduleStartAt,
           })
         : {
             scheduleType: existing.scheduleType || 'interval',
             scheduleCron: existing.scheduleCron || null,
             intervalMinutes: existing.intervalMinutes,
+            scheduleStartAt: existing.scheduleStartAt || existing.nextRunAt,
             nextRunAt: existing.nextRunAt,
           };
 
@@ -450,6 +442,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         scheduleType: normalizedSchedule.scheduleType,
         scheduleCron: normalizedSchedule.scheduleCron,
         intervalMinutes: normalizedSchedule.intervalMinutes,
+        scheduleStartAt: normalizedSchedule.scheduleStartAt,
         nextRunAt: normalizedSchedule.nextRunAt,
         enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : existing.enabled,
         model: patch.model !== undefined && patch.model !== null && String(patch.model).trim()
@@ -469,6 +462,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
             schedule_type = ?,
             schedule_cron = ?,
             interval_minutes = ?,
+            schedule_start_at = ?,
             next_run_at = ?,
             enabled = ?,
             model = ?,
@@ -485,6 +479,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         next.scheduleType,
         next.scheduleCron,
         next.intervalMinutes,
+        next.scheduleStartAt,
         next.nextRunAt,
         next.enabled ? 1 : 0,
         next.model,
