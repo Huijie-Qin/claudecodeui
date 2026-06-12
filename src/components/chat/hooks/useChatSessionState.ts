@@ -248,12 +248,7 @@ export function useChatSessionState({
 
   const scrollToBottomAndReset = useCallback(() => {
     scrollToBottom();
-    if (allMessagesLoaded) {
-      setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
-      setAllMessagesLoaded(false);
-      allMessagesLoadedRef.current = false;
-    }
-  }, [allMessagesLoaded, scrollToBottom]);
+  }, [scrollToBottom]);
 
   const isNearBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -366,8 +361,21 @@ export function useChatSessionState({
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
     const sessionKey = `${selectedSession.id}:${selectedProject.name}:${selectedProject.workspaceId || 'legacy'}:${provider}`;
 
-    // Skip if already loaded and fresh
-    if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
+    const existingSlot = sessionStore.getSessionSlot(selectedSession.id);
+
+    // Skip if already loaded, fresh, and complete.
+    if (
+      lastLoadedSessionKeyRef.current === sessionKey &&
+      sessionStore.has(selectedSession.id) &&
+      !sessionStore.isStale(selectedSession.id) &&
+      existingSlot &&
+      !existingSlot.hasMore
+    ) {
+      setVisibleMessageCount(Infinity);
+      setAllMessagesLoaded(true);
+      allMessagesLoadedRef.current = true;
+      setHasMoreMessages(false);
+      setTotalMessages(existingSlot.total);
       return;
     }
 
@@ -383,9 +391,9 @@ export function useChatSessionState({
     messagesOffsetRef.current = 0;
     setHasMoreMessages(false);
     setTotalMessages(0);
-    setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
-    setAllMessagesLoaded(false);
-    allMessagesLoadedRef.current = false;
+    setVisibleMessageCount(Infinity);
+    setAllMessagesLoaded(true);
+    allMessagesLoadedRef.current = true;
     setIsLoadingAllMessages(false);
     setLoadAllJustFinished(false);
     setShowLoadAllOverlay(false);
@@ -417,12 +425,16 @@ export function useChatSessionState({
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
       workspaceId: selectedProject.workspaceId,
-      limit: MESSAGES_PER_PAGE,
+      limit: null,
       offset: 0,
     }).then(slot => {
       if (slot) {
-        setHasMoreMessages(slot.hasMore);
+        setHasMoreMessages(false);
         setTotalMessages(slot.total);
+        messagesOffsetRef.current = slot.total;
+        setVisibleMessageCount(Infinity);
+        setAllMessagesLoaded(true);
+        allMessagesLoadedRef.current = true;
         if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
       }
       setIsLoadingSessionMessages(false);
