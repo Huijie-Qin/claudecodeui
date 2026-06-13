@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandEvents';
 import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
@@ -239,6 +240,11 @@ export default function SkillMarketDialog({
       changedPath,
       reason,
     });
+    dispatchSlashCommandsChangedForPath(changedPath, {
+      projectName: selectedProject.name,
+      workspaceId,
+      reason,
+    });
     await loadSkills(query);
     await loadDetail(skillName, selectedFilePath);
   };
@@ -314,6 +320,11 @@ export default function SkillMarketDialog({
         projectName: selectedProject.name,
         workspaceId,
         changedPath: `.claude/skills/${skillName}`,
+        reason: 'skill-market-remove',
+      });
+      dispatchSlashCommandsChangedForPath(`.claude/skills/${skillName}`, {
+        projectName: selectedProject.name,
+        workspaceId,
         reason: 'skill-market-remove',
       });
       await loadSkills(query);

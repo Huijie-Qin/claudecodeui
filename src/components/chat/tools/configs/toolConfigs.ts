@@ -131,6 +131,220 @@ function normalizeAskUserQuestionInput(value: unknown): any[] {
     .filter((q) => q.question || q.options.length > 0);
 }
 
+export interface SearchToolResultSummary {
+  files: string[];
+  count: number;
+}
+
+type SearchResultAccumulator = {
+  files: string[];
+  seenFiles: Set<string>;
+  counts: number[];
+};
+
+const SEARCH_FILE_LIST_KEYS = [
+  'filenames',
+  'files',
+  'filePaths',
+  'file_paths',
+  'paths',
+  'matches',
+  'results',
+] as const;
+
+const SEARCH_FILE_PATH_KEYS = [
+  'path',
+  'filePath',
+  'file_path',
+  'filename',
+  'file',
+] as const;
+
+const SEARCH_FILE_COUNT_KEYS = [
+  'numFiles',
+  'num_files',
+  'fileCount',
+  'file_count',
+  'totalFiles',
+  'total_files',
+] as const;
+
+const SEARCH_TEXT_CONTENT_KEYS = [
+  'content',
+  'output',
+  'text',
+  'stdout',
+] as const;
+
+function parseJsonLikeString(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed || !['{', '['].includes(trimmed[0])) {
+    return value;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function readCount(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const match = value.match(/\d+/);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number.parseInt(match[0], 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  return null;
+}
+
+function readCountFromText(value: string): number | null {
+  const foundMatch = value.match(/\bFound\s+(\d+)\s+files?\b/i);
+  if (foundMatch) {
+    return readCount(foundMatch[1]);
+  }
+
+  const filesFoundMatch = value.match(/\b(\d+)\s+files?\s+found\b/i);
+  if (filesFoundMatch) {
+    return readCount(filesFoundMatch[1]);
+  }
+
+  return null;
+}
+
+function normalizeFilePath(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  let normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  normalized = normalized.replace(/^[-*]\s+/, '');
+  normalized = normalized.replace(/^["'`]+|["'`,]+$/g, '');
+
+  return normalized || null;
+}
+
+function isLikelyFilePath(value: string): boolean {
+  const basename = value.split(/[\\/]/).pop() || value;
+  return /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith('/') ||
+    value.startsWith('./') ||
+    value.startsWith('../') ||
+    value.includes('/') ||
+    value.includes('\\') ||
+    /\.[A-Za-z0-9]+$/.test(basename);
+}
+
+function addFile(value: unknown, accumulator: SearchResultAccumulator) {
+  const normalized = normalizeFilePath(value);
+  if (!normalized || !isLikelyFilePath(normalized) || accumulator.seenFiles.has(normalized)) {
+    return;
+  }
+
+  accumulator.seenFiles.add(normalized);
+  accumulator.files.push(normalized);
+}
+
+function extractFilePathFromGrepLine(line: string): string {
+  const lineMatch = line.match(/^(.*):\d+(?::\d+)?:/);
+  return lineMatch?.[1] || line;
+}
+
+function collectFilesFromText(value: string, accumulator: SearchResultAccumulator) {
+  const explicitCount = readCountFromText(value);
+  if (explicitCount !== null) {
+    accumulator.counts.push(explicitCount);
+  }
+
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = normalizeFilePath(rawLine);
+    if (!line || /^Found\s+\d+\s+files?$/i.test(line) || /^No files? found$/i.test(line)) {
+      continue;
+    }
+
+    addFile(extractFilePathFromGrepLine(line), accumulator);
+  }
+}
+
+function collectFileEntry(value: unknown, accumulator: SearchResultAccumulator, depth: number) {
+  if (!value || depth > 4) {
+    return;
+  }
+
+  const parsed = typeof value === 'string' ? parseJsonLikeString(value) : value;
+  if (parsed !== value) {
+    collectFileEntry(parsed, accumulator, depth + 1);
+    return;
+  }
+
+  if (typeof value === 'string') {
+    collectFilesFromText(value, accumulator);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFileEntry(item, accumulator, depth + 1);
+    }
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  for (const key of SEARCH_FILE_COUNT_KEYS) {
+    const count = readCount(record[key]);
+    if (count !== null) {
+      accumulator.counts.push(count);
+    }
+  }
+
+  for (const key of SEARCH_FILE_PATH_KEYS) {
+    addFile(record[key], accumulator);
+  }
+
+  for (const key of SEARCH_FILE_LIST_KEYS) {
+    collectFileEntry(record[key], accumulator, depth + 1);
+  }
+
+  for (const key of SEARCH_TEXT_CONTENT_KEYS) {
+    collectFileEntry(record[key], accumulator, depth + 1);
+  }
+
+  collectFileEntry(record.toolUseResult, accumulator, depth + 1);
+}
+
+export function normalizeSearchToolResult(result: any): SearchToolResultSummary {
+  const accumulator: SearchResultAccumulator = {
+    files: [],
+    seenFiles: new Set<string>(),
+    counts: [],
+  };
+
+  collectFileEntry(result?.toolUseResult, accumulator, 0);
+  collectFileEntry(result, accumulator, 0);
+
+  return {
+    files: accumulator.files,
+    count: Math.max(0, accumulator.files.length, ...accumulator.counts),
+  };
+}
+
 export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   // ============================================================================
   // COMMAND TOOLS
@@ -273,15 +487,14 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       type: 'collapsible',
       defaultOpen: false,
       title: (result) => {
-        const toolData = result.toolUseResult || {};
-        const count = toolData.numFiles || toolData.filenames?.length || 0;
+        const { count } = normalizeSearchToolResult(result);
         return `Found ${count} ${count === 1 ? 'file' : 'files'}`;
       },
       contentType: 'file-list',
       getContentProps: (result) => {
-        const toolData = result.toolUseResult || {};
+        const { files } = normalizeSearchToolResult(result);
         return {
-          files: toolData.filenames || []
+          files
         };
       }
     }
@@ -306,15 +519,14 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       type: 'collapsible',
       defaultOpen: false,
       title: (result) => {
-        const toolData = result.toolUseResult || {};
-        const count = toolData.numFiles || toolData.filenames?.length || 0;
+        const { count } = normalizeSearchToolResult(result);
         return `Found ${count} ${count === 1 ? 'file' : 'files'}`;
       },
       contentType: 'file-list',
       getContentProps: (result) => {
-        const toolData = result.toolUseResult || {};
+        const { files } = normalizeSearchToolResult(result);
         return {
-          files: toolData.filenames || []
+          files
         };
       }
     }

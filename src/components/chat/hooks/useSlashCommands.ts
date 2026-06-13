@@ -4,12 +4,12 @@ import Fuse from 'fuse.js';
 
 import { authenticatedFetch } from '../../../utils/api';
 import { safeLocalStorage } from '../utils/chatStorage';
+import { SLASH_COMMANDS_CHANGED_EVENT } from '../utils/slashCommandEvents';
 import type { Project } from '../../../types/app';
 
 import { buildInputWithSelectedSlashCommand } from './useSlashCommands.utils';
 
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
-const SLASH_COMMANDS_CHANGED_EVENT = 'cloudcli:slash-commands-changed';
 
 export interface SlashCommand {
   name: string;

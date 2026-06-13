@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandEvents';
 
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
 import {
@@ -118,13 +119,19 @@ export default function SkillsPanel({ selectedProject, isReadOnly }: SkillsPanel
     setInstallError(null);
     setIsInstalling(true);
     try {
-      await readApiPayload(
+      const payload = await readApiPayload(
         await api.workspaceSkills.installPreview(selectedProject.workspaceId, {
           previewId: preview.previewId,
           enable: enableOnInstall,
         }),
         t('skillsMarket.installModal.installFailed'),
       );
+      const installedSkillName = payload.skill?.name || preview.name;
+      dispatchSlashCommandsChangedForPath(`.claude/skills/${installedSkillName}`, {
+        projectName: selectedProject.name,
+        reason: 'workspace-skill-install',
+        workspaceId: selectedProject.workspaceId,
+      });
       await reload();
       setSelectedSkillName(preview.name);
       closeInstallModal();

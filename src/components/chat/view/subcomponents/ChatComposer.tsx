@@ -172,6 +172,18 @@ export default function ChatComposer({
 
   // Hide the thinking/status bar while any permission request is pending
   const hasPendingPermissions = pendingPermissionRequests.length > 0;
+  const canAbortCurrentSession = isLoading && claudeStatus?.can_interrupt !== false;
+
+  const handleSubmitButtonPress = (
+    event: MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>,
+  ) => {
+    event.preventDefault();
+    if (canAbortCurrentSession) {
+      onAbortSession();
+      return;
+    }
+    onSubmit(event);
+  };
 
   return (
     <div className="flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
@@ -361,15 +373,23 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              disabled={!input.trim() || isLoading}
+              aria-label={
+                canAbortCurrentSession
+                  ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
+                  : t('input.sendMessage', { defaultValue: 'Send message' })
+              }
+              disabled={isLoading ? !canAbortCurrentSession : !input.trim()}
+              title={
+                canAbortCurrentSession
+                  ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
+                  : t('input.sendMessage', { defaultValue: 'Send message' })
+              }
               className="h-10 w-10 sm:h-10 sm:w-10"
               onMouseDown={(event) => {
-                event.preventDefault();
-                onSubmit(event as unknown as MouseEvent<HTMLButtonElement>);
+                handleSubmitButtonPress(event);
               }}
               onTouchStart={(event) => {
-                event.preventDefault();
-                onSubmit(event as unknown as TouchEvent<HTMLButtonElement>);
+                handleSubmitButtonPress(event);
               }}
             />
           </div>
