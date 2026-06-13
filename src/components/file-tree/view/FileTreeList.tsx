@@ -31,6 +31,14 @@ type FileTreeListProps = {
   handleCancelRename?: () => void;
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
+  isCreating?: boolean;
+  newItemParent?: string;
+  newItemType?: 'file' | 'directory';
+  newItemName?: string;
+  setNewItemName?: (name: string) => void;
+  handleConfirmCreate?: () => void;
+  handleCancelCreate?: () => void;
+  newItemInputRef?: RefObject<HTMLInputElement>;
 };
 
 export default function FileTreeList({
@@ -59,6 +67,14 @@ export default function FileTreeList({
   handleCancelRename,
   renameInputRef,
   operationLoading,
+  isCreating,
+  newItemParent,
+  newItemType,
+  newItemName,
+  setNewItemName,
+  handleConfirmCreate,
+  handleCancelCreate,
+  newItemInputRef,
 }: FileTreeListProps) {
   return (
     <div>
@@ -91,6 +107,14 @@ export default function FileTreeList({
           handleCancelRename={handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operationLoading}
+          isCreating={isCreating}
+          newItemParent={newItemParent}
+          newItemType={newItemType}
+          newItemName={newItemName}
+          setNewItemName={setNewItemName}
+          handleConfirmCreate={handleConfirmCreate}
+          handleCancelCreate={handleCancelCreate}
+          newItemInputRef={newItemInputRef}
         />
       ))}
     </div>

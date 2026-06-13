@@ -7,6 +7,7 @@ import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../type
 import { Input } from '../../../shared/view/ui';
 
 import FileContextMenu from './FileContextMenu';
+import FileTreeCreateInput from './FileTreeCreateInput';
 
 type FileTreeNodeProps = {
   item: FileTreeNodeType;
@@ -36,6 +37,14 @@ type FileTreeNodeProps = {
   handleCancelRename?: () => void;
   renameInputRef?: RefObject<HTMLInputElement>;
   operationLoading?: boolean;
+  isCreating?: boolean;
+  newItemParent?: string;
+  newItemType?: 'file' | 'directory';
+  newItemName?: string;
+  setNewItemName?: (name: string) => void;
+  handleConfirmCreate?: () => void;
+  handleCancelCreate?: () => void;
+  newItemInputRef?: RefObject<HTMLInputElement>;
 };
 
 type TreeItemIconProps = {
@@ -93,12 +102,22 @@ export default function FileTreeNode({
   handleCancelRename,
   renameInputRef,
   operationLoading,
+  isCreating,
+  newItemParent,
+  newItemType,
+  newItemName,
+  setNewItemName,
+  handleConfirmCreate,
+  handleCancelCreate,
+  newItemInputRef,
 }: FileTreeNodeProps) {
   const isDirectory = item.type === 'directory';
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
   const isRenaming = renamingItem?.path === item.path;
   const isDropTarget = isDirectory && dropTarget === item.path;
+  const shouldRenderCreateInput = Boolean(isDirectory && isCreating && newItemParent === item.path);
+  const shouldRenderChildren = Boolean(isDirectory && (shouldRenderCreateInput || (isOpen && hasChildren)));
   const dropTargetAttributes: Record<string, string> = isDirectory
     ? { [FILE_TREE_DROP_TARGET_ATTRIBUTE]: item.path }
     : {};
@@ -220,14 +239,34 @@ export default function FileTreeNode({
         rowContent
       )}
 
-      {isDirectory && isOpen && hasChildren && (
+      {shouldRenderChildren && (
         <div className="relative">
           <span
             className="absolute bottom-0 top-0 border-l border-border/40"
             style={{ left: `${level * 16 + 14}px` }}
             aria-hidden="true"
           />
-          {item.children?.map((child) => (
+          {shouldRenderCreateInput &&
+            newItemType &&
+            newItemName !== undefined &&
+            setNewItemName &&
+            handleConfirmCreate &&
+            handleCancelCreate &&
+            newItemInputRef && (
+              <FileTreeCreateInput
+                viewMode={viewMode}
+                level={level + 1}
+                newItemType={newItemType}
+                newItemName={newItemName}
+                setNewItemName={setNewItemName}
+                handleConfirmCreate={handleConfirmCreate}
+                handleCancelCreate={handleCancelCreate}
+                newItemInputRef={newItemInputRef}
+                operationLoading={operationLoading}
+                renderFileIcon={renderFileIcon}
+              />
+            )}
+          {isOpen && item.children?.map((child) => (
             <FileTreeNode
               key={child.path}
               item={child}
@@ -256,6 +295,14 @@ export default function FileTreeNode({
               handleCancelRename={handleCancelRename}
               renameInputRef={renameInputRef}
               operationLoading={operationLoading}
+              isCreating={isCreating}
+              newItemParent={newItemParent}
+              newItemType={newItemType}
+              newItemName={newItemName}
+              setNewItemName={setNewItemName}
+              handleConfirmCreate={handleConfirmCreate}
+              handleCancelCreate={handleCancelCreate}
+              newItemInputRef={newItemInputRef}
             />
           ))}
         </div>

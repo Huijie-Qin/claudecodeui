@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, X, Loader2, Folder, Upload } from 'lucide-react';
+import { AlertTriangle, Check, X, Loader2, Upload } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import { ICON_SIZE_CLASS, getFileIconData } from '../constants/fileIcons';
@@ -17,6 +17,7 @@ import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
 
 import FileTreeBody from './FileTreeBody';
+import FileTreeCreateInput from './FileTreeCreateInput';
 import FileTreeDetailedColumns from './FileTreeDetailedColumns';
 import FileTreeHeader from './FileTreeHeader';
 import FileTreeLoadingState from './FileTreeLoadingState';
@@ -193,35 +194,19 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
 
       <ScrollArea className="flex-1 px-2 py-1">
         {/* New item input */}
-        {operations.isCreating && (
-          <div
-            className="mb-1 flex items-center gap-1.5 py-[3px] pr-2"
-            style={{ paddingLeft: `${(operations.newItemParent.split('/').length - 1) * 16 + 4}px` }}
-          >
-            {operations.newItemType === 'directory' ? (
-              <Folder className={cn(ICON_SIZE_CLASS, 'text-blue-500')} />
-            ) : (
-              <span className="ml-[18px]">{renderFileIcon(operations.newItemName)}</span>
-            )}
-            <Input
-              ref={newItemInputRef}
-              type="text"
-              value={operations.newItemName}
-              onChange={(e) => operations.setNewItemName(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === 'Enter') operations.handleConfirmCreate();
-                if (e.key === 'Escape') operations.handleCancelCreate();
-              }}
-              onBlur={() => {
-                setTimeout(() => {
-                  if (operations.isCreating) operations.handleConfirmCreate();
-                }, 100);
-              }}
-              className="h-6 flex-1 text-sm"
-              disabled={operations.operationLoading}
-            />
-          </div>
+        {operations.isCreating && operations.newItemParent === '' && (
+          <FileTreeCreateInput
+            viewMode={viewMode}
+            level={0}
+            newItemType={operations.newItemType}
+            newItemName={operations.newItemName}
+            setNewItemName={operations.setNewItemName}
+            handleConfirmCreate={operations.handleConfirmCreate}
+            handleCancelCreate={operations.handleCancelCreate}
+            newItemInputRef={newItemInputRef}
+            operationLoading={operations.operationLoading}
+            renderFileIcon={renderFileIcon}
+          />
         )}
 
         <FileTreeBody
@@ -253,6 +238,14 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           handleCancelRename={operations.handleCancelRename}
           renameInputRef={renameInputRef}
           operationLoading={operations.operationLoading || upload.operationLoading}
+          isCreating={operations.isCreating}
+          newItemParent={operations.newItemParent}
+          newItemType={operations.newItemType}
+          newItemName={operations.newItemName}
+          setNewItemName={operations.setNewItemName}
+          handleConfirmCreate={operations.handleConfirmCreate}
+          handleCancelCreate={operations.handleCancelCreate}
+          newItemInputRef={newItemInputRef}
         />
       </ScrollArea>
 
