@@ -28,3 +28,20 @@ test('clearing one session stream leaves other active streams intact', () => {
   assert.equal(accumulator.get('session-1'), '');
   assert.equal(accumulator.get('session-2'), 'second');
 });
+
+test('finishing a stream segment lets later deltas start a new segment', () => {
+  const accumulator = createSessionStreamAccumulator();
+
+  accumulator.appendDelta('session-1', 'Before tool.', '2026-06-13T10:00:00.000Z');
+  const firstSegment = accumulator.finishSnapshot('session-1');
+
+  accumulator.appendDelta('session-1', 'After tool.', '2026-06-13T10:00:02.000Z');
+  const secondSegment = accumulator.getSnapshot('session-1');
+
+  assert.equal(firstSegment?.id, '__streaming_session-1_1');
+  assert.equal(firstSegment?.content, 'Before tool.');
+  assert.equal(firstSegment?.timestamp, '2026-06-13T10:00:00.000Z');
+  assert.equal(secondSegment?.id, '__streaming_session-1_2');
+  assert.equal(secondSegment?.content, 'After tool.');
+  assert.equal(secondSegment?.timestamp, '2026-06-13T10:00:02.000Z');
+});

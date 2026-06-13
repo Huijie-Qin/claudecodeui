@@ -40,7 +40,7 @@ function getMessageTime(message: NormalizedMessage): number | null {
 }
 
 function isStreamingPlaceholder(message: NormalizedMessage): boolean {
-  return message.kind === 'stream_delta' && message.id === `__streaming_${message.sessionId}`;
+  return message.kind === 'stream_delta' && message.id.startsWith('__streaming_');
 }
 
 function isAssistantText(message: NormalizedMessage): boolean {

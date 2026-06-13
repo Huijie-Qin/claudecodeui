@@ -217,12 +217,29 @@ export function useChatRealtimeHandlers({
       streamTimersRef.current.delete(sessionId);
     };
 
-    const flushStream = (sessionId: string) => {
-      clearStreamTimer(sessionId);
-      const finalText = streamAccumulatorRef.current.finish(sessionId);
-      if (finalText) {
-        sessionStore.updateStreaming(sessionId, finalText, provider);
+    const pushStreamSnapshot = (sessionId: string) => {
+      const streamSnapshot = streamAccumulatorRef.current.getSnapshot(sessionId);
+      if (streamSnapshot?.content) {
+        sessionStore.updateStreaming(sessionId, streamSnapshot.content, provider, {
+          id: streamSnapshot.id,
+          timestamp: streamSnapshot.timestamp,
+        });
       }
+    };
+
+    const finishStreamSegment = (sessionId: string) => {
+      clearStreamTimer(sessionId);
+      const streamSnapshot = streamAccumulatorRef.current.finishSnapshot(sessionId);
+      if (streamSnapshot?.content) {
+        sessionStore.updateStreaming(sessionId, streamSnapshot.content, provider, {
+          id: streamSnapshot.id,
+          timestamp: streamSnapshot.timestamp,
+        });
+      }
+    };
+
+    const flushStream = (sessionId: string) => {
+      finishStreamSegment(sessionId);
     };
 
     const finalizeStreamFallback = (sessionId: string) => {
@@ -235,14 +252,11 @@ export function useChatRealtimeHandlers({
       if (!sid) return;
       const text = msg.content || '';
       if (!text) return;
-      streamAccumulatorRef.current.appendDelta(sid, text);
+      streamAccumulatorRef.current.appendDelta(sid, text, msg.timestamp);
       if (!streamTimersRef.current.has(sid)) {
         const timerId = window.setTimeout(() => {
           streamTimersRef.current.delete(sid);
-          const accumulatedText = streamAccumulatorRef.current.get(sid);
-          if (accumulatedText) {
-            sessionStore.updateStreaming(sid, accumulatedText, provider);
-          }
+          pushStreamSnapshot(sid);
         }, 100);
         streamTimersRef.current.set(sid, timerId);
       }
@@ -251,7 +265,7 @@ export function useChatRealtimeHandlers({
 
     if (msg.kind === 'stream_end') {
       if (sid) {
-        flushStream(sid);
+        finishStreamSegment(sid);
       }
       return;
     }

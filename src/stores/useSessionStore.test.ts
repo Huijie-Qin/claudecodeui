@@ -134,3 +134,23 @@ test('computeMerged hides a streaming placeholder once the canonical assistant t
 
   assert.deepEqual(merged, [canonicalAssistant]);
 });
+
+test('computeMerged hides segmented streaming placeholders once canonical assistant text arrives', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1_2',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:19.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'The command finished successfully.',
+  };
+  const canonicalAssistant = makeAssistantText({
+    id: 'msg_canonical_assistant_after_tool',
+    timestamp: '2026-04-28T19:01:19.500Z',
+    content: 'The command finished successfully.',
+  });
+
+  const merged = computeMerged([], [streamingPlaceholder, canonicalAssistant]);
+
+  assert.deepEqual(merged, [canonicalAssistant]);
+});

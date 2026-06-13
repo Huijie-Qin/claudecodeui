@@ -126,6 +126,10 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+function isStreamingPlaceholder(message: NormalizedMessage): boolean {
+  return message.kind === 'stream_delta' && message.id.startsWith('__streaming_');
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
@@ -253,7 +257,7 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     const shouldReplaceStream = msg.kind === 'text' && msg.role === 'assistant';
     const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => m.id !== `__streaming_${sessionId}`)
+      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
     let updated = [...current, msg];
     if (updated.length > MAX_REALTIME_MESSAGES) {
@@ -272,7 +276,7 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     const shouldReplaceStream = msgs.some(msg => msg.kind === 'text' && msg.role === 'assistant');
     const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => m.id !== `__streaming_${sessionId}`)
+      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
     let updated = [...current, ...msgs];
     if (updated.length > MAX_REALTIME_MESSAGES) {
@@ -338,14 +342,19 @@ export function useSessionStore() {
    * Update or create a streaming message (accumulated text so far).
    * Uses a well-known ID so subsequent calls replace the same message.
    */
-  const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: LLMProvider) => {
+  const updateStreaming = useCallback((
+    sessionId: string,
+    accumulatedText: string,
+    msgProvider: LLMProvider,
+    options: { id?: string; timestamp?: string } = {},
+  ) => {
     const slot = getSlot(sessionId);
-    const streamId = `__streaming_${sessionId}`;
+    const streamId = options.id || `__streaming_${sessionId}`;
     const existingStream = slot.realtimeMessages.find(m => m.id === streamId);
     const msg: NormalizedMessage = {
       id: streamId,
       sessionId,
-      timestamp: existingStream?.timestamp || new Date().toISOString(),
+      timestamp: existingStream?.timestamp || options.timestamp || new Date().toISOString(),
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
@@ -368,19 +377,20 @@ export function useSessionStore() {
   const finalizeStreaming = useCallback((sessionId: string) => {
     const slot = storeRef.current.get(sessionId);
     if (!slot) return;
-    const streamId = `__streaming_${sessionId}`;
-    const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
-    if (idx >= 0) {
-      const stream = slot.realtimeMessages[idx];
-      const completedAt = new Date().toISOString();
+    const streamingIndexes = slot.realtimeMessages
+      .map((message, index) => isStreamingPlaceholder(message) ? index : -1)
+      .filter(index => index >= 0);
+    if (streamingIndexes.length > 0) {
       slot.realtimeMessages = [...slot.realtimeMessages];
-      slot.realtimeMessages[idx] = {
-        ...stream,
-        id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        timestamp: completedAt,
-        kind: 'text',
-        role: 'assistant',
-      };
+      for (const idx of streamingIndexes) {
+        const stream = slot.realtimeMessages[idx];
+        slot.realtimeMessages[idx] = {
+          ...stream,
+          id: `text_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          kind: 'text',
+          role: 'assistant',
+        };
+      }
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     }
