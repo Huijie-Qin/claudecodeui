@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, KeyboardEvent, SetStateAction } from 'react';
-import { CalendarClock, ChevronDown, ChevronRight, Edit2, Loader2, MessageSquare, Pause, Play, Save, Trash2, X } from 'lucide-react';
+import ReactDOM from 'react-dom';
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Edit2, Loader2, MessageSquare, Pause, Play, Save, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../utils/api';
@@ -725,6 +726,8 @@ export default function ScheduledTasksDialog({
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
   const [taskEditForm, setTaskEditForm] = useState<TaskEditForm | null>(null);
   const [isUpdatingTask, setIsUpdatingTask] = useState(false);
+  const [deleteConfirmationTask, setDeleteConfirmationTask] = useState<ScheduledTask | null>(null);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const initialEditStartedRef = useRef<number | null>(null);
@@ -852,9 +855,9 @@ export default function ScheduledTasksDialog({
 
   const promptTextareaRect = promptTextareaRef.current?.getBoundingClientRect();
   const commandMenuPosition = {
-    top: promptTextareaRect ? Math.max(16, promptTextareaRect.top - 316) : 0,
+    top: promptTextareaRect ? promptTextareaRect.bottom + 8 : 0,
     left: promptTextareaRect ? promptTextareaRect.left : 16,
-    bottom: promptTextareaRect ? window.innerHeight - promptTextareaRect.top + 8 : 90,
+    bottom: promptTextareaRect ? Math.max(16, window.innerHeight - promptTextareaRect.bottom + 8) : 90,
   };
   const editPromptTextareaRect = editPromptTextareaRef.current?.getBoundingClientRect();
   const editCommandMenuPosition = {
@@ -1081,8 +1084,9 @@ export default function ScheduledTasksDialog({
     }
   };
 
-  const deleteTask = async (taskId: number) => {
+  const deleteTask = async (taskId: number): Promise<boolean> => {
     setError(null);
+    setIsDeletingTask(true);
     try {
       const response = await api.scheduledTasks.remove(taskId);
       if (!response.ok) {
@@ -1090,7 +1094,7 @@ export default function ScheduledTasksDialog({
           response,
           t('scheduledTasks.errors.deleteFailed', { defaultValue: 'Failed to delete scheduled task' }),
         ));
-        return;
+        return false;
       }
       if (expandedTaskId === taskId) {
         setExpandedTaskId(null);
@@ -1102,19 +1106,36 @@ export default function ScheduledTasksDialog({
       }
       await loadTasks();
       await (window as any).refreshProjects?.();
+      return true;
     } catch (caughtError) {
       console.error('[ScheduledTasksDialog] Failed to delete task:', caughtError);
       setError(t('scheduledTasks.errors.deleteFailed', { defaultValue: 'Failed to delete scheduled task' }));
+      return false;
+    } finally {
+      setIsDeletingTask(false);
     }
   };
 
   const confirmDeleteTask = (task: ScheduledTask) => {
-    const confirmed = window.confirm(t('scheduledTasks.confirmDelete', {
-      defaultValue: 'Delete scheduled task "{{name}}"? This cannot be undone.',
-      name: task.name,
-    }));
-    if (confirmed) {
-      void deleteTask(task.id);
+    resetCommandMenuState();
+    resetEditCommandMenuState();
+    setDeleteConfirmationTask(task);
+  };
+
+  const cancelDeleteTask = () => {
+    if (!isDeletingTask) {
+      setDeleteConfirmationTask(null);
+    }
+  };
+
+  const handleConfirmDeleteTask = async () => {
+    if (!deleteConfirmationTask) {
+      return;
+    }
+
+    const deleted = await deleteTask(deleteConfirmationTask.id);
+    if (deleted) {
+      setDeleteConfirmationTask(null);
     }
   };
 
@@ -1159,7 +1180,7 @@ export default function ScheduledTasksDialog({
   }, [handleEditCommandMenuKeyDown, handleEditFileMentionsKeyDown]);
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) { resetCommandMenuState(); resetEditCommandMenuState(); onClose(); } }}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) { resetCommandMenuState(); resetEditCommandMenuState(); setDeleteConfirmationTask(null); onClose(); } }}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden p-0">
         <DialogTitle>
           {dialogTitle}
@@ -1403,7 +1424,7 @@ export default function ScheduledTasksDialog({
                             size="icon"
                             onClick={() => confirmDeleteTask(task)}
                             aria-label={t('scheduledTasks.actions.deleteTask', { defaultValue: 'Delete task' })}
-                            disabled={Boolean(taskEditValues)}
+                            disabled={Boolean(taskEditValues) || isDeletingTask}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
@@ -1552,6 +1573,47 @@ export default function ScheduledTasksDialog({
           ) : null}
         </div>
       </DialogContent>
+      {deleteConfirmationTask
+        ? ReactDOM.createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+              <div className="p-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                    <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="mb-2 text-lg font-semibold text-foreground">
+                      {t('scheduledTasks.actions.deleteTask', { defaultValue: 'Delete task' })}
+                    </h3>
+                    <p className="mb-1 text-sm text-muted-foreground">
+                      {t('scheduledTasks.confirmDelete', {
+                        defaultValue: 'Delete scheduled task "{{name}}"? This cannot be undone.',
+                        name: deleteConfirmationTask.name,
+                      })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
+                <Button variant="outline" className="flex-1" onClick={cancelDeleteTask} disabled={isDeletingTask}>
+                  {t('scheduledTasks.actions.cancel', { defaultValue: 'Cancel' })}
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1 bg-red-600 text-white hover:bg-red-700"
+                  onClick={() => void handleConfirmDeleteTask()}
+                  disabled={isDeletingTask}
+                >
+                  {isDeletingTask ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                  {t('scheduledTasks.actions.deleteTask', { defaultValue: 'Delete task' })}
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+        : null}
     </Dialog>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 
 type CommandMenuCommand = {
   name: string;
@@ -153,7 +154,7 @@ export default function CommandMenu({
   });
 
   if (commands.length === 0) {
-    return (
+    const emptyMenu = (
       <div
         ref={menuRef}
         className="command-menu command-menu-empty border border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
@@ -162,9 +163,11 @@ export default function CommandMenu({
         No commands available
       </div>
     );
+
+    return typeof document === 'undefined' ? emptyMenu : createPortal(emptyMenu, document.body);
   }
 
-  return (
+  const menu = (
     <div
       ref={menuRef}
       role="listbox"
@@ -221,4 +224,6 @@ export default function CommandMenu({
       ))}
     </div>
   );
+
+  return typeof document === 'undefined' ? menu : createPortal(menu, document.body);
 }
