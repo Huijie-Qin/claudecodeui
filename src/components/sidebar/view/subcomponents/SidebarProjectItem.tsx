@@ -394,14 +394,14 @@ export default function SidebarProjectItem({
                   />
                 </div>
                 <div
-                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-primary/80 transition-all duration-200 hover:bg-accent hover:text-primary"
+                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
                     openScheduledTasksList();
                   }}
                   title={t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' })}
                 >
-                  <CalendarClock className="h-3 w-3" />
+                  <CalendarClock className="h-3 w-3 text-muted-foreground" />
                 </div>
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
