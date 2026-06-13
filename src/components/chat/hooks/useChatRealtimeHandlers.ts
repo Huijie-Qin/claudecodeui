@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
-import type { PendingPermissionRequest } from '../types/types';
+import type { ChatMessage, PendingPermissionRequest } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 
@@ -15,6 +15,10 @@ import {
 } from './permissionRequestRouting';
 import { shouldAdoptCreatedSession } from './sessionCreatedRouting';
 import type { SessionStreamAccumulator } from './sessionStreamAccumulator';
+import {
+  getRealtimeErrorContent,
+  isPendingViewTerminalMessage,
+} from './chatRealtimeErrors';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -55,6 +59,7 @@ type LatestChatMessage = {
   tokenBudget?: unknown;
   newSessionId?: string;
   aborted?: boolean;
+  timestamp?: string;
   [key: string]: any;
 };
 
@@ -79,6 +84,7 @@ interface UseChatRealtimeHandlersArgs {
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (sessionId: string) => void;
   onWebSocketReconnect?: () => void;
+  addMessage?: (message: ChatMessage) => void;
   sessionStore: SessionStore;
 }
 
@@ -107,6 +113,7 @@ export function useChatRealtimeHandlers({
   onReplaceTemporarySession,
   onNavigateToSession,
   onWebSocketReconnect,
+  addMessage,
   sessionStore,
 }: UseChatRealtimeHandlersArgs) {
   const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
@@ -116,8 +123,7 @@ export function useChatRealtimeHandlers({
     if (lastProcessedMessageRef.current === incomingMessage) return;
     lastProcessedMessageRef.current = incomingMessage;
 
-    const activeViewSessionId =
-      selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || null;
+    const activeViewSessionId = selectedSession?.id || currentSessionId || null;
 
     /* ---------------------------------------------------------------- */
     /*  Legacy messages (no `kind` field) — handle and return           */
@@ -191,6 +197,18 @@ export function useChatRealtimeHandlers({
     const explicitSessionId = getExplicitRealtimeSessionId(msg);
     const sid = explicitSessionId || activeViewSessionId;
     const isActiveViewSession = Boolean(sid && sid === activeViewSessionId);
+    const pendingTerminalMessage = isPendingViewTerminalMessage({
+      kind: msg.kind,
+      explicitSessionId,
+      activeViewSessionId,
+      hasPendingViewSession: Boolean(pendingViewSessionRef.current),
+      selectedSessionId: selectedSession?.id || null,
+    });
+    const pendingLifecycleSessionId = pendingTerminalMessage
+      ? pendingViewSessionRef.current?.sessionId || null
+      : null;
+    const lifecycleSessionId = sid || pendingLifecycleSessionId;
+    const shouldAffectCurrentView = isActiveViewSession || pendingTerminalMessage;
 
     const clearStreamTimer = (sessionId: string) => {
       const timerId = streamTimersRef.current.get(sessionId);
@@ -244,7 +262,7 @@ export function useChatRealtimeHandlers({
         clearStreamTimer(sid);
         streamAccumulatorRef.current.clear(sid);
       }
-      sessionStore.appendRealtime(sid, msg as NormalizedMessage);
+      sessionStore.appendRealtime(sid, { ...msg, sessionId: sid } as NormalizedMessage);
     }
 
     // --- UI side effects for specific kinds ---
@@ -262,7 +280,7 @@ export function useChatRealtimeHandlers({
 
         if (shouldAdoptSession) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
-          if (pendingViewSessionRef.current && !pendingViewSessionRef.current.sessionId) {
+          if (pendingViewSessionRef.current) {
             pendingViewSessionRef.current.sessionId = newSessionId;
           }
           setCurrentSessionId(newSessionId);
@@ -283,14 +301,19 @@ export function useChatRealtimeHandlers({
           finalizeStreamFallback(sid);
         }
 
-        if (isActiveViewSession) {
+        if (shouldAffectCurrentView) {
           setIsLoading(false);
           setCanAbortSession(false);
           setClaudeStatus(null);
           setPendingPermissionRequests([]);
         }
-        onSessionInactive?.(sid);
-        onSessionNotProcessing?.(sid);
+        onSessionInactive?.(lifecycleSessionId);
+        onSessionNotProcessing?.(lifecycleSessionId);
+        if (pendingTerminalMessage) {
+          pendingViewSessionRef.current = null;
+        } else if (pendingViewSessionRef.current?.sessionId === sid) {
+          pendingViewSessionRef.current = null;
+        }
 
         // Handle aborted case
         if (msg.aborted) {
@@ -322,13 +345,26 @@ export function useChatRealtimeHandlers({
           clearStreamTimer(sid);
           streamAccumulatorRef.current.clear(sid);
         }
-        if (isActiveViewSession) {
+        if (pendingTerminalMessage) {
+          addMessage?.({
+            type: 'error',
+            content: getRealtimeErrorContent(msg),
+            timestamp: msg.timestamp || new Date(),
+          });
+        }
+        if (shouldAffectCurrentView) {
           setIsLoading(false);
           setCanAbortSession(false);
           setClaudeStatus(null);
+          setPendingPermissionRequests([]);
         }
-        onSessionInactive?.(sid);
-        onSessionNotProcessing?.(sid);
+        onSessionInactive?.(lifecycleSessionId);
+        onSessionNotProcessing?.(lifecycleSessionId);
+        if (pendingTerminalMessage) {
+          pendingViewSessionRef.current = null;
+        } else if (pendingViewSessionRef.current?.sessionId === sid) {
+          pendingViewSessionRef.current = null;
+        }
         break;
       }
 
@@ -412,6 +448,7 @@ export function useChatRealtimeHandlers({
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect,
+    addMessage,
     sessionStore,
   ]);
 

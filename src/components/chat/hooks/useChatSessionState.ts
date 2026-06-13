@@ -145,7 +145,7 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
-  const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null);
+  const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
 
   // Tell the store which session we're viewing so it only re-renders for this one
   const prevActiveForStoreRef = useRef<string | null>(null);
@@ -160,14 +160,16 @@ export function useChatSessionState({
     activeSessionId,
     previousActiveSessionId: prevActiveSessionRef.current,
     selectedSessionId: selectedSession?.id || null,
-    hasPendingUserMessage: Boolean(pendingUserMessage),
-  }) && activeSessionId && pendingUserMessage) {
+    hasPendingUserMessage: pendingMessages.length > 0,
+  }) && activeSessionId && pendingMessages.length > 0) {
     const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
-    const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
-    if (normalized) {
-      sessionStore.appendRealtime(activeSessionId, normalized);
+    for (const pendingMessage of pendingMessages) {
+      const normalized = chatMessageToNormalized(pendingMessage, activeSessionId, prov);
+      if (normalized) {
+        sessionStore.appendRealtime(activeSessionId, normalized);
+      }
     }
-    setPendingUserMessage(null);
+    setPendingMessages([]);
   }
   prevActiveSessionRef.current = activeSessionId;
 
@@ -182,17 +184,17 @@ export function useChatSessionState({
 
   const chatMessages = useMemo(() => {
     const all = normalizedToChatMessages(storeMessages);
-    // Show pending user message when no session data exists yet (new session, pre-backend-response)
-    if (pendingUserMessage && shouldShowPendingUserMessageInView({
+    // Show pending messages when no session data exists yet (new session, pre-backend-response)
+    if (pendingMessages.length > 0 && shouldShowPendingUserMessageInView({
       selectedSessionId: selectedSession?.id || null,
       storeMessageCount: all.length,
       hasPendingUserMessage: true,
     })) {
-      return [pendingUserMessage];
+      return pendingMessages;
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingUserMessage, selectedSession?.id]);
+  }, [storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
 
   const latestMessageScrollSignature = useMemo(() => {
     const latestMessage = chatMessages[chatMessages.length - 1];
@@ -222,8 +224,8 @@ export function useChatSessionState({
 
   const addMessage = useCallback((msg: ChatMessage) => {
     if (!activeSessionId) {
-      // No session yet — show as pending until the backend creates one
-      setPendingUserMessage(msg);
+      // No session yet — show as pending until the backend creates one or fails.
+      setPendingMessages((previous) => [...previous, msg]);
       return;
     }
     const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
@@ -234,7 +236,10 @@ export function useChatSessionState({
   }, [activeSessionId, sessionStore]);
 
   const clearMessages = useCallback(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId) {
+      setPendingMessages([]);
+      return;
+    }
     sessionStore.clearRealtime(activeSessionId);
   }, [activeSessionId, sessionStore]);
 
@@ -348,7 +353,7 @@ export function useChatSessionState({
       setCanAbortSession(false);
       setIsLoading(false);
       setCurrentSessionId(null);
-      setPendingUserMessage(null);
+      setPendingMessages([]);
       sessionStorage.removeItem('cursorSessionId');
       messagesOffsetRef.current = 0;
       setHasMoreMessages(false);
@@ -382,7 +387,7 @@ export function useChatSessionState({
     const sessionChanged = currentSessionId !== selectedSession.id;
     if (sessionChanged) {
       pendingViewSessionRef.current = null;
-      setPendingUserMessage(null);
+      setPendingMessages([]);
       setClaudeStatus(null);
       setCanAbortSession(false);
     }

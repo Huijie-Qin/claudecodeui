@@ -545,7 +545,7 @@ export function useChatComposerState({
           // Reset stale pending IDs from previous interrupted runs before creating a new one.
           sessionStorage.removeItem('pendingSessionId');
         }
-        pendingViewSessionRef.current = { sessionId: null, startedAt: Date.now() };
+        pendingViewSessionRef.current = { sessionId: sessionToActivate, startedAt: Date.now() };
       }
       onSessionActive?.(sessionToActivate);
       if (effectiveSessionId && !isTemporarySessionId(effectiveSessionId)) {

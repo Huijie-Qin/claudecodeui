@@ -237,6 +237,7 @@ function ChatInterface({
     onReplaceTemporarySession,
     onNavigateToSession,
     onWebSocketReconnect: handleWebSocketReconnect,
+    addMessage,
     sessionStore,
   });
 
