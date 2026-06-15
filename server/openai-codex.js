@@ -23,6 +23,18 @@ import { createNormalizedMessage } from './shared/utils.js';
 // Track active sessions
 const activeCodexSessions = new Map();
 
+function logChatSessionTokenUsage({ requestId, provider, sessionId, model, tokenBudget, tokenUsage }) {
+  console.log('[chat-session]', JSON.stringify({
+    event: 'token_usage',
+    requestId: requestId || null,
+    provider,
+    sessionId: sessionId || null,
+    model: model || null,
+    tokenBudget,
+    tokenUsage,
+  }));
+}
+
 /**
  * Transform Codex SDK event to WebSocket message format
  * @param {object} event - SDK event
@@ -285,8 +297,24 @@ export async function queryCodex(command, options = {}, ws) {
 
       // Extract and send token usage if available (normalized to match Claude format)
       if (event.type === 'turn.completed' && event.usage) {
-        const totalTokens = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
-        sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: { used: totalTokens, total: 200000 }, sessionId: currentSessionId, provider: 'codex' }));
+        const inputTokens = event.usage.input_tokens || 0;
+        const outputTokens = event.usage.output_tokens || 0;
+        const totalTokens = inputTokens + outputTokens;
+        const tokenBudget = { used: totalTokens, total: 200000 };
+        const tokenUsage = {
+          inputTokens,
+          outputTokens,
+          totalTokens,
+        };
+        logChatSessionTokenUsage({
+          requestId: options.logRequestId,
+          provider: 'codex',
+          sessionId: currentSessionId,
+          model,
+          tokenBudget,
+          tokenUsage,
+        });
+        sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, tokenUsage, sessionId: currentSessionId, provider: 'codex' }));
       }
     }
 

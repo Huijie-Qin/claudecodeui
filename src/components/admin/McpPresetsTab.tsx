@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Button, Input } from '../../shared/view/ui';
+import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { McpToolParameters } from '../mcp/McpToolParameters';
 
 import {
@@ -28,6 +28,11 @@ type McpPresetsTabProps = {
   currentTenantId?: number;
 };
 
+type DeleteDialogState =
+  | { type: 'helperScript'; preset: AdminMcpPreset; fileName: string }
+  | { type: 'preset'; preset: AdminMcpPreset }
+  | null;
+
 const EMPTY_VALUES: McpPresetFormValues = {
   tenantId: 0,
   name: '',
@@ -51,6 +56,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const defaultTenantId = currentTenantId || tenants[0]?.id || 0;
   const [tenantId, setTenantId] = useState(defaultTenantId);
   const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(null);
   const [values, setValues] = useState<McpPresetFormValues>({ ...EMPTY_VALUES, tenantId: defaultTenantId });
   const {
     presets,
@@ -142,28 +148,37 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     }
   };
 
-  const handleHelperScriptDelete = async () => {
+  const requestHelperScriptDelete = () => {
     if (!selectedPreset?.helperScript) return;
-    const confirmed = window.confirm(t('mcp.helperScript.confirmDelete', {
+    setDeleteDialog({
+      type: 'helperScript',
+      preset: selectedPreset,
       fileName: selectedPreset.helperScript.fileName,
-    }));
-    if (!confirmed) return;
-    const saved = await deleteHelperScript(selectedPreset.id);
-    if (saved) {
-      selectPreset(saved);
-    }
+    });
   };
 
-  const handlePresetDelete = async () => {
+  const requestPresetDelete = () => {
     if (!selectedPreset) return;
-    const confirmed = window.confirm(t('mcp.confirmDelete', {
-      name: selectedPreset.displayName || selectedPreset.name,
-    }));
-    if (!confirmed) return;
-    const deleted = await deletePreset(selectedPreset.id);
+    setDeleteDialog({ type: 'preset', preset: selectedPreset });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteDialog) return;
+
+    if (deleteDialog.type === 'helperScript') {
+      const saved = await deleteHelperScript(deleteDialog.preset.id);
+      if (saved) {
+        selectPreset(saved);
+      }
+      setDeleteDialog(null);
+      return;
+    }
+
+    const deleted = await deletePreset(deleteDialog.preset.id);
     if (deleted) {
       startNew();
     }
+    setDeleteDialog(null);
   };
 
   return (
@@ -333,7 +348,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => void handleHelperScriptDelete()}
+                      onClick={requestHelperScriptDelete}
                       disabled={isSaving || isTestingSelectedPreset}
                       className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
                     >
@@ -447,7 +462,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   </Button>
                   <Button
                     variant="destructive"
-                    onClick={() => void handlePresetDelete()}
+                    onClick={requestPresetDelete}
                     disabled={isSaving || isTestingSelectedPreset}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -465,7 +480,79 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
           ) : null}
         </div>
       </div>
+      <McpPresetDeleteDialog
+        state={deleteDialog}
+        isSaving={isSaving}
+        onOpenChange={(open) => {
+          if (!open && !isSaving) {
+            setDeleteDialog(null);
+          }
+        }}
+        onConfirm={() => void handleConfirmDelete()}
+      />
     </div>
+  );
+}
+
+function McpPresetDeleteDialog({
+  state,
+  isSaving,
+  onOpenChange,
+  onConfirm,
+}: {
+  state: DeleteDialogState;
+  isSaving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation(['admin', 'common']);
+  const isHelperScript = state?.type === 'helperScript';
+  const title = isHelperScript ? t('mcp.helperScript.delete') : `${t('mcp.buttons.delete')} ${t('mcp.title')}`;
+  const description = state
+    ? isHelperScript
+      ? t('mcp.helperScript.confirmDelete', { fileName: state.fileName })
+      : t('mcp.confirmDelete', { name: state.preset.displayName || state.preset.name })
+    : '';
+  const confirmLabel = isHelperScript ? t('mcp.helperScript.delete') : t('mcp.buttons.delete');
+
+  return (
+    <Dialog open={Boolean(state)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md overflow-hidden p-0">
+        <DialogTitle>{title}</DialogTitle>
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-foreground">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={() => onOpenChange(false)}
+            disabled={isSaving}
+          >
+            {t('common:buttons.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="flex-1"
+            onClick={onConfirm}
+            disabled={isSaving}
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {confirmLabel}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

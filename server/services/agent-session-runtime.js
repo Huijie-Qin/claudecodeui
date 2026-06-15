@@ -203,6 +203,30 @@ export function buildContainerName({
   return `${prefix}${runtimeSegment.slice(0, maxRuntimeLength)}-${runtimeHash}`.slice(0, 120);
 }
 
+function createRuntimeLogDetails(runtime, extra = {}) {
+  if (!runtime) return extra;
+  return {
+    runtimeId: runtime.runtime_id || null,
+    containerName: runtime.container_name || null,
+    image: runtime.image || null,
+    tenantId: runtime.tenant_id ?? null,
+    userId: runtime.user_id ?? null,
+    workspaceId: runtime.workspace_id ?? null,
+    workspaceHostPath: runtime.workspace_host_path || null,
+    status: runtime.status || null,
+    ...extra,
+  };
+}
+
+function logRuntimeEvent(event, details = {}) {
+  console.log('[agent-runtime]', JSON.stringify({
+    event,
+    provider: 'claude',
+    mode: 'docker',
+    ...details,
+  }));
+}
+
 function buildRuntimeScopeLockKey({
   provider,
   tenantId,
@@ -667,17 +691,32 @@ export function createAgentSessionRuntimeManager({
     };
   }
 
-  async function ensureContainer(runtime, containerEnv = {}) {
+  async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
+    const requestId = logContext.requestId || null;
     const inspected = await docker.inspectContainer(runtime.container_name);
     if (inspected?.running) {
+      logRuntimeEvent('container_reuse_running', createRuntimeLogDetails(runtime, {
+        requestId,
+        containerStatus: inspected.status || 'running',
+      }));
       return;
     }
     if (inspected?.exists) {
+      logRuntimeEvent('container_start_existing', createRuntimeLogDetails(runtime, {
+        requestId,
+        containerStatus: inspected.status || null,
+        exitCode: inspected.exitCode ?? null,
+      }));
       await docker.startContainer(runtime.container_name);
+      logRuntimeEvent('container_started_existing', createRuntimeLogDetails(runtime, {
+        requestId,
+      }));
       return;
     }
 
     const containerUser = resolveContainerUser(env);
+    const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
+    const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
     const args = buildDockerRunArgs({
       containerName: runtime.container_name,
       image: runtime.image,
@@ -686,10 +725,22 @@ export function createAgentSessionRuntimeManager({
       workspaceHostPath: runtime.workspace_host_path,
       runtimeHomePath: runtime.runtime_home_path,
       containerEnv,
-      memory: env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY,
-      cpus: env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS,
+      memory,
+      cpus,
     });
+    logRuntimeEvent('container_create_start', createRuntimeLogDetails(runtime, {
+      requestId,
+      memory,
+      cpus,
+      uid: containerUser.uid,
+      gid: containerUser.gid,
+    }));
     await docker.runDetached(args);
+    logRuntimeEvent('container_created', createRuntimeLogDetails(runtime, {
+      requestId,
+      memory,
+      cpus,
+    }));
     const pythonPackages = parseDockerPythonPackages(env[DOCKER_PYTHON_PACKAGES_ENV_NAME]);
     if (pythonPackages.length > 0 && typeof docker.installPythonPackages === 'function') {
       try {
@@ -733,6 +784,7 @@ export function createAgentSessionRuntimeManager({
     workspaceId,
     workspaceHostPath,
     pathSegments,
+    logRequestId = null,
   }) {
     const runtimeId = buildRuntimeId();
     const runtimePaths = buildRuntimePaths({
@@ -765,6 +817,9 @@ export function createAgentSessionRuntimeManager({
       runtimeHomePath: runtimePaths.runtimeHomePath,
       status: 'pending',
     });
+    logRuntimeEvent('runtime_created', createRuntimeLogDetails(runtime, {
+      requestId: logRequestId,
+    }));
 
     return {
       runtime,
@@ -833,7 +888,9 @@ export function createAgentSessionRuntimeManager({
       ...userEnv,
     };
     await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
-    await ensureContainer(runtimeContext.runtime, containerEnv);
+    await ensureContainer(runtimeContext.runtime, containerEnv, {
+      requestId: runtimeContext.logRequestId || null,
+    });
     const wrapperPath = await writeWrapper({
       ...runtimeContext,
       runtime: {
@@ -841,11 +898,19 @@ export function createAgentSessionRuntimeManager({
         userEnv,
       },
     });
-    const runtime = multitenancy.runtimes.updateStatus({
+    const updatedRuntime = multitenancy.runtimes.updateStatus({
       runtimeId: runtimeContext.runtime.runtime_id,
       status: 'active',
-    }) || runtimeContext.runtime;
+    });
+    const runtime = {
+      ...runtimeContext.runtime,
+      ...(updatedRuntime || {}),
+    };
     beginRuntimeUse(runtime.runtime_id);
+    logRuntimeEvent('runtime_ready', createRuntimeLogDetails(runtime, {
+      requestId: runtimeContext.logRequestId || null,
+      containerCwd: '/workspace',
+    }));
 
     return {
       mode: 'docker',
@@ -905,20 +970,38 @@ export function createAgentSessionRuntimeManager({
       });
 
       return withRuntimeLock(scopeLockKey, async () => {
-        const runtimeContext = await resolveRuntimeForSession({
+        logRuntimeEvent('runtime_prepare', {
+          requestId: options.logRequestId || null,
+          tenantId,
+          userId,
+          workspaceId,
+          sessionId: options.sessionId || null,
+          workspaceHostPath,
+        });
+        const existingRuntimeContext = await resolveRuntimeForSession({
           tenantId,
           userId,
           workspaceId,
           workspaceHostPath,
           sessionId: options.sessionId,
-        }) || await createNewRuntime({
+        });
+        const runtimeContext = existingRuntimeContext || await createNewRuntime({
           tenantId,
           userId,
           workspaceId,
           workspaceHostPath,
           pathSegments,
+          logRequestId: options.logRequestId || null,
         });
+        logRuntimeEvent(
+          existingRuntimeContext ? 'runtime_selected_existing' : 'runtime_selected_new',
+          createRuntimeLogDetails(runtimeContext.runtime, {
+            requestId: options.logRequestId || null,
+            sessionId: options.sessionId || null,
+          }),
+        );
         runtimeContext.userEnv = userEnv;
+        runtimeContext.logRequestId = options.logRequestId || null;
 
         return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({
           runtimeContext,

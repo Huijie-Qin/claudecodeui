@@ -2195,8 +2195,49 @@ function authorizeCommandWorkspace(data, request, writer) {
     }
 }
 
-async function runLimitedProviderCommand({ data, provider, writer, run }) {
+function createLogRequestId() {
+    return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createChatSessionLogContext({ data, provider, request }) {
+    const options = data.options || {};
+    const command = typeof data.command === 'string' ? data.command : '';
+    return {
+        requestId: createLogRequestId(),
+        provider,
+        sessionMode: options.sessionId ? 'resume' : 'new',
+        sessionId: options.sessionId || null,
+        tenantId: options.tenantId ?? request?.tenant?.id ?? null,
+        workspaceId: options.workspaceId ?? null,
+        userId: options.userId ?? request?.user?.id ?? request?.user?.userId ?? null,
+        cwd: options.cwd || options.projectPath || null,
+        model: options.model || null,
+        permissionMode: options.permissionMode || null,
+        messageLength: command.length,
+        prompt: command,
+        imageCount: Array.isArray(options.images) ? options.images.length : 0,
+    };
+}
+
+function logChatSessionEvent(event, context, extra = {}) {
+    if (!context) return;
+    console.log('[chat-session]', JSON.stringify({
+        event,
+        ...context,
+        ...extra,
+    }));
+}
+
+async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
     let lease;
+    const startedAt = Date.now();
+    if (logContext?.requestId) {
+        data.options = {
+            ...(data.options || {}),
+            logRequestId: logContext.requestId,
+        };
+    }
+    logChatSessionEvent('received', logContext);
     try {
         lease = sessionConcurrencyLimiter.acquire({
             userId: data.options?.userId ?? writer.userId,
@@ -2215,11 +2256,27 @@ async function runLimitedProviderCommand({ data, provider, writer, run }) {
             currentConcurrentRequests: error.activeCount,
             sessionLimit: error.limit,
         }));
+        logChatSessionEvent('rejected', logContext, {
+            reason: error.code || 'session_limit_exceeded',
+            currentConcurrentRequests: error.activeCount,
+            sessionLimit: error.limit,
+            durationMs: Date.now() - startedAt,
+        });
         return;
     }
 
     try {
+        logChatSessionEvent('dispatch', logContext);
         await run();
+        logChatSessionEvent('completed', logContext, {
+            durationMs: Date.now() - startedAt,
+        });
+    } catch (error) {
+        logChatSessionEvent('failed', logContext, {
+            durationMs: Date.now() - startedAt,
+            error: error?.message || String(error),
+        });
+        throw error;
     } finally {
         lease?.release();
     }
@@ -2244,9 +2301,7 @@ function handleChatConnection(ws, request) {
 
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
-                console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
-                console.log('📁 Project:', data.options?.projectPath || 'Unknown');
-                console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
+                const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
 
                 // Use Claude Agents SDK
                 await runLimitedProviderCommand({
@@ -2254,42 +2309,37 @@ function handleChatConnection(ws, request) {
                     provider: 'claude',
                     writer,
                     run: () => queryClaudeSDK(data.command, data.options, writer),
+                    logContext,
                 });
             } else if (data.type === 'cursor-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
-                console.log('[DEBUG] Cursor message:', data.command || '[Continue/Resume]');
-                console.log('📁 Project:', data.options?.cwd || 'Unknown');
-                console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-                console.log('🤖 Model:', data.options?.model || 'default');
+                const logContext = createChatSessionLogContext({ data, provider: 'cursor', request });
                 await runLimitedProviderCommand({
                     data,
                     provider: 'cursor',
                     writer,
                     run: () => spawnCursor(data.command, data.options, writer),
+                    logContext,
                 });
             } else if (data.type === 'codex-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
-                console.log('[DEBUG] Codex message:', data.command || '[Continue/Resume]');
-                console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
-                console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-                console.log('🤖 Model:', data.options?.model || 'default');
+                const logContext = createChatSessionLogContext({ data, provider: 'codex', request });
                 await runLimitedProviderCommand({
                     data,
                     provider: 'codex',
                     writer,
                     run: () => queryCodex(data.command, data.options, writer),
+                    logContext,
                 });
             } else if (data.type === 'gemini-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
-                console.log('[DEBUG] Gemini message:', data.command || '[Continue/Resume]');
-                console.log('📁 Project:', data.options?.projectPath || data.options?.cwd || 'Unknown');
-                console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-                console.log('🤖 Model:', data.options?.model || 'default');
+                const logContext = createChatSessionLogContext({ data, provider: 'gemini', request });
                 await runLimitedProviderCommand({
                     data,
                     provider: 'gemini',
                     writer,
                     run: () => spawnGemini(data.command, data.options, writer),
+                    logContext,
                 });
             } else if (data.type === 'cursor-resume') {
                 // Backward compatibility: treat as cursor-command with resume and no prompt
@@ -2302,6 +2352,7 @@ function handleChatConnection(ws, request) {
                         userId: writer.userId,
                     },
                 };
+                const logContext = createChatSessionLogContext({ data: resumeData, provider: 'cursor', request });
                 await runLimitedProviderCommand({
                     data: resumeData,
                     provider: 'cursor',
@@ -2311,6 +2362,7 @@ function handleChatConnection(ws, request) {
                         resume: true,
                         cwd: data.options?.cwd
                     }, writer),
+                    logContext,
                 });
             } else if (data.type === 'abort-session') {
                 console.log('[DEBUG] Abort session request:', data.sessionId);

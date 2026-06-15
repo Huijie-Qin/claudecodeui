@@ -520,6 +520,18 @@ function parseImageDataUrl(image, index) {
   };
 }
 
+function logChatSessionTokenUsage({ requestId, provider, sessionId, model, tokenBudget, tokenUsage }) {
+  console.log('[chat-session]', JSON.stringify({
+    event: 'token_usage',
+    requestId: requestId || null,
+    provider,
+    sessionId: sessionId || null,
+    model: model || null,
+    tokenBudget,
+    tokenUsage,
+  }));
+}
+
 /**
  * Builds the SDK prompt. Text-only turns can use the faster string prompt path;
  * turns with images must use SDKUserMessage content blocks so Claude receives
@@ -877,13 +889,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
         }
         const tokenBudgetData = extractTokenBudget(message);
         if (tokenBudgetData) {
+          const tokenUsageData = extractTokenUsage(message);
           const tokenStatusMessage = createNormalizedMessage({
             kind: 'status',
             text: 'token_budget',
             tokenBudget: tokenBudgetData,
-            tokenUsage: extractTokenUsage(message),
+            tokenUsage: tokenUsageData,
             sessionId: capturedSessionId || sessionId || null,
             provider: 'claude',
+          });
+          logChatSessionTokenUsage({
+            requestId: runtimeOptions.logRequestId,
+            provider: 'claude',
+            sessionId: capturedSessionId || sessionId || null,
+            model: models[0] || runtimeOptions.model || null,
+            tokenBudget: tokenBudgetData,
+            tokenUsage: tokenUsageData,
           });
           persistNormalizedMessages({
             options: runtimeOptions,

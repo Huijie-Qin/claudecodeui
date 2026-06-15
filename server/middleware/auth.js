@@ -117,8 +117,7 @@ const authenticateWebSocket = (token) => {
       return null;
     }
     return { userId: user.id, username: user.username };
-  } catch (error) {
-    console.error('WebSocket token verification error:', error);
+  } catch {
     return null;
   }
 };
