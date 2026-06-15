@@ -36,3 +36,60 @@ test('resolveClaudeModel falls back to the UI model when no environment override
     assert.equal(claudeSdk.resolveClaudeModel({ model: 'sonnet' }), 'sonnet');
   });
 });
+
+test('createClaudePromptFactory keeps text-only prompts as strings', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  const createPrompt = claudeSdk.createClaudePromptFactory('hello', []);
+
+  assert.equal(createPrompt(), 'hello');
+});
+
+test('createClaudePromptFactory creates native image content blocks', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  const createPrompt = claudeSdk.createClaudePromptFactory('describe this', [
+    {
+      data: 'data:image/png;base64,aGVsbG8=',
+      size: 5,
+      mimeType: 'image/png',
+    },
+  ]);
+
+  const iterator = createPrompt()[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  const second = await iterator.next();
+
+  assert.equal(second.done, true);
+  assert.equal(first.value.type, 'user');
+  assert.equal(first.value.parent_tool_use_id, null);
+  assert.deepEqual(first.value.message, {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'describe this' },
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'aGVsbG8=',
+        },
+      },
+    ],
+  });
+});
+
+test('createClaudePromptFactory rejects unsupported image types', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  assert.throws(
+    () => claudeSdk.createClaudePromptFactory('describe this', [
+      {
+        data: 'data:image/svg+xml;base64,PHN2Zy8+',
+        size: 6,
+        mimeType: 'image/svg+xml',
+      },
+    ]),
+    /Unsupported image type image\/svg\+xml/,
+  );
+});

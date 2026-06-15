@@ -24,6 +24,8 @@ import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
 type PendingViewSession = {
   sessionId: string | null;
   startedAt: number;
@@ -383,7 +385,13 @@ export function useChatComposerState({
           return false;
         }
 
-        if (!file.type || !file.type.startsWith('image/')) {
+        if (!file.type || !SUPPORTED_IMAGE_TYPES.has(file.type)) {
+          const fileName = file.name || 'Unknown file';
+          setImageErrors((previous) => {
+            const next = new Map(previous);
+            next.set(fileName, 'Unsupported image type (use JPEG, PNG, GIF, or WebP)');
+            return next;
+          });
           return false;
         }
 
@@ -436,7 +444,10 @@ export function useChatComposerState({
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     accept: {
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/gif': ['.gif'],
+      'image/webp': ['.webp'],
     },
     maxSize: 5 * 1024 * 1024,
     maxFiles: 5,

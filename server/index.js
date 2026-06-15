@@ -2813,11 +2813,11 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
         });
 
         const fileFilter = (req, file, cb) => {
-            const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+            const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             if (allowedMimes.includes(file.mimetype)) {
                 cb(null, true);
             } else {
-                cb(new Error('Invalid file type. Only JPEG, PNG, GIF, WebP, and SVG are allowed.'));
+                cb(new Error('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.'));
             }
         };
 

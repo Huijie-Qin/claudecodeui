@@ -14,7 +14,6 @@
 
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
@@ -56,6 +55,7 @@ const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
+const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 function parseDisabledTools(value) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -491,65 +491,64 @@ function extractTokenUsage(resultMessage) {
   };
 }
 
+function createSingleMessagePrompt(message) {
+  return (async function* singleMessagePrompt() {
+    yield message;
+  })();
+}
+
+function parseImageDataUrl(image, index) {
+  const matches = typeof image?.data === 'string'
+    ? image.data.match(/^data:([^;]+);base64,(.+)$/)
+    : null;
+  if (!matches) {
+    throw new Error(`Image ${index + 1} is missing valid base64 data.`);
+  }
+
+  const [, mimeType, base64Data] = matches;
+  if (!CLAUDE_SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error(`Unsupported image type ${mimeType}. Claude supports JPEG, PNG, GIF, and WebP images.`);
+  }
+
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: mimeType,
+      data: base64Data,
+    },
+  };
+}
+
 /**
- * Handles image processing for SDK queries
- * Saves base64 images to temporary files and returns modified prompt with file paths
- * @param {string} command - Original user prompt
- * @param {Array} images - Array of image objects with base64 data
- * @param {string} cwd - Working directory for temp file creation
- * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
+ * Builds the SDK prompt. Text-only turns can use the faster string prompt path;
+ * turns with images must use SDKUserMessage content blocks so Claude receives
+ * native visual input rather than a textual file path.
  */
-async function handleImages(command, images, cwd, promptCwd = cwd) {
-  const tempImagePaths = [];
-  const promptImagePaths = [];
-  let tempDir = null;
-
+function createClaudePromptFactory(command, images) {
   if (!images || images.length === 0) {
-    return { modifiedCommand: command, tempImagePaths, tempDir };
+    return () => command;
   }
 
-  try {
-    // Create temp directory in the project directory
-    const workingDir = cwd || process.cwd();
-    const promptWorkingDir = promptCwd || workingDir;
-    const tempSubdir = path.join('.tmp', 'images', Date.now().toString());
-    tempDir = path.join(workingDir, tempSubdir);
-    await fs.mkdir(tempDir, { recursive: true });
-
-    // Save each image to a temp file
-    for (const [index, image] of images.entries()) {
-      // Extract base64 data and mime type
-      const matches = image.data.match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) {
-        console.error('Invalid image data format');
-        continue;
-      }
-
-      const [, mimeType, base64Data] = matches;
-      const extension = mimeType.split('/')[1] || 'png';
-      const filename = `image_${index}.${extension}`;
-      const filepath = path.join(tempDir, filename);
-      const promptPath = path.join(promptWorkingDir, tempSubdir, filename);
-
-      // Write base64 data to file
-      await fs.writeFile(filepath, Buffer.from(base64Data, 'base64'));
-      tempImagePaths.push(filepath);
-      promptImagePaths.push(promptPath);
-    }
-
-    // Include the full image paths in the prompt
-    let modifiedCommand = command;
-    if (promptImagePaths.length > 0 && command && command.trim()) {
-      const imageNote = `\n\n[Images provided at the following paths:]\n${promptImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-      modifiedCommand = command + imageNote;
-    }
-
-    // Images processed
-    return { modifiedCommand, tempImagePaths, tempDir };
-  } catch (error) {
-    console.error('Error processing images for SDK:', error);
-    return { modifiedCommand: command, tempImagePaths, tempDir };
+  const content = [];
+  if (typeof command === 'string' && command.trim()) {
+    content.push({ type: 'text', text: command });
   }
+
+  images.forEach((image, index) => {
+    content.push(parseImageDataUrl(image, index));
+  });
+
+  const userMessage = {
+    type: 'user',
+    message: {
+      role: 'user',
+      content,
+    },
+    parent_tool_use_id: null,
+  };
+
+  return () => createSingleMessagePrompt(userMessage);
 }
 
 /**
@@ -674,16 +673,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       sdkOptions.mcpServers = mcpServers;
     }
 
-    // Handle images - save to temp files and modify prompt
-    const imageResult = await handleImages(
-      command,
-      options.images,
-      runtimeContext.hostWorkspacePath || options.cwd,
-      runtimeContext.containerCwd || runtimeOptions.cwd,
-    );
-    const finalCommand = imageResult.modifiedCommand;
-    tempImagePaths = imageResult.tempImagePaths;
-    tempDir = imageResult.tempDir;
+    const createPrompt = createClaudePromptFactory(command, options.images);
 
     sdkOptions.hooks = {
       Notification: [{
@@ -804,7 +794,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     let queryInstance;
     try {
       queryInstance = query({
-        prompt: finalCommand,
+        prompt: createPrompt(),
         options: sdkOptions
       });
     } catch (hookError) {
@@ -813,7 +803,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
       delete sdkOptions.hooks;
       queryInstance = query({
-        prompt: finalCommand,
+        prompt: createPrompt(),
         options: sdkOptions
       });
     }
@@ -1145,5 +1135,6 @@ export {
   resolveClaudeModel,
   loadMcpConfig,
   getPendingApprovalsForSession,
-  reconnectSessionWriter
+  reconnectSessionWriter,
+  createClaudePromptFactory
 };
