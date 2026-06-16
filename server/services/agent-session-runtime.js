@@ -404,6 +404,10 @@ function readEnvValue(record, name) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
+function hasNonEmptyBaseEnvValue(baseEnv, name) {
+  return readEnvValue(baseEnv, name) !== null;
+}
+
 function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
   const defaults = {};
   const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
@@ -427,7 +431,8 @@ function readUsernameForEnv(users, userId) {
   return typeof username === 'string' && username.trim() !== '' ? username.trim() : null;
 }
 
-function readUserContainerEnv(users, userId) {
+function readUserContainerEnv(users, userId, baseEnv = process.env) {
+  const normalizedBaseEnv = normalizeContainerEnvRecord(baseEnv);
   const username = readUsernameForEnv(users, userId);
   if (!username) {
     throw new Error('username is required for W3_NAME');
@@ -453,6 +458,9 @@ function readUserContainerEnv(users, userId) {
   }
   for (const [name, value] of Object.entries(env)) {
     if (name === USER_KEY_ENV_NAME || name === W3_NAME_ENV_NAME || name === PRIVATE_TOKEN_ENV_NAME) {
+      continue;
+    }
+    if (value === '' && hasNonEmptyBaseEnvValue(normalizedBaseEnv, name)) {
       continue;
     }
     output[name] = value;
@@ -1020,7 +1028,7 @@ export function createAgentSessionRuntimeManager({
           const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
           const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
           const userEnv = {
-            ...readUserContainerEnv(users, userId),
+            ...readUserContainerEnv(users, userId, env),
             ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
             [TENANT_ID_ENV_NAME]: String(tenantId),
             [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
@@ -1083,7 +1091,7 @@ export function createAgentSessionRuntimeManager({
 
         const userEnv = options.userId == null
           ? {}
-          : readUserContainerEnv(users, requirePositiveInteger(options.userId, 'userId'));
+          : readUserContainerEnv(users, requirePositiveInteger(options.userId, 'userId'), env);
         return {
           mode: 'local',
           cwd: options.cwd,
@@ -1100,7 +1108,7 @@ export function createAgentSessionRuntimeManager({
       const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
       const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
       const userEnv = {
-        ...readUserContainerEnv(users, userId),
+        ...readUserContainerEnv(users, userId, env),
         ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
         [TENANT_ID_ENV_NAME]: String(tenantId),
         [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
