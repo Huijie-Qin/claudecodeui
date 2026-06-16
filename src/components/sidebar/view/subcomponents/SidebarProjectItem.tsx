@@ -106,6 +106,7 @@ export default function SidebarProjectItem({
   const sessionCountLabel = `${sessionCountDisplay} session${sessions.length === 1 ? '' : 's'}`;
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
   const canShareProject = false;
+  const scheduledTasksTooltip = t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' });
 
   void _onShareProject;
 
@@ -251,7 +252,7 @@ export default function SidebarProjectItem({
                         event.stopPropagation();
                         openScheduledTasksList();
                       }}
-                      title={t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' })}
+                      title={scheduledTasksTooltip}
                     >
                       <CalendarClock className="h-4 w-4 text-primary" />
                     </button>
@@ -399,7 +400,7 @@ export default function SidebarProjectItem({
                     event.stopPropagation();
                     openScheduledTasksList();
                   }}
-                  title={t('tooltips.scheduledTasks', { defaultValue: 'Scheduled tasks' })}
+                  title={scheduledTasksTooltip}
                 >
                   <CalendarClock className="h-3 w-3 text-muted-foreground" />
                 </div>

@@ -47,7 +47,8 @@
     "deleteSession": "Bu oturumu kalıcı olarak sil",
     "save": "Kaydet",
     "cancel": "İptal",
-    "clearSearch": "Aramayı temizle"
+    "clearSearch": "Aramayı temizle",
+    "scheduledTasks": "Zamanlanmış görevler"
   },
   "navigation": {
     "chat": "Sohbet",

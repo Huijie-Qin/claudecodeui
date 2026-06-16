@@ -47,7 +47,8 @@
     "deleteSession": "永久删除此会话",
     "save": "保存",
     "cancel": "取消",
-    "clearSearch": "清除搜索"
+    "clearSearch": "清除搜索",
+    "scheduledTasks": "定时任务"
   },
   "navigation": {
     "chat": "聊天",

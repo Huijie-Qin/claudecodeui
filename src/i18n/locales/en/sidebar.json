@@ -47,7 +47,8 @@
     "deleteSession": "Delete this session permanently",
     "save": "Save",
     "cancel": "Cancel",
-    "clearSearch": "Clear search"
+    "clearSearch": "Clear search",
+    "scheduledTasks": "Scheduled tasks"
   },
   "navigation": {
     "chat": "Chat",
