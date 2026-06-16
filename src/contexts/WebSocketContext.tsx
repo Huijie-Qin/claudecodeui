@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { useTenant } from './TenantContext';
@@ -33,8 +34,9 @@ const buildWebSocketUrl = (token: string | null, tenantId: number | null) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tenantPart = tenantId ? `tenantId=${encodeURIComponent(String(tenantId))}` : '';
   if (IS_PLATFORM) return `${protocol}//${window.location.host}/ws${tenantPart ? `?${tenantPart}` : ''}`; // Platform mode: Use same domain as the page (goes through proxy)
-  if (!token) return null;
-  const params = new URLSearchParams({ token });
+  const latestToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || token;
+  if (!latestToken) return null;
+  const params = new URLSearchParams({ token: latestToken });
   if (tenantId) params.set('tenantId', String(tenantId));
   return `${protocol}//${window.location.host}/ws?${params.toString()}`; // OSS mode: Use same host:port that served the page
 };

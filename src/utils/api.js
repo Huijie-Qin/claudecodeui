@@ -1,5 +1,6 @@
 import { IS_PLATFORM, SQL_CHECK_BASE_URL } from "../constants/config";
 import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
+import { AUTH_TOKEN_REFRESHED_EVENT } from "../components/auth/constants";
 
 // Utility function for authenticated API calls
 export const authenticatedFetch = (url, options = {}) => {
@@ -26,6 +27,9 @@ export const authenticatedFetch = (url, options = {}) => {
     const refreshedToken = response.headers.get('X-Refreshed-Token');
     if (refreshedToken) {
       localStorage.setItem('auth-token', refreshedToken);
+      window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, {
+        detail: { token: refreshedToken },
+      }));
     }
     return response;
   });
