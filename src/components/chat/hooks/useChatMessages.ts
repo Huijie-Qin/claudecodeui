@@ -212,6 +212,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           ...getMessageIdentity(msg),
           type: 'error',
           content: msg.content || 'Unknown error',
+          diagnostics: msg.diagnostics as ChatMessage['diagnostics'],
           timestamp: msg.timestamp,
         });
         break;

@@ -17,6 +17,31 @@ export interface ToolResult {
   [key: string]: unknown;
 }
 
+export interface ClaudeProcessDiagnostics {
+  provider?: string | null;
+  sessionId?: string | null;
+  providerSessionId?: string | null;
+  runtimeId?: string | null;
+  runtimeMode?: string | null;
+  containerName?: string | null;
+  cwd?: string | null;
+  projectPath?: string | null;
+  hostWorkspacePath?: string | null;
+  executable?: string | null;
+  command?: string | null;
+  args?: string[];
+  startedAt?: string | null;
+  endedAt?: string | null;
+  exitCode?: number | null;
+  signal?: string | null;
+  errorMessage?: string | null;
+  errorCode?: string | null;
+  spawnError?: string | null;
+  stdoutTail?: string | null;
+  stderrTail?: string | null;
+  [key: string]: unknown;
+}
+
 export interface SubagentChildTool {
   toolId: string;
   toolName: string;
@@ -38,6 +63,7 @@ export interface ChatMessage {
   toolName?: string;
   toolInput?: unknown;
   toolResult?: ToolResult | null;
+  diagnostics?: ClaudeProcessDiagnostics;
   toolId?: string;
   toolCallId?: string;
   toolCompletedAt?: string | number | Date;

@@ -60,6 +60,7 @@ export interface NormalizedMessage {
   status?: string;
   summary?: string;
   exitCode?: number;
+  diagnostics?: Record<string, unknown>;
   actualSessionId?: string;
   parentToolUseId?: string;
   subagentTools?: unknown[];

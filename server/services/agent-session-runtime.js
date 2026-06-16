@@ -70,6 +70,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  ...NPM_PROXY_ENV_NAMES,
   'PATH',
   'HOME',
   'DOCKER_HOST',
@@ -393,6 +394,7 @@ function buildRuntimeProcessEnv(env = process.env) {
 function buildContainerEnvAllowlist(containerEnv = {}) {
   return Array.from(new Set([
     ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
+    ...NPM_PROXY_ENV_NAMES,
     ...Object.keys(normalizeContainerEnvRecord(containerEnv)),
   ]));
 }
@@ -827,6 +829,56 @@ export function createAgentSessionRuntimeManager({
     };
   }
 
+  async function createNewLocalRuntime({
+    tenantId,
+    userId,
+    workspaceId,
+    workspaceHostPath,
+    pathSegments,
+    logRequestId = null,
+  }) {
+    const runtimeId = buildRuntimeId();
+    const runtimePaths = buildRuntimePaths({
+      runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+      provider: 'claude',
+      ...pathSegments,
+      tenantId,
+      userId,
+      workspaceId,
+    });
+    const containerName = buildContainerName({
+      provider: 'claude-local',
+      tenantId,
+      userId,
+      workspaceId,
+      runtimeId,
+    });
+
+    await ensureRuntimeHomeWritable(fs, runtimePaths.runtimeHomePath, resolveContainerUser(env));
+
+    const runtime = multitenancy.runtimes.createRuntime({
+      runtimeId,
+      tenantId,
+      userId,
+      workspaceId,
+      provider: 'claude',
+      containerName,
+      image: 'local',
+      workspaceHostPath,
+      runtimeHomePath: runtimePaths.runtimeHomePath,
+      status: 'pending',
+    });
+    logRuntimeEvent('local_runtime_created', createRuntimeLogDetails(runtime, {
+      mode: 'local',
+      requestId: logRequestId,
+    }));
+
+    return {
+      runtime,
+      wrapperDir: runtimePaths.wrapperDir,
+    };
+  }
+
   async function toRuntimeContext(runtime, { requireHome = false } = {}) {
     if (!runtime) return null;
     if (!(await pathExists(fs, runtime.runtime_home_path))) {
@@ -928,10 +980,107 @@ export function createAgentSessionRuntimeManager({
     };
   }
 
+  async function activateLocalRuntimeContext({ runtimeContext, workspaceHostPath, userEnv, logRequestId = null }) {
+    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
+    const updatedRuntime = multitenancy.runtimes.updateStatus({
+      runtimeId: runtimeContext.runtime.runtime_id,
+      status: 'active',
+    });
+    const runtime = {
+      ...runtimeContext.runtime,
+      ...(updatedRuntime || {}),
+    };
+    beginRuntimeUse(runtime.runtime_id);
+    logRuntimeEvent('local_runtime_ready', createRuntimeLogDetails(runtime, {
+      mode: 'local',
+      requestId: logRequestId,
+      cwd: workspaceHostPath,
+    }));
+
+    return {
+      mode: 'local',
+      runtimeId: runtime.runtime_id,
+      runtimeHomePath: runtime.runtime_home_path,
+      cwd: workspaceHostPath,
+      projectPath: workspaceHostPath,
+      hostWorkspacePath: workspaceHostPath,
+      pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
+      settingSources: ['project', 'user', 'local'],
+      executionEnv: { ...env, ...userEnv },
+    };
+  }
+
   return {
     async prepareClaudeRuntime(options = {}) {
       const mode = resolveClaudeExecutionMode(env);
       if (mode === 'local') {
+        if (options.tenantId != null && options.userId != null && options.workspaceId != null) {
+          const tenantId = requirePositiveInteger(options.tenantId, 'tenantId');
+          const userId = requirePositiveInteger(options.userId, 'userId');
+          const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
+          const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
+          const userEnv = {
+            ...readUserContainerEnv(users, userId),
+            ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
+            [TENANT_ID_ENV_NAME]: String(tenantId),
+            [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
+          };
+          const pathSegments = readRuntimePathSegments({
+            tenantId,
+            userId,
+            workspaceId,
+            workspaceHostPath,
+          });
+          const scopeLockKey = buildRuntimeScopeLockKey({
+            provider: 'claude-local',
+            tenantId,
+            userId,
+            workspaceId,
+          });
+
+          return withRuntimeLock(scopeLockKey, async () => {
+            logRuntimeEvent('local_runtime_prepare', {
+              mode: 'local',
+              requestId: options.logRequestId || null,
+              tenantId,
+              userId,
+              workspaceId,
+              sessionId: options.sessionId || null,
+              workspaceHostPath,
+            });
+            const existingRuntimeContext = await resolveRuntimeForSession({
+              tenantId,
+              userId,
+              workspaceId,
+              workspaceHostPath,
+              sessionId: options.sessionId,
+            });
+            const runtimeContext = existingRuntimeContext || await createNewLocalRuntime({
+              tenantId,
+              userId,
+              workspaceId,
+              workspaceHostPath,
+              pathSegments,
+              logRequestId: options.logRequestId || null,
+            });
+            logRuntimeEvent(
+              existingRuntimeContext ? 'local_runtime_selected_existing' : 'local_runtime_selected_new',
+              createRuntimeLogDetails(runtimeContext.runtime, {
+                mode: 'local',
+                requestId: options.logRequestId || null,
+                sessionId: options.sessionId || null,
+              }),
+            );
+
+            return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateLocalRuntimeContext({
+              runtimeContext,
+              workspaceHostPath,
+              userEnv,
+              logRequestId: options.logRequestId || null,
+            }));
+          });
+        }
+
         const userEnv = options.userId == null
           ? {}
           : readUserContainerEnv(users, requirePositiveInteger(options.userId, 'userId'));

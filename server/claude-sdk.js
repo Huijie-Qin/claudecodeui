@@ -43,6 +43,7 @@ import {
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
+import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -605,6 +606,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
+  const processDiagnostics = createClaudeProcessDiagnostics({
+    env: options.executionEnv || process.env,
+  });
   let capturedSessionId = sessionId;
   const pendingProviderSessionId = sessionId ? null : `pending:${createRequestId()}`;
   let sessionCreatedSent = false;
@@ -652,6 +656,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
       runtimeId: runtimeContext.runtimeId,
       runtimeMode: runtimeContext.mode,
     };
+    processDiagnostics.updateContext({
+      provider: 'claude',
+      runtimeId: runtimeOptions.runtimeId || null,
+      runtimeMode: runtimeOptions.runtimeMode || 'local',
+      cwd: runtimeOptions.cwd || null,
+      projectPath: runtimeOptions.projectPath || null,
+      executable: runtimeOptions.pathToClaudeCodeExecutable || null,
+      containerName: runtimeContext.containerName || null,
+      hostWorkspacePath: runtimeContext.hostWorkspacePath || null,
+    });
+    processDiagnostics.addRedactionEnv(runtimeOptions.executionEnv || process.env);
+    runtimeOptions.spawnClaudeCodeProcess = processDiagnostics.createSpawn(runtimeContext.spawnClaudeCodeProcess);
 
     await reconcileWorkspaceSkillsForAgentTurn({
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
@@ -994,8 +1010,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
       return;
     }
 
+    const failureSessionId = finalSessionId || pendingProviderSessionId;
+    if (!finalSessionId && failureSessionId && runtimeOptions.runtimeId) {
+      bindRuntimeMessagesToProviderSession({
+        runtimeId: runtimeOptions.runtimeId,
+        providerSessionId: failureSessionId,
+        fromProviderSessionId: pendingProviderSessionId,
+      });
+    }
     agentSessionRuntimeManager.markFailed(runtimeOptions.runtimeId);
-    recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: finalSessionId, status: 'failed' });
+    recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: failureSessionId, status: 'failed' });
 
     // Check if Claude CLI is installed for a clearer error message
     const installed = runtimeOptions.runtimeMode === 'docker'
@@ -1003,27 +1027,66 @@ async function queryClaudeSDK(command, options = {}, ws) {
       : await providerAuthService.isProviderInstalled('claude');
     const errorContent = !installed
       ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
-      : error.message;
+      : processDiagnostics.redactText(error?.message || String(error));
+    const diagnostics = processDiagnostics.snapshot({
+      provider: 'claude',
+      sessionId: failureSessionId,
+      providerSessionId: failureSessionId,
+      runtimeId: runtimeOptions.runtimeId || null,
+      runtimeMode: runtimeOptions.runtimeMode || null,
+      containerName: runtimeContext?.containerName || null,
+      executable: runtimeOptions.pathToClaudeCodeExecutable || null,
+      errorMessage: error?.message || String(error),
+      errorCode: error?.code || null,
+    });
+    processDiagnostics.logSnapshot('sdk query error', {
+      sessionId: failureSessionId,
+      errorMessage: error?.message || String(error),
+      errorCode: error?.code || null,
+    });
 
-    const errorMessage = {
+    const errorMessage = createNormalizedMessage({
       kind: 'error',
       content: errorContent,
-      sessionId: finalSessionId,
-      provider: 'claude'
-    };
+      sessionId: failureSessionId,
+      provider: 'claude',
+      diagnostics,
+    });
     if (error?.code) {
       errorMessage.code = error.code;
     }
     if (Array.isArray(error?.failures)) {
-      errorMessage.failures = error.failures;
+      errorMessage.failures = processDiagnostics.redactValue(error.failures);
+    }
+
+    persistNormalizedMessages({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: failureSessionId,
+      runtimeId: runtimeOptions.runtimeId,
+      messages: [errorMessage],
+    });
+
+    if (!finalSessionId && failureSessionId && !sessionCreatedSent) {
+      sessionCreatedSent = true;
+      if (ws.setSessionId && typeof ws.setSessionId === 'function') {
+        ws.setSessionId(failureSessionId);
+      }
+      ws.send(createNormalizedMessage({
+        kind: 'session_created',
+        newSessionId: failureSessionId,
+        sessionId: failureSessionId,
+        provider: 'claude',
+        failed: true,
+      }));
     }
 
     // Send error to WebSocket
-    ws.send(createNormalizedMessage(errorMessage));
+    ws.send(errorMessage);
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',
-      sessionId: capturedSessionId || sessionId || null,
+      sessionId: failureSessionId,
       sessionName: sessionSummary,
       error
     });

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
   ChatMessage,
+  ClaudeProcessDiagnostics,
   ClaudePermissionSuggestion,
   PermissionGrantResult,
   Provider,
@@ -45,6 +46,76 @@ type InteractiveOption = {
 
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
+
+function redactVisibleSecretText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/(Authorization\s*[:=]\s*Bearer\s+)[^\s"'`]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|auth[_-]?token|private[_-]?token|user[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]')
+    .replace(/([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PRIVATE)[A-Z0-9_]*\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]');
+}
+
+function diagnosticValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return redactVisibleSecretText(value.filter((entry) => entry != null && String(entry).trim()).join(' '));
+  }
+  if (value == null) {
+    return '';
+  }
+  return redactVisibleSecretText(value);
+}
+
+function buildDiagnosticRows(diagnostics?: ClaudeProcessDiagnostics): Array<[string, string]> {
+  if (!diagnostics) {
+    return [];
+  }
+
+  const rows: Array<[string, string]> = [
+    ['runtime', [diagnostics.runtimeMode, diagnostics.runtimeId].filter(Boolean).join(' / ')],
+    ['container', diagnostics.containerName || ''],
+    ['process', [diagnostics.command, ...(diagnostics.args || [])].filter(Boolean).join(' ')],
+    ['executable', diagnostics.executable || ''],
+    ['exit', [
+      diagnostics.exitCode != null ? `code ${diagnostics.exitCode}` : '',
+      diagnostics.signal ? `signal ${diagnostics.signal}` : '',
+    ].filter(Boolean).join(', ')],
+    ['cwd', diagnostics.cwd || ''],
+    ['workspace', diagnostics.hostWorkspacePath || diagnostics.projectPath || ''],
+  ];
+
+  return rows.filter(([, value]) => Boolean(value));
+}
+
+function hasDiagnosticDetails(diagnostics?: ClaudeProcessDiagnostics): boolean {
+  return Boolean(
+    diagnostics &&
+    (
+      buildDiagnosticRows(diagnostics).length > 0 ||
+      diagnostics.stderrTail ||
+      diagnostics.stdoutTail ||
+      diagnostics.spawnError ||
+      diagnostics.errorMessage
+    )
+  );
+}
+
+function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): string {
+  if (!diagnostics) {
+    return '';
+  }
+
+  const rows = buildDiagnosticRows(diagnostics)
+    .map(([label, value]) => `${label}: ${value}`)
+    .join('\n');
+  const sections = [
+    rows,
+    diagnostics.errorMessage ? `error: ${redactVisibleSecretText(diagnostics.errorMessage)}` : '',
+    diagnostics.spawnError ? `spawn error:\n${redactVisibleSecretText(diagnostics.spawnError)}` : '',
+    diagnostics.stderrTail ? `stderr:\n${redactVisibleSecretText(diagnostics.stderrTail)}` : '',
+    diagnostics.stdoutTail ? `stdout:\n${redactVisibleSecretText(diagnostics.stdoutTail)}` : '',
+  ].filter(Boolean);
+
+  return sections.join('\n\n');
+}
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
@@ -116,6 +187,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const shouldShowAssistantTimestamp = isPlainAssistantResponse && !message.isStreaming;
   const shouldShowFooterTimestamp = !message.isStreaming && (shouldShowAssistantTimestamp || !isGrouped);
   const shouldShowAssistantFooter = shouldShowAssistantCopyControl || shouldShowFooterTimestamp;
+  const errorDiagnostics = message.type === 'error' ? message.diagnostics : undefined;
+  const diagnosticRows = useMemo(() => buildDiagnosticRows(errorDiagnostics), [errorDiagnostics]);
+  const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
+  const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -421,7 +496,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 )}
 
                 {(() => {
-                  const content = formattedMessageContent;
+                  const content = message.type === 'error'
+                    ? redactVisibleSecretText(formattedMessageContent)
+                    : formattedMessageContent;
 
                   // Detect if content is pure JSON (starts with { or [)
                   const trimmedContent = content.trim();
@@ -464,6 +541,80 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     </div>
                   );
                 })()}
+
+                {shouldShowErrorDiagnostics && (
+                  <details className="mt-3 rounded-md border border-red-200/70 bg-red-50/60 text-xs dark:border-red-900/60 dark:bg-red-950/20">
+                    <summary className="cursor-pointer select-none px-3 py-2 font-medium text-red-900 dark:text-red-100">
+                      {t('diagnostics.title', { defaultValue: 'Process diagnostics' })}
+                    </summary>
+                    <div className="space-y-3 border-t border-red-200/70 px-3 py-3 dark:border-red-900/60">
+                      {diagnosticRows.length > 0 && (
+                        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
+                          {diagnosticRows.map(([label, value]) => (
+                            <div key={label} className="contents">
+                              <dt className="font-medium text-red-900/80 dark:text-red-100/80">
+                                {t(`diagnostics.${label}`, { defaultValue: label })}
+                              </dt>
+                              <dd className="break-words font-mono text-red-950 dark:text-red-50">
+                                {diagnosticValue(value)}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+
+                      {errorDiagnostics?.errorMessage && (
+                        <div>
+                          <div className="mb-1 font-medium text-red-900/80 dark:text-red-100/80">
+                            {t('diagnostics.errorMessage', { defaultValue: 'error' })}
+                          </div>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 font-mono text-[11px] text-red-950 dark:bg-black/20 dark:text-red-50">
+                            {redactVisibleSecretText(errorDiagnostics.errorMessage)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {errorDiagnostics?.spawnError && (
+                        <div>
+                          <div className="mb-1 font-medium text-red-900/80 dark:text-red-100/80">
+                            {t('diagnostics.spawnError', { defaultValue: 'spawn error' })}
+                          </div>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 font-mono text-[11px] text-red-950 dark:bg-black/20 dark:text-red-50">
+                            {redactVisibleSecretText(errorDiagnostics.spawnError)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {errorDiagnostics?.stderrTail && (
+                        <div>
+                          <div className="mb-1 font-medium text-red-900/80 dark:text-red-100/80">
+                            {t('diagnostics.stderr', { defaultValue: 'stderr tail' })}
+                          </div>
+                          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 font-mono text-[11px] text-red-950 dark:bg-black/20 dark:text-red-50">
+                            {redactVisibleSecretText(errorDiagnostics.stderrTail)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {errorDiagnostics?.stdoutTail && (
+                        <div>
+                          <div className="mb-1 font-medium text-red-900/80 dark:text-red-100/80">
+                            {t('diagnostics.stdout', { defaultValue: 'stdout tail' })}
+                          </div>
+                          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 font-mono text-[11px] text-red-950 dark:bg-black/20 dark:text-red-50">
+                            {redactVisibleSecretText(errorDiagnostics.stdoutTail)}
+                          </pre>
+                        </div>
+                      )}
+
+                      {diagnosticCopyContent && (
+                        <div className="pt-1">
+                          <MessageCopyControl content={diagnosticCopyContent} messageType="assistant" />
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
               </div>
             )}
 
