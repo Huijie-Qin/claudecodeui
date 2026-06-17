@@ -231,6 +231,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       HTTPS_PROXY: 'http://secure-proxy.example:8443',
       http_proxy: 'http://lower-proxy.example:8080',
       https_proxy: 'http://lower-secure-proxy.example:8443',
+      MCP_DATA_SOURCE_KEY: 'host-mcp-data-source-key',
       EXTRA_SECRET: 'do-not-forward',
     },
     multitenancy: {
@@ -314,11 +315,13 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.executionEnv.HTTPS_PROXY, 'http://secure-proxy.example:8443');
   assert.equal(runtime.executionEnv.http_proxy, 'http://lower-proxy.example:8080');
   assert.equal(runtime.executionEnv.https_proxy, 'http://lower-secure-proxy.example:8443');
+  assert.equal(runtime.executionEnv.MCP_DATA_SOURCE_KEY, 'host-mcp-data-source-key');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
   assert.ok(dockerCalls[0].join(' ').includes('TENANT_ID=3'));
   assert.ok(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'));
+  assert.ok(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'));
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
@@ -333,6 +336,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e W3_NAME/);
   assert.match(wrapper, /-e TENANT_ID/);
   assert.match(wrapper, /-e WORKSPACE_ID/);
+  assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });
