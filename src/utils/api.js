@@ -285,6 +285,10 @@ export const api = {
   tenants: {
     mine: () => authenticatedFetch('/api/tenants/me'),
     validate: (tenantId) => authenticatedFetch(`/api/tenants/${tenantId}/validate`),
+    checkAgentList: (tenantId) =>
+      authenticatedFetch(`/api/tenants/${encodeURIComponent(String(tenantId))}/agent-list-check`, {
+        method: 'POST',
+      }),
     requestJoin: (tenantId, message) =>
       authenticatedFetch(`/api/tenants/${tenantId}/join-requests`, {
         method: 'POST',

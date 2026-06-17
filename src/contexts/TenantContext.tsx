@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { useAuth } from '../components/auth/context/AuthContext';
@@ -31,6 +31,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(null);
   const [isLoadingTenants, setIsLoadingTenants] = useState(false);
+  const checkedAgentListTenantsRef = useRef(new Set<string>());
 
   const selectTenant = useCallback((tenant: Tenant) => {
     setCurrentTenant(tenant);
@@ -82,6 +83,35 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshTenants();
   }, [refreshTenants]);
+
+  useEffect(() => {
+    checkedAgentListTenantsRef.current.clear();
+  }, [user?.id]);
+
+  useEffect(() => {
+    const tenantId = currentTenant?.id;
+    if (!tenantId) {
+      return;
+    }
+
+    const tenantKey = String(tenantId);
+    if (checkedAgentListTenantsRef.current.has(tenantKey)) {
+      return;
+    }
+    checkedAgentListTenantsRef.current.add(tenantKey);
+
+    void api.tenants.checkAgentList(tenantId)
+      .then((response) => {
+        if (!response.ok) {
+          checkedAgentListTenantsRef.current.delete(tenantKey);
+          console.warn(`OpenAPI agent list check failed with status ${response.status}`);
+        }
+      })
+      .catch((error) => {
+        checkedAgentListTenantsRef.current.delete(tenantKey);
+        console.warn('OpenAPI agent list check failed', error);
+      });
+  }, [currentTenant?.id]);
 
   const value = useMemo<TenantContextValue>(() => ({
     tenants,

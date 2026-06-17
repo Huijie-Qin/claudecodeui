@@ -8,7 +8,7 @@ const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 const ACCOUNT_ID_HEADER = 'X-Account-Id';
 
 export async function checkOpenApiAgentList({ tenantId, tenantCode, accountId } = {}) {
-  await requestOpenApiJson('/api/agent/list', {
+  const response = await requestOpenApiJson('/api/agent/list', {
     method: 'POST',
     tenantId: tenantId ?? tenantCode,
     accountId,
@@ -26,7 +26,7 @@ export async function checkOpenApiAgentList({ tenantId, tenantCode, accountId } 
     },
   });
 
-  return { ok: true };
+  return { ok: true, response };
 }
 
 async function requestOpenApiJson(endpoint, { method = 'GET', body, tenantId, accountId } = {}) {

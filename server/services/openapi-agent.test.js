@@ -21,6 +21,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
       pageSize: 24,
     },
   };
+  const expectedResponse = { code: 0, message: 'success', data: { records: [] } };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) {
@@ -35,7 +36,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
     seen.body = body;
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ code: 0, message: 'success', data: { records: [] } }));
+    res.end(JSON.stringify(expectedResponse));
   });
 
   await new Promise((resolve) => {
@@ -58,7 +59,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
 
     assert.deepEqual(
       await checkOpenApiAgentList({ tenantCode: 'prod-code-001', accountId: 'j00939207' }),
-      { ok: true },
+      { ok: true, response: expectedResponse },
     );
   } finally {
     restoreEnv('PROD_DA_BASE_URL', previousProdDaBaseUrl);

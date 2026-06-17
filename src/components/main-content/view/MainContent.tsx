@@ -11,7 +11,6 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { AppTab, Project } from '../../../types/app';
-import { api } from '../../../utils/api';
 import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
@@ -46,7 +45,6 @@ function MainContent({
   externalMessageUpdate,
 }: MainContentProps) {
   const [showSkillMarket, setShowSkillMarket] = React.useState(false);
-  const checkedAgentListProjectsRef = React.useRef(new Set<string>());
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
@@ -108,32 +106,6 @@ function MainContent({
       setCurrentProject?.(selectedProject);
     }
   }, [selectedProject, currentProject?.name, setCurrentProject]);
-
-  useEffect(() => {
-    const projectName = selectedProject?.name;
-    const workspaceId = selectedProject?.workspaceId;
-    if (!projectName || !workspaceId) {
-      return;
-    }
-
-    const projectKey = `${workspaceId}:${projectName}`;
-    if (checkedAgentListProjectsRef.current.has(projectKey)) {
-      return;
-    }
-    checkedAgentListProjectsRef.current.add(projectKey);
-
-    void api.checkProjectAgentList(projectName, workspaceId)
-      .then((response) => {
-        if (!response.ok) {
-          checkedAgentListProjectsRef.current.delete(projectKey);
-          console.warn(`OpenAPI agent list check failed with status ${response.status}`);
-        }
-      })
-      .catch((error) => {
-        checkedAgentListProjectsRef.current.delete(projectKey);
-        console.warn('OpenAPI agent list check failed', error);
-      });
-  }, [selectedProject?.name, selectedProject?.workspaceId]);
 
   useEffect(() => {
     const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs);

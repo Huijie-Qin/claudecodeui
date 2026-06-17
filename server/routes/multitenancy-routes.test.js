@@ -87,6 +87,52 @@ test('tenants/me grants system admins access to all active tenants', async () =>
   }]);
 });
 
+test('tenant agent list check calls OpenAPI with tenant prod code', async () => {
+  const seen = {};
+  const router = createTenantsRouter(
+    {
+      tenants: {
+        getTenantById: (tenantId) => ({
+          id: tenantId,
+          code: 'tenant-code',
+          prod_code: 'prod-tenant-code',
+          status: 'active',
+        }),
+      },
+      memberships: {
+        getActiveMembership: (userId, tenantId) => ({
+          user_id: userId,
+          tenant_id: tenantId,
+          role: 'member',
+          permission: 'edit',
+          status: 'active',
+        }),
+      },
+      joinRequests: {
+        createJoinRequest: () => ({}),
+      },
+    },
+    {
+      checkOpenApiAgentList: async (payload) => {
+        seen.payload = payload;
+        return { ok: true, response: { code: 0, message: 'success', data: { rows: [] } } };
+      },
+    },
+  );
+
+  const { response, payload } = await requestJson(router, '/2/agent-list-check', {
+    method: 'POST',
+    user: { id: 7, username: 'alice', is_system_admin: 0 },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload, { ok: true, response: { code: 0, message: 'success', data: { rows: [] } } });
+  assert.deepEqual(seen.payload, {
+    tenantCode: 'prod-tenant-code',
+    accountId: 'alice',
+  });
+});
+
 test('admin router rejects non-admin users', async () => {
   const router = createAdminRouter({
     tenants: { listTenants: () => [] },
