@@ -1,8 +1,6 @@
 import {
   AlertCircle,
   AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
   CheckCircle2,
   FileText,
   Folder,
@@ -13,8 +11,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode, UIEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
@@ -71,7 +69,7 @@ type DirectoryRow = {
 };
 
 const DEFAULT_MARKET_PAGE_SIZE = 20;
-const MARKET_PAGE_SIZE_OPTIONS = [10, 20, 50];
+const LOAD_MORE_SCROLL_THRESHOLD_PX = 96;
 
 export default function SkillMarketDialog({
   open,
@@ -82,8 +80,6 @@ export default function SkillMarketDialog({
   const { t } = useTranslation();
   const [skills, setSkills] = useState<MarketSkillSummary[]>([]);
   const [query, setQuery] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(DEFAULT_MARKET_PAGE_SIZE);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [detail, setDetail] = useState<MarketSkillDetail | null>(null);
@@ -91,12 +87,20 @@ export default function SkillMarketDialog({
   const [fileContent, setFileContent] = useState('');
   const [canManage, setCanManage] = useState(!isReadOnly);
   const [listLoading, setListLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [removeTargetName, setRemoveTargetName] = useState<string | null>(null);
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  const nextPageRef = useRef(1);
+  const hasNextPageRef = useRef(false);
+  const listLoadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const listGenerationRef = useRef(0);
+  const activeSearchRef = useRef('');
 
   const workspaceId = selectedProject.workspaceId;
   const visibleSkills = useMemo(() => {
@@ -117,43 +121,83 @@ export default function SkillMarketDialog({
   const selectedDisplayName = detail?.displayName || detail?.name || '';
   const canWrite = canManage && !isReadOnly && Boolean(workspaceId);
 
-  const loadSkills = useCallback(async (
-    searchContent = '',
-    nextPage = 1,
-    nextPageSize = DEFAULT_MARKET_PAGE_SIZE,
-  ) => {
+  const loadSkills = useCallback(async (searchContent = '', { reset = true } = {}) => {
     if (!workspaceId) {
       setError(t('skillMarketDialog.workspaceUnavailable', 'Current workspace does not support Skill Market.'));
       return;
     }
 
-    setListLoading(true);
+    if (!reset && (!hasNextPageRef.current || loadingMoreRef.current || listLoadingRef.current)) {
+      return;
+    }
+
+    const requestPage = reset ? 1 : nextPageRef.current;
+    const generation = reset ? listGenerationRef.current + 1 : listGenerationRef.current;
+    if (reset) {
+      listGenerationRef.current = generation;
+      activeSearchRef.current = searchContent;
+      nextPageRef.current = 1;
+      hasNextPageRef.current = false;
+      listLoadingRef.current = true;
+      loadingMoreRef.current = false;
+      setHasNextPage(false);
+      setLoadingMore(false);
+      setListLoading(true);
+      if (listScrollRef.current) {
+        listScrollRef.current.scrollTop = 0;
+      }
+    } else {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
     setError(null);
     try {
       const payload = await readApiPayload(
         await api.skillMarket.list(workspaceId, {
           searchContent,
-          page: nextPage,
-          pageSize: nextPageSize,
+          page: requestPage,
+          pageSize: DEFAULT_MARKET_PAGE_SIZE,
         }),
         t('skillMarketDialog.loadFailed', 'Failed to load Skill Market.'),
       );
+      if (generation !== listGenerationRef.current || activeSearchRef.current !== searchContent) {
+        return;
+      }
+
       const nextSkills = payload.skills ?? [];
       const nextPageInfo = payload.pageInfo ?? {};
+      const nextHasNextPage = Boolean(nextPageInfo.hasNextPage ?? nextSkills.length >= DEFAULT_MARKET_PAGE_SIZE);
       setCanManage(payload.canManage !== false);
-      setSkills(nextSkills);
-      setHasNextPage(Boolean(nextPageInfo.hasNextPage ?? nextSkills.length >= nextPageSize));
-      setSelectedName((current) => {
-        if (current && nextSkills.some((skill: MarketSkillSummary) => skill.name === current)) {
-          return current;
-        }
-        return nextSkills[0]?.name ?? null;
-      });
+      hasNextPageRef.current = nextHasNextPage;
+      setHasNextPage(nextHasNextPage);
+      nextPageRef.current = requestPage + 1;
+
+      if (reset) {
+        setSkills(nextSkills);
+        setSelectedName((current) => {
+          if (current && nextSkills.some((skill: MarketSkillSummary) => skill.name === current)) {
+            return current;
+          }
+          return nextSkills[0]?.name ?? null;
+        });
+      } else {
+        setSkills((current) => mergeSkillLists(current, nextSkills));
+      }
     } catch (error) {
-      setHasNextPage(false);
-      setError(error instanceof Error ? error.message : t('skillMarketDialog.loadFailed', 'Failed to load Skill Market.'));
+      if (generation === listGenerationRef.current) {
+        hasNextPageRef.current = false;
+        setHasNextPage(false);
+        setError(error instanceof Error ? error.message : t('skillMarketDialog.loadFailed', 'Failed to load Skill Market.'));
+      }
     } finally {
-      setListLoading(false);
+      if (reset && generation === listGenerationRef.current) {
+        listLoadingRef.current = false;
+        setListLoading(false);
+      }
+      if (!reset && generation === listGenerationRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [t, workspaceId]);
 
@@ -219,14 +263,22 @@ export default function SkillMarketDialog({
       setNotice(null);
       setFileContent('');
       setRemoveTargetName(null);
+      hasNextPageRef.current = false;
+      listLoadingRef.current = false;
+      loadingMoreRef.current = false;
+      nextPageRef.current = 1;
+      listGenerationRef.current += 1;
+      setHasNextPage(false);
+      setListLoading(false);
+      setLoadingMore(false);
       return undefined;
     }
 
     const timer = window.setTimeout(() => {
-      void loadSkills(query, page, pageSize);
+      void loadSkills(query, { reset: true });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [loadSkills, open, page, pageSize, query]);
+  }, [loadSkills, open, query]);
 
   useEffect(() => {
     if (open && selectedName) {
@@ -254,24 +306,34 @@ export default function SkillMarketDialog({
 
   const changeQuery = (value: string) => {
     setQuery(value);
-    setPage(1);
   };
 
-  const changePageSize = (value: string) => {
-    const nextPageSize = Number(value) || DEFAULT_MARKET_PAGE_SIZE;
-    setPageSize(nextPageSize);
-    setPage(1);
-  };
+  const loadMoreSkills = useCallback(() => {
+    void loadSkills(activeSearchRef.current, { reset: false });
+  }, [loadSkills]);
 
-  const goToPreviousPage = () => {
-    setPage((current) => Math.max(1, current - 1));
-  };
-
-  const goToNextPage = () => {
-    if (hasNextPage) {
-      setPage((current) => current + 1);
+  const handleSkillListScroll = (event: UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const remainingDistance = target.scrollHeight - target.scrollTop - target.clientHeight;
+    if (remainingDistance <= LOAD_MORE_SCROLL_THRESHOLD_PX) {
+      loadMoreSkills();
     }
   };
+
+  useEffect(() => {
+    if (!open || listLoading || loadingMore || !hasNextPage) {
+      return;
+    }
+
+    const listElement = listScrollRef.current;
+    if (!listElement) {
+      return;
+    }
+
+    if (listElement.scrollHeight <= listElement.clientHeight + LOAD_MORE_SCROLL_THRESHOLD_PX) {
+      loadMoreSkills();
+    }
+  }, [hasNextPage, listLoading, loadingMore, loadMoreSkills, open, skills.length]);
 
   const refreshAfterMutation = async (skillName: string, changedPath: string, reason: string) => {
     dispatchProjectFilesChanged({
@@ -285,7 +347,7 @@ export default function SkillMarketDialog({
       workspaceId,
       reason,
     });
-    await loadSkills(query, page, pageSize);
+    await loadSkills(query, { reset: true });
     await loadDetail(skillName, selectedFilePath);
   };
 
@@ -367,7 +429,7 @@ export default function SkillMarketDialog({
         workspaceId,
         reason: 'skill-market-remove',
       });
-      await loadSkills(query, page, pageSize);
+      await loadSkills(query, { reset: true });
     } catch (error) {
       setRemoveTargetName(null);
       setError(error instanceof Error ? error.message : t('skillMarketDialog.removeFailed', 'Failed to remove skill.'));
@@ -393,12 +455,12 @@ export default function SkillMarketDialog({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void loadSkills(query, page, pageSize)}
-              disabled={listLoading || actionLoading}
+              onClick={() => void loadSkills(query, { reset: true })}
+              disabled={listLoading || loadingMore || actionLoading}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               aria-label={t('common.refresh', 'Refresh')}
             >
-              <RefreshCw className={`h-4 w-4 ${listLoading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${listLoading || loadingMore ? 'animate-spin' : ''}`} />
             </button>
             <button
               type="button"
@@ -426,7 +488,11 @@ export default function SkillMarketDialog({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto p-2">
+            <div
+              ref={listScrollRef}
+              onScroll={handleSkillListScroll}
+              className="min-h-0 flex-1 overflow-auto p-2"
+            >
               {listLoading ? (
                 <CenteredState icon={<Loader2 className="h-4 w-4 animate-spin" />} text={t('skillMarketDialog.loading', 'Loading...')} />
               ) : visibleSkills.length === 0 ? (
@@ -435,7 +501,7 @@ export default function SkillMarketDialog({
                 <div className="grid gap-1.5">
                   {visibleSkills.map((skill) => (
                     <button
-                      key={skill.name}
+                      key={getSkillListKey(skill)}
                       type="button"
                       onClick={() => selectSkill(skill.name)}
                       className={`rounded-md border p-3 text-left transition ${
@@ -462,56 +528,18 @@ export default function SkillMarketDialog({
                       </div>
                     </button>
                   ))}
+                  {loadingMore ? (
+                    <div className="flex items-center justify-center gap-2 px-3 py-3 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {t('skillMarketDialog.loadingMore', 'Loading more...')}
+                    </div>
+                  ) : !hasNextPage ? (
+                    <div className="px-3 py-3 text-center text-xs text-muted-foreground">
+                      {t('skillMarketDialog.allLoaded', 'All skills loaded.')}
+                    </div>
+                  ) : null}
                 </div>
               )}
-            </div>
-
-            <div className="border-t border-border p-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  {t('skillMarketDialog.pagination.page', { page, defaultValue: 'Page {{page}}' })}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={goToPreviousPage}
-                    disabled={page <= 1 || listLoading}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label={t('skillMarketDialog.pagination.previous', 'Previous page')}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={goToNextPage}
-                    disabled={!hasNextPage || listLoading}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label={t('skillMarketDialog.pagination.next', 'Next page')}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  {t('skillMarketDialog.pagination.currentCount', { count: visibleSkills.length, defaultValue: '{{count}} items' })}
-                </span>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{t('skillMarketDialog.pagination.pageSize', 'Per page')}</span>
-                  <select
-                    value={pageSize}
-                    onChange={(event) => changePageSize(event.target.value)}
-                    disabled={listLoading}
-                    className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {MARKET_PAGE_SIZE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
             </div>
           </aside>
 
@@ -849,6 +877,32 @@ function createDirectoryRows(files: MarketSkillFile[]): DirectoryRow[] {
     });
 
   return rows;
+}
+
+function mergeSkillLists(current: MarketSkillSummary[], next: MarketSkillSummary[]) {
+  const merged = [...current];
+  const indexes = new Map<string, number>();
+
+  merged.forEach((skill, index) => {
+    indexes.set(getSkillListKey(skill), index);
+  });
+
+  next.forEach((skill) => {
+    const key = getSkillListKey(skill);
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push(skill);
+      return;
+    }
+    merged[existingIndex] = { ...merged[existingIndex], ...skill };
+  });
+
+  return merged;
+}
+
+function getSkillListKey(skill: MarketSkillSummary) {
+  return String(skill.id || skill.skillId || skill.name);
 }
 
 async function readApiPayload(response: Response, fallbackMessage: string) {

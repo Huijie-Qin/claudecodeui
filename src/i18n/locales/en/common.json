@@ -165,13 +165,8 @@
     "listLocalVersion": "local v{{version}}",
     "creator": "Creator {{name}}",
     "owner": "owner {{name}}",
-    "pagination": {
-      "page": "Page {{page}}",
-      "previous": "Previous page",
-      "next": "Next page",
-      "currentCount": "{{count}} items",
-      "pageSize": "Per page"
-    },
+    "loadingMore": "Loading more...",
+    "allLoaded": "All skills loaded.",
     "removeDialog": {
       "title": "Remove Skill",
       "description": "This removes the imported skill from Files/.claude/skills. The remote skill will not be deleted.",
