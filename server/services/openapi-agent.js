@@ -7,10 +7,10 @@ const OPENAPI_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 const ACCOUNT_ID_HEADER = 'X-Account-Id';
 
-export async function checkOpenApiAgentList({ tenantCode, accountId } = {}) {
+export async function checkOpenApiAgentList({ tenantId, tenantCode, accountId } = {}) {
   await requestOpenApiJson('/api/agent/list', {
     method: 'POST',
-    tenantCode,
+    tenantId: tenantId ?? tenantCode,
     accountId,
     body: {
       data: {
@@ -29,7 +29,7 @@ export async function checkOpenApiAgentList({ tenantCode, accountId } = {}) {
   return { ok: true };
 }
 
-async function requestOpenApiJson(endpoint, { method = 'GET', body, tenantCode, accountId } = {}) {
+async function requestOpenApiJson(endpoint, { method = 'GET', body, tenantId, accountId } = {}) {
   const baseUrl = getOpenApiBaseUrl();
   const openApiEndpoint = toOpenApiEndpoint(endpoint);
   const url = `${baseUrl}${openApiEndpoint}`;
@@ -38,7 +38,7 @@ async function requestOpenApiJson(endpoint, { method = 'GET', body, tenantCode, 
   const timeout = setTimeout(() => controller.abort(), OPENAPI_REQUEST_TIMEOUT_MS);
   const headers = {
     ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    ...createTenantHeaders(tenantCode),
+    ...createTenantHeaders(tenantId),
     ...createAccountHeaders(accountId),
     ...createOpenApiAuthHeaders({
       endpoint: openApiEndpoint,
@@ -102,9 +102,9 @@ function toOpenApiEndpoint(endpoint) {
   return `${OPENAPI_ENDPOINT_PREFIX}${normalizedEndpoint}`;
 }
 
-function createTenantHeaders(tenantCode) {
-  const normalizedTenantCode = String(tenantCode || '').trim();
-  return normalizedTenantCode ? { [DATA_AGENT_TENANT_HEADER]: normalizedTenantCode } : {};
+function createTenantHeaders(tenantId) {
+  const normalizedTenantId = String(tenantId || '').trim();
+  return normalizedTenantId ? { [DATA_AGENT_TENANT_HEADER]: normalizedTenantId } : {};
 }
 
 function createAccountHeaders(accountId) {

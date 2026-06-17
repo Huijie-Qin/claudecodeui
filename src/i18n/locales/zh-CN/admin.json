@@ -16,6 +16,8 @@
     "copy": "复制",
     "copied": "已复制",
     "create": "创建",
+    "save": "保存",
+    "saving": "保存中",
     "delete": "删除",
     "remove": "移除",
     "grant": "授权",
@@ -29,6 +31,8 @@
     "access": "权限",
     "code": "代码",
     "name": "名称",
+    "tenantId": "租户 ID",
+    "prodTenantId": "生产租户 ID",
     "status": "状态"
   },
   "permissions": {
@@ -64,6 +68,7 @@
     "loadAdminData": "加载管理数据失败",
     "tenantRequired": "租户代码和名称为必填项",
     "createTenant": "创建租户失败",
+    "updateTenantIdentifiers": "更新租户 ID 失败",
     "usernameMinLength": "用户名至少需要 3 个字符",
     "createUserInvite": "创建用户邀请失败",
     "createActivationLink": "创建激活链接失败",
@@ -92,6 +97,7 @@
   },
   "toast": {
     "grantTenantAccessSuccess": "已授权 {{username}} 访问 {{tenantName}}",
+    "updateTenantIdentifiersSuccess": "已更新 {{tenantName}} 的租户 ID",
     "batchCreateUsersSuccess": "已创建 {{succeeded}} 个邀请，{{failed}} 个失败",
     "batchGrantTenantAccessSuccess": "已授予 {{succeeded}} 条权限，{{failed}} 条失败",
     "batchUpdateClaudeEnvSuccess": "已更新 {{succeeded}} 个用户，{{failed}} 个失败"
@@ -162,6 +168,8 @@
     "createTitle": "创建租户",
     "codePlaceholder": "acme",
     "namePlaceholder": "Acme",
+    "tenantIdPlaceholder": "测试租户 ID",
+    "prodTenantIdPlaceholder": "生产租户 ID",
     "grantAccessTitle": "授予租户权限",
     "accessTitle": "租户权限",
     "listTitle": "租户",

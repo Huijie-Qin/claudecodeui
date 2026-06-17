@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import test from 'node:test';
 
@@ -6,6 +7,20 @@ import { checkOpenApiAgentList } from './openapi-agent.js';
 
 test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => {
   const seen = {};
+  const fixedTimestamp = 1710000000000;
+  const authKey = '00112233445566778899aabbccddeeff';
+  const expectedBody = {
+    data: {
+      mine: false,
+      searchContent: '',
+    },
+    pageInfo: {
+      orderId: 'modify_timestamp',
+      orderType: 'desc',
+      page: 1,
+      pageSize: 24,
+    },
+  };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) {
@@ -32,15 +47,17 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
   const previousProdDaKey = process.env.PROD_DA_KEY;
   const previousOpenApiBaseUrl = process.env.OPENAPI_BASE_URL;
   const previousSkillMarketBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  const previousDateNow = Date.now;
   try {
     process.env.PROD_DA_BASE_URL = `http://127.0.0.1:${server.address().port}`;
     process.env.PROD_DA_APPID = 'agent-app';
-    process.env.PROD_DA_KEY = '00112233445566778899aabbccddeeff';
+    process.env.PROD_DA_KEY = authKey;
     process.env.OPENAPI_BASE_URL = 'http://127.0.0.1:1';
     process.env.SKILL_MARKET_BASE_URL = 'http://127.0.0.1:1';
+    Date.now = () => fixedTimestamp;
 
     assert.deepEqual(
-      await checkOpenApiAgentList({ tenantCode: 'tenant-code', accountId: 'j00939207' }),
+      await checkOpenApiAgentList({ tenantId: 'prod-tenant-001', accountId: 'j00939207' }),
       { ok: true },
     );
   } finally {
@@ -49,6 +66,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
     restoreEnv('PROD_DA_KEY', previousProdDaKey);
     restoreEnv('OPENAPI_BASE_URL', previousOpenApiBaseUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousSkillMarketBaseUrl);
+    Date.now = previousDateNow;
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -56,21 +74,18 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
 
   assert.equal(seen.method, 'POST');
   assert.equal(seen.path, '/data-agent/api/agent/list');
-  assert.equal(seen.tenant, 'tenant-code');
+  assert.equal(seen.tenant, 'prod-tenant-001');
   assert.equal(seen.accountId, 'j00939207');
-  assert.match(seen.authorization, /^CLOUDSOA-HMAC-SHA256 appid=agent-app, timestamp=\d+, signature="[^"]+"$/);
-  assert.deepEqual(seen.body, {
-    data: {
-      mine: false,
-      searchContent: '',
-    },
-    pageInfo: {
-      orderId: 'modify_timestamp',
-      orderType: 'desc',
-      page: 1,
-      pageSize: 24,
-    },
-  });
+  const expectedBuilder = `POST&/data-agent/api/agent/list&&${JSON.stringify(expectedBody)}&appid=agent-app&timestamp=${fixedTimestamp}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', Buffer.from(authKey, 'hex'))
+    .update(expectedBuilder)
+    .digest('base64');
+  assert.equal(
+    seen.authorization,
+    `CLOUDSOA-HMAC-SHA256 appid=agent-app, timestamp=${fixedTimestamp}, signature="${expectedSignature}"`,
+  );
+  assert.deepEqual(seen.body, expectedBody);
 });
 
 function restoreEnv(name, value) {

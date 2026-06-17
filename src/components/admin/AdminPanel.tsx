@@ -34,7 +34,14 @@ type AdminTenant = {
   id: number;
   code: string;
   name: string;
+  tenant_id?: string | null;
+  prod_tenant_id?: string | null;
   status: string;
+};
+
+type TenantIdentifierDraft = {
+  tenantId: string;
+  prodTenantId: string;
 };
 
 type AdminUser = {
@@ -69,6 +76,7 @@ type AdminPanelProps = {
 
 type AdminTenantsPayload = {
   tenants?: AdminTenant[];
+  tenant?: AdminTenant;
   error?: string;
 };
 
@@ -306,6 +314,13 @@ function dedupeIdStrings(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
+function createTenantIdentifierDraft(tenant: AdminTenant): TenantIdentifierDraft {
+  return {
+    tenantId: tenant.tenant_id || '',
+    prodTenantId: tenant.prod_tenant_id || '',
+  };
+}
+
 export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const { t } = useTranslation('admin');
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
@@ -313,6 +328,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [memberships, setMemberships] = useState<AdminMembership[]>([]);
   const [tenantCode, setTenantCode] = useState('');
   const [tenantName, setTenantName] = useState('');
+  const [tenantIdentifierDrafts, setTenantIdentifierDrafts] = useState<Record<number, TenantIdentifierDraft>>({});
   const [newUsername, setNewUsername] = useState('');
   const [createdInvite, setCreatedInvite] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
   const [createdPasswordReset, setCreatedPasswordReset] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
@@ -354,6 +370,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [savingTenantIdentifierId, setSavingTenantIdentifierId] = useState<number | null>(null);
   const { currentTenant, refreshTenants } = useTenant();
   const { user: currentUser } = useAuth();
   const currentUserId = currentUser?.id == null ? null : Number(currentUser.id);
@@ -398,7 +415,12 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       const tenantPayload = await tenantResponse.json() as AdminTenantsPayload;
       const userPayload = await userResponse.json() as AdminUsersPayload;
       const membershipPayload = await membershipResponse.json() as AdminMembershipsPayload;
-      setTenants(tenantPayload.tenants || []);
+      const loadedTenants = tenantPayload.tenants || [];
+      setTenants(loadedTenants);
+      setTenantIdentifierDrafts((current) => loadedTenants.reduce<Record<number, TenantIdentifierDraft>>((drafts, tenant) => {
+        drafts[tenant.id] = current[tenant.id] || createTenantIdentifierDraft(tenant);
+        return drafts;
+      }, {}));
       setUsers(userPayload.users || []);
       setMemberships(membershipPayload.memberships || []);
     } catch (caughtError) {
@@ -458,6 +480,57 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       await refreshTenants();
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const updateTenantIdentifierDraft = (
+    tenantId: number,
+    field: keyof TenantIdentifierDraft,
+    value: string,
+  ) => {
+    setTenantIdentifierDrafts((current) => ({
+      ...current,
+      [tenantId]: {
+        ...(current[tenantId] || { tenantId: '', prodTenantId: '' }),
+        [field]: value,
+      },
+    }));
+  };
+
+  const updateTenantIdentifiers = async (tenant: AdminTenant) => {
+    const draft = tenantIdentifierDrafts[tenant.id] || createTenantIdentifierDraft(tenant);
+
+    setError(null);
+    setSavingTenantIdentifierId(tenant.id);
+    try {
+      const response = await api.admin.updateTenant(tenant.id, {
+        tenantId: draft.tenantId.trim(),
+        prodTenantId: draft.prodTenantId.trim(),
+      });
+
+      if (!response.ok) {
+        setError(await readError(response, t('errors.updateTenantIdentifiers')));
+        return;
+      }
+
+      const payload = await response.json() as AdminTenantsPayload;
+      const updatedTenant = payload.tenant || {
+        ...tenant,
+        tenant_id: draft.tenantId.trim() || null,
+        prod_tenant_id: draft.prodTenantId.trim() || null,
+      };
+
+      setTenants((current) => current.map((item) => (
+        item.id === updatedTenant.id ? updatedTenant : item
+      )));
+      setTenantIdentifierDrafts((current) => ({
+        ...current,
+        [updatedTenant.id]: createTenantIdentifierDraft(updatedTenant),
+      }));
+      showToast(t('toast.updateTenantIdentifiersSuccess', { tenantName: updatedTenant.name }), 'success');
+      await refreshTenants();
+    } finally {
+      setSavingTenantIdentifierId(null);
     }
   };
 
@@ -1876,16 +1949,50 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                   {tenants.length === 0 ? (
                     <div className="px-3 py-4 text-sm text-muted-foreground">{t('tenants.empty')}</div>
                   ) : (
-                    tenants.map((tenant) => (
-                      <div
-                        key={tenant.id}
-                        className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0"
-                      >
-                        <span className="truncate font-medium text-foreground">{tenant.name}</span>
-                        <span className="truncate text-muted-foreground">{tenant.code}</span>
-                        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{translateStatus(t, tenant.status)}</span>
-                      </div>
-                    ))
+                    tenants.map((tenant) => {
+                      const draft = tenantIdentifierDrafts[tenant.id] || createTenantIdentifierDraft(tenant);
+                      const isSavingTenantIdentifiers = savingTenantIdentifierId === tenant.id;
+
+                      return (
+                        <div
+                          key={tenant.id}
+                          className="grid gap-3 border-b border-border px-3 py-3 text-sm last:border-b-0 lg:grid-cols-[minmax(0,1fr)_minmax(150px,200px)_minmax(150px,220px)_auto] lg:items-end"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="truncate font-medium text-foreground">{tenant.name}</div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span className="truncate">{tenant.code}</span>
+                              <span>#{tenant.id}</span>
+                              <span className="rounded bg-muted px-2 py-0.5">{translateStatus(t, tenant.status)}</span>
+                            </div>
+                          </div>
+                          <label className="space-y-1">
+                            <span className="text-xs text-muted-foreground">{t('fields.tenantId')}</span>
+                            <Input
+                              value={draft.tenantId}
+                              onChange={(event) => updateTenantIdentifierDraft(tenant.id, 'tenantId', event.target.value)}
+                              placeholder={t('tenants.tenantIdPlaceholder')}
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-muted-foreground">{t('fields.prodTenantId')}</span>
+                            <Input
+                              value={draft.prodTenantId}
+                              onChange={(event) => updateTenantIdentifierDraft(tenant.id, 'prodTenantId', event.target.value)}
+                              placeholder={t('tenants.prodTenantIdPlaceholder')}
+                            />
+                          </label>
+                          <Button
+                            variant="secondary"
+                            onClick={() => void updateTenantIdentifiers(tenant)}
+                            disabled={isSavingTenantIdentifiers}
+                          >
+                            <Check className="h-4 w-4" />
+                            {isSavingTenantIdentifiers ? t('common.saving') : t('common.save')}
+                          </Button>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </section>

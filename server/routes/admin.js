@@ -353,6 +353,8 @@ export function createAdminRouter(
       const tenant = multitenancy.tenants.createTenant({
         code: req.body?.code,
         name: req.body?.name,
+        tenantId: req.body?.tenantId ?? req.body?.tenant_id ?? null,
+        prodTenantId: req.body?.prodTenantId ?? req.body?.prod_tenant_id ?? null,
         status: req.body?.status || 'active',
       });
 
@@ -367,6 +369,24 @@ export function createAdminRouter(
       res.status(201).json({ tenant });
     } catch (error) {
       sendRouteError(res, error, 'Failed to create tenant');
+    }
+  });
+
+  router.put('/tenants/:tenantId', (req, res) => {
+    try {
+      if (typeof multitenancy.tenants?.updateTenantIdentifiers !== 'function') {
+        return res.status(501).json({ error: 'Tenant identifier updates are not available' });
+      }
+
+      const tenant = multitenancy.tenants.updateTenantIdentifiers({
+        id: Number(req.params.tenantId),
+        tenantId: req.body?.tenantId ?? req.body?.tenant_id ?? null,
+        prodTenantId: req.body?.prodTenantId ?? req.body?.prod_tenant_id ?? null,
+      });
+
+      return res.json({ tenant });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update tenant identifiers');
     }
   });
 

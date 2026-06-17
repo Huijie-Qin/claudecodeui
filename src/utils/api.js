@@ -368,6 +368,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    updateTenant: (tenantId, payload) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
     createUser: (payload) =>
       authenticatedFetch('/api/admin/users', {
         method: 'POST',

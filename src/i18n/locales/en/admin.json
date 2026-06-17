@@ -16,6 +16,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "create": "Create",
+    "save": "Save",
+    "saving": "Saving",
     "delete": "Delete",
     "remove": "Remove",
     "grant": "Grant",
@@ -29,6 +31,8 @@
     "access": "Access",
     "code": "Code",
     "name": "Name",
+    "tenantId": "Tenant ID",
+    "prodTenantId": "Prod Tenant ID",
     "status": "Status"
   },
   "permissions": {
@@ -64,6 +68,7 @@
     "loadAdminData": "Failed to load admin data",
     "tenantRequired": "Tenant code and name are required",
     "createTenant": "Failed to create tenant",
+    "updateTenantIdentifiers": "Failed to update tenant IDs",
     "usernameMinLength": "Username must be at least 3 characters",
     "createUserInvite": "Failed to create user invitation",
     "createActivationLink": "Failed to create activation link",
@@ -92,6 +97,7 @@
   },
   "toast": {
     "grantTenantAccessSuccess": "Granted {{username}} access to {{tenantName}}",
+    "updateTenantIdentifiersSuccess": "Updated tenant IDs for {{tenantName}}",
     "batchCreateUsersSuccess": "Created {{succeeded}} invitations, {{failed}} failed",
     "batchGrantTenantAccessSuccess": "Granted {{succeeded}} access entries, {{failed}} failed",
     "batchUpdateClaudeEnvSuccess": "Updated {{succeeded}} users, {{failed}} failed"
@@ -162,6 +168,8 @@
     "createTitle": "Create tenant",
     "codePlaceholder": "acme",
     "namePlaceholder": "Acme",
+    "tenantIdPlaceholder": "dev tenant id",
+    "prodTenantIdPlaceholder": "prod tenant id",
     "grantAccessTitle": "Grant tenant access",
     "accessTitle": "Tenant access",
     "listTitle": "Tenants",

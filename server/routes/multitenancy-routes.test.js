@@ -149,6 +149,39 @@ test('admin router grants creator access to newly created tenant', async () => {
   });
 });
 
+test('admin router updates tenant identifiers', async () => {
+  const seen = {};
+  const router = createAdminRouter({
+    tenants: {
+      updateTenantIdentifiers: (payload) => {
+        seen.payload = payload;
+        return {
+          id: payload.id,
+          code: 'team',
+          name: 'Team',
+          status: 'active',
+          tenant_id: payload.tenantId,
+          prod_tenant_id: payload.prodTenantId,
+        };
+      },
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/tenants/5', {
+    method: 'PUT',
+    body: { tenantId: 'dev-tenant-001', prodTenantId: 'prod-tenant-001' },
+    user: { id: 7, is_system_admin: 1 },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen.payload, {
+    id: 5,
+    tenantId: 'dev-tenant-001',
+    prodTenantId: 'prod-tenant-001',
+  });
+  assert.equal(payload.tenant.prod_tenant_id, 'prod-tenant-001');
+});
+
 test('admin router creates invited users and returns an invitation URL', async () => {
   const seen = {};
   const router = createAdminRouter(

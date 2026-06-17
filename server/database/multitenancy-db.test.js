@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 
 import { DATABASE_SCHEMA_SQL } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
-import { createMultitenancyDb } from './multitenancy-db.js';
+import { createMultitenancyDb, initializeMultitenancyTables } from './multitenancy-db.js';
 
 function createTestDb() {
   const database = new Database(':memory:');
@@ -20,6 +20,27 @@ function seedUser(database, username) {
     .run(username, `hash-${username}`);
   return Number(result.lastInsertRowid);
 }
+
+test('multitenancy initialization migrates tenant identifier columns', () => {
+  const database = new Database(':memory:');
+  database.exec(DATABASE_SCHEMA_SQL);
+  database.exec(`
+    CREATE TABLE tenants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  initializeMultitenancyTables(database);
+
+  const columns = database.prepare('PRAGMA table_info(tenants)').all().map((column) => column.name);
+  assert.equal(columns.includes('tenant_id'), true);
+  assert.equal(columns.includes('prod_tenant_id'), true);
+});
 
 test('tenant membership controls visible tenants', () => {
   const database = createTestDb();
@@ -50,6 +71,30 @@ test('tenant membership controls visible tenants', () => {
   );
   assert.equal(mt.memberships.getActiveMembership(userId, tenant.id).permission, 'edit');
   assert.equal(mt.memberships.getActiveMembership(userId, hiddenTenant.id), null);
+});
+
+test('tenant identifiers can be created and updated', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+
+  const tenant = mt.tenants.createTenant({
+    code: 'external',
+    name: 'External',
+    tenantId: 'dev-tenant-001',
+    prodTenantId: 'prod-tenant-001',
+  });
+
+  assert.equal(tenant.tenant_id, 'dev-tenant-001');
+  assert.equal(tenant.prod_tenant_id, 'prod-tenant-001');
+
+  const updatedTenant = mt.tenants.updateTenantIdentifiers({
+    id: tenant.id,
+    tenantId: 'dev-tenant-002',
+    prodTenantId: 'prod-tenant-002',
+  });
+
+  assert.equal(updatedTenant.tenant_id, 'dev-tenant-002');
+  assert.equal(updatedTenant.prod_tenant_id, 'prod-tenant-002');
 });
 
 test('system admin access can be granted across active tenants', () => {
