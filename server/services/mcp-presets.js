@@ -134,6 +134,28 @@ function compactObject(value) {
   );
 }
 
+function normalizeTargetTenantIds(targetTenantIds) {
+  if (!Array.isArray(targetTenantIds)) {
+    throw createHttpError('targetTenantIds must be an array', 400);
+  }
+
+  const ids = [];
+  const seen = new Set();
+  for (const targetTenantId of targetTenantIds) {
+    const normalized = requirePositiveInteger(targetTenantId, 'targetTenantId');
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+
+  if (ids.length === 0) {
+    throw createHttpError('Select at least one target tenant', 400);
+  }
+
+  return ids;
+}
+
 function logPresetTest(event, details = {}) {
   console.log(`[MCP Preset Test] ${event}`, details);
 }
@@ -352,6 +374,14 @@ export function createMcpPresetService({
     return preset;
   };
 
+  const findPresetByName = ({ tenantId, name }) => {
+    const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+    return multitenancy.mcpPresets.listPresets({
+      tenantId: normalizedTenantId,
+      includeDisabled: true,
+    }).find((preset) => preset.name === name) || null;
+  };
+
   return {
     listAdminPresets: ({ tenantId, includeDisabled = true, status = null }) => {
       const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
@@ -540,6 +570,133 @@ export function createMcpPresetService({
       });
       const preset = getExistingPreset({ tenantId, presetId });
       return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId }));
+    },
+
+    copyPresetToTenants: ({ tenantId, presetId, targetTenantIds, userId }) => {
+      const sourceTenantId = requirePositiveInteger(tenantId, 'tenantId');
+      const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+      const normalizedUserId = requirePositiveInteger(userId, 'userId');
+      const sourcePreset = getExistingPreset({
+        tenantId: sourceTenantId,
+        presetId: normalizedPresetId,
+      });
+      const sourceHelperScript = getPresetHelperScript(multitenancy, {
+        tenantId: sourceTenantId,
+        presetId: normalizedPresetId,
+      });
+      const targets = normalizeTargetTenantIds(targetTenantIds);
+      const results = [];
+
+      for (const targetTenantId of targets) {
+        if (targetTenantId === sourceTenantId) {
+          results.push({
+            tenantId: targetTenantId,
+            action: 'skipped',
+            reason: 'source_tenant',
+          });
+          continue;
+        }
+
+        const targetTenant = typeof multitenancy.tenants?.getTenantById === 'function'
+          ? multitenancy.tenants.getTenantById(targetTenantId)
+          : { id: targetTenantId };
+        if (!targetTenant) {
+          results.push({
+            tenantId: targetTenantId,
+            action: 'skipped',
+            reason: 'tenant_not_found',
+          });
+          continue;
+        }
+
+        try {
+          const existingPreset = findPresetByName({
+            tenantId: targetTenantId,
+            name: sourcePreset.name,
+          });
+          const status = normalizeEditableStatus(
+            sourcePreset.status,
+            sourcePreset.status === 'disabled' ? 'disabled' : 'draft',
+          );
+          const targetPreset = existingPreset
+            ? multitenancy.mcpPresets.updatePreset({
+                tenantId: targetTenantId,
+                presetId: existingPreset.id,
+                name: sourcePreset.name,
+                displayName: sourcePreset.display_name,
+                description: sourcePreset.description || '',
+                config: sourcePreset.config,
+                preinstallScope: sourcePreset.preinstall_scope || 'none',
+                status,
+                updatedByUserId: normalizedUserId,
+              })
+            : multitenancy.mcpPresets.createPreset({
+                tenantId: targetTenantId,
+                name: sourcePreset.name,
+                displayName: sourcePreset.display_name,
+                description: sourcePreset.description || '',
+                config: sourcePreset.config,
+                preinstallScope: sourcePreset.preinstall_scope || 'none',
+                status,
+                createdByUserId: normalizedUserId,
+              });
+
+          if (sourceHelperScript) {
+            savePresetHelperScript({
+              tenantId: targetTenantId,
+              presetId: targetPreset.id,
+              userId: normalizedUserId,
+              originalName: sourceHelperScript.file_name,
+              content: sourceHelperScript.content,
+              multitenancy,
+            });
+          } else {
+            multitenancy.mcpPresetHelperScripts.deleteScript({
+              tenantId: targetTenantId,
+              presetId: targetPreset.id,
+            });
+          }
+
+          const finalPreset = multitenancy.mcpPresets.getPresetById({
+            tenantId: targetTenantId,
+            presetId: targetPreset.id,
+          });
+          results.push({
+            tenantId: targetTenantId,
+            action: existingPreset ? 'updated' : 'created',
+            preset: toAdminPreset(
+              finalPreset,
+              getPresetHelperScript(multitenancy, {
+                tenantId: targetTenantId,
+                presetId: targetPreset.id,
+              }),
+            ),
+          });
+        } catch (error) {
+          results.push({
+            tenantId: targetTenantId,
+            action: 'failed',
+            error: error instanceof Error ? error.message : 'Failed to copy MCP preset',
+          });
+        }
+      }
+
+      const summary = results.reduce((current, result) => ({
+        ...current,
+        [result.action]: current[result.action] + 1,
+      }), {
+        total: results.length,
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+      });
+
+      return {
+        sourcePreset: toAdminPreset(sourcePreset, sourceHelperScript),
+        results,
+        summary,
+      };
     },
 
     listWorkspacePresets: ({ tenantId, workspaceId }) => {

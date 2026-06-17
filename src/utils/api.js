@@ -334,6 +334,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ tenantId }),
       }),
+    copyMcpPreset: (presetId, payload) =>
+      authenticatedFetch(`/api/admin/mcp-presets/${presetId}/copy`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     disableMcpPreset: (presetId, tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets/${presetId}/disable`, {
         method: 'POST',

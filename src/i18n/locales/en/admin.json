@@ -270,6 +270,23 @@
     "preinstallBadge": "Preinstall",
     "publishNotice": "Published presets become available on the workspace MCP Tools page. Install remains one-click and requires no user-side configuration.",
     "confirmDelete": "Delete MCP preset \"{{name}}\"? This cannot be undone.",
+    "copy": {
+      "title": "Copy preset to tenants",
+      "description": "Copy \"{{name}}\" to other tenants. Existing presets with the same name will be updated.",
+      "targetTenants": "Target tenants",
+      "selectAll": "Select all",
+      "clear": "Clear",
+      "noTargets": "No other tenants are available.",
+      "confirm": "Copy",
+      "copying": "Copying",
+      "resultSummary": "Created {{created}}, updated {{updated}}, skipped {{skipped}}, failed {{failed}}.",
+      "actions": {
+        "created": "Created",
+        "updated": "Updated",
+        "skipped": "Skipped",
+        "failed": "Failed"
+      }
+    },
     "fields": {
       "displayName": "Display name",
       "displayNamePlaceholder": "Knowledge Retrieval MCP",
@@ -304,6 +321,7 @@
       "testing": "Testing",
       "test": "Test",
       "publish": "Publish",
+      "copyToTenants": "Copy to tenants",
       "disable": "Disable",
       "delete": "Delete"
     },
@@ -335,6 +353,7 @@
       "invalidConfig": "Invalid MCP preset configuration",
       "test": "Failed to test MCP preset",
       "publish": "Failed to publish MCP preset",
+      "copy": "Failed to copy MCP preset",
       "uploadHelper": "Failed to upload helper script",
       "deleteHelper": "Failed to delete helper script",
       "disable": "Failed to disable MCP preset",

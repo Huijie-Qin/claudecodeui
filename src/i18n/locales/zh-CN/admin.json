@@ -267,8 +267,26 @@
     "transportHttp": "HTTP",
     "toolsCount": "{{count}} 个工具",
     "docker": "Docker",
+    "preinstallBadge": "预安装",
     "publishNotice": "已发布的预置会出现在工作区 MCP 工具页中。安装仍是一键完成，并且不需要用户侧配置。",
     "confirmDelete": "确认删除 MCP 预置“{{name}}”？此操作不可撤销。",
+    "copy": {
+      "title": "复制预置到租户",
+      "description": "将“{{name}}”复制到其它租户。目标租户中同名预置会被更新。",
+      "targetTenants": "目标租户",
+      "selectAll": "全选",
+      "clear": "清空",
+      "noTargets": "暂无其它可复制的租户。",
+      "confirm": "复制",
+      "copying": "复制中",
+      "resultSummary": "新建 {{created}} 个，更新 {{updated}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个。",
+      "actions": {
+        "created": "已新建",
+        "updated": "已更新",
+        "skipped": "已跳过",
+        "failed": "失败"
+      }
+    },
     "fields": {
       "displayName": "显示名称",
       "displayNamePlaceholder": "知识检索 MCP",
@@ -301,6 +319,7 @@
       "testing": "测试中",
       "test": "测试",
       "publish": "发布",
+      "copyToTenants": "复制到租户",
       "disable": "禁用",
       "delete": "删除"
     },
@@ -332,6 +351,7 @@
       "invalidConfig": "MCP 预置配置无效",
       "test": "测试 MCP 预置失败",
       "publish": "发布 MCP 预置失败",
+      "copy": "复制 MCP 预置失败",
       "uploadHelper": "上传 helper 脚本失败",
       "deleteHelper": "删除 helper 脚本失败",
       "disable": "禁用 MCP 预置失败",

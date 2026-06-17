@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Copy, FlaskConical, Loader2, RefreshCw, Server, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
@@ -13,6 +13,8 @@ import {
 import {
   useAdminMcpPresets,
   type AdminMcpPreset,
+  type AdminMcpPresetCopyResponse,
+  type AdminMcpPresetCopyResult,
   type AdminMcpPresetTestResult,
 } from './hooks/useAdminMcpPresets';
 
@@ -57,6 +59,9 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const [tenantId, setTenantId] = useState(defaultTenantId);
   const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(null);
+  const [copyDialogPreset, setCopyDialogPreset] = useState<AdminMcpPreset | null>(null);
+  const [copyTargetTenantIds, setCopyTargetTenantIds] = useState<number[]>([]);
+  const [copyResult, setCopyResult] = useState<AdminMcpPresetCopyResponse | null>(null);
   const [values, setValues] = useState<McpPresetFormValues>({ ...EMPTY_VALUES, tenantId: defaultTenantId });
   const {
     presets,
@@ -69,6 +74,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
     savePreset,
     testPreset,
     publishPreset,
+    copyPresetToTenants,
     disablePreset,
     uploadHelperScript,
     deleteHelperScript,
@@ -93,6 +99,10 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const displayedValidationStatus = selectedTestResult?.status || selectedPreset?.lastTestStatus || 'notTested';
   const displayedValidationToolCount = selectedTestResult?.toolCount ?? selectedPreset?.toolCount ?? 0;
   const displayedValidationTime = selectedTestResult?.testedAt || selectedPreset?.lastTestedAt || null;
+  const copyTargetTenants = useMemo(
+    () => tenants.filter((tenant) => tenant.id !== tenantId),
+    [tenants, tenantId],
+  );
 
   const selectPreset = (preset: AdminMcpPreset) => {
     setSelectedPresetId(preset.id);
@@ -160,6 +170,34 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const requestPresetDelete = () => {
     if (!selectedPreset) return;
     setDeleteDialog({ type: 'preset', preset: selectedPreset });
+  };
+
+  const requestPresetCopy = () => {
+    if (!selectedPreset) return;
+    setCopyDialogPreset(selectedPreset);
+    setCopyTargetTenantIds(copyTargetTenants.map((tenant) => tenant.id));
+    setCopyResult(null);
+  };
+
+  const toggleCopyTargetTenant = (targetTenantId: number, checked: boolean) => {
+    setCopyTargetTenantIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(targetTenantId);
+      } else {
+        next.delete(targetTenantId);
+      }
+      return Array.from(next);
+    });
+    setCopyResult(null);
+  };
+
+  const handleConfirmCopy = async () => {
+    if (!copyDialogPreset || copyTargetTenantIds.length === 0) return;
+    const result = await copyPresetToTenants(copyDialogPreset.id, copyTargetTenantIds);
+    if (result) {
+      setCopyResult(result);
+    }
   };
 
   const handleConfirmDelete = async () => {
@@ -455,6 +493,14 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
                   </Button>
                   <Button
                     variant="outline"
+                    onClick={requestPresetCopy}
+                    disabled={isSaving || isTestingSelectedPreset || copyTargetTenants.length === 0}
+                  >
+                    <Copy className="h-4 w-4" />
+                    {t('mcp.buttons.copyToTenants', { defaultValue: 'Copy to tenants' })}
+                  </Button>
+                  <Button
+                    variant="outline"
                     onClick={() => void disablePreset(selectedPreset.id)}
                     disabled={isSaving || isTestingSelectedPreset}
                   >
@@ -490,7 +536,186 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
         }}
         onConfirm={() => void handleConfirmDelete()}
       />
+      <McpPresetCopyDialog
+        preset={copyDialogPreset}
+        tenants={copyTargetTenants}
+        selectedTenantIds={copyTargetTenantIds}
+        result={copyResult}
+        isSaving={isSaving}
+        onOpenChange={(open) => {
+          if (!open && !isSaving) {
+            setCopyDialogPreset(null);
+            setCopyTargetTenantIds([]);
+            setCopyResult(null);
+          }
+        }}
+        onSelectAll={() => {
+          setCopyTargetTenantIds(copyTargetTenants.map((tenant) => tenant.id));
+          setCopyResult(null);
+        }}
+        onClear={() => {
+          setCopyTargetTenantIds([]);
+          setCopyResult(null);
+        }}
+        onToggleTenant={toggleCopyTargetTenant}
+        onConfirm={() => void handleConfirmCopy()}
+      />
     </div>
+  );
+}
+
+function McpPresetCopyDialog({
+  preset,
+  tenants,
+  selectedTenantIds,
+  result,
+  isSaving,
+  onOpenChange,
+  onSelectAll,
+  onClear,
+  onToggleTenant,
+  onConfirm,
+}: {
+  preset: AdminMcpPreset | null;
+  tenants: AdminTenant[];
+  selectedTenantIds: number[];
+  result: AdminMcpPresetCopyResponse | null;
+  isSaving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onToggleTenant: (tenantId: number, checked: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation(['admin', 'common']);
+  const resultByTenantId = useMemo(
+    () => new Map((result?.results || []).map((entry) => [entry.tenantId, entry])),
+    [result],
+  );
+  const selectedTenantIdSet = useMemo(() => new Set(selectedTenantIds), [selectedTenantIds]);
+  const title = t('mcp.copy.title', { defaultValue: 'Copy preset to tenants' });
+  const presetName = preset?.displayName || preset?.name || '';
+
+  return (
+    <Dialog open={Boolean(preset)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl overflow-hidden p-0">
+        <DialogTitle>{title}</DialogTitle>
+        <div className="space-y-4 p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Copy className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-foreground">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {t('mcp.copy.description', {
+                  defaultValue: 'Copy "{{name}}" to other tenants. Existing presets with the same name will be updated.',
+                  name: presetName,
+                })}
+              </p>
+            </div>
+          </div>
+
+          {result ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+              {t('mcp.copy.resultSummary', {
+                defaultValue: 'Created {{created}}, updated {{updated}}, skipped {{skipped}}, failed {{failed}}.',
+                created: result.summary.created,
+                updated: result.summary.updated,
+                skipped: result.summary.skipped,
+                failed: result.summary.failed,
+              })}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('mcp.copy.targetTenants', { defaultValue: 'Target tenants' })}
+            </span>
+            <div className="flex gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={onSelectAll} disabled={isSaving || tenants.length === 0}>
+                {t('mcp.copy.selectAll', { defaultValue: 'Select all' })}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={isSaving || selectedTenantIds.length === 0}>
+                {t('mcp.copy.clear', { defaultValue: 'Clear' })}
+              </Button>
+            </div>
+          </div>
+
+          <div className="max-h-72 overflow-auto rounded-md border border-border">
+            {tenants.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-muted-foreground">
+                {t('mcp.copy.noTargets', { defaultValue: 'No other tenants are available.' })}
+              </div>
+            ) : (
+              tenants.map((tenant) => {
+                const copyEntry = resultByTenantId.get(tenant.id);
+                return (
+                  <label
+                    key={tenant.id}
+                    className="flex min-h-11 cursor-pointer items-center gap-3 border-b border-border px-3 py-2 text-sm last:border-b-0 hover:bg-muted/40"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedTenantIdSet.has(tenant.id)}
+                      onChange={(event) => onToggleTenant(tenant.id, event.target.checked)}
+                      disabled={isSaving}
+                      className="h-4 w-4 rounded border-input"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-foreground">{tenant.name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{tenant.code}</span>
+                    </span>
+                    {copyEntry ? <CopyResultBadge result={copyEntry} /> : null}
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+        <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={() => onOpenChange(false)}
+            disabled={isSaving}
+          >
+            {result ? t('common:buttons.close') : t('common:buttons.cancel')}
+          </Button>
+          <Button
+            type="button"
+            className="flex-1"
+            onClick={onConfirm}
+            disabled={isSaving || tenants.length === 0 || selectedTenantIds.length === 0}
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+            {isSaving
+              ? t('mcp.copy.copying', { defaultValue: 'Copying' })
+              : t('mcp.copy.confirm', { defaultValue: 'Copy' })}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CopyResultBadge({ result }: { result: AdminMcpPresetCopyResult }) {
+  const { t } = useTranslation('admin');
+  const tone = result.action === 'failed'
+    ? 'border-destructive/40 bg-destructive/10 text-destructive'
+    : result.action === 'skipped'
+      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200';
+  const label = t(`mcp.copy.actions.${result.action}`, { defaultValue: result.action });
+
+  return (
+    <span
+      className={`shrink-0 rounded border px-2 py-0.5 text-xs font-medium ${tone}`}
+      title={result.error || result.reason || label}
+    >
+      {label}
+    </span>
   );
 }
 

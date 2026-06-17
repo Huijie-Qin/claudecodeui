@@ -320,6 +320,154 @@ test('admin preset helper script can be deleted and clears stale validation stat
   assert.equal(multitenancy.mcpPresetHelperScripts.getScript({ tenantId: tenant.id, presetId: preset.id }), null);
 });
 
+test('admin preset copy creates and updates target tenant presets with helper scripts', () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const sourceTenant = multitenancy.tenants.createTenant({ code: 'source', name: 'Source' });
+  const newTargetTenant = multitenancy.tenants.createTenant({ code: 'new-target', name: 'New Target' });
+  const existingTargetTenant = multitenancy.tenants.createTenant({ code: 'existing-target', name: 'Existing Target' });
+  const service = createMcpPresetService({ multitenancy });
+
+  const sourcePreset = service.createPreset({
+    tenantId: sourceTenant.id,
+    userId: adminId,
+    input: {
+      name: 'shared_knowledge',
+      displayName: 'Shared Knowledge MCP',
+      description: 'Search shared docs',
+      type: 'http',
+      url: 'https://mcp.internal/shared',
+      headersHelper: 'python3 auth.py',
+      helperEnv: {
+        ROOT_SECRET: 'root-key',
+      },
+      preinstall: true,
+    },
+  });
+  service.uploadHelperScript({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    userId: adminId,
+    originalName: 'auth.py',
+    content: 'print("source")\n',
+  });
+  const existingPreset = service.createPreset({
+    tenantId: existingTargetTenant.id,
+    userId: adminId,
+    input: {
+      name: 'shared_knowledge',
+      displayName: 'Old Knowledge MCP',
+      description: 'Old docs',
+      type: 'http',
+      url: 'https://mcp.internal/old',
+    },
+  });
+  service.uploadHelperScript({
+    tenantId: existingTargetTenant.id,
+    presetId: existingPreset.id,
+    userId: adminId,
+    originalName: 'old.py',
+    content: 'print("old")\n',
+  });
+
+  const copied = service.copyPresetToTenants({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    targetTenantIds: [newTargetTenant.id, existingTargetTenant.id, sourceTenant.id, 99999],
+    userId: adminId,
+  });
+  const createdResult = copied.results.find((result) => result.tenantId === newTargetTenant.id);
+  const updatedResult = copied.results.find((result) => result.tenantId === existingTargetTenant.id);
+  const createdScript = multitenancy.mcpPresetHelperScripts.getScript({
+    tenantId: newTargetTenant.id,
+    presetId: createdResult.preset.id,
+  });
+  const updatedScript = multitenancy.mcpPresetHelperScripts.getScript({
+    tenantId: existingTargetTenant.id,
+    presetId: existingPreset.id,
+  });
+
+  assert.deepEqual(copied.summary, {
+    total: 4,
+    created: 1,
+    updated: 1,
+    skipped: 2,
+    failed: 0,
+  });
+  assert.equal(createdResult.action, 'created');
+  assert.equal(createdResult.preset.name, 'shared_knowledge');
+  assert.equal(createdResult.preset.config.url, 'https://mcp.internal/shared');
+  assert.equal(createdResult.preset.preinstallScope, 'all_workspaces');
+  assert.equal(createdResult.preset.helperScript.fileName, 'auth.py');
+  assert.equal(createdScript.content, 'print("source")\n');
+  assert.equal(updatedResult.action, 'updated');
+  assert.equal(updatedResult.preset.id, existingPreset.id);
+  assert.equal(updatedResult.preset.displayName, 'Shared Knowledge MCP');
+  assert.equal(updatedResult.preset.config.helperEnv.ROOT_SECRET, 'root-key');
+  assert.equal(updatedResult.preset.helperScript.fileName, 'auth.py');
+  assert.equal(updatedScript.content, 'print("source")\n');
+  assert.deepEqual(
+    copied.results
+      .filter((result) => result.action === 'skipped')
+      .map((result) => result.reason)
+      .sort(),
+    ['source_tenant', 'tenant_not_found'],
+  );
+});
+
+test('admin preset copy removes stale target helper scripts when the source has none', () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const sourceTenant = multitenancy.tenants.createTenant({ code: 'source', name: 'Source' });
+  const targetTenant = multitenancy.tenants.createTenant({ code: 'target', name: 'Target' });
+  const service = createMcpPresetService({ multitenancy });
+
+  const sourcePreset = service.createPreset({
+    tenantId: sourceTenant.id,
+    userId: adminId,
+    input: {
+      name: 'plain',
+      displayName: 'Plain MCP',
+      type: 'http',
+      url: 'https://mcp.internal/plain',
+    },
+  });
+  const targetPreset = service.createPreset({
+    tenantId: targetTenant.id,
+    userId: adminId,
+    input: {
+      name: 'plain',
+      displayName: 'Plain MCP',
+      type: 'http',
+      url: 'https://mcp.internal/old',
+      headersHelper: 'python3 old.py',
+    },
+  });
+  service.uploadHelperScript({
+    tenantId: targetTenant.id,
+    presetId: targetPreset.id,
+    userId: adminId,
+    originalName: 'old.py',
+    content: 'print("old")\n',
+  });
+
+  const copied = service.copyPresetToTenants({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    targetTenantIds: [targetTenant.id],
+    userId: adminId,
+  });
+
+  assert.equal(copied.results[0].action, 'updated');
+  assert.equal(copied.results[0].preset.helperScript, null);
+  assert.equal(multitenancy.mcpPresetHelperScripts.getScript({
+    tenantId: targetTenant.id,
+    presetId: targetPreset.id,
+  }), null);
+});
+
 test('admin preset test validates current form input and persists discovered tools', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);

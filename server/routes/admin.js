@@ -777,6 +777,22 @@ export function createAdminRouter(
     }
   });
 
+  router.post('/mcp-presets/:presetId/copy', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const targetTenantIds = req.body?.targetTenantIds ?? req.body?.target_tenant_ids;
+      const result = mcpPresets.copyPresetToTenants({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        targetTenantIds,
+        userId: req.user.id,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to copy MCP preset');
+    }
+  });
+
   router.post('/mcp-presets/:presetId/helper-script', (req, res) => {
     helperScriptUpload.single('script')(req, res, (uploadError) => {
       try {

@@ -111,6 +111,16 @@ test('admin mcp preset routes create and publish presets through the service', a
         seen.publish = { tenantId, presetId, userId };
         return { id: presetId, status: 'published' };
       },
+      copyPresetToTenants: ({ tenantId, presetId, targetTenantIds, userId }) => {
+        seen.copy = { tenantId, presetId, targetTenantIds, userId };
+        return {
+          summary: { total: targetTenantIds.length, created: 1, updated: 1, skipped: 0, failed: 0 },
+          results: targetTenantIds.map((targetTenantId, index) => ({
+            tenantId: targetTenantId,
+            action: index === 0 ? 'created' : 'updated',
+          })),
+        };
+      },
       deletePreset: ({ tenantId, presetId }) => {
         seen.delete = { tenantId, presetId };
         return true;
@@ -146,6 +156,11 @@ test('admin mcp preset routes create and publish presets through the service', a
     body: { tenantId: 7 },
     user: { id: 9, is_system_admin: 1 },
   });
+  const copied = await requestJson(router, '/mcp-presets/2/copy', {
+    method: 'POST',
+    body: { tenantId: 7, targetTenantIds: [8, 9] },
+    user: { id: 9, is_system_admin: 1 },
+  });
   const tested = await requestJson(router, '/mcp-presets/2/test', {
     method: 'POST',
     body: {
@@ -170,6 +185,9 @@ test('admin mcp preset routes create and publish presets through the service', a
   assert.equal(published.response.status, 200);
   assert.deepEqual(seen.publish, { tenantId: 7, presetId: 2, userId: 9 });
   assert.equal(published.payload.preset.status, 'published');
+  assert.equal(copied.response.status, 200);
+  assert.deepEqual(seen.copy, { tenantId: 7, presetId: 2, targetTenantIds: [8, 9], userId: 9 });
+  assert.deepEqual(copied.payload.summary, { total: 2, created: 1, updated: 1, skipped: 0, failed: 0 });
   assert.equal(tested.response.status, 200);
   assert.equal(tested.payload.transient, true);
   assert.equal(seen.test.input.url, 'https://mcp.internal/broken');

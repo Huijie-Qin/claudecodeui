@@ -45,6 +45,28 @@ export type AdminMcpPresetTestResult = {
   transient?: boolean;
 };
 
+export type AdminMcpPresetCopyAction = 'created' | 'updated' | 'skipped' | 'failed';
+
+export type AdminMcpPresetCopyResult = {
+  tenantId: number;
+  action: AdminMcpPresetCopyAction;
+  preset?: AdminMcpPreset;
+  reason?: string;
+  error?: string;
+};
+
+export type AdminMcpPresetCopyResponse = {
+  sourcePreset?: AdminMcpPreset;
+  results: AdminMcpPresetCopyResult[];
+  summary: {
+    total: number;
+    created: number;
+    updated: number;
+    skipped: number;
+    failed: number;
+  };
+};
+
 type ErrorPayload = {
   error?: string;
   message?: string;
@@ -228,6 +250,25 @@ export function useAdminMcpPresets(tenantId?: number) {
     }
   }, [load, tenantId, t]);
 
+  const copyPresetToTenants = useCallback(async (presetId: number, targetTenantIds: number[]) => {
+    if (!tenantId) return null;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await api.admin.copyMcpPreset(presetId, {
+        tenantId,
+        targetTenantIds,
+      });
+      if (!response.ok) {
+        setError(await readError(response, t('mcp.errors.copy')));
+        return null;
+      }
+      return await response.json() as AdminMcpPresetCopyResponse;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [tenantId, t]);
+
   const uploadHelperScript = useCallback(async (presetId: number, file: File) => {
     if (!tenantId) return null;
     setIsSaving(true);
@@ -320,6 +361,7 @@ export function useAdminMcpPresets(tenantId?: number) {
     savePreset,
     testPreset,
     publishPreset,
+    copyPresetToTenants,
     disablePreset,
     uploadHelperScript,
     deleteHelperScript,
