@@ -182,6 +182,9 @@ const runMigrations = () => {
 };
 
 function runMultitenancyMigrations() {
+  ensureColumn('tenants', 'prod_code', 'TEXT');
+  migrateLegacyTenantProdCode();
+
   const mcpPresetColumns = db
     .prepare("PRAGMA table_info(mcp_server_presets)")
     .all()
@@ -229,6 +232,32 @@ function getColumnNames(tableName) {
     .prepare(`PRAGMA table_info(${tableName})`)
     .all()
     .map((col) => col.name);
+}
+
+function ensureColumn(tableName, columnName, columnDefinition) {
+  const columnNames = getColumnNames(tableName);
+  if (columnNames.includes(columnName)) {
+    return;
+  }
+
+  console.log(`Running migration: Adding ${tableName}.${columnName} column`);
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+}
+
+function migrateLegacyTenantProdCode() {
+  const tenantColumns = getColumnNames('tenants');
+  if (!tenantColumns.includes('prod_tenant_id')) {
+    return;
+  }
+
+  console.log('Running migration: Copying tenants.prod_tenant_id to tenants.prod_code');
+  db.prepare(`
+    UPDATE tenants
+    SET prod_code = prod_tenant_id
+    WHERE (prod_code IS NULL OR prod_code = '')
+      AND prod_tenant_id IS NOT NULL
+      AND prod_tenant_id != ''
+  `).run();
 }
 
 function migrateSqlCheckPreferencesToWorkspaceScope() {
