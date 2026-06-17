@@ -20,16 +20,34 @@ const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 
 export function initializeMultitenancyTables(database = db) {
   database.exec(MULTITENANCY_SCHEMA_SQL);
-  ensureColumn(database, 'tenants', 'tenant_id', 'TEXT');
-  ensureColumn(database, 'tenants', 'prod_tenant_id', 'TEXT');
+  ensureColumn(database, 'tenants', 'prod_code', 'TEXT');
+  migrateLegacyTenantProdCode(database);
 }
 
 function ensureColumn(database, tableName, columnName, columnDefinition) {
-  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
-  if (columns.some((column) => column.name === columnName)) {
+  if (hasColumn(database, tableName, columnName)) {
     return;
   }
   database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+}
+
+function hasColumn(database, tableName, columnName) {
+  return database.prepare(`PRAGMA table_info(${tableName})`).all()
+    .some((column) => column.name === columnName);
+}
+
+function migrateLegacyTenantProdCode(database) {
+  if (!hasColumn(database, 'tenants', 'prod_tenant_id')) {
+    return;
+  }
+
+  database.prepare(`
+    UPDATE tenants
+    SET prod_code = prod_tenant_id
+    WHERE (prod_code IS NULL OR prod_code = '')
+      AND prod_tenant_id IS NOT NULL
+      AND prod_tenant_id != ''
+  `).run();
 }
 
 function requirePositiveInteger(value, name) {
@@ -717,19 +735,17 @@ export function createMultitenancyDb(database = db) {
         code,
         name,
         status = 'active',
-        tenantId = null,
-        prodTenantId = null,
+        prodCode = null,
       }) => {
         const tenantCode = requireCode(code);
         const tenantName = requireNonEmptyString(name, 'name');
         const tenantStatus = requireEnum(status, TENANT_STATUSES, 'status');
-        const externalTenantId = optionalNonEmptyString(tenantId, 'tenantId');
-        const externalProdTenantId = optionalNonEmptyString(prodTenantId, 'prodTenantId');
+        const tenantProdCode = optionalNonEmptyString(prodCode, 'prodCode');
 
         const result = database.prepare(`
-          INSERT INTO tenants (code, name, tenant_id, prod_tenant_id, status)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(tenantCode, tenantName, externalTenantId, externalProdTenantId, tenantStatus);
+          INSERT INTO tenants (code, name, prod_code, status)
+          VALUES (?, ?, ?, ?)
+        `).run(tenantCode, tenantName, tenantProdCode, tenantStatus);
 
         return database.prepare('SELECT * FROM tenants WHERE id = ?').get(Number(result.lastInsertRowid));
       },
@@ -738,18 +754,18 @@ export function createMultitenancyDb(database = db) {
         return database.prepare('SELECT * FROM tenants WHERE id = ?').get(requirePositiveInteger(tenantId, 'tenantId')) ?? null;
       },
 
-      updateTenantIdentifiers: ({ id, tenantId = null, prodTenantId = null }) => {
+      updateTenantCodes: ({ id, code, prodCode = null }) => {
         const normalizedId = requirePositiveInteger(Number(id), 'tenantId');
-        const externalTenantId = optionalNonEmptyString(tenantId, 'tenantId');
-        const externalProdTenantId = optionalNonEmptyString(prodTenantId, 'prodTenantId');
+        const tenantCode = requireCode(code);
+        const tenantProdCode = optionalNonEmptyString(prodCode, 'prodCode');
 
         const result = database.prepare(`
           UPDATE tenants
-          SET tenant_id = ?,
-              prod_tenant_id = ?,
+          SET code = ?,
+              prod_code = ?,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).run(externalTenantId, externalProdTenantId, normalizedId);
+        `).run(tenantCode, tenantProdCode, normalizedId);
 
         if (result.changes === 0) {
           throw new Error('tenant not found');

@@ -57,7 +57,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
     Date.now = () => fixedTimestamp;
 
     assert.deepEqual(
-      await checkOpenApiAgentList({ tenantId: 'prod-tenant-001', accountId: 'j00939207' }),
+      await checkOpenApiAgentList({ tenantCode: 'prod-code-001', accountId: 'j00939207' }),
       { ok: true },
     );
   } finally {
@@ -74,7 +74,7 @@ test('checkOpenApiAgentList calls the OpenAPI agent list endpoint', async () => 
 
   assert.equal(seen.method, 'POST');
   assert.equal(seen.path, '/data-agent/api/agent/list');
-  assert.equal(seen.tenant, 'prod-tenant-001');
+  assert.equal(seen.tenant, 'prod-code-001');
   assert.equal(seen.accountId, 'j00939207');
   const expectedBuilder = `POST&/data-agent/api/agent/list&&${JSON.stringify(expectedBody)}&appid=agent-app&timestamp=${fixedTimestamp}`;
   const expectedSignature = crypto

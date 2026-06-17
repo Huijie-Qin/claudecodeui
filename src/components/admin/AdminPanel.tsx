@@ -34,14 +34,13 @@ type AdminTenant = {
   id: number;
   code: string;
   name: string;
-  tenant_id?: string | null;
-  prod_tenant_id?: string | null;
+  prod_code?: string | null;
   status: string;
 };
 
-type TenantIdentifierDraft = {
-  tenantId: string;
-  prodTenantId: string;
+type TenantCodeDraft = {
+  code: string;
+  prodCode: string;
 };
 
 type AdminUser = {
@@ -314,10 +313,10 @@ function dedupeIdStrings(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
-function createTenantIdentifierDraft(tenant: AdminTenant): TenantIdentifierDraft {
+function createTenantCodeDraft(tenant: AdminTenant): TenantCodeDraft {
   return {
-    tenantId: tenant.tenant_id || '',
-    prodTenantId: tenant.prod_tenant_id || '',
+    code: tenant.code || '',
+    prodCode: tenant.prod_code || '',
   };
 }
 
@@ -328,7 +327,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [memberships, setMemberships] = useState<AdminMembership[]>([]);
   const [tenantCode, setTenantCode] = useState('');
   const [tenantName, setTenantName] = useState('');
-  const [tenantIdentifierDrafts, setTenantIdentifierDrafts] = useState<Record<number, TenantIdentifierDraft>>({});
+  const [tenantCodeDrafts, setTenantCodeDrafts] = useState<Record<number, TenantCodeDraft>>({});
   const [newUsername, setNewUsername] = useState('');
   const [createdInvite, setCreatedInvite] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
   const [createdPasswordReset, setCreatedPasswordReset] = useState<{ username: string; url: string; expiresAt?: string } | null>(null);
@@ -370,7 +369,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [savingTenantIdentifierId, setSavingTenantIdentifierId] = useState<number | null>(null);
+  const [savingTenantCodeId, setSavingTenantCodeId] = useState<number | null>(null);
   const { currentTenant, refreshTenants } = useTenant();
   const { user: currentUser } = useAuth();
   const currentUserId = currentUser?.id == null ? null : Number(currentUser.id);
@@ -417,8 +416,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
       const membershipPayload = await membershipResponse.json() as AdminMembershipsPayload;
       const loadedTenants = tenantPayload.tenants || [];
       setTenants(loadedTenants);
-      setTenantIdentifierDrafts((current) => loadedTenants.reduce<Record<number, TenantIdentifierDraft>>((drafts, tenant) => {
-        drafts[tenant.id] = current[tenant.id] || createTenantIdentifierDraft(tenant);
+      setTenantCodeDrafts((current) => loadedTenants.reduce<Record<number, TenantCodeDraft>>((drafts, tenant) => {
+        drafts[tenant.id] = current[tenant.id] || createTenantCodeDraft(tenant);
         return drafts;
       }, {}));
       setUsers(userPayload.users || []);
@@ -483,54 +482,54 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
     }
   };
 
-  const updateTenantIdentifierDraft = (
+  const updateTenantCodeDraft = (
     tenantId: number,
-    field: keyof TenantIdentifierDraft,
+    field: keyof TenantCodeDraft,
     value: string,
   ) => {
-    setTenantIdentifierDrafts((current) => ({
+    setTenantCodeDrafts((current) => ({
       ...current,
       [tenantId]: {
-        ...(current[tenantId] || { tenantId: '', prodTenantId: '' }),
+        ...(current[tenantId] || { code: '', prodCode: '' }),
         [field]: value,
       },
     }));
   };
 
-  const updateTenantIdentifiers = async (tenant: AdminTenant) => {
-    const draft = tenantIdentifierDrafts[tenant.id] || createTenantIdentifierDraft(tenant);
+  const updateTenantCodes = async (tenant: AdminTenant) => {
+    const draft = tenantCodeDrafts[tenant.id] || createTenantCodeDraft(tenant);
 
     setError(null);
-    setSavingTenantIdentifierId(tenant.id);
+    setSavingTenantCodeId(tenant.id);
     try {
       const response = await api.admin.updateTenant(tenant.id, {
-        tenantId: draft.tenantId.trim(),
-        prodTenantId: draft.prodTenantId.trim(),
+        code: normalizeTenantCode(draft.code),
+        prodCode: draft.prodCode.trim(),
       });
 
       if (!response.ok) {
-        setError(await readError(response, t('errors.updateTenantIdentifiers')));
+        setError(await readError(response, t('errors.updateTenantCodes')));
         return;
       }
 
       const payload = await response.json() as AdminTenantsPayload;
       const updatedTenant = payload.tenant || {
         ...tenant,
-        tenant_id: draft.tenantId.trim() || null,
-        prod_tenant_id: draft.prodTenantId.trim() || null,
+        code: normalizeTenantCode(draft.code),
+        prod_code: draft.prodCode.trim() || null,
       };
 
       setTenants((current) => current.map((item) => (
         item.id === updatedTenant.id ? updatedTenant : item
       )));
-      setTenantIdentifierDrafts((current) => ({
+      setTenantCodeDrafts((current) => ({
         ...current,
-        [updatedTenant.id]: createTenantIdentifierDraft(updatedTenant),
+        [updatedTenant.id]: createTenantCodeDraft(updatedTenant),
       }));
-      showToast(t('toast.updateTenantIdentifiersSuccess', { tenantName: updatedTenant.name }), 'success');
+      showToast(t('toast.updateTenantCodesSuccess', { tenantName: updatedTenant.name }), 'success');
       await refreshTenants();
     } finally {
-      setSavingTenantIdentifierId(null);
+      setSavingTenantCodeId(null);
     }
   };
 
@@ -1950,8 +1949,8 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                     <div className="px-3 py-4 text-sm text-muted-foreground">{t('tenants.empty')}</div>
                   ) : (
                     tenants.map((tenant) => {
-                      const draft = tenantIdentifierDrafts[tenant.id] || createTenantIdentifierDraft(tenant);
-                      const isSavingTenantIdentifiers = savingTenantIdentifierId === tenant.id;
+                      const draft = tenantCodeDrafts[tenant.id] || createTenantCodeDraft(tenant);
+                      const isSavingTenantCodes = savingTenantCodeId === tenant.id;
 
                       return (
                         <div
@@ -1961,34 +1960,33 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
                           <div className="min-w-0 space-y-1">
                             <div className="truncate font-medium text-foreground">{tenant.name}</div>
                             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                              <span className="truncate">{tenant.code}</span>
                               <span>#{tenant.id}</span>
                               <span className="rounded bg-muted px-2 py-0.5">{translateStatus(t, tenant.status)}</span>
                             </div>
                           </div>
                           <label className="space-y-1">
-                            <span className="text-xs text-muted-foreground">{t('fields.tenantId')}</span>
+                            <span className="text-xs text-muted-foreground">{t('fields.code')}</span>
                             <Input
-                              value={draft.tenantId}
-                              onChange={(event) => updateTenantIdentifierDraft(tenant.id, 'tenantId', event.target.value)}
-                              placeholder={t('tenants.tenantIdPlaceholder')}
+                              value={draft.code}
+                              onChange={(event) => updateTenantCodeDraft(tenant.id, 'code', normalizeTenantCode(event.target.value))}
+                              autoCapitalize="none"
                             />
                           </label>
                           <label className="space-y-1">
-                            <span className="text-xs text-muted-foreground">{t('fields.prodTenantId')}</span>
+                            <span className="text-xs text-muted-foreground">{t('fields.prodCode')}</span>
                             <Input
-                              value={draft.prodTenantId}
-                              onChange={(event) => updateTenantIdentifierDraft(tenant.id, 'prodTenantId', event.target.value)}
-                              placeholder={t('tenants.prodTenantIdPlaceholder')}
+                              value={draft.prodCode}
+                              onChange={(event) => updateTenantCodeDraft(tenant.id, 'prodCode', event.target.value)}
+                              autoCapitalize="none"
                             />
                           </label>
                           <Button
                             variant="secondary"
-                            onClick={() => void updateTenantIdentifiers(tenant)}
-                            disabled={isSavingTenantIdentifiers}
+                            onClick={() => void updateTenantCodes(tenant)}
+                            disabled={isSavingTenantCodes}
                           >
                             <Check className="h-4 w-4" />
-                            {isSavingTenantIdentifiers ? t('common.saving') : t('common.save')}
+                            {isSavingTenantCodes ? t('common.saving') : t('common.save')}
                           </Button>
                         </div>
                       );

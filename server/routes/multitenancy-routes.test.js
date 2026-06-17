@@ -149,19 +149,18 @@ test('admin router grants creator access to newly created tenant', async () => {
   });
 });
 
-test('admin router updates tenant identifiers', async () => {
+test('admin router updates tenant codes', async () => {
   const seen = {};
   const router = createAdminRouter({
     tenants: {
-      updateTenantIdentifiers: (payload) => {
+      updateTenantCodes: (payload) => {
         seen.payload = payload;
         return {
           id: payload.id,
-          code: 'team',
+          code: payload.code,
           name: 'Team',
           status: 'active',
-          tenant_id: payload.tenantId,
-          prod_tenant_id: payload.prodTenantId,
+          prod_code: payload.prodCode,
         };
       },
     },
@@ -169,17 +168,18 @@ test('admin router updates tenant identifiers', async () => {
 
   const { response, payload } = await requestJson(router, '/tenants/5', {
     method: 'PUT',
-    body: { tenantId: 'dev-tenant-001', prodTenantId: 'prod-tenant-001' },
+    body: { code: 'team-updated', prodCode: 'prod-code-001' },
     user: { id: 7, is_system_admin: 1 },
   });
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.payload, {
     id: 5,
-    tenantId: 'dev-tenant-001',
-    prodTenantId: 'prod-tenant-001',
+    code: 'team-updated',
+    prodCode: 'prod-code-001',
   });
-  assert.equal(payload.tenant.prod_tenant_id, 'prod-tenant-001');
+  assert.equal(payload.tenant.code, 'team-updated');
+  assert.equal(payload.tenant.prod_code, 'prod-code-001');
 });
 
 test('admin router creates invited users and returns an invitation URL', async () => {

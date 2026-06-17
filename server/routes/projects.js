@@ -80,13 +80,13 @@ router.post('/:projectName/agent-list-check', async (req, res) => {
     }
 
     const tenant = multitenancyDb.tenants.getTenantById(tenantId);
-    const prodTenantId = tenant?.prod_tenant_id;
+    const prodCode = tenant?.prod_code;
     const accountId = req.user.username;
-    if (!prodTenantId || !accountId) {
-      return res.status(400).json({ error: 'prod_tenant_id and username are required' });
+    if (!prodCode || !accountId) {
+      return res.status(400).json({ error: 'prod_code and username are required' });
     }
 
-    await checkOpenApiAgentList({ tenantId: prodTenantId, accountId });
+    await checkOpenApiAgentList({ tenantCode: prodCode, accountId });
     return res.json({ ok: true });
   } catch (error) {
     const statusCode = error.statusCode || 500;

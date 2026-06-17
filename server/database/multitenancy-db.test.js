@@ -21,7 +21,7 @@ function seedUser(database, username) {
   return Number(result.lastInsertRowid);
 }
 
-test('multitenancy initialization migrates tenant identifier columns', () => {
+test('multitenancy initialization migrates tenant production code column', () => {
   const database = new Database(':memory:');
   database.exec(DATABASE_SCHEMA_SQL);
   database.exec(`
@@ -38,8 +38,32 @@ test('multitenancy initialization migrates tenant identifier columns', () => {
   initializeMultitenancyTables(database);
 
   const columns = database.prepare('PRAGMA table_info(tenants)').all().map((column) => column.name);
-  assert.equal(columns.includes('tenant_id'), true);
-  assert.equal(columns.includes('prod_tenant_id'), true);
+  assert.equal(columns.includes('prod_code'), true);
+  assert.equal(columns.includes('tenant_id'), false);
+  assert.equal(columns.includes('prod_tenant_id'), false);
+});
+
+test('multitenancy initialization copies legacy prod_tenant_id into prod_code', () => {
+  const database = new Database(':memory:');
+  database.exec(DATABASE_SCHEMA_SQL);
+  database.exec(`
+    CREATE TABLE tenants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      prod_tenant_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO tenants (code, name, prod_tenant_id)
+    VALUES ('legacy', 'Legacy', 'prod-legacy');
+  `);
+
+  initializeMultitenancyTables(database);
+
+  const tenant = database.prepare('SELECT code, prod_code FROM tenants WHERE code = ?').get('legacy');
+  assert.deepEqual(tenant, { code: 'legacy', prod_code: 'prod-legacy' });
 });
 
 test('tenant membership controls visible tenants', () => {
@@ -73,28 +97,27 @@ test('tenant membership controls visible tenants', () => {
   assert.equal(mt.memberships.getActiveMembership(userId, hiddenTenant.id), null);
 });
 
-test('tenant identifiers can be created and updated', () => {
+test('tenant codes can be created and updated', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);
 
   const tenant = mt.tenants.createTenant({
     code: 'external',
     name: 'External',
-    tenantId: 'dev-tenant-001',
-    prodTenantId: 'prod-tenant-001',
+    prodCode: 'prod-code-001',
   });
 
-  assert.equal(tenant.tenant_id, 'dev-tenant-001');
-  assert.equal(tenant.prod_tenant_id, 'prod-tenant-001');
+  assert.equal(tenant.code, 'external');
+  assert.equal(tenant.prod_code, 'prod-code-001');
 
-  const updatedTenant = mt.tenants.updateTenantIdentifiers({
+  const updatedTenant = mt.tenants.updateTenantCodes({
     id: tenant.id,
-    tenantId: 'dev-tenant-002',
-    prodTenantId: 'prod-tenant-002',
+    code: 'external-updated',
+    prodCode: 'prod-code-002',
   });
 
-  assert.equal(updatedTenant.tenant_id, 'dev-tenant-002');
-  assert.equal(updatedTenant.prod_tenant_id, 'prod-tenant-002');
+  assert.equal(updatedTenant.code, 'external-updated');
+  assert.equal(updatedTenant.prod_code, 'prod-code-002');
 });
 
 test('system admin access can be granted across active tenants', () => {
