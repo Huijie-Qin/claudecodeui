@@ -115,7 +115,10 @@ test('GET /skills returns market inventory for view access', async () => {
     },
     listSkillMarket: async (args) => {
       seen.listArgs = args;
-      return [{ name: 'bug-hunter' }];
+      return {
+        skills: [{ name: 'bug-hunter' }],
+        pageInfo: { page: 1, pageSize: 20, hasNextPage: false },
+      };
     },
   });
 
@@ -137,12 +140,14 @@ test('GET /skills returns market inventory for view access', async () => {
     currentUsername: TEST_USERNAME,
     tenantCode: TEST_TENANT_CODE,
     accountId: TEST_USERNAME,
+    includePageInfo: true,
   });
   assert.deepEqual(payload, {
     workspaceId: 10,
     accessRole: 'view',
     canManage: false,
     skills: [{ name: 'bug-hunter' }],
+    pageInfo: { page: 1, pageSize: 20, hasNextPage: false },
   });
 });
 

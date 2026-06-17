@@ -27,7 +27,7 @@ export function createSkillMarketRouter({
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
-      const skills = await marketService.listSkillMarket({
+      const result = await marketService.listSkillMarket({
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         searchContent: req.query?.searchContent ?? req.query?.q ?? '',
@@ -36,13 +36,15 @@ export function createSkillMarketRouter({
         currentUsername: accountId,
         tenantCode,
         accountId,
+        includePageInfo: true,
       });
 
       return res.json({
         workspaceId: workspace.id,
         accessRole,
         canManage: isManageRole(accessRole),
-        skills,
+        skills: result.skills,
+        pageInfo: result.pageInfo,
       });
     } catch (error) {
       return handleWorkspaceError(res, error);

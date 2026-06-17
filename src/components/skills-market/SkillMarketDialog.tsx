@@ -1,6 +1,8 @@
 import {
   AlertCircle,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   FileText,
   Folder,
@@ -68,6 +70,9 @@ type DirectoryRow = {
   filePath?: string;
 };
 
+const DEFAULT_MARKET_PAGE_SIZE = 20;
+const MARKET_PAGE_SIZE_OPTIONS = [10, 20, 50];
+
 export default function SkillMarketDialog({
   open,
   selectedProject,
@@ -77,6 +82,9 @@ export default function SkillMarketDialog({
   const { t } = useTranslation();
   const [skills, setSkills] = useState<MarketSkillSummary[]>([]);
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_MARKET_PAGE_SIZE);
+  const [hasNextPage, setHasNextPage] = useState(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [detail, setDetail] = useState<MarketSkillDetail | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
@@ -109,7 +117,11 @@ export default function SkillMarketDialog({
   const selectedDisplayName = detail?.displayName || detail?.name || '';
   const canWrite = canManage && !isReadOnly && Boolean(workspaceId);
 
-  const loadSkills = useCallback(async (searchContent = '') => {
+  const loadSkills = useCallback(async (
+    searchContent = '',
+    nextPage = 1,
+    nextPageSize = DEFAULT_MARKET_PAGE_SIZE,
+  ) => {
     if (!workspaceId) {
       setError(t('skillMarketDialog.workspaceUnavailable', 'Current workspace does not support Skill Market.'));
       return;
@@ -119,12 +131,18 @@ export default function SkillMarketDialog({
     setError(null);
     try {
       const payload = await readApiPayload(
-        await api.skillMarket.list(workspaceId, { searchContent }),
+        await api.skillMarket.list(workspaceId, {
+          searchContent,
+          page: nextPage,
+          pageSize: nextPageSize,
+        }),
         t('skillMarketDialog.loadFailed', 'Failed to load Skill Market.'),
       );
       const nextSkills = payload.skills ?? [];
+      const nextPageInfo = payload.pageInfo ?? {};
       setCanManage(payload.canManage !== false);
       setSkills(nextSkills);
+      setHasNextPage(Boolean(nextPageInfo.hasNextPage ?? nextSkills.length >= nextPageSize));
       setSelectedName((current) => {
         if (current && nextSkills.some((skill: MarketSkillSummary) => skill.name === current)) {
           return current;
@@ -132,6 +150,7 @@ export default function SkillMarketDialog({
         return nextSkills[0]?.name ?? null;
       });
     } catch (error) {
+      setHasNextPage(false);
       setError(error instanceof Error ? error.message : t('skillMarketDialog.loadFailed', 'Failed to load Skill Market.'));
     } finally {
       setListLoading(false);
@@ -204,10 +223,10 @@ export default function SkillMarketDialog({
     }
 
     const timer = window.setTimeout(() => {
-      void loadSkills(query);
+      void loadSkills(query, page, pageSize);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [loadSkills, open, query]);
+  }, [loadSkills, open, page, pageSize, query]);
 
   useEffect(() => {
     if (open && selectedName) {
@@ -233,6 +252,27 @@ export default function SkillMarketDialog({
     }
   };
 
+  const changeQuery = (value: string) => {
+    setQuery(value);
+    setPage(1);
+  };
+
+  const changePageSize = (value: string) => {
+    const nextPageSize = Number(value) || DEFAULT_MARKET_PAGE_SIZE;
+    setPageSize(nextPageSize);
+    setPage(1);
+  };
+
+  const goToPreviousPage = () => {
+    setPage((current) => Math.max(1, current - 1));
+  };
+
+  const goToNextPage = () => {
+    if (hasNextPage) {
+      setPage((current) => current + 1);
+    }
+  };
+
   const refreshAfterMutation = async (skillName: string, changedPath: string, reason: string) => {
     dispatchProjectFilesChanged({
       projectName: selectedProject.name,
@@ -245,7 +285,7 @@ export default function SkillMarketDialog({
       workspaceId,
       reason,
     });
-    await loadSkills(query);
+    await loadSkills(query, page, pageSize);
     await loadDetail(skillName, selectedFilePath);
   };
 
@@ -327,7 +367,7 @@ export default function SkillMarketDialog({
         workspaceId,
         reason: 'skill-market-remove',
       });
-      await loadSkills(query);
+      await loadSkills(query, page, pageSize);
     } catch (error) {
       setRemoveTargetName(null);
       setError(error instanceof Error ? error.message : t('skillMarketDialog.removeFailed', 'Failed to remove skill.'));
@@ -353,7 +393,7 @@ export default function SkillMarketDialog({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void loadSkills(query)}
+              onClick={() => void loadSkills(query, page, pageSize)}
               disabled={listLoading || actionLoading}
               className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               aria-label={t('common.refresh', 'Refresh')}
@@ -379,7 +419,7 @@ export default function SkillMarketDialog({
                 <input
                   type="search"
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => changeQuery(event.target.value)}
                   placeholder={t('skillMarketDialog.search', 'Search skills...')}
                   className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
                 />
@@ -424,6 +464,54 @@ export default function SkillMarketDialog({
                   ))}
                 </div>
               )}
+            </div>
+
+            <div className="border-t border-border p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {t('skillMarketDialog.pagination.page', { page, defaultValue: 'Page {{page}}' })}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={goToPreviousPage}
+                    disabled={page <= 1 || listLoading}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={t('skillMarketDialog.pagination.previous', 'Previous page')}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToNextPage}
+                    disabled={!hasNextPage || listLoading}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={t('skillMarketDialog.pagination.next', 'Next page')}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {t('skillMarketDialog.pagination.currentCount', { count: visibleSkills.length, defaultValue: '{{count}} items' })}
+                </span>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>{t('skillMarketDialog.pagination.pageSize', 'Per page')}</span>
+                  <select
+                    value={pageSize}
+                    onChange={(event) => changePageSize(event.target.value)}
+                    disabled={listLoading}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {MARKET_PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
           </aside>
 

@@ -92,6 +92,10 @@ export const api = {
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: () => authenticatedFetch(withTenantParam('/api/projects')),
+  checkProjectAgentList: (projectName, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/agent-list-check`, workspaceId), {
+      method: 'POST',
+    }),
   sessions: (projectName, limit = 5, offset = 0, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/sessions?limit=${limit}&offset=${offset}`, workspaceId)),
   // Unified endpoint — all providers through one URL

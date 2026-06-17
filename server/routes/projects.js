@@ -6,6 +6,8 @@ import os from 'os';
 import express from 'express';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { checkOpenApiAgentList } from '../services/openapi-agent.js';
+import { workspaceAccess } from '../services/workspace-access.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
 
 const router = express.Router();
@@ -58,6 +60,39 @@ function createWorkspaceProject(workspace) {
     accessRole: 'owner',
   };
 }
+
+router.post('/:projectName/agent-list-check', async (req, res) => {
+  try {
+    const tenantId = Number(req.query.tenantId || req.headers['x-tenant-id'] || req.body?.tenantId);
+    const workspaceId = Number(req.query.workspaceId || req.body?.workspaceId);
+    if (!tenantId || !workspaceId || !req.user?.id) {
+      return res.status(400).json({ error: 'tenantId and workspaceId are required' });
+    }
+
+    const { workspace } = workspaceAccess.requireWorkspace({
+      tenantId,
+      userId: req.user.id,
+      workspaceId,
+      requireEdit: false,
+    });
+    if (workspace.slug !== req.params.projectName) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+
+    const tenant = multitenancyDb.tenants.getTenantById(tenantId);
+    const tenantCode = tenant?.code || tenant?.slug;
+    const accountId = req.user.username;
+    if (!tenantCode || !accountId) {
+      return res.status(400).json({ error: 'tenant code and username are required' });
+    }
+
+    await checkOpenApiAgentList({ tenantCode, accountId });
+    return res.json({ ok: true });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({ error: error.message });
+  }
+});
 
 /**
  * Validates that a path is safe for workspace operations

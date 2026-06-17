@@ -39,17 +39,26 @@ export async function listSkillMarket(options = {}) {
     currentUsername,
     tenantCode,
     accountId,
+    includePageInfo = false,
   } = normalizedOptions;
+  const normalizedPage = normalizePositiveInteger(page, 1);
+  const normalizedPageSize = normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE);
   const remoteAccountId = accountId ?? currentUsername;
   const remoteSkills = await fetchRemoteSkillList({
     searchContent,
-    page,
-    pageSize,
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
     tenantCode,
     accountId: remoteAccountId,
   });
 
   if (!workspacePath) {
+    if (includePageInfo) {
+      return {
+        skills: remoteSkills,
+        pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+      };
+    }
     return remoteSkills;
   }
 
@@ -73,7 +82,14 @@ export async function listSkillMarket(options = {}) {
     accountId: remoteAccountId,
     searchContent,
   });
-  return [...enrichedRemoteSkills, ...importedSkillSummaries];
+  const skills = [...enrichedRemoteSkills, ...importedSkillSummaries];
+  if (includePageInfo) {
+    return {
+      skills,
+      pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+    };
+  }
+  return skills;
 }
 
 export async function getSkillMarketDetail({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
@@ -557,14 +573,22 @@ async function fetchRemoteSkillList({
         searchContent,
       },
       pageInfo: {
-        page: Number(page) || 1,
-        pageSize: Number(pageSize) || DEFAULT_LIST_PAGE_SIZE,
+        page: normalizePositiveInteger(page, 1),
+        pageSize: normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE),
       },
     },
   });
 
   return normalizeSkillListPayload(payload.data)
     .map(normalizeRemoteSkillSummary);
+}
+
+function createSkillListPageInfo(remoteCount, page, pageSize) {
+  return {
+    page,
+    pageSize,
+    hasNextPage: remoteCount >= pageSize,
+  };
 }
 
 async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
@@ -1777,6 +1801,12 @@ function safeNormalizeSkillFolderName(value, { preserveCase = false } = {}) {
 function normalizeVersion(value) {
   const version = Number(value);
   return Number.isFinite(version) && version >= 0 ? version : undefined;
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 1) return fallback;
+  return Math.floor(number);
 }
 
 function parseBoolean(value) {
