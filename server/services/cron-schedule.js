@@ -134,3 +134,23 @@ export function getNextCronRunAt(expression, fromDate = new Date(), { inclusive 
 
   throw new Error('Cron expression has no matching run time within the next 2 years');
 }
+
+export function getNextCronRunAtWithStart(expression, startAfterDate = new Date(), { notBeforeDate = null } = {}) {
+  const scheduleStartDate = startAfterDate instanceof Date ? startAfterDate : new Date(startAfterDate);
+  if (Number.isNaN(scheduleStartDate.getTime())) {
+    throw new Error('startAfterDate must be a valid date');
+  }
+
+  if (notBeforeDate != null) {
+    const minimumDate = notBeforeDate instanceof Date ? notBeforeDate : new Date(notBeforeDate);
+    if (Number.isNaN(minimumDate.getTime())) {
+      throw new Error('notBeforeDate must be a valid date');
+    }
+
+    if (scheduleStartDate.getTime() <= minimumDate.getTime()) {
+      return getNextCronRunAt(expression, minimumDate, { inclusive: false });
+    }
+  }
+
+  return getNextCronRunAt(expression, scheduleStartDate, { inclusive: true });
+}

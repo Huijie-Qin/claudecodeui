@@ -6,7 +6,7 @@ import { spawnGemini } from '../gemini-cli.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
 import { expandLeadingSkillCommand } from './skill-command-expander.js';
-import { getNextCronRunAt, normalizeCronExpression } from './cron-schedule.js';
+import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } from './cron-schedule.js';
 
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const VALID_SCHEDULE_TYPES = new Set(['interval', 'cron']);
@@ -114,7 +114,14 @@ function addIntervalFromNow(intervalMinutes) {
   return new Date(Date.now() + intervalMinutes * 60_000).toISOString();
 }
 
-function normalizeTaskSchedule({ scheduleType = null, scheduleCron = null, intervalMinutes, nextRunAt, startAfterAt }) {
+function normalizeTaskSchedule({
+  scheduleType = null,
+  scheduleCron = null,
+  intervalMinutes,
+  nextRunAt,
+  startAfterAt,
+  minNextRunAt = null,
+}) {
   const inferredScheduleType = scheduleType == null || scheduleType === ''
     ? (scheduleCron ? 'cron' : 'interval')
     : scheduleType;
@@ -128,7 +135,9 @@ function normalizeTaskSchedule({ scheduleType = null, scheduleCron = null, inter
       scheduleCron: normalizedCron,
       intervalMinutes: intervalMinutes == null ? 60 : requirePositiveInteger(intervalMinutes, 'intervalMinutes'),
       scheduleStartAt,
-      nextRunAt: getNextCronRunAt(normalizedCron, startAfterDate, { inclusive: true }).toISOString(),
+      nextRunAt: getNextCronRunAtWithStart(normalizedCron, startAfterDate, {
+        notBeforeDate: minNextRunAt,
+      }).toISOString(),
     };
   }
 
@@ -426,6 +435,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
             intervalMinutes: patch.intervalMinutes !== undefined ? patch.intervalMinutes : existing.intervalMinutes,
             nextRunAt: patch.nextRunAt !== undefined ? patch.nextRunAt : existing.nextRunAt,
             startAfterAt: patch.startAfterAt !== undefined ? patch.startAfterAt : existing.scheduleStartAt,
+            minNextRunAt: new Date(),
           })
         : {
             scheduleType: existing.scheduleType || 'interval',

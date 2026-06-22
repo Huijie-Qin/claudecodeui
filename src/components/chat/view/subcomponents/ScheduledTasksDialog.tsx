@@ -151,88 +151,168 @@ function buildVisualCron({
   return `${minute} ${hour} ${monthDay} * *`;
 }
 
-function getNextVisualRunDates(
-  {
-    visualFrequency,
-    visualMinute,
-    visualHour,
-    visualWeekday,
-    visualMonthDay,
-    nextRunAt,
-  }: ScheduleControlValues,
+const CRON_FIELD_CONFIGS = [
+  { name: 'minute', min: 0, max: 59 },
+  { name: 'hour', min: 0, max: 23 },
+  { name: 'day of month', min: 1, max: 31 },
+  { name: 'month', min: 1, max: 12 },
+  { name: 'day of week', min: 0, max: 7, normalize: (value: number) => (value === 7 ? 0 : value) },
+];
+
+const MAX_PREVIEW_SEARCH_MINUTES = 366 * 24 * 60 * 2;
+
+type CronFieldConfig = {
+  name: string;
+  min: number;
+  max: number;
+  normalize?: (value: number) => number;
+};
+
+function requireCronInteger(value: string, fieldName: string) {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${fieldName} must be an integer`);
+  }
+  return Number(value);
+}
+
+function normalizeCronFieldValue(value: number, config: CronFieldConfig) {
+  if (value < config.min || value > config.max) {
+    throw new Error(`${config.name} must be between ${config.min} and ${config.max}`);
+  }
+  return config.normalize ? config.normalize(value) : value;
+}
+
+function parseCronField(field: string, config: CronFieldConfig) {
+  const raw = String(field || '').trim();
+  if (!raw) {
+    throw new Error(`${config.name} is required`);
+  }
+
+  const values = new Set<number>();
+  const parts = raw.split(',');
+  let isWildcard = false;
+
+  for (const part of parts) {
+    const slashParts = part.split('/');
+    const [rangePart, stepPart] = slashParts;
+    if (slashParts.length > 2) {
+      throw new Error(`${config.name} has an invalid step`);
+    }
+
+    const step = stepPart === undefined ? 1 : requireCronInteger(stepPart, config.name);
+    if (step <= 0) {
+      throw new Error(`${config.name} step must be greater than 0`);
+    }
+
+    let start;
+    let end;
+    if (rangePart === '*') {
+      isWildcard = parts.length === 1;
+      start = config.min;
+      end = config.max;
+    } else if (rangePart.includes('-')) {
+      const rangeParts = rangePart.split('-');
+      const [startPart, endPart] = rangeParts;
+      if (!startPart || !endPart || rangeParts.length > 2) {
+        throw new Error(`${config.name} has an invalid range`);
+      }
+      start = requireCronInteger(startPart, config.name);
+      end = requireCronInteger(endPart, config.name);
+    } else {
+      start = requireCronInteger(rangePart, config.name);
+      end = start;
+    }
+
+    if (start > end) {
+      throw new Error(`${config.name} range start must be before range end`);
+    }
+
+    for (let value = start; value <= end; value += step) {
+      values.add(normalizeCronFieldValue(value, config));
+    }
+  }
+
+  return { values, isWildcard };
+}
+
+function parseCronExpression(expression: string) {
+  const fields = normalizeCronInput(expression).split(/\s+/);
+  if (fields.length !== 5) {
+    throw new Error('Cron expression must have 5 fields');
+  }
+
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields.map((field, index) =>
+    parseCronField(field, CRON_FIELD_CONFIGS[index]));
+
+  return {
+    minute,
+    hour,
+    dayOfMonth,
+    month,
+    dayOfWeek,
+  };
+}
+
+function cronMatchesDate(parsed: ReturnType<typeof parseCronExpression>, date: Date) {
+  const minuteMatches = parsed.minute.values.has(date.getMinutes());
+  const hourMatches = parsed.hour.values.has(date.getHours());
+  const monthMatches = parsed.month.values.has(date.getMonth() + 1);
+  const dayOfMonthMatches = parsed.dayOfMonth.values.has(date.getDate());
+  const dayOfWeekMatches = parsed.dayOfWeek.values.has(date.getDay());
+
+  const dayMatches =
+    parsed.dayOfMonth.isWildcard || parsed.dayOfWeek.isWildcard
+      ? dayOfMonthMatches && dayOfWeekMatches
+      : dayOfMonthMatches || dayOfWeekMatches;
+
+  return minuteMatches && hourMatches && monthMatches && dayMatches;
+}
+
+function getNextCronRunDates(
+  expression: string,
+  fromDate: Date,
   count = 5,
+  { inclusive = false } = {},
 ) {
-  const start = new Date(nextRunAt);
+  const parsed = parseCronExpression(expression);
+  if (Number.isNaN(fromDate.getTime())) {
+    return [];
+  }
+
+  const runs: Date[] = [];
+  const candidate = new Date(fromDate);
+  const startsOnMinute = candidate.getSeconds() === 0 && candidate.getMilliseconds() === 0;
+  candidate.setSeconds(0, 0);
+  if (!inclusive || !startsOnMinute) {
+    candidate.setMinutes(candidate.getMinutes() + 1);
+  }
+
+  for (let index = 0; index < MAX_PREVIEW_SEARCH_MINUTES && runs.length < count; index += 1) {
+    if (cronMatchesDate(parsed, candidate)) {
+      runs.push(new Date(candidate));
+    }
+    candidate.setMinutes(candidate.getMinutes() + 1);
+  }
+
+  return runs;
+}
+
+function getNextVisualRunDates(
+  values: ScheduleControlValues,
+  count = 5,
+  notBeforeDate: Date | null = null,
+) {
+  const start = new Date(values.nextRunAt);
   if (Number.isNaN(start.getTime())) {
     return [];
   }
 
-  const minute = clampNumber(visualMinute, 0, 59);
-  const hour = clampNumber(visualHour, 0, 23);
-  const weekday = clampNumber(visualWeekday, 0, 6);
-  const monthDay = clampNumber(visualMonthDay, 1, 31);
-  const runs: Date[] = [];
-
-  if (visualFrequency === 'hourly') {
-    const cursor = new Date(start);
-    cursor.setSeconds(0, 0);
-    cursor.setMinutes(minute);
-    if (cursor.getTime() < start.getTime()) {
-      cursor.setHours(cursor.getHours() + 1);
-    }
-    while (runs.length < count) {
-      runs.push(new Date(cursor));
-      cursor.setHours(cursor.getHours() + 1);
-    }
-    return runs;
-  }
-
-  if (visualFrequency === 'daily') {
-    const cursor = new Date(start);
-    cursor.setHours(hour, minute, 0, 0);
-    if (cursor.getTime() < start.getTime()) {
-      cursor.setDate(cursor.getDate() + 1);
-    }
-    while (runs.length < count) {
-      runs.push(new Date(cursor));
-      cursor.setDate(cursor.getDate() + 1);
-    }
-    return runs;
-  }
-
-  if (visualFrequency === 'weekly') {
-    const cursor = new Date(start);
-    cursor.setHours(hour, minute, 0, 0);
-    cursor.setDate(cursor.getDate() + ((weekday - cursor.getDay() + 7) % 7));
-    if (cursor.getTime() < start.getTime()) {
-      cursor.setDate(cursor.getDate() + 7);
-    }
-    while (runs.length < count) {
-      runs.push(new Date(cursor));
-      cursor.setDate(cursor.getDate() + 7);
-    }
-    return runs;
-  }
-
-  let year = start.getFullYear();
-  let month = start.getMonth();
-  let guard = 0;
-  while (runs.length < count && guard < 60) {
-    const lastDayInMonth = new Date(year, month + 1, 0).getDate();
-    if (monthDay <= lastDayInMonth) {
-      const candidate = new Date(year, month, monthDay, hour, minute, 0, 0);
-      if (candidate.getTime() >= start.getTime()) {
-        runs.push(candidate);
-      }
-    }
-    month += 1;
-    if (month > 11) {
-      month = 0;
-      year += 1;
-    }
-    guard += 1;
-  }
-  return runs;
+  const lowerBound = notBeforeDate && start.getTime() <= notBeforeDate.getTime()
+    ? notBeforeDate
+    : start;
+  return getNextCronRunDates(buildVisualCron(values), lowerBound, count, {
+    inclusive: lowerBound === start,
+  });
 }
 
 function inferVisualCron(cron?: string | null): Pick<TaskEditForm, 'scheduleMode' | 'visualFrequency' | 'visualMinute' | 'visualHour' | 'visualWeekday' | 'visualMonthDay'> {
@@ -406,265 +486,259 @@ function ScheduleControls({
   values,
   onChange,
   disabled = false,
+  separateStartTime = false,
 }: {
   values: ScheduleControlValues;
   onChange: (values: ScheduleControlValues) => void;
   disabled?: boolean;
+  separateStartTime?: boolean;
 }) {
   const { t } = useTranslation('chat');
   const update = (patch: Partial<ScheduleControlValues>) => onChange({ ...values, ...patch });
   const generatedCron = buildVisualCron(values);
   const cronValue = values.scheduleMode === 'visual' ? generatedCron : values.scheduleCron;
-  const nextVisualRuns = getNextVisualRunDates(values);
+  const nextVisualRuns = getNextVisualRunDates(values, 5, separateStartTime ? new Date() : null);
+  const inlineStartTimeLabel = values.scheduleMode === 'interval'
+    ? t('scheduledTasks.labels.firstRun', { defaultValue: 'First run' })
+    : t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' });
+  const renderStartTimeField = (label: string, className = 'space-y-1') => (
+    <label className={className}>
+      <span className="text-xs text-muted-foreground">
+        {label}
+      </span>
+      <input
+        type="datetime-local"
+        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        value={values.nextRunAt}
+        onChange={(event) => update({ nextRunAt: event.target.value })}
+        disabled={disabled}
+      />
+    </label>
+  );
 
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-xs font-medium text-muted-foreground">
-          {t('scheduledTasks.labels.schedule', { defaultValue: 'Schedule' })}
-        </span>
-        <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-          {(['visual', 'cron'] as ScheduleMode[]).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                values.scheduleMode === mode
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-              }`}
-              onClick={() => update({ scheduleMode: mode })}
-              disabled={disabled}
-            >
-              {mode === 'cron'
-                ? t('scheduledTasks.modes.cron', { defaultValue: 'Cron' })
-                : t('scheduledTasks.modes.visual', { defaultValue: 'Visual' })}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {values.scheduleMode === 'interval' ? (
-        <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
-          <label className="space-y-1">
-            <span className="text-xs text-muted-foreground">
-              {t('scheduledTasks.labels.everyMinutes', { defaultValue: 'Every minutes' })}
-            </span>
-            <input
-              type="number"
-              min={1}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={values.intervalMinutes}
-              onChange={(event) => update({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })}
-              disabled={disabled}
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs text-muted-foreground">
-              {t('scheduledTasks.labels.firstRun', { defaultValue: 'First run' })}
-            </span>
-            <input
-              type="datetime-local"
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={values.nextRunAt}
-              onChange={(event) => update({ nextRunAt: event.target.value })}
-              disabled={disabled}
-            />
-          </label>
-        </div>
-      ) : null}
-
-      {values.scheduleMode === 'cron' ? (
-        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_220px]">
-          <label className="space-y-1">
-            <span className="text-xs text-muted-foreground">
-              {t('scheduledTasks.labels.cronExpression', { defaultValue: 'Cron expression' })}
-            </span>
-            <input
-              className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={values.scheduleCron}
-              onChange={(event) => update({ scheduleCron: event.target.value })}
-              placeholder="30 9 * * *"
-              disabled={disabled}
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs text-muted-foreground">
-              {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
-            </span>
-            <input
-              type="datetime-local"
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              value={values.nextRunAt}
-              onChange={(event) => update({ nextRunAt: event.target.value })}
-              disabled={disabled}
-            />
-          </label>
-        </div>
-      ) : null}
-
-      {values.scheduleMode === 'visual' ? (
-        <div className="mt-3 grid gap-3">
-          <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">
-                {t('scheduledTasks.labels.repeat', { defaultValue: 'Repeat' })}
-              </span>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={values.visualFrequency}
-                onChange={(event) => update({ visualFrequency: event.target.value as VisualFrequency })}
-                disabled={disabled}
-              >
-                {VISUAL_FREQUENCIES.map((frequency) => (
-                  <option key={frequency.value} value={frequency.value}>
-                    {t(frequency.labelKey, { defaultValue: frequency.defaultLabel })}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">
-                {t('scheduledTasks.labels.minuteWithValue', {
-                  defaultValue: 'Minute: {{minute}}',
-                  minute: pad(values.visualMinute),
-                })}
-              </span>
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={0}
-                  max={59}
-                  className="w-full"
-                  value={values.visualMinute}
-                  onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
-                  disabled={disabled}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  max={59}
-                  className="h-10 w-20 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={values.visualMinute}
-                  onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
-                  disabled={disabled}
-                />
-              </div>
-            </label>
+    <div className={separateStartTime ? 'space-y-3' : ''}>
+      {separateStartTime ? (
+        <div className="rounded-md border border-border bg-muted/20 p-3">
+          <div className="text-xs font-medium text-muted-foreground">
+            {t('scheduledTasks.labels.taskStartTime', { defaultValue: 'Task start time' })}
           </div>
-
-          {values.visualFrequency !== 'hourly' ? (
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">
-                  {t('scheduledTasks.labels.hour', { defaultValue: 'Hour' })}
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  max={23}
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={values.visualHour}
-                  onChange={(event) => update({ visualHour: clampNumber(Number(event.target.value), 0, 23) })}
-                  disabled={disabled}
-                />
-              </label>
-
-              {values.visualFrequency === 'weekly' ? (
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">
-                    {t('scheduledTasks.labels.weekday', { defaultValue: 'Weekday' })}
-                  </span>
-                  <select
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={values.visualWeekday}
-                    onChange={(event) => update({ visualWeekday: Number(event.target.value) })}
-                    disabled={disabled}
-                  >
-                    {WEEKDAYS.map((weekday) => (
-                      <option key={weekday.value} value={weekday.value}>
-                        {t(weekday.labelKey, { defaultValue: weekday.defaultLabel })}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-
-              {values.visualFrequency === 'monthly' ? (
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">
-                    {t('scheduledTasks.labels.dayOfMonth', { defaultValue: 'Day of month' })}
-                  </span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={31}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={values.visualMonthDay}
-                    onChange={(event) => update({ visualMonthDay: clampNumber(Number(event.target.value), 1, 31) })}
-                    disabled={disabled}
-                  />
-                </label>
-              ) : null}
-
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">
-                  {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
-                </span>
-                <input
-                  type="datetime-local"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={values.nextRunAt}
-                  onChange={(event) => update({ nextRunAt: event.target.value })}
-                  disabled={disabled}
-                />
-              </label>
-            </div>
-          ) : (
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">
-                {t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })}
-              </span>
-              <input
-                type="datetime-local"
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={values.nextRunAt}
-                onChange={(event) => update({ nextRunAt: event.target.value })}
-                disabled={disabled}
-              />
-            </label>
-          )}
-
-          <div className="rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
-            <div className="mb-1 font-medium text-foreground">
-              {t('scheduledTasks.labels.nextFiveRuns', { defaultValue: 'Next 5 runs' })}
-            </div>
-            {nextVisualRuns.length > 0 ? (
-              <ol className="list-decimal space-y-0.5 pl-4">
-                {nextVisualRuns.map((runDate) => (
-                  <li key={runDate.toISOString()}>{formatDateTime(runDate.toISOString(), '-')}</li>
-                ))}
-              </ol>
-            ) : (
-              <div>{t('scheduledTasks.nextRunsUnavailable', { defaultValue: 'Choose a valid start time to preview runs.' })}</div>
+          <div className="mt-3">
+            {renderStartTimeField(
+              t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' }),
+              'block w-full max-w-sm space-y-1',
             )}
           </div>
         </div>
       ) : null}
 
-      {values.scheduleMode !== 'interval' ? (
-        <div className="mt-2 rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
-          {t('scheduledTasks.cronHelp', {
-            defaultValue: 'Cron runs use the server scheduler. Next run is calculated from the start time.',
-          })}
-          {cronValue && !isValidCronCandidate(cronValue) ? (
-            <span className="ml-1 text-destructive">
-              {t('scheduledTasks.cronInvalid', { defaultValue: 'Use 5 cron fields.' })}
-            </span>
-          ) : null}
+      <div className="rounded-md border border-border bg-muted/20 p-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-xs font-medium text-muted-foreground">
+            {separateStartTime
+              ? t('scheduledTasks.labels.taskScheduleRule', { defaultValue: 'Task schedule rule' })
+              : t('scheduledTasks.labels.schedule', { defaultValue: 'Schedule' })}
+          </span>
+          <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+            {(['visual', 'cron'] as ScheduleMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                  values.scheduleMode === mode
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+                onClick={() => update({ scheduleMode: mode })}
+                disabled={disabled}
+              >
+                {mode === 'cron'
+                  ? t('scheduledTasks.modes.cron', { defaultValue: 'Cron' })
+                  : t('scheduledTasks.modes.visual', { defaultValue: 'Visual' })}
+              </button>
+            ))}
+          </div>
         </div>
-      ) : null}
+
+        {values.scheduleMode === 'interval' ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-[180px_1fr]">
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.everyMinutes', { defaultValue: 'Every minutes' })}
+              </span>
+              <input
+                type="number"
+                min={1}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={values.intervalMinutes}
+                onChange={(event) => update({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })}
+                disabled={disabled}
+              />
+            </label>
+            {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}
+          </div>
+        ) : null}
+
+        {values.scheduleMode === 'cron' ? (
+          <div className={`mt-3 grid gap-3 ${separateStartTime ? '' : 'md:grid-cols-[1fr_220px]'}`}>
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">
+                {t('scheduledTasks.labels.cronExpression', { defaultValue: 'Cron expression' })}
+              </span>
+              <input
+                className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={values.scheduleCron}
+                onChange={(event) => update({ scheduleCron: event.target.value })}
+                placeholder="30 9 * * *"
+                disabled={disabled}
+              />
+            </label>
+            {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}
+          </div>
+        ) : null}
+
+        {values.scheduleMode === 'visual' ? (
+          <div className="mt-3 grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">
+                  {t('scheduledTasks.labels.repeat', { defaultValue: 'Repeat' })}
+                </span>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={values.visualFrequency}
+                  onChange={(event) => update({ visualFrequency: event.target.value as VisualFrequency })}
+                  disabled={disabled}
+                >
+                  {VISUAL_FREQUENCIES.map((frequency) => (
+                    <option key={frequency.value} value={frequency.value}>
+                      {t(frequency.labelKey, { defaultValue: frequency.defaultLabel })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">
+                  {t('scheduledTasks.labels.minuteWithValue', {
+                    defaultValue: 'Minute: {{minute}}',
+                    minute: pad(values.visualMinute),
+                  })}
+                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={59}
+                    className="w-full"
+                    value={values.visualMinute}
+                    onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
+                    disabled={disabled}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    className="h-10 w-20 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualMinute}
+                    onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
+                    disabled={disabled}
+                  />
+                </div>
+              </label>
+            </div>
+
+            {values.visualFrequency !== 'hourly' ? (
+              <div className={`grid gap-3 ${separateStartTime ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.hour', { defaultValue: 'Hour' })}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualHour}
+                    onChange={(event) => update({ visualHour: clampNumber(Number(event.target.value), 0, 23) })}
+                    disabled={disabled}
+                  />
+                </label>
+
+                {values.visualFrequency === 'weekly' ? (
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">
+                      {t('scheduledTasks.labels.weekday', { defaultValue: 'Weekday' })}
+                    </span>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={values.visualWeekday}
+                      onChange={(event) => update({ visualWeekday: Number(event.target.value) })}
+                      disabled={disabled}
+                    >
+                      {WEEKDAYS.map((weekday) => (
+                        <option key={weekday.value} value={weekday.value}>
+                          {t(weekday.labelKey, { defaultValue: weekday.defaultLabel })}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {values.visualFrequency === 'monthly' ? (
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">
+                      {t('scheduledTasks.labels.dayOfMonth', { defaultValue: 'Day of month' })}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={values.visualMonthDay}
+                      onChange={(event) => update({ visualMonthDay: clampNumber(Number(event.target.value), 1, 31) })}
+                      disabled={disabled}
+                    />
+                  </label>
+                ) : null}
+
+                {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}
+              </div>
+            ) : !separateStartTime ? (
+              renderStartTimeField(inlineStartTimeLabel)
+            ) : null}
+
+            <div className="rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
+              <div className="mb-1 font-medium text-foreground">
+                {t('scheduledTasks.labels.nextFiveRuns', { defaultValue: 'Next 5 runs' })}
+              </div>
+              {nextVisualRuns.length > 0 ? (
+                <ol className="list-decimal space-y-0.5 pl-4">
+                  {nextVisualRuns.map((runDate) => (
+                    <li key={runDate.toISOString()}>{formatDateTime(runDate.toISOString(), '-')}</li>
+                  ))}
+                </ol>
+              ) : (
+                <div>{t('scheduledTasks.nextRunsUnavailable', { defaultValue: 'Choose a valid start time to preview runs.' })}</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {values.scheduleMode !== 'interval' ? (
+          <div className="mt-2 rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
+            {t('scheduledTasks.cronHelp', {
+              defaultValue: 'Cron runs use the server scheduler. Next run is calculated from the start time.',
+            })}
+            {cronValue && !isValidCronCandidate(cronValue) ? (
+              <span className="ml-1 text-destructive">
+                {t('scheduledTasks.cronInvalid', { defaultValue: 'Use 5 cron fields.' })}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
     </div>
   );
 }
@@ -1509,6 +1583,7 @@ export default function ScheduledTasksDialog({
                                     setTaskEditForm((current) => current ? { ...current, ...values } : current);
                                   }}
                                   disabled={isUpdatingTask}
+                                  separateStartTime
                                 />
                                 <label className="flex items-center gap-2 text-sm text-foreground">
                                   <input

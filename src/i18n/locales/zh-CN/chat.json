@@ -276,6 +276,8 @@
       "taskName": "任务名称",
       "message": "消息",
       "schedule": "定时",
+      "taskStartTime": "任务开始时间",
+      "taskScheduleRule": "任务定时规则",
       "everyMinutes": "每隔多少分钟",
       "firstRun": "首次运行",
       "cronExpression": "Cron 表达式",

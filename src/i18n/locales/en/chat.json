@@ -291,6 +291,8 @@
       "taskName": "Task name",
       "message": "Message",
       "schedule": "Schedule",
+      "taskStartTime": "Task start time",
+      "taskScheduleRule": "Task schedule rule",
       "everyMinutes": "Every minutes",
       "firstRun": "First run",
       "cronExpression": "Cron expression",

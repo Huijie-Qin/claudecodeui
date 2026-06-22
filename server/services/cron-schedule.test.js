@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getNextCronRunAt, normalizeCronExpression } from './cron-schedule.js';
+import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } from './cron-schedule.js';
 
 test('returns the next matching daily run', () => {
   const next = getNextCronRunAt('30 9 * * *', new Date(2026, 5, 9, 9, 29, 30));
@@ -19,6 +19,30 @@ test('can include the current minute when requested', () => {
   assert.equal(next.getDate(), 9);
   assert.equal(next.getHours(), 9);
   assert.equal(next.getMinutes(), 30);
+});
+
+test('uses a future configured start time inclusively with a minimum run guard', () => {
+  const next = getNextCronRunAtWithStart(
+    '30 9 * * *',
+    new Date(2026, 5, 10, 9, 30, 0),
+    { notBeforeDate: new Date(2026, 5, 9, 12, 0, 0) },
+  );
+
+  assert.equal(next.getDate(), 10);
+  assert.equal(next.getHours(), 9);
+  assert.equal(next.getMinutes(), 30);
+});
+
+test('skips stale configured start time when a minimum run guard is supplied', () => {
+  const next = getNextCronRunAtWithStart(
+    '* * * * *',
+    new Date(2026, 5, 9, 9, 30, 0),
+    { notBeforeDate: new Date(2026, 5, 9, 9, 45, 0) },
+  );
+
+  assert.equal(next.getDate(), 9);
+  assert.equal(next.getHours(), 9);
+  assert.equal(next.getMinutes(), 46);
 });
 
 test('supports Sunday as day-of-week 7', () => {
