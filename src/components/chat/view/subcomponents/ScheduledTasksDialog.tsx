@@ -487,17 +487,19 @@ function ScheduleControls({
   onChange,
   disabled = false,
   separateStartTime = false,
+  limitPreviewToNow = false,
 }: {
   values: ScheduleControlValues;
   onChange: (values: ScheduleControlValues) => void;
   disabled?: boolean;
   separateStartTime?: boolean;
+  limitPreviewToNow?: boolean;
 }) {
   const { t } = useTranslation('chat');
   const update = (patch: Partial<ScheduleControlValues>) => onChange({ ...values, ...patch });
   const generatedCron = buildVisualCron(values);
   const cronValue = values.scheduleMode === 'visual' ? generatedCron : values.scheduleCron;
-  const nextVisualRuns = getNextVisualRunDates(values, 5, separateStartTime ? new Date() : null);
+  const nextVisualRuns = getNextVisualRunDates(values, 5, limitPreviewToNow ? new Date() : null);
   const inlineStartTimeLabel = values.scheduleMode === 'interval'
     ? t('scheduledTasks.labels.firstRun', { defaultValue: 'First run' })
     : t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' });
@@ -1386,6 +1388,7 @@ export default function ScheduledTasksDialog({
                 setIntervalMinutes(values.intervalMinutes);
                 setNextRunAt(values.nextRunAt);
               }}
+              separateStartTime
             />
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input
@@ -1584,6 +1587,7 @@ export default function ScheduledTasksDialog({
                                   }}
                                   disabled={isUpdatingTask}
                                   separateStartTime
+                                  limitPreviewToNow
                                 />
                                 <label className="flex items-center gap-2 text-sm text-foreground">
                                   <input
