@@ -7,6 +7,7 @@ import { copyTextToClipboard } from '../../../utils/clipboard';
 import type { FileTreeNode } from '../types/types';
 import type { Project } from '../../../types/app';
 import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
+import { getFileTreeClipboardPath } from '../utils/fileTreePaths';
 
 // Invalid filename characters
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
@@ -316,7 +317,7 @@ export function useFileTreeOperations({
 
   // Copy path to clipboard
   const handleCopyPath = useCallback(async (item: FileTreeNode) => {
-    const didCopy = await copyTextToClipboard(item.path);
+    const didCopy = await copyTextToClipboard(getFileTreeClipboardPath(item.path, selectedProject));
 
     if (!didCopy) {
       showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
@@ -324,7 +325,7 @@ export function useFileTreeOperations({
     }
 
     showToast(t('fileTree.toast.pathCopied', 'Path copied to clipboard'), 'success');
-  }, [showToast, t]);
+  }, [selectedProject, showToast, t]);
 
   const triggerBrowserDownload = useCallback((blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
