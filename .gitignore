@@ -19,6 +19,7 @@ out/
 .env.development.local
 .env.test.local
 .env.production.local
+.certs/
 
 # IDE and editor files
 .vscode/
@@ -58,6 +59,7 @@ jspm_packages/
 
 # Optional npm cache directory
 .npm
+.npm-cache/
 
 # Optional eslint cache
 .eslintcache
@@ -118,6 +120,7 @@ CLAUDE.md
 
 logs
 dev-debug.log
+dev-run.err
 # Editor directories and files
 .idea
 .vscode

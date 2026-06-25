@@ -3,6 +3,7 @@
   "subtitle": "Tenants, users, internal MCP presets, and runtimes",
   "tabs": {
     "analytics": "Analytics",
+    "aiCode": "AI Code",
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
@@ -253,6 +254,49 @@
     },
     "errors": {
       "load": "Failed to load platform analytics"
+    }
+  },
+  "aiCode": {
+    "title": "AI code statistics",
+    "description": "Counts AI-submitted lines only after the related merge request is merged.",
+    "loading": "Loading AI code statistics...",
+    "empty": "No merged AI code records",
+    "noMrs": "No MR records",
+    "byTenant": "By tenant",
+    "byUser": "By user",
+    "mrRecords": "MR records",
+    "searchPlaceholder": "Search ticket, branch, user, repo",
+    "groupFootnote": "{{mrs}} MRs / {{lines}} lines / {{files}} files",
+    "filters": {
+      "allTenants": "All tenants",
+      "allUsers": "All users",
+      "allStatuses": "All statuses",
+      "apply": "Apply"
+    },
+    "metrics": {
+      "mergedMrs": "Merged MRs",
+      "changedLines": "Changed lines",
+      "filesChanged": "Changed files",
+      "binaryFiles": "Binary files"
+    },
+    "status": {
+      "pending": "Pending",
+      "merged": "Merged",
+      "closed": "Closed",
+      "expired": "Expired",
+      "mr_failed": "MR failed"
+    },
+    "table": {
+      "ticket": "Ticket",
+      "repo": "Repo",
+      "branch": "Branch",
+      "mr": "MR",
+      "lines": "Lines",
+      "mergedAt": "Merged at"
+    },
+    "errors": {
+      "load": "Failed to load AI code statistics",
+      "loadMrs": "Failed to load AI code merge requests"
     }
   },
   "mcp": {

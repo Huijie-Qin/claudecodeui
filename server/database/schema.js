@@ -90,6 +90,87 @@ export const CODEHUB_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS codehu
 export const CODEHUB_REPOSITORIES_USER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_codehub_repositories_user
   ON codehub_repositories(user_id, updated_at);`;
 
+export const CODEHUB_WORKSPACE_REPOSITORIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS codehub_workspace_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  repo_relative_path TEXT NOT NULL,
+  repository_url TEXT NOT NULL,
+  project_id INTEGER,
+  public_repository_url TEXT,
+  public_project_id INTEGER,
+  codehub_host TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(workspace_id, repo_relative_path)
+);`;
+
+export const CODEHUB_WORKSPACE_REPOSITORIES_LOOKUP_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_codehub_workspace_repositories_lookup
+  ON codehub_workspace_repositories(workspace_id, repo_relative_path);`;
+
+export const AI_MR_SUBMISSIONS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ai_mr_submissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  repo_relative_path TEXT NOT NULL,
+  repository_url TEXT NOT NULL,
+  project_id INTEGER,
+  public_repository_url TEXT,
+  public_project_id INTEGER,
+  source_branch TEXT NOT NULL,
+  target_branch TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  mr_id TEXT,
+  mr_iid TEXT,
+  mr_project_id INTEGER,
+  mr_url TEXT,
+  ticket_no TEXT NOT NULL,
+  description TEXT,
+  binary_source TEXT,
+  mr_title TEXT,
+  additions INTEGER DEFAULT 0,
+  deletions INTEGER DEFAULT 0,
+  files_changed INTEGER DEFAULT 0,
+  binary_files_changed INTEGER DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  mr_state TEXT,
+  mr_created_at DATETIME,
+  mr_updated_at DATETIME,
+  merged_at DATETIME,
+  closed_at DATETIME,
+  expires_at DATETIME NOT NULL,
+  last_checked_at DATETIME,
+  next_check_at DATETIME,
+  last_error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`;
+
+export const AI_MR_SUBMISSIONS_POLL_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_ai_mr_submissions_poll
+  ON ai_mr_submissions(status, next_check_at, expires_at);`;
+
+export const AI_MR_SUBMISSIONS_TENANT_STATS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_ai_mr_submissions_stats_tenant
+  ON ai_mr_submissions(status, tenant_id, merged_at);`;
+
+export const AI_MR_SUBMISSIONS_USER_STATS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_ai_mr_submissions_stats_user
+  ON ai_mr_submissions(status, tenant_id, user_id, merged_at);`;
+
+export const AI_MR_SUBMISSION_FILES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ai_mr_submission_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  submission_id INTEGER NOT NULL,
+  file_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  additions INTEGER DEFAULT 0,
+  deletions INTEGER DEFAULT 0,
+  is_binary BOOLEAN DEFAULT 0,
+  FOREIGN KEY (submission_id) REFERENCES ai_mr_submissions(id) ON DELETE CASCADE
+);`;
+
+export const AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_ai_mr_submission_files_submission
+  ON ai_mr_submission_files(submission_id);`;
+
 export const DATABASE_SCHEMA_SQL = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -168,6 +249,22 @@ ${SESSION_NAMES_LOOKUP_INDEX_SQL}
 ${CODEHUB_REPOSITORIES_TABLE_SQL}
 
 ${CODEHUB_REPOSITORIES_USER_INDEX_SQL}
+
+${CODEHUB_WORKSPACE_REPOSITORIES_TABLE_SQL}
+
+${CODEHUB_WORKSPACE_REPOSITORIES_LOOKUP_INDEX_SQL}
+
+${AI_MR_SUBMISSIONS_TABLE_SQL}
+
+${AI_MR_SUBMISSIONS_POLL_INDEX_SQL}
+
+${AI_MR_SUBMISSIONS_TENANT_STATS_INDEX_SQL}
+
+${AI_MR_SUBMISSIONS_USER_STATS_INDEX_SQL}
+
+${AI_MR_SUBMISSION_FILES_TABLE_SQL}
+
+${AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL}
 
 ${APP_CONFIG_TABLE_SQL}
 `;

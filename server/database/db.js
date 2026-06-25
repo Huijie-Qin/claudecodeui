@@ -21,6 +21,14 @@ import {
   SESSION_NAMES_LOOKUP_INDEX_SQL,
   CODEHUB_REPOSITORIES_TABLE_SQL,
   CODEHUB_REPOSITORIES_USER_INDEX_SQL,
+  CODEHUB_WORKSPACE_REPOSITORIES_TABLE_SQL,
+  CODEHUB_WORKSPACE_REPOSITORIES_LOOKUP_INDEX_SQL,
+  AI_MR_SUBMISSIONS_TABLE_SQL,
+  AI_MR_SUBMISSIONS_POLL_INDEX_SQL,
+  AI_MR_SUBMISSIONS_TENANT_STATS_INDEX_SQL,
+  AI_MR_SUBMISSIONS_USER_STATS_INDEX_SQL,
+  AI_MR_SUBMISSION_FILES_TABLE_SQL,
+  AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
@@ -170,6 +178,15 @@ const runMigrations = () => {
     db.exec(SESSION_NAMES_LOOKUP_INDEX_SQL);
     db.exec(CODEHUB_REPOSITORIES_TABLE_SQL);
     db.exec(CODEHUB_REPOSITORIES_USER_INDEX_SQL);
+    db.exec(CODEHUB_WORKSPACE_REPOSITORIES_TABLE_SQL);
+    db.exec(CODEHUB_WORKSPACE_REPOSITORIES_LOOKUP_INDEX_SQL);
+    db.exec(AI_MR_SUBMISSIONS_TABLE_SQL);
+    db.exec(AI_MR_SUBMISSIONS_POLL_INDEX_SQL);
+    db.exec(AI_MR_SUBMISSIONS_TENANT_STATS_INDEX_SQL);
+    db.exec(AI_MR_SUBMISSIONS_USER_STATS_INDEX_SQL);
+    db.exec(AI_MR_SUBMISSION_FILES_TABLE_SQL);
+    db.exec(AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL);
+    ensureAiMrSubmissionColumns();
     migrateSqlCheckPreferencesToWorkspaceScope();
     db.exec(MULTITENANCY_SCHEMA_SQL);
     runMultitenancyMigrations();
@@ -258,6 +275,16 @@ function migrateLegacyTenantProdCode() {
       AND prod_tenant_id IS NOT NULL
       AND prod_tenant_id != ''
   `).run();
+}
+
+function ensureAiMrSubmissionColumns() {
+  if (!hasTable('ai_mr_submissions')) {
+    return;
+  }
+  ensureColumn('ai_mr_submissions', 'description', 'TEXT');
+  ensureColumn('ai_mr_submissions', 'binary_source', 'TEXT');
+  ensureColumn('ai_mr_submissions', 'mr_title', 'TEXT');
+  ensureColumn('ai_mr_submissions', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
 }
 
 function migrateSqlCheckPreferencesToWorkspaceScope() {
@@ -1330,6 +1357,488 @@ const codeHubDb = {
   decryptRepositoryToken: (row) => decryptCodeHubToken(row.token_encrypted),
 };
 
+function hydrateCodeHubWorkspaceRepository(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    tenant_id: row.tenant_id,
+    user_id: row.user_id,
+    workspace_id: row.workspace_id,
+    repo_relative_path: row.repo_relative_path,
+    repository_url: row.repository_url,
+    project_id: row.project_id,
+    public_repository_url: row.public_repository_url,
+    public_project_id: row.public_project_id,
+    codehub_host: row.codehub_host,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function normalizeNullableInteger(value) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+const codeHubWorkspaceRepositoriesDb = {
+  listForWorkspace: ({ tenantId, userId, workspaceId }) => {
+    return db.prepare(`
+      SELECT *
+      FROM codehub_workspace_repositories
+      WHERE tenant_id = ? AND user_id = ? AND workspace_id = ?
+      ORDER BY repo_relative_path COLLATE NOCASE ASC
+    `).all(Number(tenantId), Number(userId), Number(workspaceId)).map(hydrateCodeHubWorkspaceRepository);
+  },
+
+  getById: ({ tenantId, userId, workspaceId, repositoryId }) => hydrateCodeHubWorkspaceRepository(db.prepare(`
+    SELECT *
+    FROM codehub_workspace_repositories
+    WHERE id = ? AND tenant_id = ? AND user_id = ? AND workspace_id = ?
+  `).get(Number(repositoryId), Number(tenantId), Number(userId), Number(workspaceId))),
+
+  getByRelativePath: ({ tenantId, userId, workspaceId, repoRelativePath }) => hydrateCodeHubWorkspaceRepository(db.prepare(`
+    SELECT *
+    FROM codehub_workspace_repositories
+    WHERE tenant_id = ? AND user_id = ? AND workspace_id = ? AND repo_relative_path = ?
+  `).get(Number(tenantId), Number(userId), Number(workspaceId), String(repoRelativePath || ''))),
+
+  upsert: ({
+    tenantId,
+    userId,
+    workspaceId,
+    repoRelativePath,
+    repositoryUrl,
+    projectId = null,
+    publicRepositoryUrl = null,
+    publicProjectId = null,
+    codehubHost,
+  }) => {
+    const existing = codeHubWorkspaceRepositoriesDb.getByRelativePath({
+      tenantId,
+      userId,
+      workspaceId,
+      repoRelativePath,
+    });
+    if (existing) {
+      db.prepare(`
+        UPDATE codehub_workspace_repositories
+        SET
+          repository_url = ?,
+          project_id = ?,
+          public_repository_url = ?,
+          public_project_id = ?,
+          codehub_host = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        String(repositoryUrl || ''),
+        normalizeNullableInteger(projectId),
+        publicRepositoryUrl || null,
+        normalizeNullableInteger(publicProjectId),
+        String(codehubHost || ''),
+        existing.id,
+      );
+      return hydrateCodeHubWorkspaceRepository(db.prepare('SELECT * FROM codehub_workspace_repositories WHERE id = ?').get(existing.id));
+    }
+
+    const result = db.prepare(`
+      INSERT INTO codehub_workspace_repositories (
+        tenant_id,
+        user_id,
+        workspace_id,
+        repo_relative_path,
+        repository_url,
+        project_id,
+        public_repository_url,
+        public_project_id,
+        codehub_host
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      Number(tenantId),
+      Number(userId),
+      Number(workspaceId),
+      String(repoRelativePath || ''),
+      String(repositoryUrl || ''),
+      normalizeNullableInteger(projectId),
+      publicRepositoryUrl || null,
+      normalizeNullableInteger(publicProjectId),
+      String(codehubHost || ''),
+    );
+    return hydrateCodeHubWorkspaceRepository(db.prepare('SELECT * FROM codehub_workspace_repositories WHERE id = ?').get(result.lastInsertRowid));
+  },
+};
+
+function hydrateAiMrSubmission(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    tenant_id: row.tenant_id,
+    user_id: row.user_id,
+    workspace_id: row.workspace_id,
+    repo_relative_path: row.repo_relative_path,
+    repository_url: row.repository_url,
+    project_id: row.project_id,
+    public_repository_url: row.public_repository_url,
+    public_project_id: row.public_project_id,
+    source_branch: row.source_branch,
+    target_branch: row.target_branch,
+    commit_sha: row.commit_sha,
+    mr_id: row.mr_id,
+    mr_iid: row.mr_iid,
+    mr_project_id: row.mr_project_id,
+    mr_url: row.mr_url,
+    ticket_no: row.ticket_no,
+    description: row.description,
+    binary_source: row.binary_source,
+    mr_title: row.mr_title,
+    additions: Number(row.additions || 0),
+    deletions: Number(row.deletions || 0),
+    files_changed: Number(row.files_changed || 0),
+    binary_files_changed: Number(row.binary_files_changed || 0),
+    status: row.status,
+    mr_state: row.mr_state,
+    mr_created_at: row.mr_created_at,
+    mr_updated_at: row.mr_updated_at,
+    merged_at: row.merged_at,
+    closed_at: row.closed_at,
+    expires_at: row.expires_at,
+    last_checked_at: row.last_checked_at,
+    next_check_at: row.next_check_at,
+    last_error: row.last_error,
+    created_at: row.created_at,
+  };
+}
+
+const aiMrSubmissionsDb = {
+  create: ({ submission, files = [] }) => {
+    const insertSubmission = db.transaction(() => {
+      const result = db.prepare(`
+        INSERT INTO ai_mr_submissions (
+          tenant_id,
+          user_id,
+          workspace_id,
+          repo_relative_path,
+          repository_url,
+          project_id,
+          public_repository_url,
+          public_project_id,
+          source_branch,
+          target_branch,
+          commit_sha,
+          mr_id,
+          mr_iid,
+          mr_project_id,
+          mr_url,
+          ticket_no,
+          description,
+          binary_source,
+          mr_title,
+          additions,
+          deletions,
+          files_changed,
+          binary_files_changed,
+          status,
+          mr_state,
+          mr_created_at,
+          mr_updated_at,
+          merged_at,
+          closed_at,
+          expires_at,
+          next_check_at,
+          last_error
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        Number(submission.tenantId),
+        Number(submission.userId),
+        Number(submission.workspaceId),
+        submission.repoRelativePath,
+        submission.repositoryUrl,
+        normalizeNullableInteger(submission.projectId),
+        submission.publicRepositoryUrl || null,
+        normalizeNullableInteger(submission.publicProjectId),
+        submission.sourceBranch,
+        submission.targetBranch,
+        submission.commitSha,
+        submission.mrId == null ? null : String(submission.mrId),
+        submission.mrIid == null ? null : String(submission.mrIid),
+        normalizeNullableInteger(submission.mrProjectId),
+        submission.mrUrl || null,
+        submission.ticketNo,
+        submission.description || null,
+        submission.binarySource || null,
+        submission.mrTitle || null,
+        Number(submission.additions || 0),
+        Number(submission.deletions || 0),
+        Number(submission.filesChanged || 0),
+        Number(submission.binaryFilesChanged || 0),
+        submission.status || 'pending',
+        submission.mrState || null,
+        submission.mrCreatedAt || null,
+        submission.mrUpdatedAt || null,
+        submission.mergedAt || null,
+        submission.closedAt || null,
+        submission.expiresAt,
+        submission.nextCheckAt || null,
+        submission.lastError || null,
+      );
+      const submissionId = result.lastInsertRowid;
+      const insertFile = db.prepare(`
+        INSERT INTO ai_mr_submission_files (
+          submission_id,
+          file_path,
+          status,
+          additions,
+          deletions,
+          is_binary
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const file of files) {
+        insertFile.run(
+          submissionId,
+          file.filePath,
+          file.status || 'modified',
+          Number(file.additions || 0),
+          Number(file.deletions || 0),
+          file.isBinary ? 1 : 0,
+        );
+      }
+      return submissionId;
+    });
+
+    const id = insertSubmission();
+    return aiMrSubmissionsDb.getById(id);
+  },
+
+  getById: (submissionId) => hydrateAiMrSubmission(db.prepare(`
+    SELECT *
+    FROM ai_mr_submissions
+    WHERE id = ?
+  `).get(Number(submissionId))),
+
+  listPendingDue: ({ now = new Date(), limit = 50 } = {}) => db.prepare(`
+    SELECT *
+    FROM ai_mr_submissions
+    WHERE status = 'pending'
+      AND (next_check_at IS NULL OR next_check_at <= ?)
+    ORDER BY created_at ASC
+    LIMIT ?
+  `).all(now.toISOString(), Number(limit)).map(hydrateAiMrSubmission),
+
+  markExpired: ({ submissionId, checkedAt = new Date() }) => {
+    db.prepare(`
+      UPDATE ai_mr_submissions
+      SET status = 'expired',
+          last_checked_at = ?,
+          next_check_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(checkedAt.toISOString(), Number(submissionId));
+    return aiMrSubmissionsDb.getById(submissionId);
+  },
+
+  attachMergeRequest: ({
+    submissionId,
+    mrId,
+    mrIid,
+    mrProjectId,
+    mrUrl = null,
+    mrState = 'opened',
+    mrCreatedAt = null,
+    mrUpdatedAt = null,
+    nextCheckAt = null,
+  }) => {
+    db.prepare(`
+      UPDATE ai_mr_submissions
+      SET mr_id = ?,
+          mr_iid = ?,
+          mr_project_id = ?,
+          mr_url = ?,
+          mr_state = ?,
+          mr_created_at = COALESCE(?, mr_created_at),
+          mr_updated_at = COALESCE(?, mr_updated_at),
+          status = 'pending',
+          next_check_at = ?,
+          last_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      mrId == null ? null : String(mrId),
+      mrIid == null ? null : String(mrIid),
+      normalizeNullableInteger(mrProjectId),
+      mrUrl,
+      mrState || null,
+      mrCreatedAt,
+      mrUpdatedAt,
+      nextCheckAt,
+      Number(submissionId),
+    );
+    return aiMrSubmissionsDb.getById(submissionId);
+  },
+
+  updateMrStatus: ({
+    submissionId,
+    status,
+    mrState,
+    mrCreatedAt = null,
+    mrUpdatedAt = null,
+    mergedAt = null,
+    closedAt = null,
+    lastError = null,
+    nextCheckAt = null,
+    checkedAt = new Date(),
+  }) => {
+    db.prepare(`
+      UPDATE ai_mr_submissions
+      SET status = ?,
+          mr_state = ?,
+          mr_created_at = COALESCE(?, mr_created_at),
+          mr_updated_at = COALESCE(?, mr_updated_at),
+          merged_at = COALESCE(?, merged_at),
+          closed_at = COALESCE(?, closed_at),
+          last_checked_at = ?,
+          next_check_at = ?,
+          last_error = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      status,
+      mrState || null,
+      mrCreatedAt,
+      mrUpdatedAt,
+      mergedAt,
+      closedAt,
+      checkedAt.toISOString(),
+      nextCheckAt,
+      lastError,
+      Number(submissionId),
+    );
+    return aiMrSubmissionsDb.getById(submissionId);
+  },
+
+  listAdminMrs: ({ status, tenantId, userId, from, to, limit = 100, offset = 0 } = {}) => {
+    const clauses = [];
+    const params = [];
+    if (status) {
+      clauses.push('s.status = ?');
+      params.push(String(status));
+    }
+    if (tenantId) {
+      clauses.push('s.tenant_id = ?');
+      params.push(Number(tenantId));
+    }
+    if (userId) {
+      clauses.push('s.user_id = ?');
+      params.push(Number(userId));
+    }
+    if (from) {
+      clauses.push("COALESCE(s.merged_at, s.created_at) >= ?");
+      params.push(String(from));
+    }
+    if (to) {
+      clauses.push("COALESCE(s.merged_at, s.created_at) <= ?");
+      params.push(String(to));
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return db.prepare(`
+      SELECT s.*, u.username, t.name AS tenant_name, t.code AS tenant_code
+      FROM ai_mr_submissions s
+      LEFT JOIN users u ON u.id = s.user_id
+      LEFT JOIN tenants t ON t.id = s.tenant_id
+      ${where}
+      ORDER BY COALESCE(s.merged_at, s.created_at) DESC, s.id DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, Number(limit), Number(offset)).map((row) => ({
+      ...hydrateAiMrSubmission(row),
+      username: row.username || null,
+      tenant_name: row.tenant_name || null,
+      tenant_code: row.tenant_code || null,
+    }));
+  },
+
+  getAdminStats: ({ tenantId, userId, from, to } = {}) => {
+    const clauses = ["s.status = 'merged'"];
+    const params = [];
+    if (tenantId) {
+      clauses.push('s.tenant_id = ?');
+      params.push(Number(tenantId));
+    }
+    if (userId) {
+      clauses.push('s.user_id = ?');
+      params.push(Number(userId));
+    }
+    if (from) {
+      clauses.push('s.merged_at >= ?');
+      params.push(String(from));
+    }
+    if (to) {
+      clauses.push('s.merged_at <= ?');
+      params.push(String(to));
+    }
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) AS merged_mr_count,
+        COALESCE(SUM(additions), 0) AS additions,
+        COALESCE(SUM(deletions), 0) AS deletions,
+        COALESCE(SUM(files_changed), 0) AS files_changed,
+        COALESCE(SUM(binary_files_changed), 0) AS binary_files_changed
+      FROM ai_mr_submissions s
+      ${where}
+    `).get(...params);
+    const byTenant = db.prepare(`
+      SELECT
+        s.tenant_id,
+        t.name AS tenant_name,
+        t.code AS tenant_code,
+        COUNT(*) AS merged_mr_count,
+        COALESCE(SUM(s.additions), 0) AS additions,
+        COALESCE(SUM(s.deletions), 0) AS deletions,
+        COALESCE(SUM(s.files_changed), 0) AS files_changed,
+        COALESCE(SUM(s.binary_files_changed), 0) AS binary_files_changed
+      FROM ai_mr_submissions s
+      LEFT JOIN tenants t ON t.id = s.tenant_id
+      ${where}
+      GROUP BY s.tenant_id
+      ORDER BY merged_mr_count DESC
+    `).all(...params);
+    const byUser = db.prepare(`
+      SELECT
+        s.tenant_id,
+        t.name AS tenant_name,
+        t.code AS tenant_code,
+        s.user_id,
+        u.username,
+        COUNT(*) AS merged_mr_count,
+        COALESCE(SUM(s.additions), 0) AS additions,
+        COALESCE(SUM(s.deletions), 0) AS deletions,
+        COALESCE(SUM(s.files_changed), 0) AS files_changed,
+        COALESCE(SUM(s.binary_files_changed), 0) AS binary_files_changed
+      FROM ai_mr_submissions s
+      LEFT JOIN tenants t ON t.id = s.tenant_id
+      LEFT JOIN users u ON u.id = s.user_id
+      ${where}
+      GROUP BY s.tenant_id, s.user_id
+      ORDER BY merged_mr_count DESC
+    `).all(...params);
+    return {
+      summary: {
+        mergedMrCount: Number(summary?.merged_mr_count || 0),
+        additions: Number(summary?.additions || 0),
+        deletions: Number(summary?.deletions || 0),
+        changedLines: Number(summary?.additions || 0) + Number(summary?.deletions || 0),
+        filesChanged: Number(summary?.files_changed || 0),
+        binaryFilesChanged: Number(summary?.binary_files_changed || 0),
+      },
+      byTenant,
+      byUser,
+    };
+  },
+};
+
 // API Keys database operations
 const apiKeysDb = {
   // Generate a new API key
@@ -1773,6 +2282,8 @@ export {
   initializeDatabase,
   userDb,
   codeHubDb,
+  codeHubWorkspaceRepositoriesDb,
+  aiMrSubmissionsDb,
   apiKeysDb,
   credentialsDb,
   notificationPreferencesDb,

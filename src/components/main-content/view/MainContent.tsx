@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
+import CodeHubPanel from '../../codehub/CodeHubPanel';
 import FileTree from '../../file-tree/view/FileTree';
 import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
 import McpToolsPanel from '../../tools-market/McpToolsPanel';
@@ -173,6 +174,12 @@ function MainContent({
                 onFileOpen={handleFileManagerFileOpen}
                 isReadOnly={isViewOnlyWorkspace}
               />
+            </div>
+          )}
+
+          {activeTab === 'codehub' && (
+            <div className="h-full overflow-hidden">
+              <CodeHubPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
             </div>
           )}
 

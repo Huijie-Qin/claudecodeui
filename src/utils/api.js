@@ -55,6 +55,16 @@ const withTenantAndWorkspaceParam = (url, workspaceId) =>
 
 const sqlCheckUrl = (path) => `${SQL_CHECK_BASE_URL}${path}`;
 
+const buildQueryString = (params = {}) => {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value == null || value === '') return;
+    searchParams.set(key, String(value));
+  });
+  const queryString = searchParams.toString();
+  return queryString ? `?${queryString}` : '';
+};
+
 // API endpoints
 export const api = {
   // Auth endpoints (no token required)
@@ -282,6 +292,61 @@ export const api = {
       }),
   },
 
+  codehub: {
+    repositories: (workspaceId) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories`)),
+    cloneRepository: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/clone`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    changes: (workspaceId, repoId) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/changes`)),
+    diff: (workspaceId, repoId, file) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/diff?file=${encodeURIComponent(file)}`)),
+    pullPreview: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/pull-preview`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    pull: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/pull`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    remoteBranches: (workspaceId, repoId) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches`)),
+    syncFork: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/sync-fork`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    commit: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/commit`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    push: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/push`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    createMergeRequest: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/merge-requests`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    submitMr: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submit-mr`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    retryMr: (submissionId) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/submissions/${encodeURIComponent(String(submissionId))}/retry-mr`), {
+        method: 'POST',
+      }),
+  },
+
   tenants: {
     mine: () => authenticatedFetch('/api/tenants/me'),
     validate: (tenantId) => authenticatedFetch(`/api/tenants/${tenantId}/validate`),
@@ -305,6 +370,10 @@ export const api = {
       }
       return authenticatedFetch(`/api/admin/analytics?${params.toString()}`);
     },
+    aiCodeStats: (filters = {}) =>
+      authenticatedFetch(`/api/admin/ai-code-stats${buildQueryString(filters)}`),
+    aiCodeMrs: (filters = {}) =>
+      authenticatedFetch(`/api/admin/ai-code-mrs${buildQueryString(filters)}`),
     mcpPresets: (tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
     createMcpPreset: (payload) =>

@@ -1,7 +1,7 @@
 import type { AppTab, WorkspaceAccessRole } from '../../../types/app';
 
-const SUPPORTED_WORKSPACE_TABS = new Set(['chat', 'files', 'mcp-tools', 'sql-check']);
-const VIEW_ONLY_DISABLED_TABS: AppTab[] = ['chat'];
+const SUPPORTED_WORKSPACE_TABS = new Set(['chat', 'files', 'codehub', 'mcp-tools', 'sql-check']);
+const VIEW_ONLY_DISABLED_TABS: AppTab[] = ['chat', 'codehub'];
 
 export function getWorkspaceDisabledTabs(accessRole?: WorkspaceAccessRole): ReadonlySet<AppTab> {
   if (accessRole !== 'view') {

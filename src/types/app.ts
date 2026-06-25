@@ -5,6 +5,7 @@ export type WorkspaceAccessRole = 'owner' | 'view' | 'edit';
 export type AppTab =
   | 'chat'
   | 'files'
+  | 'codehub'
   | 'mcp-tools'
   | 'sql-check';
 

@@ -21,6 +21,7 @@
     "chat": "Chat",
     "shell": "Shell",
     "files": "Files",
+    "codehub": "CodeHub",
     "mcpTools": "MCP Tools",
     "sqlCheck": "SQL Check",
     "skills": "Skills",

@@ -25,6 +25,7 @@ import {
   parseBatchUsernames,
   type TenantPermission,
 } from './adminPanelUtils';
+import AiCodeStatsTab from './AiCodeStatsTab';
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
@@ -364,7 +365,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes' | 'sqlCheck'>('users');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'runtimes' | 'sqlCheck'>('users');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -1230,11 +1231,24 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
             >
               {t('tabs.analytics', { defaultValue: '统计面板' })}
             </Button>
+            <Button
+              variant={activeTab === 'aiCode' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveTab('aiCode')}
+            >
+              {t('tabs.aiCode', { defaultValue: 'AI Code' })}
+            </Button>
           </div>
 
           {activeTab === 'analytics' ? (
             <div className="overflow-y-auto px-5 py-4">
               <AnalyticsDashboardTab />
+            </div>
+          ) : null}
+
+          {activeTab === 'aiCode' ? (
+            <div className="overflow-y-auto px-5 py-4">
+              <AiCodeStatsTab tenants={tenants} users={users} />
             </div>
           ) : null}
 

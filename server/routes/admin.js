@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import express from 'express';
 import multer from 'multer';
 
-import { userDb } from '../database/db.js';
+import { aiMrSubmissionsDb, userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
@@ -193,6 +193,31 @@ function parsePositiveId(value, name) {
   return parsed;
 }
 
+function parseOptionalPositiveId(value, name) {
+  if (value == null || value === '') return undefined;
+  return parsePositiveId(value, name);
+}
+
+function parseBoundedInteger(value, { name, min, max, fallback }) {
+  if (value == null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    const error = new Error(`${name} must be an integer between ${min} and ${max}`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
+function buildAiCodeStatsFilters(query = {}) {
+  return {
+    tenantId: parseOptionalPositiveId(query.tenantId, 'tenantId'),
+    userId: parseOptionalPositiveId(query.userId, 'userId'),
+    from: query.from == null || query.from === '' ? undefined : String(query.from),
+    to: query.to == null || query.to === '' ? undefined : String(query.to),
+  };
+}
+
 function parsePositiveIdList(value, name) {
   if (!Array.isArray(value)) {
     const error = new Error(`${name} must be an array`);
@@ -319,6 +344,7 @@ export function createAdminRouter(
   mcpPresets = mcpPresetService,
   workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
   platformAnalytics = platformAnalyticsService,
+  aiSubmissions = aiMrSubmissionsDb,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -454,6 +480,40 @@ export function createAdminRouter(
       res.json(usersSummary);
     } catch (error) {
       sendRouteError(res, error, 'Failed to load analytics users');
+    }
+  });
+
+  router.get('/ai-code-stats', (req, res) => {
+    try {
+      const stats = aiSubmissions.getAdminStats(buildAiCodeStatsFilters(req.query));
+      res.json({ stats });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load AI code statistics');
+    }
+  });
+
+  router.get('/ai-code-mrs', (req, res) => {
+    try {
+      const filters = buildAiCodeStatsFilters(req.query);
+      const submissions = aiSubmissions.listAdminMrs({
+        ...filters,
+        status: req.query?.status == null || req.query.status === '' ? undefined : String(req.query.status),
+        limit: parseBoundedInteger(req.query?.limit, {
+          name: 'limit',
+          min: 1,
+          max: 500,
+          fallback: 100,
+        }),
+        offset: parseBoundedInteger(req.query?.offset, {
+          name: 'offset',
+          min: 0,
+          max: 1000000,
+          fallback: 0,
+        }),
+      });
+      res.json({ submissions });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to list AI code merge requests');
     }
   });
 

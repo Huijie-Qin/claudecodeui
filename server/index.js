@@ -41,6 +41,7 @@ import {abortCodexSession, getActiveCodexSessions, isCodexSessionActive, queryCo
 import {abortGeminiSession, getActiveGeminiSessions, isGeminiSessionActive, spawnGemini} from './gemini-cli.js';
 import sessionManager from './sessionManager.js';
 import gitRoutes from './routes/git.js';
+import codehubRoutes from './routes/codehub.js';
 import authRoutes from './routes/auth.js';
 import tenantsRoutes from './routes/tenants.js';
 import adminRoutes from './routes/admin.js';
@@ -74,6 +75,7 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {codeHubMrPoller} from './services/codehub-mr-poller.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
@@ -620,6 +622,9 @@ app.use('/api/projects', authenticateToken, projectsRoutes);
 
 // Git API Routes (protected)
 app.use('/api/git', authenticateToken, gitRoutes);
+
+// CodeHub API Routes (protected)
+app.use('/api/codehub', authenticateToken, codehubRoutes);
 
 // Cursor API Routes (protected)
 app.use('/api/cursor', authenticateToken, cursorRoutes);
@@ -3334,6 +3339,7 @@ async function gracefulShutdown(signal) {
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
     runtimeSweeper.stop();
+    codeHubMrPoller.stop();
     closeHttpServer().catch((error) => {
         console.error('[Shutdown] Failed to close HTTP server:', error);
     });
@@ -3363,6 +3369,7 @@ async function startServer() {
         await initializeDatabase();
         runtimeSweeper.start();
         scheduledSessionTasks.start();
+        codeHubMrPoller.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3411,6 +3418,7 @@ async function startServer() {
         const shutdownPlugins = async () => {
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
+            codeHubMrPoller.stop();
             await stopAllPlugins();
             process.exit(0);
         };

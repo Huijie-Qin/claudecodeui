@@ -1,4 +1,5 @@
 import {
+  GitBranch,
   Folder,
   ListChecks,
   MessageSquare,
@@ -17,6 +18,7 @@ export type BuiltInMainContentTab = {
 const BASE_TABS: BuiltInMainContentTab[] = [
   { kind: 'builtin', id: 'chat', labelKey: 'tabs.chat', icon: MessageSquare },
   { kind: 'builtin', id: 'files', labelKey: 'tabs.files', icon: Folder },
+  { kind: 'builtin', id: 'codehub', labelKey: 'tabs.codehub', icon: GitBranch },
   { kind: 'builtin', id: 'mcp-tools', labelKey: 'tabs.mcpTools', icon: Wrench },
   { kind: 'builtin', id: 'sql-check', labelKey: 'tabs.sqlCheck', icon: ListChecks },
 ];
