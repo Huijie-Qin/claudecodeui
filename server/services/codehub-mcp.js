@@ -47,6 +47,63 @@ function redactSecret(value, secret = '') {
   return output.slice(0, 2000);
 }
 
+function parseJsonText(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
+  const candidate = fenced ? fenced[1].trim() : text;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeMcpContent(content) {
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((item) => {
+      if (typeof item?.text === 'string') return item.text;
+      if (item?.json !== undefined) return JSON.stringify(item.json);
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 2000);
+}
+
+function unwrapMcpToolResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return result;
+  }
+
+  if (!Array.isArray(result.content)) {
+    return result;
+  }
+
+  if (result.isError) {
+    throw createHttpError(summarizeMcpContent(result.content) || 'CodeHub MCP tool returned an error', 502);
+  }
+
+  if (result.structuredContent && typeof result.structuredContent === 'object' && !Array.isArray(result.structuredContent)) {
+    return result.structuredContent;
+  }
+
+  for (const item of result.content) {
+    if (item?.json !== undefined) {
+      return item.json;
+    }
+    if (typeof item?.text === 'string') {
+      const parsed = parseJsonText(item.text);
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+  }
+
+  return result;
+}
+
 function readPrivateToken(userId) {
   const envToken = String(process.env[PRIVATE_TOKEN_ENV_NAME] || '').trim();
   if (envToken) return envToken;
@@ -114,7 +171,7 @@ async function postJson({ url, headers, payload, fetchImpl = fetch }) {
     if (body?.error) {
       throw createHttpError(body.error?.message || body.error || 'CodeHub MCP returned an error', 502);
     }
-    return body?.result ?? body;
+    return unwrapMcpToolResult(body?.result ?? body);
   } catch (error) {
     if (error?.statusCode) throw error;
     const message = error?.name === 'AbortError'
