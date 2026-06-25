@@ -316,6 +316,10 @@ export const api = {
       }),
     remoteBranches: (workspaceId, repoId) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches`)),
+    submissionCommits: (workspaceId, repoId, targetBranch) => {
+      const params = targetBranch ? `?targetBranch=${encodeURIComponent(targetBranch)}` : '';
+      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submission-commits${params}`));
+    },
     syncFork: (workspaceId, repoId, payload) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/sync-fork`), {
         method: 'POST',

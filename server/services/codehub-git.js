@@ -178,6 +178,36 @@ function parseNumstat(output) {
     });
 }
 
+function parseCommitLog(output) {
+  return String(output || '')
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => {
+      const [commitSha, timestamp, subject = ''] = line.split('\x1f');
+      return {
+        commitSha: commitSha.trim(),
+        committedAt: new Date(Number(timestamp || 0) * 1000).toISOString(),
+        commitMessage: subject.trim(),
+      };
+    })
+    .filter((commit) => /^[0-9a-f]{7,40}$/i.test(commit.commitSha));
+}
+
+function parseRemoteHeadRefs(output) {
+  return String(output || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [commitSha, ref] = line.split(/\s+/);
+      return {
+        commitSha,
+        branch: String(ref || '').replace(/^refs\/heads\//, ''),
+      };
+    })
+    .filter((entry) => entry.commitSha && entry.branch);
+}
+
 async function getCurrentBranch(repoPath) {
   const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath });
   return stdout.trim();
@@ -299,6 +329,50 @@ export const codeHubGitService = {
       .map((ref) => ref.replace(/^refs\/heads\//, ''));
   },
 
+  async listSubmissionCommits(repoPath, { targetBranch, userId, repositoryUrl } = {}) {
+    const currentBranch = await getCurrentBranch(repoPath).catch(() => '');
+    const baseBranch = validateBranchName(targetBranch || currentBranch || 'develop');
+    await runGit(['fetch', 'origin', baseBranch], {
+      cwd: repoPath,
+      userId,
+      repositoryUrl,
+    }).catch(() => null);
+
+    const { stdout: headOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
+    const headSha = headOutput.trim();
+    let commits = [];
+    try {
+      const { stdout } = await runGit([
+        'log',
+        '--reverse',
+        '--format=%H%x1f%ct%x1f%s',
+        `origin/${baseBranch}..HEAD`,
+      ], { cwd: repoPath });
+      commits = parseCommitLog(stdout);
+    } catch {
+      commits = [];
+    }
+
+    const remoteRefs = await runGit(['ls-remote', '--heads', 'origin'], {
+      cwd: repoPath,
+      userId,
+      repositoryUrl,
+    })
+      .then((result) => parseRemoteHeadRefs(result.stdout))
+      .catch(() => []);
+    const remoteBranchesAtHead = remoteRefs
+      .filter((entry) => entry.commitSha === headSha)
+      .map((entry) => entry.branch);
+
+    return {
+      currentBranch,
+      targetBranch: baseBranch,
+      headSha,
+      commits,
+      remoteBranchesAtHead,
+    };
+  },
+
   async pullPreview(repoPath, { branch, userId, repositoryUrl }) {
     const remoteBranch = validateBranchName(branch || await getCurrentBranch(repoPath));
     const [statusResult] = await Promise.all([
@@ -415,10 +489,12 @@ export const codeHubGitService = {
       repositoryUrl,
       timeoutMs: 10 * 60 * 1000,
     });
+    const { stdout: headShaOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
     return {
       success: true,
       remote: 'origin',
       branch,
+      pushedHeadSha: headShaOutput.trim(),
     };
   },
 

@@ -174,6 +174,91 @@ function normalizeMrTargetRepository(value, repository) {
   return 'personal';
 }
 
+function mrProjectIdForTarget(repository, mrTargetRepository) {
+  return mrTargetRepository === 'upstream' ? repository.public_project_id : repository.project_id;
+}
+
+function toExistingMergeRequestPayload(submission) {
+  if (!submission) return null;
+  return {
+    submissionId: submission.id,
+    commitSha: submission.commit_sha,
+    sourceBranch: submission.source_branch,
+    targetBranch: submission.target_branch,
+    mrProjectId: submission.mr_project_id,
+    mrId: submission.mr_id,
+    mrIid: submission.mr_iid,
+    mrUrl: submission.mr_url,
+    status: submission.status,
+    mrState: submission.mr_state,
+    createdAt: submission.created_at,
+  };
+}
+
+function listActiveMergeRequestsForHead({ workspace, userId, repository, targetBranch, commitSha }) {
+  if (!commitSha || !targetBranch) return [];
+  return aiMrSubmissionsDb.listActiveForHead({
+    tenantId: workspace.tenant_id,
+    userId,
+    workspaceId: workspace.id,
+    repoRelativePath: repository.repo_relative_path,
+    targetBranch,
+    commitSha,
+  });
+}
+
+function findExistingMergeRequest({ workspace, userId, repository, sourceBranch, targetBranch, commitSha, mrTargetRepository }) {
+  const mrProjectId = mrProjectIdForTarget(repository, mrTargetRepository);
+  return listActiveMergeRequestsForHead({
+    workspace,
+    userId,
+    repository,
+    targetBranch,
+    commitSha,
+  }).find((submission) => (
+    submission.source_branch === sourceBranch
+    && Number(submission.mr_project_id || 0) === Number(mrProjectId || 0)
+  )) || null;
+}
+
+async function getCombinedCommitStats(repoPath, commitShas) {
+  const shas = Array.from(new Set(
+    (Array.isArray(commitShas) ? commitShas : [])
+      .map((sha) => String(sha || '').trim())
+      .filter(Boolean),
+  ));
+  if (shas.length === 0) {
+    throw createHttpError('At least one commitSha is required', 400);
+  }
+  const statsList = await Promise.all(shas.map((sha) => codeHubGitService.getCommitStats(repoPath, sha)));
+  const fileMap = new Map();
+  for (const stats of statsList) {
+    for (const file of stats.files || []) {
+      const existing = fileMap.get(file.filePath) || {
+        filePath: file.filePath,
+        status: file.status || 'modified',
+        additions: 0,
+        deletions: 0,
+        isBinary: false,
+      };
+      existing.additions += Number(file.additions || 0);
+      existing.deletions += Number(file.deletions || 0);
+      existing.isBinary = existing.isBinary || Boolean(file.isBinary);
+      fileMap.set(file.filePath, existing);
+    }
+  }
+  const files = Array.from(fileMap.values());
+  return {
+    commitSha: shas[shas.length - 1],
+    commitShas: shas,
+    files,
+    additions: statsList.reduce((sum, stats) => sum + Number(stats.additions || 0), 0),
+    deletions: statsList.reduce((sum, stats) => sum + Number(stats.deletions || 0), 0),
+    filesChanged: files.length,
+    binaryFilesChanged: files.filter((file) => file.isBinary).length,
+  };
+}
+
 async function readProjectInfo({ userId, repositoryUrl }) {
   try {
     console.info('[CodeHub] calling get_project_info', {
@@ -265,7 +350,7 @@ async function createMergeRequestSubmission({
   const commitText = normalizeCommitMessage({ commitMessage });
   const summary = commitMessageSummary(commitText);
   const isCrossProject = mrTargetRepository === 'upstream';
-  const mrProjectId = isCrossProject ? repository.public_project_id : repository.project_id;
+  const mrProjectId = mrProjectIdForTarget(repository, mrTargetRepository);
   const now = new Date();
   const expireDays = Number(process.env.CODEHUB_MR_EXPIRE_DAYS || 7);
   const intervalHours = Number(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS || 4);
@@ -476,6 +561,31 @@ router.get('/workspaces/:workspaceId/repositories/:repoId/remote-branches', asyn
   }
 });
 
+router.get('/workspaces/:workspaceId/repositories/:repoId/submission-commits', async (req, res) => {
+  try {
+    const { workspace, repoPath, repository, userId } = await resolveRepository(req);
+    const result = await codeHubGitService.listSubmissionCommits(repoPath, {
+      targetBranch: req.query?.targetBranch,
+      userId,
+      repositoryUrl: repository.repository_url,
+    });
+    const activeMergeRequests = listActiveMergeRequestsForHead({
+      workspace,
+      userId,
+      repository,
+      targetBranch: result.targetBranch,
+      commitSha: result.headSha,
+    }).map(toExistingMergeRequestPayload);
+    res.json({
+      ...result,
+      activeMergeRequests,
+    });
+  } catch (error) {
+    if (error?.statusCode) return handleWorkspaceError(res, error);
+    return sendRouteError(res, error, 'Failed to list submission commits');
+  }
+});
+
 router.post('/workspaces/:workspaceId/repositories/:repoId/sync-fork', async (req, res) => {
   try {
     const { repository, userId } = await resolveRepository(req, { requireEdit: true });
@@ -543,12 +653,31 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/merge-requests', asyn
       throw createHttpError('Repository project_id is not configured', 400);
     }
     const commitSha = requireNonEmptyString(req.body?.commitSha, 'commitSha');
+    const commitShas = Array.isArray(req.body?.commitShas) && req.body.commitShas.length > 0
+      ? req.body.commitShas
+      : [commitSha];
     const sourceBranch = requireNonEmptyString(req.body?.sourceBranch, 'sourceBranch');
     const targetBranch = requireNonEmptyString(req.body?.targetBranch, 'targetBranch');
     const commitMessage = normalizeCommitMessage(req.body);
     const mrTitle = requireNonEmptyString(req.body?.mrTitle || commitMessageSummary(commitMessage), 'mrTitle');
     const mrTargetRepository = normalizeMrTargetRepository(req.body?.mrTargetRepository, repository);
-    const commitStats = await codeHubGitService.getCommitStats(repoPath, commitSha);
+    const existingMergeRequest = findExistingMergeRequest({
+      workspace,
+      userId,
+      repository,
+      sourceBranch,
+      targetBranch,
+      commitSha,
+      mrTargetRepository,
+    });
+    if (existingMergeRequest) {
+      return res.status(409).json({
+        success: false,
+        error: 'Merge request already exists for this pushed HEAD',
+        existingMergeRequest: toExistingMergeRequestPayload(existingMergeRequest),
+      });
+    }
+    const commitStats = await getCombinedCommitStats(repoPath, commitShas);
     const { submission, mrError } = await createMergeRequestSubmission({
       workspace,
       userId,

@@ -57,6 +57,9 @@ type PushResult = {
   success?: boolean;
   branch?: string;
   remote?: string;
+  pushedHeadSha?: string;
+  pushedCommitShas?: string[];
+  pushedAt?: string;
 };
 
 type MrResult = {
@@ -70,8 +73,25 @@ type MrResult = {
   details?: string;
 };
 
+type ExistingMergeRequest = {
+  submissionId?: number;
+  commitSha?: string;
+  sourceBranch?: string;
+  targetBranch?: string;
+  mrProjectId?: number | null;
+  mrId?: string | null;
+  mrIid?: string | null;
+  mrUrl?: string | null;
+  status?: string;
+  mrState?: string | null;
+};
+
 type WorkflowStep = 'commit' | 'push' | 'mr';
 type MrTargetRepository = 'personal' | 'upstream';
+type CommitRecord = CommitResult & {
+  commitSha: string;
+  committedAt: string;
+};
 
 type CodeHubPanelProps = {
   selectedProject: Project;
@@ -130,7 +150,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const [diffDialogOpen, setDiffDialogOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [workflowStep, setWorkflowStep] = useState<WorkflowStep>('commit');
-  const [commitResult, setCommitResult] = useState<CommitResult | null>(null);
+  const [commitRecords, setCommitRecords] = useState<CommitRecord[]>([]);
+  const [headSha, setHeadSha] = useState('');
+  const [remoteBranchesAtHead, setRemoteBranchesAtHead] = useState<string[]>([]);
+  const [activeMergeRequests, setActiveMergeRequests] = useState<ExistingMergeRequest[]>([]);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [mrResult, setMrResult] = useState<MrResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +165,35 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const selectedRepo = useMemo(
     () => repositories.find((repo) => repo.repoId === selectedRepoId) || null,
     [repositories, selectedRepoId],
+  );
+  const committedCommitShas = useMemo(
+    () => commitRecords.map((commit) => commit.commitSha),
+    [commitRecords],
+  );
+  const hasActiveCommitBatch = commitRecords.length > 0;
+  const sourceBranchPushedAtHead = Boolean(
+    sourceBranch
+      && (
+        remoteBranchesAtHead.includes(sourceBranch)
+        || (pushResult?.success && pushResult.branch === sourceBranch && pushResult.pushedHeadSha === headSha)
+      ),
+  );
+  const selectedMrProjectId = mrTargetRepository === 'upstream' ? selectedRepo?.publicProjectId : selectedRepo?.projectId;
+  const existingMergeRequest = useMemo(
+    () => activeMergeRequests.find((mr) => (
+      mr.sourceBranch === sourceBranch
+      && mr.targetBranch === targetBranch
+      && Number(mr.mrProjectId || 0) === Number(selectedMrProjectId || 0)
+    )) || null,
+    [activeMergeRequests, selectedMrProjectId, sourceBranch, targetBranch],
+  );
+  const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
+  const batchCommitMessage = useMemo(
+    () => commitRecords
+      .map((commit) => commit.commitMessage || commit.commitSha)
+      .filter(Boolean)
+      .join('\n\n'),
+    [commitRecords],
   );
 
   const loadRepositories = useCallback(async () => {
@@ -202,9 +254,35 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     }
   }, [selectedRepoId, workspaceId]);
 
+  const loadSubmissionCommits = useCallback(async () => {
+    if (!workspaceId || !selectedRepoId) return;
+    try {
+      const response = await api.codehub.submissionCommits(workspaceId, selectedRepoId, targetBranch);
+      if (!response.ok) return;
+      const payload = await response.json();
+      const commits = payload.commits || [];
+      const branchesAtHead = payload.remoteBranchesAtHead || [];
+      setCommitRecords(commits);
+      setHeadSha(payload.headSha || '');
+      setRemoteBranchesAtHead(branchesAtHead);
+      setActiveMergeRequests(payload.activeMergeRequests || []);
+      setSourceBranch((current) => {
+        if (current && branchesAtHead.includes(current)) return current;
+        if (branchesAtHead[0]) return branchesAtHead[0];
+        return current || payload.currentBranch || '';
+      });
+    } catch (caughtError) {
+      console.warn('[CodeHubPanel] Failed to load submission commits:', caughtError);
+    }
+  }, [selectedRepoId, targetBranch, workspaceId]);
+
   useEffect(() => {
     void loadRepositories();
   }, [loadRepositories]);
+
+  useEffect(() => {
+    void loadSubmissionCommits();
+  }, [loadSubmissionCommits]);
 
   useEffect(() => {
     if (!selectedRepo) {
@@ -221,7 +299,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setMrTargetRepository('personal');
     setPullPreview(null);
     setWorkflowOpen(false);
-    setCommitResult(null);
+    setCommitRecords([]);
+    setHeadSha('');
+    setRemoteBranchesAtHead([]);
+    setActiveMergeRequests([]);
     setPushResult(null);
     setMrResult(null);
     void loadChanges();
@@ -256,9 +337,19 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const openWorkflow = useCallback(() => {
     setDialogError(null);
     setWorkflowStep('commit');
-    setCommitResult(null);
-    setPushResult(null);
-    setMrResult(null);
+    setWorkflowOpen(true);
+  }, []);
+
+  const openPushWorkflow = useCallback(() => {
+    setDialogError(null);
+    setWorkflowStep('push');
+    setWorkflowOpen(true);
+    void loadRemoteBranches();
+  }, [loadRemoteBranches]);
+
+  const openMrWorkflow = useCallback(() => {
+    setDialogError(null);
+    setWorkflowStep('mr');
     setWorkflowOpen(true);
   }, []);
 
@@ -352,17 +443,19 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         setDialogError(payload.error || payload.message || 'Failed to commit CodeHub changes');
         return;
       }
-      setCommitResult(payload);
-      setWorkflowStep('push');
+      setCommitMessage('');
+      setSelectedFiles([]);
+      setMrResult(null);
       await loadRepositories();
       await loadChanges();
+      await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
-  }, [commitMessage, loadChanges, loadRepositories, selectedFiles, selectedRepoId, workspaceId]);
+  }, [commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, workspaceId]);
 
   const pushBranch = useCallback(async () => {
-    if (!workspaceId || !selectedRepoId || !commitResult?.commitSha) return;
+    if (!workspaceId || !selectedRepoId || commitRecords.length === 0) return;
     setIsWorking(true);
     setDialogError(null);
     try {
@@ -375,32 +468,47 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         setDialogError(payload.error || payload.message || 'Failed to push CodeHub branch');
         return;
       }
-      setPushResult(payload);
+      setPushResult({
+        ...payload,
+        pushedCommitShas: committedCommitShas,
+        pushedAt: new Date().toISOString(),
+      });
+      setSourceBranch(payload.branch || sourceBranch);
+      setMrResult(null);
       setWorkflowStep('mr');
       await loadRepositories();
       await loadRemoteBranches();
+      await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
-  }, [commitResult?.commitSha, loadRemoteBranches, loadRepositories, selectedRepoId, sourceBranch, sourceBranchMode, workspaceId]);
+  }, [commitRecords.length, committedCommitShas, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedRepoId, sourceBranch, sourceBranchMode, workspaceId]);
 
   const createMergeRequest = useCallback(async () => {
-    if (!workspaceId || !selectedRepoId || !commitResult?.commitSha) return;
+    if (!workspaceId || !selectedRepoId || !headSha || !sourceBranch || !sourceBranchPushedAtHead) return;
     setIsWorking(true);
     setDialogError(null);
     setMrResult(null);
     try {
+      const mrDescription = batchCommitMessage || commitRecords.map((commit) => commit.commitSha).join('\n');
       const response = await api.codehub.createMergeRequest(workspaceId, selectedRepoId, {
-        commitSha: commitResult.commitSha,
-        commitMessage,
+        commitSha: headSha,
+        commitShas: committedCommitShas,
+        commitMessage: mrDescription,
         sourceBranch,
         targetBranch,
         mrTargetRepository,
-        mrTitle: mrTitle || commitMessage.split(/\r?\n/).find((line) => line.trim())?.trim() || 'CodeHub submission',
+        mrTitle: mrTitle || mrDescription.split(/\r?\n/).find((line) => line.trim())?.trim() || 'CodeHub submission',
       });
       const payload = await response.json().catch(() => ({}));
       setMrResult(payload);
       if (!response.ok) {
+        if (payload.existingMergeRequest) {
+          setActiveMergeRequests((current) => [
+            payload.existingMergeRequest,
+            ...current.filter((mr) => mr.submissionId !== payload.existingMergeRequest.submissionId),
+          ]);
+        }
         setDialogError(payload.error || payload.message || 'Failed to create CodeHub MR');
         return;
       }
@@ -408,19 +516,24 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       await loadRepositories();
       await loadChanges();
       await loadRemoteBranches();
+      await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
   }, [
-    commitResult?.commitSha,
-    commitMessage,
+    batchCommitMessage,
+    commitRecords,
+    committedCommitShas,
+    headSha,
     loadChanges,
     loadRemoteBranches,
     loadRepositories,
+    loadSubmissionCommits,
     mrTargetRepository,
     mrTitle,
     selectedRepoId,
     sourceBranch,
+    sourceBranchPushedAtHead,
     targetBranch,
     workspaceId,
   ]);
@@ -580,6 +693,59 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 </div>
               </section>
 
+              <section className="rounded-md border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-foreground">Submission batch</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {commitRecords.length} commits from origin/{targetBranch} to HEAD
+                      {remoteBranchesAtHead.length > 0 ? `, pushed to ${remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ')}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openPushWorkflow}
+                      disabled={isReadOnly || isWorking || commitRecords.length === 0}
+                    >
+                      <GitBranch className="h-4 w-4" />
+                      Push commits
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openMrWorkflow}
+                      disabled={isReadOnly || isWorking || !canCreateMr}
+                    >
+                      <GitPullRequest className="h-4 w-4" />
+                      Create MR
+                    </Button>
+                  </div>
+                </div>
+                {commitRecords.length > 0 ? (
+                  <div className="mt-3 max-h-28 overflow-y-auto rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    {commitRecords.map((commit) => (
+                      <div key={commit.commitSha} className="flex min-w-0 items-center justify-between gap-3 py-0.5">
+                        <span className="min-w-0 truncate">{commit.commitMessage?.split(/\r?\n/)[0] || commit.commitSha}</span>
+                        <span className="shrink-0 font-mono">{commit.commitSha.slice(0, 8)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {existingMergeRequest ? (
+                  <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                    Existing MR detected for this HEAD
+                    {existingMergeRequest.mrIid ? `: !${existingMergeRequest.mrIid}` : ''}
+                    {existingMergeRequest.mrUrl ? (
+                      <a className="ml-2 underline" href={existingMergeRequest.mrUrl} target="_blank" rel="noreferrer">
+                        Open
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
+              </section>
+
               <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                 <div className="rounded-md border border-border">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -691,10 +857,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('commit', workflowStep, Boolean(commitResult?.commitSha))}`}>
+              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}>
                 1. Commit
               </div>
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('push', workflowStep, Boolean(pushResult?.success))}`}>
+              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}>
                 2. Push
               </div>
               <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}>
@@ -712,7 +878,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                   placeholder="Enter commit message"
                 />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  {selectedFiles.length} files selected. The same message will be used as the MR description.
+                  {selectedFiles.length} files selected. This message will be added to the current submission batch.
                 </div>
                 <Button onClick={() => void commitSelectedFiles()} disabled={isWorking}>
                   <GitCommitHorizontal className="h-4 w-4" />
@@ -724,9 +890,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
             {workflowStep === 'push' ? (
               <section className="space-y-3">
                 <div className="text-sm font-medium text-foreground">Push branch</div>
-                {commitResult?.commitSha ? (
+                {commitRecords.length > 0 ? (
                   <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    Committed: {commitResult.commitSha}
+                    {commitRecords.length} commits from origin/{targetBranch} to current HEAD. Pushing will update the selected remote branch to HEAD.
                   </div>
                 ) : null}
                 <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-1">
@@ -759,9 +925,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 ) : (
                   <Input value={sourceBranch} onChange={(event) => setSourceBranch(event.target.value)} placeholder="feature/AR00000001" />
                 )}
-                <Button onClick={() => void pushBranch()} disabled={isWorking || !commitResult?.commitSha}>
+                <Button onClick={() => void pushBranch()} disabled={isWorking || commitRecords.length === 0}>
                   <GitBranch className="h-4 w-4" />
-                  Push HEAD
+                  Push commits
                 </Button>
               </section>
             ) : null}
@@ -772,8 +938,29 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 {pushResult?.success ? (
                   <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                     Pushed: {pushResult.remote || 'origin'}/{pushResult.branch}
+                    {pushResult.pushedHeadSha ? ` at ${pushResult.pushedHeadSha.slice(0, 8)}` : ''}
+                  </div>
+                ) : remoteBranchesAtHead.length > 0 ? (
+                  <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Current HEAD is available on {remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ')}.
                   </div>
                 ) : null}
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-muted-foreground">Source branch</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
+                    value={sourceBranch}
+                    onChange={(event) => setSourceBranch(event.target.value)}
+                    disabled={remoteBranchesAtHead.length === 0}
+                  >
+                    {remoteBranchesAtHead.length === 0 ? (
+                      <option value="">Push HEAD to a remote branch first</option>
+                    ) : null}
+                    {remoteBranchesAtHead.map((branch) => (
+                      <option key={branch} value={branch}>{branch}</option>
+                    ))}
+                  </select>
+                </label>
                 <Input value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} placeholder="target branch" />
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-muted-foreground">Merge target repository</div>
@@ -798,9 +985,20 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 </div>
                 <Input value={mrTitle} onChange={(event) => setMrTitle(event.target.value)} placeholder="MR title" />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  MR description will use the commit message from step 1.
+                  MR description will use the commit messages from origin/{targetBranch} to HEAD.
                 </div>
-                <Button onClick={() => void createMergeRequest()} disabled={isWorking || !pushResult?.success}>
+                {existingMergeRequest ? (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                    A merge request already exists for this source branch and HEAD
+                    {existingMergeRequest.mrIid ? `: !${existingMergeRequest.mrIid}` : ''}.
+                    {existingMergeRequest.mrUrl ? (
+                      <a className="ml-2 underline" href={existingMergeRequest.mrUrl} target="_blank" rel="noreferrer">
+                        Open MR
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
+                <Button onClick={() => void createMergeRequest()} disabled={isWorking || !canCreateMr}>
                   <GitPullRequest className="h-4 w-4" />
                   Create MR
                 </Button>
