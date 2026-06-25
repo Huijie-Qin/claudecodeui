@@ -163,6 +163,17 @@ function assertProjectInfoHasId(projectInfo, repositoryUrl) {
   );
 }
 
+function normalizeMrTargetRepository(value, repository) {
+  const target = String(value || 'personal').trim().toLowerCase();
+  if (target === 'upstream') {
+    if (!repository.public_project_id) {
+      throw createHttpError('Upstream repository project_id is not configured', 400);
+    }
+    return 'upstream';
+  }
+  return 'personal';
+}
+
 async function readProjectInfo({ userId, repositoryUrl }) {
   try {
     console.info('[CodeHub] calling get_project_info', {
@@ -249,10 +260,11 @@ async function createMergeRequestSubmission({
   targetBranch,
   commitMessage,
   mrTitle,
+  mrTargetRepository = 'personal',
 }) {
   const commitText = normalizeCommitMessage({ commitMessage });
   const summary = commitMessageSummary(commitText);
-  const isCrossProject = Boolean(repository.public_project_id);
+  const isCrossProject = mrTargetRepository === 'upstream';
   const mrProjectId = isCrossProject ? repository.public_project_id : repository.project_id;
   const now = new Date();
   const expireDays = Number(process.env.CODEHUB_MR_EXPIRE_DAYS || 7);
@@ -535,6 +547,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/merge-requests', asyn
     const targetBranch = requireNonEmptyString(req.body?.targetBranch, 'targetBranch');
     const commitMessage = normalizeCommitMessage(req.body);
     const mrTitle = requireNonEmptyString(req.body?.mrTitle || commitMessageSummary(commitMessage), 'mrTitle');
+    const mrTargetRepository = normalizeMrTargetRepository(req.body?.mrTargetRepository, repository);
     const commitStats = await codeHubGitService.getCommitStats(repoPath, commitSha);
     const { submission, mrError } = await createMergeRequestSubmission({
       workspace,
@@ -545,6 +558,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/merge-requests', asyn
       targetBranch,
       commitMessage,
       mrTitle,
+      mrTargetRepository,
     });
 
     if (mrError) {
@@ -586,6 +600,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/submit-mr', async (re
     const commitText = normalizeCommitMessage(req.body);
     const summary = commitMessageSummary(commitText);
     const mrTitle = requireNonEmptyString(req.body?.mrTitle || summary, 'mrTitle');
+    const mrTargetRepository = normalizeMrTargetRepository(req.body?.mrTargetRepository, repository);
 
     if (!repository.project_id) {
       throw createHttpError('Repository project_id is not configured', 400);
@@ -601,7 +616,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/submit-mr', async (re
       sourceBranchMode,
     });
 
-    const isCrossProject = Boolean(repository.public_project_id);
+    const isCrossProject = mrTargetRepository === 'upstream';
     const mrProjectId = isCrossProject ? repository.public_project_id : repository.project_id;
     const now = new Date();
     const expireDays = Number(process.env.CODEHUB_MR_EXPIRE_DAYS || 7);
@@ -703,7 +718,8 @@ router.post('/submissions/:submissionId/retry-mr', async (req, res) => {
       throw createHttpError('Submission project_id is not configured', 400);
     }
 
-    const isCrossProject = Boolean(submission.public_project_id);
+    const isCrossProject = Boolean(submission.public_project_id)
+      && Number(submission.mr_project_id) === Number(submission.public_project_id);
     const mrProjectId = isCrossProject ? submission.public_project_id : submission.project_id;
     const intervalHours = Number(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS || 4);
     const commitText = normalizeCommitMessage({

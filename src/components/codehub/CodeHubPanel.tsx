@@ -71,6 +71,7 @@ type MrResult = {
 };
 
 type WorkflowStep = 'commit' | 'push' | 'mr';
+type MrTargetRepository = 'personal' | 'upstream';
 
 type CodeHubPanelProps = {
   selectedProject: Project;
@@ -123,6 +124,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const [sourceBranchMode, setSourceBranchMode] = useState<'new' | 'existing'>('new');
   const [sourceBranch, setSourceBranch] = useState('');
   const [targetBranch, setTargetBranch] = useState('develop');
+  const [mrTargetRepository, setMrTargetRepository] = useState<MrTargetRepository>('personal');
   const [mrTitle, setMrTitle] = useState('');
   const [workflowOpen, setWorkflowOpen] = useState(false);
   const [diffDialogOpen, setDiffDialogOpen] = useState(false);
@@ -216,6 +218,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setPullBranch(selectedRepo.branch || 'develop');
     setSourceBranch(selectedRepo.branch || '');
     setTargetBranch(selectedRepo.branch || 'develop');
+    setMrTargetRepository('personal');
     setPullPreview(null);
     setWorkflowOpen(false);
     setCommitResult(null);
@@ -392,6 +395,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         commitMessage,
         sourceBranch,
         targetBranch,
+        mrTargetRepository,
         mrTitle: mrTitle || commitMessage.split(/\r?\n/).find((line) => line.trim())?.trim() || 'CodeHub submission',
       });
       const payload = await response.json().catch(() => ({}));
@@ -413,6 +417,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     loadChanges,
     loadRemoteBranches,
     loadRepositories,
+    mrTargetRepository,
     mrTitle,
     selectedRepoId,
     sourceBranch,
@@ -770,6 +775,27 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                   </div>
                 ) : null}
                 <Input value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} placeholder="target branch" />
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">Merge target repository</div>
+                  <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-1">
+                    <Button
+                      variant={mrTargetRepository === 'personal' ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => setMrTargetRepository('personal')}
+                    >
+                      Personal repo
+                    </Button>
+                    <Button
+                      variant={mrTargetRepository === 'upstream' ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => setMrTargetRepository('upstream')}
+                      disabled={!selectedRepo?.publicProjectId}
+                      title={selectedRepo?.publicProjectId ? 'Create MR into upstream repository' : 'No upstream repository detected'}
+                    >
+                      Upstream repo
+                    </Button>
+                  </div>
+                </div>
                 <Input value={mrTitle} onChange={(event) => setMrTitle(event.target.value)} placeholder="MR title" />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                   MR description will use the commit message from step 1.
