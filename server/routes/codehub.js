@@ -24,9 +24,10 @@ const SKIP_SCAN_DIRECTORIES = new Set([
   '.npm-cache',
 ]);
 
-function createHttpError(message, statusCode = 400) {
+function createHttpError(message, statusCode = 400, details = undefined) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (details !== undefined) error.details = details;
   return error;
 }
 
@@ -125,11 +126,59 @@ function commitMessageSummary(commitMessage) {
   return firstLine.trim().slice(0, 255);
 }
 
+function safeJsonSummary(value, maxLength = 1200) {
+  try {
+    return JSON.stringify(value).slice(0, maxLength);
+  } catch {
+    return String(value).slice(0, maxLength);
+  }
+}
+
+function requiresProjectInfo() {
+  return String(process.env.CODEHUB_REQUIRE_PROJECT_INFO || '').trim().toLowerCase() === 'true';
+}
+
+function assertProjectInfoHasId(projectInfo, repositoryUrl) {
+  if (projectInfo?.id) {
+    console.info('[CodeHub] get_project_info resolved project id', {
+      repositoryUrl,
+      projectId: projectInfo.id,
+      hasForkedFromProject: Boolean(projectInfo.forked_from_project),
+    });
+    return projectInfo;
+  }
+  console.warn('[CodeHub] get_project_info returned no project id', {
+    repositoryUrl,
+    requireProjectInfo: requiresProjectInfo(),
+    projectInfo: safeJsonSummary(projectInfo),
+  });
+  if (!requiresProjectInfo()) return projectInfo || null;
+  throw createHttpError(
+    'CodeHub project info did not include id',
+    502,
+    {
+      repositoryUrl,
+      projectInfo,
+    },
+  );
+}
+
 async function readProjectInfo({ userId, repositoryUrl }) {
   try {
-    return await codeHubMcpService.getProjectInfo({ userId, gitUrl: repositoryUrl });
+    console.info('[CodeHub] calling get_project_info', {
+      repositoryUrl,
+      requireProjectInfo: requiresProjectInfo(),
+    });
+    const projectInfo = await codeHubMcpService.getProjectInfo({ userId, gitUrl: repositoryUrl });
+    return assertProjectInfoHasId(projectInfo, repositoryUrl);
   } catch (error) {
-    if (process.env.CODEHUB_REQUIRE_PROJECT_INFO === 'true') {
+    console.error('[CodeHub] get_project_info failed', {
+      repositoryUrl,
+      requireProjectInfo: requiresProjectInfo(),
+      error: error?.message || String(error),
+      details: error?.details ? safeJsonSummary(error.details) : undefined,
+    });
+    if (requiresProjectInfo()) {
       throw error;
     }
     return null;
@@ -278,10 +327,12 @@ router.get('/workspaces/:workspaceId/repositories', async (req, res) => {
     const scannedPaths = await scanGitRepositories(workspace.path);
     for (const repoPath of scannedPaths) {
       const repoRelativePath = toRepoRelativePath(workspace.path, repoPath);
-      if (existingByPath.has(repoRelativePath)) continue;
       const summary = await codeHubGitService.getRepositorySummary(repoPath);
       if (!summary.remoteUrl) continue;
+      const existing = existingByPath.get(repoRelativePath);
+      if (existing?.project_id) continue;
       const projectInfo = await readProjectInfo({ userId, repositoryUrl: summary.remoteUrl });
+      if (existing && !projectInfo?.id) continue;
       const record = codeHubWorkspaceRepositoriesDb.upsert(toRepositoryRecordPayload({
         workspace,
         userId,
