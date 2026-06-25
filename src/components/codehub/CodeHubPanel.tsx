@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   ChevronLeft,
@@ -135,6 +135,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
+  const initializedRepoIdRef = useRef<number | null>(null);
 
   const selectedRepo = useMemo(
     () => repositories.find((repo) => repo.repoId === selectedRepoId) || null,
@@ -204,7 +205,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   }, [loadRepositories]);
 
   useEffect(() => {
-    if (!selectedRepo) return;
+    if (!selectedRepo) {
+      initializedRepoIdRef.current = null;
+      return;
+    }
+    const repoChanged = initializedRepoIdRef.current !== selectedRepo.repoId;
+    initializedRepoIdRef.current = selectedRepo.repoId;
+    if (!repoChanged) return;
+
     setPullBranch(selectedRepo.branch || 'develop');
     setSourceBranch(selectedRepo.branch || '');
     setTargetBranch(selectedRepo.branch || 'develop');
