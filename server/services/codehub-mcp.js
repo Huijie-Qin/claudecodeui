@@ -223,6 +223,7 @@ export function createCodeHubMcpService({ fetchImpl = fetch } = {}) {
       targetBranch,
       title,
       description,
+      issueNums,
     }) => {
       const request = {
         source_branch: sourceBranch,
@@ -230,6 +231,9 @@ export function createCodeHubMcpService({ fetchImpl = fetch } = {}) {
         title,
         description,
       };
+      if (issueNums) {
+        request.issue_nums = issueNums;
+      }
       if (sourceProjectId && targetProjectId) {
         request.source_project_id = Number(sourceProjectId);
         request.target_project_id = Number(targetProjectId);

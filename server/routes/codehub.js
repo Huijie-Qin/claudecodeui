@@ -112,6 +112,32 @@ function buildLegacyCommitText({ ticketNo, description, binarySource }) {
   ].join('\n');
 }
 
+function extractIssueNumsFromText(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('[TicketNo:]'))
+    .flatMap((line) => line.slice('[TicketNo:]'.length).trim().split(';'))
+    .map((ticketNo) => ticketNo.trim())
+    .filter(Boolean);
+}
+
+async function readIssueNumsFromCommits(repoPath, commitShas, fallbackText = '') {
+  const issueNums = new Set();
+  const commitMessages = await codeHubGitService.getCommitMessages(repoPath, commitShas);
+  for (const { message } of commitMessages) {
+    for (const issueNum of extractIssueNumsFromText(message)) {
+      issueNums.add(issueNum);
+    }
+  }
+  if (issueNums.size === 0) {
+    for (const issueNum of extractIssueNumsFromText(fallbackText)) {
+      issueNums.add(issueNum);
+    }
+  }
+  return Array.from(issueNums).join(';');
+}
+
 function normalizeCommitMessage(body) {
   const commitMessage = String(body?.commitMessage || '').trim();
   if (commitMessage) return commitMessage;
@@ -124,6 +150,22 @@ function normalizeCommitMessage(body) {
 function commitMessageSummary(commitMessage) {
   const firstLine = String(commitMessage || '').split(/\r?\n/).find((line) => line.trim()) || 'CodeHub submission';
   return firstLine.trim().slice(0, 255);
+}
+
+function readPositiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readMrPollIntervalMinutes() {
+  const explicitMinutes = readPositiveNumber(process.env.CODEHUB_MR_POLL_INTERVAL_MINUTES, 0);
+  if (explicitMinutes > 0) return explicitMinutes;
+  const legacyHours = readPositiveNumber(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS, 0);
+  return legacyHours > 0 ? legacyHours * 60 : 5;
+}
+
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 function safeJsonSummary(value, maxLength = 1200) {
@@ -346,6 +388,7 @@ async function createMergeRequestSubmission({
   commitMessage,
   mrTitle,
   mrTargetRepository = 'personal',
+  issueNums = '',
 }) {
   const commitText = normalizeCommitMessage({ commitMessage });
   const summary = commitMessageSummary(commitText);
@@ -353,7 +396,7 @@ async function createMergeRequestSubmission({
   const mrProjectId = mrProjectIdForTarget(repository, mrTargetRepository);
   const now = new Date();
   const expireDays = Number(process.env.CODEHUB_MR_EXPIRE_DAYS || 7);
-  const intervalHours = Number(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS || 4);
+  const intervalMinutes = readMrPollIntervalMinutes();
   let mrResult = null;
   let mrError = null;
 
@@ -367,6 +410,7 @@ async function createMergeRequestSubmission({
       targetBranch,
       title: mrTitle,
       description: commitText,
+      issueNums,
     });
   } catch (error) {
     mrError = error;
@@ -402,7 +446,7 @@ async function createMergeRequestSubmission({
       mrCreatedAt: mrResult?.created_at || null,
       mrUpdatedAt: mrResult?.updated_at || null,
       expiresAt: new Date(now.getTime() + expireDays * 24 * 60 * 60 * 1000).toISOString(),
-      nextCheckAt: mrResult ? new Date(now.getTime() + intervalHours * 60 * 60 * 1000).toISOString() : null,
+      nextCheckAt: mrResult ? addMinutes(now, intervalMinutes).toISOString() : null,
       lastError: mrError?.message || null,
     },
     files: commitStats.files,
@@ -678,6 +722,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/merge-requests', asyn
       });
     }
     const commitStats = await getCombinedCommitStats(repoPath, commitShas);
+    const issueNums = await readIssueNumsFromCommits(repoPath, commitShas, commitMessage);
     const { submission, mrError } = await createMergeRequestSubmission({
       workspace,
       userId,
@@ -688,6 +733,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/merge-requests', asyn
       commitMessage,
       mrTitle,
       mrTargetRepository,
+      issueNums,
     });
 
     if (mrError) {
@@ -749,7 +795,8 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/submit-mr', async (re
     const mrProjectId = isCrossProject ? repository.public_project_id : repository.project_id;
     const now = new Date();
     const expireDays = Number(process.env.CODEHUB_MR_EXPIRE_DAYS || 7);
-    const intervalHours = Number(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS || 4);
+    const intervalMinutes = readMrPollIntervalMinutes();
+    const issueNums = await readIssueNumsFromCommits(repoPath, [commitResult.commitSha], commitText);
     let mrResult = null;
     let mrError = null;
     try {
@@ -762,6 +809,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/submit-mr', async (re
         targetBranch,
         title: mrTitle,
         description: commitText,
+        issueNums,
       });
     } catch (error) {
       mrError = error;
@@ -796,7 +844,7 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/submit-mr', async (re
         mrCreatedAt: mrResult?.created_at || null,
         mrUpdatedAt: mrResult?.updated_at || null,
         expiresAt: new Date(now.getTime() + expireDays * 24 * 60 * 60 * 1000).toISOString(),
-        nextCheckAt: mrResult ? new Date(now.getTime() + intervalHours * 60 * 60 * 1000).toISOString() : null,
+        nextCheckAt: mrResult ? addMinutes(now, intervalMinutes).toISOString() : null,
         lastError: mrError?.message || null,
       },
       files: commitResult.files,
@@ -850,10 +898,11 @@ router.post('/submissions/:submissionId/retry-mr', async (req, res) => {
     const isCrossProject = Boolean(submission.public_project_id)
       && Number(submission.mr_project_id) === Number(submission.public_project_id);
     const mrProjectId = isCrossProject ? submission.public_project_id : submission.project_id;
-    const intervalHours = Number(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS || 4);
+    const intervalMinutes = readMrPollIntervalMinutes();
     const commitText = normalizeCommitMessage({
       commitMessage: submission.description || submission.ticket_no,
     });
+    const issueNums = extractIssueNumsFromText(commitText).join(';');
     const mrResult = await codeHubMcpService.createMergeRequest({
       userId,
       projectId: submission.project_id,
@@ -863,6 +912,7 @@ router.post('/submissions/:submissionId/retry-mr', async (req, res) => {
       targetBranch: submission.target_branch,
       title: submission.mr_title || commitMessageSummary(commitText),
       description: commitText,
+      issueNums,
     });
 
     const updated = aiMrSubmissionsDb.attachMergeRequest({
@@ -874,7 +924,7 @@ router.post('/submissions/:submissionId/retry-mr', async (req, res) => {
       mrState: mrResult?.state || 'opened',
       mrCreatedAt: mrResult?.created_at || null,
       mrUpdatedAt: mrResult?.updated_at || null,
-      nextCheckAt: new Date(Date.now() + intervalHours * 60 * 60 * 1000).toISOString(),
+      nextCheckAt: addMinutes(new Date(), intervalMinutes).toISOString(),
     });
 
     res.status(201).json({

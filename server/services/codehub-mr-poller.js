@@ -1,7 +1,7 @@
 import { aiMrSubmissionsDb } from '../database/db.js';
 import { codeHubMcpService } from './codehub-mcp.js';
 
-const DEFAULT_INTERVAL_HOURS = 4;
+const DEFAULT_INTERVAL_MINUTES = 5;
 const DEFAULT_BATCH_LIMIT = 50;
 
 function readPositiveNumber(value, fallback) {
@@ -14,8 +14,15 @@ function toDate(value) {
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
-function addHours(date, hours) {
-  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+function readIntervalMinutes() {
+  const explicitMinutes = readPositiveNumber(process.env.CODEHUB_MR_POLL_INTERVAL_MINUTES, 0);
+  if (explicitMinutes > 0) return explicitMinutes;
+  const legacyHours = readPositiveNumber(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS, 0);
+  return legacyHours > 0 ? legacyHours * 60 : DEFAULT_INTERVAL_MINUTES;
+}
+
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 function mapMergeRequestStatus(info, now) {
@@ -47,7 +54,7 @@ function mapMergeRequestStatus(info, now) {
 export function createCodeHubMrPoller({
   submissionsDb = aiMrSubmissionsDb,
   mcpService = codeHubMcpService,
-  intervalHours = readPositiveNumber(process.env.CODEHUB_MR_POLL_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS),
+  intervalMinutes = readIntervalMinutes(),
   batchLimit = readPositiveNumber(process.env.CODEHUB_MR_POLL_BATCH_LIMIT, DEFAULT_BATCH_LIMIT),
   enabled = process.env.CODEHUB_MR_POLLER_ENABLED !== 'false',
 } = {}) {
@@ -73,7 +80,7 @@ export function createCodeHubMrPoller({
             status: 'pending',
             mrState: submission.mr_state,
             checkedAt: currentNow,
-            nextCheckAt: addHours(currentNow, intervalHours).toISOString(),
+            nextCheckAt: addMinutes(currentNow, intervalMinutes).toISOString(),
             lastError: 'Missing merge request project id or iid',
           });
           continue;
@@ -87,7 +94,7 @@ export function createCodeHubMrPoller({
           });
           const mapped = mapMergeRequestStatus(info, currentNow);
           const nextCheckAt = mapped.status === 'pending'
-            ? addHours(currentNow, intervalHours).toISOString()
+            ? addMinutes(currentNow, intervalMinutes).toISOString()
             : null;
           submissionsDb.updateMrStatus({
             submissionId: submission.id,
@@ -108,7 +115,7 @@ export function createCodeHubMrPoller({
             status: 'pending',
             mrState: submission.mr_state,
             checkedAt,
-            nextCheckAt: addHours(checkedAt, intervalHours).toISOString(),
+            nextCheckAt: addMinutes(checkedAt, intervalMinutes).toISOString(),
             lastError: error?.message || String(error),
           });
         }
@@ -129,7 +136,7 @@ export function createCodeHubMrPoller({
     void pollOnce();
     timer = setInterval(() => {
       void pollOnce();
-    }, intervalHours * 60 * 60 * 1000);
+    }, intervalMinutes * 60 * 1000);
     timer.unref?.();
   }
 

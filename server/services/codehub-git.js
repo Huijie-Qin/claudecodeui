@@ -251,6 +251,24 @@ async function getCommitStats(repoPath, commitSha) {
   };
 }
 
+async function getCommitMessages(repoPath, commitShas) {
+  const shas = Array.from(new Set(
+    (Array.isArray(commitShas) ? commitShas : [])
+      .map((sha) => String(sha || '').trim())
+      .filter(Boolean),
+  ));
+  return Promise.all(shas.map(async (sha) => {
+    if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+      throw createHttpError('Invalid commitSha', 400);
+    }
+    const { stdout } = await runGit(['show', '-s', '--format=%B', sha], { cwd: repoPath });
+    return {
+      commitSha: sha,
+      message: stdout.trim(),
+    };
+  }));
+}
+
 export const codeHubGitService = {
   normalizeRelativePath,
   validateBranchName,
@@ -424,6 +442,7 @@ export const codeHubGitService = {
   },
 
   getCommitStats,
+  getCommitMessages,
 
   async commitSelectedFiles({
     repoPath,
