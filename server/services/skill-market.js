@@ -736,12 +736,17 @@ function matchesSkillSearch(skill, searchContent = '') {
 }
 
 function findRemoteSkill(skills, normalizedRef, sanitizedRef) {
-  return skills.find((skill) => (
-    skill.name === sanitizedRef
-    || String(skill.id).toLowerCase() === normalizedRef
-    || String(skill.skillId).toLowerCase() === normalizedRef
-    || String(skill.displayName).trim().toLowerCase() === normalizedRef
-  ));
+  return skills.find((skill) => {
+    const normalizedSkillName = String(skill.name || '').trim().toLowerCase();
+    const sanitizedSkillName = safeNormalizeSkillFolderName(skill.name);
+    return (
+      normalizedSkillName === normalizedRef
+      || sanitizedSkillName === sanitizedRef
+      || String(skill.id).toLowerCase() === normalizedRef
+      || String(skill.skillId).toLowerCase() === normalizedRef
+      || String(skill.displayName).trim().toLowerCase() === normalizedRef
+    );
+  });
 }
 
 async function previewRemoteSkill(remoteSkill, filePath, { tenantCode, accountId } = {}) {
@@ -1353,7 +1358,10 @@ function normalizeRemoteSkillSummary(skill) {
 
   const id = String(skill.id ?? skill.skillId ?? skill.skillName ?? skill.name ?? '').trim();
   const displayName = String(skill.skillName ?? skill.displayName ?? skill.name ?? id).trim();
-  const name = normalizeSkillFolderName(displayName || id);
+  const name = displayName || id;
+  if (!name) {
+    throw createHttpError('Skill name is required', 400);
+  }
   const version = normalizeVersion(skill.version) ?? 0;
 
   return pruneUndefined({
