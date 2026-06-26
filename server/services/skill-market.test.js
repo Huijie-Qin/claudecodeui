@@ -345,6 +345,7 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
     'sql-generator/SKILL.md': '# SQL Generator\n',
     'sql-generator/references/query.md': '# Query Notes\n',
   };
+  const seenSearchContents = [];
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
@@ -354,6 +355,7 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/skillList') {
+      seenSearchContents.push(body?.data?.searchContent);
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -483,6 +485,8 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
     ));
     assert.equal(migratedImports.imports[oldSkillName], undefined);
     assert.equal(migratedImports.imports['sql-generator'].id, 'sql-skill');
+    assert.deepEqual(seenSearchContents.slice(0, 3), ['', displayName, displayName]);
+    assert.equal(seenSearchContents.includes(displayName.toLowerCase()), false);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
@@ -775,6 +779,7 @@ test('listSkillMarket deduplicates uploaded skills by remote id when names diffe
     source: 'skill-market-api',
   });
 
+  const seenSearchContents = [];
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
@@ -784,7 +789,7 @@ test('listSkillMarket deduplicates uploaded skills by remote id when names diffe
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
 
     if (endpoint === '/data-agent/api/skill/skillList') {
-      assert.equal(body?.data?.searchContent, '');
+      seenSearchContents.push(body?.data?.searchContent);
       sendJson(res, {
         code: 0,
         message: 'success',
@@ -834,6 +839,7 @@ test('listSkillMarket deduplicates uploaded skills by remote id when names diffe
     assert.equal(detail.name, 'local-folder');
     assert.equal(detail.targetPath, '.claude/skills/local-folder');
     assert.equal(detail.files[0].path, 'SKILL.md');
+    assert.deepEqual(seenSearchContents, ['', 'remote-uploaded-id']);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
@@ -1004,7 +1010,7 @@ test('getMarketSkillPublishState marks imported skills as uploadable when the re
   assert.equal(state.canPublish, false);
   assert.equal(state.canUploadAndPublish, true);
   assert.equal(state.importedVersion, 3);
-  assert.deepEqual(seenSearchContents, ['', 'remote-deleted-id']);
+  assert.deepEqual(seenSearchContents, ['remote-deleted-id']);
 });
 
 test('uploadAndPublishLocalSkill can republish a local skill whose remote binding was deleted', async () => {
