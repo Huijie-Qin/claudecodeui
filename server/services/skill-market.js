@@ -604,14 +604,14 @@ function createSkillListPageInfo(remoteCount, page, pageSize) {
 }
 
 async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
-  const normalizedRef = String(skillRef || '').trim().toLowerCase();
-  const sanitizedRef = safeNormalizeSkillFolderName(skillRef);
-  let skills = await fetchRemoteSkillList({ searchContent: '', tenantCode, accountId });
-  let remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
-  if (!remoteSkill && normalizedRef) {
-    skills = await fetchRemoteSkillList({ searchContent: normalizedRef, tenantCode, accountId });
-    remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
+  const searchContent = String(skillRef || '').trim();
+  if (!searchContent) {
+    throw createHttpError('Skill name is required', 400);
   }
+  const normalizedRef = searchContent.toLowerCase();
+  const sanitizedRef = safeNormalizeSkillFolderName(searchContent);
+  const skills = await fetchRemoteSkillList({ searchContent, tenantCode, accountId });
+  const remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
 
   if (!remoteSkill) {
     throw createHttpError(`Skill "${skillRef}" was not found`, 404);
