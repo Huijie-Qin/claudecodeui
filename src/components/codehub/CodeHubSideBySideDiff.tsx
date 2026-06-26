@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type DiffRow = {
   key: string;
@@ -128,12 +129,13 @@ function lineNumber(value: number | null): string {
 }
 
 export default function CodeHubSideBySideDiff({ diff }: CodeHubSideBySideDiffProps) {
+  const { t } = useTranslation('codehub');
   const parsed = useMemo(() => parseUnifiedDiff(diff || ''), [diff]);
 
   if (!diff) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
-        Select a changed file to view diff.
+        {t('diff.empty')}
       </div>
     );
   }
@@ -142,12 +144,12 @@ export default function CodeHubSideBySideDiff({ diff }: CodeHubSideBySideDiffPro
     <div className="h-full overflow-auto bg-background">
       {parsed.truncated ? (
         <div className="m-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          Large diff preview: rendering is limited to keep the tab responsive.
+          {t('diff.truncated')}
         </div>
       ) : null}
       <div className="grid min-w-[980px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-muted/40 text-xs font-medium text-muted-foreground">
-        <div className="border-r border-border px-3 py-2">Before</div>
-        <div className="px-3 py-2">After</div>
+        <div className="border-r border-border px-3 py-2">{t('diff.before')}</div>
+        <div className="px-3 py-2">{t('diff.after')}</div>
       </div>
       <div className="min-w-[980px] font-mono text-xs leading-5">
         {parsed.rows.map((row) => {

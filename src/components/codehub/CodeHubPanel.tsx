@@ -11,10 +11,12 @@ import {
   RefreshCw,
   RotateCw,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { api } from '../../utils/api';
+
 import CodeHubSideBySideDiff from './CodeHubSideBySideDiff';
 
 type CodeHubRepository = {
@@ -37,11 +39,19 @@ type CodeHubChange = {
 
 type PullPreview = {
   branch?: string;
+  remote?: string;
   remoteBranch?: string;
   dirty?: boolean;
   changedFiles?: string[];
+  remoteChangedFiles?: string[];
+  localConflictFiles?: string[];
+  mergeConflictFiles?: string[];
+  conflictFiles?: string[];
+  hasConflicts?: boolean;
+  conflictCheckStatus?: string;
   ahead?: number;
   behind?: number;
+  recommendation?: string;
 };
 
 type CommitResult = {
@@ -109,13 +119,13 @@ function inferDirectoryName(repositoryUrl: string): string {
   return last.replace(/\.git$/i, '') || 'repo';
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, translate: (key: string) => string): string {
   const labels: Record<string, string> = {
-    modified: 'Modified',
-    added: 'Added',
-    deleted: 'Deleted',
-    renamed: 'Renamed',
-    untracked: 'Untracked',
+    modified: translate('status.modified'),
+    added: translate('status.added'),
+    deleted: translate('status.deleted'),
+    renamed: translate('status.renamed'),
+    untracked: translate('status.untracked'),
   };
   return labels[status] || status;
 }
@@ -127,6 +137,7 @@ function stepClassName(step: WorkflowStep, activeStep: WorkflowStep, done: boole
 }
 
 export default function CodeHubPanel({ selectedProject, isReadOnly = false }: CodeHubPanelProps) {
+  const { t } = useTranslation('codehub');
   const workspaceId = selectedProject.workspaceId;
   const [repositories, setRepositories] = useState<CodeHubRepository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<number | null>(null);
@@ -188,6 +199,15 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     [activeMergeRequests, selectedMrProjectId, sourceBranch, targetBranch],
   );
   const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
+  const pullPreviewRecommendation = useMemo(() => {
+    if (!pullPreview) return null;
+    const recommendation = pullPreview.recommendation || (pullPreview.dirty ? 'commit-first' : 'pull');
+    if (recommendation === 'commit-first') return t('pull.recommendation.commitFirst');
+    if (recommendation === 'resolve-conflicts') return t('pull.recommendation.resolveConflicts');
+    if (recommendation === 'up-to-date') return t('pull.recommendation.upToDate');
+    if (pullPreview.conflictCheckStatus === 'unknown') return t('pull.recommendation.unknown');
+    return t('pull.recommendation.pull');
+  }, [pullPreview, t]);
   const batchCommitMessage = useMemo(
     () => commitRecords
       .map((commit) => commit.commitMessage || commit.commitSha)
@@ -203,7 +223,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     try {
       const response = await api.codehub.repositories(workspaceId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to load CodeHub repositories'));
+        setError(await readError(response, t('errors.loadRepositories')));
         return;
       }
       const payload = await response.json();
@@ -217,11 +237,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       });
     } catch (caughtError) {
       console.error('[CodeHubPanel] Failed to load repositories:', caughtError);
-      setError('Failed to load CodeHub repositories');
+      setError(t('errors.loadRepositories'));
     } finally {
       setIsLoading(false);
     }
-  }, [workspaceId]);
+  }, [t, workspaceId]);
 
   const loadChanges = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -229,7 +249,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     try {
       const response = await api.codehub.changes(workspaceId, selectedRepoId);
       if (!response.ok) {
-        setError(await readError(response, 'Failed to load repository changes'));
+        setError(await readError(response, t('errors.loadChanges')));
         return;
       }
       const payload = await response.json();
@@ -238,9 +258,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       setSelectedFiles((current) => current.filter((file) => nextChanges.some((change: CodeHubChange) => change.path === file)));
     } catch (caughtError) {
       console.error('[CodeHubPanel] Failed to load changes:', caughtError);
-      setError('Failed to load repository changes');
+      setError(t('errors.loadChanges'));
     }
-  }, [selectedRepoId, workspaceId]);
+  }, [selectedRepoId, t, workspaceId]);
 
   const loadRemoteBranches = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -312,20 +332,20 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const openDiff = useCallback(async (filePath: string) => {
     if (!workspaceId || !selectedRepoId) return;
     setActiveFile(filePath);
-    setDiff('Loading diff...');
+    setDiff(t('diff.loading'));
     try {
       const response = await api.codehub.diff(workspaceId, selectedRepoId, filePath);
       if (!response.ok) {
-        setDiff(await readError(response, 'Failed to load diff'));
+        setDiff(await readError(response, t('errors.loadDiff')));
         return;
       }
       const payload = await response.json();
       setDiff(payload.diff || '');
     } catch (caughtError) {
       console.error('[CodeHubPanel] Failed to load diff:', caughtError);
-      setDiff('Failed to load diff');
+      setDiff(t('errors.loadDiff'));
     }
-  }, [selectedRepoId, workspaceId]);
+  }, [selectedRepoId, t, workspaceId]);
 
   const toggleFile = useCallback((filePath: string, checked: boolean) => {
     setSelectedFiles((current) => {
@@ -339,6 +359,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setWorkflowStep('commit');
     setWorkflowOpen(true);
   }, []);
+
+  const openCommitForPullPreview = useCallback(() => {
+    const previewFiles = pullPreview?.changedFiles || [];
+    if (previewFiles.length > 0) {
+      setSelectedFiles(previewFiles);
+    }
+    openWorkflow();
+  }, [openWorkflow, pullPreview]);
 
   const openPushWorkflow = useCallback(() => {
     setDialogError(null);
@@ -358,7 +386,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     const repositoryUrl = cloneUrl.trim();
     const directoryName = (cloneDirectory.trim() || inferDirectoryName(repositoryUrl)).trim();
     if (!repositoryUrl || !directoryName) {
-      setError('Repository URL and directory are required');
+      setError(t('errors.cloneRequired'));
       return;
     }
     setIsWorking(true);
@@ -371,7 +399,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         ...(branch ? { branch } : {}),
       });
       if (!response.ok) {
-        setError(await readError(response, 'Failed to clone repository'));
+        setError(await readError(response, t('errors.cloneFailed')));
         return;
       }
       setCloneUrl('');
@@ -382,7 +410,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [cloneBranch, cloneDirectory, cloneUrl, isReadOnly, loadRepositories, workspaceId]);
+  }, [cloneBranch, cloneDirectory, cloneUrl, isReadOnly, loadRepositories, t, workspaceId]);
 
   const previewPull = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -391,14 +419,16 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     try {
       const response = await api.codehub.pullPreview(workspaceId, selectedRepoId, { branch: pullBranch });
       if (!response.ok) {
-        setError(await readError(response, 'Failed to preview pull'));
+        setError(await readError(response, t('errors.pullPreviewFailed')));
         return;
       }
-      setPullPreview(await response.json());
+      const payload = await response.json();
+      setPullPreview(payload);
+      await loadChanges();
     } finally {
       setIsWorking(false);
     }
-  }, [pullBranch, selectedRepoId, workspaceId]);
+  }, [loadChanges, pullBranch, selectedRepoId, t, workspaceId]);
 
   const pullRepository = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly) return;
@@ -408,27 +438,28 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       const response = await api.codehub.pull(workspaceId, selectedRepoId, { branch: pullBranch });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(payload.error || payload.message || 'Failed to pull repository updates');
+        setError(payload.error || payload.message || t('errors.pullFailed'));
         return;
       }
       if (payload.conflict) {
-        setError(`Pull has conflicts: ${(payload.conflictFiles || []).join(', ')}`);
+        setError(t('errors.pullConflicts', { files: (payload.conflictFiles || []).join(', ') }));
       }
+      setPullPreview(null);
       await loadRepositories();
       await loadChanges();
     } finally {
       setIsWorking(false);
     }
-  }, [isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepoId, workspaceId]);
+  }, [isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepoId, t, workspaceId]);
 
   const commitSelectedFiles = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
     if (selectedFiles.length === 0) {
-      setDialogError('Select at least one changed file');
+      setDialogError(t('errors.selectFile'));
       return;
     }
     if (!commitMessage.trim()) {
-      setDialogError('Commit message is required');
+      setDialogError(t('errors.commitMessageRequired'));
       return;
     }
     setIsWorking(true);
@@ -440,7 +471,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setDialogError(payload.error || payload.message || 'Failed to commit CodeHub changes');
+        setDialogError(payload.error || payload.message || t('errors.commitFailed'));
         return;
       }
       setCommitMessage('');
@@ -452,7 +483,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, workspaceId]);
+  }, [commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
 
   const pushBranch = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || commitRecords.length === 0) return;
@@ -465,7 +496,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setDialogError(payload.error || payload.message || 'Failed to push CodeHub branch');
+        setDialogError(payload.error || payload.message || t('errors.pushFailed'));
         return;
       }
       setPushResult({
@@ -482,7 +513,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [commitRecords.length, committedCommitShas, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedRepoId, sourceBranch, sourceBranchMode, workspaceId]);
+  }, [commitRecords.length, committedCommitShas, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedRepoId, sourceBranch, sourceBranchMode, t, workspaceId]);
 
   const createMergeRequest = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || !headSha || !sourceBranch || !sourceBranchPushedAtHead) return;
@@ -498,7 +529,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         sourceBranch,
         targetBranch,
         mrTargetRepository,
-        mrTitle: mrTitle || mrDescription.split(/\r?\n/).find((line) => line.trim())?.trim() || 'CodeHub submission',
+        mrTitle: mrTitle || mrDescription.split(/\r?\n/).find((line) => line.trim())?.trim() || t('title'),
       });
       const payload = await response.json().catch(() => ({}));
       setMrResult(payload);
@@ -509,7 +540,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
             ...current.filter((mr) => mr.submissionId !== payload.existingMergeRequest.submissionId),
           ]);
         }
-        setDialogError(payload.error || payload.message || 'Failed to create CodeHub MR');
+        setDialogError(payload.error || payload.message || t('errors.createMrFailed'));
         return;
       }
       setSelectedFiles([]);
@@ -534,6 +565,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     selectedRepoId,
     sourceBranch,
     sourceBranchPushedAtHead,
+    t,
     targetBranch,
     workspaceId,
   ]);
@@ -547,17 +579,17 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       const payload = await response.json().catch(() => ({}));
       setMrResult(payload);
       if (!response.ok) {
-        setDialogError(payload.error || payload.message || 'Failed to retry MR creation');
+        setDialogError(payload.error || payload.message || t('errors.retryMrFailed'));
       }
     } finally {
       setIsWorking(false);
     }
-  }, [mrResult?.submissionId]);
+  }, [mrResult?.submissionId, t]);
 
   if (!workspaceId) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Current workspace does not support CodeHub.
+        {t('workspaceUnsupported')}
       </div>
     );
   }
@@ -566,17 +598,17 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     <div className="flex h-full flex-col bg-background">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-foreground">CodeHub</h2>
+          <h2 className="text-sm font-semibold text-foreground">{t('title')}</h2>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{selectedProject.displayName || selectedProject.name}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setSidebarCollapsed((value) => !value)}>
             {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-            {sidebarCollapsed ? 'Show repositories' : 'Hide repositories'}
+            {sidebarCollapsed ? t('showRepositories') : t('hideRepositories')}
           </Button>
           <Button variant="outline" size="sm" onClick={() => void loadRepositories()} disabled={isLoading || isWorking}>
             <RefreshCw className={isLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-            Refresh
+            {t('common:buttons.refresh')}
           </Button>
         </div>
       </div>
@@ -587,7 +619,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
           <section className="space-y-3">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <GitBranch className="h-4 w-4" />
-              Repositories
+              {t('repositories.title')}
             </div>
             <div className="space-y-2">
               {repositories.map((repo) => (
@@ -601,7 +633,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="min-w-0 truncate font-medium text-foreground">{repo.name}</span>
-                    {repo.dirty ? <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700">dirty</span> : null}
+                    {repo.dirty ? <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700">{t('repositories.dirty')}</span> : null}
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{repo.relativePath}</div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{repo.branch || '-'}</div>
@@ -609,16 +641,16 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
               ))}
               {repositories.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border px-3 py-5 text-center text-sm text-muted-foreground">
-                  No CodeHub repositories found.
+                  {t('selectOrCloneRepository')}
                 </div>
               ) : null}
             </div>
           </section>
 
           <section className="mt-5 space-y-3 border-t border-border pt-4">
-            <div className="text-sm font-medium text-foreground">Clone repository</div>
+            <div className="text-sm font-medium text-foreground">{t('clone.title')}</div>
             <label className="block space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Repository URL</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('clone.repositoryUrl')}</span>
               <Input
                 value={cloneUrl}
                 onChange={(event) => {
@@ -628,30 +660,30 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                     setCloneDirectory(inferDirectoryName(nextUrl));
                   }
                 }}
-                placeholder="https://codehub.../repo.git"
+                placeholder={t('clone.repositoryUrlPlaceholder')}
                 disabled={isReadOnly || isWorking}
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Workspace folder name</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('clone.folderName')}</span>
               <Input
                 value={cloneDirectory}
                 onChange={(event) => setCloneDirectory(event.target.value)}
-                placeholder="folder-name"
+                placeholder={t('clone.folderNamePlaceholder')}
                 disabled={isReadOnly || isWorking}
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Branch (optional)</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('clone.branch')}</span>
               <Input
                 value={cloneBranch}
                 onChange={(event) => setCloneBranch(event.target.value)}
-                placeholder="Optional, uses default branch when empty"
+                placeholder={t('clone.branchPlaceholder')}
                 disabled={isReadOnly || isWorking}
               />
             </label>
             <Button className="w-full" onClick={() => void cloneRepository()} disabled={isReadOnly || isWorking}>
-              Clone
+              {t('clone.button')}
             </Button>
           </section>
         </aside>
@@ -666,27 +698,100 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                     <div className="text-sm font-medium text-foreground">{selectedRepo.name}</div>
                     <div className="mt-1 truncate text-xs text-muted-foreground">{selectedRepo.repositoryUrl}</div>
                     {selectedRepo.publicRepositoryUrl ? (
-                      <div className="mt-1 truncate text-xs text-muted-foreground">Upstream: {selectedRepo.publicRepositoryUrl}</div>
+                      <div className="mt-1 truncate text-xs text-muted-foreground">{t('repository.upstream', { url: selectedRepo.publicRepositoryUrl })}</div>
                     ) : null}
                   </div>
 
                   <div className="min-w-0">
                     <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                      <Input value={pullBranch} onChange={(event) => setPullBranch(event.target.value)} placeholder="Branch to pull" />
+                      <Input
+                        value={pullBranch}
+                        onChange={(event) => {
+                          setPullBranch(event.target.value);
+                          setPullPreview(null);
+                        }}
+                        placeholder={t('pull.branchPlaceholder')}
+                      />
                       <div className="flex gap-2 sm:justify-end">
                         <Button variant="outline" size="sm" onClick={() => void previewPull()} disabled={isWorking}>
-                          Preview
+                          {t('pull.preview')}
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => void pullRepository()} disabled={isReadOnly || isWorking}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void pullRepository()}
+                          disabled={isReadOnly || isWorking || Boolean(pullPreview?.hasConflicts)}
+                          title={pullPreview?.hasConflicts ? t('pull.conflictPullDisabled') : undefined}
+                        >
                           <RotateCw className="h-4 w-4" />
-                          Pull
+                          {t('pull.button')}
                         </Button>
                       </div>
                     </div>
                     {pullPreview ? (
-                      <div className="mt-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                        {pullPreview.remoteBranch}: ahead {pullPreview.ahead || 0}, behind {pullPreview.behind || 0}.
-                        {pullPreview.dirty ? ` Local changes: ${(pullPreview.changedFiles || []).join(', ')}` : ' Worktree clean.'}
+                      <div className={`mt-3 space-y-3 rounded-md border px-3 py-2 text-xs ${
+                        pullPreview.hasConflicts
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                          : 'border-border bg-muted/40 text-muted-foreground'
+                      }`}
+                      >
+                        <div>
+                          {t('pull.summary', {
+                            branch: pullPreview.branch || '-',
+                            remote: pullPreview.remote || 'origin',
+                            remoteBranch: pullPreview.remoteBranch || pullBranch || '-',
+                            ahead: pullPreview.ahead || 0,
+                            behind: pullPreview.behind || 0,
+                          })}
+                        </div>
+                        {pullPreviewRecommendation ? (
+                          <div className="font-medium text-foreground">{pullPreviewRecommendation}</div>
+                        ) : null}
+                        {pullPreview.dirty ? (
+                          <div>
+                            {t('pull.localChanges', {
+                              files: (pullPreview.changedFiles || []).length > 0
+                                ? (pullPreview.changedFiles || []).join(', ')
+                                : t('pull.localChangesUnknown'),
+                            })}
+                          </div>
+                        ) : (
+                          <div>{t('pull.clean')}</div>
+                        )}
+                        {pullPreview.hasConflicts ? (
+                          <div className="space-y-3">
+                            <div>
+                              <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
+                              <div className="mt-1 break-words">
+                                {t('pull.conflictFiles', {
+                                  files: (pullPreview.conflictFiles || []).length > 0
+                                    ? (pullPreview.conflictFiles || []).join(', ')
+                                    : t('pull.conflictFilesUnknown'),
+                                })}
+                              </div>
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
+                                <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
+                                <div className="mt-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
+                                <Button className="mt-2 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
+                                  {t('pull.options.commitFirstButton')}
+                                </Button>
+                              </div>
+                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
+                                <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
+                                <div className="mt-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
+                              </div>
+                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
+                                <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
+                                <div className="mt-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
+                                <Button className="mt-2 w-full" variant="outline" size="sm" onClick={() => void pullRepository()} disabled={isReadOnly || isWorking}>
+                                  {t('pull.options.manualButton')}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -696,10 +801,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
               <section className="rounded-md border border-border bg-background p-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-foreground">Submission batch</div>
+                    <div className="text-sm font-medium text-foreground">{t('submission.title')}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {commitRecords.length} commits from origin/{targetBranch} to HEAD
-                      {remoteBranchesAtHead.length > 0 ? `, pushed to ${remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ')}` : ''}
+                      {t('submission.summary', { count: commitRecords.length, targetBranch })}
+                      {remoteBranchesAtHead.length > 0 ? t('submission.pushedTo', { branches: remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ') }) : ''}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -710,7 +815,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                       disabled={isReadOnly || isWorking || commitRecords.length === 0}
                     >
                       <GitBranch className="h-4 w-4" />
-                      Push commits
+                      {t('submission.pushCommits')}
                     </Button>
                     <Button
                       variant="outline"
@@ -719,7 +824,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                       disabled={isReadOnly || isWorking || !canCreateMr}
                     >
                       <GitPullRequest className="h-4 w-4" />
-                      Create MR
+                      {t('submission.createMr')}
                     </Button>
                   </div>
                 </div>
@@ -735,11 +840,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 ) : null}
                 {existingMergeRequest ? (
                   <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    Existing MR detected for this HEAD
+                    {t('submission.existingMr')}
                     {existingMergeRequest.mrIid ? `: !${existingMergeRequest.mrIid}` : ''}
                     {existingMergeRequest.mrUrl ? (
                       <a className="ml-2 underline" href={existingMergeRequest.mrUrl} target="_blank" rel="noreferrer">
-                        Open
+                        {t('submission.open')}
                       </a>
                     ) : null}
                   </div>
@@ -750,8 +855,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 <div className="rounded-md border border-border">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
                     <div>
-                      <div className="text-sm font-medium text-foreground">Changed files</div>
-                      <div className="text-xs text-muted-foreground">{selectedFiles.length} selected</div>
+                      <div className="text-sm font-medium text-foreground">{t('changes.title')}</div>
+                      <div className="text-xs text-muted-foreground">{t('changes.selected', { count: selectedFiles.length })}</div>
                     </div>
                     <div className="flex gap-2">
                       <Button
@@ -761,7 +866,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                         disabled={isReadOnly || isWorking || selectedFiles.length === 0}
                       >
                         <GitCommitHorizontal className="h-4 w-4" />
-                        Commit
+                        {t('changes.commit')}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => void loadChanges()} disabled={isWorking}>
                         <RefreshCw className="h-4 w-4" />
@@ -784,19 +889,19 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                         />
                         <button type="button" className="min-w-0 text-left" onClick={() => void openDiff(change.path)}>
                           <div className="truncate text-foreground">{change.path}</div>
-                          <div className="text-xs text-muted-foreground">{statusLabel(change.status)}</div>
+                          <div className="text-xs text-muted-foreground">{statusLabel(change.status, t)}</div>
                         </button>
                       </div>
                     ))}
                     {changes.length === 0 ? (
-                      <div className="px-3 py-8 text-center text-sm text-muted-foreground">No local changes.</div>
+                      <div className="px-3 py-8 text-center text-sm text-muted-foreground">{t('changes.empty')}</div>
                     ) : null}
                   </div>
                 </div>
 
                 <div className="min-h-[420px] rounded-md border border-border">
                   <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-                    <div className="min-w-0 truncate text-sm font-medium text-foreground">{activeFile || 'Diff'}</div>
+                    <div className="min-w-0 truncate text-sm font-medium text-foreground">{activeFile || t('diff.title')}</div>
                     <Button
                       type="button"
                       variant="ghost"
@@ -804,8 +909,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                       className="h-8 w-8"
                       onClick={() => setDiffDialogOpen(true)}
                       disabled={!diff}
-                      aria-label="Open diff in large view"
-                      title="Open diff in large view"
+                      aria-label={t('diff.largeView')}
+                      title={t('diff.largeView')}
                     >
                       <Maximize2 className="h-4 w-4" />
                     </Button>
@@ -818,7 +923,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Select or clone a CodeHub repository.
+              {t('selectOrCloneRepository')}
             </div>
           )}
 
@@ -832,11 +937,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
 
       <Dialog open={diffDialogOpen} onOpenChange={setDiffDialogOpen}>
         <DialogContent className="flex h-[88vh] max-h-[88vh] w-[94vw] max-w-[94vw] flex-col overflow-hidden rounded-lg p-0">
-          <DialogTitle>{activeFile || 'Diff'}</DialogTitle>
+          <DialogTitle>{activeFile || t('diff.title')}</DialogTitle>
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-            <div className="min-w-0 truncate text-sm font-medium text-foreground">{activeFile || 'Diff'}</div>
+            <div className="min-w-0 truncate text-sm font-medium text-foreground">{activeFile || t('diff.title')}</div>
             <Button type="button" variant="outline" size="sm" onClick={() => setDiffDialogOpen(false)}>
-              Close
+              {t('diff.close')}
             </Button>
           </div>
           <div className="min-h-0 flex-1">
@@ -847,52 +952,52 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
 
       <Dialog open={workflowOpen} onOpenChange={setWorkflowOpen}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto rounded-lg">
-          <DialogTitle>Commit, push, and create MR</DialogTitle>
+          <DialogTitle>{t('workflow.title')}</DialogTitle>
           <div className="space-y-5 p-5">
             <div>
-              <h3 className="text-base font-semibold text-foreground">Submit selected CodeHub changes</h3>
+              <h3 className="text-base font-semibold text-foreground">{t('workflow.heading')}</h3>
               <p className="mt-1 text-xs text-muted-foreground">
-                Commit, push, and MR creation are separate steps. A later step can be retried without repeating earlier successful steps.
+                {t('workflow.description')}
               </p>
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
               <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}>
-                1. Commit
+                {t('workflow.steps.commit')}
               </div>
               <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}>
-                2. Push
+                {t('workflow.steps.push')}
               </div>
               <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}>
-                3. MR
+                {t('workflow.steps.mr')}
               </div>
             </div>
 
             {workflowStep === 'commit' ? (
               <section className="space-y-3">
-                <div className="text-sm font-medium text-foreground">Commit message</div>
+                <div className="text-sm font-medium text-foreground">{t('workflow.commitMessage')}</div>
                 <textarea
                   className="min-h-36 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   value={commitMessage}
                   onChange={(event) => setCommitMessage(event.target.value)}
-                  placeholder="Enter commit message"
+                  placeholder={t('workflow.commitMessagePlaceholder')}
                 />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  {selectedFiles.length} files selected. This message will be added to the current submission batch.
+                  {t('workflow.selectedFilesMessage', { count: selectedFiles.length })}
                 </div>
                 <Button onClick={() => void commitSelectedFiles()} disabled={isWorking}>
                   <GitCommitHorizontal className="h-4 w-4" />
-                  Commit selected files
+                  {t('workflow.commitSelectedFiles')}
                 </Button>
               </section>
             ) : null}
 
             {workflowStep === 'push' ? (
               <section className="space-y-3">
-                <div className="text-sm font-medium text-foreground">Push branch</div>
+                <div className="text-sm font-medium text-foreground">{t('workflow.pushBranch')}</div>
                 {commitRecords.length > 0 ? (
                   <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    {commitRecords.length} commits from origin/{targetBranch} to current HEAD. Pushing will update the selected remote branch to HEAD.
+                    {t('workflow.pushSummary', { count: commitRecords.length, targetBranch })}
                   </div>
                 ) : null}
                 <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-1">
@@ -901,14 +1006,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                     size="sm"
                     onClick={() => setSourceBranchMode('new')}
                   >
-                    New branch
+                    {t('workflow.newBranch')}
                   </Button>
                   <Button
                     variant={sourceBranchMode === 'existing' ? 'default' : 'ghost'}
                     size="sm"
                     onClick={() => setSourceBranchMode('existing')}
                   >
-                    Existing
+                    {t('workflow.existingBranch')}
                   </Button>
                 </div>
                 {sourceBranchMode === 'existing' ? (
@@ -917,36 +1022,36 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                     value={sourceBranch}
                     onChange={(event) => setSourceBranch(event.target.value)}
                   >
-                    <option value="">Select source branch</option>
+                    <option value="">{t('workflow.selectSourceBranch')}</option>
                     {remoteBranches.map((branch) => (
                       <option key={branch} value={branch}>{branch}</option>
                     ))}
                   </select>
                 ) : (
-                  <Input value={sourceBranch} onChange={(event) => setSourceBranch(event.target.value)} placeholder="feature/AR00000001" />
+                  <Input value={sourceBranch} onChange={(event) => setSourceBranch(event.target.value)} placeholder={t('workflow.sourceBranchPlaceholder')} />
                 )}
                 <Button onClick={() => void pushBranch()} disabled={isWorking || commitRecords.length === 0}>
                   <GitBranch className="h-4 w-4" />
-                  Push commits
+                  {t('submission.pushCommits')}
                 </Button>
               </section>
             ) : null}
 
             {workflowStep === 'mr' ? (
               <section className="space-y-3">
-                <div className="text-sm font-medium text-foreground">Create merge request</div>
+                <div className="text-sm font-medium text-foreground">{t('workflow.createMergeRequest')}</div>
                 {pushResult?.success ? (
                   <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    Pushed: {pushResult.remote || 'origin'}/{pushResult.branch}
-                    {pushResult.pushedHeadSha ? ` at ${pushResult.pushedHeadSha.slice(0, 8)}` : ''}
+                    {t('workflow.pushed', { remote: pushResult.remote || 'origin', branch: pushResult.branch })}
+                    {pushResult.pushedHeadSha ? t('workflow.pushedAt', { sha: pushResult.pushedHeadSha.slice(0, 8) }) : ''}
                   </div>
                 ) : remoteBranchesAtHead.length > 0 ? (
                   <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    Current HEAD is available on {remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ')}.
+                    {t('workflow.headAvailable', { branches: remoteBranchesAtHead.map((branch) => `origin/${branch}`).join(', ') })}
                   </div>
                 ) : null}
                 <label className="block space-y-1">
-                  <span className="text-xs font-medium text-muted-foreground">Source branch</span>
+                  <span className="text-xs font-medium text-muted-foreground">{t('workflow.sourceBranch')}</span>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
                     value={sourceBranch}
@@ -954,53 +1059,53 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                     disabled={remoteBranchesAtHead.length === 0}
                   >
                     {remoteBranchesAtHead.length === 0 ? (
-                      <option value="">Push HEAD to a remote branch first</option>
+                      <option value="">{t('workflow.pushHeadFirst')}</option>
                     ) : null}
                     {remoteBranchesAtHead.map((branch) => (
                       <option key={branch} value={branch}>{branch}</option>
                     ))}
                   </select>
                 </label>
-                <Input value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} placeholder="target branch" />
+                <Input value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} placeholder={t('workflow.targetBranchPlaceholder')} />
                 <div className="space-y-2">
-                  <div className="text-xs font-medium text-muted-foreground">Merge target repository</div>
+                  <div className="text-xs font-medium text-muted-foreground">{t('workflow.mergeTargetRepository')}</div>
                   <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-1">
                     <Button
                       variant={mrTargetRepository === 'personal' ? 'default' : 'ghost'}
                       size="sm"
                       onClick={() => setMrTargetRepository('personal')}
                     >
-                      Personal repo
+                      {t('workflow.personalRepo')}
                     </Button>
                     <Button
                       variant={mrTargetRepository === 'upstream' ? 'default' : 'ghost'}
                       size="sm"
                       onClick={() => setMrTargetRepository('upstream')}
                       disabled={!selectedRepo?.publicProjectId}
-                      title={selectedRepo?.publicProjectId ? 'Create MR into upstream repository' : 'No upstream repository detected'}
+                      title={selectedRepo?.publicProjectId ? t('workflow.upstreamRepoTitle') : t('workflow.noUpstreamRepoTitle')}
                     >
-                      Upstream repo
+                      {t('workflow.upstreamRepo')}
                     </Button>
                   </div>
                 </div>
-                <Input value={mrTitle} onChange={(event) => setMrTitle(event.target.value)} placeholder="MR title" />
+                <Input value={mrTitle} onChange={(event) => setMrTitle(event.target.value)} placeholder={t('workflow.mrTitlePlaceholder')} />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  MR description will use the commit messages from origin/{targetBranch} to HEAD.
+                  {t('workflow.mrDescriptionMessage', { targetBranch })}
                 </div>
                 {existingMergeRequest ? (
                   <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    A merge request already exists for this source branch and HEAD
+                    {t('workflow.existingMrMessage')}
                     {existingMergeRequest.mrIid ? `: !${existingMergeRequest.mrIid}` : ''}.
                     {existingMergeRequest.mrUrl ? (
                       <a className="ml-2 underline" href={existingMergeRequest.mrUrl} target="_blank" rel="noreferrer">
-                        Open MR
+                        {t('workflow.openMr')}
                       </a>
                     ) : null}
                   </div>
                 ) : null}
                 <Button onClick={() => void createMergeRequest()} disabled={isWorking || !canCreateMr}>
                   <GitPullRequest className="h-4 w-4" />
-                  Create MR
+                  {t('submission.createMr')}
                 </Button>
               </section>
             ) : null}
@@ -1009,10 +1114,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
               <section className="space-y-2 rounded-md border border-border p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium text-foreground">
                   {mrResult.success ? <Check className="h-4 w-4 text-emerald-600" /> : <GitMerge className="h-4 w-4 text-amber-600" />}
-                  Submission {mrResult.status || ''}
+                  {t('workflow.submissionStatus', { status: mrResult.status || '' })}
                 </div>
-                {mrResult.commitSha ? <div className="break-all text-xs text-muted-foreground">Commit: {mrResult.commitSha}</div> : null}
-                {mrResult.mrIid ? <div className="text-xs text-muted-foreground">MR: !{mrResult.mrIid}</div> : null}
+                {mrResult.commitSha ? <div className="break-all text-xs text-muted-foreground">{t('workflow.commitSha', { sha: mrResult.commitSha })}</div> : null}
+                {mrResult.mrIid ? <div className="text-xs text-muted-foreground">{t('workflow.mrIid', { iid: mrResult.mrIid })}</div> : null}
                 {mrResult.mrUrl ? (
                   <a className="block truncate text-xs text-primary underline" href={mrResult.mrUrl} target="_blank" rel="noreferrer">
                     {mrResult.mrUrl}
@@ -1020,7 +1125,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 ) : null}
                 {!mrResult.success && mrResult.submissionId ? (
                   <Button variant="outline" size="sm" onClick={() => void retryMr()} disabled={isWorking}>
-                    Retry MR creation
+                    {t('workflow.retryMrCreation')}
                   </Button>
                 ) : null}
                 {mrResult.details ? <div className="text-xs text-destructive">{mrResult.details}</div> : null}
@@ -1035,7 +1140,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
 
             <div className="flex justify-end gap-2 border-t border-border pt-4">
               <Button variant="outline" onClick={() => setWorkflowOpen(false)}>
-                Close
+                {t('workflow.close')}
               </Button>
             </div>
           </div>

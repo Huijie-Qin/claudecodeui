@@ -1,0 +1,145 @@
+{
+  "title": "CodeHub",
+  "workspaceUnsupported": "Current workspace does not support CodeHub.",
+  "selectOrCloneRepository": "Select or clone a CodeHub repository.",
+  "showRepositories": "Show repositories",
+  "hideRepositories": "Hide repositories",
+  "repositories": {
+    "title": "Repositories",
+    "branch": "Branch",
+    "dirty": "Dirty",
+    "clean": "Clean"
+  },
+  "clone": {
+    "title": "Clone repository",
+    "repositoryUrl": "Repository URL",
+    "repositoryUrlPlaceholder": "https://codehub.../repo.git",
+    "folderName": "Workspace folder name",
+    "folderNamePlaceholder": "folder-name",
+    "branch": "Branch (optional)",
+    "branchPlaceholder": "Optional, uses default branch when empty",
+    "button": "Clone"
+  },
+  "repository": {
+    "upstream": "Upstream: {{url}}"
+  },
+  "pull": {
+    "branchPlaceholder": "Branch to pull",
+    "preview": "Preview",
+    "button": "Pull",
+    "summary": "Local {{branch}} vs {{remote}}/{{remoteBranch}}: ahead {{ahead}}, behind {{behind}}.",
+    "localChanges": "Local changes: {{files}}",
+    "localChangesUnknown": "changed files detected",
+    "clean": "Worktree clean.",
+    "conflictPullDisabled": "Resolve the preview warning or choose manual conflict handling first.",
+    "conflictsTitle": "Preview detected possible pull conflicts",
+    "conflictFiles": "Affected files: {{files}}",
+    "conflictFilesUnknown": "unknown files",
+    "recommendation": {
+      "commitFirst": "Recommendation: commit or clear local changes before pulling.",
+      "resolveConflicts": "Recommendation: choose a conflict handling option before pulling.",
+      "pull": "Recommendation: pull remote updates.",
+      "upToDate": "Recommendation: no remote updates to pull.",
+      "unknown": "Recommendation: conflict check was inconclusive; review carefully before pulling."
+    },
+    "options": {
+      "commitFirstTitle": "Commit first",
+      "commitFirstDescription": "Commit the current local changes, then preview or pull again.",
+      "commitFirstButton": "Commit changes",
+      "stashTitle": "Stash or clear",
+      "stashDescription": "Temporarily move or clean local changes, then run preview again.",
+      "manualTitle": "Manual resolution",
+      "manualDescription": "Continue pulling and resolve conflict files in the workspace.",
+      "manualButton": "Pull anyway"
+    }
+  },
+  "submission": {
+    "title": "Submission batch",
+    "summary": "{{count}} commits from origin/{{targetBranch}} to HEAD",
+    "pushedTo": ", pushed to {{branches}}",
+    "pushCommits": "Push commits",
+    "createMr": "Create MR",
+    "existingMr": "Existing MR detected for this HEAD",
+    "open": "Open"
+  },
+  "changes": {
+    "title": "Changed files",
+    "selected": "{{count}} selected",
+    "commit": "Commit",
+    "empty": "No local changes."
+  },
+  "diff": {
+    "title": "Diff",
+    "loading": "Loading diff...",
+    "largeView": "Open diff in large view",
+    "close": "Close",
+    "empty": "Select a changed file to view diff.",
+    "truncated": "Large diff preview: rendering is limited to keep the tab responsive.",
+    "before": "Before",
+    "after": "After"
+  },
+  "workflow": {
+    "title": "Commit, push, and create MR",
+    "heading": "Submit selected CodeHub changes",
+    "description": "Commit, push, and MR creation are separate steps. A later step can be retried without repeating earlier successful steps.",
+    "steps": {
+      "commit": "1. Commit",
+      "push": "2. Push",
+      "mr": "3. MR"
+    },
+    "commitMessage": "Commit message",
+    "commitMessagePlaceholder": "Enter commit message",
+    "selectedFilesMessage": "{{count}} files selected. This message will be added to the current submission batch.",
+    "commitSelectedFiles": "Commit selected files",
+    "pushBranch": "Push branch",
+    "pushSummary": "{{count}} commits from origin/{{targetBranch}} to current HEAD. Pushing will update the selected remote branch to HEAD.",
+    "newBranch": "New branch",
+    "existingBranch": "Existing",
+    "selectSourceBranch": "Select source branch",
+    "sourceBranchPlaceholder": "feature/AR00000001",
+    "createMergeRequest": "Create merge request",
+    "pushed": "Pushed: {{remote}}/{{branch}}",
+    "pushedAt": " at {{sha}}",
+    "headAvailable": "Current HEAD is available on {{branches}}.",
+    "sourceBranch": "Source branch",
+    "pushHeadFirst": "Push HEAD to a remote branch first",
+    "targetBranchPlaceholder": "target branch",
+    "mergeTargetRepository": "Merge target repository",
+    "personalRepo": "Personal repo",
+    "upstreamRepo": "Upstream repo",
+    "upstreamRepoTitle": "Create MR into upstream repository",
+    "noUpstreamRepoTitle": "No upstream repository detected",
+    "mrTitlePlaceholder": "MR title",
+    "mrDescriptionMessage": "MR description will use the commit messages from origin/{{targetBranch}} to HEAD.",
+    "existingMrMessage": "A merge request already exists for this source branch and HEAD",
+    "openMr": "Open MR",
+    "submissionStatus": "Submission {{status}}",
+    "commitSha": "Commit: {{sha}}",
+    "mrIid": "MR: !{{iid}}",
+    "retryMrCreation": "Retry MR creation",
+    "close": "Close"
+  },
+  "status": {
+    "modified": "Modified",
+    "added": "Added",
+    "deleted": "Deleted",
+    "renamed": "Renamed",
+    "untracked": "Untracked"
+  },
+  "errors": {
+    "loadRepositories": "Failed to load CodeHub repositories",
+    "loadChanges": "Failed to load repository changes",
+    "loadDiff": "Failed to load diff",
+    "cloneRequired": "Repository URL and directory are required",
+    "cloneFailed": "Failed to clone repository",
+    "pullPreviewFailed": "Failed to preview pull",
+    "pullFailed": "Failed to pull repository updates",
+    "pullConflicts": "Pull has conflicts: {{files}}",
+    "selectFile": "Select at least one changed file",
+    "commitMessageRequired": "Commit message is required",
+    "commitFailed": "Failed to commit CodeHub changes",
+    "pushFailed": "Failed to push CodeHub branch",
+    "createMrFailed": "Failed to create CodeHub MR",
+    "retryMrFailed": "Failed to retry MR creation"
+  }
+}

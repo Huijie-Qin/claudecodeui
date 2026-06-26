@@ -208,6 +208,48 @@ function parseRemoteHeadRefs(output) {
     .filter((entry) => entry.commitSha && entry.branch);
 }
 
+function parseMergeTreeNameOnlyOutput(output) {
+  const lines = String(output || '').split(/\r?\n/);
+  const files = [];
+  for (const line of lines) {
+    const value = line.trim();
+    if (!value) break;
+    if (/^[0-9a-f]{40}$/i.test(value)) continue;
+    files.push(normalizeRelativePath(value));
+  }
+  return Array.from(new Set(files.filter(Boolean)));
+}
+
+async function getRemoteChangedFiles(repoPath, remoteBranch) {
+  try {
+    const { stdout } = await runGit(['diff', '--name-only', `HEAD..origin/${remoteBranch}`], { cwd: repoPath });
+    return stdout
+      .split(/\r?\n/)
+      .map(normalizeRelativePath)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function detectMergeConflicts(repoPath, remoteBranch) {
+  try {
+    await execFileAsync('git', ['merge-tree', '--write-tree', '--name-only', '--messages', 'HEAD', `origin/${remoteBranch}`], {
+      cwd: repoPath,
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER_BYTES,
+      env: process.env,
+    });
+    return { status: 'clean', files: [] };
+  } catch (error) {
+    const files = parseMergeTreeNameOnlyOutput(error?.stdout || '');
+    if (files.length > 0) {
+      return { status: 'conflict', files };
+    }
+    return { status: 'unknown', files: [] };
+  }
+}
+
 async function getCurrentBranch(repoPath) {
   const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath });
   return stdout.trim();
@@ -407,15 +449,40 @@ export const codeHubGitService = {
     } catch {
       // Leave as zero for repositories without a comparable remote branch.
     }
+    const currentBranch = await getCurrentBranch(repoPath);
+    const changedFiles = parsePorcelainStatus(statusResult.stdout).map((entry) => entry.path);
+    const remoteChangedFiles = behind > 0 ? await getRemoteChangedFiles(repoPath, remoteBranch) : [];
+    const localConflictFiles = changedFiles.filter((file) => remoteChangedFiles.includes(file));
+    const mergeConflictCheck = behind > 0 ? await detectMergeConflicts(repoPath, remoteBranch) : { status: 'clean', files: [] };
+    const conflictFiles = Array.from(new Set([
+      ...localConflictFiles,
+      ...mergeConflictCheck.files,
+    ]));
+    const hasConflicts = conflictFiles.length > 0 || mergeConflictCheck.status === 'conflict';
+    const dirty = statusResult.stdout.trim() !== '';
+    const recommendation = dirty
+      ? 'commit-first'
+      : hasConflicts
+        ? 'resolve-conflicts'
+        : behind > 0
+          ? 'pull'
+          : 'up-to-date';
+
     return {
-      branch: await getCurrentBranch(repoPath),
+      branch: currentBranch,
       remote: 'origin',
       remoteBranch,
-      dirty: statusResult.stdout.trim() !== '',
-      changedFiles: parsePorcelainStatus(statusResult.stdout).map((entry) => entry.path),
+      dirty,
+      changedFiles,
+      remoteChangedFiles,
+      localConflictFiles,
+      mergeConflictFiles: mergeConflictCheck.files,
+      conflictFiles,
+      hasConflicts,
+      conflictCheckStatus: mergeConflictCheck.status,
       ahead,
       behind,
-      recommendation: statusResult.stdout.trim() ? 'commit-first' : 'pull',
+      recommendation,
     };
   },
 

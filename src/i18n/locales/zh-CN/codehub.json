@@ -1,0 +1,145 @@
+{
+  "title": "CodeHub",
+  "workspaceUnsupported": "当前工作区不支持 CodeHub。",
+  "selectOrCloneRepository": "请选择或克隆一个 CodeHub 代码仓。",
+  "showRepositories": "显示代码仓",
+  "hideRepositories": "隐藏代码仓",
+  "repositories": {
+    "title": "代码仓",
+    "branch": "分支",
+    "dirty": "有变更",
+    "clean": "干净"
+  },
+  "clone": {
+    "title": "克隆代码仓",
+    "repositoryUrl": "代码仓地址",
+    "repositoryUrlPlaceholder": "https://codehub.../repo.git",
+    "folderName": "工作区文件夹名称",
+    "folderNamePlaceholder": "folder-name",
+    "branch": "分支（可选）",
+    "branchPlaceholder": "可不填，留空时使用默认分支",
+    "button": "克隆"
+  },
+  "repository": {
+    "upstream": "公共仓：{{url}}"
+  },
+  "pull": {
+    "branchPlaceholder": "要拉取的分支",
+    "preview": "预览",
+    "button": "拉取",
+    "summary": "本地 {{branch}} 相比 {{remote}}/{{remoteBranch}}：ahead {{ahead}}，behind {{behind}}。",
+    "localChanges": "本地变更：{{files}}",
+    "localChangesUnknown": "检测到变更文件",
+    "clean": "工作区干净。",
+    "conflictPullDisabled": "请先处理预检提示，或选择手动冲突处理。",
+    "conflictsTitle": "预检发现可能存在拉取冲突",
+    "conflictFiles": "涉及文件：{{files}}",
+    "conflictFilesUnknown": "未知文件",
+    "recommendation": {
+      "commitFirst": "建议：先提交或清理本地变更，再执行拉取。",
+      "resolveConflicts": "建议：先选择一种冲突处理方式，再执行拉取。",
+      "pull": "建议：可以拉取远程更新。",
+      "upToDate": "建议：当前没有需要拉取的远程更新。",
+      "unknown": "建议：冲突检查结果不确定，请确认后再拉取。"
+    },
+    "options": {
+      "commitFirstTitle": "先提交",
+      "commitFirstDescription": "先提交当前本地变更，然后重新预检或拉取。",
+      "commitFirstButton": "提交变更",
+      "stashTitle": "暂存或清理",
+      "stashDescription": "先临时移走或清理本地变更，然后重新执行预检。",
+      "manualTitle": "手动处理",
+      "manualDescription": "继续拉取，并在工作区内手动解决冲突文件。",
+      "manualButton": "仍然拉取"
+    }
+  },
+  "submission": {
+    "title": "提交批次",
+    "summary": "HEAD 相比 origin/{{targetBranch}} 多 {{count}} 个 commit",
+    "pushedTo": "，已推送到 {{branches}}",
+    "pushCommits": "推送 commit",
+    "createMr": "创建 MR",
+    "existingMr": "检测到当前 HEAD 已有 MR",
+    "open": "打开"
+  },
+  "changes": {
+    "title": "变更文件",
+    "selected": "已选择 {{count}} 个",
+    "commit": "Commit",
+    "empty": "没有本地变更。"
+  },
+  "diff": {
+    "title": "Diff",
+    "loading": "正在加载 diff...",
+    "largeView": "放大查看 diff",
+    "close": "关闭",
+    "empty": "请选择一个变更文件查看 diff。",
+    "truncated": "diff 内容较大，已限制渲染范围以保持页面响应。",
+    "before": "变更前",
+    "after": "变更后"
+  },
+  "workflow": {
+    "title": "Commit、Push 并创建 MR",
+    "heading": "提交选中的 CodeHub 变更",
+    "description": "Commit、Push 和创建 MR 是相互独立的步骤。后续步骤失败后可以单独重试，不需要重复前面已成功的步骤。",
+    "steps": {
+      "commit": "1. Commit",
+      "push": "2. Push",
+      "mr": "3. MR"
+    },
+    "commitMessage": "Commit 信息",
+    "commitMessagePlaceholder": "请输入 commit 信息",
+    "selectedFilesMessage": "已选择 {{count}} 个文件。该信息会加入当前提交批次。",
+    "commitSelectedFiles": "提交选中文件",
+    "pushBranch": "推送分支",
+    "pushSummary": "HEAD 相比 origin/{{targetBranch}} 多 {{count}} 个 commit。推送会将选中的远程分支更新到当前 HEAD。",
+    "newBranch": "新分支",
+    "existingBranch": "已有分支",
+    "selectSourceBranch": "选择源分支",
+    "sourceBranchPlaceholder": "feature/AR00000001",
+    "createMergeRequest": "创建 MR",
+    "pushed": "已推送：{{remote}}/{{branch}}",
+    "pushedAt": "，位于 {{sha}}",
+    "headAvailable": "当前 HEAD 已存在于 {{branches}}。",
+    "sourceBranch": "源分支",
+    "pushHeadFirst": "请先将 HEAD 推送到远程分支",
+    "targetBranchPlaceholder": "目标分支",
+    "mergeTargetRepository": "合并目标代码仓",
+    "personalRepo": "个人仓",
+    "upstreamRepo": "公共仓",
+    "upstreamRepoTitle": "创建合入公共仓的 MR",
+    "noUpstreamRepoTitle": "未检测到公共仓",
+    "mrTitlePlaceholder": "MR 标题",
+    "mrDescriptionMessage": "MR 描述会使用 origin/{{targetBranch}} 到 HEAD 之间的 commit 信息。",
+    "existingMrMessage": "当前源分支和 HEAD 已存在 MR",
+    "openMr": "打开 MR",
+    "submissionStatus": "提交状态 {{status}}",
+    "commitSha": "Commit：{{sha}}",
+    "mrIid": "MR：!{{iid}}",
+    "retryMrCreation": "重试创建 MR",
+    "close": "关闭"
+  },
+  "status": {
+    "modified": "已修改",
+    "added": "已新增",
+    "deleted": "已删除",
+    "renamed": "已重命名",
+    "untracked": "未跟踪"
+  },
+  "errors": {
+    "loadRepositories": "加载 CodeHub 代码仓失败",
+    "loadChanges": "加载代码仓变更失败",
+    "loadDiff": "加载 diff 失败",
+    "cloneRequired": "代码仓地址和目录不能为空",
+    "cloneFailed": "克隆代码仓失败",
+    "pullPreviewFailed": "预览拉取失败",
+    "pullFailed": "拉取代码仓更新失败",
+    "pullConflicts": "拉取存在冲突：{{files}}",
+    "selectFile": "请至少选择一个变更文件",
+    "commitMessageRequired": "Commit 信息不能为空",
+    "commitFailed": "提交 CodeHub 变更失败",
+    "pushFailed": "推送 CodeHub 分支失败",
+    "createMrFailed": "创建 CodeHub MR 失败",
+    "retryMrFailed": "重试创建 MR 失败"
+  }
+}
