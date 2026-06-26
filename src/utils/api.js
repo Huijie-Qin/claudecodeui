@@ -514,8 +514,8 @@ export const api = {
       authenticatedFetch(`/api/admin/tenants/${tenantId}/users/${userId}`, {
         method: 'DELETE',
       }),
-    sqlCheckTenantConfig: (tenantId) =>
-      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/sql-check`),
+    sqlCheckTenantConfig: (tenantId, options = {}) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/sql-check`, options),
     updateSqlCheckTenantConfig: (tenantId, ruleIds) =>
       authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/sql-check`, {
         method: 'PUT',
@@ -524,9 +524,9 @@ export const api = {
   },
 
   sqlCheck: {
-    rules: () => fetch(sqlCheckUrl('/sql-check/rules')),
-    workspaceConfig: (workspaceId) =>
-      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`)),
+    rules: (options = {}) => fetch(sqlCheckUrl('/sql-check/rules'), options),
+    workspaceConfig: (workspaceId, options = {}) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`), options),
     updateWorkspaceConfig: (workspaceId, payload) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`), {
         method: 'PUT',
