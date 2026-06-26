@@ -3422,8 +3422,8 @@ async function startServer() {
             await stopAllPlugins();
             process.exit(0);
         };
-        process.on('SIGTERM', () => void shutdownPlugins());
-        process.on('SIGINT', () => void shutdownPlugins());
+        process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+        process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
     } catch (error) {
         console.error('[ERROR] Failed to start server:', error);
         process.exit(1);
