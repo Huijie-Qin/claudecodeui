@@ -45,6 +45,7 @@ export function createSkillMarketRouter({
         canManage: isManageRole(accessRole),
         skills: result.skills,
         pageInfo: result.pageInfo,
+        openApiRequestBody: result.openApiRequestBody,
       });
     } catch (error) {
       return handleWorkspaceError(res, error);

@@ -270,6 +270,29 @@ test('listSkillMarket enriches remote skills with local import and version state
   assert.equal(detail.imported, true);
 });
 
+test('listSkillMarket returns the OpenAPI skillList request body with page info', async () => {
+  const workspacePath = await makeWorkspace();
+
+  const result = await listSkillMarket(withTenant({
+    workspacePath,
+    searchContent: 'bug',
+    page: 2,
+    pageSize: 3,
+    includePageInfo: true,
+  }));
+
+  assert.deepEqual(result.openApiRequestBody, {
+    data: {
+      hasPublishedVersion: true,
+      searchContent: 'bug',
+    },
+    pageInfo: {
+      page: 2,
+      pageSize: 3,
+    },
+  });
+});
+
 test('importMarketSkill downloads the mock API skill into .claude/skills and records metadata', async () => {
   const workspacePath = await makeWorkspace();
 

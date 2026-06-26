@@ -44,6 +44,11 @@ export async function listSkillMarket(options = {}) {
   const normalizedPage = normalizePositiveInteger(page, 1);
   const normalizedPageSize = normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE);
   const remoteAccountId = accountId ?? currentUsername;
+  const openApiRequestBody = createSkillListRequestBody({
+    searchContent,
+    page: normalizedPage,
+    pageSize: normalizedPageSize,
+  });
   const remoteSkills = await fetchRemoteSkillList({
     searchContent,
     page: normalizedPage,
@@ -57,6 +62,7 @@ export async function listSkillMarket(options = {}) {
       return {
         skills: remoteSkills,
         pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+        openApiRequestBody,
       };
     }
     return remoteSkills;
@@ -87,6 +93,7 @@ export async function listSkillMarket(options = {}) {
     return {
       skills,
       pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+      openApiRequestBody,
     };
   }
   return skills;
@@ -563,24 +570,29 @@ async function fetchRemoteSkillList({
   tenantCode,
   accountId,
 } = {}) {
+  const body = createSkillListRequestBody({ searchContent, page, pageSize });
   const payload = await requestMarketJson('/api/skill/skillList', {
     method: 'POST',
     tenantCode,
     accountId,
-    body: {
-      data: {
-        hasPublishedVersion: true,
-        searchContent,
-      },
-      pageInfo: {
-        page: normalizePositiveInteger(page, 1),
-        pageSize: normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE),
-      },
-    },
+    body,
   });
 
   return normalizeSkillListPayload(payload.data)
     .map(normalizeRemoteSkillSummary);
+}
+
+function createSkillListRequestBody({ searchContent = '', page = 1, pageSize = DEFAULT_LIST_PAGE_SIZE } = {}) {
+  return {
+    data: {
+      hasPublishedVersion: true,
+      searchContent,
+    },
+    pageInfo: {
+      page: normalizePositiveInteger(page, 1),
+      pageSize: normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE),
+    },
+  };
 }
 
 function createSkillListPageInfo(remoteCount, page, pageSize) {
