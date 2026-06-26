@@ -407,6 +407,10 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
     delete process.env.SKILL_MARKET_BASE_URL;
     process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
 
+    const marketList = await listSkillMarket(withTenant({ workspacePath }));
+    assert.equal(marketList[0].name, displayName);
+    assert.equal(marketList[0].displayName, displayName);
+
     const previewDetail = await getSkillMarketDetail(withTenant({
       workspacePath,
       name: displayName,
