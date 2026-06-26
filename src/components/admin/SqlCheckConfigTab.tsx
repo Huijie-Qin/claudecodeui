@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -55,8 +55,13 @@ function toggleRuleId(ruleIds: string[], ruleId: string, checked: boolean) {
   return ruleIds.filter((item) => item !== ruleId);
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 export default function SqlCheckConfigTab({ tenants, currentTenantId }: SqlCheckConfigTabProps) {
   const { t } = useTranslation('admin');
+  const tRef = useRef(t);
   const defaultTenantId = currentTenantId || tenants[0]?.id || 0;
   const [tenantId, setTenantId] = useState(defaultTenantId);
   const [rules, setRules] = useState<SqlCheckRule[]>([]);
@@ -69,56 +74,77 @@ export default function SqlCheckConfigTab({ tenants, currentTenantId }: SqlCheck
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+
+  const translate = useCallback((key: string) => tRef.current(key), []);
+
+  useEffect(() => {
     if (!tenantId && defaultTenantId) {
       setTenantId(defaultTenantId);
     }
   }, [defaultTenantId, tenantId]);
 
-  const loadRules = useCallback(async () => {
+  const loadRules = useCallback(async ({ signal }: { signal?: AbortSignal } = {}) => {
     setIsLoadingRules(true);
     setError(null);
     try {
-      const response = await api.sqlCheck.rules();
+      const response = await api.sqlCheck.rules(signal ? { signal } : undefined);
       const payload = await response.json().catch(() => ({} as SqlCheckRulesPayload)) as SqlCheckRulesPayload;
+      if (signal?.aborted) return;
       if (!response.ok) {
-        setError(getPayloadError(payload, t('sqlCheck.errors.loadRules')));
+        setError(getPayloadError(payload, translate('sqlCheck.errors.loadRules')));
         return;
       }
       setRules(normalizeRules(payload));
     } catch (caughtError) {
+      if (signal?.aborted || isAbortError(caughtError)) return;
       console.error('[SqlCheckConfigTab] Failed to load rules:', caughtError);
-      setError(t('sqlCheck.errors.loadRules'));
+      setError(translate('sqlCheck.errors.loadRules'));
     } finally {
-      setIsLoadingRules(false);
+      if (!signal?.aborted) {
+        setIsLoadingRules(false);
+      }
     }
-  }, [t]);
+  }, [translate]);
 
-  const loadTenantConfig = useCallback(async () => {
-    if (!tenantId) return;
+  const loadTenantConfig = useCallback(async ({ signal }: { signal?: AbortSignal } = {}) => {
+    if (!tenantId) {
+      setIsLoadingConfig(false);
+      return;
+    }
     setIsLoadingConfig(true);
     setError(null);
     try {
-      const response = await api.admin.sqlCheckTenantConfig(tenantId);
+      const response = await api.admin.sqlCheckTenantConfig(tenantId, signal ? { signal } : undefined);
       const payload = await response.json().catch(() => ({} as SqlCheckConfigPayload)) as SqlCheckConfigPayload;
+      if (signal?.aborted) return;
       if (!response.ok) {
-        setError(getPayloadError(payload, t('sqlCheck.errors.loadConfig')));
+        setError(getPayloadError(payload, translate('sqlCheck.errors.loadConfig')));
         return;
       }
       setSelectedRuleIds(payload.ruleIds || []);
     } catch (caughtError) {
+      if (signal?.aborted || isAbortError(caughtError)) return;
       console.error('[SqlCheckConfigTab] Failed to load config:', caughtError);
-      setError(t('sqlCheck.errors.loadConfig'));
+      setError(translate('sqlCheck.errors.loadConfig'));
     } finally {
-      setIsLoadingConfig(false);
+      if (!signal?.aborted) {
+        setIsLoadingConfig(false);
+      }
     }
-  }, [tenantId, t]);
+  }, [tenantId, translate]);
 
   useEffect(() => {
-    void loadRules();
+    const controller = new AbortController();
+    void loadRules({ signal: controller.signal });
+    return () => controller.abort();
   }, [loadRules]);
 
   useEffect(() => {
-    void loadTenantConfig();
+    const controller = new AbortController();
+    void loadTenantConfig({ signal: controller.signal });
+    return () => controller.abort();
   }, [loadTenantConfig]);
 
   const filteredRules = useMemo(() => {
