@@ -118,6 +118,16 @@ test('GET /skills returns market inventory for view access', async () => {
       return {
         skills: [{ name: 'bug-hunter' }],
         pageInfo: { page: 1, pageSize: 20, hasNextPage: false },
+        openApiRequestBody: {
+          data: {
+            hasPublishedVersion: true,
+            searchContent: '',
+          },
+          pageInfo: {
+            page: 1,
+            pageSize: 20,
+          },
+        },
       };
     },
   });
@@ -148,6 +158,16 @@ test('GET /skills returns market inventory for view access', async () => {
     canManage: false,
     skills: [{ name: 'bug-hunter' }],
     pageInfo: { page: 1, pageSize: 20, hasNextPage: false },
+    openApiRequestBody: {
+      data: {
+        hasPublishedVersion: true,
+        searchContent: '',
+      },
+      pageInfo: {
+        page: 1,
+        pageSize: 20,
+      },
+    },
   });
 });
 
