@@ -48,10 +48,22 @@ type PullPreview = {
   mergeConflictFiles?: string[];
   conflictFiles?: string[];
   hasConflicts?: boolean;
+  localChangesBlockPull?: boolean;
   conflictCheckStatus?: string;
   ahead?: number;
   behind?: number;
   recommendation?: string;
+};
+
+type StashRecord = {
+  stashRef: string;
+  stashSha?: string;
+  stashSubject?: string;
+};
+
+type ConflictState = {
+  source: 'pull' | 'stash';
+  files: string[];
 };
 
 type CommitResult = {
@@ -126,6 +138,7 @@ function statusLabel(status: string, translate: (key: string) => string): string
     deleted: translate('status.deleted'),
     renamed: translate('status.renamed'),
     untracked: translate('status.untracked'),
+    conflict: translate('status.conflict'),
   };
   return labels[status] || status;
 }
@@ -168,6 +181,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [mrResult, setMrResult] = useState<MrResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [lastStash, setLastStash] = useState<StashRecord | null>(null);
+  const [conflictState, setConflictState] = useState<ConflictState | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
@@ -220,6 +236,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     if (!workspaceId) return;
     setIsLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const response = await api.codehub.repositories(workspaceId);
       if (!response.ok) {
@@ -255,6 +272,16 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       const payload = await response.json();
       const nextChanges = payload.files || [];
       setChanges(nextChanges);
+      const conflictFiles = nextChanges
+        .filter((change: CodeHubChange) => change.status === 'conflict')
+        .map((change: CodeHubChange) => change.path);
+      setConflictState((current) => {
+        if (conflictFiles.length === 0) return null;
+        return {
+          source: current?.source || 'pull',
+          files: conflictFiles,
+        };
+      });
       setSelectedFiles((current) => current.filter((file) => nextChanges.some((change: CodeHubChange) => change.path === file)));
     } catch (caughtError) {
       console.error('[CodeHubPanel] Failed to load changes:', caughtError);
@@ -325,6 +352,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setActiveMergeRequests([]);
     setPushResult(null);
     setMrResult(null);
+    setLastStash(null);
+    setConflictState(null);
     void loadChanges();
     void loadRemoteBranches();
   }, [loadChanges, loadRemoteBranches, selectedRepo]);
@@ -346,6 +375,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       setDiff(t('errors.loadDiff'));
     }
   }, [selectedRepoId, t, workspaceId]);
+
+  const openConflictFile = useCallback((filePath: string) => {
+    setActiveFile(filePath);
+    void openDiff(filePath);
+  }, [openDiff]);
 
   const toggleFile = useCallback((filePath: string, checked: boolean) => {
     setSelectedFiles((current) => {
@@ -416,6 +450,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     if (!workspaceId || !selectedRepoId) return;
     setIsWorking(true);
     setError(null);
+    setNotice(null);
     try {
       const response = await api.codehub.pullPreview(workspaceId, selectedRepoId, { branch: pullBranch });
       if (!response.ok) {
@@ -434,6 +469,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     if (!workspaceId || !selectedRepoId || isReadOnly) return;
     setIsWorking(true);
     setError(null);
+    setNotice(null);
     try {
       const response = await api.codehub.pull(workspaceId, selectedRepoId, { branch: pullBranch });
       const payload = await response.json().catch(() => ({}));
@@ -441,16 +477,131 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         setError(payload.error || payload.message || t('errors.pullFailed'));
         return;
       }
+      if (payload.localChangesBlockPull) {
+        setError(t('errors.pullLocalChangesWouldBeOverwritten', {
+          files: (payload.changedFiles || []).length > 0
+            ? (payload.changedFiles || []).join(', ')
+            : t('pull.conflictFilesUnknown'),
+        }));
+        await loadChanges();
+        return;
+      }
       if (payload.conflict) {
-        setError(t('errors.pullConflicts', { files: (payload.conflictFiles || []).join(', ') }));
+        const files = payload.conflictFiles || [];
+        setConflictState({ source: 'pull', files });
+        setError(null);
+        setNotice(t('pull.conflictState.pullNotice'));
+        await loadRepositories();
+        await loadChanges();
+        return;
       }
       setPullPreview(null);
+      setConflictState(null);
       await loadRepositories();
       await loadChanges();
     } finally {
       setIsWorking(false);
     }
   }, [isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepoId, t, workspaceId]);
+
+  const stashLocalChanges = useCallback(async () => {
+    if (!workspaceId || !selectedRepoId || isReadOnly) return;
+    setIsWorking(true);
+    setError(null);
+    setNotice(null);
+    setConflictState(null);
+    try {
+      const response = await api.codehub.stashLocalChanges(workspaceId, selectedRepoId, {
+        message: `CodeHub pull preview ${new Date().toISOString()}`,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(payload.error || payload.message || t('errors.stashLocalChangesFailed'));
+        return;
+      }
+      if (payload.stashed && payload.stashRef) {
+        setLastStash({
+          stashRef: payload.stashRef,
+          stashSha: payload.stashSha,
+          stashSubject: payload.stashSubject,
+        });
+      }
+      setNotice(payload.stashed
+        ? t('pull.options.stashSuccess', { ref: payload.stashRef || t('pull.options.stashFallbackRef') })
+        : t('pull.options.stashNoChanges'));
+      await loadRepositories();
+      await loadChanges();
+      await previewPull();
+    } finally {
+      setIsWorking(false);
+    }
+  }, [isReadOnly, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+
+  const restoreLastStash = useCallback(async () => {
+    if (!workspaceId || !selectedRepoId || isReadOnly || !lastStash?.stashRef) return;
+    setIsWorking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await api.codehub.restoreStash(workspaceId, selectedRepoId, {
+        stashRef: lastStash.stashRef,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(payload.error || payload.message || t('errors.restoreStashFailed'));
+        return;
+      }
+      if (payload.conflict) {
+        const files = payload.conflictFiles || [];
+        setConflictState({ source: 'stash', files });
+        setError(null);
+        setNotice(t('pull.conflictState.stashNotice'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+      setLastStash(null);
+      setConflictState(null);
+      setNotice(t('pull.restore.success', { ref: lastStash.stashRef }));
+      await loadRepositories();
+      await loadChanges();
+      await previewPull();
+    } finally {
+      setIsWorking(false);
+    }
+  }, [isReadOnly, lastStash, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+
+  const clearLocalChanges = useCallback(async () => {
+    if (!workspaceId || !selectedRepoId || isReadOnly || !pullPreview) return;
+    const files = pullPreview.changedFiles || [];
+    if (files.length === 0) {
+      setError(t('errors.clearLocalChangesNoFiles'));
+      return;
+    }
+    if (!window.confirm(t('pull.options.clearConfirm', { files: files.join(', ') }))) {
+      return;
+    }
+    setIsWorking(true);
+    setError(null);
+    setNotice(null);
+    setConflictState(null);
+    try {
+      const response = await api.codehub.clearLocalChanges(workspaceId, selectedRepoId, { files });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(payload.error || payload.message || t('errors.clearLocalChangesFailed'));
+        return;
+      }
+      setNotice(payload.cleared
+        ? t('pull.options.clearSuccess', { count: (payload.files || []).length })
+        : t('pull.options.clearNoChanges'));
+      await loadRepositories();
+      await loadChanges();
+      await previewPull();
+    } finally {
+      setIsWorking(false);
+    }
+  }, [isReadOnly, loadChanges, loadRepositories, previewPull, pullPreview, selectedRepoId, t, workspaceId]);
 
   const commitSelectedFiles = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -781,17 +932,51 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                               <div className="rounded-md border border-border/70 bg-background/70 p-2">
                                 <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
                                 <div className="mt-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
+                                <div className="mt-2 grid gap-2">
+                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void stashLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                    {t('pull.options.stashButton')}
+                                  </Button>
+                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void clearLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                    {t('pull.options.clearButton')}
+                                  </Button>
+                                </div>
                               </div>
                               <div className="rounded-md border border-border/70 bg-background/70 p-2">
                                 <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
-                                <Button className="mt-2 w-full" variant="outline" size="sm" onClick={() => void pullRepository()} disabled={isReadOnly || isWorking}>
+                                <div className="mt-1 text-muted-foreground">
+                                  {pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedDescription') : t('pull.options.manualDescription')}
+                                </div>
+                                <Button
+                                  className="mt-2 w-full"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => void pullRepository()}
+                                  disabled={isReadOnly || isWorking || Boolean(pullPreview.localChangesBlockPull)}
+                                  title={pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedTitle') : undefined}
+                                >
                                   {t('pull.options.manualButton')}
                                 </Button>
                               </div>
                             </div>
                           </div>
                         ) : null}
+                      </div>
+                    ) : null}
+                    {lastStash ? (
+                      <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-800 dark:text-sky-200">
+                        <div className="font-medium text-foreground">
+                          {t('pull.restore.title', { ref: lastStash.stashRef })}
+                        </div>
+                        <div className="mt-1">{t('pull.restore.description')}</div>
+                        <Button
+                          className="mt-2"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void restoreLastStash()}
+                          disabled={isReadOnly || isWorking}
+                        >
+                          {t('pull.restore.button')}
+                        </Button>
                       </div>
                     ) : null}
                   </div>
@@ -851,6 +1036,41 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 ) : null}
               </section>
 
+              {conflictState ? (
+                <section className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-foreground">{t('pull.conflictState.title')}</div>
+                      <div className="mt-1 text-xs">
+                        {conflictState.source === 'stash'
+                          ? t('pull.conflictState.stashDescription')
+                          : t('pull.conflictState.pullDescription')}
+                      </div>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => void loadChanges()} disabled={isWorking}>
+                      <RefreshCw className="h-4 w-4" />
+                      {t('pull.conflictState.refresh')}
+                    </Button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {conflictState.files.length > 0 ? conflictState.files.map((file) => (
+                      <Button
+                        key={file}
+                        variant="outline"
+                        size="sm"
+                        className="max-w-full justify-start"
+                        onClick={() => openConflictFile(file)}
+                      >
+                        <span className="truncate">{file}</span>
+                      </Button>
+                    )) : (
+                      <span className="text-xs">{t('pull.conflictFilesUnknown')}</span>
+                    )}
+                  </div>
+                  <div className="mt-3 text-xs">{t('pull.conflictState.resolveHint')}</div>
+                </section>
+              ) : null}
+
               <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                 <div className="rounded-md border border-border">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -879,7 +1099,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                         key={change.path}
                         className={`grid grid-cols-[auto_minmax(0,1fr)] gap-2 rounded px-2 py-2 text-sm hover:bg-muted/50 ${
                           activeFile === change.path ? 'bg-muted/60' : ''
-                        }`}
+                        } ${change.status === 'conflict' ? 'border border-amber-500/30 bg-amber-500/10' : ''}`}
                       >
                         <input
                           type="checkbox"
@@ -930,6 +1150,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
           {error ? (
             <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               {error}
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+              {notice}
             </div>
           ) : null}
         </main>

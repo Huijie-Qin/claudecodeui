@@ -48,9 +48,34 @@
       "commitFirstButton": "Commit changes",
       "stashTitle": "Stash or clear",
       "stashDescription": "Temporarily move or clean local changes, then run preview again.",
+      "stashButton": "Stash changes",
+      "stashSuccess": "Local changes were stashed as {{ref}}.",
+      "stashNoChanges": "No local changes needed to be stashed.",
+      "stashFallbackRef": "latest stash",
+      "clearButton": "Clear changes",
+      "clearConfirm": "This will discard local changes in: {{files}}. Continue?",
+      "clearSuccess": "Cleared {{count}} local changed files.",
+      "clearNoChanges": "No matching local changes needed to be cleared.",
       "manualTitle": "Manual resolution",
       "manualDescription": "Continue pulling and resolve conflict files in the workspace.",
+      "manualBlockedDescription": "Manual pull is available after local changes are committed, stashed, or cleared.",
+      "manualBlockedTitle": "Local changes would be overwritten by pull.",
       "manualButton": "Pull anyway"
+    },
+    "restore": {
+      "title": "Stashed changes: {{ref}}",
+      "description": "After pulling remote updates, restore the stashed local changes back into the workspace.",
+      "button": "Restore stash",
+      "success": "Restored stashed changes from {{ref}}."
+    },
+    "conflictState": {
+      "title": "Conflict resolution in progress",
+      "pullNotice": "Pull produced conflicts. Review and resolve the files below.",
+      "stashNotice": "Restoring the stash produced conflicts. Review and resolve the files below.",
+      "pullDescription": "The pull has stopped with merge conflicts. Open each file, resolve the conflict markers, then continue with the commit flow.",
+      "stashDescription": "The stash was applied with conflicts. Open each file, resolve the conflict markers, then continue with the commit flow.",
+      "refresh": "Refresh",
+      "resolveHint": "After resolving conflicts, save the files and refresh this list. Conflict files will leave this panel once Git reports them as resolved."
     }
   },
   "submission": {
@@ -124,7 +149,8 @@
     "added": "Added",
     "deleted": "Deleted",
     "renamed": "Renamed",
-    "untracked": "Untracked"
+    "untracked": "Untracked",
+    "conflict": "Conflict"
   },
   "errors": {
     "loadRepositories": "Failed to load CodeHub repositories",
@@ -135,6 +161,12 @@
     "pullPreviewFailed": "Failed to preview pull",
     "pullFailed": "Failed to pull repository updates",
     "pullConflicts": "Pull has conflicts: {{files}}",
+    "pullLocalChangesWouldBeOverwritten": "Pull was blocked because local changes would be overwritten: {{files}}. Commit, stash, or clear these files first.",
+    "stashLocalChangesFailed": "Failed to stash local changes",
+    "restoreStashFailed": "Failed to restore stashed changes",
+    "restoreStashConflicts": "Restoring the stash has conflicts: {{files}}. Resolve them in the workspace.",
+    "clearLocalChangesFailed": "Failed to clear local changes",
+    "clearLocalChangesNoFiles": "No local changed files are available to clear",
     "selectFile": "Select at least one changed file",
     "commitMessageRequired": "Commit message is required",
     "commitFailed": "Failed to commit CodeHub changes",

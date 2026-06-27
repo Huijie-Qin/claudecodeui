@@ -1,6 +1,7 @@
-import express from 'express';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+
+import express from 'express';
 
 import {
   aiMrSubmissionsDb,
@@ -573,6 +574,44 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/pull-preview', async 
   } catch (error) {
     if (error?.statusCode) return handleWorkspaceError(res, error);
     return sendRouteError(res, error, 'Failed to preview pull');
+  }
+});
+
+router.post('/workspaces/:workspaceId/repositories/:repoId/stash-local-changes', async (req, res) => {
+  try {
+    const { repoPath } = await resolveRepository(req, { requireEdit: true });
+    const result = await codeHubGitService.stashLocalChanges(repoPath, {
+      message: req.body?.message,
+    });
+    res.json(result);
+  } catch (error) {
+    if (error?.statusCode) return handleWorkspaceError(res, error);
+    return sendRouteError(res, error, 'Failed to stash local changes');
+  }
+});
+
+router.post('/workspaces/:workspaceId/repositories/:repoId/restore-stash', async (req, res) => {
+  try {
+    const { repoPath } = await resolveRepository(req, { requireEdit: true });
+    const result = await codeHubGitService.restoreStash(repoPath, {
+      stashRef: req.body?.stashRef,
+    });
+    res.json(result);
+  } catch (error) {
+    if (error?.statusCode) return handleWorkspaceError(res, error);
+    return sendRouteError(res, error, 'Failed to restore stashed changes');
+  }
+});
+
+router.post('/workspaces/:workspaceId/repositories/:repoId/clear-local-changes', async (req, res) => {
+  try {
+    const { repoPath } = await resolveRepository(req, { requireEdit: true });
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const result = await codeHubGitService.discardLocalChanges(repoPath, { files });
+    res.json(result);
+  } catch (error) {
+    if (error?.statusCode) return handleWorkspaceError(res, error);
+    return sendRouteError(res, error, 'Failed to clear local changes');
   }
 });
 

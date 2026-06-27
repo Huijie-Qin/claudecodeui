@@ -156,6 +156,7 @@ function parsePorcelainStatus(output) {
 
 function mapStatus(status) {
   if (status === '??') return 'untracked';
+  if (/U/.test(status) || ['AA', 'DD'].includes(status)) return 'conflict';
   if (status.includes('D')) return 'deleted';
   if (status.includes('A')) return 'added';
   if (status.includes('R')) return 'renamed';
@@ -220,6 +221,33 @@ function parseMergeTreeNameOnlyOutput(output) {
   return Array.from(new Set(files.filter(Boolean)));
 }
 
+function parseOverwrittenFilesFromGitError(message) {
+  const output = String(message || '');
+  if (!/would be overwritten by merge|would be overwritten by checkout|Please commit your changes or stash/i.test(output)) {
+    return [];
+  }
+  const lines = output.split(/\r?\n/);
+  const files = [];
+  let collecting = false;
+  for (const line of lines) {
+    if (/following files would be overwritten/i.test(line)) {
+      collecting = true;
+      continue;
+    }
+    if (!collecting) continue;
+    if (/Please commit your changes or stash|Aborting/i.test(line)) break;
+    const file = normalizeRelativePath(line);
+    if (file) files.push(file);
+  }
+  return Array.from(new Set(files));
+}
+
+function parseConflictFilesFromStatus(output) {
+  return parsePorcelainStatus(output)
+    .filter((entry) => /U/.test(entry.status) || ['AA', 'DD'].includes(entry.status))
+    .map((entry) => entry.path);
+}
+
 async function getRemoteChangedFiles(repoPath, remoteBranch) {
   try {
     const { stdout } = await runGit(['diff', '--name-only', `HEAD..origin/${remoteBranch}`], { cwd: repoPath });
@@ -248,6 +276,11 @@ async function detectMergeConflicts(repoPath, remoteBranch) {
     }
     return { status: 'unknown', files: [] };
   }
+}
+
+async function listStatusEntries(repoPath) {
+  const { stdout } = await runGit(['status', '--porcelain'], { cwd: repoPath });
+  return parsePorcelainStatus(stdout);
 }
 
 async function getCurrentBranch(repoPath) {
@@ -355,8 +388,8 @@ export const codeHubGitService = {
   },
 
   async listChanges(repoPath) {
-    const { stdout } = await runGit(['status', '--porcelain'], { cwd: repoPath });
-    return parsePorcelainStatus(stdout).map((entry) => ({
+    const entries = await listStatusEntries(repoPath);
+    return entries.map((entry) => ({
       path: entry.path,
       status: mapStatus(entry.status),
     }));
@@ -459,6 +492,7 @@ export const codeHubGitService = {
       ...mergeConflictCheck.files,
     ]));
     const hasConflicts = conflictFiles.length > 0 || mergeConflictCheck.status === 'conflict';
+    const localChangesBlockPull = localConflictFiles.length > 0;
     const dirty = statusResult.stdout.trim() !== '';
     const recommendation = dirty
       ? 'commit-first'
@@ -479,6 +513,7 @@ export const codeHubGitService = {
       mergeConflictFiles: mergeConflictCheck.files,
       conflictFiles,
       hasConflicts,
+      localChangesBlockPull,
       conflictCheckStatus: mergeConflictCheck.status,
       ahead,
       behind,
@@ -498,14 +533,111 @@ export const codeHubGitService = {
       return { success: true, output: stdout || stderr || 'Pull completed', remote: 'origin', branch: remoteBranch };
     } catch (error) {
       const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
-      const conflicts = parsePorcelainStatus(status.stdout)
-        .filter((entry) => /U/.test(entry.status) || ['AA', 'DD'].includes(entry.status))
-        .map((entry) => entry.path);
+      const conflicts = parseConflictFilesFromStatus(status.stdout);
       if (conflicts.length > 0) {
         return { success: false, conflict: true, conflictFiles: conflicts, error: error.message };
       }
+      const overwrittenFiles = parseOverwrittenFilesFromGitError(error.message);
+      if (overwrittenFiles.length > 0 || /Please commit your changes or stash/i.test(String(error.message || ''))) {
+        return {
+          success: false,
+          localChangesBlockPull: true,
+          conflict: false,
+          changedFiles: overwrittenFiles,
+          error: error.message,
+        };
+      }
       throw error;
     }
+  },
+
+  async stashLocalChanges(repoPath, { message } = {}) {
+    const entries = await listStatusEntries(repoPath);
+    if (entries.length === 0) {
+      return { success: true, stashed: false, message: 'No local changes to stash' };
+    }
+    const stashMessage = String(message || `CodeHub pull preview ${new Date().toISOString()}`).slice(0, 200);
+    const { stdout, stderr } = await runGit(['stash', 'push', '-u', '-m', stashMessage], { cwd: repoPath });
+    const listResult = await runGit(['stash', 'list', '-n', '1', '--format=%gd%x1f%H%x1f%s'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+    const [stashRef = '', stashSha = '', stashSubject = ''] = listResult.stdout.trim().split('\x1f');
+    return {
+      success: true,
+      stashed: true,
+      stashRef,
+      stashSha,
+      stashSubject,
+      files: entries.map((entry) => entry.path),
+      output: stdout || stderr || '',
+    };
+  },
+
+  async restoreStash(repoPath, { stashRef } = {}) {
+    const ref = String(stashRef || '').trim();
+    if (!/^stash@\{\d+\}$/.test(ref)) {
+      throw createHttpError('Invalid stash reference', 400);
+    }
+    try {
+      const { stdout, stderr } = await runGit(['stash', 'pop', ref], {
+        cwd: repoPath,
+        timeoutMs: 10 * 60 * 1000,
+      });
+      return {
+        success: true,
+        restored: true,
+        stashRef: ref,
+        output: stdout || stderr || '',
+      };
+    } catch (error) {
+      const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+      const conflicts = parseConflictFilesFromStatus(status.stdout);
+      if (conflicts.length > 0) {
+        return {
+          success: false,
+          conflict: true,
+          stashRef: ref,
+          conflictFiles: conflicts,
+          error: error.message,
+        };
+      }
+      throw error;
+    }
+  },
+
+  async discardLocalChanges(repoPath, { files } = {}) {
+    const requestedFiles = Array.from(new Set(
+      (Array.isArray(files) ? files : [])
+        .map(normalizeRelativePath)
+        .filter(Boolean),
+    ));
+    if (requestedFiles.length === 0) {
+      throw createHttpError('At least one file is required to clear local changes', 400);
+    }
+
+    const entries = await listStatusEntries(repoPath);
+    const selectedEntries = entries.filter((entry) => requestedFiles.includes(entry.path));
+    if (selectedEntries.length === 0) {
+      return { success: true, cleared: false, files: [] };
+    }
+
+    const untrackedFiles = selectedEntries
+      .filter((entry) => entry.status === '??')
+      .map((entry) => entry.path);
+    const trackedFiles = selectedEntries
+      .filter((entry) => entry.status !== '??')
+      .map((entry) => entry.path);
+
+    if (trackedFiles.length > 0) {
+      await runGit(['restore', '--staged', '--worktree', '--', ...trackedFiles], { cwd: repoPath });
+    }
+    if (untrackedFiles.length > 0) {
+      await runGit(['clean', '-fd', '--', ...untrackedFiles], { cwd: repoPath });
+    }
+
+    return {
+      success: true,
+      cleared: true,
+      files: selectedEntries.map((entry) => entry.path),
+    };
   },
 
   getCommitStats,

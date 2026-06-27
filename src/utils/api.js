@@ -309,6 +309,21 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    stashLocalChanges: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/stash-local-changes`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    restoreStash: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/restore-stash`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    clearLocalChanges: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/clear-local-changes`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     pull: (workspaceId, repoId, payload) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/pull`), {
         method: 'POST',

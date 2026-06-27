@@ -48,9 +48,34 @@
       "commitFirstButton": "提交变更",
       "stashTitle": "暂存或清理",
       "stashDescription": "先临时移走或清理本地变更，然后重新执行预检。",
+      "stashButton": "stash 本地变更",
+      "stashSuccess": "本地变更已保存到 {{ref}}。",
+      "stashNoChanges": "没有需要 stash 的本地变更。",
+      "stashFallbackRef": "最新 stash",
+      "clearButton": "清理变更",
+      "clearConfirm": "这会丢弃以下文件的本地变更：{{files}}。确认继续吗？",
+      "clearSuccess": "已清理 {{count}} 个本地变更文件。",
+      "clearNoChanges": "没有匹配的本地变更需要清理。",
       "manualTitle": "手动处理",
       "manualDescription": "继续拉取，并在工作区内手动解决冲突文件。",
+      "manualBlockedDescription": "需要先提交、stash 或清理本地变更后，才能手动拉取。",
+      "manualBlockedTitle": "本地变更会被拉取覆盖。",
       "manualButton": "仍然拉取"
+    },
+    "restore": {
+      "title": "已 stash：{{ref}}",
+      "description": "拉取远程更新后，可以把刚才 stash 的本地变更恢复到工作区。",
+      "button": "恢复 stash",
+      "success": "已从 {{ref}} 恢复 stash 内容。"
+    },
+    "conflictState": {
+      "title": "冲突处理中",
+      "pullNotice": "拉取产生冲突，请查看并处理下方文件。",
+      "stashNotice": "恢复 stash 产生冲突，请查看并处理下方文件。",
+      "pullDescription": "本次拉取已停在 merge 冲突状态。请打开文件，处理冲突标记后，再继续提交流程。",
+      "stashDescription": "stash 内容已应用但产生冲突。请打开文件，处理冲突标记后，再继续提交流程。",
+      "refresh": "刷新",
+      "resolveHint": "解决冲突并保存文件后，请刷新列表；当 Git 不再报告冲突时，文件会自动离开此面板。"
     }
   },
   "submission": {
@@ -124,7 +149,8 @@
     "added": "已新增",
     "deleted": "已删除",
     "renamed": "已重命名",
-    "untracked": "未跟踪"
+    "untracked": "未跟踪",
+    "conflict": "冲突"
   },
   "errors": {
     "loadRepositories": "加载 CodeHub 代码仓失败",
@@ -135,6 +161,12 @@
     "pullPreviewFailed": "预览拉取失败",
     "pullFailed": "拉取代码仓更新失败",
     "pullConflicts": "拉取存在冲突：{{files}}",
+    "pullLocalChangesWouldBeOverwritten": "拉取被阻止，因为本地变更会被覆盖：{{files}}。请先提交、stash 或清理这些文件。",
+    "stashLocalChangesFailed": "stash 本地变更失败",
+    "restoreStashFailed": "恢复 stash 失败",
+    "restoreStashConflicts": "恢复 stash 时发生冲突：{{files}}。请在工作区内手动解决。",
+    "clearLocalChangesFailed": "清理本地变更失败",
+    "clearLocalChangesNoFiles": "没有可清理的本地变更文件",
     "selectFile": "请至少选择一个变更文件",
     "commitMessageRequired": "Commit 信息不能为空",
     "commitFailed": "提交 CodeHub 变更失败",
