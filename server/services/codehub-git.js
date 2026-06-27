@@ -34,6 +34,14 @@ function normalizeRelativePath(value) {
     .trim();
 }
 
+function normalizeGitFilePath(value) {
+  const normalized = normalizeRelativePath(value);
+  if (!normalized || normalized.split('/').includes('..')) {
+    throw createHttpError('Invalid file path', 400);
+  }
+  return normalized;
+}
+
 function validateBranchName(branch) {
   const value = String(branch || '').trim();
   if (!/^[A-Za-z0-9._\/-]+$/.test(value) || value.includes('..') || value.startsWith('/') || value.endsWith('/')) {
@@ -279,7 +287,7 @@ async function detectMergeConflicts(repoPath, remoteBranch) {
 }
 
 async function listStatusEntries(repoPath) {
-  const { stdout } = await runGit(['status', '--porcelain'], { cwd: repoPath });
+  const { stdout } = await runGit(['status', '--porcelain', '-uall'], { cwd: repoPath });
   return parsePorcelainStatus(stdout);
 }
 
@@ -396,16 +404,20 @@ export const codeHubGitService = {
   },
 
   async getDiff(repoPath, filePath) {
-    const normalized = normalizeRelativePath(filePath);
+    const normalized = normalizeGitFilePath(filePath);
     const statusOutput = await runGit(['status', '--porcelain', '--', normalized], { cwd: repoPath });
     const status = statusOutput.stdout.slice(0, 2);
     if (status === '??') {
       const absolutePath = path.join(repoPath, normalized);
+      const stat = await fs.stat(absolutePath);
+      if (!stat.isFile()) {
+        throw createHttpError('Cannot show diff for a directory', 400);
+      }
       const content = await fs.readFile(absolutePath, 'utf8');
       const lines = content.split(/\r?\n/);
       return `--- /dev/null\n+++ b/${normalized}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join('\n')}`;
     }
-    const { stdout } = await runGit(['diff', '--', normalized], { cwd: repoPath });
+    const { stdout } = await runGit(['diff', 'HEAD', '--', normalized], { cwd: repoPath });
     return stdout;
   },
 

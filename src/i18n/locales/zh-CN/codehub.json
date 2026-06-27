@@ -4,6 +4,10 @@
   "selectOrCloneRepository": "请选择或克隆一个 CodeHub 代码仓。",
   "showRepositories": "显示代码仓",
   "hideRepositories": "隐藏代码仓",
+  "toast": {
+    "cloneSuccess": "代码仓 {{name}} 克隆成功。",
+    "pullSuccess": "{{branch}} 拉取成功。"
+  },
   "repositories": {
     "title": "代码仓",
     "branch": "分支",

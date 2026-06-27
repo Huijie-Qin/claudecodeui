@@ -84,6 +84,11 @@ function MainContent({
     [handleFileOpen],
   );
 
+  const handleCodeHubFileOpen = React.useCallback(
+    (filePath: string) => handleFileOpen(filePath, null, 'files'),
+    [handleFileOpen],
+  );
+
   const handleActiveTabChange = React.useCallback(
     (nextTabAction: React.SetStateAction<AppTab>) => {
       const nextTab = typeof nextTabAction === 'function'
@@ -179,7 +184,11 @@ function MainContent({
 
           {activeTab === 'codehub' && (
             <div className="h-full overflow-hidden">
-              <CodeHubPanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
+              <CodeHubPanel
+                selectedProject={selectedProject}
+                isReadOnly={isViewOnlyWorkspace}
+                onFileOpen={handleCodeHubFileOpen}
+              />
             </div>
           )}
 

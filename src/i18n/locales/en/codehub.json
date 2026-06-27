@@ -4,6 +4,10 @@
   "selectOrCloneRepository": "Select or clone a CodeHub repository.",
   "showRepositories": "Show repositories",
   "hideRepositories": "Hide repositories",
+  "toast": {
+    "cloneSuccess": "Repository {{name}} cloned successfully.",
+    "pullSuccess": "Pulled {{branch}} successfully."
+  },
   "repositories": {
     "title": "Repositories",
     "branch": "Branch",

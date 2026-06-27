@@ -108,6 +108,11 @@ type ExistingMergeRequest = {
   mrState?: string | null;
 };
 
+type CodeHubToast = {
+  message: string;
+  type: 'success';
+} | null;
+
 type WorkflowStep = 'commit' | 'push' | 'mr';
 type MrTargetRepository = 'personal' | 'upstream';
 type CommitRecord = CommitResult & {
@@ -118,6 +123,7 @@ type CommitRecord = CommitResult & {
 type CodeHubPanelProps = {
   selectedProject: Project;
   isReadOnly?: boolean;
+  onFileOpen?: (filePath: string) => void;
 };
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -149,7 +155,7 @@ function stepClassName(step: WorkflowStep, activeStep: WorkflowStep, done: boole
   return 'border-border bg-background text-muted-foreground';
 }
 
-export default function CodeHubPanel({ selectedProject, isReadOnly = false }: CodeHubPanelProps) {
+export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFileOpen }: CodeHubPanelProps) {
   const { t } = useTranslation('codehub');
   const workspaceId = selectedProject.workspaceId;
   const [repositories, setRepositories] = useState<CodeHubRepository[]>([]);
@@ -182,12 +188,23 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   const [mrResult, setMrResult] = useState<MrResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<CodeHubToast>(null);
   const [lastStash, setLastStash] = useState<StashRecord | null>(null);
   const [conflictState, setConflictState] = useState<ConflictState | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const initializedRepoIdRef = useRef<number | null>(null);
+
+  const clearDiffPreview = useCallback(() => {
+    setActiveFile('');
+    setDiff('');
+    setDiffDialogOpen(false);
+  }, []);
+
+  const showSuccessToast = useCallback((message: string) => {
+    setToast({ message, type: 'success' });
+  }, []);
 
   const selectedRepo = useMemo(
     () => repositories.find((repo) => repo.repoId === selectedRepoId) || null,
@@ -272,6 +289,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       const payload = await response.json();
       const nextChanges = payload.files || [];
       setChanges(nextChanges);
+      setActiveFile((current) => {
+        if (!current || nextChanges.some((change: CodeHubChange) => change.path === current)) {
+          return current;
+        }
+        setDiff('');
+        setDiffDialogOpen(false);
+        return '';
+      });
       const conflictFiles = nextChanges
         .filter((change: CodeHubChange) => change.status === 'conflict')
         .map((change: CodeHubChange) => change.path);
@@ -328,6 +353,13 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   }, [loadRepositories]);
 
   useEffect(() => {
+    if (!toast) return undefined;
+
+    const timer = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
     void loadSubmissionCommits();
   }, [loadSubmissionCommits]);
 
@@ -354,9 +386,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setMrResult(null);
     setLastStash(null);
     setConflictState(null);
+    clearDiffPreview();
     void loadChanges();
     void loadRemoteBranches();
-  }, [loadChanges, loadRemoteBranches, selectedRepo]);
+  }, [clearDiffPreview, loadChanges, loadRemoteBranches, selectedRepo]);
 
   const openDiff = useCallback(async (filePath: string) => {
     if (!workspaceId || !selectedRepoId) return;
@@ -376,10 +409,27 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     }
   }, [selectedRepoId, t, workspaceId]);
 
-  const openConflictFile = useCallback((filePath: string) => {
+  const toProjectRelativePath = useCallback((repoFilePath: string) => {
+    const repoRoot = String(selectedRepo?.relativePath || '')
+      .replace(/\\/g, '/')
+      .replace(/^\.\/+/, '')
+      .replace(/^\/+|\/+$/g, '');
+    const filePath = String(repoFilePath || '')
+      .replace(/\\/g, '/')
+      .replace(/^\.\/+/, '')
+      .replace(/^\/+/g, '');
+
+    return repoRoot ? `${repoRoot}/${filePath}` : filePath;
+  }, [selectedRepo?.relativePath]);
+
+  const openRepositoryFile = useCallback((filePath: string) => {
     setActiveFile(filePath);
+    if (onFileOpen) {
+      onFileOpen(toProjectRelativePath(filePath));
+      return;
+    }
     void openDiff(filePath);
-  }, [openDiff]);
+  }, [onFileOpen, openDiff, toProjectRelativePath]);
 
   const toggleFile = useCallback((filePath: string, checked: boolean) => {
     setSelectedFiles((current) => {
@@ -425,6 +475,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     }
     setIsWorking(true);
     setError(null);
+    clearDiffPreview();
     try {
       const branch = cloneBranch.trim();
       const response = await api.codehub.cloneRepository(workspaceId, {
@@ -441,16 +492,18 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       setCloneBranch('');
       await loadRepositories();
       await window.refreshProjects?.();
+      showSuccessToast(t('toast.cloneSuccess', { name: directoryName }));
     } finally {
       setIsWorking(false);
     }
-  }, [cloneBranch, cloneDirectory, cloneUrl, isReadOnly, loadRepositories, t, workspaceId]);
+  }, [clearDiffPreview, cloneBranch, cloneDirectory, cloneUrl, isReadOnly, loadRepositories, showSuccessToast, t, workspaceId]);
 
   const previewPull = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
     setIsWorking(true);
     setError(null);
     setNotice(null);
+    clearDiffPreview();
     try {
       const response = await api.codehub.pullPreview(workspaceId, selectedRepoId, { branch: pullBranch });
       if (!response.ok) {
@@ -463,13 +516,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [loadChanges, pullBranch, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, loadChanges, pullBranch, selectedRepoId, t, workspaceId]);
 
   const pullRepository = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly) return;
     setIsWorking(true);
     setError(null);
     setNotice(null);
+    clearDiffPreview();
     try {
       const response = await api.codehub.pull(workspaceId, selectedRepoId, { branch: pullBranch });
       const payload = await response.json().catch(() => ({}));
@@ -499,10 +553,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       setConflictState(null);
       await loadRepositories();
       await loadChanges();
+      showSuccessToast(t('toast.pullSuccess', { branch: payload.branch || pullBranch || selectedRepo?.branch || '-' }));
     } finally {
       setIsWorking(false);
     }
-  }, [isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepo?.branch, selectedRepoId, showSuccessToast, t, workspaceId]);
 
   const stashLocalChanges = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly) return;
@@ -510,6 +565,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setError(null);
     setNotice(null);
     setConflictState(null);
+    clearDiffPreview();
     try {
       const response = await api.codehub.stashLocalChanges(workspaceId, selectedRepoId, {
         message: `CodeHub pull preview ${new Date().toISOString()}`,
@@ -535,13 +591,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [isReadOnly, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
 
   const restoreLastStash = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !lastStash?.stashRef) return;
     setIsWorking(true);
     setError(null);
     setNotice(null);
+    clearDiffPreview();
     try {
       const response = await api.codehub.restoreStash(workspaceId, selectedRepoId, {
         stashRef: lastStash.stashRef,
@@ -569,7 +626,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [isReadOnly, lastStash, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, lastStash, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
 
   const clearLocalChanges = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !pullPreview) return;
@@ -585,6 +642,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     setError(null);
     setNotice(null);
     setConflictState(null);
+    clearDiffPreview();
     try {
       const response = await api.codehub.clearLocalChanges(workspaceId, selectedRepoId, { files });
       const payload = await response.json().catch(() => ({}));
@@ -601,7 +659,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     } finally {
       setIsWorking(false);
     }
-  }, [isReadOnly, loadChanges, loadRepositories, previewPull, pullPreview, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, previewPull, pullPreview, selectedRepoId, t, workspaceId]);
 
   const commitSelectedFiles = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -628,13 +686,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
       setCommitMessage('');
       setSelectedFiles([]);
       setMrResult(null);
+      clearDiffPreview();
       await loadRepositories();
       await loadChanges();
       await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
-  }, [commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
 
   const pushBranch = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || commitRecords.length === 0) return;
@@ -695,6 +754,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
         return;
       }
       setSelectedFiles([]);
+      clearDiffPreview();
       await loadRepositories();
       await loadChanges();
       await loadRemoteBranches();
@@ -706,6 +766,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
     batchCommitMessage,
     commitRecords,
     committedCommitShas,
+    clearDiffPreview,
     headSha,
     loadChanges,
     loadRemoteBranches,
@@ -746,7 +807,17 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="relative flex h-full flex-col bg-background">
+      {toast ? (
+        <div
+          className="animate-in slide-in-from-bottom-2 pointer-events-none fixed bottom-4 right-4 z-50 flex max-w-[min(360px,calc(100vw-2rem))] items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white shadow-lg"
+          role="status"
+          aria-live="polite"
+        >
+          <Check className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 truncate">{toast.message}</span>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-foreground">{t('title')}</h2>
@@ -777,7 +848,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                 <button
                   key={repo.repoId}
                   type="button"
-                  onClick={() => setSelectedRepoId(repo.repoId)}
+                  onClick={() => {
+                    clearDiffPreview();
+                    setSelectedRepoId(repo.repoId);
+                  }}
                   className={`w-full rounded-md border px-3 py-2 text-left text-sm transition hover:bg-muted/60 ${
                     repo.repoId === selectedRepoId ? 'border-primary bg-primary/5' : 'border-border'
                   }`}
@@ -860,6 +934,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                         onChange={(event) => {
                           setPullBranch(event.target.value);
                           setPullPreview(null);
+                          clearDiffPreview();
                         }}
                         placeholder={t('pull.branchPlaceholder')}
                       />
@@ -1059,7 +1134,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                         variant="outline"
                         size="sm"
                         className="max-w-full justify-start"
-                        onClick={() => openConflictFile(file)}
+                        onClick={() => openRepositoryFile(file)}
                       >
                         <span className="truncate">{file}</span>
                       </Button>
@@ -1107,7 +1182,17 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false }: Co
                           checked={selectedFiles.includes(change.path)}
                           onChange={(event) => toggleFile(change.path, event.target.checked)}
                         />
-                        <button type="button" className="min-w-0 text-left" onClick={() => void openDiff(change.path)}>
+                        <button
+                          type="button"
+                          className="min-w-0 text-left"
+                          onClick={() => {
+                            if (change.status === 'conflict') {
+                              openRepositoryFile(change.path);
+                              return;
+                            }
+                            void openDiff(change.path);
+                          }}
+                        >
                           <div className="truncate text-foreground">{change.path}</div>
                           <div className="text-xs text-muted-foreground">{statusLabel(change.status, t)}</div>
                         </button>
