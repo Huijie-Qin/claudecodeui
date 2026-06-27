@@ -30,8 +30,13 @@
   "pull": {
     "branchPlaceholder": "要拉取的分支",
     "preview": "预览",
+    "previewResult": "拉取预检",
+    "previewNeedsAction": "需要处理",
+    "previewReady": "可以拉取",
     "button": "拉取",
     "summary": "本地 {{branch}} 相比 {{remote}}/{{remoteBranch}}：ahead {{ahead}}，behind {{behind}}。",
+    "recommendationTitle": "建议",
+    "localStateTitle": "本地状态",
     "localChanges": "本地变更：{{files}}",
     "localChangesUnknown": "检测到变更文件",
     "clean": "工作区干净。",
@@ -39,6 +44,7 @@
     "conflictsTitle": "预检发现可能存在拉取冲突",
     "conflictFiles": "涉及文件：{{files}}",
     "conflictFilesUnknown": "未知文件",
+    "optionsTitle": "可选处理方式",
     "recommendation": {
       "commitFirst": "建议：先提交或清理本地变更，再执行拉取。",
       "resolveConflicts": "建议：先选择一种冲突处理方式，再执行拉取。",

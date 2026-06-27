@@ -30,8 +30,13 @@
   "pull": {
     "branchPlaceholder": "Branch to pull",
     "preview": "Preview",
+    "previewResult": "Pull preview",
+    "previewNeedsAction": "Needs action",
+    "previewReady": "Ready",
     "button": "Pull",
     "summary": "Local {{branch}} vs {{remote}}/{{remoteBranch}}: ahead {{ahead}}, behind {{behind}}.",
+    "recommendationTitle": "Recommendation",
+    "localStateTitle": "Local state",
     "localChanges": "Local changes: {{files}}",
     "localChangesUnknown": "changed files detected",
     "clean": "Worktree clean.",
@@ -39,6 +44,7 @@
     "conflictsTitle": "Preview detected possible pull conflicts",
     "conflictFiles": "Affected files: {{files}}",
     "conflictFilesUnknown": "unknown files",
+    "optionsTitle": "Available paths",
     "recommendation": {
       "commitFirst": "Recommendation: commit or clear local changes before pulling.",
       "resolveConflicts": "Recommendation: choose a conflict handling option before pulling.",

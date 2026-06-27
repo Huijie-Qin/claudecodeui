@@ -696,14 +696,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       }
       setLastStash(null);
       setConflictState(null);
+      setPullPreview(null);
       setNotice(t('pull.restore.success', { ref: lastStash.stashRef }));
       await loadRepositories();
       await loadChanges();
-      await previewPull();
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, isReadOnly, lastStash, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, lastStash, loadChanges, loadRepositories, selectedRepoId, t, workspaceId]);
 
   const clearLocalChanges = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !pullPreview) return;
@@ -1055,15 +1055,19 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                   </div>
                 </div>
                 {pullPreview ? (
-                  <div className={`mt-4 space-y-4 rounded-md border px-4 py-3 text-xs ${
+                  <div className={`mt-4 overflow-hidden rounded-md border text-xs ${
                     pullPreview.hasConflicts
-                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                      : 'border-border bg-muted/40 text-muted-foreground'
+                      ? 'border-amber-500/30 bg-amber-500/[0.06]'
+                      : 'border-border bg-muted/30'
                   }`}
                   >
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                      <div className="min-w-0 space-y-1">
-                        <div className="font-medium text-foreground">
+                    <div className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 ${
+                      pullPreview.hasConflicts ? 'border-amber-500/20' : 'border-border'
+                    }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-foreground">{t('pull.previewResult')}</div>
+                        <div className="mt-1 text-muted-foreground">
                           {t('pull.summary', {
                             branch: pullPreview.branch || '-',
                             remote: pullPreview.remote || 'origin',
@@ -1072,46 +1076,64 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                             behind: pullPreview.behind || 0,
                           })}
                         </div>
-                        {pullPreviewRecommendation ? (
-                          <div>{pullPreviewRecommendation}</div>
-                        ) : null}
                       </div>
-                      <div className="min-w-0 break-words rounded-md border border-border/60 bg-background/60 px-3 py-2">
-                        {pullPreview.dirty ? (
-                          <span>
-                            {t('pull.localChanges', {
-                              files: (pullPreview.changedFiles || []).length > 0
-                                ? (pullPreview.changedFiles || []).join(', ')
-                                : t('pull.localChangesUnknown'),
-                            })}
-                          </span>
-                        ) : (
-                          <span>{t('pull.clean')}</span>
-                        )}
+                      <div className={`rounded-full px-2.5 py-1 font-medium ${
+                        pullPreview.hasConflicts
+                          ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200'
+                          : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      }`}
+                      >
+                        {pullPreview.hasConflicts ? t('pull.previewNeedsAction') : t('pull.previewReady')}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className={`min-w-0 px-4 py-3 ${pullPreview.hasConflicts ? 'lg:border-r lg:border-amber-500/20' : 'lg:border-r lg:border-border'}`}>
+                        <div className="text-xs font-medium text-foreground">{t('pull.recommendationTitle')}</div>
+                        <div className="mt-1 text-muted-foreground">{pullPreviewRecommendation}</div>
+                      </div>
+                      <div className="min-w-0 px-4 py-3">
+                        <div className="text-xs font-medium text-foreground">{t('pull.localStateTitle')}</div>
+                        <div className="mt-1 break-words text-muted-foreground">
+                          {pullPreview.dirty ? (
+                            <span>
+                              {t('pull.localChanges', {
+                                files: (pullPreview.changedFiles || []).length > 0
+                                  ? (pullPreview.changedFiles || []).join(', ')
+                                  : t('pull.localChangesUnknown'),
+                              })}
+                            </span>
+                          ) : (
+                            <span>{t('pull.clean')}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
                     {pullPreview.hasConflicts ? (
-                      <div className="space-y-3">
-                        <div className="rounded-md border border-border/60 bg-background/60 px-3 py-2">
-                          <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
-                          <div className="mt-1 break-words">
-                            {t('pull.conflictFiles', {
-                              files: (pullPreview.conflictFiles || []).length > 0
-                                ? (pullPreview.conflictFiles || []).join(', ')
-                                : t('pull.conflictFilesUnknown'),
-                            })}
+                      <div className="border-t border-amber-500/20 px-4 py-3">
+                        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
+                            <div className="mt-1 break-words text-muted-foreground">
+                              {t('pull.conflictFiles', {
+                                files: (pullPreview.conflictFiles || []).length > 0
+                                  ? (pullPreview.conflictFiles || []).join(', ')
+                                  : t('pull.conflictFilesUnknown'),
+                              })}
+                            </div>
                           </div>
+                          <div className="text-xs font-medium text-muted-foreground">{t('pull.optionsTitle')}</div>
                         </div>
                         <div className="grid gap-3 lg:grid-cols-3">
-                          <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                          <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
                             <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
                             <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
                             <Button className="mt-3 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
                               {t('pull.options.commitFirstButton')}
                             </Button>
                           </div>
-                          <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                          <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
                             <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
                             <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
                             <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
@@ -1124,12 +1146,12 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                             </div>
                           </div>
                           {pullPreview.localChangesBlockPull ? (
-                            <div className="min-h-[132px] rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                            <div className="min-h-[140px] rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
                               <div className="font-medium text-foreground">{t('pull.options.manualBlockedTitle')}</div>
                               <div className="mt-1 text-muted-foreground">{t('pull.options.manualBlockedDescription')}</div>
                             </div>
                           ) : (
-                            <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                            <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
                               <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
                               <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
                               <Button
