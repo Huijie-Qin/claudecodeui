@@ -153,9 +153,7 @@ function ChatInterface({
     uploadingImages,
     imageErrors,
     getRootProps,
-    getInputProps,
     isDragActive,
-    openImagePicker,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
@@ -399,8 +397,6 @@ function ChatInterface({
           isCommandMenuOpen={showCommandMenu}
           frequentCommands={commandQuery ? [] : frequentCommands}
           getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
-          getInputProps={getInputProps as (...args: unknown[]) => Record<string, unknown>}
-          openImagePicker={openImagePicker}
           inputHighlightRef={inputHighlightRef}
           renderInputWithMentions={renderInputWithMentions}
           textareaRef={textareaRef}

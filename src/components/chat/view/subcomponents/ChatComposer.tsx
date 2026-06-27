@@ -86,8 +86,6 @@ interface ChatComposerProps {
   isCommandMenuOpen: boolean;
   frequentCommands: SlashCommand[];
   getRootProps: (...args: unknown[]) => Record<string, unknown>;
-  getInputProps: (...args: unknown[]) => Record<string, unknown>;
-  openImagePicker: () => void;
   inputHighlightRef: RefObject<HTMLDivElement>;
   renderInputWithMentions: (text: string) => ReactNode;
   textareaRef: RefObject<HTMLTextAreaElement>;
@@ -139,7 +137,6 @@ export default function ChatComposer({
   isCommandMenuOpen,
   frequentCommands,
   getRootProps,
-  getInputProps,
   inputHighlightRef,
   renderInputWithMentions,
   textareaRef,
@@ -295,8 +292,6 @@ export default function ChatComposer({
               </div>
             </PromptInputHeader>
           )}
-
-          <input {...getInputProps()} />
 
           <PromptInputBody>
             <div ref={inputHighlightRef} aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">

@@ -378,8 +378,6 @@ export function useChatComposerState({
 
   const handlePaste = useCallback((_event: ClipboardEvent<HTMLTextAreaElement>) => undefined, []);
   const getRootProps = useCallback(() => ({}), []);
-  const getInputProps = useCallback(() => ({ disabled: true, type: 'file' }), []);
-  const openImagePicker = useCallback(() => undefined, []);
   const isDragActive = false;
 
   const handleSubmit = useCallback(
@@ -856,9 +854,7 @@ export function useChatComposerState({
     uploadingImages,
     imageErrors,
     getRootProps,
-    getInputProps,
     isDragActive,
-    openImagePicker,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
