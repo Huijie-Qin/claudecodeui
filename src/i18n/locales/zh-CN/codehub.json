@@ -60,11 +60,11 @@
       "clearConfirm": "这会丢弃以下文件的本地变更：{{files}}。确认继续吗？",
       "clearSuccess": "已清理 {{count}} 个本地变更文件。",
       "clearNoChanges": "没有匹配的本地变更需要清理。",
-      "manualTitle": "手动处理",
-      "manualDescription": "继续拉取，并在工作区内手动解决冲突文件。",
-      "manualBlockedDescription": "需要先提交、stash 或清理本地变更后，才能手动拉取。",
-      "manualBlockedTitle": "本地变更会被拉取覆盖。",
-      "manualButton": "仍然拉取"
+      "manualTitle": "手动解决冲突",
+      "manualDescription": "现在拉取，并在工作区内手动解决 merge 冲突文件。",
+      "manualBlockedDescription": "Git 会覆盖本地变更，因此不能直接拉取。请先提交、stash 或清理这些文件。",
+      "manualBlockedTitle": "不能直接拉取",
+      "manualButton": "继续拉取并解决冲突"
     },
     "restore": {
       "title": "已 stash：{{ref}}",

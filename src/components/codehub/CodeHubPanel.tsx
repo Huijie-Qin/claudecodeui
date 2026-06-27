@@ -1052,14 +1052,18 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                         </Button>
                       </div>
                     </div>
-                    {pullPreview ? (
-                      <div className={`mt-3 space-y-3 rounded-md border px-3 py-2 text-xs ${
-                        pullPreview.hasConflicts
-                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                          : 'border-border bg-muted/40 text-muted-foreground'
-                      }`}
-                      >
-                        <div>
+                  </div>
+                </div>
+                {pullPreview ? (
+                  <div className={`mt-4 space-y-4 rounded-md border px-4 py-3 text-xs ${
+                    pullPreview.hasConflicts
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                      : 'border-border bg-muted/40 text-muted-foreground'
+                  }`}
+                  >
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                      <div className="min-w-0 space-y-1">
+                        <div className="font-medium text-foreground">
                           {t('pull.summary', {
                             branch: pullPreview.branch || '-',
                             remote: pullPreview.remote || 'origin',
@@ -1069,91 +1073,99 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                           })}
                         </div>
                         {pullPreviewRecommendation ? (
-                          <div className="font-medium text-foreground">{pullPreviewRecommendation}</div>
+                          <div>{pullPreviewRecommendation}</div>
                         ) : null}
+                      </div>
+                      <div className="min-w-0 break-words rounded-md border border-border/60 bg-background/60 px-3 py-2">
                         {pullPreview.dirty ? (
-                          <div>
+                          <span>
                             {t('pull.localChanges', {
                               files: (pullPreview.changedFiles || []).length > 0
                                 ? (pullPreview.changedFiles || []).join(', ')
                                 : t('pull.localChangesUnknown'),
                             })}
-                          </div>
+                          </span>
                         ) : (
-                          <div>{t('pull.clean')}</div>
+                          <span>{t('pull.clean')}</span>
                         )}
-                        {pullPreview.hasConflicts ? (
-                          <div className="space-y-3">
-                            <div>
-                              <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
-                              <div className="mt-1 break-words">
-                                {t('pull.conflictFiles', {
-                                  files: (pullPreview.conflictFiles || []).length > 0
-                                    ? (pullPreview.conflictFiles || []).join(', ')
-                                    : t('pull.conflictFilesUnknown'),
-                                })}
-                              </div>
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-3">
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
-                                <Button className="mt-2 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
-                                  {t('pull.options.commitFirstButton')}
-                                </Button>
-                              </div>
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
-                                <div className="mt-2 grid gap-2">
-                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void stashLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
-                                    {t('pull.options.stashButton')}
-                                  </Button>
-                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void clearLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
-                                    {t('pull.options.clearButton')}
-                                  </Button>
-                                </div>
-                              </div>
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">
-                                  {pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedDescription') : t('pull.options.manualDescription')}
-                                </div>
-                                <Button
-                                  className="mt-2 w-full"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => void pullRepository()}
-                                  disabled={isReadOnly || isWorking || Boolean(pullPreview.localChangesBlockPull)}
-                                  title={pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedTitle') : undefined}
-                                >
-                                  {t('pull.options.manualButton')}
-                                </Button>
-                              </div>
+                      </div>
+                    </div>
+
+                    {pullPreview.hasConflicts ? (
+                      <div className="space-y-3">
+                        <div className="rounded-md border border-border/60 bg-background/60 px-3 py-2">
+                          <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
+                          <div className="mt-1 break-words">
+                            {t('pull.conflictFiles', {
+                              files: (pullPreview.conflictFiles || []).length > 0
+                                ? (pullPreview.conflictFiles || []).join(', ')
+                                : t('pull.conflictFilesUnknown'),
+                            })}
+                          </div>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                            <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
+                            <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
+                            <Button className="mt-3 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
+                              {t('pull.options.commitFirstButton')}
+                            </Button>
+                          </div>
+                          <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                            <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
+                            <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                              <Button className="w-full" variant="outline" size="sm" onClick={() => void stashLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                {t('pull.options.stashButton')}
+                              </Button>
+                              <Button className="w-full" variant="outline" size="sm" onClick={() => void clearLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                {t('pull.options.clearButton')}
+                              </Button>
                             </div>
                           </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {lastStash ? (
-                      <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-800 dark:text-sky-200">
-                        <div className="font-medium text-foreground">
-                          {t('pull.restore.title', { ref: lastStash.stashRef })}
+                          {pullPreview.localChangesBlockPull ? (
+                            <div className="min-h-[132px] rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                              <div className="font-medium text-foreground">{t('pull.options.manualBlockedTitle')}</div>
+                              <div className="mt-1 text-muted-foreground">{t('pull.options.manualBlockedDescription')}</div>
+                            </div>
+                          ) : (
+                            <div className="flex min-h-[132px] flex-col rounded-md border border-border/70 bg-background/70 p-3">
+                              <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
+                              <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
+                              <Button
+                                className="mt-3 w-full"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void pullRepository()}
+                                disabled={isReadOnly || isWorking}
+                              >
+                                {t('pull.options.manualButton')}
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        <div className="mt-1">{t('pull.restore.description')}</div>
-                        <Button
-                          className="mt-2"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void restoreLastStash()}
-                          disabled={isReadOnly || isWorking}
-                        >
-                          {t('pull.restore.button')}
-                        </Button>
                       </div>
                     ) : null}
                   </div>
-                </div>
+                ) : null}
+                {lastStash ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-xs text-sky-800 dark:text-sky-200">
+                    <div className="min-w-0">
+                      <div className="font-medium text-foreground">
+                        {t('pull.restore.title', { ref: lastStash.stashRef })}
+                      </div>
+                      <div className="mt-1">{t('pull.restore.description')}</div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void restoreLastStash()}
+                      disabled={isReadOnly || isWorking}
+                    >
+                      {t('pull.restore.button')}
+                    </Button>
+                  </div>
+                ) : null}
               </section>
 
               <section className="rounded-md border border-border bg-background p-3">

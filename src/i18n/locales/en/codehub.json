@@ -60,11 +60,11 @@
       "clearConfirm": "This will discard local changes in: {{files}}. Continue?",
       "clearSuccess": "Cleared {{count}} local changed files.",
       "clearNoChanges": "No matching local changes needed to be cleared.",
-      "manualTitle": "Manual resolution",
-      "manualDescription": "Continue pulling and resolve conflict files in the workspace.",
-      "manualBlockedDescription": "Manual pull is available after local changes are committed, stashed, or cleared.",
-      "manualBlockedTitle": "Local changes would be overwritten by pull.",
-      "manualButton": "Pull anyway"
+      "manualTitle": "Manual conflict resolution",
+      "manualDescription": "Pull now and resolve merge conflict files in the workspace.",
+      "manualBlockedDescription": "Direct pull is unavailable because Git would overwrite local changes. Commit, stash, or clear these files first.",
+      "manualBlockedTitle": "Direct pull unavailable",
+      "manualButton": "Continue pull and resolve"
     },
     "restore": {
       "title": "Stashed changes: {{ref}}",
