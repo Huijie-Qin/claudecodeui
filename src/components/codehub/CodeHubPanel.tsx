@@ -231,6 +231,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [isLoading, setIsLoading] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const initializedRepoIdRef = useRef<number | null>(null);
+  const conflictStateRef = useRef<ConflictState | null>(null);
 
   const clearDiffPreview = useCallback(() => {
     setActiveFile('');
@@ -339,6 +340,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       const conflictFiles = nextChanges
         .filter((change: CodeHubChange) => change.status === 'conflict')
         .map((change: CodeHubChange) => change.path);
+      if (conflictFiles.length === 0 && conflictStateRef.current?.source === 'stash') {
+        setLastStash(null);
+      }
       setConflictState((current) => {
         if (conflictFiles.length === 0) return null;
         return {
@@ -429,6 +433,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   useEffect(() => {
     void loadRepositories();
   }, [loadRepositories]);
+
+  useEffect(() => {
+    conflictStateRef.current = conflictState;
+  }, [conflictState]);
 
   useEffect(() => {
     if (!toast) return undefined;
