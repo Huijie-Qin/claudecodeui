@@ -603,6 +603,18 @@ router.post('/workspaces/:workspaceId/repositories/:repoId/restore-stash', async
   }
 });
 
+router.post('/workspaces/:workspaceId/repositories/:repoId/resolve-conflict-file', async (req, res) => {
+  try {
+    const { repoPath } = await resolveRepository(req, { requireEdit: true });
+    const file = requireNonEmptyString(req.body?.file, 'file');
+    const result = await codeHubGitService.resolveConflictFile(repoPath, { file });
+    res.json(result);
+  } catch (error) {
+    if (error?.statusCode) return handleWorkspaceError(res, error);
+    return sendRouteError(res, error, 'Failed to resolve conflict file');
+  }
+});
+
 router.post('/workspaces/:workspaceId/repositories/:repoId/clear-local-changes', async (req, res) => {
   try {
     const { repoPath } = await resolveRepository(req, { requireEdit: true });

@@ -108,6 +108,13 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
       dispatchSlashCommandsChangedForPath(filePath, {
         workspaceId: file.workspaceId,
       });
+      window.dispatchEvent(new CustomEvent('cloudcli:file-saved', {
+        detail: {
+          workspaceId: file.workspaceId,
+          projectName: fileProjectName,
+          path: filePath,
+        },
+      }));
       setTimeout(() => setSaveSuccess(false), 2000);
       return true;
     } catch (error) {

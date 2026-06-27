@@ -256,6 +256,14 @@ function parseConflictFilesFromStatus(output) {
     .map((entry) => entry.path);
 }
 
+function isConflictStatus(status) {
+  return /U/.test(status) || ['AA', 'DD'].includes(status);
+}
+
+function hasConflictMarkers(content) {
+  return /^(<{7}|\|{7}|={7}|>{7})(?:\s|$)/m.test(String(content || ''));
+}
+
 async function getRemoteChangedFiles(repoPath, remoteBranch) {
   try {
     const { stdout } = await runGit(['diff', '--name-only', `HEAD..origin/${remoteBranch}`], { cwd: repoPath });
@@ -613,6 +621,47 @@ export const codeHubGitService = {
       }
       throw error;
     }
+  },
+
+  async resolveConflictFile(repoPath, { file } = {}) {
+    const normalized = normalizeGitFilePath(file);
+    const statusOutput = await runGit(['status', '--porcelain', '--', normalized], { cwd: repoPath });
+    const statusEntry = parsePorcelainStatus(statusOutput.stdout)[0] || null;
+    if (!statusEntry || !isConflictStatus(statusEntry.status)) {
+      return {
+        success: true,
+        file: normalized,
+        conflict: false,
+        resolved: false,
+        status: statusEntry?.status || '',
+      };
+    }
+
+    const absolutePath = path.join(repoPath, normalized);
+    const content = await fs.readFile(absolutePath, 'utf8');
+    if (hasConflictMarkers(content)) {
+      return {
+        success: true,
+        file: normalized,
+        conflict: true,
+        resolved: false,
+        hasConflictMarkers: true,
+        status: statusEntry.status,
+      };
+    }
+
+    await runGit(['add', '--', normalized], { cwd: repoPath });
+    const nextStatusOutput = await runGit(['status', '--porcelain', '--', normalized], { cwd: repoPath });
+    const nextStatusEntry = parsePorcelainStatus(nextStatusOutput.stdout)[0] || null;
+    const stillConflicting = Boolean(nextStatusEntry && isConflictStatus(nextStatusEntry.status));
+    return {
+      success: true,
+      file: normalized,
+      conflict: stillConflicting,
+      resolved: !stillConflicting,
+      hasConflictMarkers: false,
+      status: nextStatusEntry?.status || '',
+    };
   },
 
   async discardLocalChanges(repoPath, { files } = {}) {

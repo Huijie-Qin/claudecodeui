@@ -113,6 +113,11 @@ type CodeHubToast = {
   type: 'success';
 } | null;
 
+type FileSavedEventDetail = {
+  workspaceId?: string | number | null;
+  path?: string | null;
+};
+
 type WorkflowStep = 'commit' | 'push' | 'mr';
 type MrTargetRepository = 'personal' | 'upstream';
 type CommitRecord = CommitResult & {
@@ -153,6 +158,23 @@ function stepClassName(step: WorkflowStep, activeStep: WorkflowStep, done: boole
   if (done) return 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
   if (step === activeStep) return 'border-primary bg-primary/10 text-primary';
   return 'border-border bg-background text-muted-foreground';
+}
+
+function normalizeFilePath(value: string | null | undefined): string {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\/+/, '')
+    .replace(/^\/+|\/+$/g, '');
+}
+
+function toRepoRelativeSavedPath(savedPath: string | null | undefined, repoRelativePath: string): string | null {
+  const normalizedSavedPath = normalizeFilePath(savedPath);
+  const normalizedRepoPath = normalizeFilePath(repoRelativePath);
+  if (!normalizedSavedPath) return null;
+  if (!normalizedRepoPath) return normalizedSavedPath;
+  if (normalizedSavedPath === normalizedRepoPath) return null;
+  if (!normalizedSavedPath.startsWith(`${normalizedRepoPath}/`)) return null;
+  return normalizedSavedPath.slice(normalizedRepoPath.length + 1);
 }
 
 export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFileOpen }: CodeHubPanelProps) {
@@ -313,6 +335,41 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       setError(t('errors.loadChanges'));
     }
   }, [selectedRepoId, t, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !selectedRepoId || !selectedRepo || !conflictState) return undefined;
+
+    const handleFileSaved = (event: Event) => {
+      const detail = (event as CustomEvent<FileSavedEventDetail>).detail || {};
+      if (detail.workspaceId && String(detail.workspaceId) !== String(workspaceId)) return;
+
+      const repoFilePath = toRepoRelativeSavedPath(detail.path, selectedRepo.relativePath);
+      if (!repoFilePath || !conflictState.files.includes(repoFilePath)) return;
+
+      void (async () => {
+        try {
+          const response = await api.codehub.resolveConflictFile(workspaceId, selectedRepoId, {
+            file: repoFilePath,
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            setError(payload.error || payload.message || t('errors.resolveConflictFileFailed'));
+            return;
+          }
+          if (payload.resolved) {
+            setNotice(t('pull.conflictState.fileResolved', { file: repoFilePath }));
+          }
+          await loadChanges();
+        } catch (caughtError) {
+          console.error('[CodeHubPanel] Failed to resolve conflict file after save:', caughtError);
+          setError(t('errors.resolveConflictFileFailed'));
+        }
+      })();
+    };
+
+    window.addEventListener('cloudcli:file-saved', handleFileSaved);
+    return () => window.removeEventListener('cloudcli:file-saved', handleFileSaved);
+  }, [conflictState, loadChanges, selectedRepo, selectedRepoId, t, workspaceId]);
 
   const loadRemoteBranches = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;

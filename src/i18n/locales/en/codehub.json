@@ -79,7 +79,8 @@
       "pullDescription": "The pull has stopped with merge conflicts. Open each file, resolve the conflict markers, then continue with the commit flow.",
       "stashDescription": "The stash was applied with conflicts. Open each file, resolve the conflict markers, then continue with the commit flow.",
       "refresh": "Refresh",
-      "resolveHint": "After resolving conflicts, save the files and refresh this list. Conflict files will leave this panel once Git reports them as resolved."
+      "fileResolved": "{{file}} was marked as resolved.",
+      "resolveHint": "After resolving conflicts, save the file. CodeHub will check it automatically; conflict files leave this panel once Git reports them as resolved."
     }
   },
   "submission": {
@@ -169,6 +170,7 @@
     "stashLocalChangesFailed": "Failed to stash local changes",
     "restoreStashFailed": "Failed to restore stashed changes",
     "restoreStashConflicts": "Restoring the stash has conflicts: {{files}}. Resolve them in the workspace.",
+    "resolveConflictFileFailed": "Failed to check whether the conflict was resolved",
     "clearLocalChangesFailed": "Failed to clear local changes",
     "clearLocalChangesNoFiles": "No local changed files are available to clear",
     "selectFile": "Select at least one changed file",

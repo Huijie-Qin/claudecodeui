@@ -319,6 +319,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    resolveConflictFile: (workspaceId, repoId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/resolve-conflict-file`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     clearLocalChanges: (workspaceId, repoId, payload) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/clear-local-changes`), {
         method: 'POST',

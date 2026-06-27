@@ -79,7 +79,8 @@
       "pullDescription": "本次拉取已停在 merge 冲突状态。请打开文件，处理冲突标记后，再继续提交流程。",
       "stashDescription": "stash 内容已应用但产生冲突。请打开文件，处理冲突标记后，再继续提交流程。",
       "refresh": "刷新",
-      "resolveHint": "解决冲突并保存文件后，请刷新列表；当 Git 不再报告冲突时，文件会自动离开此面板。"
+      "fileResolved": "{{file}} 已标记为冲突解决。",
+      "resolveHint": "解决冲突并保存文件后，CodeHub 会自动检查；当 Git 不再报告冲突时，文件会自动离开此面板。"
     }
   },
   "submission": {
@@ -169,6 +170,7 @@
     "stashLocalChangesFailed": "stash 本地变更失败",
     "restoreStashFailed": "恢复 stash 失败",
     "restoreStashConflicts": "恢复 stash 时发生冲突：{{files}}。请在工作区内手动解决。",
+    "resolveConflictFileFailed": "检查冲突是否已解决失败",
     "clearLocalChangesFailed": "清理本地变更失败",
     "clearLocalChangesNoFiles": "没有可清理的本地变更文件",
     "selectFile": "请至少选择一个变更文件",
