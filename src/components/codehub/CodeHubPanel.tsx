@@ -167,8 +167,22 @@ function normalizeFilePath(value: string | null | undefined): string {
     .replace(/^\/+|\/+$/g, '');
 }
 
-function toRepoRelativeSavedPath(savedPath: string | null | undefined, repoRelativePath: string): string | null {
-  const normalizedSavedPath = normalizeFilePath(savedPath);
+function toRepoRelativeSavedPath(
+  savedPath: string | null | undefined,
+  repoRelativePath: string,
+  workspacePath: string,
+): string | null {
+  const normalizedWorkspacePath = normalizeFilePath(workspacePath);
+  const normalizedInputPath = normalizeFilePath(savedPath);
+  const normalizedSavedPath = (() => {
+    if (normalizedInputPath.startsWith('/workspace/')) {
+      return normalizedInputPath.slice('/workspace/'.length);
+    }
+    if (normalizedWorkspacePath && normalizedInputPath.startsWith(`${normalizedWorkspacePath}/`)) {
+      return normalizedInputPath.slice(normalizedWorkspacePath.length + 1);
+    }
+    return normalizedInputPath;
+  })();
   const normalizedRepoPath = normalizeFilePath(repoRelativePath);
   if (!normalizedSavedPath) return null;
   if (!normalizedRepoPath) return normalizedSavedPath;
@@ -343,7 +357,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       const detail = (event as CustomEvent<FileSavedEventDetail>).detail || {};
       if (detail.workspaceId && String(detail.workspaceId) !== String(workspaceId)) return;
 
-      const repoFilePath = toRepoRelativeSavedPath(detail.path, selectedRepo.relativePath);
+      const repoFilePath = toRepoRelativeSavedPath(
+        detail.path,
+        selectedRepo.relativePath,
+        selectedProject.fullPath || selectedProject.path || '',
+      );
       if (!repoFilePath || !conflictState.files.includes(repoFilePath)) return;
 
       void (async () => {
@@ -369,7 +387,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
 
     window.addEventListener('cloudcli:file-saved', handleFileSaved);
     return () => window.removeEventListener('cloudcli:file-saved', handleFileSaved);
-  }, [conflictState, loadChanges, selectedRepo, selectedRepoId, t, workspaceId]);
+  }, [conflictState, loadChanges, selectedProject.fullPath, selectedProject.path, selectedRepo, selectedRepoId, t, workspaceId]);
 
   const loadRemoteBranches = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
