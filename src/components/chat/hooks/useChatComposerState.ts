@@ -9,7 +9,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { useDropzone } from 'react-dropzone';
+
 import { authenticatedFetch } from '../../../utils/api';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
@@ -21,10 +21,9 @@ import type {
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
+
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
-
-const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -377,84 +376,11 @@ export function useChatComposerState({
     inputHighlightRef.current.scrollLeft = target.scrollLeft;
   }, []);
 
-  const handleImageFiles = useCallback((files: File[]) => {
-    const validFiles = files.filter((file) => {
-      try {
-        if (!file || typeof file !== 'object') {
-          console.warn('Invalid file object:', file);
-          return false;
-        }
-
-        if (!file.type || !SUPPORTED_IMAGE_TYPES.has(file.type)) {
-          const fileName = file.name || 'Unknown file';
-          setImageErrors((previous) => {
-            const next = new Map(previous);
-            next.set(fileName, 'Unsupported image type (use JPEG, PNG, GIF, or WebP)');
-            return next;
-          });
-          return false;
-        }
-
-        if (!file.size || file.size > 5 * 1024 * 1024) {
-          const fileName = file.name || 'Unknown file';
-          setImageErrors((previous) => {
-            const next = new Map(previous);
-            next.set(fileName, 'File too large (max 5MB)');
-            return next;
-          });
-          return false;
-        }
-
-        return true;
-      } catch (error) {
-        console.error('Error validating file:', error, file);
-        return false;
-      }
-    });
-
-    if (validFiles.length > 0) {
-      setAttachedImages((previous) => [...previous, ...validFiles].slice(0, 5));
-    }
-  }, []);
-
-  const handlePaste = useCallback(
-    (event: ClipboardEvent<HTMLTextAreaElement>) => {
-      const items = Array.from(event.clipboardData.items);
-
-      items.forEach((item) => {
-        if (!item.type.startsWith('image/')) {
-          return;
-        }
-        const file = item.getAsFile();
-        if (file) {
-          handleImageFiles([file]);
-        }
-      });
-
-      if (items.length === 0 && event.clipboardData.files.length > 0) {
-        const files = Array.from(event.clipboardData.files);
-        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-        if (imageFiles.length > 0) {
-          handleImageFiles(imageFiles);
-        }
-      }
-    },
-    [handleImageFiles],
-  );
-
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    accept: {
-      'image/jpeg': ['.jpg', '.jpeg'],
-      'image/png': ['.png'],
-      'image/gif': ['.gif'],
-      'image/webp': ['.webp'],
-    },
-    maxSize: 5 * 1024 * 1024,
-    maxFiles: 5,
-    onDrop: handleImageFiles,
-    noClick: true,
-    noKeyboard: true,
-  });
+  const handlePaste = useCallback((_event: ClipboardEvent<HTMLTextAreaElement>) => undefined, []);
+  const getRootProps = useCallback(() => ({}), []);
+  const getInputProps = useCallback(() => ({ disabled: true, type: 'file' }), []);
+  const openImagePicker = useCallback(() => undefined, []);
+  const isDragActive = false;
 
   const handleSubmit = useCallback(
     async (
@@ -496,38 +422,6 @@ export function useChatComposerState({
       const displayInput = pendingDisplayInputRef.current || currentInput;
       pendingDisplayInputRef.current = null;
 
-      let uploadedImages: unknown[] = [];
-      if (attachedImages.length > 0) {
-        const formData = new FormData();
-        attachedImages.forEach((file) => {
-          formData.append('images', file);
-        });
-
-        try {
-          const response = await authenticatedFetch(`/api/projects/${selectedProject.name}/upload-images`, {
-            method: 'POST',
-            headers: {},
-            body: formData,
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to upload images');
-          }
-
-          const result = await response.json();
-          uploadedImages = result.images;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          console.error('Image upload failed:', error);
-          addMessage({
-            type: 'error',
-            content: `Failed to upload images: ${message}`,
-            timestamp: new Date(),
-          });
-          return;
-        }
-      }
-
       const effectiveSessionId =
         currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
@@ -535,7 +429,6 @@ export function useChatComposerState({
       const userMessage: ChatMessage = {
         type: 'user',
         content: displayInput,
-        images: uploadedImages as any,
         timestamp: new Date(),
       };
 
@@ -658,7 +551,6 @@ export function useChatComposerState({
             model: claudeModel,
             sessionSummary,
             displayCommand: displayInput !== currentInput ? displayInput : undefined,
-            images: uploadedImages,
           },
         });
       }
@@ -680,7 +572,6 @@ export function useChatComposerState({
     },
     [
       selectedSession,
-      attachedImages,
       claudeModel,
       codexModel,
       currentSessionId,
@@ -967,7 +858,7 @@ export function useChatComposerState({
     getRootProps,
     getInputProps,
     isDragActive,
-    openImagePicker: open,
+    openImagePicker,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
