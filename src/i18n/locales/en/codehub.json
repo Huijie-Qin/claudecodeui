@@ -57,9 +57,10 @@
       "commitFirstDescription": "Commit the current local changes, then preview or pull again.",
       "commitFirstButton": "Commit changes",
       "stashTitle": "Stash or clear",
-      "stashDescription": "Temporarily move or clean local changes, then run preview again.",
+      "stashDescription": "Stash local changes and pull the remote updates in one step, or clear the local changes.",
       "stashButton": "Stash changes",
       "stashSuccess": "Local changes were stashed as {{ref}}.",
+      "stashAndPullSuccess": "Local changes were stashed as {{ref}}, and {{branch}} was pulled. Restore the stash when ready.",
       "stashNoChanges": "No local changes needed to be stashed.",
       "stashFallbackRef": "latest stash",
       "clearButton": "Clear changes",
@@ -75,6 +76,8 @@
     "restore": {
       "title": "Stashed changes: {{ref}}",
       "description": "After pulling remote updates, restore the stashed local changes back into the workspace.",
+      "waitForPull": "Pull the remote updates first, then restore these stashed changes.",
+      "waitForConflict": "Resolve the current pull conflicts before restoring these stashed changes.",
       "button": "Restore stash",
       "success": "Restored stashed changes from {{ref}}."
     },

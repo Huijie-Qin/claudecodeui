@@ -57,9 +57,10 @@
       "commitFirstDescription": "先提交当前本地变更，然后重新预检或拉取。",
       "commitFirstButton": "提交变更",
       "stashTitle": "暂存或清理",
-      "stashDescription": "先临时移走或清理本地变更，然后重新执行预检。",
+      "stashDescription": "一键 stash 本地变更并拉取远程更新，或直接清理本地变更。",
       "stashButton": "stash 本地变更",
       "stashSuccess": "本地变更已保存到 {{ref}}。",
+      "stashAndPullSuccess": "本地变更已保存到 {{ref}}，并已拉取 {{branch}}。确认后可以恢复 stash。",
       "stashNoChanges": "没有需要 stash 的本地变更。",
       "stashFallbackRef": "最新 stash",
       "clearButton": "清理变更",
@@ -75,6 +76,8 @@
     "restore": {
       "title": "已 stash：{{ref}}",
       "description": "拉取远程更新后，可以把刚才 stash 的本地变更恢复到工作区。",
+      "waitForPull": "请先完成远程拉取，然后再恢复这份 stash 内容。",
+      "waitForConflict": "请先解决当前拉取冲突，然后再恢复这份 stash 内容。",
       "button": "恢复 stash",
       "success": "已从 {{ref}} 恢复 stash 内容。"
     },

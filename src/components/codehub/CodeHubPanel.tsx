@@ -270,6 +270,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
   const canOpenPushStep = hasActiveCommitBatch;
   const canOpenMrStep = sourceBranchPushedAtHead || remoteBranchesAtHead.length > 0 || Boolean(pushResult?.success);
+  const canRestoreLastStash = Boolean(lastStash && !pullPreview && !conflictState);
   const pullPreviewRecommendation = useMemo(() => {
     if (!pullPreview) return null;
     const recommendation = pullPreview.recommendation || (pullPreview.dirty ? 'commit-first' : 'pull');
@@ -659,16 +660,54 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
           stashSubject: payload.stashSubject,
         });
       }
-      setNotice(payload.stashed
-        ? t('pull.options.stashSuccess', { ref: payload.stashRef || t('pull.options.stashFallbackRef') })
-        : t('pull.options.stashNoChanges'));
+      if (!payload.stashed) {
+        setNotice(t('pull.options.stashNoChanges'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+
+      const pullResponse = await api.codehub.pull(workspaceId, selectedRepoId, { branch: pullBranch });
+      const pullPayload = await pullResponse.json().catch(() => ({}));
+      if (!pullResponse.ok) {
+        setError(pullPayload.error || pullPayload.message || t('errors.pullFailed'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+      if (pullPayload.localChangesBlockPull) {
+        setError(t('errors.pullLocalChangesWouldBeOverwritten', {
+          files: (pullPayload.changedFiles || []).length > 0
+            ? (pullPayload.changedFiles || []).join(', ')
+            : t('pull.conflictFilesUnknown'),
+        }));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+      if (pullPayload.conflict) {
+        const files = pullPayload.conflictFiles || [];
+        setPullPreview(null);
+        setConflictState({ source: 'pull', files });
+        setNotice(t('pull.conflictState.pullNotice'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+
+      setPullPreview(null);
+      setConflictState(null);
+      setNotice(t('pull.options.stashAndPullSuccess', {
+        ref: payload.stashRef || t('pull.options.stashFallbackRef'),
+        branch: pullPayload.branch || pullBranch || selectedRepo?.branch || '-',
+      }));
       await loadRepositories();
       await loadChanges();
-      await previewPull();
+      showSuccessToast(t('toast.pullSuccess', { branch: pullPayload.branch || pullBranch || selectedRepo?.branch || '-' }));
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepo?.branch, selectedRepoId, showSuccessToast, t, workspaceId]);
 
   const restoreLastStash = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !lastStash?.stashRef) return;
@@ -1176,13 +1215,17 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                       <div className="font-medium text-foreground">
                         {t('pull.restore.title', { ref: lastStash.stashRef })}
                       </div>
-                      <div className="mt-1">{t('pull.restore.description')}</div>
+                      <div className="mt-1">
+                        {conflictState
+                          ? t('pull.restore.waitForConflict')
+                          : canRestoreLastStash ? t('pull.restore.description') : t('pull.restore.waitForPull')}
+                      </div>
                     </div>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => void restoreLastStash()}
-                      disabled={isReadOnly || isWorking}
+                      disabled={isReadOnly || isWorking || !canRestoreLastStash}
                     >
                       {t('pull.restore.button')}
                     </Button>
