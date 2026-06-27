@@ -268,6 +268,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     [activeMergeRequests, selectedMrProjectId, sourceBranch, targetBranch],
   );
   const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
+  const canOpenPushStep = hasActiveCommitBatch;
+  const canOpenMrStep = sourceBranchPushedAtHead || remoteBranchesAtHead.length > 0 || Boolean(pushResult?.success);
   const pullPreviewRecommendation = useMemo(() => {
     if (!pullPreview) return null;
     const recommendation = pullPreview.recommendation || (pullPreview.dirty ? 'commit-first' : 'pull');
@@ -762,13 +764,34 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       setSelectedFiles([]);
       setMrResult(null);
       clearDiffPreview();
+      if (payload.commitSha) {
+        setCommitRecords((current) => {
+          if (current.some((commit) => commit.commitSha === payload.commitSha)) {
+            return current;
+          }
+          return [
+            ...current,
+            {
+              commitSha: payload.commitSha,
+              commitMessage: payload.commitMessage || commitMessage,
+              committedAt: new Date().toISOString(),
+              additions: payload.additions,
+              deletions: payload.deletions,
+              filesChanged: payload.filesChanged,
+            },
+          ];
+        });
+        setHeadSha(payload.commitSha);
+      }
+      setWorkflowStep('push');
       await loadRepositories();
       await loadChanges();
+      await loadRemoteBranches();
       await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, commitMessage, loadChanges, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
 
   const pushBranch = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || commitRecords.length === 0) return;
@@ -1347,15 +1370,29 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition hover:bg-muted/50 ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}
+                onClick={() => setWorkflowStep('commit')}
+              >
                 {t('workflow.steps.commit')}
-              </div>
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}>
+              </button>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60 ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}
+                onClick={() => setWorkflowStep('push')}
+                disabled={!canOpenPushStep}
+              >
                 {t('workflow.steps.push')}
-              </div>
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}>
+              </button>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60 ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}
+                onClick={() => setWorkflowStep('mr')}
+                disabled={!canOpenMrStep}
+              >
                 {t('workflow.steps.mr')}
-              </div>
+              </button>
             </div>
 
             {workflowStep === 'commit' ? (
