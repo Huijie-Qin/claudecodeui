@@ -89,10 +89,11 @@ export default function SidebarSessionItem({
         <div
           className={cn(
             'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
-            isSelected ? 'bg-primary/5 border-primary/20' : '',
-            !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
+            isSelected ? 'bg-primary/10 border-primary/30' : '',
+            !isSelected &&
+              (sessionView.isActive
+                ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
+                : 'border-border/30'),
           )}
           onClick={selectMobileSession}
         >
@@ -160,8 +161,8 @@ export default function SidebarSessionItem({
         <Button
           variant="ghost"
           className={cn(
-            'w-full justify-start p-2 h-auto font-normal text-left hover:bg-accent/50 transition-colors duration-200',
-            isSelected && 'bg-accent text-accent-foreground',
+            'w-full justify-start border-l-2 border-transparent p-2 h-auto font-normal text-left hover:bg-accent/50 transition-colors duration-200',
+            isSelected && 'border-primary/60 bg-primary/10 text-accent-foreground hover:bg-primary/15',
           )}
           onClick={() => onSessionSelect(session, project.name)}
         >
