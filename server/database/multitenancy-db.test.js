@@ -627,6 +627,88 @@ test('session index keeps shared workspace sessions private per user', () => {
   assert.equal(mt.sessions.findOwnedSession({ tenantId: tenant.id, userId: editorId, provider: 'claude', providerSessionId: 'owner-session' }), null);
 });
 
+test('session favorites persist per user and sort favorited sessions first', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const editorId = seedUser(database, 'editor');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: editorId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/owner/repo',
+  });
+
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    summary: 'Older session',
+    status: 'active',
+  });
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'newer-session',
+    summary: 'Newer session',
+    status: 'active',
+  });
+
+  mt.sessionFavorites.setFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    favorited: true,
+  });
+
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), true);
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: editorId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), false);
+  assert.deepEqual(
+    mt.sessions.listSessions({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId })
+      .map((row) => [row.provider_session_id, row.is_favorited]),
+    [['older-session', 1], ['newer-session', 0]],
+  );
+
+  mt.sessionFavorites.setFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    favorited: false,
+  });
+
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), false);
+});
+
 test('agent session runtime binds provider session id for resume', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

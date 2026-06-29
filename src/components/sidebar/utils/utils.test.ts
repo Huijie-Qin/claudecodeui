@@ -45,6 +45,24 @@ test('getAllSessions keeps same-title Claude sessions when their ids differ', ()
   assert.deepEqual(sessions.map((session) => session.id), ['session-2', 'session-1']);
 });
 
+test('getAllSessions sorts favorited sessions before recent sessions', () => {
+  const sessions = getAllSessions(makeProject([
+    {
+      id: 'recent-session',
+      summary: 'recent',
+      lastActivity: '2026-04-26T16:48:11.000Z',
+    },
+    {
+      id: 'favorite-session',
+      summary: 'favorite',
+      lastActivity: '2026-04-26T16:46:17.000Z',
+      isFavorited: true,
+    },
+  ]), {});
+
+  assert.deepEqual(sessions.map((session) => session.id), ['favorite-session', 'recent-session']);
+});
+
 test('getSessionDate treats SQLite CURRENT_TIMESTAMP values as UTC', () => {
   assert.equal(
     getSessionDate({

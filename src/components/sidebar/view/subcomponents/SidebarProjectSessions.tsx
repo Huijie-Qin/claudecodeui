@@ -22,6 +22,7 @@ type SidebarProjectSessionsProps = {
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
+  onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -68,6 +69,7 @@ export default function SidebarProjectSessions({
   onProjectSelect,
   onSessionSelect,
   onScheduledTaskOpen,
+  onToggleSessionFavorite,
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
@@ -128,6 +130,7 @@ export default function SidebarProjectSessions({
             onProjectSelect={onProjectSelect}
             onSessionSelect={onSessionSelect}
             onScheduledTaskOpen={onScheduledTaskOpen}
+            onToggleSessionFavorite={onToggleSessionFavorite}
             onDeleteSession={onDeleteSession}
             t={t}
           />

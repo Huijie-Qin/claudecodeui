@@ -114,6 +114,7 @@ function Sidebar({
     handleProjectSelect,
     refreshProjects,
     updateSessionSummary,
+    toggleSessionFavorite,
     collapseSidebar: handleCollapseSidebar,
     expandSidebar: handleExpandSidebar,
     setShowNewProject,
@@ -255,6 +256,9 @@ function Sidebar({
     onScheduledTaskOpen,
     onScheduledTasksListOpen,
     onDeleteSession: showDeleteSessionConfirmation,
+    onToggleSessionFavorite: (project, session) => {
+      void toggleSessionFavorite(project, session);
+    },
     onLoadMoreSessions: (project) => {
       void loadMoreSessions(project);
     },

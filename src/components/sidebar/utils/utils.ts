@@ -41,6 +41,8 @@ export const persistStarredProjects = (starredProjects: Set<string>) => {
   }
 };
 
+export const isSessionFavorited = (session: SessionWithProvider): boolean => session.isFavorited === true;
+
 export const getSessionDate = (session: SessionWithProvider): Date => {
   if (session.__provider === 'cursor') {
     return parseTimestamp(session.createdAt || 0);
@@ -136,9 +138,18 @@ export const getAllSessions = (
       return true;
     });
 
-  return dedupedSessions.sort(
-    (a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime(),
-  );
+  return dedupedSessions.sort((a, b) => {
+    const aFavorited = isSessionFavorited(a);
+    const bFavorited = isSessionFavorited(b);
+    if (aFavorited && !bFavorited) {
+      return -1;
+    }
+    if (!aFavorited && bFavorited) {
+      return 1;
+    }
+
+    return getSessionDate(b).getTime() - getSessionDate(a).getTime();
+  });
 };
 
 export const getProjectLastActivity = (

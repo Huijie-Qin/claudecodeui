@@ -137,6 +137,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ summary, provider }),
     }),
+  setSessionFavorite: (sessionId, { provider = 'claude', projectName, workspaceId, favorited }) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${encodeURIComponent(sessionId)}/favorite`, workspaceId), {
+      method: 'PUT',
+      body: JSON.stringify({ provider, projectName, favorited }),
+    }),
   deleteCodexSession: (sessionId, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/codex/sessions/${sessionId}`, workspaceId), {
       method: 'DELETE',

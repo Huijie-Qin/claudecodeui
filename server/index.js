@@ -109,6 +109,14 @@ console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 
+function normalizeOpaqueSessionId(sessionId) {
+    const normalized = String(sessionId ?? '').trim();
+    if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+        return null;
+    }
+    return normalized;
+}
+
 // File system watchers for provider project/session folders
 const PROVIDER_WATCH_PATHS = [
     { provider: 'claude', rootPath: path.join(os.homedir(), '.claude', 'projects') },
@@ -815,6 +823,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
                     id: session.provider_session_id,
                     summary: session.summary || 'New Session',
                     lastActivity: session.updated_at,
+                    isFavorited: session.is_favorited === 1,
                     __provider: 'claude',
                     __workspaceId: workspace.id,
                 }));
@@ -845,6 +854,70 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
             return;
         }
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Favorite/unfavorite session endpoint
+app.put('/api/sessions/:sessionId/favorite', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const normalizedSessionId = normalizeOpaqueSessionId(sessionId);
+        if (!normalizedSessionId) {
+            return res.status(400).json({ error: 'Invalid sessionId' });
+        }
+
+        const { provider = 'claude', favorited = true, projectName } = req.body || {};
+        if (!provider || !VALID_PROVIDERS.includes(provider)) {
+            return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+        }
+
+        const userId = req.user?.id ?? req.user?.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        if (req.tenant) {
+            const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: false });
+            const ownedSession = multitenancyDb.sessions.findOwnedSession({
+                tenantId: req.tenant.id,
+                userId,
+                provider,
+                providerSessionId: normalizedSessionId,
+                workspaceId: workspace.id,
+            });
+            if (!ownedSession) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const result = multitenancyDb.sessionFavorites.setFavorite({
+                tenantId: req.tenant.id,
+                workspaceId: workspace.id,
+                userId,
+                provider,
+                providerSessionId: normalizedSessionId,
+                favorited: favorited !== false,
+            });
+
+            return res.json({ success: true, isFavorited: result.isFavorited });
+        }
+
+        if (!projectName || typeof projectName !== 'string') {
+            return res.status(400).json({ error: 'projectName is required' });
+        }
+
+        const result = multitenancyDb.sessionFavorites.setFavorite({
+            userId,
+            projectName,
+            provider,
+            providerSessionId: normalizedSessionId,
+            favorited: favorited !== false,
+        });
+
+        return res.json({ success: true, isFavorited: result.isFavorited });
+    } catch (error) {
+        console.error(`[API] Error updating favorite for session ${req.params.sessionId}:`, error);
+        const statusCode = error.statusCode || 500;
+        return res.status(statusCode).json({ error: error.message });
     }
 });
 

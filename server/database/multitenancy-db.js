@@ -214,6 +214,18 @@ function normalizeSqlCheckRuleIds(ruleIds) {
   return normalized;
 }
 
+function normalizeFavoriteProjectKey({ tenantId = null, workspaceId = null, projectName = null }) {
+  if (workspaceId != null) {
+    const normalizedTenantId = tenantId != null
+      ? requirePositiveInteger(tenantId, 'tenantId')
+      : 0;
+    const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+    return `workspace:${normalizedTenantId}:${normalizedWorkspaceId}`;
+  }
+
+  return `project:${requireNonEmptyString(projectName, 'projectName')}`;
+}
+
 function normalizeRuntimeMonitorFilters(filters = {}) {
   return {
     tenantId: normalizeOptionalPositiveInteger(filters.tenantId, 'tenantId'),
@@ -1731,27 +1743,42 @@ export function createMultitenancyDb(database = db) {
       },
 
       listSessions: ({ tenantId, workspaceId, userId, provider = null }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const projectKey = normalizeFavoriteProjectKey({
+          tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
+        });
         const params = [
-          requirePositiveInteger(tenantId, 'tenantId'),
-          requirePositiveInteger(workspaceId, 'workspaceId'),
-          requirePositiveInteger(userId, 'userId'),
+          projectKey,
+          normalizedTenantId,
+          normalizedWorkspaceId,
+          normalizedUserId,
         ];
         let providerFilter = '';
 
         if (provider != null) {
-          providerFilter = 'AND provider = ?';
+          providerFilter = 'AND si.provider = ?';
           params.push(requireEnum(provider, PROVIDERS, 'provider'));
         }
 
         return database.prepare(`
-          SELECT *
-          FROM session_index
-          WHERE tenant_id = ?
-            AND workspace_id = ?
-            AND user_id = ?
-            AND status != 'deleted'
+          SELECT
+            si.*,
+            CASE WHEN usf.user_id IS NULL THEN 0 ELSE 1 END AS is_favorited
+          FROM session_index si
+          LEFT JOIN user_session_favorites usf
+            ON usf.user_id = si.user_id
+            AND usf.project_key = ?
+            AND usf.provider = si.provider
+            AND usf.provider_session_id = si.provider_session_id
+          WHERE si.tenant_id = ?
+            AND si.workspace_id = ?
+            AND si.user_id = ?
+            AND si.status != 'deleted'
             ${providerFilter}
-          ORDER BY updated_at DESC, id DESC
+          ORDER BY is_favorited DESC, si.updated_at DESC, si.id DESC
         `).all(...params);
       },
 
@@ -1848,6 +1875,118 @@ export function createMultitenancyDb(database = db) {
         );
 
         return result.changes > 0;
+      },
+    },
+
+    sessionFavorites: {
+      setFavorite: ({
+        tenantId = null,
+        workspaceId = null,
+        userId,
+        projectName = null,
+        provider,
+        providerSessionId,
+        favorited = true,
+      }) => {
+        const normalizedUserId = requirePositiveInteger(userId, 'userId');
+        const normalizedProvider = requireEnum(provider, PROVIDERS, 'provider');
+        const normalizedProviderSessionId = requireNonEmptyString(providerSessionId, 'providerSessionId');
+        const normalizedTenantId = tenantId == null ? null : requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedWorkspaceId = workspaceId == null ? null : requirePositiveInteger(workspaceId, 'workspaceId');
+        const projectKey = normalizeFavoriteProjectKey({
+          tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
+          projectName,
+        });
+
+        if (!favorited) {
+          const result = database.prepare(`
+            DELETE FROM user_session_favorites
+            WHERE user_id = ?
+              AND project_key = ?
+              AND provider = ?
+              AND provider_session_id = ?
+          `).run(normalizedUserId, projectKey, normalizedProvider, normalizedProviderSessionId);
+
+          return {
+            isFavorited: false,
+            changed: result.changes > 0,
+          };
+        }
+
+        database.prepare(`
+          INSERT INTO user_session_favorites (
+            user_id,
+            project_key,
+            provider,
+            provider_session_id,
+            tenant_id,
+            workspace_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, project_key, provider, provider_session_id)
+          DO UPDATE SET
+            tenant_id = excluded.tenant_id,
+            workspace_id = excluded.workspace_id,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(
+          normalizedUserId,
+          projectKey,
+          normalizedProvider,
+          normalizedProviderSessionId,
+          normalizedTenantId,
+          normalizedWorkspaceId,
+        );
+
+        return {
+          isFavorited: true,
+          changed: true,
+        };
+      },
+
+      listFavoritesForScope: ({
+        tenantId = null,
+        workspaceId = null,
+        userId,
+        projectName = null,
+      }) => {
+        const projectKey = normalizeFavoriteProjectKey({ tenantId, workspaceId, projectName });
+        return database.prepare(`
+          SELECT provider, provider_session_id
+          FROM user_session_favorites
+          WHERE user_id = ?
+            AND project_key = ?
+          ORDER BY updated_at DESC, created_at DESC
+        `).all(
+          requirePositiveInteger(userId, 'userId'),
+          projectKey,
+        );
+      },
+
+      isFavorite: ({
+        tenantId = null,
+        workspaceId = null,
+        userId,
+        projectName = null,
+        provider,
+        providerSessionId,
+      }) => {
+        const projectKey = normalizeFavoriteProjectKey({ tenantId, workspaceId, projectName });
+        const row = database.prepare(`
+          SELECT 1
+          FROM user_session_favorites
+          WHERE user_id = ?
+            AND project_key = ?
+            AND provider = ?
+            AND provider_session_id = ?
+        `).get(
+          requirePositiveInteger(userId, 'userId'),
+          projectKey,
+          requireEnum(provider, PROVIDERS, 'provider'),
+          requireNonEmptyString(providerSessionId, 'providerSessionId'),
+        );
+
+        return Boolean(row);
       },
     },
 

@@ -27,6 +27,7 @@ export interface ProjectSession {
   updated_at?: string;
   lastActivity?: string;
   messageCount?: number;
+  isFavorited?: boolean;
   isScheduledTaskSession?: boolean;
   scheduledTask?: {
     id?: number;
