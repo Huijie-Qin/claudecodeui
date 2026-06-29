@@ -141,6 +141,27 @@ export default function FileTreeNode({
 
   // Render rename input if this item is being renamed
   if (isRenaming && setRenameValue && handleConfirmRename && handleCancelRename) {
+    const renameInput = (
+      <Input
+        ref={renameInputRef}
+        type="text"
+        value={renameValue || ''}
+        onChange={(e) => setRenameValue(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') handleConfirmRename();
+          if (e.key === 'Escape') handleCancelRename();
+        }}
+        onBlur={() => {
+          setTimeout(() => {
+            handleConfirmRename();
+          }, 100);
+        }}
+        className="h-6 min-w-0 flex-1 text-sm"
+        disabled={operationLoading}
+      />
+    );
+
     return (
       <div
         className={cn(rowClassName, 'bg-accent/30')}
@@ -148,25 +169,17 @@ export default function FileTreeNode({
         style={{ paddingLeft: `${level * 16 + 4}px` }}
         onClick={(e) => e.stopPropagation()}
       >
-        <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
-        <Input
-          ref={renameInputRef}
-          type="text"
-          value={renameValue || ''}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') handleConfirmRename();
-            if (e.key === 'Escape') handleCancelRename();
-          }}
-          onBlur={() => {
-            setTimeout(() => {
-              handleConfirmRename();
-            }, 100);
-          }}
-          className="h-6 flex-1 text-sm"
-          disabled={operationLoading}
-        />
+        {viewMode === 'detailed' ? (
+          <div className="col-span-12 flex min-w-0 items-center gap-1.5">
+            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+            {renameInput}
+          </div>
+        ) : (
+          <>
+            <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
+            {renameInput}
+          </>
+        )}
       </div>
     );
   }
