@@ -420,7 +420,8 @@ export function useChatSessionState({
       sessionStorage.setItem('cursorSessionId', selectedSession.id);
     }
 
-    // Check session status
+    // Check session status. The server also uses this to reconnect active Claude
+    // SDK output to the current WebSocket after a reconnect.
     if (ws) {
       sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
     }

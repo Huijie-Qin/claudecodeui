@@ -51,12 +51,56 @@ const abortedSessions = new Set();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
+const STREAM_STALL_PAUSE_POLL_MS = 5000;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
 const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
+class StreamStalledError extends Error {
+  constructor(provider, timeoutMs) {
+    super(`${provider} stream stalled: no events received for ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = 'StreamStalledError';
+    this.code = 'STREAM_STALLED';
+    this.provider = provider;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function readIteratorNextWithStallTimeout(iterator, {
+  timeoutMs,
+  provider,
+  shouldPauseTimeout = () => false,
+  onTimeout,
+}) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return iterator.next();
+  }
+
+  let timer = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    const check = () => {
+      if (shouldPauseTimeout()) {
+        timer = setTimeout(check, STREAM_STALL_PAUSE_POLL_MS);
+        return;
+      }
+
+      const error = new StreamStalledError(provider, timeoutMs);
+      onTimeout?.(error);
+      reject(error);
+    };
+
+    timer = setTimeout(check, timeoutMs);
+  });
+
+  return Promise.race([iterator.next(), timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function parseDisabledTools(value) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -617,6 +661,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let runtimeOptions = options;
   let runtimeContext = null;
   let runtimeBoundToProviderSession = Boolean(sessionId);
+  let streamStallTimeoutPaused = false;
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -779,6 +824,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         dedupeKey: `claude:interaction:${capturedSessionId || sessionId || 'none'}:${requestId}`
       }));
 
+      streamStallTimeoutPaused = true;
       const decision = await waitForToolApproval(requestId, {
         timeoutMs: requiresInteraction ? 0 : undefined,
         signal: context?.signal,
@@ -791,6 +837,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
         onCancel: (reason) => {
           ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
+      }).finally(() => {
+        streamStallTimeoutPaused = false;
       });
       if (!decision) {
         return { behavior: 'deny', message: 'Tool interaction timed out' };
@@ -850,9 +898,33 @@ async function queryClaudeSDK(command, options = {}, ws) {
       recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
 
+    const iterator = queryInstance[Symbol.asyncIterator]();
+
     // Process streaming messages
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
-    for await (const message of queryInstance) {
+    while (true) {
+      const next = await readIteratorNextWithStallTimeout(iterator, {
+        timeoutMs: STREAM_STALL_TIMEOUT_MS,
+        provider: 'Claude',
+        shouldPauseTimeout: () => streamStallTimeoutPaused,
+        onTimeout: () => {
+          const activeSessionId = capturedSessionId || sessionId || null;
+          const activeSession = activeSessionId ? getSession(activeSessionId) : null;
+          if (activeSession?.instance?.interrupt) {
+            Promise.resolve()
+              .then(() => activeSession.instance.interrupt())
+              .catch((error) => {
+                console.warn(`Failed to interrupt stalled Claude stream ${activeSessionId}:`, error?.message || error);
+              });
+          }
+        },
+      });
+
+      if (next.done) {
+        break;
+      }
+
+      const message = next.value;
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
