@@ -5,8 +5,19 @@ type HtmlPreviewProps = {
   title: string;
 };
 
+function removeScriptsFromHtml(content: string) {
+  if (typeof DOMParser === 'undefined') {
+    return content.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  }
+
+  const document = new DOMParser().parseFromString(content, 'text/html');
+  document.querySelectorAll('script').forEach((script) => script.remove());
+
+  return `<!doctype html>\n${document.documentElement.outerHTML}`;
+}
+
 export default function HtmlPreview({ content, title }: HtmlPreviewProps) {
-  const srcDoc = useMemo(() => content, [content]);
+  const srcDoc = useMemo(() => removeScriptsFromHtml(content), [content]);
 
   return (
     <iframe
