@@ -2215,6 +2215,7 @@ function createChatSessionLogContext({ data, provider, request }) {
         tenantId: options.tenantId ?? request?.tenant?.id ?? null,
         workspaceId: options.workspaceId ?? null,
         userId: options.userId ?? request?.user?.id ?? request?.user?.userId ?? null,
+        username: request?.user?.username ?? null,
         cwd: options.cwd || options.projectPath || null,
         model: options.model || null,
         permissionMode: options.permissionMode || null,
@@ -2231,6 +2232,31 @@ function logChatSessionEvent(event, context, extra = {}) {
         ...context,
         ...extra,
     }));
+}
+
+function resolveSessionLimitLogUser({ userId, username, request, writer }) {
+    const normalizedUserId = Number(userId ?? request?.user?.id ?? request?.user?.userId ?? writer?.userId);
+    const fallbackUsername = username ?? request?.user?.username ?? writer?.username ?? null;
+    if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+        return {
+            userId: null,
+            username: fallbackUsername,
+        };
+    }
+
+    try {
+        const user = userDb.getUserById(normalizedUserId);
+        return {
+            userId: normalizedUserId,
+            username: user?.username ?? fallbackUsername,
+        };
+    } catch (error) {
+        console.warn('[SessionLimit] Failed to resolve username for concurrency limit log:', error?.message || error);
+        return {
+            userId: normalizedUserId,
+            username: fallbackUsername,
+        };
+    }
 }
 
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
@@ -2251,6 +2277,21 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         if (!isSessionLimitExceededError(error)) {
             throw error;
         }
+
+        const rejectedUser = resolveSessionLimitLogUser({
+            userId: error.userId ?? data.options?.userId ?? writer.userId,
+            username: logContext?.username,
+            writer,
+        });
+        console.warn('[SessionLimit] User concurrency limit reached', JSON.stringify({
+            username: rejectedUser.username,
+            userId: rejectedUser.userId,
+            provider,
+            activeCount: error.activeCount,
+            limit: error.limit,
+            source: error.source,
+            requestId: logContext?.requestId || null,
+        }));
 
         writer.send(createNormalizedMessage({
             kind: 'error',
