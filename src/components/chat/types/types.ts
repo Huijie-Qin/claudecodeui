@@ -1,4 +1,5 @@
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
 export type Provider = LLMProvider;
 
@@ -130,7 +131,7 @@ export interface ChatInterfaceProps {
   onSessionInactive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
-  processingSessions?: Set<string>;
+  processingSessions?: ProcessingSessions;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
   onNavigateToSession?: (targetSessionId: string) => void;
   onShowSettings?: () => void;

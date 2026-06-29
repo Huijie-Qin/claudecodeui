@@ -450,9 +450,7 @@ export function useChatComposerState({
         pendingViewSessionRef.current = { sessionId: sessionToActivate, startedAt: Date.now() };
       }
       onSessionActive?.(sessionToActivate);
-      if (effectiveSessionId && !isTemporarySessionId(effectiveSessionId)) {
-        onSessionProcessing?.(effectiveSessionId);
-      }
+      onSessionProcessing?.(sessionToActivate);
 
       const getToolsSettings = () => {
         try {

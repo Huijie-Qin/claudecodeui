@@ -106,6 +106,7 @@ function ChatInterface({
     setTokenBudget,
     visibleMessages,
     allMessagesLoaded,
+    loadingStartedAt,
     claudeStatus,
     setClaudeStatus,
     createDiff,
@@ -362,6 +363,7 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
           isLoading={isLoading}
+          loadingStartedAt={loadingStartedAt}
           onAbortSession={handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}

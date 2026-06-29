@@ -11,6 +11,7 @@ type ClaudeStatusProps = {
   } | null;
   onAbort?: () => void;
   isLoading: boolean;
+  loadingStartedAt?: number | null;
   provider?: string;
 };
 
@@ -41,6 +42,7 @@ export default function ClaudeStatus({
   status,
   onAbort,
   isLoading,
+  loadingStartedAt,
   provider = 'claude',
 }: ClaudeStatusProps) {
   const { t } = useTranslation('chat');
@@ -52,7 +54,8 @@ export default function ClaudeStatus({
       setElapsedTime(0);
       return;
     }
-    const startTime = Date.now();
+    const startTime = loadingStartedAt ?? Date.now();
+    setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     const timer = setInterval(() => {
       setElapsedTime(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
@@ -64,7 +67,7 @@ export default function ClaudeStatus({
       clearInterval(timer);
       clearInterval(dotTimer);
     };
-  }, [isLoading]);
+  }, [isLoading, loadingStartedAt]);
 
   if (!isLoading && !status) return null;
 

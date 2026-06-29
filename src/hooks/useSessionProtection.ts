@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react';
 
+export type ProcessingSessions = Map<string, number>;
+
 export function useSessionProtection() {
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
-  const [processingSessions, setProcessingSessions] = useState<Set<string>>(new Set());
+  const [processingSessions, setProcessingSessions] = useState<ProcessingSessions>(new Map());
 
   const markSessionAsActive = useCallback((sessionId?: string | null) => {
     if (!sessionId) {
@@ -29,7 +31,13 @@ export function useSessionProtection() {
       return;
     }
 
-    setProcessingSessions((prev) => new Set([...prev, sessionId]));
+    setProcessingSessions((prev) => {
+      const next = new Map(prev);
+      if (!next.has(sessionId)) {
+        next.set(sessionId, Date.now());
+      }
+      return next;
+    });
   }, []);
 
   const markSessionAsNotProcessing = useCallback((sessionId?: string | null) => {
@@ -38,7 +46,7 @@ export function useSessionProtection() {
     }
 
     setProcessingSessions((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       next.delete(sessionId);
       return next;
     });
@@ -57,6 +65,26 @@ export function useSessionProtection() {
         }
       }
       next.add(realSessionId);
+      return next;
+    });
+
+    setProcessingSessions((prev) => {
+      const next = new Map<string, number>();
+      let transferredStartedAt: number | null = null;
+
+      for (const [sessionId, startedAt] of prev) {
+        if (sessionId.startsWith('new-session-')) {
+          transferredStartedAt =
+            transferredStartedAt === null ? startedAt : Math.min(transferredStartedAt, startedAt);
+        } else {
+          next.set(sessionId, startedAt);
+        }
+      }
+
+      if (transferredStartedAt !== null && !next.has(realSessionId)) {
+        next.set(realSessionId, transferredStartedAt);
+      }
+
       return next;
     });
   }, []);
