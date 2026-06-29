@@ -13,6 +13,20 @@ import { getFileTreeClipboardPath } from '../utils/fileTreePaths';
 const INVALID_FILENAME_CHARS = /[<>:"/\\|?*\x00-\x1f]/;
 const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
+function normalizeWorkspaceDisplayPath(pathValue: string): string {
+  return String(pathValue || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/\/+$/g, '');
+}
+
+function isWorkspaceDisplayPath(pathValue: string): boolean {
+  const normalizedPath = normalizeWorkspaceDisplayPath(pathValue);
+
+  return normalizedPath === '/workspace' || normalizedPath.startsWith('/workspace/');
+}
+
 export type ToastMessage = {
   message: string;
   type: 'success' | 'error';
@@ -442,11 +456,23 @@ export function useFileTreeOperations({
     const { item, targetDirectory } = moveDialog;
     if (!item || !selectedProject || isReadOnly) return;
 
+    const sourcePath = getFileTreeClipboardPath(item.path, selectedProject);
+    const normalizedTargetDirectory = normalizeWorkspaceDisplayPath(targetDirectory);
+    const invalidPathMessage = t(
+      'fileTree.move.workspacePathRequired',
+      'Path must be /workspace or start with /workspace/',
+    );
+
+    if (!isWorkspaceDisplayPath(sourcePath) || !isWorkspaceDisplayPath(normalizedTargetDirectory)) {
+      showToast(invalidPathMessage, 'error');
+      return;
+    }
+
     setOperationLoading(true);
     try {
       const response = await api.moveFile(selectedProject.name, {
-        sourcePath: item.path,
-        targetDirectory,
+        sourcePath,
+        targetDirectory: normalizedTargetDirectory,
         workspaceId: selectedProject.workspaceId,
       });
 

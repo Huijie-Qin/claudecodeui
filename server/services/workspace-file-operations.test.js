@@ -16,8 +16,8 @@ test('moveWorkspaceItem moves a file into a workspace subdirectory', async () =>
 
   const result = await moveWorkspaceItem({
     workspaceRoot,
-    sourcePath: 'note.md',
-    targetDirectory: 'docs',
+    sourcePath: '/workspace/note.md',
+    targetDirectory: '/workspace/docs',
   });
 
   assert.equal(result.relativePath, 'docs/note.md');
@@ -32,10 +32,34 @@ test('moveWorkspaceItem rejects moves outside the workspace root', async () => {
   await assert.rejects(
     moveWorkspaceItem({
       workspaceRoot,
-      sourcePath: 'note.md',
-      targetDirectory: '..',
+      sourcePath: '/workspace/note.md',
+      targetDirectory: '/workspace/..',
     }),
     /Path must be under workspace root/,
+  );
+});
+
+test('moveWorkspaceItem requires workspace display paths', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-files-move-display-path-'));
+  await fs.mkdir(path.join(workspaceRoot, 'docs'));
+  await fs.writeFile(path.join(workspaceRoot, 'note.md'), 'hello', 'utf8');
+
+  await assert.rejects(
+    moveWorkspaceItem({
+      workspaceRoot,
+      sourcePath: 'note.md',
+      targetDirectory: '/workspace/docs',
+    }),
+    /sourcePath must be \/workspace or start with \/workspace\//,
+  );
+
+  await assert.rejects(
+    moveWorkspaceItem({
+      workspaceRoot,
+      sourcePath: '/workspace/note.md',
+      targetDirectory: 'docs',
+    }),
+    /targetDirectory must be \/workspace or start with \/workspace\//,
   );
 });
 
