@@ -12,7 +12,7 @@ export default function HtmlPreview({ content, title }: HtmlPreviewProps) {
     <iframe
       title={title}
       srcDoc={srcDoc}
-      sandbox="allow-forms allow-modals allow-popups allow-scripts"
+      sandbox="allow-forms allow-modals allow-popups"
       className="h-full w-full border-0 bg-white"
     />
   );
