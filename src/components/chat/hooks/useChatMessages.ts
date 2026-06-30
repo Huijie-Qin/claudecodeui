@@ -6,6 +6,7 @@
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+import { isClaudeInternalUserContent } from '../utils/internalMessages';
 
 type TimestampValue = string | number | Date;
 
@@ -77,6 +78,15 @@ function findNextTimestamp(messages: NormalizedMessage[], currentIndex: number, 
   return undefined;
 }
 
+function isClaudeSkillToolUse(message: NormalizedMessage | undefined): boolean {
+  return Boolean(
+    message?.provider === 'claude' &&
+    message.kind === 'tool_use' &&
+    typeof message.toolName === 'string' &&
+    message.toolName.toLowerCase().includes('skill'),
+  );
+}
+
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
  * that the existing UI components expect.
@@ -104,6 +114,16 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (!content.trim()) continue;
 
         if (msg.role === 'user') {
+          if (
+            msg.provider === 'claude' &&
+            (
+              isClaudeInternalUserContent(content) ||
+              isClaudeSkillToolUse(messages[messageIndex - 1])
+            )
+          ) {
+            continue;
+          }
+
           // Parse task notifications
           const taskNotifRegex = /<task-notification>\s*<task-id>[^<]*<\/task-id>\s*<output-file>[^<]*<\/output-file>\s*<status>([^<]*)<\/status>\s*<summary>([^<]*)<\/summary>\s*<\/task-notification>/g;
           const taskNotifMatch = taskNotifRegex.exec(content);
