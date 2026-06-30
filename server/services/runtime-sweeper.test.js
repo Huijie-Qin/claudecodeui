@@ -69,7 +69,7 @@ test('sweepOnce stops only expired idle runtimes with running containers', async
   const result = await sweeper.sweepOnce();
 
   assert.deepEqual(result, { inspected: 3, stopped: 1, failed: 0 });
-  assert.deepEqual(multitenancy.calls, [{ olderThanMinutes: 30, limit: 100 }]);
+  assert.deepEqual(multitenancy.calls, [{ olderThanMinutes: 30, limit: 100, cursor: null }]);
   assert.deepEqual(inspected, ['container-running', 'container-exited', 'container-missing']);
   assert.deepEqual(stopped, [{ runtimeId: 'runtime-running', olderThanMinutes: 30 }]);
 });
@@ -102,6 +102,59 @@ test('sweepOnce skips a running candidate when protected stop reports stale reva
 
   assert.deepEqual(result, { inspected: 1, stopped: 0, failed: 0 });
   assert.deepEqual(stopped, [{ runtimeId: 'runtime-resumed', olderThanMinutes: 30 }]);
+});
+
+test('sweepOnce continues through all expired idle runtime batches', async () => {
+  const firstBatch = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    runtime_id: `runtime-${index + 1}`,
+    container_name: `container-${index + 1}`,
+    last_used_at: '2026-05-04 00:00:00',
+  }));
+  const secondBatch = [{
+    id: 101,
+    runtime_id: 'runtime-101',
+    container_name: 'container-101',
+    last_used_at: '2026-05-04 00:01:00',
+  }];
+  const batches = [firstBatch, secondBatch];
+  const calls = [];
+  const inspected = [];
+  const sweeper = createRuntimeSweeper({
+    config: ENABLED_CONFIG,
+    multitenancy: {
+      runtimes: {
+        listExpiredIdleRuntimes(args) {
+          calls.push(args);
+          return batches.shift() ?? [];
+        },
+      },
+    },
+    docker: {
+      async inspectContainer(containerName) {
+        inspected.push(containerName);
+        return { exists: true, running: true };
+      },
+    },
+    runtimeManager: {
+      async stopExpiredIdleRuntime() {
+        return true;
+      },
+    },
+    logger: createLogger(),
+  });
+
+  const result = await sweeper.sweepOnce();
+
+  assert.deepEqual(result, { inspected: 101, stopped: 101, failed: 0 });
+  assert.equal(inspected.length, 101);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { olderThanMinutes: 30, limit: 100, cursor: null });
+  assert.deepEqual(calls[1], {
+    olderThanMinutes: 30,
+    limit: 100,
+    cursor: { lastUsedAt: '2026-05-04 00:00:00', id: 100 },
+  });
 });
 
 test('disabled sweeper returns zeros and does not query database', async () => {

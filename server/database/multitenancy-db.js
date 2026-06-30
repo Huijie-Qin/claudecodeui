@@ -2337,12 +2337,27 @@ export function createMultitenancyDb(database = db) {
         `).get(requireNonEmptyString(runtimeId, 'runtimeId')) ?? null;
       },
 
-      listExpiredIdleRuntimes: ({ olderThanMinutes, limit = 100 }) => {
+      listExpiredIdleRuntimes: ({ olderThanMinutes, limit = 100, cursor = null }) => {
         const normalizedOlderThanMinutes = requirePositiveInteger(
           Number(olderThanMinutes),
           'olderThanMinutes',
         );
         const normalizedLimit = normalizePositiveLimit(limit, 100, 200);
+        const cursorLastUsedAt = cursor?.lastUsedAt == null
+          ? null
+          : requireNonEmptyString(cursor.lastUsedAt, 'cursor.lastUsedAt');
+        const cursorId = cursor?.id == null
+          ? null
+          : requirePositiveInteger(Number(cursor.id), 'cursor.id');
+        const cursorClause = cursorLastUsedAt == null || cursorId == null
+          ? ''
+          : `AND (
+              r.last_used_at > ?
+              OR (r.last_used_at = ? AND r.id > ?)
+            )`;
+        const cursorParams = cursorClause
+          ? [cursorLastUsedAt, cursorLastUsedAt, cursorId]
+          : [];
 
         return database.prepare(`
           SELECT
@@ -2359,9 +2374,10 @@ export function createMultitenancyDb(database = db) {
           JOIN workspaces w ON w.id = r.workspace_id
           WHERE r.status = 'idle'
             AND r.last_used_at <= datetime('now', ?)
+            ${cursorClause}
           ORDER BY r.last_used_at ASC, r.id ASC
           LIMIT ?
-        `).all(`-${normalizedOlderThanMinutes} minutes`, normalizedLimit);
+        `).all(`-${normalizedOlderThanMinutes} minutes`, ...cursorParams, normalizedLimit);
       },
 
       findExpiredIdleRuntimeById: ({ runtimeId, olderThanMinutes }) => {

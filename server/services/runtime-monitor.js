@@ -5,8 +5,8 @@ import {
   DockerCliClient,
 } from './agent-session-runtime.js';
 
-const DEFAULT_IDLE_TIMEOUT_MINUTES = 30;
-const DEFAULT_SWEEPER_INTERVAL_SECONDS = 60;
+const DEFAULT_IDLE_TIMEOUT_MINUTES = 72 * 60;
+const DEFAULT_SWEEPER_INTERVAL_SECONDS = 12 * 60 * 60;
 const DEFAULT_STALE_ACTIVE_MINUTES = 30;
 
 function parseBoolean(value, fallback) {
