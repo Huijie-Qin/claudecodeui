@@ -285,6 +285,8 @@ export function useChatRealtimeHandlers({
         const newSessionId = msg.newSessionId;
         if (!newSessionId) break;
 
+        onReplaceTemporarySession?.(newSessionId);
+
         const shouldAdoptSession = shouldAdoptCreatedSession({
           newSessionId,
           currentSessionId,
@@ -298,7 +300,6 @@ export function useChatRealtimeHandlers({
             pendingViewSessionRef.current.sessionId = newSessionId;
           }
           setCurrentSessionId(newSessionId);
-          onReplaceTemporarySession?.(newSessionId);
           setPendingPermissionRequests((prev) =>
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
           );
