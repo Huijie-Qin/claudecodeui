@@ -9,7 +9,7 @@ import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.j
 import { mcpPresetService } from '../services/mcp-presets.js';
 import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
-import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
+import { adminAnalyticsCacheService } from '../services/admin-analytics-cache.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -345,6 +345,7 @@ export function createAdminRouter(
   workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
   platformAnalytics = platformAnalyticsService,
   aiSubmissions = aiMrSubmissionsDb,
+  adminAnalytics = adminAnalyticsCacheService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -461,7 +462,7 @@ export function createAdminRouter(
 
   router.get('/analytics/summary', (req, res) => {
     try {
-      const summary = buildAdminAnalyticsSummary({ rangeDays: req.query?.rangeDays });
+      const summary = adminAnalytics.getSummary({ rangeDays: req.query?.rangeDays });
       res.json(summary);
     } catch (error) {
       sendRouteError(res, error, 'Failed to load analytics summary');
@@ -470,7 +471,7 @@ export function createAdminRouter(
 
   router.get('/analytics/users', (req, res) => {
     try {
-      const usersSummary = buildAdminAnalyticsUsers({
+      const usersSummary = adminAnalytics.getUsers({
         rangeDays: req.query?.rangeDays,
         page: req.query?.page,
         pageSize: req.query?.pageSize,

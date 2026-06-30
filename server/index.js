@@ -77,6 +77,7 @@ import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {adminAnalyticsCacheService} from './services/admin-analytics-cache.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
@@ -3501,6 +3502,7 @@ async function gracefulShutdown(signal) {
 
     runtimeSweeper.stop();
     codeHubMrPoller.stop();
+    adminAnalyticsCacheService.stop();
     closeHttpServer().catch((error) => {
         console.error('[Shutdown] Failed to close HTTP server:', error);
     });
@@ -3531,6 +3533,7 @@ async function startServer() {
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
+        adminAnalyticsCacheService.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3580,6 +3583,7 @@ async function startServer() {
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();
+            adminAnalyticsCacheService.stop();
             await stopAllPlugins();
             process.exit(0);
         };

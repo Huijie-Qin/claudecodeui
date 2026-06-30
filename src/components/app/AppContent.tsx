@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import Sidebar from '../sidebar/view/Sidebar';
 import MainContent from '../main-content/view/MainContent';
-import AdminPanel from '../admin/AdminPanel';
 import ScheduledTasksDialog from '../chat/view/subcomponents/ScheduledTasksDialog';
 import { isSystemAdminUser } from '../admin/adminPanelUtils';
 import { useAuth } from '../auth/context/AuthContext';
@@ -25,6 +24,7 @@ type ScheduledTaskEditorState = {
 
 export default function AppContent() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const { t } = useTranslation('common');
   const { isMobile } = useDeviceSettings({ trackPWA: false });
@@ -32,7 +32,6 @@ export default function AppContent() {
   const { tenants, currentTenant, selectTenant } = useTenant();
   const { ws, sendMessage, subscribeMessage, latestMessage, isConnected } = useWebSocket();
   const wasConnectedRef = useRef(false);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [scheduledTaskEditor, setScheduledTaskEditor] = useState<ScheduledTaskEditorState | null>(null);
   const isSystemAdmin = isSystemAdminUser(user);
 
@@ -76,6 +75,18 @@ export default function AppContent() {
       setSidebarOpen(false);
     }
   }, [isMobile, navigate, selectTenant, setSidebarOpen]);
+
+  const handleAdminOpen = useCallback(() => {
+    navigate('/admin', {
+      state: {
+        from: `${location.pathname}${location.search}`,
+      },
+    });
+
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, location.pathname, location.search, navigate, setSidebarOpen]);
 
   const handleScheduledTaskOpen = useCallback((project: Project, session: ProjectSession) => {
     const taskId = Number(session.scheduledTask?.id);
@@ -223,7 +234,7 @@ export default function AppContent() {
             onScheduledTaskOpen={handleScheduledTaskOpen}
             onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
             showAdminEntry={isSystemAdmin}
-            onShowAdminPanel={() => setShowAdminPanel(true)}
+            onShowAdminPanel={handleAdminOpen}
             tenants={tenants}
             currentTenant={currentTenant}
             onTenantSwitch={handleTenantSwitch}
@@ -258,7 +269,7 @@ export default function AppContent() {
               onScheduledTaskOpen={handleScheduledTaskOpen}
               onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
               showAdminEntry={isSystemAdmin}
-              onShowAdminPanel={() => setShowAdminPanel(true)}
+              onShowAdminPanel={handleAdminOpen}
               tenants={tenants}
               currentTenant={currentTenant}
               onTenantSwitch={handleTenantSwitch}
@@ -291,8 +302,6 @@ export default function AppContent() {
           externalMessageUpdate={externalMessageUpdate}
         />
       </div>
-
-      <AdminPanel open={showAdminPanel} onOpenChange={setShowAdminPanel} />
 
       {scheduledTaskEditor ? (
         <ScheduledTasksDialog
