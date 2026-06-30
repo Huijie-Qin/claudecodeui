@@ -32,6 +32,7 @@ import {
     getActiveClaudeSDKSessions,
     getPendingApprovalsForSession,
     isClaudeSDKSessionActive,
+    pushClaudeSupplement,
     queryClaudeSDK,
     reconnectSessionWriter,
     resolveToolApproval
@@ -2421,15 +2422,61 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
+                if (data.options?.sessionId) {
+                    const pushedToExistingSession = pushClaudeSupplement({
+                        sessionId: data.options.sessionId,
+                        content: data.command,
+                        displayContent: data.options.displayCommand,
+                        clientMessageId: data.clientMessageId,
+                        mode: 'now',
+                        writer,
+                    });
+                    if (pushedToExistingSession.success) {
+                        logChatSessionEvent('pushed_to_existing_stream', logContext);
+                        return;
+                    }
+                }
 
                 // Use Claude Agents SDK
-                await runLimitedProviderCommand({
+                void runLimitedProviderCommand({
                     data,
                     provider: 'claude',
                     writer,
                     run: () => queryClaudeSDK(data.command, data.options, writer),
                     logContext,
+                }).catch((error) => {
+                    console.error('[ERROR] Claude command failed:', error?.message || error);
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: error?.message || String(error),
+                        provider: 'claude',
+                        sessionId: data.options?.sessionId || null,
+                    }));
                 });
+            } else if (data.type === 'claude-supplement') {
+                const result = pushClaudeSupplement({
+                    sessionId: data.sessionId,
+                    content: data.content,
+                    clientMessageId: data.clientMessageId,
+                    mode: data.mode,
+                    writer,
+                });
+                if (!result.success) {
+                    writer.send({
+                        type: 'claude-supplement-ack',
+                        sessionId: data.sessionId || null,
+                        clientMessageId: data.clientMessageId || null,
+                        status: 'failed',
+                        error: result.error,
+                        timestamp: new Date().toISOString(),
+                    });
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: result.error,
+                        provider: 'claude',
+                        sessionId: data.sessionId || null,
+                    }));
+                }
             } else if (data.type === 'cursor-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'cursor', request });

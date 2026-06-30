@@ -177,12 +177,18 @@ export default function ChatComposer({
     event: MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>,
   ) => {
     event.preventDefault();
-    if (canAbortCurrentSession) {
+    if (canAbortCurrentSession && !hasInput) {
       onAbortSession();
       return;
     }
     onSubmit(event);
   };
+
+  const submitLabel = isLoading && hasInput
+    ? t('input.sendSupplement', { defaultValue: 'Send supplemental info' })
+    : canAbortCurrentSession
+      ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
+      : t('input.sendMessage', { defaultValue: 'Send message' });
 
   return (
     <div className="flex-shrink-0 p-2 pb-2 sm:p-4 sm:pb-4 md:p-4 md:pb-6">
@@ -371,17 +377,10 @@ export default function ChatComposer({
               {sendByCtrlEnter ? t('input.hintText.ctrlEnter') : t('input.hintText.enter')}
             </div>
             <PromptInputSubmit
-              aria-label={
-                canAbortCurrentSession
-                  ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
-                  : t('input.sendMessage', { defaultValue: 'Send message' })
-              }
-              disabled={isLoading ? !canAbortCurrentSession : !input.trim()}
-              title={
-                canAbortCurrentSession
-                  ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
-                  : t('input.sendMessage', { defaultValue: 'Send message' })
-              }
+              aria-label={submitLabel}
+              disabled={isLoading ? (!hasInput && !canAbortCurrentSession) : !input.trim()}
+              title={submitLabel}
+              status={isLoading && hasInput ? 'ready' : undefined}
               className="h-10 w-10 sm:h-10 sm:w-10"
               onMouseDown={(event) => {
                 handleSubmitButtonPress(event);
