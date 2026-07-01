@@ -156,6 +156,23 @@ function normalizeTargetTenantIds(targetTenantIds) {
   return ids;
 }
 
+function copyPresetTestState(multitenancy, { sourcePreset, targetPreset, targetTenantId, userId }) {
+  if (!sourcePreset.last_test_status) {
+    return targetPreset;
+  }
+
+  return multitenancy.mcpPresets.recordPresetTest({
+    tenantId: targetTenantId,
+    presetId: targetPreset.id,
+    status: sourcePreset.last_test_status,
+    error: sourcePreset.last_test_error || null,
+    toolCount: Number(sourcePreset.tool_count || 0),
+    tools: Array.isArray(sourcePreset.tools) ? sourcePreset.tools : [],
+    dockerCompatible: sourcePreset.docker_compatible === 1 || sourcePreset.docker_compatible === true,
+    updatedByUserId: userId,
+  });
+}
+
 function logPresetTest(event, details = {}) {
   console.log(`[MCP Preset Test] ${event}`, details);
 }
@@ -614,11 +631,8 @@ export function createMcpPresetService({
             tenantId: targetTenantId,
             name: sourcePreset.name,
           });
-          const status = normalizeEditableStatus(
-            sourcePreset.status,
-            sourcePreset.status === 'disabled' ? 'disabled' : 'draft',
-          );
-          const targetPreset = existingPreset
+          const status = normalizeStatus(sourcePreset.status, 'draft');
+          let targetPreset = existingPreset
             ? multitenancy.mcpPresets.updatePreset({
                 tenantId: targetTenantId,
                 presetId: existingPreset.id,
@@ -640,6 +654,12 @@ export function createMcpPresetService({
                 status,
                 createdByUserId: normalizedUserId,
               });
+          targetPreset = copyPresetTestState(multitenancy, {
+            sourcePreset,
+            targetPreset,
+            targetTenantId,
+            userId: normalizedUserId,
+          });
 
           if (sourceHelperScript) {
             savePresetHelperScript({
