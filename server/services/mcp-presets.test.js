@@ -416,6 +416,89 @@ test('admin preset copy creates and updates target tenant presets with helper sc
   );
 });
 
+test('admin preset copy preserves published status and test metadata', () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const userId = seedUser(database, 'alice');
+  const sourceTenant = multitenancy.tenants.createTenant({ code: 'source', name: 'Source' });
+  const targetTenant = multitenancy.tenants.createTenant({ code: 'target', name: 'Target' });
+  multitenancy.memberships.upsertMembership({
+    tenantId: targetTenant.id,
+    userId,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = multitenancy.workspaces.createWorkspace({
+    tenantId: targetTenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/repo',
+  });
+  const service = createMcpPresetService({ multitenancy });
+
+  const sourcePreset = service.createPreset({
+    tenantId: sourceTenant.id,
+    userId: adminId,
+    input: {
+      name: 'published_knowledge',
+      displayName: 'Published Knowledge MCP',
+      description: 'Search published docs',
+      type: 'http',
+      url: 'https://mcp.internal/published',
+      preinstall: true,
+    },
+  });
+  multitenancy.mcpPresets.recordPresetTest({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    status: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'read_doc' }],
+    dockerCompatible: true,
+    updatedByUserId: adminId,
+  });
+  multitenancy.mcpPresets.publishPreset({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    updatedByUserId: adminId,
+  });
+  const staleTargetPreset = service.createPreset({
+    tenantId: targetTenant.id,
+    userId: adminId,
+    input: {
+      name: 'published_knowledge',
+      displayName: 'Stale Knowledge MCP',
+      type: 'http',
+      url: 'https://mcp.internal/stale',
+    },
+  });
+
+  const copied = service.copyPresetToTenants({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    targetTenantIds: [targetTenant.id],
+    userId: adminId,
+  });
+  const updatedResult = copied.results[0];
+  const workspacePresets = service.listWorkspacePresets({
+    tenantId: targetTenant.id,
+    workspaceId: workspace.id,
+  });
+
+  assert.equal(updatedResult.action, 'updated');
+  assert.equal(updatedResult.preset.id, staleTargetPreset.id);
+  assert.equal(updatedResult.preset.status, 'published');
+  assert.equal(updatedResult.preset.preinstallScope, 'all_workspaces');
+  assert.equal(updatedResult.preset.lastTestStatus, 'healthy');
+  assert.equal(updatedResult.preset.toolCount, 2);
+  assert.equal(updatedResult.preset.dockerCompatible, true);
+  assert.deepEqual(updatedResult.preset.tools.map((tool) => tool.name), ['search_docs', 'read_doc']);
+  assert.deepEqual(workspacePresets.map((preset) => preset.name), ['published_knowledge']);
+});
+
 test('admin preset copy removes stale target helper scripts when the source has none', () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
