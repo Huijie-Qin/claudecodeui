@@ -603,7 +603,7 @@ function createSkillListPageInfo(remoteCount, page, pageSize) {
   };
 }
 
-async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
+export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
   const searchContent = String(skillRef || '').trim();
   if (!searchContent) {
     throw createHttpError('Skill name is required', 400);
@@ -795,7 +795,7 @@ async function readRemoteSkillFiles(remoteSkill, { tenantCode, accountId, skillR
   return files.sort(sortFileEntries);
 }
 
-async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } = {}) {
+export async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } = {}) {
   const { response, payload } = await requestMarketMaybeJson('/api/skill/download', {
     method: 'POST',
     tenantCode,

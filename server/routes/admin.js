@@ -7,6 +7,7 @@ import { aiMrSubmissionsDb, userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
+import { skillPresetService } from '../services/skill-presets.js';
 import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
@@ -198,6 +199,38 @@ function parseOptionalPositiveId(value, name) {
   return parsePositiveId(value, name);
 }
 
+function parsePositiveIntegerWithFallback(value, fallback, name) {
+  if (value == null || value === '') return fallback;
+  return parsePositiveId(value, name);
+}
+
+function resolveAdminTenantCode(multitenancy, tenantId) {
+  const tenant = multitenancy.tenants?.getTenantById?.(tenantId);
+  if (!tenant?.code) {
+    const error = new Error('Tenant code is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  return String(tenant.code);
+}
+
+function resolveAdminAccountId(req, users) {
+  if (req.user?.username) {
+    return String(req.user.username);
+  }
+
+  const user = typeof users?.getUserById === 'function'
+    ? users.getUserById(req.user?.id)
+    : null;
+  if (user?.username) {
+    return String(user.username);
+  }
+
+  const error = new Error('User username is required');
+  error.statusCode = 400;
+  throw error;
+}
+
 function parseBoundedInteger(value, { name, min, max, fallback }) {
   if (value == null || value === '') return fallback;
   const parsed = Number(value);
@@ -345,6 +378,7 @@ export function createAdminRouter(
   workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
   platformAnalytics = platformAnalyticsService,
   aiSubmissions = aiMrSubmissionsDb,
+  skillPresets = skillPresetService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -768,6 +802,153 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/skill-presets/market', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      const result = await skillPresets.searchMarketSkills({
+        searchContent: req.query?.searchContent ?? req.query?.q ?? '',
+        page: parsePositiveIntegerWithFallback(req.query?.page, 1, 'page'),
+        pageSize: parsePositiveIntegerWithFallback(req.query?.pageSize, 20, 'pageSize'),
+        tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
+        accountId: resolveAdminAccountId(req, users),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to search Skill Market');
+    }
+  });
+
+  router.get('/skill-presets', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      const presets = skillPresets.listAdminPresets({ tenantId });
+      return res.json({ presets });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Skill presets');
+    }
+  });
+
+  router.post('/skill-presets', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId, 'tenantId');
+      const preset = await skillPresets.createPreset({
+        tenantId,
+        userId: req.user.id,
+        input: req.body,
+        tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
+        accountId: resolveAdminAccountId(req, users),
+      });
+      return res.status(201).json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Skill preset');
+    }
+  });
+
+  router.put('/skill-presets/:presetId', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = await skillPresets.updatePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+        input: req.body,
+        tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
+        accountId: resolveAdminAccountId(req, users),
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Skill preset');
+    }
+  });
+
+  router.post('/skill-presets/:presetId/validate', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const result = await skillPresets.validatePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+        tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
+        accountId: resolveAdminAccountId(req, users),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to validate Skill preset');
+    }
+  });
+
+  router.post('/skill-presets/:presetId/publish', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = skillPresets.publishPreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish Skill preset');
+    }
+  });
+
+  router.post('/skill-presets/:presetId/copy', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const result = skillPresets.copyPresetToTenants({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        targetTenantIds: req.body?.targetTenantIds ?? req.body?.target_tenant_ids,
+        userId: req.user.id,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to copy Skill preset');
+    }
+  });
+
+  router.post('/skill-presets/:presetId/apply', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const result = await skillPresets.applyPresetToExistingWorkspaces({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+        tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
+        overwrite: req.body?.overwrite === true,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to apply Skill preset');
+    }
+  });
+
+  router.post('/skill-presets/:presetId/disable', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const preset = skillPresets.disablePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+        userId: req.user.id,
+      });
+      return res.json({ preset });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to disable Skill preset');
+    }
+  });
+
+  router.delete('/skill-presets/:presetId', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
+      const deleted = skillPresets.deletePreset({
+        tenantId,
+        presetId: parsePositiveId(req.params.presetId, 'presetId'),
+      });
+      return res.json({ deleted });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Skill preset');
+    }
+  });
+
   router.get('/mcp-presets', (req, res) => {
     try {
       const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
@@ -965,4 +1146,4 @@ export function createAdminRouter(
 }
 
 export { requireSystemAdmin };
-export default createAdminRouter(multitenancyDb, userDb, runtimeMonitorService, mcpPresetService);
+export default createAdminRouter();
