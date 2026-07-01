@@ -513,6 +513,8 @@ const app = express();
 const server = http.createServer(app);
 
 const ptySessionsMap = new Map();
+const activeProviderCommands = new Map();
+let activeProviderCommandCounter = 0;
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, 10) || 30 * 60 * 1000;
@@ -609,6 +611,19 @@ app.get('/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         installMode
+    });
+});
+
+app.get('/health/active-work', (req, res) => {
+    const summary = getActiveWorkSummary();
+    const active = getActiveWorkCount(summary);
+
+    res.json({
+        active,
+        hasActiveWork: active > 0,
+        isShuttingDown,
+        summary,
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -2336,6 +2351,7 @@ function resolveSessionLimitLogUser({ userId, username, request, writer }) {
 
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
     let lease;
+    let activeCommandId = null;
     const startedAt = Date.now();
     if (logContext?.requestId) {
         data.options = {
@@ -2387,6 +2403,14 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
     }
 
     try {
+        activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
+        activeProviderCommands.set(activeCommandId, {
+            provider,
+            sessionId: data.options?.sessionId || null,
+            userId: data.options?.userId ?? writer.userId ?? null,
+            requestId: logContext?.requestId || null,
+            startedAt
+        });
         logChatSessionEvent('dispatch', logContext);
         await run();
         logChatSessionEvent('completed', logContext, {
@@ -2399,6 +2423,9 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         });
         throw error;
     } finally {
+        if (activeCommandId) {
+            activeProviderCommands.delete(activeCommandId);
+        }
         lease?.release();
     }
 }
@@ -3413,17 +3440,39 @@ const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
 function getActiveWorkSummary() {
-    return {
+    const providerCommands = {
+        claude: 0,
+        codex: 0,
+        cursor: 0,
+        gemini: 0
+    };
+
+    for (const command of activeProviderCommands.values()) {
+        if (Object.prototype.hasOwnProperty.call(providerCommands, command.provider)) {
+            providerCommands[command.provider] += 1;
+        }
+    }
+
+    const providerSessions = {
         claude: getActiveClaudeSDKSessions().length,
         codex: getActiveCodexSessions().length,
         cursor: getActiveCursorSessions().length,
-        gemini: getActiveGeminiSessions().length,
+        gemini: getActiveGeminiSessions().length
+    };
+
+    return {
+        providerCommands,
+        providerSessions,
         shell: ptySessionsMap.size
     };
 }
 
 function getActiveWorkCount(summary = getActiveWorkSummary()) {
-    return Object.values(summary).reduce((total, count) => total + count, 0);
+    const activeProviderCommands = Object.values(summary.providerCommands || {})
+        .reduce((total, count) => total + count, 0);
+    const activeProviderSessions = Object.values(summary.providerSessions || {})
+        .reduce((total, count) => total + count, 0);
+    return Math.max(activeProviderCommands, activeProviderSessions) + (summary.shell || 0);
 }
 
 function waitForActiveWorkToDrain(timeoutMs) {
