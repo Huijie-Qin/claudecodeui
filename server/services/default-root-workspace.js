@@ -7,6 +7,7 @@ import { multitenancyDb as defaultMultitenancyDb } from '../database/multitenanc
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 import { createWorkspaceMcpToolsService } from './workspace-mcp-tools.js';
+import { createSkillPresetService } from './skill-presets.js';
 import { buildTenantWorkspacePath } from './workspace-projects.js';
 
 export const ROOT_WORKSPACE_NAME = 'workspace';
@@ -63,10 +64,32 @@ async function installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, user
   return result;
 }
 
+async function installPreinstalledSkillPresets(skillPresets, { tenantId, tenantCode, userId, username, workspace }) {
+  if (typeof skillPresets?.installPreinstalledSkillPresets !== 'function') {
+    return { installed: [], errors: [] };
+  }
+
+  const result = await skillPresets.installPreinstalledSkillPresets({
+    tenantId,
+    workspaceId: workspace.id,
+    workspacePath: workspace.path,
+    userId,
+    tenantCode,
+    accountId: username,
+  });
+
+  if (result.errors?.length > 0) {
+    console.warn('Failed to preinstall some Skill presets:', result.errors);
+  }
+
+  return result;
+}
+
 export async function ensureDefaultRootWorkspace({
   multitenancy = defaultMultitenancyDb,
   users = defaultUserDb,
   workspaceMcpTools = createWorkspaceMcpToolsService({ multitenancy }),
+  skillPresets = createSkillPresetService({ multitenancy, users }),
   tenantId,
   userId,
 } = {}) {
@@ -105,6 +128,13 @@ export async function ensureDefaultRootWorkspace({
   await copyDefaultSkills(workspace.path);
   if (createdDefaultWorkspace) {
     await installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace });
+    await installPreinstalledSkillPresets(skillPresets, {
+      tenantId,
+      tenantCode: tenant?.code,
+      userId,
+      username: user?.username,
+      workspace,
+    });
   }
   return workspace;
 }

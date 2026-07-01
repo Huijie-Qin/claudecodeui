@@ -307,6 +307,51 @@ export const api = {
     },
     mcpPresets: (tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
+    skillPresets: (tenantId) =>
+      authenticatedFetch(`/api/admin/skill-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
+    searchSkillPresetMarket: (tenantId, { searchContent = '', page = 1, pageSize = 20 } = {}) => {
+      const params = new URLSearchParams({
+        tenantId: String(tenantId),
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (searchContent) params.set('searchContent', searchContent);
+      return authenticatedFetch(`/api/admin/skill-presets/market?${params.toString()}`);
+    },
+    createSkillPreset: (payload) =>
+      authenticatedFetch('/api/admin/skill-presets', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateSkillPreset: (presetId, payload) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    validateSkillPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}/validate`, {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      }),
+    publishSkillPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      }),
+    applySkillPreset: (presetId, payload) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}/apply`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    disableSkillPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}/disable`, {
+        method: 'POST',
+        body: JSON.stringify({ tenantId }),
+      }),
+    deleteSkillPreset: (presetId, tenantId) =>
+      authenticatedFetch(`/api/admin/skill-presets/${presetId}?tenantId=${encodeURIComponent(String(tenantId))}`, {
+        method: 'DELETE',
+      }),
     createMcpPreset: (payload) =>
       authenticatedFetch('/api/admin/mcp-presets', {
         method: 'POST',

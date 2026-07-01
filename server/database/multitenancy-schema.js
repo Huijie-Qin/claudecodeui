@@ -148,6 +148,56 @@ CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (
 CREATE INDEX IF NOT EXISTS idx_workspace_skill_market_imports_remote
   ON workspace_skill_market_imports(remote_id);
 
+CREATE TABLE IF NOT EXISTS tenant_skill_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT 'skill-market-api' CHECK (source_type IN ('skill-market-api')),
+  skill_id TEXT NOT NULL,
+  remote_id TEXT NOT NULL,
+  nsp_path TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 0,
+  source_json TEXT,
+  preinstall_scope TEXT NOT NULL DEFAULT 'none' CHECK (preinstall_scope IN ('none', 'all_workspaces')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
+  last_validation_status TEXT,
+  last_validation_error TEXT,
+  last_validated_at DATETIME,
+  created_by_user_id INTEGER NOT NULL,
+  updated_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (tenant_id, name),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_skill_presets_tenant_status
+  ON tenant_skill_presets(tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS workspace_skill_preset_installs (
+  workspace_id INTEGER NOT NULL,
+  preset_id INTEGER NOT NULL,
+  skill_name TEXT NOT NULL,
+  installed_by_user_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'installed' CHECK (status IN ('installed', 'removed', 'failed')),
+  installed_version INTEGER NOT NULL DEFAULT 0,
+  installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_error TEXT,
+  PRIMARY KEY (workspace_id, preset_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (preset_id) REFERENCES tenant_skill_presets(id) ON DELETE CASCADE,
+  FOREIGN KEY (installed_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_skill_preset_installs_preset
+  ON workspace_skill_preset_installs(preset_id, status);
+
 CREATE TABLE IF NOT EXISTS tenant_sql_check_rules (
   tenant_id INTEGER NOT NULL,
   rule_id TEXT NOT NULL,

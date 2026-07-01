@@ -14,6 +14,10 @@ const RUNTIME_STATUSES = new Set(['pending', 'active', 'idle', 'failed', 'delete
 const MCP_PRESET_STATUSES = new Set(['draft', 'published', 'disabled']);
 const MCP_TRANSPORTS = new Set(['http']);
 const MCP_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
+const SKILL_PRESET_STATUSES = new Set(['draft', 'published', 'disabled']);
+const SKILL_PRESET_SOURCES = new Set(['skill-market-api']);
+const SKILL_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
+const SKILL_PRESET_INSTALL_STATUSES = new Set(['installed', 'removed', 'failed']);
 const PERMISSIONS = new Set(['view', 'edit']);
 const PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
@@ -141,6 +145,30 @@ function normalizeMcpConfig(value) {
 
 function normalizeMcpPreinstallScope(value = 'none') {
   return requireEnum(value || 'none', MCP_PREINSTALL_SCOPES, 'preinstallScope');
+}
+
+function normalizeSkillPresetName(value) {
+  const normalized = requireNonEmptyString(value, 'name');
+  if (
+    normalized === '.'
+    || normalized === '..'
+    || /[\\/]/.test(normalized)
+    || /[\x00-\x1F\x7F]/.test(normalized)
+  ) {
+    throw new Error('name contains invalid path characters');
+  }
+  if (normalized.length > 80) {
+    throw new Error('name must be 80 characters or fewer');
+  }
+  return normalized;
+}
+
+function normalizeSkillPresetSource(value = 'skill-market-api') {
+  return requireEnum(value || 'skill-market-api', SKILL_PRESET_SOURCES, 'sourceType');
+}
+
+function normalizeSkillPreinstallScope(value = 'none') {
+  return requireEnum(value || 'none', SKILL_PREINSTALL_SCOPES, 'preinstallScope');
 }
 
 function normalizeToolsJson(value) {
@@ -339,6 +367,24 @@ function hydrateSkillMarketImportRow(row) {
     source: row.source || 'skill-market-api',
     importedAt: row.imported_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function hydrateSkillPresetRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    version: Number(row.version || 0),
+    source: parseJson(row.source_json, {}),
+    preinstall_scope: row.preinstall_scope || 'none',
+  };
+}
+
+function hydrateSkillPresetInstallRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    installed_version: Number(row.installed_version || 0),
   };
 }
 
@@ -1068,6 +1114,16 @@ export function createMultitenancyDb(database = db) {
           requirePositiveInteger(userId, 'userId'),
         );
       },
+
+      listActiveForTenant: ({ tenantId }) => {
+        return database.prepare(`
+          SELECT *
+          FROM workspaces
+          WHERE tenant_id = ?
+            AND status = 'active'
+          ORDER BY owner_user_id ASC, display_name ASC, id ASC
+        `).all(requirePositiveInteger(tenantId, 'tenantId'));
+      },
     },
 
     workspaceAcl: {
@@ -1634,6 +1690,365 @@ export function createMultitenancyDb(database = db) {
             ${whereStatus}
           ORDER BY p.display_name ASC, p.id ASC
         `).all(normalizedWorkspaceId).map(hydrateMcpInstallRow);
+      },
+    },
+
+    skillPresets: {
+      createPreset: ({
+        tenantId,
+        name,
+        displayName,
+        description = '',
+        sourceType = 'skill-market-api',
+        skillId,
+        remoteId,
+        nspPath = '',
+        version = 0,
+        source = null,
+        preinstallScope = 'none',
+        status = 'draft',
+        createdByUserId,
+        updatedByUserId = createdByUserId,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedName = normalizeSkillPresetName(name);
+        const normalizedDisplayName = requireNonEmptyString(displayName, 'displayName');
+        const normalizedDescription = typeof description === 'string' ? description.trim() : '';
+        const normalizedSourceType = normalizeSkillPresetSource(sourceType);
+        const normalizedSkillId = requireNonEmptyString(skillId, 'skillId');
+        const normalizedRemoteId = requireNonEmptyString(remoteId, 'remoteId');
+        const normalizedVersion = Number(version || 0);
+        if (!Number.isInteger(normalizedVersion) || normalizedVersion < 0) {
+          throw new Error('version must be a non-negative integer');
+        }
+        const normalizedCreatedBy = requirePositiveInteger(createdByUserId, 'createdByUserId');
+        const normalizedUpdatedBy = requirePositiveInteger(updatedByUserId, 'updatedByUserId');
+
+        const result = database.prepare(`
+          INSERT INTO tenant_skill_presets (
+            tenant_id,
+            name,
+            display_name,
+            description,
+            source_type,
+            skill_id,
+            remote_id,
+            nsp_path,
+            version,
+            source_json,
+            preinstall_scope,
+            status,
+            created_by_user_id,
+            updated_by_user_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          normalizedTenantId,
+          normalizedName,
+          normalizedDisplayName,
+          normalizedDescription,
+          normalizedSourceType,
+          normalizedSkillId,
+          normalizedRemoteId,
+          typeof nspPath === 'string' ? nspPath : '',
+          normalizedVersion,
+          serializeJson(source, 'source'),
+          normalizeSkillPreinstallScope(preinstallScope),
+          requireEnum(status, SKILL_PRESET_STATUSES, 'status'),
+          normalizedCreatedBy,
+          normalizedUpdatedBy,
+        );
+
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE id = ?
+        `).get(Number(result.lastInsertRowid)));
+      },
+
+      updatePreset: ({
+        tenantId,
+        presetId,
+        name,
+        displayName,
+        description = '',
+        sourceType = 'skill-market-api',
+        skillId,
+        remoteId,
+        nspPath = '',
+        version = 0,
+        source = null,
+        preinstallScope = 'none',
+        status = 'draft',
+        updatedByUserId,
+      }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedVersion = Number(version || 0);
+        if (!Number.isInteger(normalizedVersion) || normalizedVersion < 0) {
+          throw new Error('version must be a non-negative integer');
+        }
+
+        database.prepare(`
+          UPDATE tenant_skill_presets
+          SET
+            name = ?,
+            display_name = ?,
+            description = ?,
+            source_type = ?,
+            skill_id = ?,
+            remote_id = ?,
+            nsp_path = ?,
+            version = ?,
+            source_json = ?,
+            preinstall_scope = ?,
+            status = ?,
+            last_validation_status = NULL,
+            last_validation_error = NULL,
+            last_validated_at = NULL,
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          normalizeSkillPresetName(name),
+          requireNonEmptyString(displayName, 'displayName'),
+          typeof description === 'string' ? description.trim() : '',
+          normalizeSkillPresetSource(sourceType),
+          requireNonEmptyString(skillId, 'skillId'),
+          requireNonEmptyString(remoteId, 'remoteId'),
+          typeof nspPath === 'string' ? nspPath : '',
+          normalizedVersion,
+          serializeJson(source, 'source'),
+          normalizeSkillPreinstallScope(preinstallScope),
+          requireEnum(status, SKILL_PRESET_STATUSES, 'status'),
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          normalizedTenantId,
+          normalizedPresetId,
+        );
+
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(normalizedTenantId, normalizedPresetId));
+      },
+
+      getPresetById: ({ tenantId, presetId }) => {
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        ));
+      },
+
+      listPresets: ({ tenantId, includeDisabled = true, status = null, preinstallScope = null }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const whereClauses = ['tenant_id = ?'];
+        const params = [normalizedTenantId];
+
+        if (status != null) {
+          whereClauses.push('status = ?');
+          params.push(requireEnum(status, SKILL_PRESET_STATUSES, 'status'));
+        } else if (!includeDisabled) {
+          whereClauses.push("status != 'disabled'");
+        }
+
+        if (preinstallScope != null) {
+          whereClauses.push('preinstall_scope = ?');
+          params.push(normalizeSkillPreinstallScope(preinstallScope));
+        }
+
+        return database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE ${whereClauses.join(' AND ')}
+          ORDER BY display_name ASC, id ASC
+        `).all(...params).map(hydrateSkillPresetRow);
+      },
+
+      findPresetByName: ({ tenantId, name }) => {
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ?
+            AND name = ?
+        `).get(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          normalizeSkillPresetName(name),
+        ));
+      },
+
+      recordValidation: ({
+        tenantId,
+        presetId,
+        status,
+        error = null,
+        updatedByUserId,
+      }) => {
+        database.prepare(`
+          UPDATE tenant_skill_presets
+          SET
+            last_validation_status = ?,
+            last_validation_error = ?,
+            last_validated_at = CURRENT_TIMESTAMP,
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requireNonEmptyString(status, 'status'),
+          error == null ? null : String(error),
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+
+      publishPreset: ({ tenantId, presetId, updatedByUserId }) => {
+        database.prepare(`
+          UPDATE tenant_skill_presets
+          SET
+            status = 'published',
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+
+      disablePreset: ({ tenantId, presetId, updatedByUserId }) => {
+        database.prepare(`
+          UPDATE tenant_skill_presets
+          SET
+            status = 'disabled',
+            updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(updatedByUserId, 'updatedByUserId'),
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return hydrateSkillPresetRow(database.prepare(`
+          SELECT *
+          FROM tenant_skill_presets
+          WHERE tenant_id = ? AND id = ?
+        `).get(tenantId, presetId));
+      },
+
+      deletePreset: ({ tenantId, presetId }) => {
+        const result = database.prepare(`
+          DELETE FROM tenant_skill_presets
+          WHERE tenant_id = ?
+            AND id = ?
+        `).run(
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(presetId, 'presetId'),
+        );
+
+        return result.changes > 0;
+      },
+    },
+
+    skillPresetInstalls: {
+      upsertInstall: ({
+        workspaceId,
+        presetId,
+        skillName,
+        installedByUserId,
+        installedVersion = 0,
+        status = 'installed',
+        lastError = null,
+      }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedInstalledBy = requirePositiveInteger(installedByUserId, 'installedByUserId');
+        const normalizedStatus = requireEnum(status, SKILL_PRESET_INSTALL_STATUSES, 'status');
+        const normalizedInstalledVersion = Number(installedVersion || 0);
+        if (!Number.isInteger(normalizedInstalledVersion) || normalizedInstalledVersion < 0) {
+          throw new Error('installedVersion must be a non-negative integer');
+        }
+
+        database.prepare(`
+          INSERT INTO workspace_skill_preset_installs (
+            workspace_id,
+            preset_id,
+            skill_name,
+            installed_by_user_id,
+            status,
+            installed_version,
+            last_error
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(workspace_id, preset_id)
+          DO UPDATE SET
+            skill_name = excluded.skill_name,
+            installed_by_user_id = excluded.installed_by_user_id,
+            status = excluded.status,
+            installed_version = excluded.installed_version,
+            last_error = excluded.last_error,
+            updated_at = CURRENT_TIMESTAMP,
+            last_applied_at = CURRENT_TIMESTAMP
+        `).run(
+          normalizedWorkspaceId,
+          normalizedPresetId,
+          normalizeSkillPresetName(skillName),
+          normalizedInstalledBy,
+          normalizedStatus,
+          normalizedInstalledVersion,
+          lastError == null ? null : String(lastError),
+        );
+
+        return hydrateSkillPresetInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_skill_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
+      listInstallsForWorkspace: ({ workspaceId, includeRemoved = false }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const whereStatus = includeRemoved ? '' : "AND i.status = 'installed'";
+        return database.prepare(`
+          SELECT
+            i.*,
+            p.tenant_id,
+            p.display_name,
+            p.description,
+            p.status AS preset_status,
+            p.source_type,
+            p.skill_id,
+            p.remote_id,
+            p.nsp_path,
+            p.version AS preset_version
+          FROM workspace_skill_preset_installs i
+          JOIN tenant_skill_presets p ON p.id = i.preset_id
+          WHERE i.workspace_id = ?
+            ${whereStatus}
+          ORDER BY p.display_name ASC, p.id ASC
+        `).all(normalizedWorkspaceId).map(hydrateSkillPresetInstallRow);
       },
     },
 
