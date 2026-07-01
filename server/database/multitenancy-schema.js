@@ -278,6 +278,22 @@ CREATE TABLE IF NOT EXISTS session_index (
 CREATE INDEX IF NOT EXISTS idx_session_index_owner ON session_index(tenant_id, workspace_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_session_index_lookup ON session_index(provider, provider_session_id, user_id);
 
+CREATE TABLE IF NOT EXISTS user_session_favorites (
+  user_id INTEGER NOT NULL,
+  project_key TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'cursor', 'gemini')),
+  provider_session_id TEXT NOT NULL,
+  tenant_id INTEGER,
+  workspace_id INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, project_key, provider, provider_session_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_session_favorites_scope
+  ON user_session_favorites(user_id, project_key);
+
 CREATE TABLE IF NOT EXISTS agent_session_runtime (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   runtime_id TEXT NOT NULL UNIQUE,

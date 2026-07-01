@@ -381,7 +381,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
                 if (event.key === 'Enter') operations.handleConfirmMove();
                 if (event.key === 'Escape') operations.handleCancelMove();
               }}
-              placeholder={t('fileTree.move.rootPlaceholder', 'Leave empty for project root, or enter docs/examples')}
+              placeholder={t('fileTree.move.rootPlaceholder', 'Must start with /workspace, e.g. /workspace or /workspace/docs/examples')}
               disabled={operations.operationLoading}
               className="mb-4"
               autoFocus

@@ -15,8 +15,8 @@ test('resolveRuntimeMonitorConfig defaults to docker-enabled monitor settings', 
 
   assert.deepEqual(config, {
     enabled: true,
-    idleTimeoutMinutes: 30,
-    sweeperIntervalSeconds: 60,
+    idleTimeoutMinutes: 4320,
+    sweeperIntervalSeconds: 43200,
     staleActiveMinutes: 30,
   });
 });

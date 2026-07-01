@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Database,
+  Download,
   Gauge,
   MessageSquare,
   RefreshCw,
@@ -16,6 +17,7 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react';
+import JSZip from 'jszip';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
@@ -131,6 +133,7 @@ type AnalyticsUsersPayload = {
     since: string;
     generatedAt: string;
   };
+  cache?: AnalyticsCacheInfo;
   users: AnalyticsUser[];
   pagination: {
     page: number;
@@ -182,12 +185,19 @@ type AnalyticsCoverage = {
   tokenUsage: boolean;
 };
 
+type AnalyticsCacheInfo = {
+  updatedAt: string;
+  intervalMinutes: number;
+  nextRefreshAt?: string | null;
+};
+
 type AnalyticsSummary = {
   range: {
     days: number;
     since: string;
     generatedAt: string;
   };
+  cache?: AnalyticsCacheInfo;
   overall: AnalyticsOverall;
   kpis: AnalyticsKpis;
   funnel: FunnelItem[];
@@ -223,6 +233,31 @@ const RANK_BAR_COLORS = [
   'bg-amber-500',
   'bg-rose-500',
 ];
+const USER_ANALYTICS_EXPORT_PAGE_SIZE = 100;
+
+type ExcelCellValue = string | number | null | undefined;
+
+type ExcelColumn = {
+  header: string;
+  value: (user: AnalyticsUser) => ExcelCellValue;
+};
+
+const USER_ANALYTICS_EXPORT_COLUMNS: ExcelColumn[] = [
+  { header: '用户 ID', value: (user) => user.userId },
+  { header: '用户', value: (user) => user.username },
+  { header: '租户', value: (user) => user.tenantNames || '-' },
+  { header: '会话数', value: (user) => user.sessionCount },
+  { header: '总消息数', value: (user) => user.totalMessageCount },
+  { header: '用户消息数', value: (user) => user.userMessageCount },
+  { header: '系统消息数', value: (user) => user.systemMessageCount },
+  { header: '助手消息数', value: (user) => user.assistantMessageCount },
+  { header: 'Token 数', value: (user) => user.tokenCount },
+  { header: '活跃天数', value: (user) => user.activeDays },
+  { header: '首次使用时间', value: (user) => formatDateTime(user.firstUsedAt) },
+  { header: '最后使用时间', value: (user) => formatDateTime(user.lastUsedAt) },
+  { header: '上次登录', value: (user) => formatDateTime(user.lastLoginAt) },
+  { header: '用户创建时间', value: (user) => formatDateTime(user.userCreatedAt) },
+];
 
 function formatNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-';
@@ -252,6 +287,104 @@ function formatShortDay(value: string): string {
   const parts = value.split('-');
   if (parts.length !== 3) return value;
   return `${parts[1]}/${parts[2]}`;
+}
+
+function escapeXml(value: ExcelCellValue): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function getExcelColumnName(index: number): string {
+  let name = '';
+  let current = index + 1;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    current = Math.floor((current - 1) / 26);
+  }
+  return name;
+}
+
+function buildExcelCell(value: ExcelCellValue, rowIndex: number, columnIndex: number): string {
+  const reference = `${getExcelColumnName(columnIndex)}${rowIndex}`;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `<c r="${reference}"><v>${value}</v></c>`;
+  }
+  return `<c r="${reference}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+}
+
+function buildWorksheetXml(columns: ExcelColumn[], users: AnalyticsUser[]): string {
+  const headerRow = columns
+    .map((column, columnIndex) => buildExcelCell(column.header, 1, columnIndex))
+    .join('');
+  const dataRows = users.map((user, rowOffset) => {
+    const rowIndex = rowOffset + 2;
+    const cells = columns
+      .map((column, columnIndex) => buildExcelCell(column.value(user), rowIndex, columnIndex))
+      .join('');
+    return `<row r="${rowIndex}">${cells}</row>`;
+  }).join('');
+  const columnWidths = columns.map((_, index) => (
+    `<col min="${index + 1}" max="${index + 1}" width="${index < 3 ? 18 : 14}" customWidth="1"/>`
+  )).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <cols>${columnWidths}</cols>
+  <sheetData>
+    <row r="1">${headerRow}</row>
+    ${dataRows}
+  </sheetData>
+</worksheet>`;
+}
+
+async function buildUserAnalyticsWorkbook(users: AnalyticsUser[]): Promise<Blob> {
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`);
+  zip.folder('_rels')?.file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`);
+  zip.folder('xl')?.file('workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="用户使用明细" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`);
+  zip.folder('xl')?.folder('_rels')?.file('workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`);
+  zip.folder('xl')?.folder('worksheets')?.file(
+    'sheet1.xml',
+    buildWorksheetXml(USER_ANALYTICS_EXPORT_COLUMNS, users),
+  );
+
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function getMax(values: number[]): number {
@@ -740,6 +873,7 @@ function TenantRanking({ tenants }: { tenants: TenantMetric[] }) {
 function UserAnalyticsPanel({ rangeDays }: { rangeDays: number }) {
   const [payload, setPayload] = useState<AnalyticsUsersPayload | null>(null);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+  const [isExportingUsers, setIsExportingUsers] = useState(false);
   const [userError, setUserError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -795,6 +929,48 @@ function UserAnalyticsPanel({ rangeDays }: { rangeDays: number }) {
     setSearch('');
     setPage(1);
   };
+
+  const exportAllUsers = useCallback(async () => {
+    setIsExportingUsers(true);
+    setUserError(null);
+
+    try {
+      const exportedUsers: AnalyticsUser[] = [];
+      let exportPage = 1;
+      let exportTotalPages = 1;
+
+      do {
+        const response = await api.admin.analyticsUsers({
+          rangeDays,
+          page: exportPage,
+          pageSize: USER_ANALYTICS_EXPORT_PAGE_SIZE,
+          sortBy,
+          search,
+        });
+        if (!response.ok) {
+          setUserError(await readError(response, '导出用户使用明细失败'));
+          return;
+        }
+
+        const nextPayload = await response.json() as AnalyticsUsersPayload;
+        exportedUsers.push(...nextPayload.users);
+        exportTotalPages = nextPayload.pagination.totalPages;
+        exportPage += 1;
+      } while (exportPage <= exportTotalPages);
+
+      const workbook = await buildUserAnalyticsWorkbook(exportedUsers);
+      downloadBlob(
+        workbook,
+        `user-analytics-${rangeDays}d-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+    } catch (caughtError) {
+      console.error('[AnalyticsDashboardTab] Failed to export analytics users:', caughtError);
+      setUserError('导出用户使用明细失败');
+    } finally {
+      setIsExportingUsers(false);
+    }
+  }, [rangeDays, search, sortBy]);
+
   const currentPage = payload?.pagination.page ?? page;
   const totalPages = payload?.pagination.totalPages ?? 1;
   const totalUsers = payload?.pagination.total ?? 0;
@@ -854,6 +1030,16 @@ function UserAnalyticsPanel({ rangeDays }: { rangeDays: number }) {
               <option key={option} value={option}>{option} / 页</option>
             ))}
           </select>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void exportAllUsers()}
+            disabled={isExportingUsers || isLoadingUsers}
+          >
+            <Download className={isExportingUsers ? 'h-4 w-4 animate-pulse' : 'h-4 w-4'} />
+            {isExportingUsers ? '导出中' : '导出 Excel'}
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={() => void loadUsers()} disabled={isLoadingUsers}>
             <RefreshCw className={isLoadingUsers ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
             刷新
@@ -1128,6 +1314,13 @@ export default function AnalyticsDashboardTab() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium text-foreground">{translate('title', '统计面板')}</h3>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" />
+            <span>
+              数据每半小时更新一次
+              {summary?.cache?.updatedAt ? `，上次更新 ${formatDateTime(summary.cache.updatedAt)}` : ''}
+            </span>
+          </div>
           <div className="text-xs text-muted-foreground">
             {summary ? `总体指标为全历史数据；时间范围指标：近 ${summary.range.days} 天 · 生成时间 ${formatDateTime(summary.range.generatedAt)}` : '聚合平台使用、问数、租户和执行链路数据'}
           </div>

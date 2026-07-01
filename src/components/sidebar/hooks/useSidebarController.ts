@@ -14,6 +14,7 @@ import type {
 import {
   filterProjects,
   getAllSessions,
+  isSessionFavorited,
   loadStarredProjects,
   persistStarredProjects,
   readProjectSortOrder,
@@ -576,6 +577,33 @@ export function useSidebarController({
     [onRefresh, t],
   );
 
+  const toggleSessionFavorite = useCallback(
+    async (project: Project, session: SessionWithProvider) => {
+      const nextFavorited = !isSessionFavorited(session);
+
+      try {
+        const response = await api.setSessionFavorite(session.id, {
+          provider: session.__provider,
+          projectName: project.name,
+          workspaceId: project.workspaceId,
+          favorited: nextFavorited,
+        });
+
+        if (response.ok) {
+          await onRefresh();
+          return;
+        }
+
+        console.error('[Sidebar] Failed to update session favorite:', response.status);
+        alert(t('messages.favoriteSessionFailed', { defaultValue: 'Failed to update session favorite. Please try again.' }));
+      } catch (error) {
+        console.error('[Sidebar] Error updating session favorite:', error);
+        alert(t('messages.favoriteSessionError', { defaultValue: 'Error updating session favorite. Please try again.' }));
+      }
+    },
+    [onRefresh, t],
+  );
+
   const collapseSidebar = useCallback(() => {
     setSidebarVisible(false);
   }, [setSidebarVisible]);
@@ -621,6 +649,7 @@ export function useSidebarController({
     handleProjectSelect,
     refreshProjects,
     updateSessionSummary,
+    toggleSessionFavorite,
     collapseSidebar,
     expandSidebar,
     setShowNewProject,

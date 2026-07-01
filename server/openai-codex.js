@@ -22,6 +22,37 @@ import { createNormalizedMessage } from './shared/utils.js';
 
 // Track active sessions
 const activeCodexSessions = new Map();
+const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CODEX_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
+
+class StreamStalledError extends Error {
+  constructor(provider, timeoutMs) {
+    super(`${provider} stream stalled: no events received for ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = 'StreamStalledError';
+    this.code = 'STREAM_STALLED';
+    this.provider = provider;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function readIteratorNextWithStallTimeout(iterator, { timeoutMs, provider, onTimeout }) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return iterator.next();
+  }
+
+  let timer = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new StreamStalledError(provider, timeoutMs);
+      onTimeout?.(error);
+      reject(error);
+    }, timeoutMs);
+  });
+
+  return Promise.race([iterator.next(), timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function logChatSessionTokenUsage({ requestId, provider, sessionId, model, tokenBudget, tokenUsage }) {
   console.log('[chat-session]', JSON.stringify({
@@ -265,7 +296,23 @@ export async function queryCodex(command, options = {}, ws) {
       signal: abortController.signal
     });
 
-    for await (const event of streamedTurn.events) {
+    const iterator = streamedTurn.events[Symbol.asyncIterator]();
+
+    while (true) {
+      const next = await readIteratorNextWithStallTimeout(iterator, {
+        timeoutMs: STREAM_STALL_TIMEOUT_MS,
+        provider: 'Codex',
+        onTimeout: () => {
+          abortController.abort();
+        }
+      });
+
+      if (next.done) {
+        break;
+      }
+
+      const event = next.value;
+
       // Check if session was aborted
       const session = activeCodexSessions.get(currentSessionId);
       if (!session || session.status === 'aborted') {
@@ -339,6 +386,8 @@ export async function queryCodex(command, options = {}, ws) {
       String(error?.message || '').toLowerCase().includes('aborted');
 
     if (!wasAborted) {
+      const hadTerminalFailure = Boolean(terminalFailure);
+      terminalFailure = terminalFailure || error;
       console.error('[Codex] Error:', error);
 
       // Check if Codex SDK is available for a clearer error message
@@ -347,9 +396,13 @@ export async function queryCodex(command, options = {}, ws) {
         ? 'Codex CLI is not configured. Please set up authentication first.'
         : error.message;
 
-      sendMessage(ws, createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: currentSessionId, provider: 'codex' }));
+      const errorMessage = createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: currentSessionId, provider: 'codex' });
+      if (error?.code) {
+        errorMessage.code = error.code;
+      }
+      sendMessage(ws, errorMessage);
       recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'failed' });
-      if (!terminalFailure) {
+      if (!hadTerminalFailure) {
         notifyRunFailed({
           userId: ws?.userId || null,
           provider: 'codex',
@@ -365,7 +418,7 @@ export async function queryCodex(command, options = {}, ws) {
     if (currentSessionId) {
       const session = activeCodexSessions.get(currentSessionId);
       if (session) {
-        session.status = session.status === 'aborted' ? 'aborted' : 'completed';
+        session.status = session.status === 'aborted' ? 'aborted' : terminalFailure ? 'failed' : 'completed';
       }
     }
   }

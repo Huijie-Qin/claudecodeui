@@ -91,6 +91,7 @@ function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
     id: session.provider_session_id,
     summary: session.summary || 'New Session',
     lastActivity: session.updated_at,
+    isFavorited: session.is_favorited === 1,
     __provider: session.provider,
     __workspaceId: workspaceId,
   };

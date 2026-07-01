@@ -627,6 +627,88 @@ test('session index keeps shared workspace sessions private per user', () => {
   assert.equal(mt.sessions.findOwnedSession({ tenantId: tenant.id, userId: editorId, provider: 'claude', providerSessionId: 'owner-session' }), null);
 });
 
+test('session favorites persist per user and sort favorited sessions first', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'owner');
+  const editorId = seedUser(database, 'editor');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: editorId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/owner/repo',
+  });
+
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    summary: 'Older session',
+    status: 'active',
+  });
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'newer-session',
+    summary: 'Newer session',
+    status: 'active',
+  });
+
+  mt.sessionFavorites.setFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    favorited: true,
+  });
+
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), true);
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: editorId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), false);
+  assert.deepEqual(
+    mt.sessions.listSessions({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId })
+      .map((row) => [row.provider_session_id, row.is_favorited]),
+    [['older-session', 1], ['newer-session', 0]],
+  );
+
+  mt.sessionFavorites.setFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+    favorited: false,
+  });
+
+  assert.equal(mt.sessionFavorites.isFavorite({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    provider: 'claude',
+    providerSessionId: 'older-session',
+  }), false);
+});
+
 test('agent session runtime binds provider session id for resume', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);
@@ -1103,6 +1185,60 @@ test('runtime monitor selects expired idle runtimes only', () => {
   const expired = mt.runtimes.listExpiredIdleRuntimes({ olderThanMinutes: 30, limit: 10 });
 
   assert.deepEqual(expired.map((row) => row.runtime_id), ['old-idle']);
+});
+
+test('runtime monitor pages expired idle runtimes with a stable cursor', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  database.prepare("INSERT INTO users (id, username, password_hash) VALUES (1, 'owner', 'hash')").run();
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId: 1,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: 1,
+    slug: 'work',
+    displayName: 'Work',
+    path: '/tmp/work',
+  });
+  for (const runtimeId of ['old-idle-1', 'old-idle-2', 'old-idle-3']) {
+    mt.runtimes.createRuntime({
+      runtimeId,
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      userId: 1,
+      provider: 'claude',
+      providerSessionId: `${runtimeId}-session`,
+      containerName: `${runtimeId}-container`,
+      image: 'cloudcli/test:claude',
+      workspaceHostPath: '/tmp/work',
+      runtimeHomePath: `/tmp/runtime/${runtimeId}`,
+      status: 'idle',
+    });
+    database.prepare(`
+      UPDATE agent_session_runtime
+      SET last_used_at = datetime('now', '-45 minutes')
+      WHERE runtime_id = ?
+    `).run(runtimeId);
+  }
+
+  const firstPage = mt.runtimes.listExpiredIdleRuntimes({ olderThanMinutes: 30, limit: 2 });
+  const secondPage = mt.runtimes.listExpiredIdleRuntimes({
+    olderThanMinutes: 30,
+    limit: 2,
+    cursor: {
+      lastUsedAt: firstPage[1].last_used_at,
+      id: firstPage[1].id,
+    },
+  });
+
+  assert.deepEqual(firstPage.map((row) => row.runtime_id), ['old-idle-1', 'old-idle-2']);
+  assert.deepEqual(secondPage.map((row) => row.runtime_id), ['old-idle-3']);
 });
 
 test('runtime monitor revalidates one expired idle runtime by id', () => {

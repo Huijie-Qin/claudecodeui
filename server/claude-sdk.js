@@ -51,12 +51,57 @@ const abortedSessions = new Set();
 const pendingToolApprovals = new Map();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
+const STREAM_STALL_PAUSE_POLL_MS = 5000;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 
 const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const CLAUDE_SESSION_IDLE_CLOSE_MS = parseInt(process.env.CLAUDE_SESSION_IDLE_CLOSE_MS, 10) || 5 * 60 * 1000;
+
+class StreamStalledError extends Error {
+  constructor(provider, timeoutMs) {
+    super(`${provider} stream stalled: no events received for ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = 'StreamStalledError';
+    this.code = 'STREAM_STALLED';
+    this.provider = provider;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function readIteratorNextWithStallTimeout(iterator, {
+  timeoutMs,
+  provider,
+  shouldPauseTimeout = () => false,
+  onTimeout,
+}) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return iterator.next();
+  }
+
+  let timer = null;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    const check = () => {
+      if (shouldPauseTimeout()) {
+        timer = setTimeout(check, STREAM_STALL_PAUSE_POLL_MS);
+        return;
+      }
+
+      const error = new StreamStalledError(provider, timeoutMs);
+      onTimeout?.(error);
+      reject(error);
+    };
+
+    timer = setTimeout(check, timeoutMs);
+  });
+
+  return Promise.race([iterator.next(), timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function parseDisabledTools(value) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -335,14 +380,22 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, runtimeOptions = {}) {
+function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, runtimeOptions = {}, inputQueue = null) {
+  const existing = activeSessions.get(sessionId) || {};
+  if (existing.idleCloseTimer) {
+    clearTimeout(existing.idleCloseTimer);
+  }
+
   activeSessions.set(sessionId, {
+    ...existing,
     instance: queryInstance,
     startTime: Date.now(),
-    status: 'active',
+    status: 'processing',
     tempImagePaths,
     tempDir,
     writer,
+    inputQueue: inputQueue || existing.inputQueue || null,
+    idleCloseTimer: null,
     runtimeId: runtimeOptions.runtimeId || null,
     runtimeMode: runtimeOptions.runtimeMode || 'local',
     runtimeOptions,
@@ -366,12 +419,51 @@ function getSession(sessionId) {
   return activeSessions.get(sessionId);
 }
 
+function updateSessionWriter(sessionId, writer) {
+  const session = getSession(sessionId);
+  if (!session || !writer) {
+    return false;
+  }
+  session.writer = writer;
+  return true;
+}
+
+function markSessionProcessing(sessionId) {
+  const session = getSession(sessionId);
+  if (!session) return false;
+  if (session.idleCloseTimer) {
+    clearTimeout(session.idleCloseTimer);
+    session.idleCloseTimer = null;
+  }
+  session.status = 'processing';
+  return true;
+}
+
+function scheduleSessionIdleClose(sessionId) {
+  const session = getSession(sessionId);
+  if (!session) return;
+  session.status = 'idle';
+  if (session.idleCloseTimer) {
+    clearTimeout(session.idleCloseTimer);
+  }
+  session.idleCloseTimer = setTimeout(() => {
+    const latest = getSession(sessionId);
+    if (!latest || latest.status !== 'idle') {
+      return;
+    }
+    latest.inputQueue?.close();
+    latest.instance?.close?.();
+  }, CLAUDE_SESSION_IDLE_CLOSE_MS);
+}
+
 /**
  * Gets all active session IDs
  * @returns {Array<string>} Array of active session IDs
  */
 function getAllSessions() {
-  return Array.from(activeSessions.keys());
+  return Array.from(activeSessions.entries())
+    .filter(([, session]) => session.status === 'processing')
+    .map(([sessionId]) => sessionId);
 }
 
 function countActiveSessionsForRuntime(runtimeId, { excludingSessionId = null } = {}) {
@@ -379,7 +471,7 @@ function countActiveSessionsForRuntime(runtimeId, { excludingSessionId = null } 
   let count = 0;
   for (const [activeSessionId, session] of activeSessions.entries()) {
     if (activeSessionId === excludingSessionId) continue;
-    if (session.runtimeMode === 'docker' && session.runtimeId === runtimeId && session.status === 'active') {
+    if (session.runtimeMode === 'docker' && session.runtimeId === runtimeId && session.status === 'processing') {
       count += 1;
     }
   }
@@ -533,14 +625,85 @@ function logChatSessionTokenUsage({ requestId, provider, sessionId, model, token
   }));
 }
 
+class ClaudeInputQueue {
+  constructor() {
+    this.items = [];
+    this.waiters = [];
+    this.closed = false;
+    this.pendingQueryTurns = 0;
+  }
+
+  push(message) {
+    if (this.closed) {
+      throw new Error('Claude input queue is closed');
+    }
+    if (message?.shouldQuery !== false) {
+      this.pendingQueryTurns += 1;
+    }
+
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter({ value: message, done: false });
+      return;
+    }
+
+    this.items.push(message);
+  }
+
+  close() {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) {
+      waiter({ value: undefined, done: true });
+    }
+  }
+
+  async next() {
+    const item = this.items.shift();
+    if (item) {
+      return { value: item, done: false };
+    }
+
+    if (this.closed) {
+      return { value: undefined, done: true };
+    }
+
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+
+  finishQueryTurn() {
+    this.pendingQueryTurns = Math.max(0, this.pendingQueryTurns - 1);
+    return this.pendingQueryTurns;
+  }
+}
+
 /**
- * Builds the SDK prompt. Text-only turns can use the faster string prompt path;
- * turns with images must use SDKUserMessage content blocks so Claude receives
- * native visual input rather than a textual file path.
+ * Builds a Claude SDK user message. Text-only turns use native string content;
+ * turns with images use content blocks so Claude receives native visual input.
  */
-function createClaudePromptFactory(command, images) {
+function buildClaudeUserMessage(command, images, options = {}) {
   if (!images || images.length === 0) {
-    return () => command;
+    return {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: command,
+      },
+      parent_tool_use_id: null,
+      priority: options.priority || 'next',
+      shouldQuery: options.shouldQuery !== false,
+      timestamp: options.timestamp || new Date().toISOString(),
+    };
   }
 
   const content = [];
@@ -552,15 +715,32 @@ function createClaudePromptFactory(command, images) {
     content.push(parseImageDataUrl(image, index));
   });
 
-  const userMessage = {
+  return {
     type: 'user',
     message: {
       role: 'user',
       content,
     },
     parent_tool_use_id: null,
+    priority: options.priority || 'next',
+    shouldQuery: options.shouldQuery !== false,
+    timestamp: options.timestamp || new Date().toISOString(),
   };
+}
 
+function isLiveUserTextMessage(message) {
+  return message?.kind === 'text' && message?.role === 'user';
+}
+
+/**
+ * Backward-compatible helper for tests/imports that expect a prompt factory.
+ */
+function createClaudePromptFactory(command, images) {
+  if (!images || images.length === 0) {
+    return () => command;
+  }
+
+  const userMessage = buildClaudeUserMessage(command, images);
   return () => createSingleMessagePrompt(userMessage);
 }
 
@@ -617,6 +797,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let runtimeOptions = options;
   let runtimeContext = null;
   let runtimeBoundToProviderSession = Boolean(sessionId);
+  let streamStallTimeoutPaused = false;
+  const inputQueue = new ClaudeInputQueue();
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -701,7 +883,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
       sdkOptions.mcpServers = mcpServers;
     }
 
-    const createPrompt = createClaudePromptFactory(command, options.images);
+    inputQueue.push(buildClaudeUserMessage(command, options.images, {
+      priority: 'next',
+      shouldQuery: true,
+    }));
 
     sdkOptions.hooks = {
       Notification: [{
@@ -779,6 +964,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         dedupeKey: `claude:interaction:${capturedSessionId || sessionId || 'none'}:${requestId}`
       }));
 
+      streamStallTimeoutPaused = true;
       const decision = await waitForToolApproval(requestId, {
         timeoutMs: requiresInteraction ? 0 : undefined,
         signal: context?.signal,
@@ -791,6 +977,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
         onCancel: (reason) => {
           ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
+      }).finally(() => {
+        streamStallTimeoutPaused = false;
       });
       if (!decision) {
         return { behavior: 'deny', message: 'Tool interaction timed out' };
@@ -822,7 +1010,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     let queryInstance;
     try {
       queryInstance = query({
-        prompt: createPrompt(),
+        prompt: inputQueue,
         options: sdkOptions
       });
     } catch (hookError) {
@@ -831,7 +1019,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
       delete sdkOptions.hooks;
       queryInstance = query({
-        prompt: createPrompt(),
+        prompt: inputQueue,
         options: sdkOptions
       });
     }
@@ -845,19 +1033,47 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions);
+      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
       bindRuntimeToProviderSession(capturedSessionId);
       recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
 
+    const iterator = queryInstance[Symbol.asyncIterator]();
+
     // Process streaming messages
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
-    for await (const message of queryInstance) {
+    while (true) {
+      const next = await readIteratorNextWithStallTimeout(iterator, {
+        timeoutMs: STREAM_STALL_TIMEOUT_MS,
+        provider: 'Claude',
+        shouldPauseTimeout: () => {
+          const activeSessionId = capturedSessionId || sessionId || null;
+          const activeSession = activeSessionId ? getSession(activeSessionId) : null;
+          return streamStallTimeoutPaused || activeSession?.status === 'idle';
+        },
+        onTimeout: () => {
+          const activeSessionId = capturedSessionId || sessionId || null;
+          const activeSession = activeSessionId ? getSession(activeSessionId) : null;
+          if (activeSession?.instance?.interrupt) {
+            Promise.resolve()
+              .then(() => activeSession.instance.interrupt())
+              .catch((error) => {
+                console.warn(`Failed to interrupt stalled Claude stream ${activeSessionId}:`, error?.message || error);
+              });
+          }
+        },
+      });
+
+      if (next.done) {
+        break;
+      }
+
+      const message = next.value;
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions);
+        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
@@ -882,14 +1098,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
+      const visibleNormalized = normalized.filter((msg) => !isLiveUserTextMessage(msg));
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',
         providerSessionId: persistenceSessionId,
         runtimeId: runtimeOptions.runtimeId,
-        messages: normalized,
+        messages: visibleNormalized,
       });
-      for (const msg of normalized) {
+      for (const msg of visibleNormalized) {
         // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
@@ -899,6 +1116,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // Extract and send token budget updates from result messages
       if (message.type === 'result') {
+        const remainingQueryTurns = inputQueue.finishQueryTurn();
         const models = Object.keys(message.modelUsage || {});
         if (models.length > 0) {
           // Model info available in result message
@@ -931,6 +1149,42 @@ async function queryClaudeSDK(command, options = {}, ws) {
           });
           ws.send(tokenStatusMessage);
         }
+
+        const completedSessionId = capturedSessionId || sessionId || null;
+        if (remainingQueryTurns > 0) {
+          if (completedSessionId) {
+            markSessionProcessing(completedSessionId);
+          }
+          continue;
+        }
+
+        if (completedSessionId) {
+          scheduleSessionIdleClose(completedSessionId);
+        }
+
+        recordProviderSession({
+          options: runtimeOptions,
+          provider: 'claude',
+          providerSessionId: completedSessionId,
+          status: 'completed',
+        });
+
+        ws.send(createNormalizedMessage({
+          kind: 'complete',
+          exitCode: 0,
+          isNewSession: !sessionId && !!command,
+          sessionId: completedSessionId,
+          provider: 'claude',
+          aborted: false,
+          success: true,
+        }));
+        notifyRunStopped({
+          userId: ws?.userId || null,
+          provider: 'claude',
+          sessionId: completedSessionId,
+          sessionName: sessionSummary,
+          stopReason: 'completed'
+        });
       }
     }
 
@@ -952,23 +1206,24 @@ async function queryClaudeSDK(command, options = {}, ws) {
       status: wasAborted ? 'aborted' : 'completed',
     });
 
-    // Send completion event
-    ws.send(createNormalizedMessage({
-      kind: 'complete',
-      exitCode: 0,
-      isNewSession: !sessionId && !!command,
-      sessionId: finalSessionId,
-      provider: 'claude',
-      aborted: wasAborted,
-      success: true,
-    }));
-    notifyRunStopped({
-      userId: ws?.userId || null,
-      provider: 'claude',
-      sessionId: finalSessionId,
-      sessionName: sessionSummary,
-      stopReason: wasAborted ? 'aborted' : 'completed'
-    });
+    if (wasAborted) {
+      ws.send(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 0,
+        isNewSession: !sessionId && !!command,
+        sessionId: finalSessionId,
+        provider: 'claude',
+        aborted: true,
+        success: true,
+      }));
+      notifyRunStopped({
+        userId: ws?.userId || null,
+        provider: 'claude',
+        sessionId: finalSessionId,
+        sessionName: sessionSummary,
+        stopReason: 'aborted'
+      });
+    }
     // Complete
 
   } catch (error) {
@@ -1114,6 +1369,11 @@ async function abortClaudeSDKSession(sessionId) {
     // cleanup because SDK interrupt can leave docker exec alive.
     session.status = 'aborted';
     abortedSessions.add(sessionId);
+    if (session.idleCloseTimer) {
+      clearTimeout(session.idleCloseTimer);
+      session.idleCloseTimer = null;
+    }
+    session.inputQueue?.close();
 
     const interruptPromise = Promise.resolve()
       .then(() => session.instance.interrupt())
@@ -1160,7 +1420,7 @@ async function abortClaudeSDKSession(sessionId) {
  */
 function isClaudeSDKSessionActive(sessionId) {
   const session = getSession(sessionId);
-  return session && session.status === 'active';
+  return Boolean(session && session.status === 'processing');
 }
 
 /**
@@ -1208,6 +1468,102 @@ function reconnectSessionWriter(sessionId, newRawWs) {
   return true;
 }
 
+function normalizeSupplementMode(mode) {
+  if (mode === 'context-only') {
+    return { priority: 'later', shouldQuery: false };
+  }
+  if (mode === 'next') {
+    return { priority: 'next', shouldQuery: true };
+  }
+  return { priority: 'now', shouldQuery: true };
+}
+
+function sendWriterMessage(writer, message) {
+  if (!writer || typeof writer.send !== 'function') {
+    return;
+  }
+  writer.send(message);
+}
+
+function pushClaudeSupplement({
+  sessionId,
+  content,
+  displayContent = null,
+  clientMessageId = null,
+  mode = 'now',
+  writer = null,
+} = {}) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const normalizedContent = typeof content === 'string' ? content.trim() : '';
+  const normalizedDisplayContent =
+    typeof displayContent === 'string' && displayContent.trim()
+      ? displayContent.trim()
+      : normalizedContent;
+  if (!normalizedSessionId || !normalizedContent) {
+    return { success: false, error: 'sessionId and content are required' };
+  }
+
+  const session = getSession(normalizedSessionId);
+  if (!session?.inputQueue) {
+    return { success: false, error: 'Claude session is not accepting supplemental input' };
+  }
+
+  updateSessionWriter(normalizedSessionId, writer);
+
+  const timestamp = new Date().toISOString();
+  const messageId = typeof clientMessageId === 'string' && clientMessageId.trim()
+    ? `supplement_${clientMessageId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120)}`
+    : null;
+  const persistedMessage = createNormalizedMessage({
+    kind: 'text',
+    role: 'user',
+    content: normalizedDisplayContent,
+    sessionId: normalizedSessionId,
+    provider: 'claude',
+    timestamp,
+    ...(messageId ? { id: messageId } : {}),
+    isSupplement: true,
+    supplementMode: mode,
+  });
+
+  persistNormalizedMessages({
+    options: session.runtimeOptions,
+    provider: 'claude',
+    providerSessionId: normalizedSessionId,
+    runtimeId: session.runtimeId,
+    messages: [persistedMessage],
+  });
+
+  const { priority, shouldQuery } = normalizeSupplementMode(mode);
+  markSessionProcessing(normalizedSessionId);
+  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+    priority,
+    shouldQuery,
+    timestamp,
+  }));
+
+  const targetWriter = writer || session.writer;
+  sendWriterMessage(targetWriter, {
+    type: 'claude-supplement-ack',
+    sessionId: normalizedSessionId,
+    clientMessageId,
+    status: 'injected',
+    mode,
+    timestamp,
+  });
+  if (shouldQuery) {
+    sendWriterMessage(targetWriter, createNormalizedMessage({
+      kind: 'status',
+      text: 'Processing',
+      sessionId: normalizedSessionId,
+      provider: 'claude',
+      canInterrupt: true,
+    }));
+  }
+
+  return { success: true };
+}
+
 // Export public API
 export {
   queryClaudeSDK,
@@ -1220,5 +1576,6 @@ export {
   loadMcpConfig,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
+  pushClaudeSupplement,
   createClaudePromptFactory
 };

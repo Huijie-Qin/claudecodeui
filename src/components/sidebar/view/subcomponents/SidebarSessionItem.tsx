@@ -1,4 +1,4 @@
-import { CalendarClock, Check, Clock, Edit2, Pause, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, Clock, Edit2, Pause, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { MouseEvent } from 'react';
 
@@ -23,6 +23,7 @@ type SidebarSessionItemProps = {
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
+  onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -46,11 +47,13 @@ export default function SidebarSessionItem({
   onProjectSelect,
   onSessionSelect,
   onScheduledTaskOpen,
+  onToggleSessionFavorite,
   onDeleteSession,
   t,
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
+  const isFavorited = session.isFavorited === true;
   const isScheduledTaskSession = session.isScheduledTaskSession === true;
   const isScheduledTaskPaused = isScheduledTaskSession && session.scheduledTask?.enabled === false;
   const canRenameSession = !isScheduledTaskSession;
@@ -72,6 +75,11 @@ export default function SidebarSessionItem({
     onDeleteSession(project, session.id, sessionView.sessionName, session.__provider);
   };
 
+  const toggleFavoriteSession = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onToggleSessionFavorite(project, session);
+  };
+
   const openScheduledTask = (event: MouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
     onScheduledTaskOpen?.(project, session);
@@ -89,10 +97,11 @@ export default function SidebarSessionItem({
         <div
           className={cn(
             'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
-            isSelected ? 'bg-primary/5 border-primary/20' : '',
-            !isSelected && sessionView.isActive
-              ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
-              : 'border-border/30',
+            isSelected ? 'bg-primary/10 border-primary/30' : '',
+            !isSelected &&
+              (sessionView.isActive
+                ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
+                : 'border-border/30'),
           )}
           onClick={selectMobileSession}
         >
@@ -141,6 +150,21 @@ export default function SidebarSessionItem({
               </div>
             </div>
 
+            <button
+              className={cn(
+                'ml-1 flex h-5 w-5 items-center justify-center rounded-md border transition-transform active:scale-95',
+                isFavorited
+                  ? 'border-yellow-200 bg-yellow-500/10 text-yellow-600 dark:border-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                  : 'border-gray-200 bg-gray-500/10 text-gray-600 dark:border-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+              )}
+              onClick={toggleFavoriteSession}
+              title={isFavorited
+                ? t('tooltips.removeSessionFromFavorites', { defaultValue: 'Remove session from favorites' })
+                : t('tooltips.addSessionToFavorites', { defaultValue: 'Add session to favorites' })}
+            >
+              <Star className={cn('h-2.5 w-2.5', isFavorited && 'fill-current')} />
+            </button>
+
             {!sessionView.isCursorSession && (
               <button
                 className="ml-1 flex h-5 w-5 items-center justify-center rounded-md bg-red-50 opacity-70 transition-transform active:scale-95 dark:bg-red-900/20"
@@ -160,8 +184,8 @@ export default function SidebarSessionItem({
         <Button
           variant="ghost"
           className={cn(
-            'w-full justify-start p-2 h-auto font-normal text-left hover:bg-accent/50 transition-colors duration-200',
-            isSelected && 'bg-accent text-accent-foreground',
+            'h-auto w-full justify-start border-l-2 border-transparent p-2 text-left font-normal transition-colors duration-200 hover:bg-accent/50',
+            isSelected && 'border-primary/60 bg-primary/10 text-accent-foreground hover:bg-primary/15',
           )}
           onClick={() => onSessionSelect(session, project.name)}
         >
@@ -215,7 +239,7 @@ export default function SidebarSessionItem({
           </div>
         </Button>
 
-        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 opacity-0 transition-all duration-200 group-hover:opacity-100">
+        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 transform items-center gap-1 transition-all duration-200">
             {editingSession === session.id && canRenameSession ? (
               <>
                 <input
@@ -259,7 +283,7 @@ export default function SidebarSessionItem({
               <>
                 {canRenameSession && (
                   <button
-                    className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
+                    className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 opacity-0 hover:bg-gray-100 group-hover:opacity-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
                     onClick={(event) => {
                       event.stopPropagation();
                       onStartEditingSession(session.id, sessionView.sessionName);
@@ -269,9 +293,26 @@ export default function SidebarSessionItem({
                     <Edit2 className="h-3 w-3 text-gray-600 dark:text-gray-400" />
                   </button>
                 )}
+                <button
+                  className={cn(
+                    'flex h-6 w-6 items-center justify-center rounded transition-all duration-200 hover:bg-yellow-50 dark:hover:bg-yellow-900/20',
+                    isFavorited ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                  )}
+                  onClick={toggleFavoriteSession}
+                  title={isFavorited
+                    ? t('tooltips.removeSessionFromFavorites', { defaultValue: 'Remove session from favorites' })
+                    : t('tooltips.addSessionToFavorites', { defaultValue: 'Add session to favorites' })}
+                >
+                  <Star
+                    className={cn(
+                      'h-3 w-3 transition-colors',
+                      isFavorited ? 'fill-current text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400',
+                    )}
+                  />
+                </button>
                 {!sessionView.isCursorSession && (
                   <button
-                    className="flex h-6 w-6 items-center justify-center rounded bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
+                    className="flex h-6 w-6 items-center justify-center rounded bg-red-50 opacity-0 hover:bg-red-100 group-hover:opacity-100 dark:bg-red-900/20 dark:hover:bg-red-900/40"
                     onClick={(event) => {
                       event.stopPropagation();
                       requestDeleteSession();

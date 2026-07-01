@@ -24,6 +24,13 @@ type PendingViewSession = {
   startedAt: number;
 };
 
+const STREAM_HEALTH_CHECK_INTERVAL_MS = 10_000;
+const STREAM_INACTIVITY_CHECK_MS = 30_000;
+const STREAM_STATUS_PROBE_MIN_INTERVAL_MS = 20_000;
+
+const isConcreteSessionId = (sessionId: string | null | undefined): sessionId is string =>
+  typeof sessionId === 'string' && sessionId.length > 0 && !sessionId.startsWith('new-session-');
+
 function ChatInterface({
   selectedProject,
   selectedSession,
@@ -56,6 +63,8 @@ function ChatInterface({
   const streamAccumulatorRef = useRef(createSessionStreamAccumulator());
   const streamTimersRef = useRef(new Map<string, number>());
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
+  const lastRealtimeActivityAtRef = useRef(Date.now());
+  const lastSessionStatusProbeAtRef = useRef(0);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
 
   const resetStreamingState = useCallback(() => {
@@ -106,6 +115,7 @@ function ChatInterface({
     setTokenBudget,
     visibleMessages,
     allMessagesLoaded,
+    loadingStartedAt,
     claudeStatus,
     setClaudeStatus,
     createDiff,
@@ -199,20 +209,65 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
-  // On WebSocket reconnect, re-fetch the current session's messages from the server
-  // so missed streaming events are shown. Also reset isLoading.
-  const handleWebSocketReconnect = useCallback(async () => {
-    if (!selectedProject || !selectedSession) return;
+  const getCurrentConcreteSessionId = useCallback(() => {
     const providerVal = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
-    await sessionStore.refreshFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || providerVal) as LLMProvider,
-      projectName: selectedProject.name,
-      projectPath: selectedProject.fullPath || selectedProject.path || '',
-      workspaceId: selectedProject.workspaceId,
+    const reconnectProvider = (selectedSession?.__provider || providerVal) as LLMProvider;
+    const pendingSessionId =
+      typeof window !== 'undefined' ? sessionStorage.getItem('pendingSessionId') : null;
+    const candidateSessionId =
+      selectedSession?.id ||
+      currentSessionId ||
+      pendingViewSessionRef.current?.sessionId ||
+      pendingSessionId ||
+      null;
+
+    return {
+      provider: reconnectProvider,
+      sessionId: isConcreteSessionId(candidateSessionId) ? candidateSessionId : null,
+    };
+  }, [currentSessionId, selectedSession]);
+
+  const probeCurrentSessionStatus = useCallback(() => {
+    const { provider: probeProvider, sessionId } = getCurrentConcreteSessionId();
+
+    if (!sessionId) {
+      return false;
+    }
+
+    lastSessionStatusProbeAtRef.current = Date.now();
+    sendMessage({
+      type: 'check-session-status',
+      sessionId,
+      provider: probeProvider,
     });
-    setIsLoading(false);
-    setCanAbortSession(false);
-  }, [selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
+
+    return true;
+  }, [getCurrentConcreteSessionId, sendMessage]);
+
+  // On WebSocket reconnect, re-fetch the current session's messages from the server
+  // so missed streaming events are shown. Also ask the server whether the session
+  // is still active; for Claude this reattaches SDK output to the new socket.
+  const handleWebSocketReconnect = useCallback(async () => {
+    const { provider: reconnectProvider, sessionId } = getCurrentConcreteSessionId();
+
+    if (sessionId) {
+      probeCurrentSessionStatus();
+    }
+
+    if (selectedProject && selectedSession) {
+      await sessionStore.refreshFromServer(selectedSession.id, {
+        provider: reconnectProvider,
+        projectName: selectedProject.name,
+        projectPath: selectedProject.fullPath || selectedProject.path || '',
+        workspaceId: selectedProject.workspaceId,
+      });
+    }
+
+    if (!sessionId) {
+      setIsLoading(false);
+      setCanAbortSession(false);
+    }
+  }, [getCurrentConcreteSessionId, probeCurrentSessionStatus, selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
 
   useChatRealtimeHandlers({
     latestMessage,
@@ -238,6 +293,77 @@ function ChatInterface({
     addMessage,
     sessionStore,
   });
+
+  useEffect(() => {
+    if (!isLoading) {
+      lastSessionStatusProbeAtRef.current = 0;
+      return;
+    }
+
+    lastRealtimeActivityAtRef.current = Date.now();
+  }, [isLoading]);
+
+  useEffect(() => {
+    return subscribeMessage((message) => {
+      if (!message) return;
+      if (message.type === 'websocket-reconnected') return;
+
+      lastRealtimeActivityAtRef.current = Date.now();
+    });
+  }, [subscribeMessage]);
+
+  useEffect(() => {
+    return subscribeMessage((message) => {
+      if (!message || message.type !== 'session-status' || message.isProcessing !== false) {
+        return;
+      }
+      if (!selectedProject) {
+        return;
+      }
+
+      const statusSessionId = typeof message.sessionId === 'string' ? message.sessionId : null;
+      if (!statusSessionId) {
+        return;
+      }
+
+      const { provider: statusProvider, sessionId: currentConcreteSessionId } = getCurrentConcreteSessionId();
+      if (currentConcreteSessionId && statusSessionId !== currentConcreteSessionId) {
+        return;
+      }
+
+      void sessionStore.refreshFromServer(statusSessionId, {
+        provider: (message.provider || statusProvider) as LLMProvider,
+        projectName: selectedProject.name,
+        projectPath: selectedProject.fullPath || selectedProject.path || '',
+        workspaceId: selectedProject.workspaceId,
+      });
+    });
+  }, [getCurrentConcreteSessionId, selectedProject, sessionStore, subscribeMessage]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      const inactiveForMs = now - lastRealtimeActivityAtRef.current;
+      const lastProbeAgeMs = now - lastSessionStatusProbeAtRef.current;
+
+      if (
+        inactiveForMs < STREAM_INACTIVITY_CHECK_MS ||
+        lastProbeAgeMs < STREAM_STATUS_PROBE_MIN_INTERVAL_MS
+      ) {
+        return;
+      }
+
+      probeCurrentSessionStatus();
+    }, STREAM_HEALTH_CHECK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isLoading, probeCurrentSessionStatus]);
 
   useEffect(() => {
     if (!isLoading || !canAbortSession) {
@@ -362,6 +488,7 @@ function ChatInterface({
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
           isLoading={isLoading}
+          loadingStartedAt={loadingStartedAt}
           onAbortSession={handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}
@@ -408,16 +535,22 @@ function ChatInterface({
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
           onInputFocusChange={handleInputFocusChange}
-          placeholder={t('input.placeholder', {
-            provider:
-              provider === 'cursor'
-                ? t('messageTypes.cursor')
-                : provider === 'codex'
-                  ? t('messageTypes.codex')
-                  : provider === 'gemini'
-                    ? t('messageTypes.gemini')
-                    : t('messageTypes.claude'),
-          })}
+          placeholder={
+            isLoading && provider === 'claude'
+              ? t('input.supplementPlaceholder', {
+                  defaultValue: 'Add supplemental info while Claude is working...',
+                })
+              : t('input.placeholder', {
+                  provider:
+                    provider === 'cursor'
+                      ? t('messageTypes.cursor')
+                      : provider === 'codex'
+                        ? t('messageTypes.codex')
+                        : provider === 'gemini'
+                          ? t('messageTypes.gemini')
+                          : t('messageTypes.claude'),
+                })
+          }
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
           onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}

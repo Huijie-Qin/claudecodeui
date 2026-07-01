@@ -84,6 +84,13 @@ const createFakeSubmitEvent = () => {
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
 
+const createClientMessageId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `supplement_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
   fallbackInput: string,
@@ -386,7 +393,68 @@ export function useChatComposerState({
     ) => {
       event.preventDefault();
       const currentInput = inputValueRef.current;
-      if (!currentInput.trim() || isLoading || !selectedProject) {
+      if (!currentInput.trim() || !selectedProject) {
+        return;
+      }
+
+      if (isLoading) {
+        if (provider !== 'claude') {
+          return;
+        }
+
+        const pendingSessionId =
+          typeof window !== 'undefined' ? sessionStorage.getItem('pendingSessionId') : null;
+        const candidateSessionIds = [
+          currentSessionId,
+          selectedSession?.id || null,
+          pendingViewSessionRef.current?.sessionId || null,
+          pendingSessionId,
+        ];
+        const targetSessionId =
+          candidateSessionIds.find((sessionId) => Boolean(sessionId) && !isTemporarySessionId(sessionId)) || null;
+
+        if (!targetSessionId) {
+          console.warn('Supplement requested but no concrete Claude session ID is available yet.');
+          return;
+        }
+
+        const supplementContent = currentInput.trim();
+        const clientMessageId = createClientMessageId();
+        addMessage({
+          type: 'user',
+          content: supplementContent,
+          timestamp: new Date(),
+        });
+        setIsLoading(true);
+        setClaudeStatus({
+          text: 'Processing',
+          tokens: 0,
+          can_interrupt: true,
+        });
+        setCanAbortSession(true);
+        setIsUserScrolledUp(false);
+        onSessionProcessing?.(targetSessionId);
+        setTimeout(() => scrollToBottom(), 100);
+
+        sendMessage({
+          type: 'claude-supplement',
+          sessionId: targetSessionId,
+          content: supplementContent,
+          clientMessageId,
+          mode: 'now',
+        });
+
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setAttachedImages([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
         return;
       }
 
@@ -450,9 +518,7 @@ export function useChatComposerState({
         pendingViewSessionRef.current = { sessionId: sessionToActivate, startedAt: Date.now() };
       }
       onSessionActive?.(sessionToActivate);
-      if (effectiveSessionId && !isTemporarySessionId(effectiveSessionId)) {
-        onSessionProcessing?.(effectiveSessionId);
-      }
+      onSessionProcessing?.(sessionToActivate);
 
       const getToolsSettings = () => {
         try {

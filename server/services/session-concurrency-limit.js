@@ -4,13 +4,14 @@ const USER_SESSION_LIMIT_ENV_NAME = 'session_limit';
 const FALLBACK_SESSION_LIMIT_ENV_NAME = 'SESSION_LIMIT';
 
 export class SessionLimitExceededError extends Error {
-  constructor({ activeCount, limit, source }) {
+  constructor({ activeCount, limit, source, userId }) {
     super('Session concurrency limit exceeded');
     this.name = 'SessionLimitExceededError';
     this.code = 'SESSION_LIMIT_EXCEEDED';
     this.activeCount = activeCount;
     this.limit = limit;
     this.source = source;
+    this.userId = userId;
   }
 }
 
@@ -92,6 +93,7 @@ export function createSessionConcurrencyLimiter({
         activeCount,
         limit: config.limit,
         source: config.source,
+        userId: normalizedUserId,
       });
     }
 

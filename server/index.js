@@ -32,6 +32,7 @@ import {
     getActiveClaudeSDKSessions,
     getPendingApprovalsForSession,
     isClaudeSDKSessionActive,
+    pushClaudeSupplement,
     queryClaudeSDK,
     reconnectSessionWriter,
     resolveToolApproval
@@ -76,6 +77,7 @@ import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {adminAnalyticsCacheService} from './services/admin-analytics-cache.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
@@ -108,6 +110,14 @@ const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
 console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
+
+function normalizeOpaqueSessionId(sessionId) {
+    const normalized = String(sessionId ?? '').trim();
+    if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+        return null;
+    }
+    return normalized;
+}
 
 // File system watchers for provider project/session folders
 const PROVIDER_WATCH_PATHS = [
@@ -503,6 +513,8 @@ const app = express();
 const server = http.createServer(app);
 
 const ptySessionsMap = new Map();
+const activeProviderCommands = new Map();
+let activeProviderCommandCounter = 0;
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, 10) || 30 * 60 * 1000;
@@ -599,6 +611,19 @@ app.get('/health', (req, res) => {
         status: 'ok',
         timestamp: new Date().toISOString(),
         installMode
+    });
+});
+
+app.get('/health/active-work', (req, res) => {
+    const summary = getActiveWorkSummary();
+    const active = getActiveWorkCount(summary);
+
+    res.json({
+        active,
+        hasActiveWork: active > 0,
+        isShuttingDown,
+        summary,
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -815,6 +840,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
                     id: session.provider_session_id,
                     summary: session.summary || 'New Session',
                     lastActivity: session.updated_at,
+                    isFavorited: session.is_favorited === 1,
                     __provider: 'claude',
                     __workspaceId: workspace.id,
                 }));
@@ -845,6 +871,70 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
             return;
         }
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Favorite/unfavorite session endpoint
+app.put('/api/sessions/:sessionId/favorite', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const normalizedSessionId = normalizeOpaqueSessionId(sessionId);
+        if (!normalizedSessionId) {
+            return res.status(400).json({ error: 'Invalid sessionId' });
+        }
+
+        const { provider = 'claude', favorited = true, projectName } = req.body || {};
+        if (!provider || !VALID_PROVIDERS.includes(provider)) {
+            return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+        }
+
+        const userId = req.user?.id ?? req.user?.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        if (req.tenant) {
+            const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: false });
+            const ownedSession = multitenancyDb.sessions.findOwnedSession({
+                tenantId: req.tenant.id,
+                userId,
+                provider,
+                providerSessionId: normalizedSessionId,
+                workspaceId: workspace.id,
+            });
+            if (!ownedSession) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const result = multitenancyDb.sessionFavorites.setFavorite({
+                tenantId: req.tenant.id,
+                workspaceId: workspace.id,
+                userId,
+                provider,
+                providerSessionId: normalizedSessionId,
+                favorited: favorited !== false,
+            });
+
+            return res.json({ success: true, isFavorited: result.isFavorited });
+        }
+
+        if (!projectName || typeof projectName !== 'string') {
+            return res.status(400).json({ error: 'projectName is required' });
+        }
+
+        const result = multitenancyDb.sessionFavorites.setFavorite({
+            userId,
+            projectName,
+            provider,
+            providerSessionId: normalizedSessionId,
+            favorited: favorited !== false,
+        });
+
+        return res.json({ success: true, isFavorited: result.isFavorited });
+    } catch (error) {
+        console.error(`[API] Error updating favorite for session ${req.params.sessionId}:`, error);
+        const statusCode = error.statusCode || 500;
+        return res.status(statusCode).json({ error: error.message });
     }
 });
 
@@ -2215,6 +2305,7 @@ function createChatSessionLogContext({ data, provider, request }) {
         tenantId: options.tenantId ?? request?.tenant?.id ?? null,
         workspaceId: options.workspaceId ?? null,
         userId: options.userId ?? request?.user?.id ?? request?.user?.userId ?? null,
+        username: request?.user?.username ?? null,
         cwd: options.cwd || options.projectPath || null,
         model: options.model || null,
         permissionMode: options.permissionMode || null,
@@ -2233,8 +2324,34 @@ function logChatSessionEvent(event, context, extra = {}) {
     }));
 }
 
+function resolveSessionLimitLogUser({ userId, username, request, writer }) {
+    const normalizedUserId = Number(userId ?? request?.user?.id ?? request?.user?.userId ?? writer?.userId);
+    const fallbackUsername = username ?? request?.user?.username ?? writer?.username ?? null;
+    if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+        return {
+            userId: null,
+            username: fallbackUsername,
+        };
+    }
+
+    try {
+        const user = userDb.getUserById(normalizedUserId);
+        return {
+            userId: normalizedUserId,
+            username: user?.username ?? fallbackUsername,
+        };
+    } catch (error) {
+        console.warn('[SessionLimit] Failed to resolve username for concurrency limit log:', error?.message || error);
+        return {
+            userId: normalizedUserId,
+            username: fallbackUsername,
+        };
+    }
+}
+
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
     let lease;
+    let activeCommandId = null;
     const startedAt = Date.now();
     if (logContext?.requestId) {
         data.options = {
@@ -2251,6 +2368,21 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         if (!isSessionLimitExceededError(error)) {
             throw error;
         }
+
+        const rejectedUser = resolveSessionLimitLogUser({
+            userId: error.userId ?? data.options?.userId ?? writer.userId,
+            username: logContext?.username,
+            writer,
+        });
+        console.warn('[SessionLimit] User concurrency limit reached', JSON.stringify({
+            username: rejectedUser.username,
+            userId: rejectedUser.userId,
+            provider,
+            activeCount: error.activeCount,
+            limit: error.limit,
+            source: error.source,
+            requestId: logContext?.requestId || null,
+        }));
 
         writer.send(createNormalizedMessage({
             kind: 'error',
@@ -2271,6 +2403,14 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
     }
 
     try {
+        activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
+        activeProviderCommands.set(activeCommandId, {
+            provider,
+            sessionId: data.options?.sessionId || null,
+            userId: data.options?.userId ?? writer.userId ?? null,
+            requestId: logContext?.requestId || null,
+            startedAt
+        });
         logChatSessionEvent('dispatch', logContext);
         await run();
         logChatSessionEvent('completed', logContext, {
@@ -2283,6 +2423,9 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         });
         throw error;
     } finally {
+        if (activeCommandId) {
+            activeProviderCommands.delete(activeCommandId);
+        }
         lease?.release();
     }
 }
@@ -2307,15 +2450,61 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
+                if (data.options?.sessionId) {
+                    const pushedToExistingSession = pushClaudeSupplement({
+                        sessionId: data.options.sessionId,
+                        content: data.command,
+                        displayContent: data.options.displayCommand,
+                        clientMessageId: data.clientMessageId,
+                        mode: 'now',
+                        writer,
+                    });
+                    if (pushedToExistingSession.success) {
+                        logChatSessionEvent('pushed_to_existing_stream', logContext);
+                        return;
+                    }
+                }
 
                 // Use Claude Agents SDK
-                await runLimitedProviderCommand({
+                void runLimitedProviderCommand({
                     data,
                     provider: 'claude',
                     writer,
                     run: () => queryClaudeSDK(data.command, data.options, writer),
                     logContext,
+                }).catch((error) => {
+                    console.error('[ERROR] Claude command failed:', error?.message || error);
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: error?.message || String(error),
+                        provider: 'claude',
+                        sessionId: data.options?.sessionId || null,
+                    }));
                 });
+            } else if (data.type === 'claude-supplement') {
+                const result = pushClaudeSupplement({
+                    sessionId: data.sessionId,
+                    content: data.content,
+                    clientMessageId: data.clientMessageId,
+                    mode: data.mode,
+                    writer,
+                });
+                if (!result.success) {
+                    writer.send({
+                        type: 'claude-supplement-ack',
+                        sessionId: data.sessionId || null,
+                        clientMessageId: data.clientMessageId || null,
+                        status: 'failed',
+                        error: result.error,
+                        timestamp: new Date().toISOString(),
+                    });
+                    writer.send(createNormalizedMessage({
+                        kind: 'error',
+                        content: result.error,
+                        provider: 'claude',
+                        sessionId: data.sessionId || null,
+                    }));
+                }
             } else if (data.type === 'cursor-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'cursor', request });
@@ -3251,17 +3440,39 @@ const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
 function getActiveWorkSummary() {
-    return {
+    const providerCommands = {
+        claude: 0,
+        codex: 0,
+        cursor: 0,
+        gemini: 0
+    };
+
+    for (const command of activeProviderCommands.values()) {
+        if (Object.prototype.hasOwnProperty.call(providerCommands, command.provider)) {
+            providerCommands[command.provider] += 1;
+        }
+    }
+
+    const providerSessions = {
         claude: getActiveClaudeSDKSessions().length,
         codex: getActiveCodexSessions().length,
         cursor: getActiveCursorSessions().length,
-        gemini: getActiveGeminiSessions().length,
+        gemini: getActiveGeminiSessions().length
+    };
+
+    return {
+        providerCommands,
+        providerSessions,
         shell: ptySessionsMap.size
     };
 }
 
 function getActiveWorkCount(summary = getActiveWorkSummary()) {
-    return Object.values(summary).reduce((total, count) => total + count, 0);
+    const activeProviderCommands = Object.values(summary.providerCommands || {})
+        .reduce((total, count) => total + count, 0);
+    const activeProviderSessions = Object.values(summary.providerSessions || {})
+        .reduce((total, count) => total + count, 0);
+    return Math.max(activeProviderCommands, activeProviderSessions) + (summary.shell || 0);
 }
 
 function waitForActiveWorkToDrain(timeoutMs) {
@@ -3340,6 +3551,7 @@ async function gracefulShutdown(signal) {
 
     runtimeSweeper.stop();
     codeHubMrPoller.stop();
+    adminAnalyticsCacheService.stop();
     closeHttpServer().catch((error) => {
         console.error('[Shutdown] Failed to close HTTP server:', error);
     });
@@ -3370,6 +3582,7 @@ async function startServer() {
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
+        adminAnalyticsCacheService.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3419,6 +3632,7 @@ async function startServer() {
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();
+            adminAnalyticsCacheService.stop();
             await stopAllPlugins();
             process.exit(0);
         };

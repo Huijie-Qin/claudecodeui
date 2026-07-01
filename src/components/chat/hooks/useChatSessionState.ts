@@ -6,6 +6,7 @@ import type { ChatMessage, Provider } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
 import { normalizedToChatMessages } from './useChatMessages';
 import {
@@ -28,7 +29,7 @@ interface UseChatSessionStateArgs {
   sendMessage: (message: unknown) => void;
   autoScrollToBottom?: boolean;
   externalMessageUpdate?: number;
-  processingSessions?: Set<string>;
+  processingSessions?: ProcessingSessions;
   resetStreamingState: () => void;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   sessionStore: SessionStore;
@@ -122,6 +123,7 @@ export function useChatSessionState({
   const [loadAllJustFinished, setLoadAllJustFinished] = useState(false);
   const [showLoadAllOverlay, setShowLoadAllOverlay] = useState(false);
   const [viewHiddenCount, setViewHiddenCount] = useState(0);
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [searchTarget, setSearchTarget] = useState<{ timestamp?: string; uuid?: string; snippet?: string } | null>(null);
@@ -352,6 +354,7 @@ export function useChatSessionState({
       setClaudeStatus(null);
       setCanAbortSession(false);
       setIsLoading(false);
+      setLoadingStartedAt(null);
       setCurrentSessionId(null);
       setPendingMessages([]);
       sessionStorage.removeItem('cursorSessionId');
@@ -409,6 +412,7 @@ export function useChatSessionState({
     if (sessionChanged) {
       setTokenBudget(null);
       setIsLoading(false);
+      setLoadingStartedAt(null);
     }
 
     setCurrentSessionId(selectedSession.id);
@@ -416,7 +420,8 @@ export function useChatSessionState({
       sessionStorage.setItem('cursorSessionId', selectedSession.id);
     }
 
-    // Check session status
+    // Check session status. The server also uses this to reconnect active Claude
+    // SDK output to the current WebSocket after a reconnect.
     if (ws) {
       sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
     }
@@ -665,14 +670,24 @@ export function useChatSessionState({
   }, [handleScroll]);
 
   useEffect(() => {
+    if (!isLoading) {
+      setLoadingStartedAt(null);
+    }
+  }, [isLoading]);
+
+  useEffect(() => {
     const activeViewSessionId = selectedSession?.id || currentSessionId;
     if (!activeViewSessionId || !processingSessions) return;
-    const shouldBeProcessing = processingSessions.has(activeViewSessionId);
+    const processingStartedAt = processingSessions.get(activeViewSessionId);
+    const shouldBeProcessing = processingStartedAt !== undefined;
+    if (shouldBeProcessing && loadingStartedAt !== processingStartedAt) {
+      setLoadingStartedAt(processingStartedAt);
+    }
     if (shouldBeProcessing && !isLoading) {
       setIsLoading(true);
       setCanAbortSession(true);
     }
-  }, [currentSessionId, isLoading, processingSessions, selectedSession?.id]);
+  }, [currentSessionId, isLoading, loadingStartedAt, processingSessions, selectedSession?.id]);
 
   // "Load all" overlay
   const prevLoadingRef = useRef(false);
@@ -786,6 +801,7 @@ export function useChatSessionState({
     isLoadingAllMessages,
     loadAllJustFinished,
     showLoadAllOverlay,
+    loadingStartedAt,
     claudeStatus,
     setClaudeStatus,
     createDiff,

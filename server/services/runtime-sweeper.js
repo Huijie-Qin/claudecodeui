@@ -1,4 +1,5 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
+
 import {
   agentSessionRuntimeManager,
   DockerCliClient,
@@ -6,6 +7,7 @@ import {
 import { resolveRuntimeMonitorConfig } from './runtime-monitor.js';
 
 const ZERO_RESULT = { inspected: 0, stopped: 0, failed: 0 };
+const SWEEP_BATCH_SIZE = 100;
 
 export function createRuntimeSweeper({
   config = resolveRuntimeMonitorConfig(),
@@ -28,50 +30,66 @@ export function createRuntimeSweeper({
     const result = { inspected: 0, stopped: 0, failed: 0 };
 
     try {
-      let candidates;
-      try {
-        candidates = await multitenancy.runtimes.listExpiredIdleRuntimes({
-          olderThanMinutes: config.idleTimeoutMinutes,
-          limit: 100,
-        });
-      } catch (error) {
-        result.failed += 1;
-        logger?.warn?.('runtime sweeper list failed', { error: error?.message });
-        return result;
-      }
-
-      for (const runtime of candidates) {
-        result.inspected += 1;
+      let cursor = null;
+      while (true) {
+        let candidates;
         try {
-          const inspected = await docker.inspectContainer(runtime.container_name);
-          if (!inspected?.running) {
-            continue;
-          }
-
-          const stopped = await runtimeManager.stopExpiredIdleRuntime({
-            runtimeId: runtime.runtime_id,
+          candidates = await multitenancy.runtimes.listExpiredIdleRuntimes({
             olderThanMinutes: config.idleTimeoutMinutes,
-          });
-          if (!stopped) {
-            continue;
-          }
-
-          result.stopped += 1;
-          logger?.info?.('runtime sweeper stopped idle runtime', {
-            runtimeId: runtime.runtime_id,
-            containerName: runtime.container_name,
+            limit: SWEEP_BATCH_SIZE,
+            cursor,
           });
         } catch (error) {
           result.failed += 1;
-          logger?.warn?.('runtime sweeper failed runtime', {
-            runtimeId: runtime.runtime_id,
-            containerName: runtime.container_name,
-            error: error?.message,
-          });
+          logger?.warn?.('runtime sweeper list failed', { error: error?.message });
+          return result;
+        }
+
+        if (!candidates.length) {
+          return result;
+        }
+
+        for (const runtime of candidates) {
+          result.inspected += 1;
+          try {
+            const inspected = await docker.inspectContainer(runtime.container_name);
+            if (!inspected?.running) {
+              continue;
+            }
+
+            const stopped = await runtimeManager.stopExpiredIdleRuntime({
+              runtimeId: runtime.runtime_id,
+              olderThanMinutes: config.idleTimeoutMinutes,
+            });
+            if (!stopped) {
+              continue;
+            }
+
+            result.stopped += 1;
+            logger?.info?.('runtime sweeper stopped idle runtime', {
+              runtimeId: runtime.runtime_id,
+              containerName: runtime.container_name,
+            });
+          } catch (error) {
+            result.failed += 1;
+            logger?.warn?.('runtime sweeper failed runtime', {
+              runtimeId: runtime.runtime_id,
+              containerName: runtime.container_name,
+              error: error?.message,
+            });
+          }
+        }
+
+        const lastCandidate = candidates.at(-1);
+        cursor = {
+          lastUsedAt: lastCandidate.last_used_at,
+          id: lastCandidate.id,
+        };
+
+        if (candidates.length < SWEEP_BATCH_SIZE) {
+          return result;
         }
       }
-
-      return result;
     } finally {
       sweepInProgress = false;
     }

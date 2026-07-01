@@ -37,6 +37,7 @@ type SidebarProjectItemProps = {
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
   onScheduledTasksListOpen?: (project: Project) => void;
+  onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
     sessionId: string,
@@ -90,6 +91,7 @@ export default function SidebarProjectItem({
   onSessionSelect,
   onScheduledTaskOpen,
   onScheduledTasksListOpen,
+  onToggleSessionFavorite,
   onDeleteSession,
   onLoadMoreSessions,
   onNewSession,
@@ -224,6 +226,27 @@ export default function SidebarProjectItem({
                 ) : (
                   <>
                     <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openScheduledTasksList();
+                      }}
+                      title={scheduledTasksTooltip}
+                    >
+                      <CalendarClock className="h-4 w-4 text-primary" />
+                    </button>
+
+                    <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onStartEditingProject(project);
+                      }}
+                    >
+                      <Edit3 className="h-4 w-4 text-primary" />
+                    </button>
+
+                    <button
                       className={cn(
                         'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
                         isStarred
@@ -247,17 +270,6 @@ export default function SidebarProjectItem({
                     </button>
 
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openScheduledTasksList();
-                      }}
-                      title={scheduledTasksTooltip}
-                    >
-                      <CalendarClock className="h-4 w-4 text-primary" />
-                    </button>
-
-                    <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -265,16 +277,6 @@ export default function SidebarProjectItem({
                       }}
                     >
                       <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
-                    </button>
-
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStartEditingProject(project);
-                      }}
-                    >
-                      <Edit3 className="h-4 w-4 text-primary" />
                     </button>
 
                     <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted/30">
@@ -375,26 +377,6 @@ export default function SidebarProjectItem({
             ) : (
               <>
                 <div
-                  className={cn(
-                    'w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center rounded cursor-pointer touch:opacity-100',
-                    isStarred ? 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20 opacity-100' : 'hover:bg-accent',
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleStarProject();
-                  }}
-                  title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
-                >
-                  <Star
-                    className={cn(
-                      'w-3 h-3 transition-colors',
-                      isStarred
-                        ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                        : 'text-muted-foreground',
-                    )}
-                  />
-                </div>
-                <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -413,6 +395,26 @@ export default function SidebarProjectItem({
                   title={t('tooltips.renameProject')}
                 >
                   <Edit3 className="h-3 w-3" />
+                </div>
+                <div
+                  className={cn(
+                    'w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center rounded cursor-pointer touch:opacity-100',
+                    isStarred ? 'hover:bg-yellow-50 dark:hover:bg-yellow-900/20 opacity-100' : 'hover:bg-accent',
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleStarProject();
+                  }}
+                  title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                >
+                  <Star
+                    className={cn(
+                      'w-3 h-3 transition-colors',
+                      isStarred
+                        ? 'text-yellow-600 dark:text-yellow-400 fill-current'
+                        : 'text-muted-foreground',
+                    )}
+                  />
                 </div>
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
@@ -452,6 +454,7 @@ export default function SidebarProjectItem({
         onProjectSelect={onProjectSelect}
         onSessionSelect={onSessionSelect}
         onScheduledTaskOpen={onScheduledTaskOpen}
+        onToggleSessionFavorite={onToggleSessionFavorite}
         onDeleteSession={onDeleteSession}
         onLoadMoreSessions={onLoadMoreSessions}
         onNewSession={onNewSession}

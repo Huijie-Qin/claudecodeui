@@ -76,7 +76,7 @@ export default function CodeEditor({
   const { t } = useTranslation('codeEditor');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
-  const [markdownPreview, setMarkdownPreview] = useState(false);
+  const [previewEnabled, setPreviewEnabled] = useState(false);
   const marketSkillName = useMemo(() => getImportedSkillNameFromPath(file.path), [file.path]);
   const [marketSkillSubmit, setMarketSkillSubmit] = useState<MarketSkillSubmitState>({
     skillName: null,
@@ -359,6 +359,13 @@ export default function CodeEditor({
     return extension === 'md' || extension === 'markdown';
   }, [file.name]);
 
+  const isHtmlFile = useMemo(() => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    return extension === 'html' || extension === 'htm';
+  }, [file.name]);
+
+  const previewMode = isMarkdownFile ? 'markdown' : isHtmlFile ? 'html' : null;
+
   const minimapExtension = useMemo(
     () => (
       createMinimapExtension({
@@ -442,6 +449,10 @@ export default function CodeEditor({
     dependency: content,
   });
 
+  useEffect(() => {
+    setPreviewEnabled(false);
+  }, [file.path]);
+
   if (loading) {
     return (
       <CodeEditorLoadingState
@@ -485,11 +496,11 @@ export default function CodeEditor({
             file={file}
             isSidebar={isSidebar}
             isFullscreen={isFullscreen}
-            isMarkdownFile={isMarkdownFile}
-            markdownPreview={markdownPreview}
+            previewMode={previewMode}
+            previewEnabled={previewEnabled}
             saving={saving}
             saveSuccess={saveSuccess}
-            onToggleMarkdownPreview={() => setMarkdownPreview((previous) => !previous)}
+            onTogglePreview={() => setPreviewEnabled((previous) => !previous)}
             onOpenSettings={() => window.openSettings?.('appearance')}
             onDownload={handleDownload}
             onSave={handleSave}
@@ -504,6 +515,8 @@ export default function CodeEditor({
               showingChanges: t('header.showingChanges'),
               editMarkdown: t('actions.editMarkdown'),
               previewMarkdown: t('actions.previewMarkdown'),
+              editHtml: t('actions.editHtml', 'Edit HTML'),
+              previewHtml: t('actions.previewHtml', 'Preview HTML'),
               settings: t('toolbar.settings'),
               download: t('actions.download'),
               save: t('actions.save'),
@@ -540,8 +553,9 @@ export default function CodeEditor({
               content={content}
               onChange={setContent}
               readOnly={isReadOnly}
-              markdownPreview={markdownPreview}
-              isMarkdownFile={isMarkdownFile}
+              previewEnabled={previewEnabled}
+              previewMode={previewMode}
+              htmlPreviewTitle={t('actions.htmlPreviewTitle', 'HTML preview')}
               isDarkMode={isDarkMode}
               fontSize={fontSize}
               showLineNumbers={showLineNumbers}

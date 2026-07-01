@@ -23,6 +23,31 @@ function resolveWorkspacePath(workspaceRoot, requestedPath = '') {
   return assertUnderRoot(workspaceRoot, target);
 }
 
+function normalizeWorkspaceDisplayPath(requestedPath, fieldName) {
+  const normalizedPath = String(requestedPath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/\/+$/g, '');
+
+  if (normalizedPath !== '/workspace' && !normalizedPath.startsWith('/workspace/')) {
+    const error = new Error(`${fieldName} must be /workspace or start with /workspace/`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return normalizedPath === '/workspace'
+    ? ''
+    : normalizedPath.slice('/workspace/'.length);
+}
+
+function resolveWorkspaceDisplayPath(workspaceRoot, requestedPath, fieldName) {
+  return resolveWorkspacePath(
+    workspaceRoot,
+    normalizeWorkspaceDisplayPath(requestedPath, fieldName),
+  );
+}
+
 function toWorkspaceRelativePath(workspaceRoot, targetPath) {
   return path.relative(path.resolve(workspaceRoot), path.resolve(targetPath)).split(path.sep).join('/');
 }
@@ -55,8 +80,8 @@ export async function moveWorkspaceItem({
   }
 
   const root = path.resolve(workspaceRoot);
-  const resolvedSourcePath = resolveWorkspacePath(root, sourcePath);
-  const resolvedTargetDirectory = resolveWorkspacePath(root, targetDirectory || '');
+  const resolvedSourcePath = resolveWorkspaceDisplayPath(root, sourcePath, 'sourcePath');
+  const resolvedTargetDirectory = resolveWorkspaceDisplayPath(root, targetDirectory, 'targetDirectory');
 
   if (resolvedSourcePath === root) {
     const error = new Error('Cannot move workspace root');

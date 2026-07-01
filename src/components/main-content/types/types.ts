@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 
 import type { AppTab, Project, ProjectSession } from '../../../types/app';
+import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
 export type SessionLifecycleHandler = (sessionId?: string | null) => void;
 
@@ -49,7 +50,7 @@ export type MainContentProps = {
   onSessionInactive: SessionLifecycleHandler;
   onSessionProcessing: SessionLifecycleHandler;
   onSessionNotProcessing: SessionLifecycleHandler;
-  processingSessions: Set<string>;
+  processingSessions: ProcessingSessions;
   onReplaceTemporarySession: SessionLifecycleHandler;
   onNavigateToSession: (targetSessionId: string) => void;
   onShowSettings: () => void;

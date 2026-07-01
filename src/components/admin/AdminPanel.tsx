@@ -1,19 +1,37 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { Check, ChevronDown, Copy, KeyRound, Plus, RefreshCw, Search, Shield, Trash2, UserMinus, UserPlus, X } from 'lucide-react';
+import {
+  BarChart3,
+  Building2,
+  Check,
+  ChevronDown,
+  Code2,
+  Copy,
+  Database,
+  KeyRound,
+  PackagePlus,
+  Plus,
+  RefreshCw,
+  Search,
+  Server,
+  Trash2,
+  UserMinus,
+  UserPlus,
+  Users,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
 import { useTenant } from '../../contexts/TenantContext';
 import { copyTextToClipboard } from '../../utils/clipboard';
+import { cn } from '../../lib/utils';
 import {
   Button,
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-  Dialog,
-  DialogContent,
-  DialogTitle,
   Input,
   Tooltip,
 } from '../../shared/view/ui';
@@ -70,10 +88,26 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminPanelProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'runtimes' | 'sqlCheck';
+
+type AdminTabConfig = {
+  id: AdminTab;
+  labelKey: string;
+  defaultLabel: string;
+  icon: LucideIcon;
 };
+
+const ADMIN_TABS: AdminTabConfig[] = [
+  { id: 'users', labelKey: 'tabs.users', defaultLabel: 'Users', icon: Users },
+  { id: 'tenants', labelKey: 'tabs.tenants', defaultLabel: 'Tenant Access', icon: Building2 },
+  { id: 'claudeEnv', labelKey: 'tabs.claudeEnv', defaultLabel: 'Claude Env', icon: KeyRound },
+  { id: 'mcpPresets', labelKey: 'tabs.mcpPresets', defaultLabel: 'MCP Server Presets', icon: Server },
+  { id: 'skillPresets', labelKey: 'tabs.skillPresets', defaultLabel: 'Skill Presets', icon: PackagePlus },
+  { id: 'sqlCheck', labelKey: 'tabs.sqlCheck', defaultLabel: 'SQL Check', icon: Database },
+  { id: 'runtimes', labelKey: 'tabs.runtimes', defaultLabel: 'Runtime Monitor', icon: RefreshCw },
+  { id: 'analytics', labelKey: 'tabs.analytics', defaultLabel: 'Analytics', icon: BarChart3 },
+  { id: 'aiCode', labelKey: 'tabs.aiCode', defaultLabel: 'AI Code', icon: Code2 },
+];
 
 type AdminTenantsPayload = {
   tenants?: AdminTenant[];
@@ -322,7 +356,7 @@ function createTenantCodeDraft(tenant: AdminTenant): TenantCodeDraft {
   };
 }
 
-export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
+export default function AdminPanel() {
   const { t } = useTranslation('admin');
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -366,7 +400,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
-  const [activeTab, setActiveTab] = useState<'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'runtimes' | 'sqlCheck'>('users');
+  const [activeTab, setActiveTab] = useState<AdminTab>('users');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -451,11 +485,9 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   }, [t]);
 
   useEffect(() => {
-    if (open) {
-      void load();
-      void loadClaudeEnvUsers();
-    }
-  }, [load, loadClaudeEnvUsers, open]);
+    void load();
+    void loadClaudeEnvUsers();
+  }, [load, loadClaudeEnvUsers]);
 
   const createTenant = async () => {
     const code = normalizeTenantCode(tenantCode);
@@ -1156,82 +1188,47 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="relative max-h-[88vh] max-w-6xl overflow-hidden p-0">
-        <DialogTitle>{t('title')}</DialogTitle>
-        {toast ? (
-          <div
-            className={`animate-in slide-in-from-bottom-2 pointer-events-none absolute bottom-4 right-4 z-20 flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white shadow-lg ${
-              toast.type === 'success' ? 'bg-emerald-600' : 'bg-destructive'
-            }`}
-            role="status"
-            aria-live="polite"
-          >
-            {toast.type === 'success' ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
-            <span>{toast.message}</span>
-          </div>
-        ) : null}
-        <div className="flex max-h-[88vh] flex-col">
-          <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <Shield className="h-4 w-4" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
-              <p className="truncate text-xs text-muted-foreground">{t('subtitle')}</p>
-            </div>
-          </div>
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
+      {toast ? (
+        <div
+          className={`animate-in slide-in-from-bottom-2 pointer-events-none absolute bottom-4 right-4 z-20 flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white shadow-lg ${
+            toast.type === 'success' ? 'bg-emerald-600' : 'bg-destructive'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {toast.type === 'success' ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+          <span>{toast.message}</span>
+        </div>
+      ) : null}
 
-          <div className="flex flex-wrap gap-1 border-b border-border px-5 py-2">
-            <Button
-              variant={activeTab === 'users' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('users')}
-            >
-              {t('tabs.users')}
-            </Button>
-            <Button
-              variant={activeTab === 'tenants' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('tenants')}
-            >
-              {t('tabs.tenants')}
-            </Button>
-            <Button
-              variant={activeTab === 'claudeEnv' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('claudeEnv')}
-            >
-              {t('tabs.claudeEnv')}
-            </Button>
-            <Button
-              variant={activeTab === 'mcpPresets' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('mcpPresets')}
-            >
-              {t('tabs.mcpPresets')}
-            </Button>
-            <Button
-              variant={activeTab === 'skillPresets' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('skillPresets')}
-            >
-              {t('tabs.skillPresets', { defaultValue: 'Skill Presets' })}
-            </Button>
-            <Button
-              variant={activeTab === 'sqlCheck' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('sqlCheck')}
-            >
-              {t('tabs.sqlCheck')}
-            </Button>
-            <Button
-              variant={activeTab === 'runtimes' ? 'default' : 'ghost'}
-              size="sm"
-              onClick={() => setActiveTab('runtimes')}
-            >
-              {t('tabs.runtimes')}
-            </Button>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="shrink-0 border-b border-border bg-muted/20 lg:w-64 lg:border-b-0 lg:border-r">
+          <nav className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible lg:p-3" aria-label={t('title')}>
+            {ADMIN_TABS.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+
+              return (
+                <Button
+                  key={tab.id}
+                  variant="ghost"
+                  className={cn(
+                    'h-10 shrink-0 justify-start px-3 text-muted-foreground lg:w-full',
+                    isActive && 'bg-primary text-primary-foreground shadow hover:bg-primary/90 hover:text-primary-foreground',
+                  )}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{t(tab.labelKey, { defaultValue: tab.defaultLabel })}</span>
+                </Button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="hidden">
             <Button
               variant={activeTab === 'analytics' ? 'default' : 'ghost'}
               size="sm"
@@ -1249,19 +1246,19 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           </div>
 
           {activeTab === 'analytics' ? (
-            <div className="overflow-y-auto px-5 py-4">
+            <div className="h-full overflow-y-auto px-5 py-4">
               <AnalyticsDashboardTab />
             </div>
           ) : null}
 
           {activeTab === 'aiCode' ? (
-            <div className="overflow-y-auto px-5 py-4">
+            <div className="h-full overflow-y-auto px-5 py-4">
               <AiCodeStatsTab tenants={tenants} users={users} />
             </div>
           ) : null}
 
           {activeTab === 'users' ? (
-            <div className="space-y-5 overflow-y-auto px-5 py-4">
+            <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('users.createTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1550,7 +1547,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           ) : null}
 
           {activeTab === 'claudeEnv' ? (
-            <div className="space-y-5 overflow-y-auto px-5 py-4">
+            <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
@@ -1826,7 +1823,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           ) : null}
 
           {activeTab === 'tenants' ? (
-            <div className="space-y-5 overflow-y-auto px-5 py-4">
+            <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('tenants.createTitle')}</h3>
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
@@ -2026,7 +2023,7 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           ) : null}
 
           {activeTab === 'mcpPresets' ? (
-            <div className="overflow-y-auto px-5 py-4">
+            <div className="h-full overflow-y-auto px-5 py-4">
               <McpPresetsTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : null}
@@ -2038,18 +2035,18 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
           ) : null}
 
           {activeTab === 'sqlCheck' ? (
-            <div className="overflow-y-auto px-5 py-4">
+            <div className="h-full overflow-y-auto px-5 py-4">
               <SqlCheckConfigTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : null}
 
           {activeTab === 'runtimes' ? (
-            <div className="overflow-y-auto px-5 py-4">
+            <div className="h-full overflow-y-auto px-5 py-4">
               <RuntimeMonitorTab />
             </div>
           ) : null}
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

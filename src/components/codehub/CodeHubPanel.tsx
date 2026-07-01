@@ -167,8 +167,22 @@ function normalizeFilePath(value: string | null | undefined): string {
     .replace(/^\/+|\/+$/g, '');
 }
 
-function toRepoRelativeSavedPath(savedPath: string | null | undefined, repoRelativePath: string): string | null {
-  const normalizedSavedPath = normalizeFilePath(savedPath);
+function toRepoRelativeSavedPath(
+  savedPath: string | null | undefined,
+  repoRelativePath: string,
+  workspacePath: string,
+): string | null {
+  const normalizedWorkspacePath = normalizeFilePath(workspacePath);
+  const normalizedInputPath = normalizeFilePath(savedPath);
+  const normalizedSavedPath = (() => {
+    if (normalizedInputPath.startsWith('/workspace/')) {
+      return normalizedInputPath.slice('/workspace/'.length);
+    }
+    if (normalizedWorkspacePath && normalizedInputPath.startsWith(`${normalizedWorkspacePath}/`)) {
+      return normalizedInputPath.slice(normalizedWorkspacePath.length + 1);
+    }
+    return normalizedInputPath;
+  })();
   const normalizedRepoPath = normalizeFilePath(repoRelativePath);
   if (!normalizedSavedPath) return null;
   if (!normalizedRepoPath) return normalizedSavedPath;
@@ -217,6 +231,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [isLoading, setIsLoading] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const initializedRepoIdRef = useRef<number | null>(null);
+  const conflictStateRef = useRef<ConflictState | null>(null);
 
   const clearDiffPreview = useCallback(() => {
     setActiveFile('');
@@ -254,6 +269,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     [activeMergeRequests, selectedMrProjectId, sourceBranch, targetBranch],
   );
   const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
+  const canOpenPushStep = hasActiveCommitBatch;
+  const canOpenMrStep = sourceBranchPushedAtHead || remoteBranchesAtHead.length > 0 || Boolean(pushResult?.success);
+  const canRestoreLastStash = Boolean(lastStash && !pullPreview && !conflictState);
   const pullPreviewRecommendation = useMemo(() => {
     if (!pullPreview) return null;
     const recommendation = pullPreview.recommendation || (pullPreview.dirty ? 'commit-first' : 'pull');
@@ -322,6 +340,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       const conflictFiles = nextChanges
         .filter((change: CodeHubChange) => change.status === 'conflict')
         .map((change: CodeHubChange) => change.path);
+      if (conflictFiles.length === 0 && conflictStateRef.current?.source === 'stash') {
+        setLastStash(null);
+      }
       setConflictState((current) => {
         if (conflictFiles.length === 0) return null;
         return {
@@ -343,7 +364,11 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       const detail = (event as CustomEvent<FileSavedEventDetail>).detail || {};
       if (detail.workspaceId && String(detail.workspaceId) !== String(workspaceId)) return;
 
-      const repoFilePath = toRepoRelativeSavedPath(detail.path, selectedRepo.relativePath);
+      const repoFilePath = toRepoRelativeSavedPath(
+        detail.path,
+        selectedRepo.relativePath,
+        selectedProject.fullPath || selectedProject.path || '',
+      );
       if (!repoFilePath || !conflictState.files.includes(repoFilePath)) return;
 
       void (async () => {
@@ -369,7 +394,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
 
     window.addEventListener('cloudcli:file-saved', handleFileSaved);
     return () => window.removeEventListener('cloudcli:file-saved', handleFileSaved);
-  }, [conflictState, loadChanges, selectedRepo, selectedRepoId, t, workspaceId]);
+  }, [conflictState, loadChanges, selectedProject.fullPath, selectedProject.path, selectedRepo, selectedRepoId, t, workspaceId]);
 
   const loadRemoteBranches = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
@@ -408,6 +433,10 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   useEffect(() => {
     void loadRepositories();
   }, [loadRepositories]);
+
+  useEffect(() => {
+    conflictStateRef.current = conflictState;
+  }, [conflictState]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -639,16 +668,54 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
           stashSubject: payload.stashSubject,
         });
       }
-      setNotice(payload.stashed
-        ? t('pull.options.stashSuccess', { ref: payload.stashRef || t('pull.options.stashFallbackRef') })
-        : t('pull.options.stashNoChanges'));
+      if (!payload.stashed) {
+        setNotice(t('pull.options.stashNoChanges'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+
+      const pullResponse = await api.codehub.pull(workspaceId, selectedRepoId, { branch: pullBranch });
+      const pullPayload = await pullResponse.json().catch(() => ({}));
+      if (!pullResponse.ok) {
+        setError(pullPayload.error || pullPayload.message || t('errors.pullFailed'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+      if (pullPayload.localChangesBlockPull) {
+        setError(t('errors.pullLocalChangesWouldBeOverwritten', {
+          files: (pullPayload.changedFiles || []).length > 0
+            ? (pullPayload.changedFiles || []).join(', ')
+            : t('pull.conflictFilesUnknown'),
+        }));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+      if (pullPayload.conflict) {
+        const files = pullPayload.conflictFiles || [];
+        setPullPreview(null);
+        setConflictState({ source: 'pull', files });
+        setNotice(t('pull.conflictState.pullNotice'));
+        await loadRepositories();
+        await loadChanges();
+        return;
+      }
+
+      setPullPreview(null);
+      setConflictState(null);
+      setNotice(t('pull.options.stashAndPullSuccess', {
+        ref: payload.stashRef || t('pull.options.stashFallbackRef'),
+        branch: pullPayload.branch || pullBranch || selectedRepo?.branch || '-',
+      }));
       await loadRepositories();
       await loadChanges();
-      await previewPull();
+      showSuccessToast(t('toast.pullSuccess', { branch: pullPayload.branch || pullBranch || selectedRepo?.branch || '-' }));
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, loadChanges, loadRepositories, pullBranch, selectedRepo?.branch, selectedRepoId, showSuccessToast, t, workspaceId]);
 
   const restoreLastStash = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !lastStash?.stashRef) return;
@@ -676,14 +743,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       }
       setLastStash(null);
       setConflictState(null);
+      setPullPreview(null);
       setNotice(t('pull.restore.success', { ref: lastStash.stashRef }));
       await loadRepositories();
       await loadChanges();
-      await previewPull();
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, isReadOnly, lastStash, loadChanges, loadRepositories, previewPull, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, isReadOnly, lastStash, loadChanges, loadRepositories, selectedRepoId, t, workspaceId]);
 
   const clearLocalChanges = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || isReadOnly || !pullPreview) return;
@@ -744,13 +811,34 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       setSelectedFiles([]);
       setMrResult(null);
       clearDiffPreview();
+      if (payload.commitSha) {
+        setCommitRecords((current) => {
+          if (current.some((commit) => commit.commitSha === payload.commitSha)) {
+            return current;
+          }
+          return [
+            ...current,
+            {
+              commitSha: payload.commitSha,
+              commitMessage: payload.commitMessage || commitMessage,
+              committedAt: new Date().toISOString(),
+              additions: payload.additions,
+              deletions: payload.deletions,
+              filesChanged: payload.filesChanged,
+            },
+          ];
+        });
+        setHeadSha(payload.commitSha);
+      }
+      setWorkflowStep('push');
       await loadRepositories();
       await loadChanges();
+      await loadRemoteBranches();
       await loadSubmissionCommits();
     } finally {
       setIsWorking(false);
     }
-  }, [clearDiffPreview, commitMessage, loadChanges, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, commitMessage, loadChanges, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedFiles, selectedRepoId, t, workspaceId]);
 
   const pushBranch = useCallback(async () => {
     if (!workspaceId || !selectedRepoId || commitRecords.length === 0) return;
@@ -1011,14 +1099,22 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                         </Button>
                       </div>
                     </div>
-                    {pullPreview ? (
-                      <div className={`mt-3 space-y-3 rounded-md border px-3 py-2 text-xs ${
-                        pullPreview.hasConflicts
-                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                          : 'border-border bg-muted/40 text-muted-foreground'
-                      }`}
-                      >
-                        <div>
+                  </div>
+                </div>
+                {pullPreview ? (
+                  <div className={`mt-4 overflow-hidden rounded-md border text-xs ${
+                    pullPreview.hasConflicts
+                      ? 'border-amber-500/30 bg-amber-500/[0.06]'
+                      : 'border-border bg-muted/30'
+                  }`}
+                  >
+                    <div className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 ${
+                      pullPreview.hasConflicts ? 'border-amber-500/20' : 'border-border'
+                    }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-foreground">{t('pull.previewResult')}</div>
+                        <div className="mt-1 text-muted-foreground">
                           {t('pull.summary', {
                             branch: pullPreview.branch || '-',
                             remote: pullPreview.remote || 'origin',
@@ -1027,92 +1123,122 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                             behind: pullPreview.behind || 0,
                           })}
                         </div>
-                        {pullPreviewRecommendation ? (
-                          <div className="font-medium text-foreground">{pullPreviewRecommendation}</div>
-                        ) : null}
-                        {pullPreview.dirty ? (
-                          <div>
-                            {t('pull.localChanges', {
-                              files: (pullPreview.changedFiles || []).length > 0
-                                ? (pullPreview.changedFiles || []).join(', ')
-                                : t('pull.localChangesUnknown'),
-                            })}
-                          </div>
-                        ) : (
-                          <div>{t('pull.clean')}</div>
-                        )}
-                        {pullPreview.hasConflicts ? (
-                          <div className="space-y-3">
-                            <div>
-                              <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
-                              <div className="mt-1 break-words">
-                                {t('pull.conflictFiles', {
-                                  files: (pullPreview.conflictFiles || []).length > 0
-                                    ? (pullPreview.conflictFiles || []).join(', ')
-                                    : t('pull.conflictFilesUnknown'),
-                                })}
-                              </div>
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-3">
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
-                                <Button className="mt-2 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
-                                  {t('pull.options.commitFirstButton')}
-                                </Button>
-                              </div>
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
-                                <div className="mt-2 grid gap-2">
-                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void stashLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
-                                    {t('pull.options.stashButton')}
-                                  </Button>
-                                  <Button className="w-full" variant="outline" size="sm" onClick={() => void clearLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
-                                    {t('pull.options.clearButton')}
-                                  </Button>
-                                </div>
-                              </div>
-                              <div className="rounded-md border border-border/70 bg-background/70 p-2">
-                                <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
-                                <div className="mt-1 text-muted-foreground">
-                                  {pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedDescription') : t('pull.options.manualDescription')}
-                                </div>
-                                <Button
-                                  className="mt-2 w-full"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => void pullRepository()}
-                                  disabled={isReadOnly || isWorking || Boolean(pullPreview.localChangesBlockPull)}
-                                  title={pullPreview.localChangesBlockPull ? t('pull.options.manualBlockedTitle') : undefined}
-                                >
-                                  {t('pull.options.manualButton')}
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
                       </div>
-                    ) : null}
-                    {lastStash ? (
-                      <div className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-800 dark:text-sky-200">
-                        <div className="font-medium text-foreground">
-                          {t('pull.restore.title', { ref: lastStash.stashRef })}
+                      <div className={`rounded-full px-2.5 py-1 font-medium ${
+                        pullPreview.hasConflicts
+                          ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200'
+                          : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      }`}
+                      >
+                        {pullPreview.hasConflicts ? t('pull.previewNeedsAction') : t('pull.previewReady')}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className={`min-w-0 px-4 py-3 ${pullPreview.hasConflicts ? 'lg:border-r lg:border-amber-500/20' : 'lg:border-r lg:border-border'}`}>
+                        <div className="text-xs font-medium text-foreground">{t('pull.recommendationTitle')}</div>
+                        <div className="mt-1 text-muted-foreground">{pullPreviewRecommendation}</div>
+                      </div>
+                      <div className="min-w-0 px-4 py-3">
+                        <div className="text-xs font-medium text-foreground">{t('pull.localStateTitle')}</div>
+                        <div className="mt-1 break-words text-muted-foreground">
+                          {pullPreview.dirty ? (
+                            <span>
+                              {t('pull.localChanges', {
+                                files: (pullPreview.changedFiles || []).length > 0
+                                  ? (pullPreview.changedFiles || []).join(', ')
+                                  : t('pull.localChangesUnknown'),
+                              })}
+                            </span>
+                          ) : (
+                            <span>{t('pull.clean')}</span>
+                          )}
                         </div>
-                        <div className="mt-1">{t('pull.restore.description')}</div>
-                        <Button
-                          className="mt-2"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void restoreLastStash()}
-                          disabled={isReadOnly || isWorking}
-                        >
-                          {t('pull.restore.button')}
-                        </Button>
+                      </div>
+                    </div>
+
+                    {pullPreview.hasConflicts ? (
+                      <div className="border-t border-amber-500/20 px-4 py-3">
+                        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-medium text-foreground">{t('pull.conflictsTitle')}</div>
+                            <div className="mt-1 break-words text-muted-foreground">
+                              {t('pull.conflictFiles', {
+                                files: (pullPreview.conflictFiles || []).length > 0
+                                  ? (pullPreview.conflictFiles || []).join(', ')
+                                  : t('pull.conflictFilesUnknown'),
+                              })}
+                            </div>
+                          </div>
+                          <div className="text-xs font-medium text-muted-foreground">{t('pull.optionsTitle')}</div>
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
+                            <div className="font-medium text-foreground">{t('pull.options.commitFirstTitle')}</div>
+                            <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.commitFirstDescription')}</div>
+                            <Button className="mt-3 w-full" variant="outline" size="sm" onClick={openCommitForPullPreview} disabled={isReadOnly || isWorking}>
+                              {t('pull.options.commitFirstButton')}
+                            </Button>
+                          </div>
+                          <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
+                            <div className="font-medium text-foreground">{t('pull.options.stashTitle')}</div>
+                            <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.stashDescription')}</div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                              <Button className="w-full" variant="outline" size="sm" onClick={() => void stashLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                {t('pull.options.stashButton')}
+                              </Button>
+                              <Button className="w-full" variant="outline" size="sm" onClick={() => void clearLocalChanges()} disabled={isReadOnly || isWorking || !pullPreview.dirty}>
+                                {t('pull.options.clearButton')}
+                              </Button>
+                            </div>
+                          </div>
+                          {pullPreview.localChangesBlockPull ? (
+                            <div className="min-h-[140px] rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                              <div className="font-medium text-foreground">{t('pull.options.manualBlockedTitle')}</div>
+                              <div className="mt-1 text-muted-foreground">{t('pull.options.manualBlockedDescription')}</div>
+                            </div>
+                          ) : (
+                            <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
+                              <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
+                              <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
+                              <Button
+                                className="mt-3 w-full"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void pullRepository()}
+                                disabled={isReadOnly || isWorking}
+                              >
+                                {t('pull.options.manualButton')}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ) : null}
                   </div>
-                </div>
+                ) : null}
+                {lastStash ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-xs text-sky-800 dark:text-sky-200">
+                    <div className="min-w-0">
+                      <div className="font-medium text-foreground">
+                        {t('pull.restore.title', { ref: lastStash.stashRef })}
+                      </div>
+                      <div className="mt-1">
+                        {conflictState
+                          ? t('pull.restore.waitForConflict')
+                          : canRestoreLastStash ? t('pull.restore.description') : t('pull.restore.waitForPull')}
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void restoreLastStash()}
+                      disabled={isReadOnly || isWorking || !canRestoreLastStash}
+                    >
+                      {t('pull.restore.button')}
+                    </Button>
+                  </div>
+                ) : null}
               </section>
 
               <section className="rounded-md border border-border bg-background p-3">
@@ -1329,15 +1455,29 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition hover:bg-muted/50 ${stepClassName('commit', workflowStep, commitRecords.length > 0)}`}
+                onClick={() => setWorkflowStep('commit')}
+              >
                 {t('workflow.steps.commit')}
-              </div>
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}>
+              </button>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60 ${stepClassName('push', workflowStep, sourceBranchPushedAtHead)}`}
+                onClick={() => setWorkflowStep('push')}
+                disabled={!canOpenPushStep}
+              >
                 {t('workflow.steps.push')}
-              </div>
-              <div className={`rounded-md border px-3 py-2 text-sm ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}>
+              </button>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition enabled:hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60 ${stepClassName('mr', workflowStep, Boolean(mrResult?.success))}`}
+                onClick={() => setWorkflowStep('mr')}
+                disabled={!canOpenMrStep}
+              >
                 {t('workflow.steps.mr')}
-              </div>
+              </button>
             </div>
 
             {workflowStep === 'commit' ? (
