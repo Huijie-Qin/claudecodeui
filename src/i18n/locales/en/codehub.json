@@ -169,6 +169,7 @@
   "errors": {
     "loadRepositories": "Failed to load CodeHub repositories",
     "loadChanges": "Failed to load repository changes",
+    "repositoryMissing": "This CodeHub repository folder no longer exists in the workspace. The repository list has been refreshed.",
     "loadDiff": "Failed to load diff",
     "cloneRequired": "Repository URL and directory are required",
     "cloneFailed": "Failed to clone repository",

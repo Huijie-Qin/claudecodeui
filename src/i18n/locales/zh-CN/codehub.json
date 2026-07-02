@@ -169,6 +169,7 @@
   "errors": {
     "loadRepositories": "加载 CodeHub 代码仓失败",
     "loadChanges": "加载代码仓变更失败",
+    "repositoryMissing": "该 CodeHub 代码仓文件夹已不在工作区中，代码仓列表已刷新。",
     "loadDiff": "加载 diff 失败",
     "cloneRequired": "代码仓地址和目录不能为空",
     "cloneFailed": "克隆代码仓失败",

@@ -362,6 +362,18 @@ async function scanGitRepositories(workspacePath, { maxDepth = 4 } = {}) {
   return found;
 }
 
+async function isGitRepositoryPath(repoPath) {
+  try {
+    const [repoStat, gitStat] = await Promise.all([
+      fs.stat(repoPath),
+      fs.stat(path.join(repoPath, '.git')),
+    ]);
+    return repoStat.isDirectory() && gitStat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function resolveRepository(req, { requireEdit = false } = {}) {
   const { workspace } = resolveWorkspace(req, { requireEdit });
   const userId = getRequestUserId(req);
@@ -376,6 +388,9 @@ async function resolveRepository(req, { requireEdit = false } = {}) {
     throw createHttpError('CodeHub workspace repository not found', 404);
   }
   const repoPath = assertInside(workspace.path, path.resolve(workspace.path, repository.repo_relative_path));
+  if (!await isGitRepositoryPath(repoPath)) {
+    throw createHttpError('CodeHub repository folder no longer exists in the workspace', 404);
+  }
   return { workspace, userId, repository, repoPath };
 }
 
@@ -488,6 +503,9 @@ router.get('/workspaces/:workspaceId/repositories', async (req, res) => {
     const repositories = await Promise.all(
       Array.from(existingByPath.values()).map(async (repo) => {
         const repoPath = assertInside(workspace.path, path.resolve(workspace.path, repo.repo_relative_path));
+        if (!await isGitRepositoryPath(repoPath)) {
+          return null;
+        }
         const summary = await codeHubGitService.getRepositorySummary(repoPath).catch(() => ({
           branch: '',
           remoteUrl: repo.repository_url,
@@ -507,7 +525,7 @@ router.get('/workspaces/:workspaceId/repositories', async (req, res) => {
         };
       }),
     );
-    res.json({ repositories });
+    res.json({ repositories: repositories.filter(Boolean) });
   } catch (error) {
     if (error?.statusCode) return handleWorkspaceError(res, error);
     return sendRouteError(res, error, 'Failed to list CodeHub repositories');

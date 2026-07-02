@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import type { Project } from '../../types/app';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { api } from '../../utils/api';
+import { subscribeProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
 import CodeHubSideBySideDiff from './CodeHubSideBySideDiff';
 
@@ -323,6 +324,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     try {
       const response = await api.codehub.changes(workspaceId, selectedRepoId);
       if (!response.ok) {
+        if (response.status === 404) {
+          setChanges([]);
+          setSelectedFiles([]);
+          clearDiffPreview();
+          setError(t('errors.repositoryMissing'));
+          await loadRepositories();
+          return;
+        }
         setError(await readError(response, t('errors.loadChanges')));
         return;
       }
@@ -355,7 +364,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       console.error('[CodeHubPanel] Failed to load changes:', caughtError);
       setError(t('errors.loadChanges'));
     }
-  }, [selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, loadRepositories, selectedRepoId, t, workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !selectedRepoId || !selectedRepo || !conflictState) return undefined;
@@ -433,6 +442,14 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   useEffect(() => {
     void loadRepositories();
   }, [loadRepositories]);
+
+  useEffect(() => {
+    return subscribeProjectFilesChanged((event) => {
+      if (event.reason !== 'delete') return;
+      if (event.workspaceId && String(event.workspaceId) !== String(workspaceId)) return;
+      void loadRepositories();
+    });
+  }, [loadRepositories, workspaceId]);
 
   useEffect(() => {
     conflictStateRef.current = conflictState;
