@@ -71,6 +71,7 @@ import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatab
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
+import {noApiCache} from './middleware/no-api-cache.js';
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
 import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
@@ -627,8 +628,8 @@ app.get('/health/active-work', (req, res) => {
     });
 });
 
-// Optional API key validation (if configured)
-app.use('/api', validateApiKey);
+// Dynamic API responses must always reflect current state.
+app.use('/api', noApiCache, validateApiKey);
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
