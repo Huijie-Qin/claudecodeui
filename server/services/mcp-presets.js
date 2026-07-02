@@ -156,21 +156,38 @@ function normalizeTargetTenantIds(targetTenantIds) {
   return ids;
 }
 
-function copyPresetTestState(multitenancy, { sourcePreset, targetPreset, targetTenantId, userId }) {
-  if (!sourcePreset.last_test_status) {
-    return targetPreset;
+function restoreCopiedPresetState(multitenancy, { sourcePreset, targetPreset, targetTenantId, userId }) {
+  let restoredPreset = targetPreset;
+
+  if (sourcePreset.last_test_status) {
+    restoredPreset = multitenancy.mcpPresets.recordPresetTest({
+      tenantId: targetTenantId,
+      presetId: targetPreset.id,
+      status: sourcePreset.last_test_status,
+      error: sourcePreset.last_test_error || null,
+      toolCount: Number(sourcePreset.tool_count || 0),
+      tools: Array.isArray(sourcePreset.tools) ? sourcePreset.tools : [],
+      dockerCompatible: sourcePreset.docker_compatible === 1 || sourcePreset.docker_compatible === true,
+      updatedByUserId: userId,
+    });
   }
 
-  return multitenancy.mcpPresets.recordPresetTest({
-    tenantId: targetTenantId,
-    presetId: targetPreset.id,
-    status: sourcePreset.last_test_status,
-    error: sourcePreset.last_test_error || null,
-    toolCount: Number(sourcePreset.tool_count || 0),
-    tools: Array.isArray(sourcePreset.tools) ? sourcePreset.tools : [],
-    dockerCompatible: sourcePreset.docker_compatible === 1 || sourcePreset.docker_compatible === true,
-    updatedByUserId: userId,
-  });
+  const status = normalizeStatus(sourcePreset.status, 'draft');
+  if (status === 'published') {
+    restoredPreset = multitenancy.mcpPresets.publishPreset({
+      tenantId: targetTenantId,
+      presetId: targetPreset.id,
+      updatedByUserId: userId,
+    });
+  } else if (status === 'disabled') {
+    restoredPreset = multitenancy.mcpPresets.disablePreset({
+      tenantId: targetTenantId,
+      presetId: targetPreset.id,
+      updatedByUserId: userId,
+    });
+  }
+
+  return restoredPreset;
 }
 
 function logPresetTest(event, details = {}) {
@@ -632,7 +649,7 @@ export function createMcpPresetService({
             name: sourcePreset.name,
           });
           const status = normalizeStatus(sourcePreset.status, 'draft');
-          let targetPreset = existingPreset
+          const targetPreset = existingPreset
             ? multitenancy.mcpPresets.updatePreset({
                 tenantId: targetTenantId,
                 presetId: existingPreset.id,
@@ -654,12 +671,6 @@ export function createMcpPresetService({
                 status,
                 createdByUserId: normalizedUserId,
               });
-          targetPreset = copyPresetTestState(multitenancy, {
-            sourcePreset,
-            targetPreset,
-            targetTenantId,
-            userId: normalizedUserId,
-          });
 
           if (sourceHelperScript) {
             savePresetHelperScript({
@@ -677,9 +688,15 @@ export function createMcpPresetService({
             });
           }
 
+          const restoredPreset = restoreCopiedPresetState(multitenancy, {
+            sourcePreset,
+            targetPreset,
+            targetTenantId,
+            userId: normalizedUserId,
+          });
           const finalPreset = multitenancy.mcpPresets.getPresetById({
             tenantId: targetTenantId,
-            presetId: targetPreset.id,
+            presetId: restoredPreset.id,
           });
           results.push({
             tenantId: targetTenantId,
@@ -688,7 +705,7 @@ export function createMcpPresetService({
               finalPreset,
               getPresetHelperScript(multitenancy, {
                 tenantId: targetTenantId,
-                presetId: targetPreset.id,
+                presetId: restoredPreset.id,
               }),
             ),
           });

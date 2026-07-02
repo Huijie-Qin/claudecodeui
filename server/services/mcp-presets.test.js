@@ -448,8 +448,16 @@ test('admin preset copy preserves published status and test metadata', () => {
       description: 'Search published docs',
       type: 'http',
       url: 'https://mcp.internal/published',
+      headersHelper: 'python3 auth.py',
       preinstall: true,
     },
+  });
+  service.uploadHelperScript({
+    tenantId: sourceTenant.id,
+    presetId: sourcePreset.id,
+    userId: adminId,
+    originalName: 'auth.py',
+    content: 'print("source")\n',
   });
   multitenancy.mcpPresets.recordPresetTest({
     tenantId: sourceTenant.id,
@@ -495,6 +503,7 @@ test('admin preset copy preserves published status and test metadata', () => {
   assert.equal(updatedResult.preset.lastTestStatus, 'healthy');
   assert.equal(updatedResult.preset.toolCount, 2);
   assert.equal(updatedResult.preset.dockerCompatible, true);
+  assert.equal(updatedResult.preset.helperScript.fileName, 'auth.py');
   assert.deepEqual(updatedResult.preset.tools.map((tool) => tool.name), ['search_docs', 'read_doc']);
   assert.deepEqual(workspacePresets.map((preset) => preset.name), ['published_knowledge']);
 });
