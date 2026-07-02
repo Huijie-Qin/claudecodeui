@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
+import CurrentUserBadge from '../auth/view/CurrentUserBadge';
 
 import AdminPanel from './AdminPanel';
 import { isSystemAdminUser } from './adminPanelUtils';
@@ -40,6 +41,10 @@ export default function AdminPage() {
           <h1 className="truncate text-base font-semibold text-foreground">{t('title')}</h1>
           <p className="truncate text-xs text-muted-foreground">{t('subtitle')}</p>
         </div>
+        <CurrentUserBadge
+          className="ml-auto max-w-[34vw] shrink-0 px-2 py-1.5 sm:max-w-[220px] sm:px-2.5"
+          textClassName="text-xs sm:text-sm"
+        />
       </header>
       <main className="min-h-0 flex-1">
         <AdminPanel />

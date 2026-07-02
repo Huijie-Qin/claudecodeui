@@ -6,6 +6,7 @@ import { IS_PLATFORM } from '../../../../constants/config';
 import type { Tenant } from '../../../../types/app';
 import { resolveTenantSelection, shouldShowTenantSwitcher } from '../../../tenant/tenantSwitcherUtils';
 import { useAuth } from '../../../auth/context/AuthContext';
+import CurrentUserBadge from '../../../auth/view/CurrentUserBadge';
 
 type SidebarFooterProps = {
   onShowSettings: () => void;
@@ -90,6 +91,13 @@ export default function SidebarFooter({
   return (
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       <div className="nav-divider" />
+
+      <CurrentUserBadge className="mx-2 my-2 hidden h-9 md:flex" />
+      <CurrentUserBadge
+        className="mx-3 mt-2 flex h-12 rounded-xl px-4 md:hidden"
+        iconClassName="h-4 w-4"
+        textClassName="text-base"
+      />
 
       {showTenantSwitcher && currentTenant && (
         <div ref={tenantSwitcherRef} className="relative px-2 py-2">
