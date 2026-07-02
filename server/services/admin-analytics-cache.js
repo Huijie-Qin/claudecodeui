@@ -1,10 +1,5 @@
 import { db as defaultDb } from '../database/db.js';
 
-import {
-  buildAdminAnalyticsSummary,
-  buildAdminAnalyticsUsers,
-} from './admin-analytics.js';
-
 const CACHE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS admin_analytics_cache (
     cache_key TEXT PRIMARY KEY,
@@ -19,8 +14,6 @@ const MAX_RANGE_DAYS = 365;
 const DEFAULT_USER_ANALYTICS_PAGE_SIZE = 20;
 const MAX_USER_ANALYTICS_PAGE_SIZE = 100;
 const REFRESH_INTERVAL_MINUTES = 30;
-const STARTUP_REFRESH_DELAY_MS = 60 * 1000;
-const REFRESH_JOB_DELAY_MS = 2 * 1000;
 const WARM_RANGE_DAYS = [7, 30, 90];
 const VALID_USER_SORTS = new Set(['sessionCount', 'userMessageCount']);
 
@@ -82,24 +75,162 @@ function withCacheMetadata(payload, row) {
   };
 }
 
+function buildRange(rangeDays) {
+  const generatedAt = new Date();
+  const since = new Date(generatedAt.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+  return {
+    days: rangeDays,
+    since: since.toISOString(),
+    generatedAt: generatedAt.toISOString(),
+  };
+}
+
+function emptyRetention() {
+  return {
+    cohortSize: 0,
+    retained: 0,
+    rate: null,
+  };
+}
+
+function emptyOverall() {
+  return {
+    totalUsers: 0,
+    activeUsers: 0,
+    everActiveUsers: 0,
+    totalTenants: 0,
+    activeTenants: 0,
+    totalWorkspaces: 0,
+    activeWorkspaces: 0,
+    totalSessionCount: 0,
+    totalMessageCount: 0,
+    userMessageCount: 0,
+    systemMessageCount: 0,
+    assistantMessageCount: 0,
+    totalTokens: 0,
+    tokenTrackedMessages: 0,
+    tokenTrackingEnabled: false,
+    totalErrorCount: 0,
+    failedRuntimeCount: 0,
+    failedSessionCount: 0,
+    highRiskSqlCount: 0,
+    assistantReplyCount: 0,
+    answerReturnRate: null,
+    averageMessagesPerSession: null,
+    averageUserMessagesPerSession: null,
+    messageUserCount: 0,
+  };
+}
+
+function emptyKpis() {
+  return {
+    totalUsers: 0,
+    activeUsers: 0,
+    totalTenants: 0,
+    activeTenants: 0,
+    loginDau: 0,
+    loginMau: 0,
+    questionDau: 0,
+    questionMau: 0,
+    newLoginUsers: 0,
+    newQuestionUsers: 0,
+    churnedQuestionUsers: 0,
+    questionCount: 0,
+    sessionCount: 0,
+    assistantReplyCount: 0,
+    answerReturnRate: null,
+    sqlGeneratedCount: 0,
+    sqlGenerationRate: null,
+    dataOpsSubmissionCount: null,
+    dataOpsExecutionSuccessRate: null,
+    endToEndSuccessRate: null,
+    failedRuntimeCount: 0,
+    noAssistantReplyCount: 0,
+    highRiskSqlCount: 0,
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheTokens: 0,
+    tokenTrackedMessages: 0,
+    tokenTrackingEnabled: false,
+    retentionD1: null,
+    retentionD7: null,
+    retentionD30: null,
+  };
+}
+
+function buildEmptySummary(rangeDays) {
+  return {
+    range: buildRange(rangeDays),
+    cache: {
+      updatedAt: null,
+      intervalMinutes: REFRESH_INTERVAL_MINUTES,
+      nextRefreshAt: null,
+      unavailableReason: 'analytics_refresh_disabled',
+    },
+    overall: emptyOverall(),
+    kpis: emptyKpis(),
+    funnel: [],
+    tenantDistribution: [],
+    activeTenants: [],
+    topUsers: [],
+    highFrequencyQueries: [],
+    highFailureQueries: [],
+    failureReasons: [],
+    retention: {
+      d1: emptyRetention(),
+      d7: emptyRetention(),
+      d30: emptyRetention(),
+    },
+    dailyTrend: [],
+    providerUsage: [],
+    coverage: {
+      loginHistory: 'disabled',
+      questionEvents: false,
+      sqlDetection: 'disabled',
+      dataOpsEvents: false,
+      tokenUsage: false,
+    },
+  };
+}
+
+function buildEmptyUsers({
+  rangeDays,
+  page,
+  pageSize,
+  sortBy,
+  search,
+}) {
+  return {
+    range: buildRange(rangeDays),
+    cache: {
+      updatedAt: null,
+      intervalMinutes: REFRESH_INTERVAL_MINUTES,
+      nextRefreshAt: null,
+      unavailableReason: 'analytics_refresh_disabled',
+    },
+    users: [],
+    pagination: {
+      page,
+      pageSize,
+      total: 0,
+      totalPages: 1,
+      sortBy,
+      sortDirection: 'desc',
+      search,
+    },
+  };
+}
+
 export function createAdminAnalyticsCacheService({
   database = defaultDb,
   refreshIntervalMinutes = REFRESH_INTERVAL_MINUTES,
   warmRangeDays = WARM_RANGE_DAYS,
   logger = console,
-  setIntervalFn = setInterval,
-  clearIntervalFn = clearInterval,
-  setTimeoutFn = setTimeout,
-  clearTimeoutFn = clearTimeout,
 } = {}) {
   database.exec(CACHE_TABLE_SQL);
 
   const refreshIntervalMs = refreshIntervalMinutes * 60 * 1000;
-  const runningKeys = new Set();
-  const refreshTimers = new Set();
-  let startupTimer = null;
-  let interval = null;
-  let refreshAllRunning = false;
 
   function isRowStale(updatedAt, now = Date.now()) {
     const updatedTime = new Date(updatedAt).getTime();
@@ -129,74 +260,23 @@ export function createAdminAnalyticsCacheService({
     }
   }
 
-  function writeCache(cacheKey, payload) {
-    const updatedAt = new Date().toISOString();
-    database.prepare(`
-      INSERT INTO admin_analytics_cache (
-        cache_key,
-        payload_json,
-        updated_at,
-        refresh_interval_minutes
-      )
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(cache_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        updated_at = excluded.updated_at,
-        refresh_interval_minutes = excluded.refresh_interval_minutes
-    `).run(
-      cacheKey,
-      JSON.stringify(payload),
-      updatedAt,
-      refreshIntervalMinutes,
-    );
-    return {
-      cache_key: cacheKey,
-      payload_json: JSON.stringify(payload),
-      updated_at: updatedAt,
-      refresh_interval_minutes: refreshIntervalMinutes,
-    };
-  }
-
-  function computeSummary(rangeDays) {
-    return buildAdminAnalyticsSummary({ database, rangeDays });
-  }
-
-  function computeUsers(params) {
-    return buildAdminAnalyticsUsers({ database, ...params });
-  }
-
-  function refreshKey(cacheKey, computePayload) {
-    if (runningKeys.has(cacheKey)) return;
-    runningKeys.add(cacheKey);
-
-    const timer = setTimeoutFn(() => {
-      refreshTimers.delete(timer);
-      try {
-        writeCache(cacheKey, computePayload());
-      } catch (error) {
-        logger?.warn?.('[Admin Analytics Cache] Refresh failed', {
-          cacheKey,
-          error: error?.message,
-        });
-      } finally {
-        runningKeys.delete(cacheKey);
-      }
-    }, 0);
-    refreshTimers.add(timer);
-    timer?.unref?.();
-  }
-
-  function getOrCompute(cacheKey, computePayload) {
+  function getCachedOrFallback(cacheKey, fallbackPayload) {
     const cached = readCache(cacheKey);
     if (cached) {
+      const payload = withCacheMetadata(cached.payload, cached.row);
       if (isRowStale(cached.row.updated_at)) {
-        refreshKey(cacheKey, computePayload);
+        return {
+          ...payload,
+          cache: {
+            ...payload.cache,
+            stale: true,
+          },
+        };
       }
-      return withCacheMetadata(cached.payload, cached.row);
+      return payload;
     }
 
-    const payload = computePayload();
-    return withCacheMetadata(payload, writeCache(cacheKey, payload));
+    return fallbackPayload;
   }
 
   function normalizeUsersParams({
@@ -222,93 +302,27 @@ export function createAdminAnalyticsCacheService({
   function getSummary({ rangeDays } = {}) {
     const normalizedRangeDays = normalizeRangeDays(rangeDays);
     const cacheKey = summaryCacheKey(normalizedRangeDays);
-    return getOrCompute(cacheKey, () => computeSummary(normalizedRangeDays));
+    return getCachedOrFallback(cacheKey, buildEmptySummary(normalizedRangeDays));
   }
 
   function getUsers(params = {}) {
     const normalizedParams = normalizeUsersParams(params);
     const cacheKey = usersCacheKey(normalizedParams);
-    return getOrCompute(cacheKey, () => computeUsers(normalizedParams));
+    return getCachedOrFallback(cacheKey, buildEmptyUsers(normalizedParams));
   }
 
   function refreshOnce() {
-    if (refreshAllRunning) return;
-    refreshAllRunning = true;
-
-    const jobs = warmRangeDays.flatMap((rangeDaysInput) => {
-      const rangeDays = normalizeRangeDays(rangeDaysInput);
-      const usersParams = normalizeUsersParams({ rangeDays });
-      return [
-        {
-          cacheKey: summaryCacheKey(rangeDays),
-          computePayload: () => computeSummary(rangeDays),
-        },
-        {
-          cacheKey: usersCacheKey(usersParams),
-          computePayload: () => computeUsers(usersParams),
-        },
-      ];
+    logger?.warn?.('[Admin Analytics Cache] Refresh skipped because in-process analytics refresh is disabled', {
+      warmRangeDays,
     });
-
-    const runNext = () => {
-      const job = jobs.shift();
-      if (!job) {
-        refreshAllRunning = false;
-        return;
-      }
-
-      const timer = setTimeoutFn(() => {
-        refreshTimers.delete(timer);
-        try {
-          writeCache(job.cacheKey, job.computePayload());
-        } catch (error) {
-          logger?.warn?.('[Admin Analytics Cache] Scheduled refresh failed', {
-            cacheKey: job.cacheKey,
-            error: error?.message,
-          });
-        } finally {
-          runNext();
-        }
-      }, jobs.length === warmRangeDays.length * 2 - 1 ? 0 : REFRESH_JOB_DELAY_MS);
-      refreshTimers.add(timer);
-      timer?.unref?.();
-    };
-
-    try {
-      runNext();
-    } catch (error) {
-      refreshAllRunning = false;
-      logger?.warn?.('[Admin Analytics Cache] Scheduled refresh failed', {
-        error: error?.message,
-      });
-    }
   }
 
   function start() {
-    if (interval) return;
-    startupTimer = setTimeoutFn(() => {
-      startupTimer = null;
-      refreshOnce();
-    }, STARTUP_REFRESH_DELAY_MS);
-    startupTimer?.unref?.();
-    interval = setIntervalFn(refreshOnce, refreshIntervalMs);
-    interval?.unref?.();
+    logger?.info?.('[Admin Analytics Cache] In-process analytics refresh is disabled; serving cached data only');
   }
 
   function stop() {
-    if (startupTimer) {
-      clearTimeoutFn(startupTimer);
-      startupTimer = null;
-    }
-    for (const timer of refreshTimers) {
-      clearTimeoutFn(timer);
-    }
-    refreshTimers.clear();
-    runningKeys.clear();
-    refreshAllRunning = false;
-    if (!interval) return;
-    clearIntervalFn(interval);
-    interval = null;
+    // No-op while in-process analytics refresh is disabled.
   }
 
   return {
