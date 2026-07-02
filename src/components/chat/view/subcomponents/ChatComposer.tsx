@@ -29,7 +29,6 @@ import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
-import TokenUsagePie from './TokenUsagePie';
 
 interface MentionableFile {
   name: string;
@@ -114,7 +113,6 @@ export default function ChatComposer({
   isLoading,
   onAbortSession,
   provider,
-  tokenBudget,
   slashCommandsCount,
   onToggleCommandMenu,
   hasInput,
@@ -322,8 +320,6 @@ export default function ChatComposer({
 
         <PromptInputFooter>
           <PromptInputTools>
-            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
-
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
               onClick={onToggleCommandMenu}
