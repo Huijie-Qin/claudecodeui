@@ -91,7 +91,7 @@
     "label": "Einstellungen",
     "agents": "Agenten",
     "appearance": "Darstellung",
-    "git": "Git",
+    "git": "CodeHub",
     "apiTokens": "API & Token",
     "tasks": "Aufgaben",
     "plugins": "Plugins",
@@ -191,15 +191,15 @@
     "cancel": "Abbrechen"
   },
   "git": {
-    "title": "Git-Konfiguration",
-    "description": "Konfiguriere deine Git-Identität für Commits. Diese Einstellungen werden global über git config --global angewendet",
+    "title": "CodeHub-Konfiguration",
+    "description": "Konfiguriere deine CodeHub-Identität für Commits. Diese Einstellungen werden global über codehub config --global angewendet",
     "name": {
-      "label": "Git-Name",
-      "help": "Dein Name für Git-Commits"
+      "label": "CodeHub-Name",
+      "help": "Dein Name für CodeHub-Commits"
     },
     "email": {
-      "label": "Git-E-Mail",
-      "help": "Deine E-Mail-Adresse für Git-Commits"
+      "label": "CodeHub-E-Mail",
+      "help": "Deine E-Mail-Adresse für CodeHub-Commits"
     },
     "actions": {
       "save": "Konfiguration speichern",

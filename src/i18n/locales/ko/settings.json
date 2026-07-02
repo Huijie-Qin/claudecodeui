@@ -91,7 +91,7 @@
     "label": "설정",
     "agents": "에이전트",
     "appearance": "외관",
-    "git": "Git",
+    "git": "CodeHub",
     "apiTokens": "API & 토큰",
     "tasks": "작업",
     "notifications": "알림",
@@ -211,15 +211,15 @@
     "cancel": "취소"
   },
   "git": {
-    "title": "Git 설정",
-    "description": "커밋을 위한 Git 정보를 설정합니다. 이 설정은 git config --global로 전역 적용됩니다",
+    "title": "CodeHub 설정",
+    "description": "커밋을 위한 CodeHub 정보를 설정합니다. 이 설정은 codehub config --global로 전역 적용됩니다",
     "name": {
-      "label": "Git 이름",
-      "help": "Git 커밋에 사용될 이름"
+      "label": "CodeHub 이름",
+      "help": "CodeHub 커밋에 사용될 이름"
     },
     "email": {
-      "label": "Git 이메일",
-      "help": "Git 커밋에 사용될 이메일"
+      "label": "CodeHub 이메일",
+      "help": "CodeHub 커밋에 사용될 이메일"
     },
     "actions": {
       "save": "설정 저장",

@@ -91,7 +91,7 @@
     "label": "Impostazioni",
     "agents": "Agenti",
     "appearance": "Aspetto",
-    "git": "Git",
+    "git": "CodeHub",
     "apiTokens": "API e Token",
     "tasks": "Attività",
     "notifications": "Notifiche",
@@ -211,15 +211,15 @@
     "cancel": "Annulla"
   },
   "git": {
-    "title": "Configurazione Git",
-    "description": "Configura la tua identità git per i commit. Queste impostazioni verranno applicate globalmente tramite git config --global",
+    "title": "Configurazione CodeHub",
+    "description": "Configura la tua identità codehub per i commit. Queste impostazioni verranno applicate globalmente tramite codehub config --global",
     "name": {
-      "label": "Nome Git",
-      "help": "Il tuo nome per i commit git"
+      "label": "Nome CodeHub",
+      "help": "Il tuo nome per i commit codehub"
     },
     "email": {
-      "label": "Email Git",
-      "help": "La tua email per i commit git"
+      "label": "Email CodeHub",
+      "help": "La tua email per i commit codehub"
     },
     "actions": {
       "save": "Salva configurazione",

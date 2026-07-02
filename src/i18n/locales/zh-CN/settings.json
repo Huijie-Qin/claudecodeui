@@ -91,7 +91,7 @@
     "label": "设置",
     "agents": "智能体",
     "appearance": "外观",
-    "git": "Git",
+    "git": "CodeHub",
     "codeHub": "CodeHub",
     "apiTokens": "API 和令牌",
     "tasks": "任务",
@@ -212,23 +212,23 @@
     "cancel": "取消"
   },
   "git": {
-    "title": "Git 配置",
-    "description": "配置您的 git 提交身份。这些设置将通过 git config --global 全局应用",
+    "title": "CodeHub 配置",
+    "description": "配置您的 codehub 提交身份。这些设置将通过 codehub config --global 全局应用",
     "name": {
-      "label": "Git 名称",
-      "help": "您的 git 提交名称"
+      "label": "CodeHub 名称",
+      "help": "您的 codehub 提交名称"
     },
     "email": {
-      "label": "Git 邮箱",
-      "help": "您的 git 提交邮箱"
+      "label": "CodeHub 邮箱",
+      "help": "您的 codehub 提交邮箱"
     },
     "token": {
-      "label": "git_token",
+      "label": "codehub_token",
       "placeholder": "个人访问令牌",
       "help": "执行 Docker exec 时会作为 PRIVATE_TOKEN 传入容器环境变量。不需要 Token 时可留空。",
-      "configured": "已保存 git_token。输入新 Token 可替换已保存的值。",
-      "show": "显示 git_token",
-      "hide": "隐藏 git_token"
+      "configured": "已保存 codehub_token。输入新 Token 可替换已保存的值。",
+      "show": "显示 codehub_token",
+      "hide": "隐藏 codehub_token"
     },
     "actions": {
       "save": "保存配置",

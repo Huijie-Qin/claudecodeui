@@ -91,7 +91,7 @@
     "label": "Настройки",
     "agents": "Агенты",
     "appearance": "Внешний вид",
-    "git": "Git",
+    "git": "CodeHub",
     "apiTokens": "API и токены",
     "tasks": "Задачи",
     "plugins": "Плагины",
@@ -191,15 +191,15 @@
     "cancel": "Отмена"
   },
   "git": {
-    "title": "Конфигурация Git",
-    "description": "Настройте вашу git идентичность для коммитов. Эти настройки будут применены глобально через git config --global",
+    "title": "Конфигурация CodeHub",
+    "description": "Настройте вашу codehub идентичность для коммитов. Эти настройки будут применены глобально через codehub config --global",
     "name": {
-      "label": "Имя Git",
-      "help": "Ваше имя для git коммитов"
+      "label": "Имя CodeHub",
+      "help": "Ваше имя для codehub коммитов"
     },
     "email": {
-      "label": "Email Git",
-      "help": "Ваш email для git коммитов"
+      "label": "Email CodeHub",
+      "help": "Ваш email для codehub коммитов"
     },
     "actions": {
       "save": "Сохранить конфигурацию",

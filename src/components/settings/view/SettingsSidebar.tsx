@@ -19,7 +19,6 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
   { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
-  { id: 'codehub', labelKey: 'mainTabs.codeHub', icon: GitBranch },
   { id: 'api', labelKey: 'mainTabs.apiTokens', icon: Key },
   { id: 'tasks', labelKey: 'mainTabs.tasks', icon: ListChecks },
   { id: 'plugins', labelKey: 'mainTabs.plugins', icon: Puzzle },

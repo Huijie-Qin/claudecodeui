@@ -4,7 +4,7 @@ import type { LLMProvider } from '../../../types/app';
 import type { ModelResponseHookConfig } from '../../../hooks/modelResponseNotificationHooks';
 import type { ProviderAuthStatus } from '../../provider-auth/types';
 
-export type SettingsMainTab = 'appearance' | 'git' | 'codehub' | 'api' | 'tasks' | 'notifications' | 'plugins' | 'about';
+export type SettingsMainTab = 'appearance' | 'git' | 'api' | 'tasks' | 'notifications' | 'plugins' | 'about';
 export type AgentProvider = LLMProvider;
 export type AgentCategory = 'account' | 'permissions';
 export type ProjectSortOrder = 'name' | 'date';

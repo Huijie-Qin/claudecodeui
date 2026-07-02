@@ -91,7 +91,7 @@
     "label": "Settings",
     "agents": "Agents",
     "appearance": "Appearance",
-    "git": "Git",
+    "git": "CodeHub",
     "codeHub": "CodeHub",
     "apiTokens": "API & Tokens",
     "tasks": "Tasks",
@@ -212,23 +212,23 @@
     "cancel": "Cancel"
   },
   "git": {
-    "title": "Git Configuration",
-    "description": "Configure your git identity for commits. These settings will be applied globally via git config --global",
+    "title": "CodeHub Configuration",
+    "description": "Configure your codehub identity for commits. These settings will be applied globally via codehub config --global",
     "name": {
-      "label": "Git Name",
-      "help": "Your name for git commits"
+      "label": "CodeHub Name",
+      "help": "Your name for codehub commits"
     },
     "email": {
-      "label": "Git Email",
-      "help": "Your email for git commits"
+      "label": "CodeHub Email",
+      "help": "Your email for codehub commits"
     },
     "token": {
-      "label": "git_token",
+      "label": "codehub_token",
       "placeholder": "Personal access token",
       "help": "Passed to Docker exec as PRIVATE_TOKEN. Leave blank if you do not need a token.",
-      "configured": "A git_token is saved. Enter a new token to replace it.",
-      "show": "Show git_token",
-      "hide": "Hide git_token"
+      "configured": "A codehub_token is saved. Enter a new token to replace it.",
+      "show": "Show codehub_token",
+      "hide": "Hide codehub_token"
     },
     "actions": {
       "save": "Save Configuration",

@@ -91,7 +91,7 @@
     "label": "Ayarlar",
     "agents": "Ajanlar",
     "appearance": "Görünüm",
-    "git": "Git",
+    "git": "CodeHub",
     "apiTokens": "API ve Token'lar",
     "tasks": "Görevler",
     "notifications": "Bildirimler",
@@ -211,15 +211,15 @@
     "cancel": "İptal"
   },
   "git": {
-    "title": "Git Yapılandırması",
-    "description": "Commit'ler için git kimliğini yapılandır. Bu ayarlar git config --global ile genel olarak uygulanacak",
+    "title": "CodeHub Yapılandırması",
+    "description": "Commit'ler için codehub kimliğini yapılandır. Bu ayarlar codehub config --global ile genel olarak uygulanacak",
     "name": {
-      "label": "Git Adı",
-      "help": "Git commit'leri için adın"
+      "label": "CodeHub Adı",
+      "help": "CodeHub commit'leri için adın"
     },
     "email": {
-      "label": "Git E-postası",
-      "help": "Git commit'leri için e-postan"
+      "label": "CodeHub E-postası",
+      "help": "CodeHub commit'leri için e-postan"
     },
     "actions": {
       "save": "Yapılandırmayı Kaydet",

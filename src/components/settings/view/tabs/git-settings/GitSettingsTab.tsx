@@ -29,7 +29,6 @@ export default function GitSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title={t('git.title')}
-        description={t('git.description')}
       >
         <SettingsCard className="p-4">
           <div className="space-y-4">

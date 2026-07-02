@@ -10,7 +10,6 @@ import type {
 export const SETTINGS_MAIN_TABS: SettingsMainTab[] = [
   'appearance',
   'git',
-  'codehub',
   'api',
   'tasks',
   'notifications',
