@@ -114,8 +114,11 @@ const markdownPreviewComponents: Components = {
   ),
 };
 
+const remarkGfmOptions = { singleTilde: false };
+const remarkGfmPlugin: [typeof remarkGfm, typeof remarkGfmOptions] = [remarkGfm, remarkGfmOptions];
+
 export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
+  const remarkPlugins = useMemo(() => [remarkGfmPlugin, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
   const parsed = useMemo(() => extractFrontMatter(content), [content]);
 

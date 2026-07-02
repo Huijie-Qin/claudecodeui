@@ -143,9 +143,12 @@ const markdownComponents = {
   ),
 };
 
+const remarkGfmOptions = { singleTilde: false };
+const remarkGfmPlugin: [typeof remarkGfm, typeof remarkGfmOptions] = [remarkGfm, remarkGfmOptions];
+
 export function Markdown({ children, className }: MarkdownProps) {
   const content = normalizeInlineCodeFences(String(children ?? ''));
-  const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
+  const remarkPlugins = useMemo(() => [remarkGfmPlugin, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
 
   return (
