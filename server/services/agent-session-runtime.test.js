@@ -491,6 +491,82 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(runtime.runtimeId, 'existing');
 });
 
+test('docker mode recreates a running container when workspace cwd is unhealthy', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-unhealthy-workspace-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: null,
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'active',
+  };
+  let created = false;
+  let removedContainer = null;
+  const dockerRuns = [];
+  let workspaceChecks = 0;
+
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: () => {
+          created = true;
+        },
+        findByProviderSession: () => null,
+        findByOwner: () => runtimeRow,
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, status: 'running' }),
+      verifyWorkspaceCwd: async () => {
+        workspaceChecks += 1;
+        if (workspaceChecks === 1) {
+          const error = new Error('OCI runtime exec failed');
+          error.stderr = 'current working directory is outside of container mount namespace root';
+          throw error;
+        }
+      },
+      removeContainer: async (name) => {
+        removedContainer = name;
+      },
+      runDetached: async (args) => {
+        dockerRuns.push(args);
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+  });
+
+  assert.equal(created, false);
+  assert.equal(removedContainer, 'cloudcli-claude-existing');
+  assert.equal(dockerRuns.length, 1);
+  assert.equal(workspaceChecks, 2);
+  assert.equal(runtime.runtimeId, 'existing');
+});
+
 test('docker mode stopRuntime stops the session container and marks runtime idle', async () => {
   let stoppedContainer = null;
   let statusUpdate = null;

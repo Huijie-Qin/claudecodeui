@@ -31,6 +31,7 @@ const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
+const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
 const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
@@ -229,6 +230,15 @@ function logRuntimeEvent(event, details = {}) {
     mode: 'docker',
     ...details,
   }));
+}
+
+function formatRuntimeError(error) {
+  const message = [
+    error?.message,
+    error?.stderr,
+    error?.stdout,
+  ].filter(Boolean).join('\n').trim();
+  return message ? message.slice(0, 1000) : String(error || 'unknown error');
 }
 
 function buildRuntimeScopeLockKey({
@@ -541,6 +551,20 @@ export class DockerCliClient {
     }
   }
 
+  async verifyWorkspaceCwd(containerName) {
+    await execFileAsync('docker', [
+      'exec',
+      '-w',
+      '/workspace',
+      '-e',
+      'HOME=/home/cloudcli',
+      requireValue(containerName, 'containerName'),
+      'pwd',
+    ], {
+      timeout: DOCKER_WORKSPACE_CHECK_TIMEOUT_MS,
+    });
+  }
+
   async installPythonPackages(containerName, packages = []) {
     const requestedPackages = Array.isArray(packages)
       ? packages.map((entry) => String(entry).trim()).filter(Boolean)
@@ -706,12 +730,84 @@ export function createAgentSessionRuntimeManager({
 
   async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
     const requestId = logContext.requestId || null;
+    const createContainer = async () => {
+      const containerUser = resolveContainerUser(env);
+      const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
+      const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
+      const args = buildDockerRunArgs({
+        containerName: runtime.container_name,
+        image: runtime.image,
+        uid: containerUser.uid,
+        gid: containerUser.gid,
+        workspaceHostPath: runtime.workspace_host_path,
+        runtimeHomePath: runtime.runtime_home_path,
+        containerEnv,
+        memory,
+        cpus,
+      });
+      logRuntimeEvent('container_create_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        memory,
+        cpus,
+        uid: containerUser.uid,
+        gid: containerUser.gid,
+      }));
+      await docker.runDetached(args);
+      logRuntimeEvent('container_created', createRuntimeLogDetails(runtime, {
+        requestId,
+        memory,
+        cpus,
+      }));
+      await verifyContainerWorkspace(runtime, { requestId, throwOnFailure: true });
+      const pythonPackages = parseDockerPythonPackages(env[DOCKER_PYTHON_PACKAGES_ENV_NAME]);
+      if (pythonPackages.length > 0 && typeof docker.installPythonPackages === 'function') {
+        try {
+          const installPromise = docker.installPythonPackages(runtime.container_name, pythonPackages);
+          if (installPromise && typeof installPromise.catch === 'function') {
+            installPromise.catch((error) => {
+              console.warn(
+                `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
+                error,
+              );
+            });
+          }
+        } catch (error) {
+          console.warn(
+            `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
+            error,
+          );
+        }
+      }
+    };
+
+    const recreateContainer = async (reason, error = null) => {
+      if (typeof docker.removeContainer !== 'function') {
+        throw error || new Error('Docker runtime container is unhealthy and cannot be removed');
+      }
+      logRuntimeEvent('container_recreate_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        reason,
+        error: error ? formatRuntimeError(error) : undefined,
+      }));
+      await docker.removeContainer(runtime.container_name);
+      logRuntimeEvent('container_removed_for_recreate', createRuntimeLogDetails(runtime, {
+        requestId,
+        reason,
+      }));
+      await createContainer();
+    };
+
     const inspected = await docker.inspectContainer(runtime.container_name);
     if (inspected?.running) {
-      logRuntimeEvent('container_reuse_running', createRuntimeLogDetails(runtime, {
-        requestId,
-        containerStatus: inspected.status || 'running',
-      }));
+      const healthy = await verifyContainerWorkspace(runtime, { requestId });
+      if (healthy) {
+        logRuntimeEvent('container_reuse_running', createRuntimeLogDetails(runtime, {
+          requestId,
+          containerStatus: inspected.status || 'running',
+        }));
+        return;
+      }
+      await recreateContainer('workspace_cwd_unhealthy');
       return;
     }
     if (inspected?.exists) {
@@ -720,58 +816,42 @@ export function createAgentSessionRuntimeManager({
         containerStatus: inspected.status || null,
         exitCode: inspected.exitCode ?? null,
       }));
-      await docker.startContainer(runtime.container_name);
-      logRuntimeEvent('container_started_existing', createRuntimeLogDetails(runtime, {
-        requestId,
-      }));
+      try {
+        await docker.startContainer(runtime.container_name);
+      } catch (error) {
+        await recreateContainer('start_failed', error);
+        return;
+      }
+      const healthy = await verifyContainerWorkspace(runtime, { requestId });
+      if (healthy) {
+        logRuntimeEvent('container_started_existing', createRuntimeLogDetails(runtime, {
+          requestId,
+        }));
+        return;
+      }
+      await recreateContainer('workspace_cwd_unhealthy');
       return;
     }
 
-    const containerUser = resolveContainerUser(env);
-    const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
-    const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
-    const args = buildDockerRunArgs({
-      containerName: runtime.container_name,
-      image: runtime.image,
-      uid: containerUser.uid,
-      gid: containerUser.gid,
-      workspaceHostPath: runtime.workspace_host_path,
-      runtimeHomePath: runtime.runtime_home_path,
-      containerEnv,
-      memory,
-      cpus,
-    });
-    logRuntimeEvent('container_create_start', createRuntimeLogDetails(runtime, {
-      requestId,
-      memory,
-      cpus,
-      uid: containerUser.uid,
-      gid: containerUser.gid,
-    }));
-    await docker.runDetached(args);
-    logRuntimeEvent('container_created', createRuntimeLogDetails(runtime, {
-      requestId,
-      memory,
-      cpus,
-    }));
-    const pythonPackages = parseDockerPythonPackages(env[DOCKER_PYTHON_PACKAGES_ENV_NAME]);
-    if (pythonPackages.length > 0 && typeof docker.installPythonPackages === 'function') {
-      try {
-        const installPromise = docker.installPythonPackages(runtime.container_name, pythonPackages);
-        if (installPromise && typeof installPromise.catch === 'function') {
-          installPromise.catch((error) => {
-            console.warn(
-              `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
-              error,
-            );
-          });
-        }
-      } catch (error) {
-        console.warn(
-          `[agent-session-runtime] Docker Python package install failed for ${runtime.container_name}:`,
-          error,
-        );
+    await createContainer();
+  }
+
+  async function verifyContainerWorkspace(runtime, { requestId = null, throwOnFailure = false } = {}) {
+    if (typeof docker.verifyWorkspaceCwd !== 'function') {
+      return true;
+    }
+    try {
+      await docker.verifyWorkspaceCwd(runtime.container_name);
+      return true;
+    } catch (error) {
+      logRuntimeEvent('container_workspace_check_failed', createRuntimeLogDetails(runtime, {
+        requestId,
+        error: formatRuntimeError(error),
+      }));
+      if (throwOnFailure) {
+        throw error;
       }
+      return false;
     }
   }
 
