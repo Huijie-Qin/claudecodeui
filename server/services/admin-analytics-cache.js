@@ -19,6 +19,8 @@ const MAX_RANGE_DAYS = 365;
 const DEFAULT_USER_ANALYTICS_PAGE_SIZE = 20;
 const MAX_USER_ANALYTICS_PAGE_SIZE = 100;
 const REFRESH_INTERVAL_MINUTES = 30;
+const STARTUP_REFRESH_DELAY_MS = 60 * 1000;
+const REFRESH_JOB_DELAY_MS = 2 * 1000;
 const WARM_RANGE_DAYS = [7, 30, 90];
 const VALID_USER_SORTS = new Set(['sessionCount', 'userMessageCount']);
 
@@ -87,11 +89,14 @@ export function createAdminAnalyticsCacheService({
   logger = console,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
 } = {}) {
   database.exec(CACHE_TABLE_SQL);
 
   const refreshIntervalMs = refreshIntervalMinutes * 60 * 1000;
   const runningKeys = new Set();
+  const refreshTimers = new Set();
   let startupTimer = null;
   let interval = null;
   let refreshAllRunning = false;
@@ -164,7 +169,8 @@ export function createAdminAnalyticsCacheService({
     if (runningKeys.has(cacheKey)) return;
     runningKeys.add(cacheKey);
 
-    setTimeout(() => {
+    const timer = setTimeoutFn(() => {
+      refreshTimers.delete(timer);
       try {
         writeCache(cacheKey, computePayload());
       } catch (error) {
@@ -176,6 +182,8 @@ export function createAdminAnalyticsCacheService({
         runningKeys.delete(cacheKey);
       }
     }, 0);
+    refreshTimers.add(timer);
+    timer?.unref?.();
   }
 
   function getOrCompute(cacheKey, computePayload) {
@@ -226,36 +234,78 @@ export function createAdminAnalyticsCacheService({
   function refreshOnce() {
     if (refreshAllRunning) return;
     refreshAllRunning = true;
-    try {
-      for (const rangeDays of warmRangeDays.map(normalizeRangeDays)) {
-        writeCache(summaryCacheKey(rangeDays), computeSummary(rangeDays));
-        const usersParams = normalizeUsersParams({ rangeDays });
-        writeCache(usersCacheKey(usersParams), computeUsers(usersParams));
+
+    const jobs = warmRangeDays.flatMap((rangeDaysInput) => {
+      const rangeDays = normalizeRangeDays(rangeDaysInput);
+      const usersParams = normalizeUsersParams({ rangeDays });
+      return [
+        {
+          cacheKey: summaryCacheKey(rangeDays),
+          computePayload: () => computeSummary(rangeDays),
+        },
+        {
+          cacheKey: usersCacheKey(usersParams),
+          computePayload: () => computeUsers(usersParams),
+        },
+      ];
+    });
+
+    const runNext = () => {
+      const job = jobs.shift();
+      if (!job) {
+        refreshAllRunning = false;
+        return;
       }
+
+      const timer = setTimeoutFn(() => {
+        refreshTimers.delete(timer);
+        try {
+          writeCache(job.cacheKey, job.computePayload());
+        } catch (error) {
+          logger?.warn?.('[Admin Analytics Cache] Scheduled refresh failed', {
+            cacheKey: job.cacheKey,
+            error: error?.message,
+          });
+        } finally {
+          runNext();
+        }
+      }, jobs.length === warmRangeDays.length * 2 - 1 ? 0 : REFRESH_JOB_DELAY_MS);
+      refreshTimers.add(timer);
+      timer?.unref?.();
+    };
+
+    try {
+      runNext();
     } catch (error) {
+      refreshAllRunning = false;
       logger?.warn?.('[Admin Analytics Cache] Scheduled refresh failed', {
         error: error?.message,
       });
-    } finally {
-      refreshAllRunning = false;
     }
   }
 
   function start() {
     if (interval) return;
-    startupTimer = setTimeout(() => {
+    startupTimer = setTimeoutFn(() => {
       startupTimer = null;
       refreshOnce();
-    }, 0);
+    }, STARTUP_REFRESH_DELAY_MS);
+    startupTimer?.unref?.();
     interval = setIntervalFn(refreshOnce, refreshIntervalMs);
     interval?.unref?.();
   }
 
   function stop() {
     if (startupTimer) {
-      clearTimeout(startupTimer);
+      clearTimeoutFn(startupTimer);
       startupTimer = null;
     }
+    for (const timer of refreshTimers) {
+      clearTimeoutFn(timer);
+    }
+    refreshTimers.clear();
+    runningKeys.clear();
+    refreshAllRunning = false;
     if (!interval) return;
     clearIntervalFn(interval);
     interval = null;
