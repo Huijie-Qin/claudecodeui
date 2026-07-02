@@ -29,7 +29,7 @@
   },
   "pull": {
     "branchPlaceholder": "要拉取的分支",
-    "preview": "预览",
+    "preview": "预检",
     "previewResult": "拉取预检",
     "previewNeedsAction": "需要处理",
     "previewReady": "可以拉取",
