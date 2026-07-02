@@ -18,6 +18,7 @@ import {
   Tooltip,
 } from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
+import CurrentUserBadge from '../auth/view/CurrentUserBadge';
 
 import {
   buildTenantMembershipPayload,
@@ -1178,6 +1179,10 @@ export default function AdminPanel({ open, onOpenChange }: AdminPanelProps) {
               <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
               <p className="truncate text-xs text-muted-foreground">{t('subtitle')}</p>
             </div>
+            <CurrentUserBadge
+              className="ml-auto max-w-[30vw] shrink-0 px-2 py-1.5 sm:max-w-[220px] sm:px-2.5"
+              textClassName="text-xs sm:text-sm"
+            />
           </div>
 
           <div className="flex flex-wrap gap-1 border-b border-border px-5 py-2">
