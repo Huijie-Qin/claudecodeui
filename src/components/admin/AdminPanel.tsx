@@ -401,6 +401,7 @@ export default function AdminPanel() {
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
+  const [hasOpenedSkillPresets, setHasOpenedSkillPresets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -420,6 +421,12 @@ export default function AdminPanel() {
     const timer = window.setTimeout(() => setToast(null), 3000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (activeTab === 'skillPresets') {
+      setHasOpenedSkillPresets(true);
+    }
+  }, [activeTab]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -2028,8 +2035,8 @@ export default function AdminPanel() {
             </div>
           ) : null}
 
-          {activeTab === 'skillPresets' ? (
-            <div className="overflow-y-auto px-5 py-4">
+          {hasOpenedSkillPresets ? (
+            <div className={cn('h-full overflow-y-auto px-5 py-4', activeTab !== 'skillPresets' && 'hidden')}>
               <SkillPresetsTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : null}
