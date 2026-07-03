@@ -133,7 +133,6 @@ type AnalyticsUsersPayload = {
     since: string;
     generatedAt: string;
   };
-  cache?: AnalyticsCacheInfo;
   users: AnalyticsUser[];
   pagination: {
     page: number;
@@ -185,19 +184,12 @@ type AnalyticsCoverage = {
   tokenUsage: boolean;
 };
 
-type AnalyticsCacheInfo = {
-  updatedAt: string;
-  intervalMinutes: number;
-  nextRefreshAt?: string | null;
-};
-
 type AnalyticsSummary = {
   range: {
     days: number;
     since: string;
     generatedAt: string;
   };
-  cache?: AnalyticsCacheInfo;
   overall: AnalyticsOverall;
   kpis: AnalyticsKpis;
   funnel: FunnelItem[];
@@ -1314,13 +1306,6 @@ export default function AnalyticsDashboardTab() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium text-foreground">{translate('title', '统计面板')}</h3>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <Clock className="h-3.5 w-3.5" />
-            <span>
-              数据每半小时更新一次
-              {summary?.cache?.updatedAt ? `，上次更新 ${formatDateTime(summary.cache.updatedAt)}` : ''}
-            </span>
-          </div>
           <div className="text-xs text-muted-foreground">
             {summary ? `总体指标为全历史数据；时间范围指标：近 ${summary.range.days} 天 · 生成时间 ${formatDateTime(summary.range.generatedAt)}` : '聚合平台使用、问数、租户和执行链路数据'}
           </div>
