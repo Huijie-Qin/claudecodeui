@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/sql-check/rules') {
-    return sendJson(res, 200, { response: loadRules() });
+    return sendJson(res, 200, loadRules());
   }
 
   return sendJson(res, 404, { error: 'Not found' });
