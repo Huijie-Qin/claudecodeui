@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/apply-mcp-tool-overrides.cjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
