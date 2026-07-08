@@ -5,17 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../shared/view/ui';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
-
-type SqlCheckRule = {
-  rule_id: string;
-  name: string;
-  desc: string;
-};
-
-type SqlCheckRulesPayload = {
-  response?: SqlCheckRule[];
-  error?: string;
-};
+import { normalizeSqlCheckRules, type SqlCheckRule } from './sqlCheckRules';
 
 type WorkspaceSqlCheckConfig = {
   workspaceId?: number;
@@ -35,18 +25,10 @@ type SqlCheckPanelProps = {
   selectedProject: Project;
 };
 
-function normalizeRules(payload: SqlCheckRulesPayload): SqlCheckRule[] {
-  return (payload.response || [])
-    .map((rule) => ({
-      rule_id: String(rule.rule_id || '').trim(),
-      name: String(rule.name || rule.rule_id || '').trim(),
-      desc: String(rule.desc || '').trim(),
-    }))
-    .filter((rule) => rule.rule_id && rule.name);
-}
-
-function payloadError(payload: { error?: string } | null, fallback: string) {
-  return payload?.error || fallback;
+function payloadError(payload: unknown, fallback: string) {
+  if (typeof payload !== 'object' || payload === null || !('error' in payload)) return fallback;
+  const error = (payload as { error?: unknown }).error;
+  return typeof error === 'string' && error ? error : fallback;
 }
 
 function toggleRuleId(ruleIds: string[], ruleId: string, checked: boolean) {
@@ -102,13 +84,13 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     setError(null);
     try {
       const response = await api.sqlCheck.rules(signal ? { signal } : undefined);
-      const payload = await response.json().catch(() => ({} as SqlCheckRulesPayload)) as SqlCheckRulesPayload;
+      const payload = await response.json().catch(() => ({} as unknown));
       if (signal?.aborted) return;
       if (!response.ok) {
         setError(payloadError(payload, translate('sqlCheck.errors.loadRules')));
         return;
       }
-      setRules(normalizeRules(payload));
+      setRules(normalizeSqlCheckRules(payload));
     } catch (caughtError) {
       if (signal?.aborted || isAbortError(caughtError)) return;
       console.error('[SqlCheckPanel] Failed to load rules:', caughtError);
