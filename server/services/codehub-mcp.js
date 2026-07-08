@@ -59,6 +59,29 @@ function parseJsonText(value) {
   }
 }
 
+function parseSseText(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  const events = text.split(/\r?\n\r?\n/);
+  for (const event of events) {
+    const data = event
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trimStart())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') continue;
+    const parsed = parseJsonText(data);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function summarizeMcpContent(content) {
   if (!Array.isArray(content)) return '';
   return content
@@ -149,7 +172,7 @@ async function postJson({ url, headers, payload, fetchImpl = fetch }) {
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: {
-        Accept: 'application/json',
+        Accept: 'application/json, text/event-stream',
         'Content-Type': 'application/json',
         ...headers,
       },
@@ -157,13 +180,16 @@ async function postJson({ url, headers, payload, fetchImpl = fetch }) {
       signal: controller.signal,
     });
     const text = await response.text();
+    const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
     let body = {};
     if (text) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        throw createHttpError(`CodeHub MCP returned non-JSON response (${response.status})`, 502);
+      const parsed = contentType.includes('text/event-stream')
+        ? parseSseText(text)
+        : parseJsonText(text);
+      if (parsed === null) {
+        throw createHttpError(`CodeHub MCP returned unsupported response (${response.status}, ${contentType || 'unknown content-type'})`, 502);
       }
+      body = parsed;
     }
     if (!response.ok) {
       throw createHttpError(body?.message || body?.error || `CodeHub MCP returned ${response.status}`, response.status);
@@ -183,10 +209,10 @@ async function postJson({ url, headers, payload, fetchImpl = fetch }) {
   }
 }
 
-export function createCodeHubMcpService({ fetchImpl = fetch } = {}) {
+export function createCodeHubMcpService({ fetchImpl = fetch, headerResolver = getCodeHubHeaders } = {}) {
   async function callTool({ userId, toolName, arguments: toolArguments }) {
     const url = requiredConfig('CODEHUB_MCP_URL');
-    const headers = await getCodeHubHeaders({ userId });
+    const headers = await headerResolver({ userId });
     return postJson({
       url,
       headers,
