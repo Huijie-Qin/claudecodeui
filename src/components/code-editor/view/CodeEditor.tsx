@@ -450,8 +450,8 @@ export default function CodeEditor({
   });
 
   useEffect(() => {
-    setPreviewEnabled(false);
-  }, [file.path]);
+    setPreviewEnabled(previewMode === 'html');
+  }, [file.path, previewMode]);
 
   if (loading) {
     return (
