@@ -37,6 +37,36 @@ test('resolveClaudeModel falls back to the UI model when no environment override
   });
 });
 
+test('mapCliOptionsToSDK makes normal sessions fully authorized for subagent inheritance', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  for (const permissionMode of [undefined, 'default', 'acceptEdits', 'bypassPermissions']) {
+    const options = claudeSdk.mapCliOptionsToSDK({
+      permissionMode,
+      executionEnv: {},
+    });
+
+    assert.equal(options.permissionMode, 'bypassPermissions');
+    assert.equal(options.allowDangerouslySkipPermissions, true);
+    assert.ok(options.disallowedTools.includes('WebSearch'));
+    assert.ok(options.disallowedTools.includes('WebFetch'));
+  }
+});
+
+test('mapCliOptionsToSDK preserves plan mode without enabling permission bypass', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  const options = claudeSdk.mapCliOptionsToSDK({
+    permissionMode: 'plan',
+    executionEnv: {},
+  });
+
+  assert.equal(options.permissionMode, 'plan');
+  assert.equal(options.allowDangerouslySkipPermissions, undefined);
+  assert.ok(options.allowedTools.includes('Read'));
+  assert.ok(options.allowedTools.includes('Task'));
+});
+
 test('createClaudePromptFactory keeps text-only prompts as strings', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

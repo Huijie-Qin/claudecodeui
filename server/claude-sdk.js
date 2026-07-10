@@ -316,9 +316,16 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.cwd = cwd;
   }
 
-  // Keep plan mode behavior, while normal execution is auto-approved through canUseTool below.
+  // Normal CCUI sessions auto-authorize every tool that is not explicitly
+  // disabled. Express that through the SDK's native permission mode so
+  // Agent-tool subagents inherit the same access as the parent. Relying only
+  // on canUseTool leaves background subagents unable to use tools because they
+  // cannot always surface permission prompts.
   if (permissionMode === 'plan') {
-    sdkOptions.permissionMode = permissionMode;
+    sdkOptions.permissionMode = 'plan';
+  } else {
+    sdkOptions.permissionMode = 'bypassPermissions';
+    sdkOptions.allowDangerouslySkipPermissions = true;
   }
 
   let allowedTools = [];
