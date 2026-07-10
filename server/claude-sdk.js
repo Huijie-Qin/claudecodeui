@@ -32,6 +32,11 @@ import {
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
 import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  applyMcpToolOverrides,
+  isMcpToolName,
+  readMcpToolOverridesConfig,
+} from './services/mcp-tool-overrides.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { recordProviderSession } from './services/session-ownership.js';
@@ -895,6 +900,65 @@ async function queryClaudeSDK(command, options = {}, ws) {
       shouldQuery: true,
     }));
 
+    const mcpOverridesWorkspaceRoot = runtimeContext.hostWorkspacePath ||
+      runtimeOptions.cwd ||
+      runtimeOptions.projectPath ||
+      options.cwd;
+
+    const readRuntimeMcpToolOverridesConfig = async () => {
+      try {
+        return await readMcpToolOverridesConfig(mcpOverridesWorkspaceRoot);
+      } catch (error) {
+        console.warn('Failed to read MCP tool overrides:', error?.message || error);
+        return null;
+      }
+    };
+
+    const applyRuntimeMcpToolOverrides = async (toolName, input) => {
+      if (!isMcpToolName(toolName)) {
+        return { input, applied: false, appliedParams: [] };
+      }
+
+      const config = await readRuntimeMcpToolOverridesConfig();
+      return applyMcpToolOverrides({ toolName, input, config });
+    };
+
+    const applyRuntimeMcpToolOverridesToMessages = async (messages) => {
+      const hasMcpToolUse = Array.isArray(messages) &&
+        messages.some((msg) => msg?.kind === 'tool_use' && isMcpToolName(msg.toolName));
+      if (!hasMcpToolUse) {
+        return messages;
+      }
+
+      const config = await readRuntimeMcpToolOverridesConfig();
+      return messages.map((msg) => {
+        if (msg?.kind !== 'tool_use' || !isMcpToolName(msg.toolName)) {
+          return msg;
+        }
+
+        const overrideResult = applyMcpToolOverrides({
+          toolName: msg.toolName,
+          input: msg.toolInput,
+          config,
+        });
+        if (!overrideResult.applied) {
+          return msg;
+        }
+
+        return {
+          ...msg,
+          toolInput: overrideResult.input,
+          originalToolInput: msg.toolInput,
+          mcpToolOverrides: {
+            applied: true,
+            params: overrideResult.appliedParams,
+            serverName: overrideResult.serverName,
+            toolName: overrideResult.toolName,
+          },
+        };
+      });
+    };
+
     sdkOptions.hooks = {
       Notification: [{
         matcher: '',
@@ -930,17 +994,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
         };
       }
 
+      const overrideResult = await applyRuntimeMcpToolOverrides(toolName, input);
+      const effectiveInput = overrideResult.input;
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
-        return { behavior: 'allow', updatedInput: input };
+        return { behavior: 'allow', updatedInput: effectiveInput };
       }
 
-      if ((toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') && typeof input?.plan === 'string') {
+      if ((toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') && typeof effectiveInput?.plan === 'string') {
         try {
           const savedPlan = await savePlanMarkdownToWorkspaceRoot({
             workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || options.cwd,
-            plan: input.plan,
+            plan: effectiveInput.plan,
             sessionId: capturedSessionId || sessionId || null,
           });
           ws.send({
@@ -959,7 +1025,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       const requestId = createRequestId();
       const interactionMessage = getToolInteractionMessage(toolName);
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      ws.send(createNormalizedMessage({
+        kind: 'permission_request',
+        requestId,
+        toolName,
+        input: effectiveInput,
+        sessionId: capturedSessionId || sessionId || null,
+        provider: 'claude'
+      }));
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: capturedSessionId || sessionId || null,
@@ -978,7 +1051,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
           _toolName: toolName,
-          _input: input,
+          _input: effectiveInput,
           _receivedAt: new Date(),
         },
         onCancel: (reason) => {
@@ -1004,7 +1077,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
-        return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
+        return { behavior: 'allow', updatedInput: decision.updatedInput ?? effectiveInput };
       }
 
       return { behavior: 'deny', message: decision.message ?? 'User declined tool interaction' };
@@ -1104,7 +1177,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const persistenceSessionId = sid || pendingProviderSessionId;
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
-      const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
+      const normalized = await applyRuntimeMcpToolOverridesToMessages(
+        sessionsService.normalizeMessage('claude', transformedMessage, sid)
+      );
       const visibleNormalized = normalized.filter((msg) => !isLiveUserTextMessage(msg));
       persistNormalizedMessages({
         options: runtimeOptions,
