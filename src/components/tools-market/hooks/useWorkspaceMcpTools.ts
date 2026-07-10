@@ -11,7 +11,7 @@ export type WorkspaceMcpPreset = {
   status: 'available' | 'connected' | 'probe_failed' | 'unverified';
   dockerCompatible: boolean;
   toolCount: number;
-  tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
+  tools?: WorkspaceMcpTool[];
   installed: boolean;
   connectionStatus: 'available' | 'connected' | 'probe_failed' | 'unverified';
   probeStatus?: 'healthy' | 'probe_failed' | null;
@@ -25,6 +25,12 @@ export type WorkspaceMcpPreset = {
   lastTestedAt?: string | null;
   installedAt?: string | null;
   appliesOn: 'next_agent_turn';
+};
+
+export type WorkspaceMcpTool = {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
 };
 
 export type WorkspaceMcpToolsResponse = {

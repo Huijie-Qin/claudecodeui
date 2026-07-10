@@ -35,9 +35,6 @@ process.stdin.on('end', () => {
     for (const [key, entry] of Object.entries(params)) {
       if (!entry || entry.custom !== true) continue;
 
-      // Keep explicit model/user supplied values for the puncture test.
-      if (Object.prototype.hasOwnProperty.call(mergedInput, key)) continue;
-
       mergedInput[key] = entry.value;
     }
 

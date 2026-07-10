@@ -4,6 +4,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  Settings,
   ShieldCheck,
   Trash2,
   X,
@@ -22,6 +23,7 @@ import {
   getPresetCardBadges,
   getPresetToolDetails,
 } from './mcpToolsDisplay';
+import McpToolSettingsDialog from './McpToolSettingsDialog';
 
 type McpToolsPanelProps = {
   selectedProject: Project;
@@ -36,6 +38,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
   const [filter, setFilter] = useState<FilterKey>('all');
   const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
   const [detailPresetId, setDetailPresetId] = useState<number | null>(null);
+  const [settingsPresetId, setSettingsPresetId] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const {
     data,
@@ -79,6 +82,10 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
     if (detailPresetId == null) return null;
     return presets.find((preset) => preset.id === detailPresetId) ?? null;
   }, [detailPresetId, presets]);
+  const settingsPreset = useMemo(() => {
+    if (settingsPresetId == null) return null;
+    return presets.find((preset) => preset.id === settingsPresetId) ?? null;
+  }, [presets, settingsPresetId]);
 
   const handleInstall = async (preset: WorkspaceMcpPreset) => {
     if (!canManage || preset.installed) return;
@@ -98,6 +105,12 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
   const handleOpenDetail = (preset: WorkspaceMcpPreset) => {
     setSelectedPresetId(preset.id);
     setDetailPresetId(preset.id);
+  };
+
+  const handleOpenSettings = (preset: WorkspaceMcpPreset) => {
+    if (!preset.installed) return;
+    setSelectedPresetId(preset.id);
+    setSettingsPresetId(preset.id);
   };
 
   return (
@@ -183,6 +196,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
                     isSelected={selectedPreset?.id === preset.id}
                     onInstall={handleInstall}
                     onOpenDetail={handleOpenDetail}
+                    onOpenSettings={handleOpenSettings}
                     onRemove={handleRemove}
                     onSelect={setSelectedPresetId}
                     preset={preset}
@@ -207,6 +221,14 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
           preset={detailPreset}
         />
       ) : null}
+      {settingsPreset ? (
+        <McpToolSettingsDialog
+          canManage={canManage}
+          onClose={() => setSettingsPresetId(null)}
+          preset={settingsPreset}
+          selectedProject={selectedProject}
+        />
+      ) : null}
     </section>
   );
 }
@@ -227,6 +249,7 @@ function PresetCard({
   isSelected,
   onInstall,
   onOpenDetail,
+  onOpenSettings,
   onRemove,
   onSelect,
   preset,
@@ -237,6 +260,7 @@ function PresetCard({
   isSelected: boolean;
   onInstall: (preset: WorkspaceMcpPreset) => void;
   onOpenDetail: (preset: WorkspaceMcpPreset) => void;
+  onOpenSettings: (preset: WorkspaceMcpPreset) => void;
   onRemove: (preset: WorkspaceMcpPreset) => void;
   onSelect: (presetId: number) => void;
   preset: WorkspaceMcpPreset;
@@ -275,33 +299,47 @@ function PresetCard({
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">{t('mcpTools.appliesOnNextTurn')}</span>
-        {preset.installed ? (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={!canManage || isRemoving}
+            disabled={!canManage || !preset.installed}
             onClick={(event) => {
               event.stopPropagation();
-              onRemove(preset);
+              onOpenSettings(preset);
             }}
             className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isRemoving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            {t('buttons.delete')}
+            <Settings className="h-4 w-4" />
+            设置
           </button>
-        ) : (
-          <button
-            type="button"
-            disabled={!canManage || isInstalling}
-            onClick={(event) => {
-              event.stopPropagation();
-              onInstall(preset);
-            }}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isInstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-            {isInstalling ? t('mcpTools.installing') : canManage ? t('mcpTools.install') : t('mcpTools.requiresEditAccess')}
-          </button>
-        )}
+          {preset.installed ? (
+            <button
+              type="button"
+              disabled={!canManage || isRemoving}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove(preset);
+              }}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isRemoving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {t('buttons.delete')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={!canManage || isInstalling}
+              onClick={(event) => {
+                event.stopPropagation();
+                onInstall(preset);
+              }}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isInstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {isInstalling ? t('mcpTools.installing') : canManage ? t('mcpTools.install') : t('mcpTools.requiresEditAccess')}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
