@@ -1,4 +1,5 @@
 import { UserCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
 import { useAuth } from '../context/AuthContext';
@@ -14,6 +15,7 @@ export default function CurrentUserBadge({
   iconClassName,
   textClassName,
 }: CurrentUserBadgeProps) {
+  const { t } = useTranslation('auth');
   const { user } = useAuth();
   const username = typeof user?.username === 'string' ? user.username.trim() : '';
 
@@ -27,8 +29,8 @@ export default function CurrentUserBadge({
         'flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/35 px-2.5 py-1.5 text-muted-foreground',
         className,
       )}
-      aria-label={`当前登录用户：${username}`}
-      title={`当前登录用户：${username}`}
+      title={t('currentUserLabel', { username })}
+      aria-label={t('currentUserLabel', { username })}
     >
       <UserCircle
         className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', iconClassName)}

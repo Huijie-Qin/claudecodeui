@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
-import { AUTH_ERROR_MESSAGES } from '../constants';
 import { useAuth } from '../context/AuthContext';
 import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
 
@@ -39,28 +40,29 @@ function getHomePath(): string {
   return basename ? `${basename.replace(/\/$/, '')}/` : '/';
 }
 
-function validateInviteForm(formState: InviteFormState): string | null {
+function validateInviteForm(formState: InviteFormState, t: TFunction<'auth'>): string | null {
   if (!formState.password || !formState.confirmPassword || !formState.gitEmail.trim()) {
-    return 'Please fill in all fields.';
+    return t('invite.errors.requiredFields');
   }
 
   if (formState.password.length < 6) {
-    return 'Password must be at least 6 characters long.';
+    return t('invite.errors.passwordMinLength');
   }
 
   if (formState.password !== formState.confirmPassword) {
-    return 'Passwords do not match.';
+    return t('invite.errors.passwordMismatch');
   }
 
   const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!gitEmailPattern.test(formState.gitEmail.trim())) {
-    return 'Please enter a valid Git email address.';
+    return t('invite.errors.invalidGitEmail');
   }
 
   return null;
 }
 
 export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
+  const { t } = useTranslation('auth');
   const { acceptInvitation } = useAuth();
   const [username, setUsername] = useState('');
   const [formState, setFormState] = useState<InviteFormState>(initialState);
@@ -80,7 +82,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
         const payload = await parseJsonSafely<InvitationPayload>(response);
 
         if (!response.ok || !payload?.invitation?.username) {
-          const message = resolveApiErrorMessage(payload, 'Invitation is invalid or has expired.');
+          const message = resolveApiErrorMessage(payload, t('invite.errors.invalidInvitation'));
           if (!isCancelled) {
             setErrorMessage(message);
           }
@@ -93,7 +95,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
       } catch (caughtError) {
         console.error('Invitation lookup error:', caughtError);
         if (!isCancelled) {
-          setErrorMessage(AUTH_ERROR_MESSAGES.networkError);
+          setErrorMessage(t('errors.networkError'));
         }
       } finally {
         if (!isCancelled) {
@@ -107,7 +109,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
     return () => {
       isCancelled = true;
     };
-  }, [token]);
+  }, [t, token]);
 
   const updateField = useCallback((field: keyof InviteFormState, value: string) => {
     setFormState((previous) => ({ ...previous, [field]: value }));
@@ -118,7 +120,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
       event.preventDefault();
       setErrorMessage('');
 
-      const validationError = validateInviteForm(formState);
+      const validationError = validateInviteForm(formState, t);
       if (validationError) {
         setErrorMessage(validationError);
         return;
@@ -134,24 +136,24 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
 
       window.location.assign(getHomePath());
     },
-    [acceptInvitation, formState, token],
+    [acceptInvitation, formState, t, token],
   );
 
   return (
     <AuthScreenLayout
-      title="Accept invitation"
-      description="Create your password to finish joining CloudCLI"
-      footerText="Your username was set by the administrator."
+      title={t('invite.title')}
+      description={t('invite.description')}
+      footerText={t('invite.footer')}
       logo={<img src="/logo.svg" alt="CloudCLI" className="h-16 w-16" />}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
           id="invitedUsername"
           name="username"
-          label="Username"
-          value={isLoadingInvitation ? 'Loading...' : username}
+          label={t('invite.username')}
+          value={isLoadingInvitation ? t('invite.loadingUsername') : username}
           onChange={() => undefined}
-          placeholder="Username"
+          placeholder={t('invite.username')}
           isDisabled={isLoadingInvitation || isSubmitting}
           autoComplete="username"
           readOnly
@@ -160,10 +162,10 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
         <AuthInputField
           id="password"
           name="password"
-          label="Password"
+          label={t('invite.password')}
           value={formState.password}
           onChange={(value) => updateField('password', value)}
-          placeholder="Enter your password"
+          placeholder={t('invite.placeholders.password')}
           isDisabled={isLoadingInvitation || isSubmitting || !username}
           type="password"
           autoComplete="new-password"
@@ -172,10 +174,10 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
         <AuthInputField
           id="confirmPassword"
           name="confirmPassword"
-          label="Confirm Password"
+          label={t('invite.confirmPassword')}
           value={formState.confirmPassword}
           onChange={(value) => updateField('confirmPassword', value)}
-          placeholder="Confirm your password"
+          placeholder={t('invite.placeholders.confirmPassword')}
           isDisabled={isLoadingInvitation || isSubmitting || !username}
           type="password"
           autoComplete="new-password"
@@ -184,10 +186,10 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
         <AuthInputField
           id="gitEmail"
           name="gitEmail"
-          label="Email"
+          label={t('invite.email')}
           value={formState.gitEmail}
           onChange={(value) => updateField('gitEmail', value)}
-          placeholder="Enter your Huawei Email"
+          placeholder={t('invite.placeholders.gitEmail')}
           isDisabled={isLoadingInvitation || isSubmitting || !username}
           type="email"
           autoComplete="email"
@@ -200,7 +202,7 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
           disabled={isLoadingInvitation || isSubmitting || !username}
           className="w-full rounded-md bg-blue-600 px-4 py-2 font-medium text-white transition-colors duration-200 hover:bg-blue-700 disabled:bg-blue-400"
         >
-          {isSubmitting ? 'Creating account...' : 'Set Password and Sign In'}
+          {isSubmitting ? t('invite.loading') : t('invite.submit')}
         </button>
       </form>
     </AuthScreenLayout>
