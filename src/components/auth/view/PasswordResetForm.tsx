@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
-import { AUTH_ERROR_MESSAGES } from '../constants';
 import { useAuth } from '../context/AuthContext';
 import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
 
@@ -37,23 +38,24 @@ function getHomePath(): string {
   return basename ? `${basename.replace(/\/$/, '')}/` : '/';
 }
 
-function validateResetForm(formState: ResetFormState): string | null {
+function validateResetForm(formState: ResetFormState, t: TFunction<'auth'>): string | null {
   if (!formState.password || !formState.confirmPassword) {
-    return 'Please fill in all fields.';
+    return t('reset.errors.requiredFields');
   }
 
   if (formState.password.length < 6) {
-    return 'Password must be at least 6 characters long.';
+    return t('reset.errors.passwordMinLength');
   }
 
   if (formState.password !== formState.confirmPassword) {
-    return 'Passwords do not match.';
+    return t('reset.errors.passwordMismatch');
   }
 
   return null;
 }
 
 export default function PasswordResetForm({ token }: PasswordResetFormProps) {
+  const { t } = useTranslation('auth');
   const { resetPassword } = useAuth();
   const [username, setUsername] = useState('');
   const [formState, setFormState] = useState<ResetFormState>(initialState);
@@ -73,7 +75,7 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
         const payload = await parseJsonSafely<PasswordResetPayload>(response);
 
         if (!response.ok || !payload?.passwordReset?.username) {
-          const message = resolveApiErrorMessage(payload, 'Password reset link is invalid or has expired.');
+          const message = resolveApiErrorMessage(payload, t('reset.errors.invalidLink'));
           if (!isCancelled) {
             setErrorMessage(message);
           }
@@ -86,7 +88,7 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
       } catch (caughtError) {
         console.error('Password reset lookup error:', caughtError);
         if (!isCancelled) {
-          setErrorMessage(AUTH_ERROR_MESSAGES.networkError);
+          setErrorMessage(t('errors.networkError'));
         }
       } finally {
         if (!isCancelled) {
@@ -100,7 +102,7 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
     return () => {
       isCancelled = true;
     };
-  }, [token]);
+  }, [t, token]);
 
   const updateField = useCallback((field: keyof ResetFormState, value: string) => {
     setFormState((previous) => ({ ...previous, [field]: value }));
@@ -111,7 +113,7 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
       event.preventDefault();
       setErrorMessage('');
 
-      const validationError = validateResetForm(formState);
+      const validationError = validateResetForm(formState, t);
       if (validationError) {
         setErrorMessage(validationError);
         return;
@@ -127,24 +129,24 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
 
       window.location.assign(getHomePath());
     },
-    [formState, resetPassword, token],
+    [formState, resetPassword, t, token],
   );
 
   return (
     <AuthScreenLayout
-      title="Reset password"
-      description="Choose a new password for your CloudCLI account"
-      footerText="This link can only be used once."
+      title={t('reset.title')}
+      description={t('reset.description')}
+      footerText={t('reset.footer')}
       logo={<img src="/logo.svg" alt="CloudCLI" className="h-16 w-16" />}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <AuthInputField
           id="resetUsername"
           name="username"
-          label="Username"
-          value={isLoadingReset ? 'Loading...' : username}
+          label={t('reset.username')}
+          value={isLoadingReset ? t('reset.loadingUsername') : username}
           onChange={() => undefined}
-          placeholder="Username"
+          placeholder={t('reset.username')}
           isDisabled={isLoadingReset || isSubmitting}
           autoComplete="username"
           readOnly
@@ -153,10 +155,10 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
         <AuthInputField
           id="resetPassword"
           name="password"
-          label="New Password"
+          label={t('reset.password')}
           value={formState.password}
           onChange={(value) => updateField('password', value)}
-          placeholder="Enter your new password"
+          placeholder={t('reset.placeholders.password')}
           isDisabled={isLoadingReset || isSubmitting || !username}
           type="password"
           autoComplete="new-password"
@@ -165,10 +167,10 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
         <AuthInputField
           id="resetConfirmPassword"
           name="confirmPassword"
-          label="Confirm New Password"
+          label={t('reset.confirmPassword')}
           value={formState.confirmPassword}
           onChange={(value) => updateField('confirmPassword', value)}
-          placeholder="Confirm your new password"
+          placeholder={t('reset.placeholders.confirmPassword')}
           isDisabled={isLoadingReset || isSubmitting || !username}
           type="password"
           autoComplete="new-password"
@@ -181,7 +183,7 @@ export default function PasswordResetForm({ token }: PasswordResetFormProps) {
           disabled={isLoadingReset || isSubmitting || !username}
           className="w-full rounded-md bg-blue-600 px-4 py-2 font-medium text-white transition-colors duration-200 hover:bg-blue-700 disabled:bg-blue-400"
         >
-          {isSubmitting ? 'Resetting password...' : 'Reset Password and Sign In'}
+          {isSubmitting ? t('reset.loading') : t('reset.submit')}
         </button>
       </form>
     </AuthScreenLayout>

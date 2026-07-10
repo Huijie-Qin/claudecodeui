@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { IS_PLATFORM } from '../../../constants/config';
 import { api } from '../../../utils/api';
-import { AUTH_ERROR_MESSAGES, AUTH_TOKEN_REFRESHED_EVENT, AUTH_TOKEN_STORAGE_KEY } from '../constants';
+import { AUTH_TOKEN_REFRESHED_EVENT, AUTH_TOKEN_STORAGE_KEY } from '../constants';
 import type {
   AuthContextValue,
   AuthProviderProps,
@@ -36,6 +37,7 @@ export function useAuth(): AuthContextValue {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
+  const { t } = useTranslation('auth');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => readStoredToken());
   const [isLoading, setIsLoading] = useState(true);
@@ -110,11 +112,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await checkOnboardingStatus();
     } catch (caughtError) {
       console.error('[Auth] Auth status check failed:', caughtError);
-      setError(AUTH_ERROR_MESSAGES.authStatusCheckFailed);
+      setError(t('errors.authStatusCheckFailed'));
     } finally {
       setIsLoading(false);
     }
-  }, [checkOnboardingStatus, clearSession, token]);
+  }, [checkOnboardingStatus, clearSession, t, token]);
 
   useEffect(() => {
     if (IS_PLATFORM) {
@@ -151,7 +153,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
-          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+          const message = resolveApiErrorMessage(payload, t('errors.loginFailed'));
           setError(message);
           return { success: false, error: message };
         }
@@ -162,11 +164,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Login error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const message = t('errors.networkError');
+        setError(message);
+        return { success: false, error: message };
       }
     },
-    [checkOnboardingStatus, setSession],
+    [checkOnboardingStatus, setSession, t],
   );
 
   const register = useCallback<AuthContextValue['register']>(
@@ -177,7 +180,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
-          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.registrationFailed);
+          const message = resolveApiErrorMessage(payload, t('errors.registrationFailed'));
           setError(message);
           return { success: false, error: message };
         }
@@ -188,11 +191,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Registration error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const message = t('errors.networkError');
+        setError(message);
+        return { success: false, error: message };
       }
     },
-    [checkOnboardingStatus, setSession],
+    [checkOnboardingStatus, setSession, t],
   );
 
   const acceptInvitation = useCallback<AuthContextValue['acceptInvitation']>(
@@ -203,7 +207,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
-          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.registrationFailed);
+          const message = resolveApiErrorMessage(payload, t('errors.registrationFailed'));
           setError(message);
           return { success: false, error: message };
         }
@@ -214,11 +218,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Invitation acceptance error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const message = t('errors.networkError');
+        setError(message);
+        return { success: false, error: message };
       }
     },
-    [checkOnboardingStatus, setSession],
+    [checkOnboardingStatus, setSession, t],
   );
 
   const resetPassword = useCallback<AuthContextValue['resetPassword']>(
@@ -229,7 +234,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const payload = await parseJsonSafely<AuthSessionPayload>(response);
 
         if (!response.ok || !payload?.token || !payload.user) {
-          const message = resolveApiErrorMessage(payload, AUTH_ERROR_MESSAGES.loginFailed);
+          const message = resolveApiErrorMessage(payload, t('errors.loginFailed'));
           setError(message);
           return { success: false, error: message };
         }
@@ -240,11 +245,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: true };
       } catch (caughtError) {
         console.error('Password reset error:', caughtError);
-        setError(AUTH_ERROR_MESSAGES.networkError);
-        return { success: false, error: AUTH_ERROR_MESSAGES.networkError };
+        const message = t('errors.networkError');
+        setError(message);
+        return { success: false, error: message };
       }
     },
-    [checkOnboardingStatus, setSession],
+    [checkOnboardingStatus, setSession, t],
   );
 
   const logout = useCallback(() => {
