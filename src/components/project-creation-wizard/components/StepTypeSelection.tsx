@@ -1,5 +1,6 @@
 import { FolderPlus, GitBranch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import type { WorkspaceType } from '../types';
 
 type StepTypeSelectionProps = {

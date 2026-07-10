@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -8,10 +8,8 @@ import StepReview from './components/StepReview';
 import StepTypeSelection from './components/StepTypeSelection';
 import WizardFooter from './components/WizardFooter';
 import WizardProgress from './components/WizardProgress';
-import { useGithubTokens } from './hooks/useGithubTokens';
-import { cloneWorkspaceWithProgress, createWorkspaceRequest } from './data/workspaceApi';
-import { isCloneWorkflow, shouldShowGithubAuthentication } from './utils/pathUtils';
-import type { TokenMode, WizardFormState, WizardStep, WorkspaceType } from './types';
+import { createWorkspaceRequest } from './data/workspaceApi';
+import type { WizardFormState, WizardStep, WorkspaceType } from './types';
 
 type ProjectCreationWizardProps = {
   onClose: () => void;
@@ -21,10 +19,6 @@ type ProjectCreationWizardProps = {
 const initialFormState: WizardFormState = {
   workspaceType: 'new',
   workspacePath: '',
-  githubUrl: '',
-  tokenMode: 'stored',
-  selectedGithubToken: '',
-  newGithubToken: '',
 };
 
 export default function ProjectCreationWizard({
@@ -36,25 +30,6 @@ export default function ProjectCreationWizard({
   const [formState, setFormState] = useState<WizardFormState>(initialFormState);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cloneProgress, setCloneProgress] = useState('');
-
-  const shouldLoadTokens =
-    step === 2 && shouldShowGithubAuthentication(formState.workspaceType, formState.githubUrl);
-
-  const autoSelectToken = useCallback((tokenId: string) => {
-    setFormState((previous) => ({ ...previous, selectedGithubToken: tokenId }));
-  }, []);
-
-  const {
-    tokens: availableTokens,
-    loading: loadingTokens,
-    loadError: tokenLoadError,
-    selectedTokenName,
-  } = useGithubTokens({
-    shouldLoad: shouldLoadTokens,
-    selectedTokenId: formState.selectedGithubToken,
-    onAutoSelectToken: autoSelectToken,
-  });
 
   // Keep cross-step values in this component; local UI state lives in child components.
   const updateField = useCallback(<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) => {
@@ -63,11 +38,6 @@ export default function ProjectCreationWizard({
 
   const updateWorkspaceType = useCallback(
     (workspaceType: WorkspaceType) => updateField('workspaceType', workspaceType),
-    [updateField],
-  );
-
-  const updateTokenMode = useCallback(
-    (tokenMode: TokenMode) => updateField('tokenMode', tokenMode),
     [updateField],
   );
 
@@ -106,31 +76,8 @@ export default function ProjectCreationWizard({
   const handleCreate = useCallback(async () => {
     setIsCreating(true);
     setError(null);
-    setCloneProgress('');
 
     try {
-      const shouldCloneRepository = isCloneWorkflow(formState.workspaceType, formState.githubUrl);
-
-      if (shouldCloneRepository) {
-        const project = await cloneWorkspaceWithProgress(
-          {
-            workspaceType: formState.workspaceType,
-            workspacePath: formState.workspacePath,
-            githubUrl: formState.githubUrl,
-            tokenMode: formState.tokenMode,
-            selectedGithubToken: formState.selectedGithubToken,
-            newGithubToken: formState.newGithubToken,
-          },
-          {
-            onProgress: setCloneProgress,
-          },
-        );
-
-        onProjectCreated?.(project);
-        onClose();
-        return;
-      }
-
       const project = await createWorkspaceRequest({
         workspaceType: formState.workspaceType,
         path: formState.workspacePath.trim(),
@@ -148,11 +95,6 @@ export default function ProjectCreationWizard({
       setIsCreating(false);
     }
   }, [formState, onClose, onProjectCreated, t]);
-
-  const shouldCloneRepository = useMemo(
-    () => isCloneWorkflow(formState.workspaceType, formState.githubUrl),
-    [formState.githubUrl, formState.workspaceType],
-  );
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
@@ -191,23 +133,8 @@ export default function ProjectCreationWizard({
             <StepConfiguration
               workspaceType={formState.workspaceType}
               workspacePath={formState.workspacePath}
-              githubUrl={formState.githubUrl}
-              tokenMode={formState.tokenMode}
-              selectedGithubToken={formState.selectedGithubToken}
-              newGithubToken={formState.newGithubToken}
-              availableTokens={availableTokens}
-              loadingTokens={loadingTokens}
-              tokenLoadError={tokenLoadError}
               isCreating={isCreating}
               onWorkspacePathChange={(workspacePath) => updateField('workspacePath', workspacePath)}
-              onGithubUrlChange={(githubUrl) => updateField('githubUrl', githubUrl)}
-              onTokenModeChange={updateTokenMode}
-              onSelectedGithubTokenChange={(selectedGithubToken) =>
-                updateField('selectedGithubToken', selectedGithubToken)
-              }
-              onNewGithubTokenChange={(newGithubToken) =>
-                updateField('newGithubToken', newGithubToken)
-              }
               onAdvanceToConfirm={() => setStep(3)}
             />
           )}
@@ -215,9 +142,6 @@ export default function ProjectCreationWizard({
           {step === 3 && (
             <StepReview
               formState={formState}
-              selectedTokenName={selectedTokenName}
-              isCreating={isCreating}
-              cloneProgress={cloneProgress}
             />
           )}
         </div>
@@ -225,7 +149,6 @@ export default function ProjectCreationWizard({
         <WizardFooter
           step={step}
           isCreating={isCreating}
-          isCloneWorkflow={shouldCloneRepository}
           onClose={onClose}
           onBack={handleBack}
           onNext={handleNext}

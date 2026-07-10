@@ -2,23 +2,10 @@ export type WizardStep = 1 | 2 | 3;
 
 export type WorkspaceType = 'existing' | 'new';
 
-export type TokenMode = 'stored' | 'new' | 'none';
-
 export type FolderSuggestion = {
   name: string;
   path: string;
   type?: string;
-};
-
-export type GithubTokenCredential = {
-  id: number;
-  credential_name: string;
-  is_active: boolean;
-};
-
-export type CredentialsResponse = {
-  credentials?: GithubTokenCredential[];
-  error?: string;
 };
 
 export type BrowseFilesystemResponse = {
@@ -46,17 +33,7 @@ export type CreateWorkspaceResponse = {
   details?: string;
 };
 
-export type CloneProgressEvent = {
-  type?: string;
-  message?: string;
-  project?: Record<string, unknown>;
-};
-
 export type WizardFormState = {
   workspaceType: WorkspaceType;
   workspacePath: string;
-  githubUrl: string;
-  tokenMode: TokenMode;
-  selectedGithubToken: string;
-  newGithubToken: string;
 };
