@@ -453,7 +453,7 @@ function ParameterInput({
   return (
     <input
       disabled={disabled}
-      type={field.kind === 'number' ? 'number' : 'text'}
+      type="text"
       value={value}
       onChange={(event) => onChange(event.target.value)}
       className={commonClassName}
