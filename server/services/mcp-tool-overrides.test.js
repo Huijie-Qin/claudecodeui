@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   MCP_TOOL_OVERRIDES_RELATIVE_PATH,
   applyMcpToolOverrides,
+  buildMcpToolOverridePreToolUseOutput,
   parseMcpToolName,
   readMcpToolOverridesConfig,
 } from './mcp-tool-overrides.js';
@@ -93,6 +94,70 @@ test('applyMcpToolOverrides leaves non-custom and non-MCP inputs unchanged', () 
     applied: false,
     appliedParams: [],
   });
+});
+
+test('buildMcpToolOverridePreToolUseOutput returns SDK updatedInput for MCP calls', () => {
+  const result = buildMcpToolOverridePreToolUseOutput({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {
+      query: 'model query',
+      max_results: 3,
+      indexes: ['model-index'],
+    },
+    config: {
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { custom: false, value: 'ignored query' },
+                max_results: { custom: true, value: 8 },
+                indexes: { custom: true, value: ['engineering', 'policy'] },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(result.output, {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      updatedInput: {
+        query: 'model query',
+        max_results: 8,
+        indexes: ['engineering', 'policy'],
+      },
+    },
+  });
+  assert.equal(result.overrideResult.applied, true);
+  assert.deepEqual(result.overrideResult.appliedParams, ['max_results', 'indexes']);
+});
+
+test('buildMcpToolOverridePreToolUseOutput is a no-op when no custom MCP params match', () => {
+  const input = { query: 'model query' };
+  const result = buildMcpToolOverridePreToolUseOutput({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input,
+    config: {
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { custom: false, value: 'ignored query' },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(result.output, {});
+  assert.equal(result.overrideResult.input, input);
+  assert.equal(result.overrideResult.applied, false);
 });
 
 test('readMcpToolOverridesConfig reads the workspace-local override file', async () => {

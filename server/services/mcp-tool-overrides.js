@@ -75,3 +75,23 @@ export function applyMcpToolOverrides({ toolName, input, config }) {
   };
 }
 
+export function buildMcpToolOverridePreToolUseOutput({ toolName, input, config }) {
+  const overrideResult = applyMcpToolOverrides({ toolName, input, config });
+  if (!overrideResult.applied) {
+    return {
+      output: {},
+      overrideResult,
+    };
+  }
+
+  return {
+    output: {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: overrideResult.input,
+      },
+    },
+    overrideResult,
+  };
+}
+

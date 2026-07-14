@@ -34,6 +34,7 @@ import {
 import { loadMcpConfig } from './services/claude-mcp-config.js';
 import {
   applyMcpToolOverrides,
+  buildMcpToolOverridePreToolUseOutput,
   isMcpToolName,
   readMcpToolOverridesConfig,
 } from './services/mcp-tool-overrides.js';
@@ -959,7 +960,30 @@ async function queryClaudeSDK(command, options = {}, ws) {
       });
     };
 
+    // bypassPermissions skips canUseTool for auto-approved calls, so MCP input
+    // mutation must happen in PreToolUse to affect the actual server request.
     sdkOptions.hooks = {
+      PreToolUse: [{
+        matcher: 'mcp__.*',
+        hooks: [async (input) => {
+          if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
+            return {};
+          }
+
+          const config = await readRuntimeMcpToolOverridesConfig();
+          const { output, overrideResult } = buildMcpToolOverridePreToolUseOutput({
+            toolName: input.tool_name,
+            input: input.tool_input,
+            config,
+          });
+          if (overrideResult.applied) {
+            console.info(
+              `[MCP overrides] Applied ${overrideResult.appliedParams.join(', ')} to ${input.tool_name}`,
+            );
+          }
+          return output;
+        }],
+      }],
       Notification: [{
         matcher: '',
         hooks: [async (input) => {
