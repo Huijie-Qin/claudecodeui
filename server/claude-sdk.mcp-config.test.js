@@ -101,6 +101,35 @@ test('loadMcpConfig can isolate docker mode to workspace .mcp.json', async () =>
   assert.equal(config.workspace_only.url, 'https://workspace.example.com/mcp');
 });
 
+test('loadMcpConfig rewrites local MCP URLs for docker mode', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-sdk-mcp-docker-local-'));
+  const homeDir = path.join(tempRoot, 'home');
+  const workspacePath = path.join(tempRoot, 'workspace');
+  await fs.mkdir(workspacePath, { recursive: true });
+
+  await writeJson(path.join(workspacePath, '.mcp.json'), {
+    mcpServers: {
+      local_docs: {
+        type: 'http',
+        url: 'http://127.0.0.1:39999/mcp',
+      },
+      remote_docs: {
+        type: 'http',
+        url: 'https://remote.example.com/mcp',
+      },
+    },
+  });
+
+  const config = await loadMcpConfig(workspacePath, {
+    homeDir,
+    includeHostConfig: false,
+    runtimeMode: 'docker',
+  });
+
+  assert.equal(config.local_docs.url, 'http://host.docker.internal:39999/mcp');
+  assert.equal(config.remote_docs.url, 'https://remote.example.com/mcp');
+});
+
 test('loadMcpConfig returns null when no MCP servers are configured', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-sdk-mcp-empty-'));
   const homeDir = path.join(tempRoot, 'home');
