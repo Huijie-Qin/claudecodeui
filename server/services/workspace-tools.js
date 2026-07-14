@@ -11,6 +11,8 @@ const HEADER_HELPER_TIMEOUT_MS = 10_000;
 const HEADER_HELPER_MAX_BUFFER_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
 const mcpStatusCache = new Map();
+const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
+const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
 const HOST_SHELL_COMMAND = process.platform === 'win32'
   ? (process.env.ComSpec || 'cmd.exe')
   : '/bin/sh';
@@ -93,9 +95,9 @@ export async function readWorkspaceMcpConfig(workspacePath) {
   }
 }
 
-export async function writeWorkspaceMcpConfig(workspacePath, config) {
+export async function writeWorkspaceMcpConfig(workspacePath, config, { env = process.env } = {}) {
   const { mcpConfigPath } = getWorkspaceToolsPaths(workspacePath);
-  const normalized = normalizeMcpConfig(config);
+  const normalized = normalizeWorkspaceMcpConfigForRuntime(config, { env });
   if (Object.keys(normalized.mcpServers).length === 0) {
     await removeJsonFile(mcpConfigPath);
     return;
@@ -842,6 +844,45 @@ function normalizeMcpConfig(config) {
     ...readPlainObject(config),
     mcpServers: readPlainObject(config?.mcpServers) || {},
   };
+}
+
+function normalizeWorkspaceMcpConfigForRuntime(config, { env = process.env } = {}) {
+  const normalized = normalizeMcpConfig(config);
+  if (String(env.CLAUDE_EXECUTION_MODE || 'local').trim().toLowerCase() !== 'docker') {
+    return normalized;
+  }
+
+  return {
+    ...normalized,
+    mcpServers: Object.fromEntries(
+      Object.entries(normalized.mcpServers).map(([name, serverConfig]) => [
+        name,
+        rewriteLocalHttpMcpServerForDocker(serverConfig),
+      ]),
+    ),
+  };
+}
+
+function rewriteLocalHttpMcpServerForDocker(serverConfig) {
+  const record = readPlainObject(serverConfig);
+  const url = firstString(record?.url);
+  if (!record || !url) {
+    return serverConfig;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!DOCKER_LOCAL_MCP_HOSTNAMES.has(parsed.hostname)) {
+      return serverConfig;
+    }
+    parsed.hostname = DOCKER_HOST_MCP_HOSTNAME;
+    return {
+      ...record,
+      url: parsed.toString(),
+    };
+  } catch {
+    return serverConfig;
+  }
 }
 
 function normalizeStatus(status) {

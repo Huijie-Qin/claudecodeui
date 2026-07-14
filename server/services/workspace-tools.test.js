@@ -70,6 +70,64 @@ test('listWorkspaceTools reads project .mcp.json and preserves unsupported exist
   }
 });
 
+test('writeWorkspaceMcpConfig rewrites local HTTP MCP URLs for docker mode', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  try {
+    await writeWorkspaceMcpConfig(
+      workspacePath,
+      {
+        mcpServers: {
+          docs: {
+            type: 'http',
+            url: 'http://127.0.0.1:39999/mcp',
+          },
+          local: {
+            type: 'stdio',
+            command: 'npx',
+            args: ['server'],
+          },
+        },
+      },
+      { env: { CLAUDE_EXECUTION_MODE: 'docker' } },
+    );
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+
+    assert.equal(config.mcpServers.docs.url, 'http://host.docker.internal:39999/mcp');
+    assert.deepEqual(config.mcpServers.local, {
+      type: 'stdio',
+      command: 'npx',
+      args: ['server'],
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeWorkspaceMcpConfig preserves local HTTP MCP URLs outside docker mode', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  try {
+    await writeWorkspaceMcpConfig(
+      workspacePath,
+      {
+        mcpServers: {
+          docs: {
+            type: 'http',
+            url: 'http://127.0.0.1:39999/mcp',
+          },
+        },
+      },
+      { env: { CLAUDE_EXECUTION_MODE: 'local' } },
+    );
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+
+    assert.equal(config.mcpServers.docs.url, 'http://127.0.0.1:39999/mcp');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('upsertWorkspaceMcpServer probes, writes .mcp.json, and caches status without status.json', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
