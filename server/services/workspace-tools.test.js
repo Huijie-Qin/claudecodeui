@@ -70,6 +70,64 @@ test('listWorkspaceTools reads project .mcp.json and preserves unsupported exist
   }
 });
 
+test('writeWorkspaceMcpConfig rewrites local HTTP MCP URLs for docker mode', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  try {
+    await writeWorkspaceMcpConfig(
+      workspacePath,
+      {
+        mcpServers: {
+          docs: {
+            type: 'http',
+            url: 'http://127.0.0.1:39999/mcp',
+          },
+          local: {
+            type: 'stdio',
+            command: 'npx',
+            args: ['server'],
+          },
+        },
+      },
+      { env: { CLAUDE_EXECUTION_MODE: 'docker' } },
+    );
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+
+    assert.equal(config.mcpServers.docs.url, 'http://host.docker.internal:39999/mcp');
+    assert.deepEqual(config.mcpServers.local, {
+      type: 'stdio',
+      command: 'npx',
+      args: ['server'],
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('writeWorkspaceMcpConfig preserves local HTTP MCP URLs outside docker mode', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  try {
+    await writeWorkspaceMcpConfig(
+      workspacePath,
+      {
+        mcpServers: {
+          docs: {
+            type: 'http',
+            url: 'http://127.0.0.1:39999/mcp',
+          },
+        },
+      },
+      { env: { CLAUDE_EXECUTION_MODE: 'local' } },
+    );
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+
+    assert.equal(config.mcpServers.docs.url, 'http://127.0.0.1:39999/mcp');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('upsertWorkspaceMcpServer probes, writes .mcp.json, and caches status without status.json', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
@@ -250,6 +308,7 @@ test('previewMcpJsonImport classifies HTTP, needs-value, unsupported, invalid, a
 });
 
 test('probeHttpMcpServer runs headersHelper and lets dynamic headers override static headers', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
@@ -267,33 +326,38 @@ test('probeHttpMcpServer runs headersHelper and lets dynamic headers override st
       headers: { 'Content-Type': 'application/json' },
     });
   };
-  const helperScript = [
+  const helperPath = path.join(workspacePath, 'headers-helper.cjs');
+  await fs.writeFile(helperPath, [
     'process.stdout.write(JSON.stringify({',
-    'Authorization: "Bearer dynamic",',
-    '"X-Helper": process.env.CLAUDE_CODE_MCP_SERVER_NAME + ":" + process.env.CLAUDE_CODE_MCP_SERVER_URL',
-    '}))',
-  ].join('');
-  const headersHelper = `${JSON.stringify(process.execPath)} -e '${helperScript}'`;
+    "  Authorization: 'Bearer dynamic',",
+    "  'X-Helper': `${process.env.CLAUDE_CODE_MCP_SERVER_NAME}:${process.env.CLAUDE_CODE_MCP_SERVER_URL}`,",
+    '}));',
+  ].join(''));
+  const headersHelper = `node ${helperPath.replace(/\\/g, '/')}`;
 
-  const result = await probeHttpMcpServer(
-    {
-      type: 'http',
-      name: 'docs',
-      url: 'http://127.0.0.1:9000/mcp',
-      headers: {
-        Authorization: 'Bearer static',
-        'X-Static': 'yes',
+  try {
+    const result = await probeHttpMcpServer(
+      {
+        type: 'http',
+        name: 'docs',
+        url: 'http://127.0.0.1:9000/mcp',
+        headers: {
+          Authorization: 'Bearer static',
+          'X-Static': 'yes',
+        },
+        headersHelper,
       },
-      headersHelper,
-    },
-    { fetchImpl },
-  );
+      { fetchImpl },
+    );
 
-  assert.equal(result.status, 'healthy');
-  assert.equal(calls[0].headers.Authorization, 'Bearer dynamic');
-  assert.equal(calls[0].headers['X-Static'], 'yes');
-  assert.equal(calls[0].headers['X-Helper'], 'docs:http://127.0.0.1:9000/mcp');
-  assert.equal(calls[2].headers.Authorization, 'Bearer dynamic');
+    assert.equal(result.status, 'healthy');
+    assert.equal(calls[0].headers.Authorization, 'Bearer dynamic');
+    assert.equal(calls[0].headers['X-Static'], 'yes');
+    assert.equal(calls[0].headers['X-Helper'], 'docs:http://127.0.0.1:9000/mcp');
+    assert.equal(calls[2].headers.Authorization, 'Bearer dynamic');
+  } finally {
+    await cleanup();
+  }
 });
 
 test('probeHttpMcpServer performs initialize and tools/list over HTTP JSON-RPC', async () => {
