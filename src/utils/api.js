@@ -515,6 +515,11 @@ export const api = {
       if (search) params.set('search', search);
       return authenticatedFetch(`/api/admin/analytics/users?${params.toString()}`);
     },
+    mcpToolUsage: ({ rangeDays = 30, provider = '' } = {}) => {
+      const params = new URLSearchParams({ rangeDays: String(rangeDays) });
+      if (provider) params.set('provider', provider);
+      return authenticatedFetch(`/api/admin/mcp/tool-usage?${params.toString()}`);
+    },
     createTenant: (payload) =>
       authenticatedFetch('/api/admin/tenants', {
         method: 'POST',

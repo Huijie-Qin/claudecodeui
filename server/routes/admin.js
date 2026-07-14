@@ -11,6 +11,7 @@ import { skillPresetService } from '../services/skill-presets.js';
 import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
+import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -514,6 +515,18 @@ export function createAdminRouter(
       res.json(usersSummary);
     } catch (error) {
       sendRouteError(res, error, 'Failed to load analytics users');
+    }
+  });
+
+  router.get('/mcp/tool-usage', (req, res) => {
+    try {
+      const summary = buildMcpToolUsageSummary({
+        rangeDays: req.query?.rangeDays,
+        provider: req.query?.provider,
+      });
+      res.json(summary);
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load MCP tool usage');
     }
   });
 
