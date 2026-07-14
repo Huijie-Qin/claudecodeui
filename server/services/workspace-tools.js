@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -12,6 +12,7 @@ const HEADER_HELPER_MAX_BUFFER_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
 const mcpStatusCache = new Map();
 const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
+const HOST_LOOPBACK_MCP_HOSTNAME = '127.0.0.1';
 const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
 const HOST_SHELL_COMMAND = process.platform === 'win32'
   ? (process.env.ComSpec || 'cmd.exe')
@@ -175,7 +176,7 @@ export async function probeWorkspaceMcpServer({
   env = process.env,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: false });
-  const runtimeConfig = normalizeMcpServerConfigForRuntime(normalized.config, { env });
+  const runtimeConfig = normalizeMcpServerConfigForProbeRuntime(normalized.config, { env });
   const result = await probe({ ...runtimeConfig, name: normalized.name });
   const checkedAt = now().toISOString();
   const entry = {
@@ -229,7 +230,7 @@ export async function upsertWorkspaceMcpServer({
     };
   }
 
-  const runtimeConfig = normalizeMcpServerConfigForRuntime(normalized.config, { env });
+  const runtimeConfig = normalizeMcpServerConfigForProbeRuntime(normalized.config, { env });
   const probeResult = await probe({ ...runtimeConfig, name: normalized.name });
   if (probeResult.status !== 'healthy') {
     const status = await readMcpStatus(workspacePath);
@@ -874,6 +875,29 @@ function normalizeMcpServerConfigForRuntime(serverConfig, { env = process.env } 
   return rewriteLocalHttpMcpServerForDocker(serverConfig);
 }
 
+export function normalizeMcpServerConfigForProbeRuntime(serverConfig, { env = process.env } = {}) {
+  return resolveMcpProbeRuntime(env) === 'docker'
+    ? rewriteLocalHttpMcpServerForDocker(serverConfig)
+    : rewriteDockerHostHttpMcpServerForHost(serverConfig);
+}
+
+function resolveMcpProbeRuntime(env = process.env) {
+  const configured = String(env.CLOUDCLI_MCP_PROBE_RUNTIME || '').trim().toLowerCase();
+  if (configured === 'docker' || configured === 'container') return 'docker';
+  if (configured === 'host' || configured === 'local') return 'host';
+  return isRunningInsideContainer() ? 'docker' : 'host';
+}
+
+function isRunningInsideContainer() {
+  if (process.platform === 'win32') return false;
+  if (existsSync('/.dockerenv')) return true;
+  try {
+    return /docker|kubepods|containerd/i.test(readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 function rewriteLocalHttpMcpServerForDocker(serverConfig) {
   const record = readPlainObject(serverConfig);
   const url = firstString(record?.url);
@@ -887,6 +911,28 @@ function rewriteLocalHttpMcpServerForDocker(serverConfig) {
       return serverConfig;
     }
     parsed.hostname = DOCKER_HOST_MCP_HOSTNAME;
+    return {
+      ...record,
+      url: parsed.toString(),
+    };
+  } catch {
+    return serverConfig;
+  }
+}
+
+function rewriteDockerHostHttpMcpServerForHost(serverConfig) {
+  const record = readPlainObject(serverConfig);
+  const url = firstString(record?.url);
+  if (!record || !url) {
+    return serverConfig;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== DOCKER_HOST_MCP_HOSTNAME) {
+      return serverConfig;
+    }
+    parsed.hostname = HOST_LOOPBACK_MCP_HOSTNAME;
     return {
       ...record,
       url: parsed.toString(),

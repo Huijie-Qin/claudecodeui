@@ -172,7 +172,7 @@ test('upsertWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe'
         type: 'http',
         url: 'http://127.0.0.1:39999/mcp',
       },
-      env: { CLAUDE_EXECUTION_MODE: 'docker' },
+      env: { CLOUDCLI_MCP_PROBE_RUNTIME: 'docker' },
       probe: async (config) => {
         seen.push(config);
         return {
@@ -292,7 +292,7 @@ test('probeWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe',
         type: 'http',
         url: 'http://localhost:5555/mcp',
       },
-      env: { CLAUDE_EXECUTION_MODE: 'docker' },
+      env: { CLOUDCLI_MCP_PROBE_RUNTIME: 'docker' },
       probe: async (config) => {
         seen.push(config);
         return {
@@ -308,6 +308,38 @@ test('probeWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe',
 
     assert.equal(result.status, 'healthy');
     assert.equal(seen[0].url, 'http://host.docker.internal:5555/mcp');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('probeWorkspaceMcpServer rewrites docker host MCP URLs before local host probe', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  const seen = [];
+  try {
+    const result = await probeWorkspaceMcpServer({
+      workspacePath,
+      server: {
+        name: 'probe-only',
+        type: 'http',
+        url: 'http://host.docker.internal:5555/mcp',
+      },
+      env: { CLOUDCLI_MCP_PROBE_RUNTIME: 'host' },
+      probe: async (config) => {
+        seen.push(config);
+        return {
+          status: 'healthy',
+          phase: 'tools_list',
+          error: '',
+          latencyMs: 3,
+          toolCount: 0,
+          tools: [],
+        };
+      },
+    });
+
+    assert.equal(result.status, 'healthy');
+    assert.equal(seen[0].url, 'http://127.0.0.1:5555/mcp');
   } finally {
     await cleanup();
   }
