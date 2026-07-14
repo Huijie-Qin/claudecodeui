@@ -4,9 +4,6 @@ import path from 'path';
 
 import { applyWorkspaceMcpHelperScripts } from './mcp-helper-scripts.js';
 
-const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
-const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
-
 async function readJsonIfPresent(filePath, label) {
   try {
     try {
@@ -28,42 +25,6 @@ function mergeMcpServers(target, source) {
     return { ...target, ...source };
   }
   return target;
-}
-
-function rewriteLocalHttpMcpServerForDocker(serverConfig) {
-  if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
-    return serverConfig;
-  }
-  if (typeof serverConfig.url !== 'string' || serverConfig.url.trim() === '') {
-    return serverConfig;
-  }
-
-  try {
-    const parsed = new URL(serverConfig.url);
-    if (!DOCKER_LOCAL_MCP_HOSTNAMES.has(parsed.hostname)) {
-      return serverConfig;
-    }
-    parsed.hostname = DOCKER_HOST_MCP_HOSTNAME;
-    return {
-      ...serverConfig,
-      url: parsed.toString(),
-    };
-  } catch {
-    return serverConfig;
-  }
-}
-
-function normalizeMcpServersForRuntime(mcpServers, { runtimeMode = 'local' } = {}) {
-  if (String(runtimeMode || 'local').trim().toLowerCase() !== 'docker') {
-    return mcpServers;
-  }
-
-  return Object.fromEntries(
-    Object.entries(mcpServers).map(([name, serverConfig]) => [
-      name,
-      rewriteLocalHttpMcpServerForDocker(serverConfig),
-    ]),
-  );
 }
 
 /**
@@ -114,7 +75,6 @@ async function loadMcpConfig(cwd, {
     if (Object.keys(mcpServers).length === 0) {
       return null;
     }
-    mcpServers = normalizeMcpServersForRuntime(mcpServers, { runtimeMode });
     if (tenantId && workspaceId) {
       mcpServers = await applyWorkspaceMcpHelperScripts(mcpServers, {
         tenantId,
