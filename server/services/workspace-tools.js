@@ -172,9 +172,11 @@ export async function probeWorkspaceMcpServer({
   server,
   now = () => new Date(),
   probe = probeHttpMcpServer,
+  env = process.env,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: false });
-  const result = await probe({ ...normalized.config, name: normalized.name });
+  const runtimeConfig = normalizeMcpServerConfigForRuntime(normalized.config, { env });
+  const result = await probe({ ...runtimeConfig, name: normalized.name });
   const checkedAt = now().toISOString();
   const entry = {
     ...result,
@@ -198,6 +200,7 @@ export async function upsertWorkspaceMcpServer({
   server,
   now = () => new Date(),
   probe = probeHttpMcpServer,
+  env = process.env,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: true });
   const timestamp = now().toISOString();
@@ -226,7 +229,8 @@ export async function upsertWorkspaceMcpServer({
     };
   }
 
-  const probeResult = await probe({ ...normalized.config, name: normalized.name });
+  const runtimeConfig = normalizeMcpServerConfigForRuntime(normalized.config, { env });
+  const probeResult = await probe({ ...runtimeConfig, name: normalized.name });
   if (probeResult.status !== 'healthy') {
     const status = await readMcpStatus(workspacePath);
     await writeMcpStatus(workspacePath, {
@@ -861,6 +865,13 @@ function normalizeWorkspaceMcpConfigForRuntime(config, { env = process.env } = {
       ]),
     ),
   };
+}
+
+function normalizeMcpServerConfigForRuntime(serverConfig, { env = process.env } = {}) {
+  if (String(env.CLAUDE_EXECUTION_MODE || 'local').trim().toLowerCase() !== 'docker') {
+    return serverConfig;
+  }
+  return rewriteLocalHttpMcpServerForDocker(serverConfig);
 }
 
 function rewriteLocalHttpMcpServerForDocker(serverConfig) {

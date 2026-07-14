@@ -161,6 +161,37 @@ test('upsertWorkspaceMcpServer probes, writes .mcp.json, and caches status witho
   }
 });
 
+test('upsertWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  const seen = [];
+  try {
+    await upsertWorkspaceMcpServer({
+      workspacePath,
+      server: {
+        name: 'docs',
+        type: 'http',
+        url: 'http://127.0.0.1:39999/mcp',
+      },
+      env: { CLAUDE_EXECUTION_MODE: 'docker' },
+      probe: async (config) => {
+        seen.push(config);
+        return {
+          status: 'healthy',
+          phase: 'tools_list',
+          error: '',
+          latencyMs: 3,
+          toolCount: 0,
+          tools: [],
+        };
+      },
+    });
+
+    assert.equal(seen[0].url, 'http://host.docker.internal:39999/mcp');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('upsertWorkspaceMcpServer saves needs-value drafts without writing .mcp.json', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   try {
@@ -245,6 +276,38 @@ test('probeWorkspaceMcpServer caches real probe result without writing config or
     assert.deepEqual(config.mcpServers, {});
     assert.equal(status.servers['probe-only'].toolCount, 1);
     await assert.rejects(fs.access(statusPath), { code: 'ENOENT' });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('probeWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  const seen = [];
+  try {
+    const result = await probeWorkspaceMcpServer({
+      workspacePath,
+      server: {
+        name: 'probe-only',
+        type: 'http',
+        url: 'http://localhost:5555/mcp',
+      },
+      env: { CLAUDE_EXECUTION_MODE: 'docker' },
+      probe: async (config) => {
+        seen.push(config);
+        return {
+          status: 'healthy',
+          phase: 'tools_list',
+          error: '',
+          latencyMs: 3,
+          toolCount: 0,
+          tools: [],
+        };
+      },
+    });
+
+    assert.equal(result.status, 'healthy');
+    assert.equal(seen[0].url, 'http://host.docker.internal:5555/mcp');
   } finally {
     await cleanup();
   }
