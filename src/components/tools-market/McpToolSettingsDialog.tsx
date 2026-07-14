@@ -182,15 +182,19 @@ export default function McpToolSettingsDialog({
     setError(null);
     setSuccess(null);
     try {
-      const params = Object.fromEntries(fields.map((field) => {
+      const params = Object.fromEntries(fields.flatMap((field) => {
         const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
-        return [
+        if (!state.custom) {
+          return [];
+        }
+
+        return [[
           field.key,
           {
-            custom: state.custom,
-            value: state.custom ? parseFieldValue(field, state.rawValue) : field.defaultValue,
+            custom: true,
+            value: parseFieldValue(field, state.rawValue),
           },
-        ];
+        ]];
       }));
       const nextConfig = withToolOverrideParams(config, preset, selectedTool.name, params);
       await ensureOverridesDirectory(selectedProject);

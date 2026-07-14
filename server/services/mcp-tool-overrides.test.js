@@ -57,6 +57,43 @@ test('applyMcpToolOverrides replaces model parameters when custom is true', () =
   });
 });
 
+test('applyMcpToolOverrides supports sparse configs with only custom parameters', () => {
+  const result = applyMcpToolOverrides({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {
+      query: 'model query',
+      max_results: 3,
+      indexes: ['model-index'],
+      filters: { owner: 'model' },
+      fresh_only: false,
+    },
+    config: {
+      version: 1,
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { custom: true, value: 'custom query' },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.appliedParams, ['query']);
+  assert.deepEqual(result.input, {
+    query: 'custom query',
+    max_results: 3,
+    indexes: ['model-index'],
+    filters: { owner: 'model' },
+    fresh_only: false,
+  });
+});
+
 test('applyMcpToolOverrides leaves non-custom and non-MCP inputs unchanged', () => {
   const config = {
     mcpServers: {
