@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn as spawnChildProcess } from 'node:child_process';
 import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -340,6 +340,56 @@ exec docker exec -i \\
   ${container} \\
   ${binary} "$@"
 `;
+}
+
+export function buildClaudeDockerExecArgs({
+  containerName,
+  args = [],
+  env = {},
+  envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  executable = 'claude',
+}) {
+  const normalizedEnv = normalizeContainerEnvRecord(env);
+  const dockerEnvArgs = envAllowlist.flatMap((name) => (
+    Object.prototype.hasOwnProperty.call(normalizedEnv, name)
+      ? ['-e', `${name}=${normalizedEnv[name]}`]
+      : []
+  ));
+
+  return [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    ...dockerEnvArgs,
+    requireValue(containerName, 'containerName'),
+    requireValue(executable, 'executable'),
+    ...(Array.isArray(args) ? args : []),
+  ];
+}
+
+export function createClaudeDockerSpawn({
+  containerName,
+  envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  spawnImpl = spawnChildProcess,
+} = {}) {
+  return (options = {}) => spawnImpl(
+    'docker',
+    buildClaudeDockerExecArgs({
+      containerName,
+      args: options.args,
+      env: options.env,
+      envAllowlist,
+    }),
+    {
+      env: options.env,
+      signal: options.signal,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
 }
 
 export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, gid } = {}) {
@@ -1065,6 +1115,12 @@ export function createAgentSessionRuntimeManager({
       projectPath: '/workspace',
       hostWorkspacePath: workspaceHostPath,
       pathToClaudeCodeExecutable: wrapperPath,
+      spawnClaudeCodeProcess: process.platform === 'win32'
+        ? createClaudeDockerSpawn({
+          containerName: runtime.container_name,
+          envAllowlist: buildContainerEnvAllowlist(userEnv),
+        })
+        : undefined,
       executionEnv: buildWrapperHostEnv(env, userEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,

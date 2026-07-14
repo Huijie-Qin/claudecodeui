@@ -5,11 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildClaudeDockerExecArgs,
   buildClaudeDockerWrapperScript,
   buildContainerName,
   buildDockerRunArgs,
   buildRuntimePaths,
   createAgentSessionRuntimeManager,
+  createClaudeDockerSpawn,
   ensureRuntimeHomeWritable,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
@@ -170,6 +172,75 @@ test('claude docker wrapper tolerates an empty forwarded env array', () => {
 
   assert.match(wrapper, /\$\{DOCKER_ENV\[@\]\+"\$\{DOCKER_ENV\[@\]\}"\}/);
   assert.match(wrapper, /set -euo pipefail/);
+});
+
+test('docker exec args forward allowed environment and Claude arguments', () => {
+  const args = buildClaudeDockerExecArgs({
+    containerName: 'cloudcli-claude-test',
+    args: ['--model', 'glm-5.1'],
+    env: {
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test',
+      ANTHROPIC_MODEL: 'glm-5.1',
+      PRIVATE_TOKEN: 'private-token',
+      'BAD-NAME': 'ignored',
+    },
+  });
+
+  assert.deepEqual(args.slice(0, 7), [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    '-e',
+  ]);
+  assert.ok(args.includes('ANTHROPIC_BASE_URL=https://gateway.example.test'));
+  assert.ok(args.includes('ANTHROPIC_MODEL=glm-5.1'));
+  assert.ok(args.includes('PRIVATE_TOKEN=private-token'));
+  assert.equal(args.includes('BAD-NAME=ignored'), false);
+  assert.deepEqual(args.slice(-4), ['cloudcli-claude-test', 'claude', '--model', 'glm-5.1']);
+});
+
+test('custom docker spawn bypasses host wrapper execution', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    envAllowlist: ['ANTHROPIC_MODEL'],
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  const result = spawnClaudeCodeProcess({
+    command: 'C:\\runtime\\claude-docker-wrapper',
+    args: ['--model', 'glm-5.1'],
+    env: { ANTHROPIC_MODEL: 'glm-5.1', PATH: 'C:\\bin' },
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result, child);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'docker');
+  assert.deepEqual(calls[0][1], [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    '-e',
+    'ANTHROPIC_MODEL=glm-5.1',
+    'cloudcli-claude-test',
+    'claude',
+    '--model',
+    'glm-5.1',
+  ]);
+  assert.equal(calls[0][2].env.PATH, 'C:\\bin');
+  assert.deepEqual(calls[0][2].stdio, ['pipe', 'pipe', 'pipe']);
+  assert.equal(calls[0][2].windowsHide, true);
 });
 
 test('docker runtime home is owned by the sandbox user when possible', async () => {
