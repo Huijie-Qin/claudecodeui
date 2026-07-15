@@ -8,6 +8,7 @@ import {
 } from './workspace-path-mapping.js';
 
 export const MCP_TOOL_OVERRIDES_RELATIVE_PATH = path.join('.claude', 'mcp-tool-overrides.local.json');
+export const MCP_TOOL_OVERRIDES_TRACE_LOG_ID = 'MCP_TOOL_OVERRIDES_TRACE';
 export { WORKSPACE_CONTAINER_ROOT_ENV, WORKSPACE_HOST_ROOT_ENV };
 
 function isPlainObject(value) {
@@ -33,29 +34,94 @@ function buildConfigPathCandidates(workspaceRoot, env = process.env) {
   if (typeof workspaceRoot === 'string' && workspaceRoot.trim()) {
     candidates.push(
       ...buildWorkspacePathCandidates(workspaceRoot, env)
-        .map((root) => path.join(root, MCP_TOOL_OVERRIDES_RELATIVE_PATH)),
+        .map((root, index) => ({
+          source: index === 0 ? 'workspace' : 'mapped',
+          path: path.join(root, MCP_TOOL_OVERRIDES_RELATIVE_PATH),
+        })),
     );
   }
-  candidates.push(MCP_TOOL_OVERRIDES_RELATIVE_PATH);
-  return [...new Set(candidates)];
+  candidates.push({
+    source: 'relative',
+    path: MCP_TOOL_OVERRIDES_RELATIVE_PATH,
+  });
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.path)) return false;
+    seen.add(candidate.path);
+    return true;
+  });
 }
 
-export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.env } = {}) {
-  for (const configPath of buildConfigPathCandidates(workspaceRoot, env)) {
+function buildTraceMeta({ workspaceRoot, candidates, selectedCandidate = null }) {
+  return {
+    logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+    workspaceRoot: typeof workspaceRoot === 'string' && workspaceRoot.trim() ? workspaceRoot : null,
+    cwd: process.cwd(),
+    selected: selectedCandidate
+      ? { source: selectedCandidate.source, path: selectedCandidate.path }
+      : null,
+    candidates: candidates.map((candidate) => ({
+      source: candidate.source,
+      path: candidate.path,
+    })),
+  };
+}
+
+function logTrace(logger, level, message, meta = {}) {
+  const logFn = logger?.[level] || logger?.log;
+  if (typeof logFn !== 'function') return;
+  logFn.call(logger, `[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] ${message} ${JSON.stringify(meta)}`);
+}
+
+export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.env, logger = console } = {}) {
+  const candidates = buildConfigPathCandidates(workspaceRoot, env);
+
+  for (const candidate of candidates) {
     try {
-      const content = (await fs.readFile(configPath, 'utf8')).replace(/^\uFEFF/, '');
-      if (!content.trim()) return null;
+      const content = (await fs.readFile(candidate.path, 'utf8')).replace(/^\uFEFF/, '');
+      if (!content.trim()) {
+        logTrace(logger, 'info', 'Config file is empty', buildTraceMeta({
+          workspaceRoot,
+          candidates,
+          selectedCandidate: candidate,
+        }));
+        return null;
+      }
 
       const parsed = JSON.parse(content);
-      return isPlainObject(parsed) ? parsed : null;
+      if (!isPlainObject(parsed)) {
+        logTrace(logger, 'warn', 'Config file is not a JSON object', buildTraceMeta({
+          workspaceRoot,
+          candidates,
+          selectedCandidate: candidate,
+        }));
+        return null;
+      }
+
+      logTrace(logger, 'info', 'Loaded config file', buildTraceMeta({
+        workspaceRoot,
+        candidates,
+        selectedCandidate: candidate,
+      }));
+      return parsed;
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
         continue;
       }
+      logTrace(logger, 'warn', 'Failed to read config file', {
+        ...buildTraceMeta({ workspaceRoot, candidates, selectedCandidate: candidate }),
+        errorCode: error?.code || null,
+        errorMessage: error?.message || String(error),
+      });
       throw error;
     }
   }
 
+  logTrace(logger, 'info', 'No config file found', buildTraceMeta({
+    workspaceRoot,
+    candidates,
+  }));
   return null;
 }
 

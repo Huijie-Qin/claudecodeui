@@ -33,6 +33,7 @@ import {
 } from './services/notification-orchestrator.js';
 import { loadMcpConfig } from './services/claude-mcp-config.js';
 import {
+  MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
   applyMcpToolOverrides,
   buildMcpToolOverridePreToolUseOutput,
   isMcpToolName,
@@ -910,7 +911,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
       try {
         return await readMcpToolOverridesConfig(mcpOverridesWorkspaceRoot);
       } catch (error) {
-        console.warn('Failed to read MCP tool overrides:', error?.message || error);
+        const traceMeta = {
+          logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+          workspaceRoot: mcpOverridesWorkspaceRoot || null,
+          errorCode: error?.code || null,
+          errorMessage: error?.message || String(error),
+        };
+        console.warn(
+          `[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] Failed to read MCP tool overrides ${JSON.stringify(traceMeta)}`,
+        );
         return null;
       }
     };
@@ -977,8 +986,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
             config,
           });
           if (overrideResult.applied) {
+            const traceMeta = {
+              logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+              toolName: input.tool_name,
+              appliedParams: overrideResult.appliedParams,
+            };
             console.info(
-              `[MCP overrides] Applied ${overrideResult.appliedParams.join(', ')} to ${input.tool_name}`,
+              `[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] Applied MCP tool overrides ${JSON.stringify(traceMeta)}`,
             );
           }
           return output;

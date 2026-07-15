@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   MCP_TOOL_OVERRIDES_RELATIVE_PATH,
+  MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
   WORKSPACE_CONTAINER_ROOT_ENV,
   WORKSPACE_HOST_ROOT_ENV,
   applyMcpToolOverrides,
@@ -24,6 +25,22 @@ async function withTempCwd(prefix, task) {
     process.chdir(previousCwd);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+function createCaptureLogger() {
+  const entries = [];
+  return {
+    entries,
+    logger: {
+      info: (...args) => entries.push(['info', ...args]),
+      warn: (...args) => entries.push(['warn', ...args]),
+      log: (...args) => entries.push(['log', ...args]),
+    },
+  };
+}
+
+function parseTraceMeta(message) {
+  return JSON.parse(message.slice(message.indexOf('{')));
 }
 
 test('parseMcpToolName extracts MCP server and tool names', () => {
@@ -228,7 +245,7 @@ test('readMcpToolOverridesConfig prefers the workspace-local override file', asy
       mcpServers: { cwd_only: { tools: {} } },
     }), 'utf8');
 
-    assert.deepEqual(await readMcpToolOverridesConfig(workspaceRoot), {
+    assert.deepEqual(await readMcpToolOverridesConfig(workspaceRoot, { logger: null }), {
       version: 1,
       mcpServers: { workspace_only: { tools: {} } },
     });
@@ -241,7 +258,7 @@ test('readMcpToolOverridesConfig accepts UTF-8 BOM config files', async () => {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `\uFEFF${JSON.stringify({ version: 1, mcpServers: {} })}`, 'utf8');
 
-    assert.deepEqual(await readMcpToolOverridesConfig('/ignored/workspace/root'), {
+    assert.deepEqual(await readMcpToolOverridesConfig('/ignored/workspace/root', { logger: null }), {
       version: 1,
       mcpServers: {},
     });
@@ -273,6 +290,7 @@ test('readMcpToolOverridesConfig prefers mapped container workspace roots before
         [WORKSPACE_HOST_ROOT_ENV]: hostRoot,
         [WORKSPACE_CONTAINER_ROOT_ENV]: containerRoot,
       },
+      logger: null,
     }), {
       version: 1,
       mcpServers: { mapped_only: { tools: {} } },
@@ -289,7 +307,7 @@ test('readMcpToolOverridesConfig falls back to the relative cwd override file', 
       mcpServers: { cwd_only: { tools: {} } },
     }), 'utf8');
 
-    assert.deepEqual(await readMcpToolOverridesConfig('/missing/workspace/root'), {
+    assert.deepEqual(await readMcpToolOverridesConfig('/missing/workspace/root', { logger: null }), {
       version: 1,
       mcpServers: { cwd_only: { tools: {} } },
     });
@@ -298,7 +316,33 @@ test('readMcpToolOverridesConfig falls back to the relative cwd override file', 
 
 test('readMcpToolOverridesConfig returns null when the override file is missing', async () => {
   await withTempCwd('mcp-tool-overrides-missing-', async () => {
-    assert.equal(await readMcpToolOverridesConfig('/ignored/workspace/root'), null);
+    assert.equal(await readMcpToolOverridesConfig('/ignored/workspace/root', { logger: null }), null);
+  });
+});
+
+test('readMcpToolOverridesConfig logs trace marker and candidate paths', async () => {
+  await withTempCwd('mcp-tool-overrides-log-', async (tempRoot) => {
+    const workspaceRoot = path.join(tempRoot, 'missing-workspace');
+    const configPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ version: 1, mcpServers: {} }), 'utf8');
+
+    const { entries, logger } = createCaptureLogger();
+    assert.deepEqual(await readMcpToolOverridesConfig(workspaceRoot, { logger }), {
+      version: 1,
+      mcpServers: {},
+    });
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0][0], 'info');
+    assert.match(entries[0][1], new RegExp(MCP_TOOL_OVERRIDES_TRACE_LOG_ID));
+    assert.equal(entries[0].length, 2);
+
+    const traceMeta = parseTraceMeta(entries[0][1]);
+    assert.equal(traceMeta.logId, MCP_TOOL_OVERRIDES_TRACE_LOG_ID);
+    assert.equal(traceMeta.selected.source, 'relative');
+    assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'workspace'));
+    assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'relative'));
   });
 });
 
