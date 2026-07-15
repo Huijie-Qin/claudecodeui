@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import {
   MCP_TOOL_OVERRIDES_RELATIVE_PATH,
+  WORKSPACE_CONTAINER_ROOT_ENV,
+  WORKSPACE_HOST_ROOT_ENV,
   applyMcpToolOverrides,
   buildMcpToolOverridePreToolUseOutput,
   parseMcpToolName,
@@ -207,6 +209,50 @@ test('readMcpToolOverridesConfig reads the workspace-local override file', async
     assert.deepEqual(await readMcpToolOverridesConfig(tempRoot), {
       version: 1,
       mcpServers: {},
+    });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('readMcpToolOverridesConfig accepts UTF-8 BOM config files', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-bom-'));
+  try {
+    const configPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `\uFEFF${JSON.stringify({ version: 1, mcpServers: {} })}`, 'utf8');
+
+    assert.deepEqual(await readMcpToolOverridesConfig(tempRoot), {
+      version: 1,
+      mcpServers: {},
+    });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('readMcpToolOverridesConfig reads through a container workspace root mapping', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-mapped-'));
+  try {
+    const containerRoot = path.join(tempRoot, 'host-home');
+    const mappedWorkspaceRoot = path.join(containerRoot, 'default', 'j00939207', 'test');
+    const configPath = path.join(mappedWorkspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      mcpServers: { env_enum: { tools: {} } },
+    }), 'utf8');
+
+    const hostRoot = `C:\\cloudcli-missing-${Date.now()}-${process.pid}`;
+    const workspaceRoot = `${hostRoot}\\default\\j00939207\\test`;
+    assert.deepEqual(await readMcpToolOverridesConfig(workspaceRoot, {
+      env: {
+        [WORKSPACE_HOST_ROOT_ENV]: hostRoot,
+        [WORKSPACE_CONTAINER_ROOT_ENV]: containerRoot,
+      },
+    }), {
+      version: 1,
+      mcpServers: { env_enum: { tools: {} } },
     });
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });

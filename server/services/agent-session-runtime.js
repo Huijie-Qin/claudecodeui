@@ -11,6 +11,7 @@ import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 import { codeHubService } from './codehub.js';
 import { sanitizePathSegment } from './workspace-projects.js';
+import { mapWorkspacePathForContainer } from './workspace-path-mapping.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -719,13 +720,34 @@ export function createAgentSessionRuntimeManager({
     }
   }
 
-  async function resolveWorkspaceHostPath(workspacePath) {
-    const resolved = await fs.realpath(requireValue(workspacePath, 'cwd'));
-    const stats = await fs.stat(resolved);
+  async function assertWorkspaceDirectory(workspacePath) {
+    const stats = await fs.stat(workspacePath);
     if (!stats.isDirectory()) {
       throw new Error('workspace path must be a directory');
     }
-    return resolved;
+  }
+
+  async function resolveWorkspaceHostPath(workspacePath) {
+    const requestedPath = requireValue(workspacePath, 'cwd');
+    try {
+      const resolved = await fs.realpath(requestedPath);
+      await assertWorkspaceDirectory(resolved);
+      return resolved;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+        throw error;
+      }
+
+      const containerWorkspacePath = mapWorkspacePathForContainer(requestedPath, env);
+      if (!containerWorkspacePath || containerWorkspacePath === requestedPath) {
+        throw error;
+      }
+
+      const resolvedContainerPath = await fs.realpath(containerWorkspacePath);
+      await assertWorkspaceDirectory(resolvedContainerPath);
+    }
+
+    return requestedPath;
   }
 
   function beginRuntimeUse(runtimeId) {
@@ -1115,12 +1137,10 @@ export function createAgentSessionRuntimeManager({
       projectPath: '/workspace',
       hostWorkspacePath: workspaceHostPath,
       pathToClaudeCodeExecutable: wrapperPath,
-      spawnClaudeCodeProcess: process.platform === 'win32'
-        ? createClaudeDockerSpawn({
-          containerName: runtime.container_name,
-          envAllowlist: buildContainerEnvAllowlist(userEnv),
-        })
-        : undefined,
+      spawnClaudeCodeProcess: createClaudeDockerSpawn({
+        containerName: runtime.container_name,
+        envAllowlist: buildContainerEnvAllowlist(userEnv),
+      }),
       executionEnv: buildWrapperHostEnv(env, userEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,

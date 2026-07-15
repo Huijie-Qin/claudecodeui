@@ -5,6 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  WORKSPACE_CONTAINER_ROOT_ENV,
+  WORKSPACE_HOST_ROOT_ENV,
+} from './services/workspace-path-mapping.js';
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -128,6 +132,41 @@ test('loadMcpConfig rewrites local MCP URLs for docker mode', async () => {
 
   assert.equal(config.local_docs.url, 'http://host.docker.internal:39999/mcp');
   assert.equal(config.remote_docs.url, 'https://remote.example.com/mcp');
+});
+
+test('loadMcpConfig reads workspace .mcp.json through a container workspace root mapping', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-sdk-mcp-mapped-'));
+  const homeDir = path.join(tempRoot, 'home');
+  const containerRoot = path.join(tempRoot, 'host-home');
+  const mappedWorkspacePath = path.join(containerRoot, 'default', 'j00939207', 'test');
+  await fs.mkdir(mappedWorkspacePath, { recursive: true });
+
+  await writeJson(path.join(mappedWorkspacePath, '.mcp.json'), {
+    mcpServers: {
+      env_enum: {
+        type: 'http',
+        url: 'http://host.docker.internal:40002/mcp',
+      },
+    },
+  });
+
+  const hostRoot = `C:\\cloudcli-missing-${Date.now()}-${process.pid}`;
+  const workspacePath = `${hostRoot}\\default\\j00939207\\test`;
+  const config = await loadMcpConfig(workspacePath, {
+    homeDir,
+    includeHostConfig: false,
+    env: {
+      [WORKSPACE_HOST_ROOT_ENV]: hostRoot,
+      [WORKSPACE_CONTAINER_ROOT_ENV]: containerRoot,
+    },
+  });
+
+  assert.deepEqual(config, {
+    env_enum: {
+      type: 'http',
+      url: 'http://host.docker.internal:40002/mcp',
+    },
+  });
 });
 
 test('loadMcpConfig returns null when no MCP servers are configured', async () => {

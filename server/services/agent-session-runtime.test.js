@@ -17,6 +17,10 @@ import {
   resolveClaudeExecutionMode,
 } from './agent-session-runtime.js';
 import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
+import {
+  WORKSPACE_CONTAINER_ROOT_ENV,
+  WORKSPACE_HOST_ROOT_ENV,
+} from './workspace-path-mapping.js';
 
 const emptyUserEnvDb = {
   getUserById: (userId) => ({ id: userId, username: `user-${userId}` }),
@@ -368,6 +372,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.cwd, workspaceRealPath);
   assert.equal(runtime.containerCwd, '/workspace');
   assert.equal(runtime.projectPath, '/workspace');
+  assert.equal(typeof runtime.spawnClaudeCodeProcess, 'function');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
   assert.deepEqual(pythonPackageInstalls, [{
@@ -410,6 +415,75 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
+});
+
+test('docker mode validates a mapped container workspace while keeping the host path', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-mapped-workspace-'));
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  const containerRoot = path.join(tempRoot, 'host-home');
+  const mappedWorkspacePath = path.join(containerRoot, 'default', 'j00939207', 'test');
+  await fs.mkdir(mappedWorkspacePath, { recursive: true });
+
+  const hostRoot = `C:\\cloudcli-missing-${Date.now()}-${process.pid}`;
+  const workspacePath = `${hostRoot}\\default\\j00939207\\test`;
+  const createdRuntimes = [];
+  const dockerCalls = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      [WORKSPACE_HOST_ROOT_ENV]: hostRoot,
+      [WORKSPACE_CONTAINER_ROOT_ENV]: containerRoot,
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: (runtime) => {
+          createdRuntimes.push(runtime);
+          return {
+            runtime_id: runtime.runtimeId,
+            tenant_id: runtime.tenantId,
+            workspace_id: runtime.workspaceId,
+            user_id: runtime.userId,
+            provider: runtime.provider,
+            container_name: runtime.containerName,
+            image: runtime.image,
+            workspace_host_path: runtime.workspaceHostPath,
+            runtime_home_path: runtime.runtimeHomePath,
+            status: 'pending',
+          };
+        },
+        findByProviderSession: () => null,
+        updateStatus: (input) => ({
+          runtime_id: createdRuntimes[0].runtimeId,
+          container_name: createdRuntimes[0].containerName,
+          image: createdRuntimes[0].image,
+          workspace_host_path: createdRuntimes[0].workspaceHostPath,
+          runtime_home_path: createdRuntimes[0].runtimeHomePath,
+          status: input.status,
+        }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => null,
+      runDetached: async (args) => {
+        dockerCalls.push(args);
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 1,
+    userId: 2,
+    workspaceId: 3,
+    cwd: workspacePath,
+  });
+
+  assert.equal(runtime.cwd, workspacePath);
+  assert.equal(runtime.hostWorkspacePath, workspacePath);
+  assert.equal(createdRuntimes[0].workspaceHostPath, workspacePath);
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${workspacePath},dst=/workspace`));
 });
 
 test('docker mode does not wait for configured Python package installation', async () => {

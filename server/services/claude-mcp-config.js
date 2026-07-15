@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import { applyWorkspaceMcpHelperScripts } from './mcp-helper-scripts.js';
+import { buildWorkspacePathCandidates } from './workspace-path-mapping.js';
 
 const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
 const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
@@ -15,7 +16,7 @@ async function readJsonIfPresent(filePath, label) {
       return null;
     }
 
-    const configContent = await fs.readFile(filePath, 'utf8');
+    const configContent = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
     return JSON.parse(configContent);
   } catch (error) {
     console.error(`Failed to parse ${label}:`, error.message);
@@ -88,6 +89,7 @@ async function loadMcpConfig(cwd, {
   workspaceId = null,
   runtimeMode = 'local',
   runtimeHomePath = null,
+  env = process.env,
 } = {}) {
   try {
     let mcpServers = {};
@@ -107,8 +109,14 @@ async function loadMcpConfig(cwd, {
     }
 
     if (cwd) {
-      const workspaceConfig = await readJsonIfPresent(path.join(cwd, '.mcp.json'), `${cwd}/.mcp.json`);
-      mcpServers = mergeMcpServers(mcpServers, workspaceConfig?.mcpServers);
+      for (const workspacePath of buildWorkspacePathCandidates(cwd, env)) {
+        const workspaceConfigPath = path.join(workspacePath, '.mcp.json');
+        const workspaceConfig = await readJsonIfPresent(workspaceConfigPath, `${workspacePath}/.mcp.json`);
+        if (workspaceConfig) {
+          mcpServers = mergeMcpServers(mcpServers, workspaceConfig.mcpServers);
+          break;
+        }
+      }
     }
 
     if (Object.keys(mcpServers).length === 0) {

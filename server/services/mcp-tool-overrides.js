@@ -1,7 +1,14 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
+import {
+  WORKSPACE_CONTAINER_ROOT_ENV,
+  WORKSPACE_HOST_ROOT_ENV,
+  buildWorkspacePathCandidates,
+} from './workspace-path-mapping.js';
+
 export const MCP_TOOL_OVERRIDES_RELATIVE_PATH = path.join('.claude', 'mcp-tool-overrides.local.json');
+export { WORKSPACE_CONTAINER_ROOT_ENV, WORKSPACE_HOST_ROOT_ENV };
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -21,22 +28,30 @@ export function isMcpToolName(toolName) {
   return parseMcpToolName(toolName) !== null;
 }
 
-export async function readMcpToolOverridesConfig(workspaceRoot) {
+function buildConfigPathCandidates(workspaceRoot, env = process.env) {
+  return buildWorkspacePathCandidates(workspaceRoot, env)
+    .map((root) => path.join(root, MCP_TOOL_OVERRIDES_RELATIVE_PATH));
+}
+
+export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.env } = {}) {
   if (typeof workspaceRoot !== 'string' || !workspaceRoot.trim()) return null;
 
-  try {
-    const configPath = path.join(workspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
-    const content = await fs.readFile(configPath, 'utf8');
-    if (!content.trim()) return null;
+  for (const configPath of buildConfigPathCandidates(workspaceRoot, env)) {
+    try {
+      const content = (await fs.readFile(configPath, 'utf8')).replace(/^\uFEFF/, '');
+      if (!content.trim()) return null;
 
-    const parsed = JSON.parse(content);
-    return isPlainObject(parsed) ? parsed : null;
-  } catch (error) {
-    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
-      return null;
+      const parsed = JSON.parse(content);
+      return isPlainObject(parsed) ? parsed : null;
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
+
+  return null;
 }
 
 export function applyMcpToolOverrides({ toolName, input, config }) {
