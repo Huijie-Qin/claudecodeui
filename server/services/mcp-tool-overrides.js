@@ -29,13 +29,18 @@ export function isMcpToolName(toolName) {
 }
 
 function buildConfigPathCandidates(workspaceRoot, env = process.env) {
-  return buildWorkspacePathCandidates(workspaceRoot, env)
-    .map((root) => path.join(root, MCP_TOOL_OVERRIDES_RELATIVE_PATH));
+  const candidates = [];
+  if (typeof workspaceRoot === 'string' && workspaceRoot.trim()) {
+    candidates.push(
+      ...buildWorkspacePathCandidates(workspaceRoot, env)
+        .map((root) => path.join(root, MCP_TOOL_OVERRIDES_RELATIVE_PATH)),
+    );
+  }
+  candidates.push(MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+  return [...new Set(candidates)];
 }
 
 export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.env } = {}) {
-  if (typeof workspaceRoot !== 'string' || !workspaceRoot.trim()) return null;
-
   for (const configPath of buildConfigPathCandidates(workspaceRoot, env)) {
     try {
       const content = (await fs.readFile(configPath, 'utf8')).replace(/^\uFEFF/, '');

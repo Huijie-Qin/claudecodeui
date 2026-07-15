@@ -14,6 +14,18 @@ import {
   readMcpToolOverridesConfig,
 } from './mcp-tool-overrides.js';
 
+async function withTempCwd(prefix, task) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(tempRoot);
+    return await task(tempRoot);
+  } finally {
+    process.chdir(previousCwd);
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 test('parseMcpToolName extracts MCP server and tool names', () => {
   assert.deepEqual(parseMcpToolName('mcp__knowledge_retrieval__search_docs'), {
     serverName: 'knowledge_retrieval',
@@ -199,48 +211,59 @@ test('buildMcpToolOverridePreToolUseOutput is a no-op when no custom MCP params 
   assert.equal(result.overrideResult.applied, false);
 });
 
-test('readMcpToolOverridesConfig reads the workspace-local override file', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-'));
-  try {
-    const configPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ version: 1, mcpServers: {} }), 'utf8');
-
-    assert.deepEqual(await readMcpToolOverridesConfig(tempRoot), {
+test('readMcpToolOverridesConfig prefers the workspace-local override file', async () => {
+  await withTempCwd('mcp-tool-overrides-', async (tempRoot) => {
+    const workspaceRoot = path.join(tempRoot, 'workspace');
+    const workspaceConfigPath = path.join(workspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(workspaceConfigPath), { recursive: true });
+    await fs.writeFile(workspaceConfigPath, JSON.stringify({
       version: 1,
-      mcpServers: {},
+      mcpServers: { workspace_only: { tools: {} } },
+    }), 'utf8');
+
+    const relativeConfigPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(relativeConfigPath), { recursive: true });
+    await fs.writeFile(relativeConfigPath, JSON.stringify({
+      version: 1,
+      mcpServers: { cwd_only: { tools: {} } },
+    }), 'utf8');
+
+    assert.deepEqual(await readMcpToolOverridesConfig(workspaceRoot), {
+      version: 1,
+      mcpServers: { workspace_only: { tools: {} } },
     });
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  });
 });
 
 test('readMcpToolOverridesConfig accepts UTF-8 BOM config files', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-bom-'));
-  try {
+  await withTempCwd('mcp-tool-overrides-bom-', async (tempRoot) => {
     const configPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `\uFEFF${JSON.stringify({ version: 1, mcpServers: {} })}`, 'utf8');
 
-    assert.deepEqual(await readMcpToolOverridesConfig(tempRoot), {
+    assert.deepEqual(await readMcpToolOverridesConfig('/ignored/workspace/root'), {
       version: 1,
       mcpServers: {},
     });
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  });
 });
 
-test('readMcpToolOverridesConfig reads through a container workspace root mapping', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-mapped-'));
-  try {
+test('readMcpToolOverridesConfig prefers mapped container workspace roots before the relative fallback', async () => {
+  await withTempCwd('mcp-tool-overrides-mapped-', async (tempRoot) => {
     const containerRoot = path.join(tempRoot, 'host-home');
     const mappedWorkspaceRoot = path.join(containerRoot, 'default', 'j00939207', 'test');
-    const configPath = path.join(mappedWorkspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({
+    const mappedConfigPath = path.join(mappedWorkspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(mappedConfigPath), { recursive: true });
+    await fs.writeFile(mappedConfigPath, JSON.stringify({
       version: 1,
-      mcpServers: { env_enum: { tools: {} } },
+      mcpServers: { mapped_only: { tools: {} } },
+    }), 'utf8');
+
+    const relativeConfigPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(relativeConfigPath), { recursive: true });
+    await fs.writeFile(relativeConfigPath, JSON.stringify({
+      version: 1,
+      mcpServers: { cwd_only: { tools: {} } },
     }), 'utf8');
 
     const hostRoot = `C:\\cloudcli-missing-${Date.now()}-${process.pid}`;
@@ -252,19 +275,30 @@ test('readMcpToolOverridesConfig reads through a container workspace root mappin
       },
     }), {
       version: 1,
-      mcpServers: { env_enum: { tools: {} } },
+      mcpServers: { mapped_only: { tools: {} } },
     });
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  });
+});
+
+test('readMcpToolOverridesConfig falls back to the relative cwd override file', async () => {
+  await withTempCwd('mcp-tool-overrides-relative-', async (tempRoot) => {
+    const configPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      mcpServers: { cwd_only: { tools: {} } },
+    }), 'utf8');
+
+    assert.deepEqual(await readMcpToolOverridesConfig('/missing/workspace/root'), {
+      version: 1,
+      mcpServers: { cwd_only: { tools: {} } },
+    });
+  });
 });
 
 test('readMcpToolOverridesConfig returns null when the override file is missing', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-tool-overrides-missing-'));
-  try {
-    assert.equal(await readMcpToolOverridesConfig(tempRoot), null);
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  await withTempCwd('mcp-tool-overrides-missing-', async () => {
+    assert.equal(await readMcpToolOverridesConfig('/ignored/workspace/root'), null);
+  });
 });
 
