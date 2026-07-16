@@ -989,6 +989,12 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                 return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
             }
 
+            // Stopping a running Claude command makes runLimitedProviderCommand
+            // release its concurrency-limit lease through the existing finally block.
+            if (provider === 'claude') {
+                await abortClaudeSDKSession(sessionId);
+            }
+
             const renamed = multitenancyDb.sessions.markDeleted({
                 tenantId: req.tenant.id,
                 userId: req.user?.id ?? req.user?.userId,
@@ -1005,7 +1011,11 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         }
 
         const { projectName, sessionId } = req.params;
+        const provider = req.body?.provider || 'claude';
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
+        if (provider === 'claude') {
+            await abortClaudeSDKSession(sessionId);
+        }
         await deleteSession(projectName, sessionId);
         sessionNamesDb.deleteName(sessionId, 'claude');
         console.log(`[API] Session ${sessionId} deleted successfully`);
