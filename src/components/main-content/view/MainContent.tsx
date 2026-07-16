@@ -47,7 +47,7 @@ function MainContent({
 }: MainContentProps) {
   const [showSkillMarket, setShowSkillMarket] = React.useState(false);
   const { preferences } = useUiPreferences();
-  const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
+  const { hideToolMessages, autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
 
@@ -162,6 +162,7 @@ function MainContent({
                 onNavigateToSession={onNavigateToSession}
                 onShowSettings={onShowSettings}
                 autoExpandTools={autoExpandTools}
+                hideToolMessages={hideToolMessages}
                 showRawParameters={showRawParameters}
                 showThinking={showThinking}
                 autoScrollToBottom={autoScrollToBottom}

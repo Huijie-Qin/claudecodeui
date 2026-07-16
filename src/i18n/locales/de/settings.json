@@ -58,6 +58,7 @@
       "inputSettings": "Eingabeeinstellungen"
     },
     "darkMode": "Darkmode",
+    "hideToolMessages": "Werkzeugmeldungen ausblenden",
     "autoExpandTools": "Werkzeuge automatisch erweitern",
     "showRawParameters": "Rohe Parameter anzeigen",
     "showThinking": "Denken anzeigen",

@@ -58,6 +58,7 @@
       "inputSettings": "入力設定"
     },
     "darkMode": "ダークモード",
+    "hideToolMessages": "ツールメッセージを非表示",
     "autoExpandTools": "ツールを自動展開",
     "showRawParameters": "生パラメータを表示",
     "showThinking": "思考を表示",

@@ -22,12 +22,14 @@ export default function QuickSettingsPanelView() {
   } = useQuickSettingsDrag({ isMobile });
 
   const quickSettingsPreferences = useMemo<QuickSettingsPreferences>(() => ({
+    hideToolMessages: preferences.hideToolMessages,
     autoExpandTools: preferences.autoExpandTools,
     showRawParameters: preferences.showRawParameters,
     showThinking: preferences.showThinking,
     autoScrollToBottom: preferences.autoScrollToBottom,
     sendByCtrlEnter: preferences.sendByCtrlEnter,
   }), [
+    preferences.hideToolMessages,
     preferences.autoExpandTools,
     preferences.autoScrollToBottom,
     preferences.sendByCtrlEnter,

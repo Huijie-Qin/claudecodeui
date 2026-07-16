@@ -43,6 +43,7 @@ interface ChatMessagesPaneProps {
   onShowSettings?: () => void;
   onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   autoExpandTools?: boolean;
+  hideToolMessages?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
@@ -82,6 +83,7 @@ export default function ChatMessagesPane({
   onShowSettings,
   onGrantToolPermission,
   autoExpandTools,
+  hideToolMessages,
   showRawParameters,
   showThinking,
   selectedProject,
@@ -90,7 +92,7 @@ export default function ChatMessagesPane({
   const keyedVisibleMessages = useMemo(() => {
     const occurrenceCounts = new Map<string, number>();
 
-    return visibleMessages.map((message, index) => {
+    return visibleMessages.filter((message) => !(hideToolMessages && message.isToolUse)).map((message, index) => {
       const baseKey = getIntrinsicMessageKey(message) || `message-fallback-${index}`;
       const occurrenceIndex = occurrenceCounts.get(baseKey) || 0;
       occurrenceCounts.set(baseKey, occurrenceIndex + 1);
@@ -100,7 +102,7 @@ export default function ChatMessagesPane({
         key: occurrenceIndex === 0 ? baseKey : `${baseKey}-duplicate-${occurrenceIndex}`,
       };
     });
-  }, [visibleMessages]);
+  }, [hideToolMessages, visibleMessages]);
 
   return (
     <div

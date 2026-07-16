@@ -58,6 +58,7 @@
       "inputSettings": "Настройки ввода"
     },
     "darkMode": "Темная тема",
+    "hideToolMessages": "Скрывать сообщения инструментов",
     "autoExpandTools": "Автоматически разворачивать инструменты",
     "showRawParameters": "Показывать сырые параметры",
     "showThinking": "Показывать размышления",

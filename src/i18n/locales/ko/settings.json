@@ -58,6 +58,7 @@
       "inputSettings": "입력 설정"
     },
     "darkMode": "다크 모드",
+    "hideToolMessages": "도구 메시지 숨기기",
     "autoExpandTools": "도구 자동 펼치기",
     "showRawParameters": "Raw 파라미터 표시",
     "showThinking": "생각 과정 표시",
