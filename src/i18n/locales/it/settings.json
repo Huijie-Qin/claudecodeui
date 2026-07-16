@@ -58,6 +58,7 @@
       "inputSettings": "Impostazioni input"
     },
     "darkMode": "Modalità scura",
+    "hideToolMessages": "Nascondi messaggi degli strumenti",
     "autoExpandTools": "Espandi strumenti automaticamente",
     "showRawParameters": "Mostra parametri grezzi",
     "showThinking": "Mostra ragionamento",

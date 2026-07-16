@@ -48,6 +48,7 @@ function ChatInterface({
   onNavigateToSession,
   onShowSettings,
   autoExpandTools,
+  hideToolMessages,
   showRawParameters,
   showThinking,
   autoScrollToBottom,
@@ -477,6 +478,7 @@ function ChatInterface({
           onShowSettings={onShowSettings}
           onGrantToolPermission={handleGrantToolPermission}
           autoExpandTools={autoExpandTools}
+          hideToolMessages={hideToolMessages}
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}

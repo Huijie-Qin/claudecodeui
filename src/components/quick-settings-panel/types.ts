@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
 export type PreferenceToggleKey =
+  | 'hideToolMessages'
   | 'autoExpandTools'
   | 'showRawParameters'
   | 'showThinking'

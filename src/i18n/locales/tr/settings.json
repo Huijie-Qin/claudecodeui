@@ -58,6 +58,7 @@
       "inputSettings": "Girdi Ayarları"
     },
     "darkMode": "Koyu Mod",
+    "hideToolMessages": "Araç mesajlarını gizle",
     "autoExpandTools": "Araçları otomatik genişlet",
     "showRawParameters": "Ham parametreleri göster",
     "showThinking": "Düşünmeyi göster",

@@ -58,6 +58,7 @@
       "inputSettings": "Input Settings"
     },
     "darkMode": "Dark Mode",
+    "hideToolMessages": "Hide tool messages",
     "autoExpandTools": "Auto-expand tools",
     "showRawParameters": "Show raw parameters",
     "showThinking": "Show thinking",
