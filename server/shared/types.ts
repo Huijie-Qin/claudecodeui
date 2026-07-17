@@ -80,6 +80,8 @@ export type FetchHistoryOptions = {
   projectName?: string;
   /** Absolute workspace path. Required by Cursor to compute its chat hash. */
   projectPath?: string;
+  /** Isolated Claude runtime HOME used to locate persisted JSONL transcripts. */
+  runtimeHomePath?: string;
   /** Page size. `null` means all messages. */
   limit?: number | null;
   /** Pagination offset from the newest messages. */

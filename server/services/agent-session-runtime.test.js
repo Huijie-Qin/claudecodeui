@@ -12,6 +12,7 @@ import {
   buildRuntimePaths,
   createAgentSessionRuntimeManager,
   createClaudeDockerSpawn,
+  ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
@@ -280,6 +281,32 @@ test('docker runtime home falls back to writable permissions when chown fails', 
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
     ['chmod', '/tmp/runtime/home', 0o777],
   ]);
+});
+
+test('claude runtime settings preserve existing values and set the cleanup period', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-settings-test-'));
+  const claudeDir = path.join(tempRoot, '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  await fs.mkdir(claudeDir, { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({ theme: 'dark', cleanupPeriodDays: 30 }), 'utf8');
+
+  assert.equal(await ensureClaudeCleanupPeriod(fs, tempRoot), true);
+  assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, 'utf8')), {
+    theme: 'dark',
+    cleanupPeriodDays: 36500,
+  });
+});
+
+test('claude runtime settings are not rewritten when the cleanup period is already configured', async () => {
+  const calls = [];
+  const fsMock = {
+    readFile: async () => JSON.stringify({ cleanupPeriodDays: 36500 }),
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    writeFile: async (...args) => calls.push(['writeFile', ...args]),
+  };
+
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home'), false);
+  assert.deepEqual(calls, []);
 });
 
 test('docker mode creates runtime home, wrapper, DB row, and container', async () => {

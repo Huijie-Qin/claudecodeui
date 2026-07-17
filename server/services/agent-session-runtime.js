@@ -34,6 +34,7 @@ const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
+const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
 const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
 const NPM_PROXY_ENV_NAMES = [
@@ -415,6 +416,35 @@ export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, 
   if (typeof fsImpl.chmod === 'function') {
     await fsImpl.chmod(runtimeHomePath, chownSucceeded ? 0o700 : 0o777);
   }
+}
+
+export async function ensureClaudeCleanupPeriod(fsImpl, runtimeHomePath) {
+  const claudeDir = path.join(runtimeHomePath, '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settings = {};
+
+  try {
+    const content = await fsImpl.readFile(settingsPath, 'utf8');
+    settings = JSON.parse(content);
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      throw new Error('Claude settings must be a JSON object');
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  if (settings.cleanupPeriodDays === CLAUDE_CLEANUP_PERIOD_DAYS) {
+    return false;
+  }
+
+  await fsImpl.mkdir(claudeDir, { recursive: true });
+  await fsImpl.writeFile(settingsPath, `${JSON.stringify({
+    ...settings,
+    cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
+  }, null, 2)}\n`, 'utf8');
+  return true;
 }
 
 function normalizeContainerEnvRecord(value) {
@@ -1103,6 +1133,7 @@ export function createAgentSessionRuntimeManager({
       ...userEnv,
     };
     await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
+    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path);
     await ensureContainer(runtimeContext.runtime, containerEnv, {
       requestId: runtimeContext.logRequestId || null,
     });
