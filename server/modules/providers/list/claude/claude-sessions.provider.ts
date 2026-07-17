@@ -1,4 +1,6 @@
-import { getSessionMessages } from '@/projects.js';
+import path from 'node:path';
+
+import { getSessionMessages, getSessionMessagesFromProjectsRoot } from '@/projects.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
@@ -22,6 +24,13 @@ type ClaudeHistoryResult =
 
 const loadClaudeSessionMessages = getSessionMessages as unknown as (
   projectName: string,
+  sessionId: string,
+  limit: number | null,
+  offset: number,
+) => Promise<ClaudeHistoryResult>;
+
+const loadClaudeRuntimeSessionMessages = getSessionMessagesFromProjectsRoot as unknown as (
+  projectsRoot: string,
   sessionId: string,
   limit: number | null,
   offset: number,
@@ -308,13 +317,20 @@ export class ClaudeSessionsProvider implements IProviderSessions {
   ): Promise<FetchHistoryResult> {
     const { limit = null, offset = 0 } = options;
     const projectStorageName = resolveClaudeProjectStorageName(options);
-    if (!projectStorageName) {
+    if (!options.runtimeHomePath && !projectStorageName) {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
     let result: ClaudeHistoryResult;
     try {
-      result = await loadClaudeSessionMessages(projectStorageName, sessionId, limit, offset);
+      result = options.runtimeHomePath
+        ? await loadClaudeRuntimeSessionMessages(
+          path.join(options.runtimeHomePath, '.claude', 'projects'),
+          sessionId,
+          limit,
+          offset,
+        )
+        : await loadClaudeSessionMessages(projectStorageName, sessionId, limit, offset);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);

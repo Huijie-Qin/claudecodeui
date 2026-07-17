@@ -1036,10 +1036,9 @@ async function parseAgentTools(filePath) {
   return tools;
 }
 
-// Get messages for a specific session with pagination support
-async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-
+// Get messages for a specific session from an explicit Claude project directory.
+// Docker runtimes keep their own HOME, so callers must not always assume os.homedir().
+async function getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit = null, offset = 0) {
   try {
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
@@ -1135,6 +1134,114 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
     console.error(`Error reading messages for session ${sessionId}:`, error);
     return limit === null ? [] : { messages: [], total: 0, hasMore: false };
   }
+}
+
+// Get messages for a specific session with pagination support.
+async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  return getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit, offset);
+}
+
+async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0) {
+  const safeSessionId = String(sessionId || '');
+  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
+    throw new Error('Invalid Claude session id');
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(projectsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { messages: [], total: 0, hasMore: false, offset, limit };
+    }
+    throw error;
+  }
+
+  const projectDirs = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(projectsRoot, entry.name));
+  const directFileName = `${safeSessionId}.jsonl`;
+  const directMatches = [];
+  const remainingDirs = [];
+
+  for (const projectDir of projectDirs) {
+    try {
+      await fs.access(path.join(projectDir, directFileName));
+      directMatches.push(projectDir);
+    } catch {
+      remainingDirs.push(projectDir);
+    }
+  }
+
+  // The normal Claude layout names the transcript after the session. Only scan
+  // other project directories for legacy layouts when no direct match exists.
+  const candidateDirs = directMatches.length > 0 ? directMatches : remainingDirs;
+  const allMessages = [];
+  for (const projectDir of candidateDirs) {
+    const result = await getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, null, 0);
+    const messages = Array.isArray(result) ? result : (result.messages || []);
+    allMessages.push(...messages);
+    if (directMatches.length === 0 && messages.length > 0) {
+      break;
+    }
+  }
+
+  allMessages.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+  const total = allMessages.length;
+  if (limit === null) {
+    return { messages: allMessages, total, hasMore: false, offset: 0, limit: null };
+  }
+
+  const normalizedLimit = Math.max(0, Number(limit) || 0);
+  const normalizedOffset = Math.max(0, Number(offset) || 0);
+  const startIndex = Math.max(0, total - normalizedOffset - normalizedLimit);
+  const endIndex = total - normalizedOffset;
+  return {
+    messages: allMessages.slice(startIndex, endIndex),
+    total,
+    hasMore: startIndex > 0,
+    offset: normalizedOffset,
+    limit: normalizedLimit,
+  };
+}
+
+async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
+  const safeSessionId = String(sessionId || '');
+  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
+    throw new Error('Invalid Claude session id');
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(projectsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+
+  let deleted = false;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const projectDir = path.join(projectsRoot, entry.name);
+    const transcriptPath = path.join(projectDir, `${safeSessionId}.jsonl`);
+    try {
+      await fs.unlink(transcriptPath);
+      deleted = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+
+    // Claude stores tool results and subagent history below a session-specific
+    // directory. It is safe to remove only the directory named by this session.
+    const sessionDataDir = path.join(projectDir, safeSessionId);
+    try {
+      await fs.rm(sessionDataDir, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return deleted;
 }
 
 // Rename a project's display name
@@ -2553,6 +2660,9 @@ export {
   getProjects,
   getSessions,
   getSessionMessages,
+  getSessionMessagesFromProjectDirectory,
+  getSessionMessagesFromProjectsRoot,
+  deleteSessionFromProjectsRoot,
   parseJsonlSessions,
   renameProject,
   deleteSession,

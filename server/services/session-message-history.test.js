@@ -8,13 +8,64 @@ import {
   persistUserPromptMessage,
 } from './session-message-history.js';
 
-test('session message history prefers DB rows over provider fallback', async () => {
-  let fallbackCalled = false;
+test('Claude session history prefers runtime JSONL over legacy DB rows', async () => {
+  let historyOptions = null;
   const service = createSessionMessageHistoryService({
     multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
       sessionMessages: {
         listMessages: () => ({
           messages: [{ id: 'db-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async (_provider, _sessionId, options) => {
+        historyOptions = options;
+        return {
+          messages: [{ id: 'jsonl-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        };
+      },
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+  });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.messages[0].id, 'jsonl-msg');
+  assert.equal(historyOptions.runtimeHomePath, '/tmp/runtime/home');
+});
+
+test('Claude session history falls back to legacy DB when runtime JSONL is unavailable', async () => {
+  let fallbackCalled = false;
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => null,
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{ id: 'legacy-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
           total: 1,
           hasMore: false,
           offset: 0,
@@ -42,59 +93,11 @@ test('session message history prefers DB rows over provider fallback', async () 
     },
   });
 
-  assert.equal(result.total, 1);
-  assert.equal(result.messages[0].id, 'db-msg');
   assert.equal(fallbackCalled, false);
-});
-
-test('session message history falls back when DB has no messages', async () => {
-  let fallbackCalled = false;
-  const service = createSessionMessageHistoryService({
-    multitenancy: {
-      sessionMessages: {
-        listMessages: () => ({
-          messages: [],
-          total: 0,
-          hasMore: false,
-          offset: 0,
-          limit: null,
-        }),
-      },
-    },
-    providerSessions: {
-      fetchHistory: async (providerName, sessionId, options) => {
-        fallbackCalled = true;
-        assert.equal(providerName, 'claude');
-        assert.equal(sessionId, 's1');
-        assert.equal(options.projectPath, '/tmp/repo');
-        return {
-          messages: [{ id: 'legacy-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
-          total: 1,
-          hasMore: false,
-          offset: 0,
-          limit: null,
-        };
-      },
-    },
-  });
-
-  const result = await service.fetchHistory({
-    tenantId: 1,
-    userId: 2,
-    provider: 'claude',
-    providerSessionId: 's1',
-    ownedSession: {
-      workspace_id: 3,
-      workspace_slug: 'repo',
-      workspace_path: '/tmp/repo',
-    },
-  });
-
-  assert.equal(fallbackCalled, true);
   assert.equal(result.messages[0].id, 'legacy-msg');
 });
 
-test('user prompt is persisted before assistant history for newly created sessions', () => {
+test('Claude user and assistant messages are not persisted to the database', () => {
   const persisted = [];
   const multitenancy = {
     sessionMessages: {
@@ -158,9 +161,7 @@ test('user prompt is persisted before assistant history for newly created sessio
 
   const history = multitenancy.sessionMessages.listMessages();
 
-  assert.deepEqual(history.messages.map((message) => message.role), ['user', 'assistant']);
-  assert.deepEqual(history.messages.map((message) => message.content), ['Reply exactly with ok.', 'ok']);
-  assert.deepEqual(history.messages.map((message) => message.sessionId), ['claude-session-1', 'claude-session-1']);
+  assert.deepEqual(history.messages, []);
 });
 
 test('streaming control messages are not persisted into durable session history', () => {
@@ -208,9 +209,8 @@ test('streaming control messages are not persisted into durable session history'
     ],
   });
 
-  assert.equal(changed, 1);
-  assert.deepEqual(persisted.map((message) => message.kind), ['text']);
-  assert.deepEqual(persisted.map((message) => message.content), ['Hello']);
+  assert.equal(changed, 0);
+  assert.deepEqual(persisted, []);
 });
 
 test('Claude meta and sidechain messages are not persisted into durable session history', () => {
@@ -263,6 +263,6 @@ test('Claude meta and sidechain messages are not persisted into durable session 
     ],
   });
 
-  assert.equal(changed, 1);
-  assert.deepEqual(persisted.map((message) => message.id), ['assistant-1']);
+  assert.equal(changed, 0);
+  assert.deepEqual(persisted, []);
 });

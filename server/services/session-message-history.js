@@ -60,6 +60,49 @@ export function createSessionMessageHistoryService({
       limit = null,
       offset = 0,
     }) {
+      if (provider === 'claude') {
+        const runtimeLookup = {
+          tenantId,
+          userId,
+          workspaceId: ownedSession.workspace_id,
+          provider,
+          providerSessionId,
+        };
+        const runtime = multitenancy.runtimes?.findByProviderSession?.(runtimeLookup)
+          || multitenancy.runtimes?.findByOwner?.({
+            tenantId,
+            userId,
+            workspaceId: ownedSession.workspace_id,
+            provider,
+            workspaceHostPath: ownedSession.workspace_path || undefined,
+          });
+
+        if (runtime?.runtime_home_path && providerSessions) {
+          const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
+            projectName: ownedSession.workspace_slug || '',
+            projectPath: ownedSession.workspace_path || '',
+            runtimeHomePath: runtime.runtime_home_path,
+            limit,
+            offset,
+          });
+          if (jsonlHistory.total > 0) {
+            return jsonlHistory;
+          }
+        }
+
+        // Transitional fallback for legacy sessions whose runtime home or JSONL
+        // was removed before runtime-aware history was introduced.
+        return multitenancy.sessionMessages.listMessages({
+          tenantId,
+          userId,
+          workspaceId: ownedSession.workspace_id,
+          provider,
+          providerSessionId,
+          limit,
+          offset,
+        });
+      }
+
       const dbHistory = multitenancy.sessionMessages.listMessages({
         tenantId,
         userId,
@@ -97,6 +140,13 @@ export function persistNormalizedMessages({
   runtimeId,
   messages,
 }) {
+  // Claude Code already persists the canonical conversation transcript as
+  // JSONL in its isolated runtime HOME. Avoid maintaining a second message
+  // body store that can drift from the transcript.
+  if (provider === 'claude') {
+    return 0;
+  }
+
   if (
     !runtimeId ||
     !options.tenantId ||

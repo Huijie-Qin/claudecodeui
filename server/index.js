@@ -21,6 +21,7 @@ import {
     createConversationSearchHelpers,
     deleteProject,
     deleteSession,
+    deleteSessionFromProjectsRoot,
     extractProjectDirectory,
     getProjects,
     getSessions,
@@ -993,6 +994,25 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
             // release its concurrency-limit lease through the existing finally block.
             if (provider === 'claude') {
                 await abortClaudeSDKSession(sessionId);
+                const runtime = multitenancyDb.runtimes.findByProviderSession({
+                    tenantId: req.tenant.id,
+                    userId: req.user?.id ?? req.user?.userId,
+                    workspaceId: workspace.id,
+                    provider,
+                    providerSessionId: sessionId,
+                }) || multitenancyDb.runtimes.findByOwner({
+                    tenantId: req.tenant.id,
+                    userId: req.user?.id ?? req.user?.userId,
+                    workspaceId: workspace.id,
+                    provider,
+                    workspaceHostPath: workspace.path,
+                });
+                if (runtime?.runtime_home_path) {
+                    await deleteSessionFromProjectsRoot(
+                        path.join(runtime.runtime_home_path, '.claude', 'projects'),
+                        sessionId,
+                    );
+                }
             }
 
             const renamed = multitenancyDb.sessions.markDeleted({
@@ -1190,35 +1210,78 @@ async function searchTenantConversations({
             if (totalMatches >= safeLimit || isAborted()) break;
             if (!session?.provider || !session?.provider_session_id) continue;
 
-            let history;
-            try {
-                history = multitenancyDb.sessionMessages.listMessages({
+            let messages = [];
+            if (session.provider === 'claude') {
+                const runtime = multitenancyDb.runtimes.findByProviderSession({
                     tenantId,
                     workspaceId: workspace.id,
                     userId,
                     provider: session.provider,
                     providerSessionId: session.provider_session_id,
-                    limit: null,
-                    offset: 0,
+                }) || multitenancyDb.runtimes.findByOwner({
+                    tenantId,
+                    workspaceId: workspace.id,
+                    userId,
+                    provider: session.provider,
+                    workspaceHostPath: workspace.path,
                 });
-            } catch (error) {
-                console.warn(`Skipping searchable history for ${session.provider}:${session.provider_session_id}:`, error.message);
-                continue;
-            }
-
-            let messages = history.messages || [];
-            if (history.total === 0) {
                 try {
-                    const fallbackHistory = await sessionsService.fetchHistory(session.provider, session.provider_session_id, {
-                        projectName: workspace.slug || '',
-                        projectPath: workspace.path || '',
+                    if (runtime?.runtime_home_path) {
+                        const jsonlHistory = await sessionsService.fetchHistory(session.provider, session.provider_session_id, {
+                            projectName: workspace.slug || '',
+                            projectPath: workspace.path || '',
+                            runtimeHomePath: runtime.runtime_home_path,
+                            limit: null,
+                            offset: 0,
+                        });
+                        messages = jsonlHistory.messages || [];
+                    }
+                } catch (error) {
+                    console.warn(`Skipping Claude JSONL history for ${session.provider_session_id}:`, error.message);
+                }
+            } else {
+                try {
+                    const dbHistory = multitenancyDb.sessionMessages.listMessages({
+                        tenantId,
                         workspaceId: workspace.id,
+                        userId,
+                        provider: session.provider,
+                        providerSessionId: session.provider_session_id,
                         limit: null,
                         offset: 0,
                     });
-                    messages = fallbackHistory.messages || [];
+                    messages = dbHistory.messages || [];
+                    if (messages.length === 0) {
+                        const providerHistory = await sessionsService.fetchHistory(session.provider, session.provider_session_id, {
+                            projectName: workspace.slug || '',
+                            projectPath: workspace.path || '',
+                            workspaceId: workspace.id,
+                            limit: null,
+                            offset: 0,
+                        });
+                        messages = providerHistory.messages || [];
+                    }
                 } catch (error) {
-                    console.warn(`Skipping provider fallback history for ${session.provider}:${session.provider_session_id}:`, error.message);
+                    console.warn(`Skipping provider history for ${session.provider}:${session.provider_session_id}:`, error.message);
+                }
+            }
+
+            // Transitional fallback for sessions created before runtime JSONL
+            // became the canonical Claude history source.
+            if (messages.length === 0) {
+                try {
+                    const legacyHistory = multitenancyDb.sessionMessages.listMessages({
+                        tenantId,
+                        workspaceId: workspace.id,
+                        userId,
+                        provider: session.provider,
+                        providerSessionId: session.provider_session_id,
+                        limit: null,
+                        offset: 0,
+                    });
+                    messages = legacyHistory.messages || [];
+                } catch (error) {
+                    console.warn(`Skipping legacy history for ${session.provider}:${session.provider_session_id}:`, error.message);
                 }
             }
 
