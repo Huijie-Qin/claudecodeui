@@ -58,6 +58,7 @@
       "ok": "知道了"
     },
     "diff": {
+      "binaryFile": "二进制文件已变更，无法进行文本对比。",
       "currentRemote": "当前远端",
       "localWorkspace": "本地工作区",
       "status": {

@@ -60,6 +60,7 @@
       "ok": "OK"
     },
     "diff": {
+      "binaryFile": "Binary file changed; text comparison is unavailable.",
       "currentRemote": "Current remote",
       "localWorkspace": "Local workspace",
       "status": {

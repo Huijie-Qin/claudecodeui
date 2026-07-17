@@ -33,6 +33,7 @@ type CodeEditorProps = {
 type MarketSkillPublishChange = {
   path: string;
   status: 'added' | 'modified' | 'deleted';
+  isBinary?: boolean;
   oldContent?: string;
   newContent?: string;
 };
@@ -751,7 +752,7 @@ type SideBySideDiffRow = {
 
 function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
   const { t } = useTranslation('codeEditor');
-  const rows = createSideBySideDiffRows(change);
+  const rows = change.isBinary ? [] : createSideBySideDiffRows(change);
 
   return (
     <div className="overflow-hidden rounded-md border border-border">
@@ -761,6 +762,11 @@ function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
           {t(`skillMarket.diff.status.${change.status}`)}
         </span>
       </div>
+      {change.isBinary ? (
+        <div className="bg-background px-3 py-4 text-sm text-muted-foreground">
+          {t('skillMarket.diff.binaryFile', 'Binary file changed; text comparison is unavailable.')}
+        </div>
+      ) : (
       <div className="overflow-auto bg-background">
         <div className="min-w-[920px]">
           <div className="grid grid-cols-2 border-b border-border bg-muted/70 text-xs font-medium text-muted-foreground">
@@ -786,6 +792,7 @@ function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

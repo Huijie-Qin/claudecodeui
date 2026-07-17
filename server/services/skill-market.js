@@ -1289,11 +1289,15 @@ async function collectSkillDirectoryFiles(rootDirectory, currentDirectory, files
     const relativePath = normalizeRelativeFilePath(
       path.relative(rootDirectory, absolutePath).split(path.sep).join('/'),
     );
-    const content = await fs.readFile(absolutePath, 'utf8');
+    const rawContent = await fs.readFile(absolutePath);
+    const isBinary = isBinaryContent(rawContent);
+    const content = isBinary ? '' : rawContent.toString('utf8');
     files.push({
       path: relativePath,
       content,
-      size: Buffer.byteLength(content, 'utf8'),
+      rawContent,
+      isBinary,
+      size: rawContent.length,
     });
   }
 }
@@ -1312,7 +1316,7 @@ async function buildSkillArchiveForm(skillName, files) {
   const archiveRoot = normalizeRuntimeSkillFolderName(skillName);
   const zip = new JSZip();
   files.forEach((file) => {
-    zip.file(`${archiveRoot}/${file.path}`, file.content);
+    zip.file(`${archiveRoot}/${file.path}`, file.rawContent ?? file.content);
   });
   const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
   const formData = new FormData();
@@ -1666,28 +1670,43 @@ function compareSkillFiles(remoteFiles, localFiles) {
       return [{
         path: filePath,
         status: 'added',
+        ...(localFile.isBinary ? { isBinary: true } : {}),
         oldContent: '',
-        newContent: localFile.content,
+        newContent: localFile.isBinary ? '' : localFile.content,
       }];
     }
     if (remoteFile && !localFile) {
       return [{
         path: filePath,
         status: 'deleted',
+        ...(remoteFile.isBinary ? { isBinary: true } : {}),
         oldContent: remoteFile.content,
         newContent: '',
       }];
     }
-    if (remoteFile.content !== localFile.content) {
+    const isBinary = Boolean(remoteFile.isBinary || localFile.isBinary);
+    if (isBinary || remoteFile.content !== localFile.content) {
       return [{
         path: filePath,
         status: 'modified',
-        oldContent: remoteFile.content,
-        newContent: localFile.content,
+        ...(isBinary ? { isBinary: true } : {}),
+        oldContent: isBinary ? '' : remoteFile.content,
+        newContent: isBinary ? '' : localFile.content,
       }];
     }
     return [];
   });
+}
+
+function isBinaryContent(buffer) {
+  if (!buffer?.length) return false;
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+  let suspiciousBytes = 0;
+  for (const byte of sample) {
+    if (byte === 0) return true;
+    if (byte < 7 || (byte > 13 && byte < 32)) suspiciousBytes += 1;
+  }
+  return suspiciousBytes / sample.length > 0.1;
 }
 
 function toLocalImportState(status, remoteSkill, currentUsername) {

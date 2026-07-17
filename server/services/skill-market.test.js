@@ -855,6 +855,7 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
   await fs.mkdir(path.join(skillPath, 'references'), { recursive: true });
   await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Folder\nchanged\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'guide.md'), '# Guide\n', 'utf8');
+  await fs.writeFile(path.join(skillPath, 'references', 'asset.bin'), Buffer.from([0, 1, 2, 255]));
   await writeLegacyMarketImport(workspacePath, 'local-folder', {
     name: 'local-folder',
     skillId: 'remote-uploaded-id',
@@ -927,12 +928,21 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
       currentUsername: TEST_ACCOUNT_ID,
     }));
 
-    assert.deepEqual(preview.changes, [{
-      path: 'SKILL.md',
-      status: 'modified',
-      oldContent: '# Local Folder\n',
-      newContent: '# Local Folder\nchanged\n',
-    }]);
+    assert.deepEqual(preview.changes, [
+      {
+        path: 'references/asset.bin',
+        status: 'added',
+        isBinary: true,
+        oldContent: '',
+        newContent: '',
+      },
+      {
+        path: 'SKILL.md',
+        status: 'modified',
+        oldContent: '# Local Folder\n',
+        newContent: '# Local Folder\nchanged\n',
+      },
+    ]);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
