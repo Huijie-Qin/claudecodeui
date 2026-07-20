@@ -31,10 +31,7 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
-import {
-  attachMcpServersToSdkOptions,
-  loadMcpConfig,
-} from './services/claude-mcp-config.js';
+import { loadMcpConfig } from './services/claude-mcp-config.js';
 import {
   MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
   applyMcpToolOverrides,
@@ -887,13 +884,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
 
-    // Load MCP configuration from the host workspace even when Claude runs with
-    // /workspace as its container cwd, then pass it explicitly to the Agent SDK.
-    await attachMcpServersToSdkOptions({
-      sdkOptions,
-      runtimeContext,
-      runtimeOptions,
+    // Load MCP configuration
+    const mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
+      includeHostConfig: !runtimeContext.disableHostMcpConfig,
+      tenantId: runtimeOptions.tenantId,
+      workspaceId: runtimeOptions.workspaceId,
+      runtimeMode: runtimeContext.mode,
+      runtimeHomePath: runtimeContext.runtimeHomePath,
     });
+    if (mcpServers) {
+      sdkOptions.mcpServers = mcpServers;
+    }
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
       priority: 'next',
@@ -1706,7 +1707,6 @@ export {
   resolveToolApproval,
   resolveClaudeModel,
   loadMcpConfig,
-  attachMcpServersToSdkOptions,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
   pushClaudeSupplement,

@@ -3,10 +3,6 @@ import os from 'os';
 import path from 'path';
 
 import { applyWorkspaceMcpHelperScripts } from './mcp-helper-scripts.js';
-import { buildWorkspacePathCandidates } from './workspace-path-mapping.js';
-
-const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
-const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
 
 async function readJsonIfPresent(filePath, label) {
   try {
@@ -16,7 +12,7 @@ async function readJsonIfPresent(filePath, label) {
       return null;
     }
 
-    const configContent = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
+    const configContent = await fs.readFile(filePath, 'utf8');
     return JSON.parse(configContent);
   } catch (error) {
     console.error(`Failed to parse ${label}:`, error.message);
@@ -29,42 +25,6 @@ function mergeMcpServers(target, source) {
     return { ...target, ...source };
   }
   return target;
-}
-
-function rewriteLocalHttpMcpServerForDocker(serverConfig) {
-  if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
-    return serverConfig;
-  }
-  if (typeof serverConfig.url !== 'string' || serverConfig.url.trim() === '') {
-    return serverConfig;
-  }
-
-  try {
-    const parsed = new URL(serverConfig.url);
-    if (!DOCKER_LOCAL_MCP_HOSTNAMES.has(parsed.hostname)) {
-      return serverConfig;
-    }
-    parsed.hostname = DOCKER_HOST_MCP_HOSTNAME;
-    return {
-      ...serverConfig,
-      url: parsed.toString(),
-    };
-  } catch {
-    return serverConfig;
-  }
-}
-
-function normalizeMcpServersForRuntime(mcpServers, { runtimeMode = 'local' } = {}) {
-  if (String(runtimeMode || 'local').trim().toLowerCase() !== 'docker') {
-    return mcpServers;
-  }
-
-  return Object.fromEntries(
-    Object.entries(mcpServers).map(([name, serverConfig]) => [
-      name,
-      rewriteLocalHttpMcpServerForDocker(serverConfig),
-    ]),
-  );
 }
 
 /**
@@ -89,7 +49,6 @@ async function loadMcpConfig(cwd, {
   workspaceId = null,
   runtimeMode = 'local',
   runtimeHomePath = null,
-  env = process.env,
 } = {}) {
   try {
     let mcpServers = {};
@@ -109,20 +68,13 @@ async function loadMcpConfig(cwd, {
     }
 
     if (cwd) {
-      for (const workspacePath of buildWorkspacePathCandidates(cwd, env)) {
-        const workspaceConfigPath = path.join(workspacePath, '.mcp.json');
-        const workspaceConfig = await readJsonIfPresent(workspaceConfigPath, `${workspacePath}/.mcp.json`);
-        if (workspaceConfig) {
-          mcpServers = mergeMcpServers(mcpServers, workspaceConfig.mcpServers);
-          break;
-        }
-      }
+      const workspaceConfig = await readJsonIfPresent(path.join(cwd, '.mcp.json'), `${cwd}/.mcp.json`);
+      mcpServers = mergeMcpServers(mcpServers, workspaceConfig?.mcpServers);
     }
 
     if (Object.keys(mcpServers).length === 0) {
       return null;
     }
-    mcpServers = normalizeMcpServersForRuntime(mcpServers, { runtimeMode });
     if (tenantId && workspaceId) {
       mcpServers = await applyWorkspaceMcpHelperScripts(mcpServers, {
         tenantId,
@@ -138,37 +90,4 @@ async function loadMcpConfig(cwd, {
   }
 }
 
-async function attachMcpServersToSdkOptions({
-  sdkOptions,
-  runtimeContext = {},
-  runtimeOptions = {},
-  loadConfig = loadMcpConfig,
-  logger = console,
-}) {
-  const workspacePath = runtimeContext.hostWorkspacePath
-    || runtimeOptions.cwd
-    || runtimeOptions.projectPath
-    || null;
-  const mcpServers = await loadConfig(workspacePath, {
-    includeHostConfig: !runtimeContext.disableHostMcpConfig,
-    tenantId: runtimeOptions.tenantId,
-    workspaceId: runtimeOptions.workspaceId,
-    runtimeMode: runtimeContext.mode,
-    runtimeHomePath: runtimeContext.runtimeHomePath,
-    env: runtimeOptions.executionEnv,
-  });
-
-  if (!mcpServers || Object.keys(mcpServers).length === 0) {
-    return null;
-  }
-
-  sdkOptions.mcpServers = mcpServers;
-  logger?.info?.('[claude-sdk] Workspace MCP servers attached to agent turn', {
-    workspacePath,
-    runtimeMode: runtimeContext.mode || 'local',
-    serverNames: Object.keys(mcpServers),
-  });
-  return mcpServers;
-}
-
-export { attachMcpServersToSdkOptions, loadMcpConfig };
+export { loadMcpConfig };
