@@ -175,3 +175,67 @@ test('preset probe resolves uploaded helper script into private host directory',
     await fs.rm(helperRoot, { recursive: true, force: true });
   }
 });
+
+test('workspace MCP config restores preset headersHelper after a same-name custom config omits it', async () => {
+  const database = createTestDb();
+  const { multitenancy, tenant, workspace } = seedWorkspaceWithPreset(database);
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-helper-custom-'));
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+
+  try {
+    const resolved = await applyWorkspaceMcpHelperScripts({
+      knowledge: {
+        type: 'http',
+        url: 'https://custom.example.com/mcp',
+        headers: { 'X-Custom': 'custom' },
+      },
+    }, {
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      runtimeMode: 'docker',
+      runtimeHomePath,
+      multitenancy,
+    });
+
+    assert.equal(resolved.knowledge.url, 'https://custom.example.com/mcp');
+    assert.deepEqual(resolved.knowledge.headers, { 'X-Custom': 'custom' });
+    assert.equal(
+      resolved.knowledge.headersHelper,
+      "cd '/home/cloudcli/.cloudcli/mcp-helpers/knowledge' && set -a && . './.headers-helper.env.sh' && set +a && python3 auth.py",
+    );
+    assert.equal(Object.hasOwn(resolved.knowledge, 'helperEnv'), false);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('workspace MCP config respects an explicitly cleared headersHelper', async () => {
+  const database = createTestDb();
+  const { multitenancy, tenant, workspace } = seedWorkspaceWithPreset(database);
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-helper-cleared-'));
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+
+  try {
+    const resolved = await applyWorkspaceMcpHelperScripts({
+      knowledge: {
+        type: 'http',
+        url: 'https://custom.example.com/mcp',
+        headersHelper: '',
+      },
+    }, {
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      runtimeMode: 'docker',
+      runtimeHomePath,
+      multitenancy,
+    });
+
+    assert.equal(resolved.knowledge.headersHelper, '');
+    await assert.rejects(
+      fs.access(path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', 'knowledge', 'auth.py')),
+      { code: 'ENOENT' },
+    );
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});

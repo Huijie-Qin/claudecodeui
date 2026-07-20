@@ -256,6 +256,11 @@ export async function upsertWorkspaceMcpServer({
     readMcpStatus(workspacePath),
     readMcpDrafts(workspacePath),
   ]);
+  const persistedConfig = preserveExistingHeadersHelper({
+    normalizedConfig: normalized.config,
+    requestedServer: server,
+    existingConfig: config.mcpServers?.[normalized.name],
+  });
   const nextDrafts = { ...drafts.drafts };
   delete nextDrafts[normalized.name];
 
@@ -264,7 +269,7 @@ export async function upsertWorkspaceMcpServer({
       ...config,
       mcpServers: {
         ...config.mcpServers,
-        [normalized.name]: normalized.config,
+        [normalized.name]: persistedConfig,
       },
     }),
     writeMcpStatus(workspacePath, {
@@ -286,7 +291,7 @@ export async function upsertWorkspaceMcpServer({
 
   return {
     savedAsDraft: false,
-    server: toMcpTool(normalized.name, normalized.config, {
+    server: toMcpTool(normalized.name, persistedConfig, {
       ...probeResult,
       name: normalized.name,
       checkedAt: timestamp,
@@ -603,6 +608,18 @@ function normalizeHttpMcpInput(server, { allowDraft }) {
       headersHelper: firstString(record.headersHelper) || undefined,
     },
   };
+}
+
+function preserveExistingHeadersHelper({ normalizedConfig, requestedServer, existingConfig }) {
+  const requestedRecord = readPlainObject(requestedServer) || {};
+  if (Object.prototype.hasOwnProperty.call(requestedRecord, 'headersHelper')) {
+    return normalizedConfig;
+  }
+
+  const existingHeadersHelper = firstString(readPlainObject(existingConfig)?.headersHelper);
+  return existingHeadersHelper
+    ? { ...normalizedConfig, headersHelper: existingHeadersHelper }
+    : normalizedConfig;
 }
 
 function normalizeHttpConfig(config) {

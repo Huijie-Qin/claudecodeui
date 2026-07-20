@@ -224,11 +224,18 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
   for (const install of installs) {
     const serverName = install.name;
     const currentConfig = nextServers[serverName];
-    if (!currentConfig?.headersHelper) continue;
+    if (!currentConfig || typeof currentConfig !== 'object' || Array.isArray(currentConfig)) continue;
     const preset = multitenancy.mcpPresets?.getPresetById?.({
       tenantId: requirePositiveInteger(tenantId, 'tenantId'),
       presetId: install.preset_id,
     });
+    const presetHeadersHelper = typeof preset?.config?.headersHelper === 'string'
+      ? preset.config.headersHelper.trim()
+      : '';
+    const effectiveConfig = !Object.prototype.hasOwnProperty.call(currentConfig, 'headersHelper') && presetHeadersHelper
+      ? { ...currentConfig, headersHelper: presetHeadersHelper }
+      : currentConfig;
+    if (!effectiveConfig.headersHelper) continue;
     const helperEnv = readStringRecord(preset?.config?.helperEnv);
 
     const script = getPresetHelperScript(multitenancy, {
@@ -236,7 +243,7 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
       presetId: install.preset_id,
     });
     if (!script && Object.keys(helperEnv).length === 0) {
-      nextServers[serverName] = withoutHelperEnv(currentConfig);
+      nextServers[serverName] = withoutHelperEnv(effectiveConfig);
       continue;
     }
 
@@ -261,7 +268,7 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
       fsImpl,
     });
     nextServers[serverName] = withHelperWorkingDirectory(
-      currentConfig,
+      effectiveConfig,
       commandDirectory,
       { includeEnvFile: Boolean(envPath) },
     );

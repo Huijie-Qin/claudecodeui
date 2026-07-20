@@ -161,6 +161,81 @@ test('upsertWorkspaceMcpServer probes, writes .mcp.json, and caches status witho
   }
 });
 
+test('upsertWorkspaceMcpServer preserves an existing headersHelper when a custom update omits it', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  const overridePath = path.join(workspacePath, '.claude', 'mcp-tool-overrides.local.json');
+  const overrideContent = '{"version":1,"servers":{"docs":{"lookup":false}}}\n';
+  try {
+    await writeWorkspaceMcpConfig(workspacePath, {
+      mcpServers: {
+        docs: {
+          type: 'http',
+          url: 'https://old.example.com/mcp',
+          headers: { 'X-Old': 'old' },
+          headersHelper: 'python3 mcp-headers-helper.py',
+        },
+      },
+    });
+    await fs.mkdir(path.dirname(overridePath), { recursive: true });
+    await fs.writeFile(overridePath, overrideContent, 'utf8');
+
+    await upsertWorkspaceMcpServer({
+      workspacePath,
+      server: {
+        name: 'docs',
+        type: 'http',
+        url: 'https://new.example.com/mcp',
+        headers: { 'X-Custom': 'custom' },
+      },
+      probe: okProbe([{ name: 'lookup' }]),
+    });
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+    assert.deepEqual(config.mcpServers.docs, {
+      type: 'http',
+      url: 'https://new.example.com/mcp',
+      headers: { 'X-Custom': 'custom' },
+      headersHelper: 'python3 mcp-headers-helper.py',
+    });
+    assert.equal(await fs.readFile(overridePath, 'utf8'), overrideContent);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('upsertWorkspaceMcpServer removes headersHelper when a custom update explicitly clears it', async () => {
+  const { workspacePath, cleanup } = await createWorkspace();
+  try {
+    await writeWorkspaceMcpConfig(workspacePath, {
+      mcpServers: {
+        docs: {
+          type: 'http',
+          url: 'https://old.example.com/mcp',
+          headersHelper: 'python3 mcp-headers-helper.py',
+        },
+      },
+    });
+
+    await upsertWorkspaceMcpServer({
+      workspacePath,
+      server: {
+        name: 'docs',
+        type: 'http',
+        url: 'https://new.example.com/mcp',
+        headers: {},
+        headersHelper: '',
+      },
+      probe: okProbe(),
+    });
+
+    const config = await readWorkspaceMcpConfig(workspacePath);
+    assert.equal(Object.prototype.hasOwnProperty.call(config.mcpServers.docs, 'headersHelper'), false);
+    assert.equal(config.mcpServers.docs.url, 'https://new.example.com/mcp');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('upsertWorkspaceMcpServer rewrites local HTTP MCP URLs before docker probe', async () => {
   const { workspacePath, cleanup } = await createWorkspace();
   const seen = [];
