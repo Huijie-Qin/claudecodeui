@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  attachMcpServersToSdkOptions,
+  loadMcpConfig,
+} from './services/claude-mcp-config.js';
 import {
   WORKSPACE_CONTAINER_ROOT_ENV,
   WORKSPACE_HOST_ROOT_ENV,
@@ -178,4 +181,67 @@ test('loadMcpConfig returns null when no MCP servers are configured', async () =
   const config = await loadMcpConfig(workspacePath, { homeDir });
 
   assert.equal(config, null);
+});
+
+test('attachMcpServersToSdkOptions reads the host workspace and exposes servers to Claude', async () => {
+  const calls = [];
+  const sdkOptions = {};
+  const loggerEvents = [];
+  const mcpServers = await attachMcpServersToSdkOptions({
+    sdkOptions,
+    runtimeContext: {
+      mode: 'docker',
+      hostWorkspacePath: 'C:\\workspaces\\team\\repo',
+      runtimeHomePath: 'C:\\runtime-home',
+      disableHostMcpConfig: true,
+    },
+    runtimeOptions: {
+      cwd: '/workspace',
+      projectPath: '/workspace',
+      tenantId: 7,
+      workspaceId: 11,
+      executionEnv: { WORKSPACES_ROOT: 'C:\\workspaces' },
+    },
+    loadConfig: async (workspacePath, options) => {
+      calls.push({ workspacePath, options });
+      return {
+        datasource: {
+          type: 'http',
+          url: 'https://mcp.example.com/mcp',
+        },
+      };
+    },
+    logger: {
+      info: (...args) => loggerEvents.push(args),
+    },
+  });
+
+  assert.deepEqual(calls, [{
+    workspacePath: 'C:\\workspaces\\team\\repo',
+    options: {
+      includeHostConfig: false,
+      tenantId: 7,
+      workspaceId: 11,
+      runtimeMode: 'docker',
+      runtimeHomePath: 'C:\\runtime-home',
+      env: { WORKSPACES_ROOT: 'C:\\workspaces' },
+    },
+  }]);
+  assert.equal(mcpServers, sdkOptions.mcpServers);
+  assert.deepEqual(Object.keys(sdkOptions.mcpServers), ['datasource']);
+  assert.equal(loggerEvents.length, 1);
+  assert.deepEqual(loggerEvents[0][1].serverNames, ['datasource']);
+});
+
+test('attachMcpServersToSdkOptions leaves SDK options unchanged when the workspace has no MCP servers', async () => {
+  const sdkOptions = { model: 'test-model' };
+  const result = await attachMcpServersToSdkOptions({
+    sdkOptions,
+    runtimeContext: { mode: 'local' },
+    runtimeOptions: { cwd: '/workspace' },
+    loadConfig: async () => null,
+  });
+
+  assert.equal(result, null);
+  assert.deepEqual(sdkOptions, { model: 'test-model' });
 });

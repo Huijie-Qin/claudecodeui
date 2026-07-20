@@ -138,4 +138,37 @@ async function loadMcpConfig(cwd, {
   }
 }
 
-export { loadMcpConfig };
+async function attachMcpServersToSdkOptions({
+  sdkOptions,
+  runtimeContext = {},
+  runtimeOptions = {},
+  loadConfig = loadMcpConfig,
+  logger = console,
+}) {
+  const workspacePath = runtimeContext.hostWorkspacePath
+    || runtimeOptions.cwd
+    || runtimeOptions.projectPath
+    || null;
+  const mcpServers = await loadConfig(workspacePath, {
+    includeHostConfig: !runtimeContext.disableHostMcpConfig,
+    tenantId: runtimeOptions.tenantId,
+    workspaceId: runtimeOptions.workspaceId,
+    runtimeMode: runtimeContext.mode,
+    runtimeHomePath: runtimeContext.runtimeHomePath,
+    env: runtimeOptions.executionEnv,
+  });
+
+  if (!mcpServers || Object.keys(mcpServers).length === 0) {
+    return null;
+  }
+
+  sdkOptions.mcpServers = mcpServers;
+  logger?.info?.('[claude-sdk] Workspace MCP servers attached to agent turn', {
+    workspacePath,
+    runtimeMode: runtimeContext.mode || 'local',
+    serverNames: Object.keys(mcpServers),
+  });
+  return mcpServers;
+}
+
+export { attachMcpServersToSdkOptions, loadMcpConfig };
