@@ -65,9 +65,22 @@ const INTERNAL_CONTENT_PREFIXES = [
   '[Request interrupted',
 ] as const;
 
+const INTERNAL_SKILL_CONTENT_MARKERS = [
+  'Base directory for this skill:',
+] as const;
+
+const INTERNAL_SKILL_CONTENT_PATTERNS = [
+  /^\s*<[^>\n]*skill[^>\n]*>/i,
+  /^\s*skill\s+(?:body|content|detail|details|instructions|parameters|params|arguments|args)\s*:/i,
+] as const;
+
 function isInternalContent(content: string): boolean {
   const normalizedContent = content.trimStart();
-  return INTERNAL_CONTENT_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix));
+  return (
+    INTERNAL_CONTENT_PREFIXES.some((prefix) => normalizedContent.startsWith(prefix)) ||
+    INTERNAL_SKILL_CONTENT_MARKERS.some((marker) => normalizedContent.includes(marker)) ||
+    INTERNAL_SKILL_CONTENT_PATTERNS.some((pattern) => pattern.test(normalizedContent))
+  );
 }
 
 function cleanAssistantText(text: string): string {
