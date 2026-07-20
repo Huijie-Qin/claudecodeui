@@ -31,6 +31,49 @@ test('runtime Claude history finds the session JSONL and ignores other sessions 
   assert.deepEqual(result.messages.map((message) => message.uuid), ['m1', 'm2']);
 });
 
+test('runtime Claude history reads only the directly named transcript when it exists', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-history-direct-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-direct';
+  await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [{
+    sessionId,
+    uuid: 'direct-message',
+    type: 'user',
+    timestamp: '2026-01-01T00:00:01.000Z',
+    message: { role: 'user', content: 'direct' },
+  }]);
+  await writeJsonl(path.join(projectDir, 'unrelated.jsonl'), [{
+    sessionId,
+    uuid: 'must-not-be-read',
+    type: 'assistant',
+    timestamp: '2026-01-01T00:00:02.000Z',
+    message: { role: 'assistant', content: 'legacy duplicate' },
+  }]);
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+
+  assert.deepEqual(result.messages.map((message) => message.uuid), ['direct-message']);
+});
+
+test('runtime Claude history scans legacy transcript names only when the direct file is absent', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-history-legacy-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-legacy';
+  await writeJsonl(path.join(projectDir, 'legacy-layout.jsonl'), [{
+    sessionId,
+    uuid: 'legacy-message',
+    type: 'user',
+    timestamp: '2026-01-01T00:00:01.000Z',
+    message: { role: 'user', content: 'legacy' },
+  }]);
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+
+  assert.deepEqual(result.messages.map((message) => message.uuid), ['legacy-message']);
+});
+
 test('runtime Claude history keeps newest-first pagination semantics', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-history-page-'));
   const projectsRoot = path.join(root, '.claude', 'projects');
