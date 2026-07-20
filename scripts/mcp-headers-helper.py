@@ -8,7 +8,7 @@ import sys
 
 def require_environment_variable(name: str) -> str:
     """Return a required value without ever writing it to stderr."""
-    value = os.environ.get(name)
+    value = os.getenv(name)
     if value is None or not value.strip():
         print(f"Missing required environment variable: {name}", file=sys.stderr)
         raise SystemExit(2)
