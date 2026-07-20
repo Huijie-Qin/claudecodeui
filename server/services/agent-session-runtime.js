@@ -418,6 +418,36 @@ export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, 
   }
 }
 
+export async function migratePathOwnership(fsImpl, targetPath, { uid, gid } = {}) {
+  if (!isNonNegativeInteger(uid) || !isNonNegativeInteger(gid)) {
+    throw new Error('uid and gid must be non-negative integers');
+  }
+
+  const stats = await fsImpl.lstat(targetPath);
+  if (stats.isSymbolicLink()) {
+    if (typeof fsImpl.lchown === 'function') {
+      await fsImpl.lchown(targetPath, uid, gid);
+      return 1;
+    }
+    return 0;
+  }
+
+  let migratedEntries = 0;
+  if (stats.isDirectory()) {
+    const entries = await fsImpl.readdir(targetPath, { withFileTypes: true });
+    for (const entry of entries) {
+      migratedEntries += await migratePathOwnership(
+        fsImpl,
+        path.join(targetPath, entry.name),
+        { uid, gid },
+      );
+    }
+  }
+
+  await fsImpl.chown(targetPath, uid, gid);
+  return migratedEntries + 1;
+}
+
 export async function ensureClaudeCleanupPeriod(fsImpl, runtimeHomePath) {
   const claudeDir = path.join(runtimeHomePath, '.claude');
   const settingsPath = path.join(claudeDir, 'settings.json');
@@ -592,13 +622,15 @@ export class DockerCliClient {
       const { stdout } = await execFileAsync('docker', [
         'inspect',
         '-f',
-        '{{json .State}}',
+        '{{json .}}',
         containerName,
       ]);
-      const state = JSON.parse(stdout.trim());
+      const inspected = JSON.parse(stdout.trim());
+      const state = inspected.State || {};
       return {
         exists: true,
         running: state.Running === true,
+        user: inspected.Config?.User ?? null,
         state,
         status: state.Status ?? null,
         exitCode: state.ExitCode ?? null,
@@ -832,8 +864,9 @@ export function createAgentSessionRuntimeManager({
 
   async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
     const requestId = logContext.requestId || null;
+    const containerUser = resolveContainerUser(env);
+    const expectedContainerUser = `${containerUser.uid}:${containerUser.gid}`;
     const createContainer = async () => {
-      const containerUser = resolveContainerUser(env);
       const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
       const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
       const args = buildDockerRunArgs({
@@ -899,7 +932,46 @@ export function createAgentSessionRuntimeManager({
       await createContainer();
     };
 
+    const migrateContainerUser = async (inspected) => {
+      if (typeof docker.removeContainer !== 'function') {
+        throw new Error('Docker runtime container user changed and the existing container cannot be removed');
+      }
+
+      logRuntimeEvent('container_user_migration_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        previousUser: inspected.user,
+        targetUser: expectedContainerUser,
+      }));
+
+      if (inspected.running) {
+        await docker.stopContainer(runtime.container_name);
+      }
+
+      const workspaceEntries = await migratePathOwnership(fs, runtime.workspace_host_path, containerUser);
+      const runtimeHomeEntries = await migratePathOwnership(fs, runtime.runtime_home_path, containerUser);
+
+      await docker.removeContainer(runtime.container_name);
+      await createContainer();
+
+      logRuntimeEvent('container_user_migration_completed', createRuntimeLogDetails(runtime, {
+        requestId,
+        previousUser: inspected.user,
+        targetUser: expectedContainerUser,
+        workspaceEntries,
+        runtimeHomeEntries,
+      }));
+    };
+
     const inspected = await docker.inspectContainer(runtime.container_name);
+    if (
+      inspected?.exists
+      && typeof inspected.user === 'string'
+      && inspected.user.trim() !== ''
+      && inspected.user.trim() !== expectedContainerUser
+    ) {
+      await migrateContainerUser(inspected);
+      return;
+    }
     if (inspected?.running) {
       const healthy = await verifyContainerWorkspace(runtime, { requestId });
       if (healthy) {

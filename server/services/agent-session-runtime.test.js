@@ -14,6 +14,7 @@ import {
   createClaudeDockerSpawn,
   ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
+  migratePathOwnership,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
 } from './agent-session-runtime.js';
@@ -280,6 +281,36 @@ test('docker runtime home falls back to writable permissions when chown fails', 
   assert.deepEqual(calls, [
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
     ['chmod', '/tmp/runtime/home', 0o777],
+  ]);
+});
+
+test('runtime ownership migration recursively chowns entries without following symlinks', async () => {
+  const calls = [];
+  const linkPath = path.join('/workspace', 'link');
+  const fsMock = {
+    lstat: async (targetPath) => ({
+      isDirectory: () => targetPath === '/workspace',
+      isSymbolicLink: () => targetPath === linkPath,
+    }),
+    readdir: async () => [
+      { name: 'file.txt' },
+      { name: 'link' },
+    ],
+    chown: async (targetPath, uid, gid) => calls.push(['chown', targetPath, uid, gid]),
+    lchown: async (targetPath, uid, gid) => calls.push(['lchown', targetPath, uid, gid]),
+  };
+
+  const migratedEntries = await migratePathOwnership(
+    fsMock,
+    '/workspace',
+    { uid: 1000, gid: 1000 },
+  );
+
+  assert.equal(migratedEntries, 3);
+  assert.deepEqual(calls, [
+    ['chown', path.join('/workspace', 'file.txt'), 1000, 1000],
+    ['lchown', linkPath, 1000, 1000],
+    ['chown', '/workspace', 1000, 1000],
   ]);
 });
 
@@ -661,6 +692,84 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(startedContainer, 'cloudcli-claude-existing');
   assert.equal(runtime.runtimeHomePath, runtimeHomePath);
   assert.equal(runtime.runtimeId, 'existing');
+});
+
+test('docker mode migrates an existing root container to the configured non-root user', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-user-migration-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  await fs.writeFile(path.join(workspacePath, 'project.txt'), 'project');
+  await fs.writeFile(path.join(runtimeHomePath, 'session.json'), '{}');
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const runtimeRow = {
+    runtime_id: 'existing-root-runtime',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-root',
+    container_name: 'cloudcli-claude-existing-root',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  const events = [];
+  const ownershipChanges = [];
+  const logs = [];
+  const fsMock = {
+    ...fs,
+    chown: async (targetPath, uid, gid) => ownershipChanges.push({ targetPath, uid, gid }),
+    lchown: async (targetPath, uid, gid) => ownershipChanges.push({ targetPath, uid, gid, symlink: true }),
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_DOCKER_UID: '1000',
+      CLOUDCLI_DOCKER_GID: '1000',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    fs: fsMock,
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, user: '0:0' }),
+      stopContainer: async () => events.push('stop'),
+      removeContainer: async () => events.push('remove'),
+      runDetached: async (args) => events.push(`run:${args[args.indexOf('--user') + 1]}`),
+      verifyWorkspaceCwd: async () => events.push('verify'),
+    },
+  });
+
+  const originalConsoleLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+      sessionId: 'claude-session-root',
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.deepEqual(events, ['stop', 'remove', 'run:1000:1000', 'verify']);
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeHomePath));
+  assert.ok(ownershipChanges.every((entry) => entry.uid === 1000 && entry.gid === 1000));
+  assert.ok(logs.some((entry) => entry.includes('container_user_migration_completed')));
+  assert.ok(logs.some((entry) => entry.includes('"previousUser":"0:0"')));
+  assert.ok(logs.some((entry) => entry.includes('"targetUser":"1000:1000"')));
 });
 
 test('docker mode recreates a running container when workspace cwd is unhealthy', async () => {
