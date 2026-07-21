@@ -1293,6 +1293,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         if (completedSessionId) {
           scheduleSessionIdleClose(completedSessionId);
+          runtimeOptions.onConcurrencyIdle?.();
         }
 
         recordProviderSession({
@@ -1641,6 +1642,26 @@ function pushClaudeSupplement({
     return { success: false, error: 'Claude session is not accepting supplemental input' };
   }
 
+  const { priority, shouldQuery } = normalizeSupplementMode(mode);
+  if (shouldQuery) {
+    try {
+      session.runtimeOptions?.onConcurrencyResume?.();
+    } catch (error) {
+      if (error?.code === 'SESSION_LIMIT_EXCEEDED') {
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          activeCount: error.activeCount,
+          limit: error.limit,
+          source: error.source,
+          userId: error.userId,
+        };
+      }
+      throw error;
+    }
+  }
+
   updateSessionWriter(normalizedSessionId, writer);
 
   const timestamp = new Date().toISOString();
@@ -1667,7 +1688,6 @@ function pushClaudeSupplement({
     messages: [persistedMessage],
   });
 
-  const { priority, shouldQuery } = normalizeSupplementMode(mode);
   markSessionProcessing(normalizedSessionId);
   session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
     priority,

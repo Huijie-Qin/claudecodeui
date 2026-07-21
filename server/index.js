@@ -2475,6 +2475,26 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
+    // Claude keeps its SDK stream alive while idle for fast follow-up turns.
+    // Tie the concurrency lease to processing, not to that reusable stream.
+    const acquireConcurrencyLease = () => {
+        if (lease) return;
+        lease = sessionConcurrencyLimiter.acquire({
+            userId: data.options?.userId ?? writer.userId,
+        });
+    };
+    const releaseConcurrencyLease = () => {
+        lease?.release();
+        lease = null;
+    };
+    if (provider === 'claude') {
+        data.options = {
+            ...(data.options || {}),
+            onConcurrencyResume: acquireConcurrencyLease,
+            onConcurrencyIdle: releaseConcurrencyLease,
+        };
+    }
+
     try {
         activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
         activeProviderCommands.set(activeCommandId, {
@@ -2499,7 +2519,7 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         if (activeCommandId) {
             activeProviderCommands.delete(activeCommandId);
         }
-        lease?.release();
+        releaseConcurrencyLease();
     }
 }
 
@@ -2534,6 +2554,18 @@ function handleChatConnection(ws, request) {
                     });
                     if (pushedToExistingSession.success) {
                         logChatSessionEvent('pushed_to_existing_stream', logContext);
+                        return;
+                    }
+                    if (pushedToExistingSession.code === 'SESSION_LIMIT_EXCEEDED') {
+                        writer.send(createNormalizedMessage({
+                            kind: 'error',
+                            content: createSessionLimitExceededMessage(pushedToExistingSession),
+                            code: pushedToExistingSession.code,
+                            provider: 'claude',
+                            sessionId: data.options.sessionId,
+                            currentConcurrentRequests: pushedToExistingSession.activeCount,
+                            sessionLimit: pushedToExistingSession.limit,
+                        }));
                         return;
                     }
                 }
