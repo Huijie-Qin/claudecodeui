@@ -475,6 +475,87 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });
 
+test('docker mode prepares new workspace ownership before creating its first container', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-new-ownership-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.writeFile(path.join(workspacePath, 'root-owned.txt'), 'test');
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const events = [];
+  const ownershipChanges = [];
+  const logs = [];
+  let runtimeRow = null;
+  const fsMock = {
+    ...fs,
+    chown: async (targetPath, uid, gid) => {
+      ownershipChanges.push({ targetPath, uid, gid });
+    },
+    lchown: async (targetPath, uid, gid) => {
+      ownershipChanges.push({ targetPath, uid, gid, symlink: true });
+    },
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_DOCKER_UID: '1000',
+      CLOUDCLI_DOCKER_GID: '1000',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => null,
+        findByOwner: () => null,
+        createRuntime: (input) => {
+          runtimeRow = {
+            runtime_id: input.runtimeId,
+            tenant_id: input.tenantId,
+            workspace_id: input.workspaceId,
+            user_id: input.userId,
+            provider: input.provider,
+            container_name: input.containerName,
+            image: input.image,
+            workspace_host_path: input.workspaceHostPath,
+            runtime_home_path: input.runtimeHomePath,
+            status: input.status,
+          };
+          return runtimeRow;
+        },
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    fs: fsMock,
+    docker: {
+      inspectContainer: async () => null,
+      runDetached: async (args) => events.push(`run:${args[args.indexOf('--user') + 1]}`),
+      verifyWorkspaceCwd: async () => events.push('verify'),
+    },
+  });
+
+  const originalConsoleLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.deepEqual(events, ['run:1000:1000', 'verify']);
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.join(workspaceRealPath, 'root-owned.txt')));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeRow.runtime_home_path));
+  assert.ok(ownershipChanges.every((entry) => entry.uid === 1000 && entry.gid === 1000));
+  assert.ok(logs.some((entry) => entry.includes('container_ownership_prepare_completed')));
+  assert.ok(logs.some((entry) => entry.includes('"targetUser":"1000:1000"')));
+});
+
 test('docker mode validates a mapped container workspace while keeping the host path', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-mapped-workspace-'));
   const runtimeRoot = path.join(tempRoot, 'runtimes');

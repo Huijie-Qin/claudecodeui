@@ -812,6 +812,25 @@ export function createAgentSessionRuntimeManager({
     return requestedPath;
   }
 
+  async function resolveWorkspaceOwnershipPath(workspaceHostPath) {
+    const requestedPath = requireValue(workspaceHostPath, 'workspaceHostPath');
+    try {
+      await fs.lstat(requestedPath);
+      return requestedPath;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+        throw error;
+      }
+    }
+
+    const mappedPath = mapWorkspacePathForContainer(requestedPath, env);
+    if (!mappedPath || mappedPath === requestedPath) {
+      throw new Error(`workspace ownership path is not accessible: ${requestedPath}`);
+    }
+    await fs.lstat(mappedPath);
+    return mappedPath;
+  }
+
   function beginRuntimeUse(runtimeId) {
     if (!runtimeId) return 0;
     const next = (activeRuntimeUses.get(runtimeId) || 0) + 1;
@@ -947,7 +966,8 @@ export function createAgentSessionRuntimeManager({
         await docker.stopContainer(runtime.container_name);
       }
 
-      const workspaceEntries = await migratePathOwnership(fs, runtime.workspace_host_path, containerUser);
+      const workspaceOwnershipPath = await resolveWorkspaceOwnershipPath(runtime.workspace_host_path);
+      const workspaceEntries = await migratePathOwnership(fs, workspaceOwnershipPath, containerUser);
       const runtimeHomeEntries = await migratePathOwnership(fs, runtime.runtime_home_path, containerUser);
 
       await docker.removeContainer(runtime.container_name);
@@ -956,6 +976,24 @@ export function createAgentSessionRuntimeManager({
       logRuntimeEvent('container_user_migration_completed', createRuntimeLogDetails(runtime, {
         requestId,
         previousUser: inspected.user,
+        targetUser: expectedContainerUser,
+        workspaceEntries,
+        runtimeHomeEntries,
+      }));
+    };
+
+    const prepareNewContainerOwnership = async () => {
+      logRuntimeEvent('container_ownership_prepare_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        targetUser: expectedContainerUser,
+      }));
+
+      const workspaceOwnershipPath = await resolveWorkspaceOwnershipPath(runtime.workspace_host_path);
+      const workspaceEntries = await migratePathOwnership(fs, workspaceOwnershipPath, containerUser);
+      const runtimeHomeEntries = await migratePathOwnership(fs, runtime.runtime_home_path, containerUser);
+
+      logRuntimeEvent('container_ownership_prepare_completed', createRuntimeLogDetails(runtime, {
+        requestId,
         targetUser: expectedContainerUser,
         workspaceEntries,
         runtimeHomeEntries,
@@ -1007,6 +1045,7 @@ export function createAgentSessionRuntimeManager({
       return;
     }
 
+    await prepareNewContainerOwnership();
     await createContainer();
   }
 
