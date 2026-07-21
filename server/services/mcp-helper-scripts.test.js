@@ -116,7 +116,21 @@ test('workspace MCP config resolves uploaded helper script into private docker r
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-helper-docker-'));
   const runtimeHomePath = path.join(tempRoot, 'runtime-home');
   const workspacePath = path.join(tempRoot, 'workspace');
+  const cloudcliPath = path.join(runtimeHomePath, '.cloudcli');
+  const helperRoot = path.join(cloudcliPath, 'mcp-helpers');
+  const chmodCalls = [];
+  const fsImpl = {
+    mkdir: fs.mkdir.bind(fs),
+    writeFile: fs.writeFile.bind(fs),
+    chmod: async (targetPath, mode) => {
+      chmodCalls.push([targetPath, mode]);
+      return fs.chmod(targetPath, mode);
+    },
+  };
   await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(helperRoot, { recursive: true, mode: 0o700 });
+  await fs.chmod(cloudcliPath, 0o700);
+  await fs.chmod(helperRoot, 0o700);
 
   try {
     const mcpServers = {
@@ -133,10 +147,12 @@ test('workspace MCP config resolves uploaded helper script into private docker r
       runtimeMode: 'docker',
       runtimeHomePath,
       multitenancy,
+      fsImpl,
     });
 
     const scriptPath = path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', 'knowledge', 'auth.py');
     const envPath = path.join(runtimeHomePath, '.cloudcli', 'mcp-helpers', 'knowledge', '.headers-helper.env.sh');
+    const helperDirectory = path.dirname(scriptPath);
     assert.equal(await fs.readFile(scriptPath, 'utf8'), 'import json\nprint(json.dumps({"Authorization": "Bearer dynamic"}))\n');
     assert.equal(await fs.readFile(envPath, 'utf8'), "export ROOT_SECRET='dynamic-root-key'\n");
     assert.equal(
@@ -145,6 +161,19 @@ test('workspace MCP config resolves uploaded helper script into private docker r
     );
     assert.equal(Object.hasOwn(resolved.knowledge, 'helperEnv'), false);
     assert.equal(resolved.knowledge.headersHelper.includes(workspacePath), false);
+    assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === cloudcliPath && mode === 0o755), true);
+    assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === helperRoot && mode === 0o755), true);
+    assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === helperDirectory && mode === 0o755), true);
+    assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === scriptPath && mode === 0o755), true);
+    assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === envPath && mode === 0o644), true);
+
+    if (process.platform !== 'win32') {
+      assert.equal((await fs.stat(cloudcliPath)).mode & 0o777, 0o755);
+      assert.equal((await fs.stat(helperRoot)).mode & 0o777, 0o755);
+      assert.equal((await fs.stat(helperDirectory)).mode & 0o777, 0o755);
+      assert.equal((await fs.stat(scriptPath)).mode & 0o777, 0o755);
+      assert.equal((await fs.stat(envPath)).mode & 0o777, 0o644);
+    }
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

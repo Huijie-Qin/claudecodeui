@@ -11,6 +11,16 @@ const HELPER_ENV_FILE_NAME = '.headers-helper.env.sh';
 const HELPER_FILE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const HELPER_SCRIPT_MAX_BYTES = 64 * 1024;
 const HELPER_ENV_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const PRIVATE_HELPER_MODES = Object.freeze({
+  directory: 0o700,
+  script: 0o700,
+  env: 0o600,
+});
+const DOCKER_HELPER_MODES = Object.freeze({
+  directory: 0o755,
+  script: 0o755,
+  env: 0o644,
+});
 
 function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
@@ -66,30 +76,54 @@ function helperContainerDirectory(presetName) {
   return path.posix.join(MCP_HELPER_CONTAINER_ROOT, String(presetName));
 }
 
-async function writeHelperScript({ directory, fileName, content, fsImpl = fs }) {
-  await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
-  await fsImpl.chmod(directory, 0o700).catch(() => {});
+async function writeHelperScript({
+  directory,
+  fileName,
+  content,
+  modes = PRIVATE_HELPER_MODES,
+  fsImpl = fs,
+}) {
+  await fsImpl.mkdir(directory, { recursive: true, mode: modes.directory });
+  await fsImpl.chmod(directory, modes.directory).catch(() => {});
   const scriptPath = path.join(directory, requireSafeHelperFileName(fileName));
-  await fsImpl.writeFile(scriptPath, content, { mode: 0o700 });
-  await fsImpl.chmod(scriptPath, 0o700).catch(() => {});
+  await fsImpl.writeFile(scriptPath, content, { mode: modes.script });
+  await fsImpl.chmod(scriptPath, modes.script).catch(() => {});
   return scriptPath;
 }
 
-async function writeHelperEnvFile({ directory, helperEnv, fsImpl = fs }) {
+async function writeHelperEnvFile({
+  directory,
+  helperEnv,
+  modes = PRIVATE_HELPER_MODES,
+  fsImpl = fs,
+}) {
   const env = readStringRecord(helperEnv);
   if (Object.keys(env).length === 0) {
     return null;
   }
 
-  await fsImpl.mkdir(directory, { recursive: true, mode: 0o700 });
-  await fsImpl.chmod(directory, 0o700).catch(() => {});
+  await fsImpl.mkdir(directory, { recursive: true, mode: modes.directory });
+  await fsImpl.chmod(directory, modes.directory).catch(() => {});
   const envPath = path.join(directory, HELPER_ENV_FILE_NAME);
   const content = Object.entries(env)
     .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
     .join('\n');
-  await fsImpl.writeFile(envPath, `${content}\n`, { mode: 0o600 });
-  await fsImpl.chmod(envPath, 0o600).catch(() => {});
+  await fsImpl.writeFile(envPath, `${content}\n`, { mode: modes.env });
+  await fsImpl.chmod(envPath, modes.env).catch(() => {});
   return envPath;
+}
+
+async function ensureDockerHelperDirectoryAccessible(runtimeHomePath, directory, fsImpl = fs) {
+  const cloudcliDirectory = path.join(runtimeHomePath, '.cloudcli');
+  const helperRoot = path.join(cloudcliDirectory, 'mcp-helpers');
+  await fsImpl.mkdir(directory, { recursive: true, mode: DOCKER_HELPER_MODES.directory });
+
+  // These paths may have been created as 0700 by an earlier release. Repair
+  // every parent below the private runtime home so the container UID can
+  // traverse the bind mount and execute/read the generated helper files.
+  for (const helperDirectory of [cloudcliDirectory, helperRoot, directory]) {
+    await fsImpl.chmod(helperDirectory, DOCKER_HELPER_MODES.directory).catch(() => {});
+  }
 }
 
 function withoutHelperEnv(config) {
@@ -247,24 +281,32 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
       continue;
     }
 
-    const hostDirectory = runtimeMode === 'docker' && runtimeHomePath
+    const isDockerRuntime = runtimeMode === 'docker' && runtimeHomePath;
+    const hostDirectory = isDockerRuntime
       ? helperDirectoryForRuntime(runtimeHomePath, serverName)
       : helperDirectoryForPreset(helperRoot, { tenantId, presetId: install.preset_id });
-    const commandDirectory = runtimeMode === 'docker' && runtimeHomePath
+    const commandDirectory = isDockerRuntime
       ? helperContainerDirectory(serverName)
       : hostDirectory;
+    const modes = isDockerRuntime ? DOCKER_HELPER_MODES : PRIVATE_HELPER_MODES;
+
+    if (isDockerRuntime) {
+      await ensureDockerHelperDirectoryAccessible(runtimeHomePath, hostDirectory, fsImpl);
+    }
 
     if (script) {
       await writeHelperScript({
         directory: hostDirectory,
         fileName: script.file_name,
         content: script.content,
+        modes,
         fsImpl,
       });
     }
     const envPath = await writeHelperEnvFile({
       directory: hostDirectory,
       helperEnv,
+      modes,
       fsImpl,
     });
     nextServers[serverName] = withHelperWorkingDirectory(
