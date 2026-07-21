@@ -396,6 +396,10 @@ function ChatInterface({
     pendingPermissionRequests,
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
+  const handleProviderChange = useCallback(
+    (nextProvider: LLMProvider) => setProvider(nextProvider as Provider),
+    [setProvider],
+  );
 
   const selectedModel = provider === 'cursor'
     ? cursorModel
@@ -453,7 +457,7 @@ function ChatInterface({
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
-          setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
+          setProvider={handleProviderChange}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}

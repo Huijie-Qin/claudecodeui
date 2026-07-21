@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -49,7 +49,7 @@ interface ChatMessagesPaneProps {
   selectedProject: Project;
 }
 
-export default function ChatMessagesPane({
+function ChatMessagesPane({
   scrollContainerRef,
   onWheel,
   onTouchMove,
@@ -186,4 +186,6 @@ export default function ChatMessagesPane({
     </div>
   );
 }
+
+export default memo(ChatMessagesPane);
 
