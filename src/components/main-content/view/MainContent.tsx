@@ -61,6 +61,7 @@ function MainContent({
     editingFile,
     editorWidth,
     editorExpanded,
+    isResizing,
     hasManualWidth,
     resizeHandleRef,
     handleFileOpen,
@@ -211,6 +212,7 @@ function MainContent({
           isMobile={isMobile}
           editorExpanded={editorExpanded}
           editorWidth={editorWidth}
+          isResizing={isResizing}
           hasManualWidth={hasManualWidth}
           resizeHandleRef={resizeHandleRef}
           onResizeStart={handleResizeStart}
