@@ -397,24 +397,28 @@ export function createClaudeDockerSpawn({
 export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, gid } = {}) {
   await fsImpl.mkdir(runtimeHomePath, { recursive: true });
 
-  let chownSucceeded = false;
-  if (
-    typeof fsImpl.chown === 'function'
-    && isNonNegativeInteger(uid)
-    && isNonNegativeInteger(gid)
-  ) {
-    try {
-      await fsImpl.chown(runtimeHomePath, uid, gid);
-      chownSucceeded = true;
-    } catch {
-      // Some deployments run without permission to chown bind mounts. In that
-      // case, fall back to a writable runtime home so the sandbox user can
-      // create Claude config files.
+  const runtimeDirectoryPath = path.dirname(runtimeHomePath);
+  const permissionTargets = [...new Set([runtimeDirectoryPath, runtimeHomePath])];
+  for (const targetPath of permissionTargets) {
+    let chownSucceeded = false;
+    if (
+      typeof fsImpl.chown === 'function'
+      && isNonNegativeInteger(uid)
+      && isNonNegativeInteger(gid)
+    ) {
+      try {
+        await fsImpl.chown(targetPath, uid, gid);
+        chownSucceeded = true;
+      } catch {
+        // Some deployments run without permission to chown bind mounts. In
+        // that case, fall back to writable permissions for both the
+        // workspace-specific runtime directory and its home directory.
+      }
     }
-  }
 
-  if (typeof fsImpl.chmod === 'function') {
-    await fsImpl.chmod(runtimeHomePath, chownSucceeded ? 0o700 : 0o777);
+    if (typeof fsImpl.chmod === 'function') {
+      await fsImpl.chmod(targetPath, chownSucceeded ? 0o700 : 0o777);
+    }
   }
 }
 

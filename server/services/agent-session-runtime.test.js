@@ -249,7 +249,7 @@ test('custom docker spawn bypasses host wrapper execution', () => {
   assert.equal(calls[0][2].windowsHide, true);
 });
 
-test('docker runtime home is owned by the sandbox user when possible', async () => {
+test('docker runtime directory and home are owned by the sandbox user when possible', async () => {
   const calls = [];
   const fsMock = {
     mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
@@ -261,12 +261,14 @@ test('docker runtime home is owned by the sandbox user when possible', async () 
 
   assert.deepEqual(calls, [
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chown', '/tmp/runtime', 1000, 1000],
+    ['chmod', '/tmp/runtime', 0o700],
     ['chown', '/tmp/runtime/home', 1000, 1000],
     ['chmod', '/tmp/runtime/home', 0o700],
   ]);
 });
 
-test('docker runtime home falls back to writable permissions when chown fails', async () => {
+test('docker runtime directory and home fall back to writable permissions when chown fails', async () => {
   const calls = [];
   const fsMock = {
     mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
@@ -280,6 +282,7 @@ test('docker runtime home falls back to writable permissions when chown fails', 
 
   assert.deepEqual(calls, [
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chmod', '/tmp/runtime', 0o777],
     ['chmod', '/tmp/runtime/home', 0o777],
   ]);
 });
@@ -551,6 +554,7 @@ test('docker mode prepares new workspace ownership before creating its first con
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.join(workspaceRealPath, 'root-owned.txt')));
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeRow.runtime_home_path));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.dirname(runtimeRow.runtime_home_path)));
   assert.ok(ownershipChanges.every((entry) => entry.uid === 1000 && entry.gid === 1000));
   assert.ok(logs.some((entry) => entry.includes('container_ownership_prepare_completed')));
   assert.ok(logs.some((entry) => entry.includes('"targetUser":"1000:1000"')));
