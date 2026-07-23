@@ -212,6 +212,8 @@ function runMultitenancyMigrations() {
     db.exec("ALTER TABLE mcp_server_presets ADD COLUMN preinstall_scope TEXT NOT NULL DEFAULT 'none'");
   }
 
+  ensureColumn('workspace_mcp_preset_installs', 'tool_settings_json', "TEXT NOT NULL DEFAULT '{}'");
+
   const scheduledTaskColumns = db
     .prepare("PRAGMA table_info(scheduled_session_tasks)")
     .all()
@@ -232,6 +234,18 @@ function runMultitenancyMigrations() {
     db.exec('ALTER TABLE scheduled_session_tasks ADD COLUMN schedule_start_at TEXT');
     db.exec('UPDATE scheduled_session_tasks SET schedule_start_at = next_run_at WHERE schedule_start_at IS NULL');
   }
+
+  if (!scheduledTaskColumns.includes('session_mode')) {
+    console.log('Running migration: Adding scheduled_session_tasks.session_mode column');
+    db.exec("ALTER TABLE scheduled_session_tasks ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'");
+  }
+
+  db.exec(`
+    UPDATE session_index
+    SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+    WHERE provider_session_id LIKE 'scheduled-task-%'
+      AND status != 'deleted'
+  `);
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_mcp_server_presets_tenant_preinstall
@@ -2172,7 +2186,34 @@ function applyCustomSessionNames(sessions, provider) {
   }
 }
 
+function mapScheduledTaskFolder(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: Boolean(row.enabled),
+    provider: row.provider,
+    scheduleType: row.schedule_type || 'interval',
+    scheduleCron: row.schedule_cron || null,
+    scheduleStartAt: row.schedule_start_at || row.next_run_at,
+    nextRunAt: row.next_run_at,
+    lastRunAt: row.last_run_at || null,
+    lastSessionId: row.last_session_id || null,
+    sessionMode: row.session_mode || 'new',
+  };
+}
+
 const scheduledTasksDb = {
+  listWorkspaceTasks: ({ tenantId, userId, workspaceId }) => {
+    return db.prepare(`
+      SELECT *
+      FROM scheduled_session_tasks
+      WHERE tenant_id = ?
+        AND user_id = ?
+        AND workspace_id = ?
+      ORDER BY enabled DESC, next_run_at ASC, updated_at DESC, id DESC
+    `).all(tenantId, userId, workspaceId).map(mapScheduledTaskFolder);
+  },
+
   getSessionTaskMap: ({ tenantId, userId, workspaceId = null, provider = null, sessionIds = [] } = {}) => {
     const normalizedSessionIds = Array.isArray(sessionIds)
       ? sessionIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim())
@@ -2199,37 +2240,28 @@ const scheduledTasksDb = {
     const placeholders = normalizedSessionIds.map(() => '?').join(',');
     const rows = db.prepare(`
       SELECT
-        last_session_id,
-        id,
-        name,
-        enabled,
-        provider,
-        schedule_type,
-        schedule_cron,
-        schedule_start_at,
-        next_run_at
-      FROM scheduled_session_tasks
-      WHERE tenant_id = ?
-        AND user_id = ?
-        AND last_session_id IN (${placeholders})
-        ${workspaceClause}
-        ${providerClause}
-      ORDER BY enabled DESC, updated_at DESC, id DESC
+        si.provider_session_id,
+        t.*
+      FROM session_index si
+      JOIN scheduled_session_tasks t
+        ON t.id = CASE
+          WHEN json_valid(si.metadata_json) THEN CAST(json_extract(si.metadata_json, '$.scheduledTaskId') AS INTEGER)
+          ELSE NULL
+        END
+        OR t.last_session_id = si.provider_session_id
+      WHERE t.tenant_id = ?
+        AND t.user_id = ?
+        AND si.provider_session_id IN (${placeholders})
+        AND si.status != 'deleted'
+        ${workspaceClause ? 'AND t.workspace_id = ?' : ''}
+        ${providerClause ? 'AND t.provider = ?' : ''}
+      ORDER BY t.enabled DESC, t.updated_at DESC, t.id DESC
     `).all(...params);
 
     const result = new Map();
     for (const row of rows) {
-      if (!result.has(row.last_session_id)) {
-        result.set(row.last_session_id, {
-          id: row.id,
-          name: row.name,
-          enabled: Boolean(row.enabled),
-          provider: row.provider,
-          scheduleType: row.schedule_type || 'interval',
-          scheduleCron: row.schedule_cron || null,
-          scheduleStartAt: row.schedule_start_at || row.next_run_at,
-          nextRunAt: row.next_run_at,
-        });
+      if (!result.has(row.provider_session_id)) {
+        result.set(row.provider_session_id, mapScheduledTaskFolder(row));
       }
     }
     return result;

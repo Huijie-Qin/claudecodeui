@@ -3,6 +3,7 @@ interface CreatedSessionRoutingArgs {
   currentSessionId: string | null;
   selectedSessionId: string | null;
   hasPendingViewSession: boolean;
+  isBackgroundSession?: boolean;
 }
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
@@ -13,9 +14,11 @@ export function shouldAdoptCreatedSession({
   currentSessionId,
   selectedSessionId,
   hasPendingViewSession,
+  isBackgroundSession = false,
 }: CreatedSessionRoutingArgs): boolean {
   return Boolean(
     newSessionId &&
+    !isBackgroundSession &&
     hasPendingViewSession &&
     !selectedSessionId &&
     (!currentSessionId || isTemporarySessionId(currentSessionId)),

@@ -7,12 +7,18 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 
 import { expandLeadingSkillCommand } from './skill-command-expander.js';
 import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } from './cron-schedule.js';
+import {
+  normalizeScheduledTaskSessionMode,
+  resolveScheduledTaskResumeSession,
+  sanitizeScheduledTaskEvent,
+} from './scheduled-task-execution.js';
 
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const VALID_SCHEDULE_TYPES = new Set(['interval', 'cron']);
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const MAX_DUE_TASKS_PER_TICK = 10;
 const PENDING_SESSION_PREFIX = 'scheduled-task-';
+const PENDING_PROVIDER_SESSION_PREFIX = 'pending:';
 
 function requirePositiveInteger(value, fieldName) {
   const number = Number(value);
@@ -102,6 +108,7 @@ function mapTaskRow(row) {
     model: row.model,
     permissionMode: row.permission_mode,
     toolsSettings: parseOptionalJson(row.tools_settings_json),
+    sessionMode: row.session_mode || 'new',
     lastRunAt: row.last_run_at,
     lastSessionId: row.last_session_id,
     lastError: row.last_error,
@@ -163,8 +170,17 @@ function isPendingScheduledSessionId(sessionId) {
   return typeof sessionId === 'string' && sessionId.startsWith(PENDING_SESSION_PREFIX);
 }
 
-function buildPendingSessionId(taskId) {
-  return `${PENDING_SESSION_PREFIX}${taskId}`;
+function isPendingProviderSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.startsWith(PENDING_PROVIDER_SESSION_PREFIX);
+}
+
+function isResumableSessionId(sessionId) {
+  return Boolean(
+    typeof sessionId === 'string'
+    && sessionId.trim()
+    && !isPendingScheduledSessionId(sessionId)
+    && !isPendingProviderSessionId(sessionId),
+  );
 }
 
 class ScheduledTaskWriter {
@@ -174,20 +190,39 @@ class ScheduledTaskWriter {
     this.userId = task.user_id;
     this.tenantId = task.tenant_id;
     this.sessionId = null;
+    this.observedSessionId = null;
+    this.lastError = null;
+    this.displayPrompt = null;
+    this.modelPrompt = null;
     this.isWebSocketWriter = true;
+    this.isScheduledTaskWriter = true;
+    this.isBackgroundTaskWriter = true;
+  }
+
+  observeSessionId(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId.trim()) return;
+    const normalizedSessionId = sessionId.trim();
+    this.observedSessionId = normalizedSessionId;
+    if (isResumableSessionId(normalizedSessionId)) {
+      this.sessionId = normalizedSessionId;
+    }
   }
 
   send(data) {
     if (data?.sessionId || data?.newSessionId || data?.actualSessionId) {
-      this.sessionId = data.sessionId || data.newSessionId || data.actualSessionId || this.sessionId;
+      this.observeSessionId(data.sessionId || data.newSessionId || data.actualSessionId);
+    }
+    if (data?.kind === 'error') {
+      this.lastError = data.content || data.message || data.text || 'Scheduled task failed';
     }
 
     if (!this.clients) return;
 
     const payload = JSON.stringify({
-      ...data,
+      ...this.toVisibleData(data),
       scheduledTaskId: this.task.id,
       scheduledTaskName: this.task.name,
+      scheduledTaskPreviousSessionId: this.task.last_session_id || null,
     });
 
     this.clients.forEach((client) => {
@@ -201,23 +236,74 @@ class ScheduledTaskWriter {
     });
   }
 
+  setPromptDisplay({ displayPrompt, modelPrompt }) {
+    this.displayPrompt = typeof displayPrompt === 'string' ? displayPrompt : null;
+    this.modelPrompt = typeof modelPrompt === 'string' ? modelPrompt : null;
+  }
+
+  toVisibleData(data) {
+    return sanitizeScheduledTaskEvent({
+      data,
+      displayPrompt: this.displayPrompt,
+      modelPrompt: this.modelPrompt,
+    });
+  }
+
   setSessionId(sessionId) {
-    this.sessionId = sessionId;
+    this.observeSessionId(sessionId);
   }
 
   getSessionId() {
     return this.sessionId;
   }
+
+  getObservedSessionId() {
+    return this.observedSessionId;
+  }
+
+  getLastError() {
+    return this.lastError;
+  }
+
+  clearLastError() {
+    this.lastError = null;
+  }
 }
 
-function createTaskOptions(task) {
+function hasBoundClaudeRuntime(task, sessionId) {
+  if (task.provider !== 'claude' || !isResumableSessionId(sessionId)) {
+    return true;
+  }
+
+  if (typeof multitenancyDb.runtimes?.findByProviderSession !== 'function') {
+    return true;
+  }
+
+  try {
+    return Boolean(multitenancyDb.runtimes.findByProviderSession({
+      tenantId: task.tenant_id,
+      workspaceId: task.workspace_id,
+      userId: task.user_id,
+      provider: 'claude',
+      providerSessionId: sessionId,
+    }));
+  } catch (error) {
+    console.warn(`[ScheduledTasks] Failed to verify Claude runtime for task ${task.id}:`, error?.message || error);
+    return false;
+  }
+}
+
+function createScheduledTaskOptions(task) {
   const toolsSettings = parseOptionalJson(task.tools_settings_json) || {};
   const boundSessionId = typeof task.last_session_id === 'string' && task.last_session_id.trim()
     ? task.last_session_id.trim()
     : null;
-  const resumableSessionId = boundSessionId && !isPendingScheduledSessionId(boundSessionId)
-    ? boundSessionId
-    : null;
+  const resumableSessionId = resolveScheduledTaskResumeSession({
+    sessionMode: task.session_mode || 'new',
+    sessionId: boundSessionId,
+    isResumable: isResumableSessionId,
+    canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId),
+  });
   const baseOptions = {
     tenantId: task.tenant_id,
     workspaceId: task.workspace_id,
@@ -227,10 +313,17 @@ function createTaskOptions(task) {
     cwd: task.workspace_path,
     sessionId: resumableSessionId || undefined,
     resume: Boolean(resumableSessionId),
-    sessionSummary: task.name,
+    sessionSummary: task.run_session_summary || task.name,
+    sessionMetadata: {
+      scheduledTaskId: task.id,
+      scheduledTaskRunAt: task.run_started_at || null,
+    },
     model: task.model || undefined,
     permissionMode: task.permission_mode || undefined,
     toolsSettings,
+    backgroundTask: true,
+    scheduledTaskId: task.id,
+    displayCommand: task.prompt,
   };
 
   if (task.provider === 'cursor') {
@@ -240,13 +333,18 @@ function createTaskOptions(task) {
   return baseOptions;
 }
 
+function isInvalidClaudeResumeError(errorMessage) {
+  return /--resume requires a valid session ID/i.test(String(errorMessage || ''));
+}
+
 async function runProviderTask(task, writer) {
-  const options = createTaskOptions(task);
+  const options = createScheduledTaskOptions(task);
   const expandedSkill = await expandLeadingSkillCommand({
     prompt: task.prompt,
     workspacePath: task.workspace_path,
   });
   const prompt = expandedSkill.prompt;
+  writer.setPromptDisplay?.({ displayPrompt: task.prompt, modelPrompt: prompt });
 
   if (task.provider === 'cursor') {
     await spawnCursor(prompt, options, writer);
@@ -256,6 +354,17 @@ async function runProviderTask(task, writer) {
     await spawnGemini(prompt, options, writer);
   } else {
     await queryClaudeSDK(prompt, options, writer);
+    if (options.resume && isInvalidClaudeResumeError(writer.getLastError?.())) {
+      console.warn(
+        `[ScheduledTasks] Task ${task.id} could not resume Claude session ${options.sessionId}; retrying with a new session`,
+      );
+      writer.clearLastError?.();
+      await queryClaudeSDK(prompt, {
+        ...options,
+        sessionId: undefined,
+        resume: false,
+      }, writer);
+    }
   }
 }
 
@@ -309,6 +418,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       model = null,
       permissionMode = null,
       toolsSettings = null,
+      sessionMode = 'new',
       sessionId = null,
     }) {
       if (sessionId) {
@@ -330,7 +440,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         nextRunAt,
         startAfterAt,
       });
-      const normalizedSessionId = null;
+      const normalizedSessionMode = normalizeScheduledTaskSessionMode(sessionMode);
 
       const result = db.prepare(`
         INSERT INTO scheduled_session_tasks (
@@ -349,9 +459,10 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           model,
           permission_mode,
           tools_settings_json,
+          session_mode,
           last_session_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         normalizedTenantId,
         normalizedWorkspaceId,
@@ -368,47 +479,11 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         model ? String(model).trim() : null,
         permissionMode ? String(permissionMode).trim() : null,
         serializeOptionalJson(toolsSettings, 'toolsSettings'),
-        normalizedSessionId,
+        normalizedSessionMode,
+        null,
       );
 
       const taskId = Number(result.lastInsertRowid);
-      if (!normalizedSessionId) {
-        const pendingSessionId = buildPendingSessionId(taskId);
-        db.prepare(`
-          UPDATE scheduled_session_tasks
-          SET last_session_id = ?,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(pendingSessionId, taskId);
-
-        multitenancyDb.sessions.upsertSession({
-          tenantId: normalizedTenantId,
-          workspaceId: normalizedWorkspaceId,
-          userId: normalizedUserId,
-          provider: normalizedProvider,
-          providerSessionId: pendingSessionId,
-          summary: normalizedName,
-          status: 'active',
-          metadata: {
-            scheduledTaskId: taskId,
-            pendingScheduledSession: true,
-          },
-        });
-      } else {
-        multitenancyDb.sessions.upsertSession({
-          tenantId: normalizedTenantId,
-          workspaceId: normalizedWorkspaceId,
-          userId: normalizedUserId,
-          provider: normalizedProvider,
-          providerSessionId: normalizedSessionId,
-          summary: normalizedName,
-          status: 'active',
-          metadata: {
-            scheduledTaskId: taskId,
-          },
-        });
-      }
-
       return service.getOwned({ tenantId: normalizedTenantId, userId: normalizedUserId, taskId });
     },
 
@@ -462,6 +537,9 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           ? String(patch.permissionMode).trim()
           : (patch.permissionMode === null ? null : existing.permissionMode),
         toolsSettings: patch.toolsSettings !== undefined ? patch.toolsSettings : existing.toolsSettings,
+        sessionMode: patch.sessionMode !== undefined
+          ? normalizeScheduledTaskSessionMode(patch.sessionMode)
+          : existing.sessionMode,
       };
 
       db.prepare(`
@@ -478,6 +556,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
             model = ?,
             permission_mode = ?,
             tools_settings_json = ?,
+            session_mode = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE tenant_id = ?
           AND user_id = ?
@@ -495,6 +574,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         next.model,
         next.permissionMode,
         serializeOptionalJson(next.toolsSettings, 'toolsSettings'),
+        next.sessionMode,
         requirePositiveInteger(tenantId, 'tenantId'),
         requirePositiveInteger(userId, 'userId'),
         requirePositiveInteger(taskId, 'taskId'),
@@ -517,14 +597,24 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       return result.changes > 0;
     },
 
-    markRunResult({ taskId, sessionId = null, error = null }) {
+    markRunResult({
+      taskId,
+      sessionId = null,
+      observedSessionId = null,
+      error = null,
+      sessionSummary = null,
+      runStartedAt = null,
+    }) {
       const task = db.prepare(`
         SELECT *
         FROM scheduled_session_tasks
         WHERE id = ?
       `).get(requirePositiveInteger(taskId, 'taskId'));
       const previousSessionId = task?.last_session_id;
-      const normalizedSessionId = sessionId && !isPendingScheduledSessionId(sessionId) ? sessionId : null;
+      const normalizedSessionId = isResumableSessionId(sessionId) ? sessionId.trim() : null;
+      const nonResumableObservedSessionId = observedSessionId && !isResumableSessionId(observedSessionId)
+        ? observedSessionId.trim()
+        : null;
 
       db.prepare(`
         UPDATE scheduled_session_tasks
@@ -538,7 +628,7 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       if (
         normalizedSessionId &&
         previousSessionId &&
-        isPendingScheduledSessionId(previousSessionId) &&
+        (isPendingScheduledSessionId(previousSessionId) || isPendingProviderSessionId(previousSessionId)) &&
         previousSessionId !== normalizedSessionId
       ) {
         multitenancyDb.sessions.markDeleted({
@@ -547,6 +637,32 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           userId: task.user_id,
           provider: task.provider,
           providerSessionId: previousSessionId,
+        });
+      }
+
+      if (nonResumableObservedSessionId && isPendingProviderSessionId(nonResumableObservedSessionId) && task) {
+        multitenancyDb.sessions.markDeleted({
+          tenantId: task.tenant_id,
+          workspaceId: task.workspace_id,
+          userId: task.user_id,
+          provider: task.provider,
+          providerSessionId: nonResumableObservedSessionId,
+        });
+      }
+
+      if (normalizedSessionId && task) {
+        multitenancyDb.sessions.upsertSession({
+          tenantId: task.tenant_id,
+          workspaceId: task.workspace_id,
+          userId: task.user_id,
+          provider: task.provider,
+          providerSessionId: normalizedSessionId,
+          summary: sessionSummary || task.name,
+          status: error ? 'failed' : 'completed',
+          metadata: {
+            scheduledTaskId: task.id,
+            scheduledTaskRunAt: runStartedAt,
+          },
         });
       }
     },
@@ -582,17 +698,40 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
     async runTask(task) {
       if (activeRuns.has(task.id)) return;
       activeRuns.add(task.id);
-      const writer = new ScheduledTaskWriter({ task, clients });
+      const runStartedAt = new Date().toISOString();
+      const runSessionSummary = (task.session_mode || 'new') === 'merge'
+        ? task.name
+        : `${task.name} - ${runStartedAt.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')}`;
+      const currentRun = {
+        ...task,
+        run_started_at: runStartedAt,
+        run_session_summary: runSessionSummary,
+      };
+      const writer = new ScheduledTaskWriter({ task: currentRun, clients });
       try {
-        if (task.workspace_status !== 'active') {
+        if (currentRun.workspace_status !== 'active') {
           throw new Error('Workspace is not active');
         }
-        await runProviderTask(task, writer);
-        service.markRunResult({ taskId: task.id, sessionId: writer.getSessionId(), error: null });
+        await runProviderTask(currentRun, writer);
+        service.markRunResult({
+          taskId: currentRun.id,
+          sessionId: writer.getSessionId(),
+          observedSessionId: writer.getObservedSessionId(),
+          error: writer.getLastError(),
+          sessionSummary: runSessionSummary,
+          runStartedAt,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ScheduledTasks] Task ${task.id} failed:`, message);
-        service.markRunResult({ taskId: task.id, sessionId: writer.getSessionId(), error: message });
+        service.markRunResult({
+          taskId: currentRun.id,
+          sessionId: writer.getSessionId(),
+          observedSessionId: writer.getObservedSessionId(),
+          error: message,
+          sessionSummary: runSessionSummary,
+          runStartedAt,
+        });
       } finally {
         activeRuns.delete(task.id);
       }

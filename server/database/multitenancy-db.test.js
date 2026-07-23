@@ -709,6 +709,55 @@ test('session favorites persist per user and sort favorited sessions first', () 
   }), false);
 });
 
+test('session index preserves scheduled task metadata on ordinary session updates', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'scheduled-user');
+  const tenant = mt.tenants.createTenant({ code: 'scheduled-team', name: 'Scheduled Team' });
+  mt.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'scheduled-repo',
+    displayName: 'Scheduled Repo',
+    path: '/tmp/cloudcli/scheduled-team/scheduled-user/repo',
+  });
+
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    provider: 'claude',
+    providerSessionId: 'scheduled-run-1',
+    summary: 'Scheduled run',
+    metadata: { scheduledTaskId: 42 },
+  });
+  mt.sessions.upsertSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    provider: 'claude',
+    providerSessionId: 'scheduled-run-1',
+    summary: 'Continued scheduled run',
+    status: 'completed',
+  });
+
+  const session = mt.sessions.findOwnedSession({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    provider: 'claude',
+    providerSessionId: 'scheduled-run-1',
+  });
+  assert.deepEqual(JSON.parse(session.metadata_json), { scheduledTaskId: 42 });
+});
+
 test('agent session runtime binds provider session id for resume', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

@@ -51,6 +51,21 @@ export interface ProjectSessionMeta {
   [key: string]: unknown;
 }
 
+export interface ProjectScheduledTask {
+  id: number;
+  name: string;
+  enabled: boolean;
+  provider: LLMProvider;
+  sessionMode: 'new' | 'merge';
+  scheduleType?: 'interval' | 'cron';
+  scheduleCron?: string | null;
+  scheduleStartAt?: string | null;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  lastSessionId?: string | null;
+  [key: string]: unknown;
+}
+
 export interface ProjectTaskmasterInfo {
   hasTaskmaster?: boolean;
   status?: string;
@@ -71,6 +86,7 @@ export interface Project {
   cursorSessions?: ProjectSession[];
   codexSessions?: ProjectSession[];
   geminiSessions?: ProjectSession[];
+  scheduledTasks?: ProjectScheduledTask[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
   [key: string]: unknown;

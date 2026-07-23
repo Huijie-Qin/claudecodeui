@@ -93,6 +93,7 @@ router.post('/', (req, res) => {
       model: req.body?.model,
       permissionMode: req.body?.permissionMode,
       toolsSettings: req.body?.toolsSettings,
+      sessionMode: req.body?.sessionMode,
       sessionId: req.body?.sessionId,
     });
 

@@ -11,6 +11,23 @@ test('shouldRefreshProjectsForRealtimeMessage refreshes when a provider session 
   );
 });
 
+test('scheduled task sessions refresh the project tree without taking over a pending chat', () => {
+  assert.equal(
+    shouldAdoptCreatedSession({
+      newSessionId: 'scheduled-run-1',
+      currentSessionId: 'new-session-1',
+      selectedSessionId: null,
+      hasPendingViewSession: true,
+      isBackgroundSession: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRefreshProjectsForRealtimeMessage({ kind: 'session_created', newSessionId: 'scheduled-run-1' }),
+    true,
+  );
+});
+
 test('shouldRefreshProjectsForRealtimeMessage refreshes after a successful completed session', () => {
   assert.equal(
     shouldRefreshProjectsForRealtimeMessage({ kind: 'complete', exitCode: 0, sessionId: 'session-123' }),

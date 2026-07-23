@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, KeyboardEvent, SetStateAction } from 'react';
 import ReactDOM from 'react-dom';
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Edit2, Loader2, MessageSquare, Pause, Play, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, Edit2, Loader2, MessageSquare, Pause, Play, Repeat2, Save, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../utils/api';
@@ -27,6 +27,7 @@ type ScheduledTask = {
   permissionMode?: string | null;
   lastRunAt?: string | null;
   lastSessionId?: string | null;
+  sessionMode?: 'new' | 'merge';
   lastError?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -35,7 +36,7 @@ type ScheduledTask = {
 type ScheduleType = 'interval' | 'cron';
 type ScheduleMode = 'interval' | 'cron' | 'visual';
 type ScheduledTasksDialogMode = 'create' | 'manage';
-type VisualFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
+type VisualFrequency = 'daily' | 'weekly' | 'monthly';
 
 type TaskEditForm = {
   name: string;
@@ -50,6 +51,7 @@ type TaskEditForm = {
   intervalMinutes: number;
   nextRunAt: string;
   enabled: boolean;
+  sessionMode: 'new' | 'merge';
 };
 
 type ScheduledTasksDialogProps = {
@@ -97,10 +99,9 @@ const WEEKDAYS = [
 ];
 
 const VISUAL_FREQUENCIES: Array<{ value: VisualFrequency; labelKey: string; defaultLabel: string }> = [
-  { value: 'hourly', labelKey: 'scheduledTasks.frequencies.hourly', defaultLabel: 'Hourly' },
-  { value: 'daily', labelKey: 'scheduledTasks.frequencies.daily', defaultLabel: 'Daily' },
-  { value: 'weekly', labelKey: 'scheduledTasks.frequencies.weekly', defaultLabel: 'Weekly' },
   { value: 'monthly', labelKey: 'scheduledTasks.frequencies.monthly', defaultLabel: 'Monthly' },
+  { value: 'weekly', labelKey: 'scheduledTasks.frequencies.weekly', defaultLabel: 'Weekly' },
+  { value: 'daily', labelKey: 'scheduledTasks.frequencies.daily', defaultLabel: 'Daily' },
 ];
 
 function pad(value: number) {
@@ -145,7 +146,6 @@ function buildVisualCron({
   const weekday = clampNumber(visualWeekday, 0, 6);
   const monthDay = clampNumber(visualMonthDay, 1, 31);
 
-  if (visualFrequency === 'hourly') return `${minute} * * * *`;
   if (visualFrequency === 'daily') return `${minute} ${hour} * * *`;
   if (visualFrequency === 'weekly') return `${minute} ${hour} * * ${weekday}`;
   return `${minute} ${hour} ${monthDay} * *`;
@@ -319,7 +319,7 @@ function inferVisualCron(cron?: string | null): Pick<TaskEditForm, 'scheduleMode
   const fields = normalizeCronInput(cron || '').split(/\s+/);
   const fallback = {
     scheduleMode: 'cron' as ScheduleMode,
-    visualFrequency: 'hourly' as VisualFrequency,
+    visualFrequency: 'daily' as VisualFrequency,
     visualMinute: 0,
     visualHour: 9,
     visualWeekday: 1,
@@ -334,9 +334,7 @@ function inferVisualCron(cron?: string | null): Pick<TaskEditForm, 'scheduleMode
   const weekday = Number(weekdayField);
   if (!Number.isInteger(minute) || minute < 0 || minute > 59 || monthField !== '*') return fallback;
 
-  if (hourField === '*' && dayField === '*' && weekdayField === '*') {
-    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'hourly', visualMinute: minute };
-  }
+  if (hourField === '*' && dayField === '*' && weekdayField === '*') return fallback;
   if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && dayField === '*' && weekdayField === '*') {
     return { ...fallback, scheduleMode: 'visual', visualFrequency: 'daily', visualMinute: minute, visualHour: hour };
   }
@@ -384,17 +382,17 @@ function buildTaskEditForm(task: ScheduledTask): TaskEditForm {
   const visualSchedule = scheduleType === 'cron'
     ? inferVisualCron(task.scheduleCron)
     : {
-        scheduleMode: 'visual' as ScheduleMode,
-        visualFrequency: 'hourly' as VisualFrequency,
+        scheduleMode: 'interval' as ScheduleMode,
+        visualFrequency: 'daily' as VisualFrequency,
         visualMinute: 0,
         visualHour: 9,
         visualWeekday: 1,
-        visualMonthDay: 1,
+        visualMonthDay: 15,
       };
   return {
     name: task.name || '',
     prompt: task.prompt || '',
-    scheduleMode: scheduleType === 'cron' ? visualSchedule.scheduleMode : 'visual',
+    scheduleMode: visualSchedule.scheduleMode,
     scheduleCron: task.scheduleCron || '',
     visualFrequency: visualSchedule.visualFrequency,
     visualMinute: visualSchedule.visualMinute,
@@ -404,6 +402,7 @@ function buildTaskEditForm(task: ScheduledTask): TaskEditForm {
     intervalMinutes: Math.max(1, Number(task.intervalMinutes) || 1),
     nextRunAt: toLocalInputValue(task.scheduleStartAt || task.nextRunAt),
     enabled: task.enabled,
+    sessionMode: task.sessionMode === 'merge' ? 'merge' : 'new',
   };
 }
 
@@ -435,6 +434,74 @@ function DetailRow({ label, value, tone = 'default' }: { label: string; value?: 
         {value || '-'}
       </dd>
     </div>
+  );
+}
+
+function SessionModeOptions({
+  sessionMode,
+  onChange,
+  disabled = false,
+  t,
+}: {
+  sessionMode: 'new' | 'merge';
+  onChange: (sessionMode: 'new' | 'merge') => void;
+  disabled?: boolean;
+  t: TranslationFunction;
+}) {
+  const options = [
+    {
+      value: 'new' as const,
+      label: t('scheduledTasks.sessionModes.new', { defaultValue: 'New session for every run' }),
+      description: t('scheduledTasks.sessionModeDescriptions.new', {
+        defaultValue: 'Each run uses an independent context and does not affect other runs.',
+      }),
+    },
+    {
+      value: 'merge' as const,
+      label: t('scheduledTasks.sessionModes.merge', { defaultValue: 'Merge into one session' }),
+      description: t('scheduledTasks.sessionModeDescriptions.merge', {
+        defaultValue: 'Create a session on the first run and continue it on later runs.',
+      }),
+    },
+  ];
+
+  return (
+    <fieldset>
+      <legend className="mb-2 text-xs font-medium text-muted-foreground">
+        {t('scheduledTasks.labels.sessionMode', { defaultValue: 'Session mode' })}
+      </legend>
+      <div role="radiogroup" className="overflow-hidden rounded-md border border-border bg-background">
+        {options.map((option, index) => {
+          const selected = sessionMode === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={disabled}
+              onClick={() => onChange(option.value)}
+              className={`flex min-h-[58px] w-full items-start gap-3 px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                index > 0 ? 'border-t border-border' : ''
+              } ${selected ? 'bg-primary/5' : 'hover:bg-accent/50'}`}
+            >
+              <span
+                aria-hidden="true"
+                className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                  selected ? 'border-primary' : 'border-muted-foreground/60'
+                }`}
+              >
+                {selected ? <span className="h-2 w-2 rounded-full bg-primary" /> : null}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">{option.label}</span>
+                <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{option.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
   );
 }
 
@@ -488,18 +555,40 @@ function ScheduleControls({
   disabled = false,
   separateStartTime = false,
   limitPreviewToNow = false,
+  allowAdvancedModes = false,
 }: {
   values: ScheduleControlValues;
   onChange: (values: ScheduleControlValues) => void;
   disabled?: boolean;
   separateStartTime?: boolean;
   limitPreviewToNow?: boolean;
+  allowAdvancedModes?: boolean;
 }) {
   const { t } = useTranslation('chat');
   const update = (patch: Partial<ScheduleControlValues>) => onChange({ ...values, ...patch });
   const generatedCron = buildVisualCron(values);
   const cronValue = values.scheduleMode === 'visual' ? generatedCron : values.scheduleCron;
   const nextVisualRuns = getNextVisualRunDates(values, 5, limitPreviewToNow ? new Date() : null);
+  const visualTime = `${pad(values.visualHour)}:${pad(values.visualMinute)}`;
+  const selectedWeekday = WEEKDAYS.find((weekday) => weekday.value === values.visualWeekday);
+  const visualScheduleSummary = values.visualFrequency === 'monthly'
+    ? t('scheduledTasks.summary.monthly', {
+        defaultValue: 'Every month on day {{day}} at {{time}}',
+        day: values.visualMonthDay,
+        time: visualTime,
+      })
+    : values.visualFrequency === 'weekly'
+      ? t('scheduledTasks.summary.weekly', {
+          defaultValue: 'Every {{weekday}} at {{time}}',
+          weekday: selectedWeekday
+            ? t(selectedWeekday.labelKey, { defaultValue: selectedWeekday.defaultLabel })
+            : '',
+          time: visualTime,
+        })
+      : t('scheduledTasks.summary.daily', {
+          defaultValue: 'Every day at {{time}}',
+          time: visualTime,
+        });
   const inlineStartTimeLabel = values.scheduleMode === 'interval'
     ? t('scheduledTasks.labels.firstRun', { defaultValue: 'First run' })
     : t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' });
@@ -541,25 +630,33 @@ function ScheduleControls({
               ? t('scheduledTasks.labels.taskScheduleRule', { defaultValue: 'Task schedule rule' })
               : t('scheduledTasks.labels.schedule', { defaultValue: 'Schedule' })}
           </span>
-          <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-            {(['visual', 'cron'] as ScheduleMode[]).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                  values.scheduleMode === mode
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                }`}
-                onClick={() => update({ scheduleMode: mode })}
-                disabled={disabled}
-              >
-                {mode === 'cron'
-                  ? t('scheduledTasks.modes.cron', { defaultValue: 'Cron' })
-                  : t('scheduledTasks.modes.visual', { defaultValue: 'Visual' })}
-              </button>
-            ))}
-          </div>
+          {allowAdvancedModes ? (
+            <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+              {([
+                ...(values.scheduleMode === 'interval' ? ['interval' as ScheduleMode] : []),
+                'visual' as ScheduleMode,
+                'cron' as ScheduleMode,
+              ]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                    values.scheduleMode === mode
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                  onClick={() => update({ scheduleMode: mode })}
+                  disabled={disabled}
+                >
+                  {mode === 'cron'
+                    ? t('scheduledTasks.modes.cron', { defaultValue: 'Cron' })
+                    : mode === 'interval'
+                      ? t('scheduledTasks.modes.interval', { defaultValue: 'Interval' })
+                      : t('scheduledTasks.modes.visual', { defaultValue: 'Simple' })}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {values.scheduleMode === 'interval' ? (
@@ -601,10 +698,10 @@ function ScheduleControls({
 
         {values.scheduleMode === 'visual' ? (
           <div className="mt-3 grid gap-3">
-            <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
+            <div className={`grid gap-3 ${values.visualFrequency === 'daily' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
               <label className="space-y-1">
                 <span className="text-xs text-muted-foreground">
-                  {t('scheduledTasks.labels.repeat', { defaultValue: 'Repeat' })}
+                  {t('scheduledTasks.labels.period', { defaultValue: 'Period' })}
                 </span>
                 <select
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -620,95 +717,71 @@ function ScheduleControls({
                 </select>
               </label>
 
+              {values.visualFrequency === 'monthly' ? (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.date', { defaultValue: 'Date' })}
+                  </span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualMonthDay}
+                    onChange={(event) => update({ visualMonthDay: Number(event.target.value) })}
+                    disabled={disabled}
+                  >
+                    {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                      <option key={day} value={day}>
+                        {t('scheduledTasks.labels.dayOption', { defaultValue: 'Day {{day}}', day })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {values.visualFrequency === 'weekly' ? (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.weekday', { defaultValue: 'Weekday' })}
+                  </span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualWeekday}
+                    onChange={(event) => update({ visualWeekday: Number(event.target.value) })}
+                    disabled={disabled}
+                  >
+                    {WEEKDAYS.map((weekday) => (
+                      <option key={weekday.value} value={weekday.value}>
+                        {t(weekday.labelKey, { defaultValue: weekday.defaultLabel })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
               <label className="space-y-1">
                 <span className="text-xs text-muted-foreground">
-                  {t('scheduledTasks.labels.minuteWithValue', {
-                    defaultValue: 'Minute: {{minute}}',
-                    minute: pad(values.visualMinute),
-                  })}
+                  {t('scheduledTasks.labels.runTime', { defaultValue: 'Run time' })}
                 </span>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={59}
-                    className="w-full"
-                    value={values.visualMinute}
-                    onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
-                    disabled={disabled}
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={59}
-                    className="h-10 w-20 rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={values.visualMinute}
-                    onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
-                    disabled={disabled}
-                  />
-                </div>
+                <input
+                  type="time"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={visualTime}
+                  onChange={(event) => {
+                    const [hour, minute] = event.target.value.split(':').map(Number);
+                    if (Number.isInteger(hour) && Number.isInteger(minute)) {
+                      update({ visualHour: hour, visualMinute: minute });
+                    }
+                  }}
+                  disabled={disabled}
+                />
               </label>
             </div>
 
-            {values.visualFrequency !== 'hourly' ? (
-              <div className={`grid gap-3 ${separateStartTime ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
-                <label className="space-y-1">
-                  <span className="text-xs text-muted-foreground">
-                    {t('scheduledTasks.labels.hour', { defaultValue: 'Hour' })}
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={23}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={values.visualHour}
-                    onChange={(event) => update({ visualHour: clampNumber(Number(event.target.value), 0, 23) })}
-                    disabled={disabled}
-                  />
-                </label>
+            {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}
 
-                {values.visualFrequency === 'weekly' ? (
-                  <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">
-                      {t('scheduledTasks.labels.weekday', { defaultValue: 'Weekday' })}
-                    </span>
-                    <select
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      value={values.visualWeekday}
-                      onChange={(event) => update({ visualWeekday: Number(event.target.value) })}
-                      disabled={disabled}
-                    >
-                      {WEEKDAYS.map((weekday) => (
-                        <option key={weekday.value} value={weekday.value}>
-                          {t(weekday.labelKey, { defaultValue: weekday.defaultLabel })}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {values.visualFrequency === 'monthly' ? (
-                  <label className="space-y-1">
-                    <span className="text-xs text-muted-foreground">
-                      {t('scheduledTasks.labels.dayOfMonth', { defaultValue: 'Day of month' })}
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={31}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      value={values.visualMonthDay}
-                      onChange={(event) => update({ visualMonthDay: clampNumber(Number(event.target.value), 1, 31) })}
-                      disabled={disabled}
-                    />
-                  </label>
-                ) : null}
-
-                {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}
-              </div>
-            ) : !separateStartTime ? (
-              renderStartTimeField(inlineStartTimeLabel)
-            ) : null}
+            <div className="flex items-center gap-2 rounded-md bg-background px-3 py-2 text-xs text-foreground">
+              <Repeat2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <span>{visualScheduleSummary}</span>
+            </div>
 
             <div className="rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
               <div className="mb-1 font-medium text-foreground">
@@ -727,7 +800,7 @@ function ScheduleControls({
           </div>
         ) : null}
 
-        {values.scheduleMode !== 'interval' ? (
+        {values.scheduleMode === 'cron' ? (
           <div className="mt-2 rounded-md bg-background px-3 py-2 text-xs text-muted-foreground">
             {t('scheduledTasks.cronHelp', {
               defaultValue: 'Cron runs use the server scheduler. Next run is calculated from the start time.',
@@ -787,14 +860,15 @@ export default function ScheduledTasksDialog({
   const [prompt, setPrompt] = useState('');
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('visual');
   const [scheduleCron, setScheduleCron] = useState('');
-  const [visualFrequency, setVisualFrequency] = useState<VisualFrequency>('hourly');
+  const [visualFrequency, setVisualFrequency] = useState<VisualFrequency>('monthly');
   const [visualMinute, setVisualMinute] = useState(0);
   const [visualHour, setVisualHour] = useState(9);
   const [visualWeekday, setVisualWeekday] = useState(1);
-  const [visualMonthDay, setVisualMonthDay] = useState(1);
+  const [visualMonthDay, setVisualMonthDay] = useState(15);
   const [intervalMinutes, setIntervalMinutes] = useState(60);
   const [nextRunAt, setNextRunAt] = useState(() => toLocalInputValue());
   const [enabled, setEnabled] = useState(true);
+  const [sessionMode, setSessionMode] = useState<'new' | 'merge'>('new');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -815,7 +889,7 @@ export default function ScheduledTasksDialog({
     ? t('scheduledTasks.detailsTitle', { defaultValue: 'Scheduled task details' })
     : showCreateForm
       ? t('scheduledTasks.createTitle', { defaultValue: 'Create scheduled task' })
-      : t('scheduledTasks.title', { defaultValue: 'Scheduled session tasks' });
+      : t('scheduledTasks.title', { defaultValue: 'Scheduled tasks' });
 
   const canSave = useMemo(
     () => {
@@ -947,14 +1021,15 @@ export default function ScheduledTasksDialog({
     setPrompt(initialPrompt.trim());
     setScheduleMode('visual');
     setScheduleCron('');
-    setVisualFrequency('hourly');
+    setVisualFrequency('monthly');
     setVisualMinute(0);
     setVisualHour(9);
     setVisualWeekday(1);
-    setVisualMonthDay(1);
+    setVisualMonthDay(15);
     setIntervalMinutes(60);
     setNextRunAt(toLocalInputValue());
     setEnabled(true);
+    setSessionMode('new');
     setError(null);
     resetCommandMenuState();
     resetEditCommandMenuState();
@@ -1052,6 +1127,7 @@ export default function ScheduledTasksDialog({
         model: model || null,
         permissionMode: permissionMode || null,
         toolsSettings: getDefaultToolsSettings(provider),
+        sessionMode,
         sessionId: selectedSessionId || null,
       });
 
@@ -1115,6 +1191,7 @@ export default function ScheduledTasksDialog({
         prompt: taskEditForm.prompt.trim(),
         ...schedulePayload,
         enabled: taskEditForm.enabled,
+        sessionMode: taskEditForm.sessionMode,
       });
 
       if (!response.ok) {
@@ -1390,6 +1467,7 @@ export default function ScheduledTasksDialog({
               }}
               separateStartTime
             />
+            <SessionModeOptions sessionMode={sessionMode} onChange={setSessionMode} t={t} />
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input
                 type="checkbox"
@@ -1588,6 +1666,17 @@ export default function ScheduledTasksDialog({
                                   disabled={isUpdatingTask}
                                   separateStartTime
                                   limitPreviewToNow
+                                  allowAdvancedModes
+                                />
+                                <SessionModeOptions
+                                  sessionMode={taskEditValues.sessionMode}
+                                  onChange={(nextSessionMode) => {
+                                    setTaskEditForm((current) => current
+                                      ? { ...current, sessionMode: nextSessionMode }
+                                      : current);
+                                  }}
+                                  disabled={isUpdatingTask}
+                                  t={t}
                                 />
                                 <label className="flex items-center gap-2 text-sm text-foreground">
                                   <input
@@ -1605,6 +1694,12 @@ export default function ScheduledTasksDialog({
 
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <DetailRow label={t('scheduledTasks.labels.session', { defaultValue: 'Session' })} value={task.lastSessionId} />
+                                <DetailRow
+                                  label={t('scheduledTasks.labels.sessionMode', { defaultValue: 'Session mode' })}
+                                  value={task.sessionMode === 'merge'
+                                    ? t('scheduledTasks.sessionModes.merge', { defaultValue: 'Merge into one session' })
+                                    : t('scheduledTasks.sessionModes.new', { defaultValue: 'New session for every run' })}
+                                />
                                 <DetailRow label={t('scheduledTasks.labels.model', { defaultValue: 'Model' })} value={task.model} />
                                 <DetailRow label={t('scheduledTasks.labels.permission', { defaultValue: 'Permission' })} value={task.permissionMode} />
                                 <DetailRow label={t('scheduledTasks.labels.startAfter', { defaultValue: 'Start after' })} value={formatDateTime(task.scheduleStartAt || task.nextRunAt, neverLabel)} />
@@ -1633,6 +1728,12 @@ export default function ScheduledTasksDialog({
                               <DetailRow label={t('scheduledTasks.labels.nextRun', { defaultValue: 'Next run' })} value={formatDateTime(task.nextRunAt, neverLabel)} />
                               <DetailRow label={t('scheduledTasks.labels.lastRun', { defaultValue: 'Last run' })} value={formatDateTime(task.lastRunAt, neverLabel)} />
                               <DetailRow label={t('scheduledTasks.labels.session', { defaultValue: 'Session' })} value={task.lastSessionId} />
+                              <DetailRow
+                                label={t('scheduledTasks.labels.sessionMode', { defaultValue: 'Session mode' })}
+                                value={task.sessionMode === 'merge'
+                                  ? t('scheduledTasks.sessionModes.merge', { defaultValue: 'Merge into one session' })
+                                  : t('scheduledTasks.sessionModes.new', { defaultValue: 'New session for every run' })}
+                              />
                               <DetailRow label={t('scheduledTasks.labels.model', { defaultValue: 'Model' })} value={task.model} />
                               <DetailRow label={t('scheduledTasks.labels.permission', { defaultValue: 'Permission' })} value={task.permissionMode} />
                               <DetailRow label={t('scheduledTasks.labels.created', { defaultValue: 'Created' })} value={formatDateTime(task.createdAt, neverLabel)} />

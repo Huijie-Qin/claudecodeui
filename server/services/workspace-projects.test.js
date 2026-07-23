@@ -100,6 +100,8 @@ test('mapWorkspaceRowsToProjects groups private sessions by provider', () => {
         { provider: 'claude', provider_session_id: 'c1', summary: 'Claude', updated_at: '2026-04-26' },
         { provider: 'codex', provider_session_id: 'x1', summary: 'Codex', updated_at: '2026-04-26' },
       ],
+      listScheduledTasks: () => [],
+      getScheduledTaskMap: () => new Map(),
     },
   );
 
@@ -108,4 +110,38 @@ test('mapWorkspaceRowsToProjects groups private sessions by provider', () => {
   assert.deepEqual(projects[0].sessions.map((session) => session.id), ['c1']);
   assert.deepEqual(projects[0].codexSessions.map((session) => session.id), ['x1']);
   assert.equal(projects[0].sessionMeta.total, 2);
+});
+
+test('mapWorkspaceRowsToProjects exposes scheduled task folders and groups run sessions', () => {
+  const scheduledTask = {
+    id: 42,
+    name: 'Daily check',
+    enabled: true,
+    provider: 'claude',
+    sessionMode: 'new',
+  };
+  const projects = mapWorkspaceRowsToProjects(
+    [{
+      id: 10,
+      tenant_id: 2,
+      owner_user_id: 7,
+      slug: 'repo',
+      display_name: 'Repo',
+      path: '/tmp/cloudcli/2/7/repo',
+      accessRole: 'owner',
+    }],
+    {
+      tenantId: 2,
+      userId: 7,
+      listSessions: () => [
+        { provider: 'claude', provider_session_id: 'run-1', summary: 'Daily check run', updated_at: '2026-07-20' },
+      ],
+      listScheduledTasks: () => [scheduledTask],
+      getScheduledTaskMap: () => new Map([['run-1', scheduledTask]]),
+    },
+  );
+
+  assert.deepEqual(projects[0].scheduledTasks, [scheduledTask]);
+  assert.equal(projects[0].sessions[0].isScheduledTaskSession, true);
+  assert.equal(projects[0].sessions[0].scheduledTask.id, 42);
 });

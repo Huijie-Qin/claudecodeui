@@ -179,6 +179,14 @@ function normalizeToolsJson(value) {
   return serializeJson(value, 'tools');
 }
 
+function normalizeToolSettingsJson(value) {
+  if (value == null) return '{}';
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('toolSettings must be an object');
+  }
+  return serializeJson(value, 'toolSettings');
+}
+
 function normalizeLimit(value) {
   if (value == null) return null;
   if (!Number.isInteger(value) || value < 0) {
@@ -355,6 +363,7 @@ function hydrateMcpInstallRow(row) {
   return {
     ...row,
     tools: parseJson(row.tools_json, []),
+    toolSettings: parseJson(row.tool_settings_json, {}),
   };
 }
 
@@ -1681,6 +1690,36 @@ export function createMultitenancyDb(database = db) {
         `).get(normalizedWorkspaceId, normalizedPresetId));
       },
 
+      updateToolSettings: ({
+        workspaceId,
+        presetId,
+        toolSettings = {},
+      }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        const normalizedToolSettingsJson = normalizeToolSettingsJson(toolSettings);
+
+        database.prepare(`
+          UPDATE workspace_mcp_preset_installs
+          SET
+            tool_settings_json = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE workspace_id = ?
+            AND preset_id = ?
+            AND status = 'installed'
+        `).run(
+          normalizedToolSettingsJson,
+          normalizedWorkspaceId,
+          normalizedPresetId,
+        );
+
+        return hydrateMcpInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_mcp_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
       listInstallsForWorkspace: ({ workspaceId, includeRemoved = false }) => {
         const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
         const whereStatus = includeRemoved ? '' : "AND i.status = 'installed'";
@@ -2137,7 +2176,7 @@ export function createMultitenancyDb(database = db) {
             workspace_id = excluded.workspace_id,
             summary = excluded.summary,
             status = excluded.status,
-            metadata_json = excluded.metadata_json,
+            metadata_json = COALESCE(excluded.metadata_json, session_index.metadata_json),
             updated_at = CURRENT_TIMESTAMP
         `).run(
           normalizedTenantId,

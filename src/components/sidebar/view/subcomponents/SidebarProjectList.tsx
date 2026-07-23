@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
-import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { LoadingProgress, Project, ProjectScheduledTask, ProjectSession, LLMProvider } from '../../../../types/app';
 import type {
   LoadingSessionsByProject,
   MCPServerStatus,
@@ -39,7 +39,7 @@ export type SidebarProjectListProps = {
   onSaveProjectName: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
-  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
+  onScheduledTaskOpen?: (project: Project, task: ProjectScheduledTask) => void;
   onScheduledTasksListOpen?: (project: Project) => void;
   onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (

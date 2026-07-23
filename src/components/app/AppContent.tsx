@@ -13,7 +13,7 @@ import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useModelResponseBrowserNotifications } from '../../hooks/useModelResponseBrowserNotifications';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
-import type { LLMProvider, Project, ProjectSession, Tenant } from '../../types/app';
+import type { LLMProvider, Project, ProjectScheduledTask, Tenant } from '../../types/app';
 
 type ScheduledTaskEditorState = {
   project: Project;
@@ -88,8 +88,8 @@ export default function AppContent() {
     }
   }, [isMobile, location.pathname, location.search, navigate, setSidebarOpen]);
 
-  const handleScheduledTaskOpen = useCallback((project: Project, session: ProjectSession) => {
-    const taskId = Number(session.scheduledTask?.id);
+  const handleScheduledTaskOpen = useCallback((project: Project, task: ProjectScheduledTask) => {
+    const taskId = Number(task.id);
     if (!Number.isFinite(taskId)) {
       return;
     }
@@ -97,7 +97,7 @@ export default function AppContent() {
     setScheduledTaskEditor({
       project,
       taskId,
-      provider: session.scheduledTask?.provider || session.__provider || 'claude',
+      provider: task.provider || 'claude',
       mode: 'detail',
     });
     setActiveTab('chat');

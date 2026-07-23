@@ -2,7 +2,7 @@ import { CalendarClock, Check, ChevronDown, ChevronRight, Edit3, Folder, FolderO
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
-import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { Project, ProjectScheduledTask, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
 import TaskIndicator from './TaskIndicator';
@@ -35,7 +35,7 @@ type SidebarProjectItemProps = {
   onSaveProjectName: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
-  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
+  onScheduledTaskOpen?: (project: Project, task: ProjectScheduledTask) => void;
   onScheduledTasksListOpen?: (project: Project) => void;
   onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
