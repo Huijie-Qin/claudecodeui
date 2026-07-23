@@ -1,0 +1,63 @@
+services:
+  cloudcli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${CLOUDCLI_IMAGE:-cloudcli:local}
+    # Compose reads .env for interpolation only unless it is declared here.
+    # Keep it outside the image while injecting the same application settings
+    # used by native development/production starts.
+    env_file:
+      - path: ./.env
+        required: false
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${CLOUDCLI_PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      SERVER_PORT: 3001
+      CLAUDE_EXECUTION_MODE: docker
+
+      # Keep the native installation paths by default so an existing
+      # ~/.cloudcli/auth.db and its registered workspace paths are reused.
+      # CLOUDCLI_MOUNT_ROOT must be an absolute host path and is mounted at the
+      # identical container path because Claude runtime bind mounts depend on it.
+      CLOUDCLI_DATA_ROOT: ${CLOUDCLI_DATA_ROOT:-${CLOUDCLI_MOUNT_ROOT:-${HOME}}/.cloudcli}
+      HOME: ${CLOUDCLI_MOUNT_ROOT:-${HOME}}
+      DATABASE_PATH: ${CLOUDCLI_DATABASE_PATH:-${CLOUDCLI_DATA_ROOT:-${CLOUDCLI_MOUNT_ROOT:-${HOME}}/.cloudcli}/auth.db}
+      WORKSPACES_ROOT: ${CLOUDCLI_WORKSPACES_ROOT:-${CLOUDCLI_MOUNT_ROOT:-${HOME}}}
+      CLOUDCLI_RUNTIME_ROOT: ${CLOUDCLI_RUNTIME_PATH:-${CLOUDCLI_DATA_ROOT:-${CLOUDCLI_MOUNT_ROOT:-${HOME}}/.cloudcli}/runtimes}
+
+      # Optional overrides. When omitted, the entrypoint detects ownership from
+      # the mounted host root and falls back to 1000 for a root-owned new path.
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
+
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: ${CLOUDCLI_CLAUDE_DOCKER_IMAGE:-docker.io/cloudcliai/sandbox:claude-code}
+      CLOUDCLI_DOCKER_MEMORY: ${CLOUDCLI_DOCKER_MEMORY:-2g}
+      CLOUDCLI_DOCKER_CPUS: ${CLOUDCLI_DOCKER_CPUS:-2}
+      CLOUDCLI_DOCKER_PYTHON_PACKAGES: ${CLOUDCLI_DOCKER_PYTHON_PACKAGES:-requests}
+      CLOUDCLI_DOCKER_SHARED_PYTHON: ${CLOUDCLI_DOCKER_SHARED_PYTHON:-true}
+    volumes:
+      # Do not replace this with a named volume or change only the container-side
+      # path: existing workspace records and the host Docker daemon must be able
+      # to resolve these exact paths.
+      - type: bind
+        source: ${CLOUDCLI_MOUNT_ROOT:-${HOME}}
+        target: ${CLOUDCLI_MOUNT_ROOT:-${HOME}}
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 40s
