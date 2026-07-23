@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, FolderClock, Pause, Plus, Settings2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
+
 import { Button } from '../../../../shared/view/ui';
 import type { Project, ProjectScheduledTask, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
+
 import SidebarSessionItem from './SidebarSessionItem';
 
 type SidebarProjectSessionsProps = {
@@ -100,7 +102,7 @@ export default function SidebarProjectSessions({
           name: String(session.scheduledTask?.name || session.summary || 'Scheduled task'),
           enabled: session.scheduledTask?.enabled !== false,
           provider: session.scheduledTask?.provider || session.__provider,
-          sessionMode: session.scheduledTask?.sessionMode === 'merge' ? 'merge' : 'new',
+          sessionMode: session.scheduledTask?.sessionMode === 'new' ? 'new' : 'merge',
           scheduleType: session.scheduledTask?.scheduleType,
           scheduleCron: session.scheduledTask?.scheduleCron,
           scheduleStartAt: session.scheduledTask?.scheduleStartAt,

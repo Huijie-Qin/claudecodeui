@@ -32,6 +32,7 @@ import {
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import { migrateExistingScheduledTasksToMerge } from './scheduled-task-migrations.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
   decryptUserEnvRecord,
@@ -237,7 +238,12 @@ function runMultitenancyMigrations() {
 
   if (!scheduledTaskColumns.includes('session_mode')) {
     console.log('Running migration: Adding scheduled_session_tasks.session_mode column');
-    db.exec("ALTER TABLE scheduled_session_tasks ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'");
+    db.exec("ALTER TABLE scheduled_session_tasks ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'merge'");
+  }
+
+  const sessionModeMigration = migrateExistingScheduledTasksToMerge(db);
+  if (sessionModeMigration.applied) {
+    console.log(`Running migration: Set ${sessionModeMigration.updatedTasks} existing scheduled tasks to merge mode`);
   }
 
   db.exec(`
@@ -2198,7 +2204,7 @@ function mapScheduledTaskFolder(row) {
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at || null,
     lastSessionId: row.last_session_id || null,
-    sessionMode: row.session_mode || 'new',
+    sessionMode: row.session_mode || 'merge',
   };
 }
 

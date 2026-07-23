@@ -8,6 +8,7 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import { expandLeadingSkillCommand } from './skill-command-expander.js';
 import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } from './cron-schedule.js';
 import {
+  buildScheduledTaskRunSessionSummary,
   normalizeScheduledTaskSessionMode,
   resolveScheduledTaskResumeSession,
   sanitizeScheduledTaskEvent,
@@ -108,7 +109,7 @@ function mapTaskRow(row) {
     model: row.model,
     permissionMode: row.permission_mode,
     toolsSettings: parseOptionalJson(row.tools_settings_json),
-    sessionMode: row.session_mode || 'new',
+    sessionMode: row.session_mode || 'merge',
     lastRunAt: row.last_run_at,
     lastSessionId: row.last_session_id,
     lastError: row.last_error,
@@ -299,7 +300,7 @@ function createScheduledTaskOptions(task) {
     ? task.last_session_id.trim()
     : null;
   const resumableSessionId = resolveScheduledTaskResumeSession({
-    sessionMode: task.session_mode || 'new',
+    sessionMode: task.session_mode || 'merge',
     sessionId: boundSessionId,
     isResumable: isResumableSessionId,
     canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId),
@@ -699,9 +700,11 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
       if (activeRuns.has(task.id)) return;
       activeRuns.add(task.id);
       const runStartedAt = new Date().toISOString();
-      const runSessionSummary = (task.session_mode || 'new') === 'merge'
-        ? task.name
-        : `${task.name} - ${runStartedAt.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')}`;
+      const runSessionSummary = buildScheduledTaskRunSessionSummary({
+        taskName: task.name,
+        sessionMode: task.session_mode,
+        runStartedAt,
+      });
       const currentRun = {
         ...task,
         run_started_at: runStartedAt,
