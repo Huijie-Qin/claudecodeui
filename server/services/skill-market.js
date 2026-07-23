@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
 const MARKET_RESPONSE_LOG_SNIPPET_CHARS = 500;
@@ -262,6 +264,13 @@ export async function downloadMarketSkill({
         updatedAt: timestamp,
       },
     },
+  });
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [runtimePath],
+    recursive: true,
+    reason: 'skill_market_import',
+    context: { workspaceId: workspaceId || null, skillName },
   });
 
   return getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
@@ -1165,6 +1174,11 @@ async function writeMarketImports({ workspaceId, workspacePath } = {}, metadata)
   if (!workspacePath) return;
   const { importsPath } = getSkillMarketPaths(workspacePath);
   await writeJsonAtomic(importsPath, normalizedMetadata);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [importsPath],
+    reason: 'skill_market_metadata',
+  });
 }
 
 async function getSkillMarketImportsDb() {

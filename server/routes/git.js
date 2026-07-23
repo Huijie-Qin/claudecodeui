@@ -5,6 +5,7 @@ import { promises as fs } from 'fs';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
 import { workspaceAccess } from '../services/workspace-access.js';
+import { applyWorkspaceOwnership } from '../services/workspace-ownership.js';
 import { createWorkspaceRequestResolver, handleWorkspaceError } from '../services/workspace-request.js';
 
 const router = express.Router();
@@ -13,8 +14,14 @@ const resolveWorkspaceForGitRequest = createWorkspaceRequestResolver(workspaceAc
 
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const { env, ...spawnOptions } = options;
     const child = spawn(command, args, {
-      ...options,
+      ...spawnOptions,
+      env: {
+        ...process.env,
+        GIT_OPTIONAL_LOCKS: '0',
+        ...env,
+      },
       shell: false,
     });
 
@@ -46,6 +53,68 @@ function spawnAsync(command, args, options = {}) {
       reject(error);
     });
   });
+}
+
+function isPathInside(rootPath, targetPath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function normalizeGitWorkspaceOwnership({
+  workspacePath,
+  repositoryRootPath = workspacePath,
+  targetPaths = [],
+  wholeWorkspace = false,
+  reason,
+}) {
+  const requestedTargets = wholeWorkspace
+    ? [workspacePath]
+    : [path.join(repositoryRootPath, '.git'), ...targetPaths];
+  const safeTargets = [];
+  for (const targetPath of requestedTargets) {
+    if (!isPathInside(workspacePath, targetPath)) {
+      console.warn('[workspace-ownership] Skipping Git path outside workspace:', targetPath);
+      continue;
+    }
+    if (await pathExists(targetPath)) {
+      safeTargets.push(targetPath);
+    }
+  }
+  if (safeTargets.length === 0) return;
+
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: safeTargets,
+    recursive: true,
+    reason,
+  });
+}
+
+async function withOwnershipFinalizer(operation, finalizer) {
+  let primaryError = null;
+  try {
+    return await operation();
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      await finalizer();
+    } catch (ownershipError) {
+      if (!primaryError) throw ownershipError;
+      console.error('[workspace-ownership] Failed while preserving primary Git error:', ownershipError);
+    }
+  }
 }
 
 // Input validation helpers (defense-in-depth)
@@ -533,11 +602,16 @@ router.post('/initial-commit', async (req, res) => {
       // No HEAD - this is good, we can create initial commit
     }
 
-    // Add all files
-    await spawnAsync('git', ['add', '.'], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(async () => {
+      // Add all files
+      await spawnAsync('git', ['add', '.'], { cwd: projectPath });
 
-    // Create initial commit
-    const { stdout } = await spawnAsync('git', ['commit', '-m', 'Initial commit'], { cwd: projectPath });
+      // Create initial commit
+      return spawnAsync('git', ['commit', '-m', 'Initial commit'], { cwd: projectPath });
+    }, () => normalizeGitWorkspaceOwnership({
+      workspacePath: projectPath,
+      reason: 'git_initial_commit',
+    }));
 
     res.json({ success: true, output: stdout, message: 'Initial commit created successfully' });
   } catch (error) {
@@ -571,14 +645,20 @@ router.post('/commit', async (req, res) => {
     await validateGitRepository(projectPath);
     const repositoryRootPath = await getRepositoryRootPath(projectPath);
     
-    // Stage selected files
-    for (const file of files) {
-      const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-      await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
-    }
+    const { stdout } = await withOwnershipFinalizer(async () => {
+      // Stage selected files
+      for (const file of files) {
+        const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
+        await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      }
 
-    // Commit with message
-    const { stdout } = await spawnAsync('git', ['commit', '-m', message], { cwd: repositoryRootPath });
+      // Commit with message
+      return spawnAsync('git', ['commit', '-m', message], { cwd: repositoryRootPath });
+    }, () => normalizeGitWorkspaceOwnership({
+      workspacePath: projectPath,
+      repositoryRootPath,
+      reason: 'git_commit',
+    }));
     
     res.json({ success: true, output: stdout });
   } catch (error) {
@@ -609,21 +689,26 @@ router.post('/revert-local-commit', async (req, res) => {
       });
     }
 
-    try {
-      // Soft reset rewinds one commit while preserving all file changes in the index.
-      await spawnAsync('git', ['reset', '--soft', 'HEAD~1'], { cwd: projectPath });
-    } catch (error) {
-      const errorDetails = `${error.stderr || ''} ${error.message || ''}`;
-      const isInitialCommit = errorDetails.includes('HEAD~1') &&
-        (errorDetails.includes('unknown revision') || errorDetails.includes('ambiguous argument'));
+    await withOwnershipFinalizer(async () => {
+      try {
+        // Soft reset rewinds one commit while preserving all file changes in the index.
+        await spawnAsync('git', ['reset', '--soft', 'HEAD~1'], { cwd: projectPath });
+      } catch (error) {
+        const errorDetails = `${error.stderr || ''} ${error.message || ''}`;
+        const isInitialCommit = errorDetails.includes('HEAD~1') &&
+          (errorDetails.includes('unknown revision') || errorDetails.includes('ambiguous argument'));
 
-      if (!isInitialCommit) {
-        throw error;
+        if (!isInitialCommit) {
+          throw error;
+        }
+
+        // Initial commit has no parent; deleting HEAD uncommits it and keeps files staged.
+        await spawnAsync('git', ['update-ref', '-d', 'HEAD'], { cwd: projectPath });
       }
-
-      // Initial commit has no parent; deleting HEAD uncommits it and keeps files staged.
-      await spawnAsync('git', ['update-ref', '-d', 'HEAD'], { cwd: projectPath });
-    }
+    }, () => normalizeGitWorkspaceOwnership({
+      workspacePath: projectPath,
+      reason: 'git_revert_local_commit',
+    }));
 
     res.json({
       success: true,
@@ -694,7 +779,14 @@ router.post('/checkout', async (req, res) => {
     
     // Checkout the branch
     validateBranchName(branch);
-    const { stdout } = await spawnAsync('git', ['checkout', branch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['checkout', branch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        wholeWorkspace: true,
+        reason: 'git_checkout',
+      }),
+    );
     
     res.json({ success: true, output: stdout });
   } catch (error) {
@@ -717,7 +809,13 @@ router.post('/create-branch', async (req, res) => {
     
     // Create and checkout new branch
     validateBranchName(branch);
-    const { stdout } = await spawnAsync('git', ['checkout', '-b', branch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['checkout', '-b', branch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        reason: 'git_create_branch',
+      }),
+    );
     
     res.json({ success: true, output: stdout });
   } catch (error) {
@@ -745,7 +843,13 @@ router.post('/delete-branch', async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete the currently checked-out branch' });
     }
 
-    const { stdout } = await spawnAsync('git', ['branch', '-d', branch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['branch', '-d', branch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        reason: 'git_delete_branch',
+      }),
+    );
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git delete branch error:', error);
@@ -1155,7 +1259,13 @@ router.post('/fetch', async (req, res) => {
     }
 
     validateRemoteName(remoteName);
-    const { stdout } = await spawnAsync('git', ['fetch', remoteName], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['fetch', remoteName], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        reason: 'git_fetch',
+      }),
+    );
 
     res.json({ success: true, output: stdout || 'Fetch completed successfully', remoteName });
   } catch (error) {
@@ -1201,7 +1311,14 @@ router.post('/pull', async (req, res) => {
 
     validateRemoteName(remoteName);
     validateBranchName(remoteBranch);
-    const { stdout } = await spawnAsync('git', ['pull', remoteName, remoteBranch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['pull', remoteName, remoteBranch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        wholeWorkspace: true,
+        reason: 'git_pull',
+      }),
+    );
 
     res.json({
       success: true,
@@ -1270,7 +1387,13 @@ router.post('/push', async (req, res) => {
 
     validateRemoteName(remoteName);
     validateBranchName(remoteBranch);
-    const { stdout } = await spawnAsync('git', ['push', remoteName, remoteBranch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['push', remoteName, remoteBranch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        reason: 'git_push',
+      }),
+    );
 
     res.json({
       success: true,
@@ -1356,7 +1479,13 @@ router.post('/publish', async (req, res) => {
 
     // Publish the branch (set upstream and push)
     validateRemoteName(remoteName);
-    const { stdout } = await spawnAsync('git', ['push', '--set-upstream', remoteName, branch], { cwd: projectPath });
+    const { stdout } = await withOwnershipFinalizer(
+      () => spawnAsync('git', ['push', '--set-upstream', remoteName, branch], { cwd: projectPath }),
+      () => normalizeGitWorkspaceOwnership({
+        workspacePath: projectPath,
+        reason: 'git_publish',
+      }),
+    );
     
     res.json({ 
       success: true, 
@@ -1421,24 +1550,31 @@ router.post('/discard', async (req, res) => {
     }
 
     const status = statusOutput.substring(0, 2);
+    const absoluteFilePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
 
-    if (status === '??') {
-      // Untracked file or directory - delete it
-      const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-      const stats = await fs.stat(filePath);
+    await withOwnershipFinalizer(async () => {
+      if (status === '??') {
+        // Untracked file or directory - delete it
+        const stats = await fs.stat(absoluteFilePath);
 
-      if (stats.isDirectory()) {
-        await fs.rm(filePath, { recursive: true, force: true });
-      } else {
-        await fs.unlink(filePath);
+        if (stats.isDirectory()) {
+          await fs.rm(absoluteFilePath, { recursive: true, force: true });
+        } else {
+          await fs.unlink(absoluteFilePath);
+        }
+      } else if (status.includes('M') || status.includes('D')) {
+        // Modified or deleted file - restore from HEAD
+        await spawnAsync('git', ['restore', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      } else if (status.includes('A')) {
+        // Added file - unstage it
+        await spawnAsync('git', ['reset', 'HEAD', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
       }
-    } else if (status.includes('M') || status.includes('D')) {
-      // Modified or deleted file - restore from HEAD
-      await spawnAsync('git', ['restore', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
-    } else if (status.includes('A')) {
-      // Added file - unstage it
-      await spawnAsync('git', ['reset', 'HEAD', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
-    }
+    }, () => normalizeGitWorkspaceOwnership({
+      workspacePath: projectPath,
+      repositoryRootPath,
+      targetPaths: [absoluteFilePath],
+      reason: 'git_discard',
+    }));
     
     res.json({ success: true, message: `Changes discarded for ${repositoryRelativeFilePath}` });
   } catch (error) {

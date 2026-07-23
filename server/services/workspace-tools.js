@@ -3,6 +3,8 @@ import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 const EMPTY_MCP_CONFIG = Object.freeze({ mcpServers: {} });
 const EMPTY_STATUS = Object.freeze({ version: 1, servers: {} });
 const EMPTY_DRAFTS = Object.freeze({ version: 1, drafts: {} });
@@ -104,6 +106,11 @@ export async function writeWorkspaceMcpConfig(workspacePath, config, { env = pro
     return;
   }
   await writeJsonFile(mcpConfigPath, normalized);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [mcpConfigPath],
+    reason: 'workspace_mcp_config',
+  });
 }
 
 export async function readMcpStatus(workspacePath) {
@@ -141,6 +148,11 @@ export async function writeMcpDrafts(workspacePath, drafts) {
     return;
   }
   await writeJsonFile(draftsPath, normalized);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [draftsPath],
+    reason: 'workspace_mcp_drafts',
+  });
 }
 
 export async function listWorkspaceTools(workspacePath, { accessRole = 'view' } = {}) {

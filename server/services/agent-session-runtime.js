@@ -10,8 +10,12 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 import { codeHubService } from './codehub.js';
+import { resolveContainerUser } from './container-user.js';
 import { sanitizePathSegment } from './workspace-projects.js';
 import { mapWorkspacePathForContainer } from './workspace-path-mapping.js';
+import { migratePathOwnership } from './workspace-ownership.js';
+
+export { migratePathOwnership } from './workspace-ownership.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -189,23 +193,6 @@ export function rewriteDockerProxyEnv(value) {
     }
   }
   return normalized;
-}
-
-function currentUid() {
-  return typeof process.getuid === 'function' ? process.getuid() : 1000;
-}
-
-function currentGid() {
-  return typeof process.getgid === 'function' ? process.getgid() : 1000;
-}
-
-function resolveContainerUser(env = process.env) {
-  const defaultUid = currentUid();
-  const defaultGid = currentGid();
-  return {
-    uid: Number.parseInt(env.CLOUDCLI_DOCKER_UID || String(defaultUid > 0 ? defaultUid : 1000), 10),
-    gid: Number.parseInt(env.CLOUDCLI_DOCKER_GID || String(defaultGid > 0 ? defaultGid : 1000), 10),
-  };
 }
 
 function isNonNegativeInteger(value) {
@@ -571,63 +558,139 @@ export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, 
   }
 }
 
-export async function migratePathOwnership(fsImpl, targetPath, { uid, gid } = {}) {
-  if (!isNonNegativeInteger(uid) || !isNonNegativeInteger(gid)) {
-    throw new Error('uid and gid must be non-negative integers');
-  }
-
-  const stats = await fsImpl.lstat(targetPath);
-  if (stats.isSymbolicLink()) {
-    if (typeof fsImpl.lchown === 'function') {
-      await fsImpl.lchown(targetPath, uid, gid);
-      return 1;
+async function lstatIfExists(fsImpl, targetPath) {
+  try {
+    return await fsImpl.lstat(targetPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return null;
     }
-    return 0;
+    throw error;
   }
-
-  let migratedEntries = 0;
-  if (stats.isDirectory()) {
-    const entries = await fsImpl.readdir(targetPath, { withFileTypes: true });
-    for (const entry of entries) {
-      migratedEntries += await migratePathOwnership(
-        fsImpl,
-        path.join(targetPath, entry.name),
-        { uid, gid },
-      );
-    }
-  }
-
-  await fsImpl.chown(targetPath, uid, gid);
-  return migratedEntries + 1;
 }
 
-export async function ensureClaudeCleanupPeriod(fsImpl, runtimeHomePath) {
+function assertRuntimeConfigPathType(stats, targetPath, expectedType) {
+  if (stats?.isSymbolicLink?.()) {
+    throw new Error(`Claude runtime config path must not be a symbolic link: ${targetPath}`);
+  }
+  if (expectedType === 'directory' && !stats?.isDirectory?.()) {
+    throw new Error(`Claude runtime config path must be a directory: ${targetPath}`);
+  }
+  if (expectedType === 'file' && !stats?.isFile?.()) {
+    throw new Error(`Claude runtime config path must be a regular file: ${targetPath}`);
+  }
+}
+
+async function ensureRuntimeConfigPathPermissions(
+  fsImpl,
+  targetPath,
+  {
+    uid,
+    gid,
+    mode,
+    expectedType,
+  },
+) {
+  const stats = await fsImpl.lstat(targetPath);
+  assertRuntimeConfigPathType(stats, targetPath, expectedType);
+
+  let ownershipChanged = false;
+  if (
+    isNonNegativeInteger(uid)
+    && isNonNegativeInteger(gid)
+    && (stats.uid !== uid || stats.gid !== gid)
+  ) {
+    if (typeof fsImpl.chown !== 'function') {
+      throw new Error(`Unable to set Claude runtime config ownership: ${targetPath}`);
+    }
+    await fsImpl.chown(targetPath, uid, gid);
+    ownershipChanged = true;
+  }
+
+  const currentMode = Number.isInteger(stats.mode) ? stats.mode & 0o777 : null;
+  let modeChanged = false;
+  if (currentMode !== mode) {
+    if (typeof fsImpl.chmod !== 'function') {
+      throw new Error(`Unable to set Claude runtime config permissions: ${targetPath}`);
+    }
+    await fsImpl.chmod(targetPath, mode);
+    modeChanged = true;
+  }
+
+  return { ownershipChanged, modeChanged };
+}
+
+export async function ensureClaudeCleanupPeriod(
+  fsImpl,
+  runtimeHomePath,
+  {
+    uid,
+    gid,
+    logger = null,
+    context = {},
+  } = {},
+) {
   const claudeDir = path.join(runtimeHomePath, '.claude');
   const settingsPath = path.join(claudeDir, 'settings.json');
   let settings = {};
+  let settingsUpdated = false;
 
-  try {
+  await fsImpl.mkdir(claudeDir, { recursive: true, mode: 0o700 });
+  const claudeDirStats = await fsImpl.lstat(claudeDir);
+  assertRuntimeConfigPathType(claudeDirStats, claudeDir, 'directory');
+
+  const existingSettingsStats = await lstatIfExists(fsImpl, settingsPath);
+  if (existingSettingsStats) {
+    assertRuntimeConfigPathType(existingSettingsStats, settingsPath, 'file');
     const content = await fsImpl.readFile(settingsPath, 'utf8');
     settings = JSON.parse(content);
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
       throw new Error('Claude settings must be a JSON object');
     }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      throw error;
-    }
   }
 
-  if (settings.cleanupPeriodDays === CLAUDE_CLEANUP_PERIOD_DAYS) {
-    return false;
+  if (settings.cleanupPeriodDays !== CLAUDE_CLEANUP_PERIOD_DAYS) {
+    await fsImpl.writeFile(settingsPath, `${JSON.stringify({
+      ...settings,
+      cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
+    }, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    settingsUpdated = true;
   }
 
-  await fsImpl.mkdir(claudeDir, { recursive: true });
-  await fsImpl.writeFile(settingsPath, `${JSON.stringify({
-    ...settings,
-    cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
-  }, null, 2)}\n`, 'utf8');
-  return true;
+  const directoryPermissions = await ensureRuntimeConfigPathPermissions(fsImpl, claudeDir, {
+    uid,
+    gid,
+    mode: 0o700,
+    expectedType: 'directory',
+  });
+  const settingsPermissions = await ensureRuntimeConfigPathPermissions(fsImpl, settingsPath, {
+    uid,
+    gid,
+    mode: 0o600,
+    expectedType: 'file',
+  });
+  const ownershipEntries = Number(directoryPermissions.ownershipChanged)
+    + Number(settingsPermissions.ownershipChanged);
+  const modeEntries = Number(directoryPermissions.modeChanged)
+    + Number(settingsPermissions.modeChanged);
+
+  if (ownershipEntries > 0 || modeEntries > 0) {
+    logger?.log?.('[agent-session-runtime]', JSON.stringify({
+      event: 'runtime_settings_permissions_updated',
+      ...context,
+      targetUser: isNonNegativeInteger(uid) && isNonNegativeInteger(gid)
+        ? `${uid}:${gid}`
+        : null,
+      ownershipEntries,
+      modeEntries,
+      settingsUpdated,
+    }));
+  }
+
+  return settingsUpdated;
 }
 
 function normalizeContainerEnvRecord(value) {
@@ -1412,8 +1475,15 @@ export function createAgentSessionRuntimeManager({
       ...buildRuntimeProcessEnv(env),
       ...userEnv,
     };
-    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
-    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path);
+    const containerUser = resolveContainerUser(env);
+    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, containerUser);
+    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path, {
+      ...containerUser,
+      logger: console,
+      context: createRuntimeLogDetails(runtimeContext.runtime, {
+        requestId: runtimeContext.logRequestId || null,
+      }),
+    });
     await ensureContainer(runtimeContext.runtime, containerEnv, {
       requestId: runtimeContext.logRequestId || null,
     });

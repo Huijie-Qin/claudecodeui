@@ -428,16 +428,176 @@ test('claude runtime settings preserve existing values and set the cleanup perio
   });
 });
 
-test('claude runtime settings are not rewritten when the cleanup period is already configured', async () => {
+test('claude runtime settings permissions are corrected even when content is not rewritten', async () => {
   const calls = [];
+  const logs = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
   const fsMock = {
+    lstat: async (targetPath) => ({
+      uid: 0,
+      gid: 0,
+      mode: targetPath === claudeDir ? 0o755 : 0o644,
+      isSymbolicLink: () => false,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => targetPath === settingsPath,
+    }),
     readFile: async () => JSON.stringify({ cleanupPeriodDays: 36500 }),
     mkdir: async (...args) => calls.push(['mkdir', ...args]),
     writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
   };
 
-  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home'), false);
-  assert.deepEqual(calls, []);
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+    logger: {
+      log: (...args) => logs.push(args),
+    },
+    context: {
+      runtimeId: 'runtime-1',
+    },
+  }), false);
+  assert.equal(calls.some(([operation]) => operation === 'writeFile'), false);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chown'), [
+    ['chown', claudeDir, 1000, 1000],
+    ['chown', settingsPath, 1000, 1000],
+  ]);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chmod'), [
+    ['chmod', claudeDir, 0o700],
+    ['chmod', settingsPath, 0o600],
+  ]);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], '[agent-session-runtime]');
+  assert.deepEqual(JSON.parse(logs[0][1]), {
+    event: 'runtime_settings_permissions_updated',
+    runtimeId: 'runtime-1',
+    targetUser: '1000:1000',
+    ownershipEntries: 2,
+    modeEntries: 2,
+    settingsUpdated: false,
+  });
+});
+
+test('new claude runtime settings use secure mode and target container ownership', async () => {
+  const calls = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settingsCreated = false;
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => {
+      if (targetPath === settingsPath && !settingsCreated) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return {
+        uid: 0,
+        gid: 0,
+        mode: targetPath === claudeDir ? 0o755 : 0o600,
+        isSymbolicLink: () => false,
+        isDirectory: () => targetPath === claudeDir,
+        isFile: () => targetPath === settingsPath,
+      };
+    },
+    writeFile: async (...args) => {
+      settingsCreated = true;
+      calls.push(['writeFile', ...args]);
+    },
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+  }), true);
+  const writeCall = calls.find(([operation]) => operation === 'writeFile');
+  assert.equal(writeCall[1], settingsPath);
+  assert.deepEqual(writeCall[3], {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chown'), [
+    ['chown', claudeDir, 1000, 1000],
+    ['chown', settingsPath, 1000, 1000],
+  ]);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chmod'), [
+    ['chmod', claudeDir, 0o700],
+  ]);
+});
+
+test('claude runtime settings permission handling is idempotent', async () => {
+  const calls = [];
+  const logs = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => ({
+      uid: 1000,
+      gid: 1000,
+      mode: targetPath === claudeDir ? 0o700 : 0o600,
+      isSymbolicLink: () => false,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => targetPath === settingsPath,
+    }),
+    readFile: async () => JSON.stringify({ cleanupPeriodDays: 36500 }),
+    writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+    logger: {
+      log: (...args) => logs.push(args),
+    },
+  }), false);
+  assert.equal(calls.some(([operation]) => (
+    operation === 'writeFile'
+    || operation === 'chown'
+    || operation === 'chmod'
+  )), false);
+  assert.deepEqual(logs, []);
+});
+
+test('claude runtime settings reject a symbolic-link settings file before reading it', async () => {
+  const calls = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => ({
+      uid: 1000,
+      gid: 1000,
+      mode: targetPath === claudeDir ? 0o700 : 0o600,
+      isSymbolicLink: () => targetPath === settingsPath,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => false,
+    }),
+    readFile: async (...args) => calls.push(['readFile', ...args]),
+    writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  await assert.rejects(
+    ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+      uid: 1000,
+      gid: 1000,
+    }),
+    /must not be a symbolic link/,
+  );
+  assert.equal(calls.some(([operation]) => (
+    operation === 'readFile'
+    || operation === 'writeFile'
+    || operation === 'chown'
+    || operation === 'chmod'
+  )), false);
 });
 
 test('docker mode creates runtime home, wrapper, DB row, and container', async () => {

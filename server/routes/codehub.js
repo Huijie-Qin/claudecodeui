@@ -387,7 +387,24 @@ async function resolveRepository(req, { requireEdit = false } = {}) {
   if (!repository) {
     throw createHttpError('CodeHub workspace repository not found', 404);
   }
-  const repoPath = assertInside(workspace.path, path.resolve(workspace.path, repository.repo_relative_path));
+  const requestedRepoPath = assertInside(
+    workspace.path,
+    path.resolve(workspace.path, repository.repo_relative_path),
+  );
+  let workspaceRealPath;
+  let repositoryRealPath;
+  try {
+    [workspaceRealPath, repositoryRealPath] = await Promise.all([
+      fs.realpath(workspace.path),
+      fs.realpath(requestedRepoPath),
+    ]);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+      throw createHttpError('CodeHub repository folder no longer exists in the workspace', 404);
+    }
+    throw error;
+  }
+  const repoPath = assertInside(workspaceRealPath, repositoryRealPath);
   if (!await isGitRepositoryPath(repoPath)) {
     throw createHttpError('CodeHub repository folder no longer exists in the workspace', 404);
   }

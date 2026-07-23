@@ -13,6 +13,7 @@ import {
   resolveScheduledTaskResumeSession,
   sanitizeScheduledTaskEvent,
 } from './scheduled-task-execution.js';
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
 const VALID_SCHEDULE_TYPES = new Set(['interval', 'cron']);
@@ -736,6 +737,22 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           runStartedAt,
         });
       } finally {
+        if (task.provider !== 'claude' && task.workspace_path) {
+          await applyWorkspaceOwnership({
+            workspaceRoot: task.workspace_path,
+            targetPaths: [task.workspace_path],
+            recursive: true,
+            includeParents: false,
+            reason: 'scheduled_provider_task_completed',
+            context: {
+              provider: task.provider,
+              workspaceId: task.workspace_id,
+              scheduledTaskId: task.id,
+            },
+          }).catch((error) => {
+            console.error('[workspace-ownership] Failed after scheduled provider task:', error);
+          });
+        }
         activeRuns.delete(task.id);
       }
     },

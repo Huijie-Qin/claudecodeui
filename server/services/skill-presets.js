@@ -16,6 +16,7 @@ import {
   readSkillsMetadata,
   writeSkillsMetadata,
 } from './workspace-skills.js';
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const SKILL_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 
@@ -337,6 +338,13 @@ async function installDownloadedPresetSkill({
     }
     await fs.rename(stagePath, runtimePath);
     runtimeInstalled = true;
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [runtimePath],
+      recursive: true,
+      reason: 'skill_preset_install',
+      context: { presetId: preset.id, skillName },
+    });
     await removeLegacyPresetSkillSource({
       workspacePath,
       metadata,
@@ -345,7 +353,9 @@ async function installDownloadedPresetSkill({
       presetId: preset.id,
       overwrite,
     });
-    await fs.rm(backupPath, { recursive: true, force: true });
+    await fs.rm(backupPath, { recursive: true, force: true }).catch((error) => {
+      console.warn('[skill-presets] Failed to remove installed skill backup:', error?.message || error);
+    });
 
     return {
       name: skillName,

@@ -5,6 +5,8 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import JSZip from 'jszip';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 const EMPTY_METADATA = Object.freeze({
   version: 1,
   skills: {},
@@ -47,6 +49,11 @@ export async function writeSkillsMetadata(workspacePath, metadata) {
   const tempPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(`${tempPath}`, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
   await fs.rename(tempPath, metadataPath);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [metadataPath],
+    reason: 'workspace_skills_metadata',
+  });
 }
 
 export async function parseSkillManifest(skillDirectory) {
@@ -220,6 +227,13 @@ export async function previewGithubSkillInstall({
     });
 
     await writeJsonFile(path.join(previewDirectory, 'preview.json'), preview);
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [previewDirectory],
+      recursive: true,
+      reason: 'workspace_skill_github_preview',
+      context: { previewId, skillName },
+    });
     return preview;
   } catch (error) {
     await fs.rm(previewDirectory, { recursive: true, force: true });
@@ -278,6 +292,13 @@ export async function previewLocalSkillUpload({
     });
 
     await writeJsonFile(path.join(previewDirectory, 'preview.json'), preview);
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [previewDirectory],
+      recursive: true,
+      reason: 'workspace_skill_upload_preview',
+      context: { previewId, skillName },
+    });
     return preview;
   } catch (error) {
     await fs.rm(previewDirectory, { recursive: true, force: true });
@@ -350,11 +371,22 @@ export async function installGithubSkill({ workspacePath, previewId, enable = tr
       await fs.cp(sourcePath, runtimePath, { recursive: true });
     }
 
-    await fs.rm(sourceBackupPath, { recursive: true, force: true });
-    await fs.rm(runtimeBackupPath, { recursive: true, force: true });
-    await fs.rm(previewDirectory, { recursive: true, force: true });
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [sourcePath, ...(enable !== false ? [runtimePath] : [])],
+      recursive: true,
+      reason: 'workspace_skill_install',
+      context: { skillName: name },
+    });
 
     const manifest = await parseSkillManifest(sourcePath);
+    await Promise.all([
+      fs.rm(sourceBackupPath, { recursive: true, force: true }),
+      fs.rm(runtimeBackupPath, { recursive: true, force: true }),
+      fs.rm(previewDirectory, { recursive: true, force: true }),
+    ]).catch((error) => {
+      console.warn('[workspace-skills] Failed to remove an install staging path:', error?.message || error);
+    });
     return pruneUndefined({
       name,
       displayName: manifest.status === 'valid' ? manifest.name : name,
@@ -414,7 +446,7 @@ export async function setSkillEnabled({ workspacePath, name, enabled, now = () =
   const sourcePath = path.join(sourceRoot, skillName);
   const runtimePath = path.join(runtimeRoot, skillName);
   if (enabled !== false) {
-    await materializeManagedSkill(sourcePath, runtimePath);
+    await materializeManagedSkill(sourcePath, runtimePath, workspacePath);
   } else {
     await fs.rm(runtimePath, { recursive: true, force: true });
   }
@@ -478,7 +510,7 @@ export async function reconcileManagedSkills(workspacePath) {
         await fs.rm(runtimePath, { recursive: true, force: true });
         result.removed.push(name);
       } else {
-        await materializeManagedSkill(sourcePath, runtimePath);
+        await materializeManagedSkill(sourcePath, runtimePath, workspacePath);
         result.materialized.push(name);
       }
     } catch (error) {
@@ -677,7 +709,7 @@ async function getSkillInstallConflict(workspacePath, name) {
   return { type: 'none', blocking: false };
 }
 
-async function materializeManagedSkill(sourcePath, runtimePath) {
+async function materializeManagedSkill(sourcePath, runtimePath, workspacePath) {
   await assertDirectoryExists(sourcePath, `Managed skill source does not exist at ${sourcePath}`);
   const stagePath = path.join(path.dirname(runtimePath), `.${path.basename(runtimePath)}.${process.pid}.${Date.now()}.stage`);
   await fs.mkdir(path.dirname(runtimePath), { recursive: true });
@@ -685,6 +717,13 @@ async function materializeManagedSkill(sourcePath, runtimePath) {
   await fs.cp(sourcePath, stagePath, { recursive: true });
   await fs.rm(runtimePath, { recursive: true, force: true });
   await fs.rename(stagePath, runtimePath);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [runtimePath],
+    recursive: true,
+    reason: 'workspace_skill_materialize',
+    context: { skillName: path.basename(runtimePath) },
+  });
 }
 
 async function listRelativeFiles(rootDirectory) {
