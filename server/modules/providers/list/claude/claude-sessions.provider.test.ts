@@ -136,6 +136,87 @@ test('ClaudeSessionsProvider filters skill bodies even when the meta flag is mis
   assert.deepEqual(messages, []);
 });
 
+test('ClaudeSessionsProvider reconstructs slash invocation from expanded skill history', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: [
+        '# dataops-html-report',
+        '',
+        'Analyze the supplied data and prepare a report.',
+        '',
+        '## User request',
+        '',
+        '帮我分析这份数据',
+        '',
+      ].join('\n'),
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, '/dataops-html-report 帮我分析这份数据');
+});
+
+test('ClaudeSessionsProvider uses the first skill heading and final user request delimiter', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill-last-request',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: [
+          'Base directory for this skill: /skills/report-skill',
+          '',
+          '# report-skill',
+          '',
+          '# Example heading that is not the skill name',
+          '',
+          '## User request',
+          '',
+          'Example request from the skill body.',
+          '',
+          'Continue following the skill instructions.',
+          '',
+          '## User request',
+          '',
+          '第一行',
+          '第二行',
+          '',
+        ].join('\n'),
+      }],
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, '/report-skill 第一行\n第二行');
+});
+
+test('ClaudeSessionsProvider leaves user text unchanged without the exact skill delimiter', () => {
+  const provider = new ClaudeSessionsProvider();
+  const content = '# report-skill\n\n## User request\nMissing required blank line.';
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'not-expanded-skill',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content,
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, content);
+});
+
 test('ClaudeSessionsProvider filters snake-case sidechain messages from user-visible messages', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({

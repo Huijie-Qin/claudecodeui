@@ -39,6 +39,50 @@ test('computeMerged drops local optimistic user message after the server copy ar
   assert.deepEqual(merged, [serverMessage]);
 });
 
+test('computeMerged drops realtime slash invocation after reconstructed history arrives', () => {
+  const content = '/dataops-html-report 帮我分析这份数据';
+  const serverMessage = makeUserText({
+    id: 'expanded-skill-jsonl',
+    timestamp: '2026-04-26T10:31:33.357Z',
+    content,
+  });
+  const localOptimisticMessage = makeUserText({
+    id: 'local_1777199493000_skill',
+    timestamp: '2026-04-26T10:31:33.000Z',
+    content,
+  });
+
+  const merged = computeMerged([serverMessage], [localOptimisticMessage]);
+
+  assert.deepEqual(merged, [serverMessage]);
+});
+
+test('computeMerged matches persisted user messages to optimistic messages one-to-one', () => {
+  const content = '/dataops-html-report 帮我分析这份数据';
+  const serverMessage = makeUserText({
+    id: 'expanded-skill-jsonl',
+    timestamp: '2026-04-26T10:31:33.357Z',
+    content,
+  });
+  const firstLocalCall = makeUserText({
+    id: 'local_1777199493000_first',
+    timestamp: '2026-04-26T10:31:33.000Z',
+    content,
+  });
+  const secondLocalCall = makeUserText({
+    id: 'local_1777199493700_second',
+    timestamp: '2026-04-26T10:31:33.700Z',
+    content,
+  });
+
+  const merged = computeMerged(
+    [serverMessage],
+    [firstLocalCall, secondLocalCall],
+  );
+
+  assert.deepEqual(merged, [serverMessage, secondLocalCall]);
+});
+
 test('computeMerged keeps later repeated user text as a distinct message', () => {
   const serverMessage = makeUserText({
     id: 'server-user',

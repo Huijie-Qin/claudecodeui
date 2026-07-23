@@ -34,6 +34,52 @@ function isPersistedCopyOfOptimisticUserText(
   return Math.abs(serverTime - realtimeTime) <= OPTIMISTIC_USER_DEDUPE_WINDOW_MS;
 }
 
+function dropPersistedRealtimeCopies(
+  server: NormalizedMessage[],
+  realtime: NormalizedMessage[],
+  serverIds: Set<string>,
+): NormalizedMessage[] {
+  const claimedServerIndexes = new Set<number>();
+  const extra: NormalizedMessage[] = [];
+
+  for (const realtimeMessage of realtime) {
+    if (serverIds.has(realtimeMessage.id)) {
+      continue;
+    }
+
+    let matchedServerIndex = -1;
+    let closestTimeDelta = Number.POSITIVE_INFINITY;
+
+    for (let serverIndex = 0; serverIndex < server.length; serverIndex++) {
+      if (claimedServerIndexes.has(serverIndex)) {
+        continue;
+      }
+
+      const serverMessage = server[serverIndex];
+      if (!isPersistedCopyOfOptimisticUserText(serverMessage, realtimeMessage)) {
+        continue;
+      }
+
+      const serverTime = new Date(serverMessage.timestamp).getTime();
+      const realtimeTime = new Date(realtimeMessage.timestamp).getTime();
+      const timeDelta = Math.abs(serverTime - realtimeTime);
+      if (timeDelta < closestTimeDelta) {
+        matchedServerIndex = serverIndex;
+        closestTimeDelta = timeDelta;
+      }
+    }
+
+    if (matchedServerIndex >= 0) {
+      claimedServerIndexes.add(matchedServerIndex);
+      continue;
+    }
+
+    extra.push(realtimeMessage);
+  }
+
+  return extra;
+}
+
 function getMessageTime(message: NormalizedMessage): number | null {
   const time = new Date(message.timestamp).getTime();
   return Number.isFinite(time) ? time : null;
@@ -134,10 +180,7 @@ export function computeMerged(server: NormalizedMessage[], realtime: NormalizedM
   if (realtimeUnique.length === 0) return server;
   if (server.length === 0) return realtimeUnique;
   const serverIds = new Set(server.map(m => m.id));
-  const extra = realtimeUnique.filter(m =>
-    !serverIds.has(m.id) &&
-    !server.some(serverMessage => isPersistedCopyOfOptimisticUserText(serverMessage, m))
-  );
+  const extra = dropPersistedRealtimeCopies(server, realtimeUnique, serverIds);
   if (extra.length === 0) return server;
   return extra.reduce(insertByTimestamp, server);
 }

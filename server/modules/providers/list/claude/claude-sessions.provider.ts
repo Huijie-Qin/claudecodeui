@@ -74,6 +74,34 @@ const INTERNAL_SKILL_CONTENT_PATTERNS = [
   /^\s*skill\s+(?:body|content|detail|details|instructions|parameters|params|arguments|args)\s*:/i,
 ] as const;
 
+const SKILL_USER_REQUEST_DELIMITER = '\n\n## User request\n\n';
+const SKILL_NAME_HEADING_PATTERN = /^# ([^\r\n]+)$/m;
+
+/**
+ * CCUI expands slash-invoked skills before sending them to Claude. The
+ * canonical JSONL transcript therefore contains the skill body followed by
+ * the original user request. Reconstruct the compact command form for
+ * user-facing history while leaving the transcript itself untouched.
+ */
+function extractExpandedSkillInvocation(content: string): string | null {
+  const requestIndex = content.lastIndexOf(SKILL_USER_REQUEST_DELIMITER);
+  if (requestIndex < 0) {
+    return null;
+  }
+
+  const skillContent = content.slice(0, requestIndex);
+  const skillName = SKILL_NAME_HEADING_PATTERN.exec(skillContent)?.[1]?.trim();
+  if (!skillName || /[\s/]/.test(skillName)) {
+    return null;
+  }
+
+  const userQuery = content
+    .slice(requestIndex + SKILL_USER_REQUEST_DELIMITER.length)
+    .trim();
+
+  return userQuery ? `/${skillName} ${userQuery}` : `/${skillName}`;
+}
+
 function isInternalContent(content: string): boolean {
   const normalizedContent = content.trimStart();
   return (
@@ -85,6 +113,15 @@ function isInternalContent(content: string): boolean {
 
 function cleanAssistantText(text: string): string {
   return text.replace(/<\|assistant\|>/g, '');
+}
+
+function resolveVisibleUserText(text: string): string | null {
+  const skillInvocation = extractExpandedSkillInvocation(text);
+  if (skillInvocation) {
+    return skillInvocation;
+  }
+
+  return isInternalContent(text) ? null : text;
 }
 
 function resolveConversationRole(raw: AnyRecord): 'user' | 'assistant' | undefined {
@@ -157,7 +194,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
-            if (text && !isInternalContent(text)) {
+            const visibleText = text ? resolveVisibleUserText(text) : null;
+            if (visibleText) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
                 sessionId,
@@ -165,7 +203,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
                 provider: PROVIDER,
                 kind: 'text',
                 role: 'user',
-                content: text,
+                content: visibleText,
               }));
             }
           }
@@ -177,7 +215,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          if (textParts && !isInternalContent(textParts)) {
+          const visibleTextParts = textParts ? resolveVisibleUserText(textParts) : null;
+          if (visibleTextParts) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
               sessionId,
@@ -185,13 +224,14 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               provider: PROVIDER,
               kind: 'text',
               role: 'user',
-              content: textParts,
+              content: visibleTextParts,
             }));
           }
         }
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
-        if (text && !isInternalContent(text)) {
+        const visibleText = text ? resolveVisibleUserText(text) : null;
+        if (visibleText) {
           messages.push(createNormalizedMessage({
             id: baseId,
             sessionId,
@@ -199,7 +239,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             provider: PROVIDER,
             kind: 'text',
             role: 'user',
-            content: text,
+            content: visibleText,
           }));
         }
       }
