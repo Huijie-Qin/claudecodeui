@@ -1,40 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { getMessageCopyPayload, type MessageCopyFormat } from '../../utils/messageCopy';
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
 
-type CopyFormat = 'text' | 'markdown';
-
 type CopyFormatOption = {
-  format: CopyFormat;
+  format: MessageCopyFormat;
   label: string;
-};
-
-// Converts markdown into readable plain text for "Copy as text".
-const convertMarkdownToPlainText = (markdown: string): string => {
-  let plainText = markdown.replace(/\r\n/g, '\n');
-  const codeBlocks: string[] = [];
-  plainText = plainText.replace(/```[\w-]*\n([\s\S]*?)```/g, (_match, code: string) => {
-    const placeholder = `@@CODEBLOCK${codeBlocks.length}@@`;
-    codeBlocks.push(code.replace(/\n$/, ''));
-    return placeholder;
-  });
-  plainText = plainText.replace(/`([^`]+)`/g, '$1');
-  plainText = plainText.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1');
-  plainText = plainText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
-  plainText = plainText.replace(/^>\s?/gm, '');
-  plainText = plainText.replace(/^#{1,6}\s+/gm, '');
-  plainText = plainText.replace(/^[-*+]\s+/gm, '');
-  plainText = plainText.replace(/^\d+\.\s+/gm, '');
-  plainText = plainText.replace(/(\*\*|__)(.*?)\1/g, '$2');
-  // Keep underscore characters intact for copy as text to avoid stripping literal underscores in user input.
-  plainText = plainText.replace(/\*(.*?)\*/g, '$1');
-  plainText = plainText.replace(/~~(.*?)~~/g, '$1');
-  plainText = plainText.replace(/<\/?[^>]+(>|$)/g, '');
-  plainText = plainText.replace(/\n{3,}/g, '\n\n');
-  plainText = plainText.replace(/@@CODEBLOCK(\d+)@@/g, (_match, index: string) => codeBlocks[Number(index)] ?? '');
-  return plainText.trim();
 };
 
 const MessageCopyControl = ({
@@ -46,8 +20,8 @@ const MessageCopyControl = ({
 }) => {
   const { t } = useTranslation('chat');
   const canSelectCopyFormat = messageType === 'assistant';
-  const defaultFormat: CopyFormat = canSelectCopyFormat ? 'markdown' : 'text';
-  const [selectedFormat, setSelectedFormat] = useState<CopyFormat>(defaultFormat);
+  const defaultFormat: MessageCopyFormat = canSelectCopyFormat ? 'markdown' : 'text';
+  const [selectedFormat, setSelectedFormat] = useState<MessageCopyFormat>(defaultFormat);
   const [copied, setCopied] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -72,11 +46,8 @@ const MessageCopyControl = ({
     : t('copyMessage.textShort', { defaultValue: 'TXT' });
 
   const copyPayload = useMemo(() => {
-    if (selectedFormat === 'markdown') {
-      return content;
-    }
-    return convertMarkdownToPlainText(content);
-  }, [content, selectedFormat]);
+    return getMessageCopyPayload({ content, format: selectedFormat, messageType });
+  }, [content, messageType, selectedFormat]);
 
   useEffect(() => {
     setSelectedFormat(defaultFormat);
@@ -121,7 +92,7 @@ const MessageCopyControl = ({
     }, COPY_SUCCESS_TIMEOUT_MS);
   };
 
-  const handleFormatChange = (format: CopyFormat) => {
+  const handleFormatChange = (format: MessageCopyFormat) => {
     setSelectedFormat(format);
     setIsDropdownOpen(false);
   };
