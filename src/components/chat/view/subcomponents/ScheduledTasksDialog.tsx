@@ -36,7 +36,7 @@ type ScheduledTask = {
 type ScheduleType = 'interval' | 'cron';
 type ScheduleMode = 'interval' | 'cron' | 'visual';
 type ScheduledTasksDialogMode = 'create' | 'manage';
-type VisualFrequency = 'daily' | 'weekly' | 'monthly';
+type VisualFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 type TaskEditForm = {
   name: string;
@@ -102,6 +102,7 @@ const VISUAL_FREQUENCIES: Array<{ value: VisualFrequency; labelKey: string; defa
   { value: 'monthly', labelKey: 'scheduledTasks.frequencies.monthly', defaultLabel: 'Monthly' },
   { value: 'weekly', labelKey: 'scheduledTasks.frequencies.weekly', defaultLabel: 'Weekly' },
   { value: 'daily', labelKey: 'scheduledTasks.frequencies.daily', defaultLabel: 'Daily' },
+  { value: 'hourly', labelKey: 'scheduledTasks.frequencies.hourly', defaultLabel: 'Hourly' },
 ];
 
 function pad(value: number) {
@@ -146,6 +147,7 @@ function buildVisualCron({
   const weekday = clampNumber(visualWeekday, 0, 6);
   const monthDay = clampNumber(visualMonthDay, 1, 31);
 
+  if (visualFrequency === 'hourly') return `${minute} * * * *`;
   if (visualFrequency === 'daily') return `${minute} ${hour} * * *`;
   if (visualFrequency === 'weekly') return `${minute} ${hour} * * ${weekday}`;
   return `${minute} ${hour} ${monthDay} * *`;
@@ -334,7 +336,9 @@ function inferVisualCron(cron?: string | null): Pick<TaskEditForm, 'scheduleMode
   const weekday = Number(weekdayField);
   if (!Number.isInteger(minute) || minute < 0 || minute > 59 || monthField !== '*') return fallback;
 
-  if (hourField === '*' && dayField === '*' && weekdayField === '*') return fallback;
+  if (hourField === '*' && dayField === '*' && weekdayField === '*') {
+    return { ...fallback, scheduleMode: 'visual', visualFrequency: 'hourly', visualMinute: minute };
+  }
   if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && dayField === '*' && weekdayField === '*') {
     return { ...fallback, scheduleMode: 'visual', visualFrequency: 'daily', visualMinute: minute, visualHour: hour };
   }
@@ -571,7 +575,12 @@ function ScheduleControls({
   const nextVisualRuns = getNextVisualRunDates(values, 5, limitPreviewToNow ? new Date() : null);
   const visualTime = `${pad(values.visualHour)}:${pad(values.visualMinute)}`;
   const selectedWeekday = WEEKDAYS.find((weekday) => weekday.value === values.visualWeekday);
-  const visualScheduleSummary = values.visualFrequency === 'monthly'
+  const visualScheduleSummary = values.visualFrequency === 'hourly'
+    ? t('scheduledTasks.summary.hourly', {
+        defaultValue: 'Every hour at minute {{minute}}',
+        minute: pad(values.visualMinute),
+      })
+    : values.visualFrequency === 'monthly'
     ? t('scheduledTasks.summary.monthly', {
         defaultValue: 'Every month on day {{day}} at {{time}}',
         day: values.visualMonthDay,
@@ -698,7 +707,11 @@ function ScheduleControls({
 
         {values.scheduleMode === 'visual' ? (
           <div className="mt-3 grid gap-3">
-            <div className={`grid gap-3 ${values.visualFrequency === 'daily' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
+            <div className={`grid gap-3 ${
+              values.visualFrequency === 'daily' || values.visualFrequency === 'hourly'
+                ? 'sm:grid-cols-2'
+                : 'sm:grid-cols-3'
+            }`}>
               <label className="space-y-1">
                 <span className="text-xs text-muted-foreground">
                   {t('scheduledTasks.labels.period', { defaultValue: 'Period' })}
@@ -757,23 +770,40 @@ function ScheduleControls({
                 </label>
               ) : null}
 
-              <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">
-                  {t('scheduledTasks.labels.runTime', { defaultValue: 'Run time' })}
-                </span>
-                <input
-                  type="time"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={visualTime}
-                  onChange={(event) => {
-                    const [hour, minute] = event.target.value.split(':').map(Number);
-                    if (Number.isInteger(hour) && Number.isInteger(minute)) {
-                      update({ visualHour: hour, visualMinute: minute });
-                    }
-                  }}
-                  disabled={disabled}
-                />
-              </label>
+              {values.visualFrequency === 'hourly' ? (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.runMinute', { defaultValue: 'Run minute' })}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={values.visualMinute}
+                    onChange={(event) => update({ visualMinute: clampNumber(Number(event.target.value), 0, 59) })}
+                    disabled={disabled}
+                  />
+                </label>
+              ) : (
+                <label className="space-y-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t('scheduledTasks.labels.runTime', { defaultValue: 'Run time' })}
+                  </span>
+                  <input
+                    type="time"
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={visualTime}
+                    onChange={(event) => {
+                      const [hour, minute] = event.target.value.split(':').map(Number);
+                      if (Number.isInteger(hour) && Number.isInteger(minute)) {
+                        update({ visualHour: hour, visualMinute: minute });
+                      }
+                    }}
+                    disabled={disabled}
+                  />
+                </label>
+              )}
             </div>
 
             {!separateStartTime ? renderStartTimeField(inlineStartTimeLabel) : null}

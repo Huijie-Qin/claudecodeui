@@ -301,6 +301,7 @@
       "period": "Period",
       "date": "Date",
       "runTime": "Run time",
+      "runMinute": "Run minute",
       "dayOption": "Day {{day}}",
       "minuteWithValue": "Minute: {{minute}}",
       "hour": "Hour",
@@ -368,6 +369,7 @@
     "summary": {
       "cron": "Cron {{expression}}",
       "everyMinutes": "Every {{count}} min",
+      "hourly": "Every hour at minute {{minute}}",
       "monthly": "Every month on day {{day}} at {{time}}",
       "weekly": "Every {{weekday}} at {{time}}",
       "daily": "Every day at {{time}}",

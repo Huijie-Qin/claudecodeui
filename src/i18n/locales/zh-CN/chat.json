@@ -286,6 +286,7 @@
       "period": "周期",
       "date": "日期",
       "runTime": "执行时间",
+      "runMinute": "执行分钟",
       "dayOption": "{{day}} 日",
       "minuteWithValue": "分钟：{{minute}}",
       "hour": "小时",
@@ -353,6 +354,7 @@
     "summary": {
       "cron": "Cron {{expression}}",
       "everyMinutes": "每 {{count}} 分钟",
+      "hourly": "每小时第 {{minute}} 分钟执行",
       "monthly": "每月 {{day}} 日 {{time}} 执行",
       "weekly": "每{{weekday}} {{time}} 执行",
       "daily": "每天 {{time}} 执行",
