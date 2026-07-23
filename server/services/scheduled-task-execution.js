@@ -1,6 +1,10 @@
 const VALID_SESSION_MODES = new Set(['new', 'merge']);
 const SCHEDULED_TASK_TIME_ZONE = 'Asia/Shanghai';
 
+export function resolveScheduledTaskProviderPrompt(prompt) {
+  return prompt;
+}
+
 export function normalizeScheduledTaskSessionMode(sessionMode) {
   const normalized = String(sessionMode || 'new').trim().toLowerCase();
   if (!VALID_SESSION_MODES.has(normalized)) {

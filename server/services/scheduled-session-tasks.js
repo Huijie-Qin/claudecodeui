@@ -5,11 +5,11 @@ import { queryCodex } from '../openai-codex.js';
 import { spawnGemini } from '../gemini-cli.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
-import { expandLeadingSkillCommand } from './skill-command-expander.js';
 import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } from './cron-schedule.js';
 import {
   buildScheduledTaskRunSessionSummary,
   normalizeScheduledTaskSessionMode,
+  resolveScheduledTaskProviderPrompt,
   resolveScheduledTaskResumeSession,
   sanitizeScheduledTaskEvent,
 } from './scheduled-task-execution.js';
@@ -341,11 +341,7 @@ function isInvalidClaudeResumeError(errorMessage) {
 
 async function runProviderTask(task, writer) {
   const options = createScheduledTaskOptions(task);
-  const expandedSkill = await expandLeadingSkillCommand({
-    prompt: task.prompt,
-    workspacePath: task.workspace_path,
-  });
-  const prompt = expandedSkill.prompt;
+  const prompt = resolveScheduledTaskProviderPrompt(task.prompt);
   writer.setPromptDisplay?.({ displayPrompt: task.prompt, modelPrompt: prompt });
 
   if (task.provider === 'cursor') {
