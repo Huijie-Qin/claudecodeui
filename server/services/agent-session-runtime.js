@@ -35,8 +35,46 @@ const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
+const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
+const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
+const DOCKER_SHARED_PYTHON_CONTAINER_PATH = '/opt/cloudcli/python';
+const DOCKER_SHARED_PYTHON_USER_BASE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/user-base`;
+const DOCKER_SHARED_PIP_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pip-cache`;
+const DOCKER_SHARED_UV_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/uv-cache`;
+const DOCKER_SHARED_PIPX_HOME = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pipx`;
+const DEFAULT_DOCKER_CONTAINER_PATH = [
+  '/home/agent/.local/bin',
+  '/usr/local/share/npm-global/bin',
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+].join(':');
+const DOCKER_SHARED_PYTHON_PATH = `${DOCKER_SHARED_PYTHON_USER_BASE}/bin:${DEFAULT_DOCKER_CONTAINER_PATH}`;
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
-const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
+const DOCKER_RUNTIME_MANAGED_ENV_NAMES = new Set([
+  'HOME',
+  'PATH',
+  'PYTHONUSERBASE',
+  'PYTHONNOUSERSITE',
+  'PIP_CACHE_DIR',
+  'PIP_DISABLE_PIP_VERSION_CHECK',
+  'PIP_BREAK_SYSTEM_PACKAGES',
+  'PIP_USER',
+  'PIP_PREFIX',
+  'PIP_TARGET',
+  'PIP_REQUIRE_VIRTUALENV',
+  'VIRTUAL_ENV',
+  'UV_CACHE_DIR',
+  'PIPX_HOME',
+  'PIPX_BIN_DIR',
+]);
+const DOCKER_RUN_ENV_DENYLIST = new Set([
+  PRIVATE_TOKEN_ENV_NAME,
+  ...DOCKER_RUNTIME_MANAGED_ENV_NAMES,
+]);
 const NPM_PROXY_ENV_NAMES = [
   'npm_config_proxy',
   'npm_config_https_proxy',
@@ -85,6 +123,7 @@ const WRAPPER_HOST_ENV_ALLOWLIST = [
   'XDG_RUNTIME_DIR',
 ];
 const CONTAINER_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LOOPBACK_PROXY_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 function requireValue(value, name) {
   if (value == null || String(value).trim() === '') {
@@ -119,6 +158,37 @@ function sanitizeSegment(value, fallback = 'x') {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function rewriteDockerProxyValue(value) {
+  const input = String(value || '').trim();
+  if (!input) return input;
+  try {
+    const parsed = new URL(input);
+    if (!LOOPBACK_PROXY_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return input;
+    }
+    parsed.hostname = 'host.docker.internal';
+    return parsed.toString();
+  } catch {
+    return input;
+  }
+}
+
+export function rewriteDockerProxyEnv(value) {
+  const normalized = normalizeContainerEnvRecord(value);
+  for (const name of [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'http_proxy',
+    'https_proxy',
+    ...NPM_PROXY_ENV_NAMES,
+  ]) {
+    if (normalized[name]) {
+      normalized[name] = rewriteDockerProxyValue(normalized[name]);
+    }
+  }
+  return normalized;
 }
 
 function currentUid() {
@@ -162,6 +232,57 @@ export function parseDockerPythonPackages(value) {
     .split(/[\s,]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function buildDockerPythonInstallArgs(containerName, packages = []) {
+  const requestedPackages = Array.isArray(packages)
+    ? packages.map((entry) => String(entry).trim()).filter(Boolean)
+    : parseDockerPythonPackages(packages);
+  if (requestedPackages.length === 0) return [];
+
+  return [
+    'exec',
+    '-e',
+    'HOME=/home/cloudcli',
+    requireValue(containerName, 'containerName'),
+    'python3',
+    '-m',
+    'pip',
+    'install',
+    '--user',
+    '--break-system-packages',
+    '--disable-pip-version-check',
+    ...requestedPackages,
+  ];
+}
+
+function parseBoolean(value, fallback) {
+  if (value == null || String(value).trim() === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  throw new Error(`${DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME} must be a boolean`);
+}
+
+export function resolveDockerSharedPythonPath(env = process.env, image = DEFAULT_CLAUDE_DOCKER_IMAGE) {
+  if (!parseBoolean(env[DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME], true)) {
+    return null;
+  }
+
+  const runtimeRoot = path.resolve(expandHome(env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT));
+  const sharedRoot = path.resolve(expandHome(
+    env[DOCKER_SHARED_PYTHON_ROOT_ENV_NAME]
+      || path.join(runtimeRoot, '.shared', 'python'),
+  ));
+  const imageScope = crypto
+    .createHash('sha256')
+    .update(requireValue(image, 'image'))
+    .digest('hex')
+    .slice(0, 20);
+
+  // Keep incompatible images out of the same Python user base. Python itself
+  // adds another layer by placing packages under lib/pythonX.Y/site-packages.
+  return path.join(sharedRoot, `image-${imageScope}`);
 }
 
 export function buildRuntimePaths({
@@ -265,13 +386,38 @@ export function buildDockerRunArgs({
   gid,
   workspaceHostPath,
   runtimeHomePath,
+  sharedPythonHostPath = null,
   containerEnv = {},
   memory = DEFAULT_DOCKER_MEMORY,
   cpus = DEFAULT_DOCKER_CPUS,
 }) {
-  const containerEnvArgs = Object.entries(normalizeContainerEnvRecord(containerEnv))
+  const containerEnvArgs = Object.entries(rewriteDockerProxyEnv(containerEnv))
     .filter(([key]) => !DOCKER_RUN_ENV_DENYLIST.has(key))
     .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+  const sharedPythonArgs = sharedPythonHostPath
+    ? [
+        '--mount',
+        `type=bind,src=${requireValue(sharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
+        '-e',
+        `PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`,
+        '-e',
+        `PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`,
+        '-e',
+        'PIP_DISABLE_PIP_VERSION_CHECK=1',
+        '-e',
+        'PIP_BREAK_SYSTEM_PACKAGES=1',
+        '-e',
+        'PIP_USER=1',
+        '-e',
+        `UV_CACHE_DIR=${DOCKER_SHARED_UV_CACHE}`,
+        '-e',
+        `PIPX_HOME=${DOCKER_SHARED_PIPX_HOME}`,
+        '-e',
+        `PIPX_BIN_DIR=${DOCKER_SHARED_PYTHON_USER_BASE}/bin`,
+        '-e',
+        `PATH=${DOCKER_SHARED_PYTHON_PATH}`,
+      ]
+    : [];
 
   return [
     'run',
@@ -290,12 +436,15 @@ export function buildDockerRunArgs({
     '--cpus',
     requireValue(cpus, 'cpus'),
     '--read-only',
+    '--add-host',
+    'host.docker.internal:host-gateway',
     '--tmpfs',
     '/tmp:rw,nosuid,size=512m',
     '--mount',
     `type=bind,src=${requireValue(workspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
     '--mount',
     `type=bind,src=${requireValue(runtimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
+    ...sharedPythonArgs,
     '-e',
     'HOME=/home/cloudcli',
     ...containerEnvArgs,
@@ -503,10 +652,13 @@ function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
       output[name] = String(env[name]);
     }
   }
-  Object.assign(output, normalizeContainerEnvRecord(containerEnv));
+  Object.assign(output, Object.fromEntries(
+    Object.entries(normalizeContainerEnvRecord(containerEnv))
+      .filter(([name]) => !DOCKER_RUNTIME_MANAGED_ENV_NAMES.has(name)),
+  ));
   if (!output.PATH) output.PATH = process.env.PATH || '';
   if (!output.HOME) output.HOME = os.homedir();
-  return output;
+  return rewriteDockerProxyEnv(output);
 }
 
 function buildRuntimeProcessEnv(env = process.env) {
@@ -516,7 +668,7 @@ function buildRuntimeProcessEnv(env = process.env) {
       output[name] = String(env[name]);
     }
   }
-  return normalizeContainerEnvRecord(output);
+  return rewriteDockerProxyEnv(output);
 }
 
 function buildContainerEnvAllowlist(containerEnv = {}) {
@@ -524,12 +676,35 @@ function buildContainerEnvAllowlist(containerEnv = {}) {
     ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
     ...NPM_PROXY_ENV_NAMES,
     ...Object.keys(normalizeContainerEnvRecord(containerEnv)),
-  ]));
+  ])).filter((name) => !DOCKER_RUNTIME_MANAGED_ENV_NAMES.has(name));
 }
 
 function readEnvValue(record, name) {
   const value = record?.[name];
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
+  // Lightweight test doubles and third-party Docker clients may only expose
+  // state. In that case preserve the previous reuse behavior.
+  if (!Array.isArray(inspected?.mounts) || !Array.isArray(inspected?.env)) {
+    return true;
+  }
+
+  const sharedMount = inspected.mounts.find(
+    (mount) => mount?.Destination === DOCKER_SHARED_PYTHON_CONTAINER_PATH,
+  );
+  if (!sharedPythonHostPath) {
+    return !sharedMount;
+  }
+
+  const envSet = new Set(inspected.env);
+  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(sharedPythonHostPath)
+    && envSet.has(`PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`)
+    && envSet.has(`PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`)
+    && envSet.has('PIP_BREAK_SYSTEM_PACKAGES=1')
+    && envSet.has('PIP_USER=1')
+    && envSet.has(`PATH=${DOCKER_SHARED_PYTHON_PATH}`);
 }
 
 function hasNonEmptyBaseEnvValue(baseEnv, name) {
@@ -636,6 +811,8 @@ export class DockerCliClient {
         running: state.Running === true,
         user: inspected.Config?.User ?? null,
         state,
+        env: Array.isArray(inspected.Config?.Env) ? inspected.Config.Env : [],
+        mounts: Array.isArray(inspected.Mounts) ? inspected.Mounts : [],
         status: state.Status ?? null,
         exitCode: state.ExitCode ?? null,
         startedAt: state.StartedAt ?? null,
@@ -683,31 +860,9 @@ export class DockerCliClient {
   }
 
   async installPythonPackages(containerName, packages = []) {
-    const requestedPackages = Array.isArray(packages)
-      ? packages.map((entry) => String(entry).trim()).filter(Boolean)
-      : parseDockerPythonPackages(packages);
-    if (requestedPackages.length === 0) {
-      return;
-    }
-
-    const execArgs = [
-      'exec',
-      '-e',
-      'HOME=/home/cloudcli',
-      requireValue(containerName, 'containerName'),
-    ];
-
-    await execFileAsync('docker', [
-      ...execArgs,
-      'python3',
-      '-m',
-      'pip',
-      'install',
-      '--user',
-      '--no-cache-dir',
-      '--disable-pip-version-check',
-      ...requestedPackages,
-    ]);
+    const args = buildDockerPythonInstallArgs(containerName, packages);
+    if (args.length === 0) return;
+    await execFileAsync('docker', args);
   }
 
   async statsContainers(containerNames) {
@@ -889,9 +1044,13 @@ export function createAgentSessionRuntimeManager({
     const requestId = logContext.requestId || null;
     const containerUser = resolveContainerUser(env);
     const expectedContainerUser = `${containerUser.uid}:${containerUser.gid}`;
+    const sharedPythonHostPath = resolveDockerSharedPythonPath(env, runtime.image);
     const createContainer = async () => {
       const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
       const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
+      if (sharedPythonHostPath) {
+        await ensureRuntimeHomeWritable(fs, sharedPythonHostPath, containerUser);
+      }
       const args = buildDockerRunArgs({
         containerName: runtime.container_name,
         image: runtime.image,
@@ -899,6 +1058,7 @@ export function createAgentSessionRuntimeManager({
         gid: containerUser.gid,
         workspaceHostPath: runtime.workspace_host_path,
         runtimeHomePath: runtime.runtime_home_path,
+        sharedPythonHostPath,
         containerEnv,
         memory,
         cpus,
@@ -909,6 +1069,7 @@ export function createAgentSessionRuntimeManager({
         cpus,
         uid: containerUser.uid,
         gid: containerUser.gid,
+        sharedPythonHostPath,
       }));
       await docker.runDetached(args);
       logRuntimeEvent('container_created', createRuntimeLogDetails(runtime, {
@@ -1012,6 +1173,10 @@ export function createAgentSessionRuntimeManager({
       && inspected.user.trim() !== expectedContainerUser
     ) {
       await migrateContainerUser(inspected);
+      return;
+    }
+    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath)) {
+      await recreateContainer('shared_python_config_changed');
       return;
     }
     if (inspected?.running) {

@@ -173,9 +173,18 @@ ANTHROPIC_MODEL=your-model-name
 CLAUDE_EXECUTION_MODE=docker
 CLOUDCLI_CLAUDE_DOCKER_IMAGE=docker.io/cloudcliai/sandbox:claude-code
 CLOUDCLI_RUNTIME_ROOT=~/.cloudcli/runtimes
+CLOUDCLI_DOCKER_SHARED_PYTHON=true
+# 可选；默认值为 $CLOUDCLI_RUNTIME_ROOT/.shared/python
+CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT=~/.cloudcli/runtimes/.shared/python
 ```
 
 本地普通开发可以不设置这些变量；默认执行模式是 `local`。开启 Docker 模式前，需要本机 Docker 可用，并且镜像里能运行 `claude`。
+
+Docker 模式默认把所有 runtime 的 Python user site、pip 下载/轮子缓存、uv 缓存和 pipx 环境挂载到同一个宿主机目录。目录先按 Claude Docker 镜像引用分桶，Python 包再按 `pythonX.Y` 存放，因此同一镜像、同一 Python 小版本下安装的包只保存一份。用户的 `/home/cloudcli`、Claude 配置和 workspace 仍然独立。
+
+容器会设置 `PIP_USER=1` 和 `PIP_BREAK_SYSTEM_PACKAGES=1`，因此 Claude 在非 virtualenv 环境中执行普通的 `pip install <package>` 或 `python3 -m pip install <package>` 时，会绕过 Debian/Ubuntu 的 PEP 668 限制并写入共享 user site；共享 `bin` 目录也会加入 `PATH`。显式使用 `--target`、`--prefix`、`--no-user` 或在 virtualenv 内安装属于主动绕过共享策略的行为。共享 user site 是一个全局环境：安装另一个版本或卸载包会影响使用同一镜像的其他 runtime，生产环境建议固定版本，并只允许受信任用户安装依赖。如需恢复原有的每用户存储方式，设置 `CLOUDCLI_DOCKER_SHARED_PYTHON=false`。
+
+如果代理变量使用 `localhost`、`127.0.0.1` 或 `::1`，Docker runtime 会把代理主机改写为 `host.docker.internal`，并添加 `host-gateway` 映射，避免容器把宿主机代理误认为容器自身。
 
 ## 5. 启动开发模式
 
