@@ -1,10 +1,20 @@
-# syntax=docker/dockerfile:1.7
-
-ARG HWY_DOCKER_REGISTRY=swr.cn-north-4.myhuaweicloud.com/docker.io/library
+# The public SWR mirror publishes Docker Hub images as architecture-specific
+# tags, so BuildKit's TARGETARCH selects the matching base without Docker Hub.
+ARG HWY_DOCKER_REGISTRY=swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io
 ARG HWY_NODE_IMAGE=node:22-bookworm-slim
+ARG HWY_NODE_ARM64_IMAGE=node:22-bookworm-slim-linuxarm64
 ARG HWY_DOCKER_CLI_IMAGE=docker:29-cli
+ARG HWY_DOCKER_CLI_ARM64_IMAGE=docker:29-cli-linuxarm64
+ARG HWY_AMD64_PLATFORM=linux/amd64
+ARG HWY_ARM64_PLATFORM=linux/arm64
+ARG TARGETARCH
 
-FROM ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS builder
+FROM --platform=${HWY_AMD64_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS node-amd64
+FROM --platform=${HWY_ARM64_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_NODE_ARM64_IMAGE} AS node-arm64
+FROM --platform=${HWY_AMD64_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_DOCKER_CLI_IMAGE} AS docker-cli-amd64
+FROM --platform=${HWY_ARM64_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_DOCKER_CLI_ARM64_IMAGE} AS docker-cli-arm64
+
+FROM node-${TARGETARCH} AS builder
 
 WORKDIR /app
 
@@ -21,10 +31,10 @@ RUN npm run build \
     && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*
 
 
-FROM ${HWY_DOCKER_REGISTRY}/${HWY_DOCKER_CLI_IMAGE} AS docker-cli
+FROM docker-cli-${TARGETARCH} AS docker-cli
 
 
-FROM ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS runtime
+FROM node-${TARGETARCH} AS runtime
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
