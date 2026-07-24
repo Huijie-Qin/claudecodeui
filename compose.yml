@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ${CLOUDCLI_IMAGE:-cloudcli:local}
+    platform: linux/amd64
     # Compose reads .env for interpolation only unless it is declared here.
     # Keep it outside the image while injecting the same application settings
     # used by native development/production starts.
