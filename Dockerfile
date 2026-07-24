@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim AS builder
+ARG HWY_DOCKER_REGISTRY=swr.cn-north-4.myhuaweicloud.com/docker.io/library
+ARG HWY_NODE_IMAGE=node:22-bookworm-slim
+ARG HWY_DOCKER_CLI_IMAGE=docker:29-cli
+
+FROM ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -17,10 +21,10 @@ RUN npm run build \
     && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*
 
 
-FROM docker:29-cli AS docker-cli
+FROM ${HWY_DOCKER_REGISTRY}/${HWY_DOCKER_CLI_IMAGE} AS docker-cli
 
 
-FROM node:22-bookworm-slim AS runtime
+FROM ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS runtime
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
