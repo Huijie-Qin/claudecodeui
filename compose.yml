@@ -7,6 +7,9 @@ services:
         # Export non-secret mirror URLs before building. Credentials must not
         # be passed as build args because image metadata can expose them.
         NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
+        # Defaults to false for private internal CAs; set true when the build
+        # environment trusts the registry certificate chain.
+        NPM_STRICT_SSL: "${NPM_STRICT_SSL:-false}"
         APT_DEBIAN_MIRROR: "${APT_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
         APT_DEBIAN_SECURITY_MIRROR: "${APT_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}"
     image: ${CLOUDCLI_IMAGE:-cloudcli:local}

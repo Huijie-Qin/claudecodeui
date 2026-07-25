@@ -27,6 +27,7 @@ RUN set -eux; \
 FROM node-base AS builder
 
 ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG NPM_STRICT_SSL=false
 
 WORKDIR /app
 
@@ -50,7 +51,8 @@ RUN test -n "$NPM_REGISTRY" \
         --no-audit \
         --no-fund \
         --registry="$NPM_REGISTRY" \
-        --replace-registry-host=always
+        --replace-registry-host=always \
+        --strict-ssl="$NPM_STRICT_SSL"
 
 COPY . .
 # Docker mode always supplies its own Claude wrapper, so the SDK's large
