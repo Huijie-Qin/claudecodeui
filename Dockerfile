@@ -26,6 +26,9 @@ FROM --platform=${HWY_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_DOCKER_CLI_IMAGE} A
 
 FROM --platform=${HWY_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS runtime
 
+ARG APT_DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG APT_DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     SERVER_PORT=3001 \
@@ -34,15 +37,26 @@ ENV NODE_ENV=production \
 # The daemon remains on the host and is reached through /var/run/docker.sock.
 # The official current CLI is copied below because Debian Bookworm's 20.10 client
 # does not implement the JSON stats format used by the runtime monitor.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    test -n "$APT_DEBIAN_MIRROR"; \
+    test -n "$APT_DEBIAN_SECURITY_MIRROR"; \
+    sources_file=/etc/apt/sources.list.d/debian.sources; \
+    test -f "$sources_file"; \
+    sed -Ei \
+        -e "s|^URIs: https?://deb[.]debian[.]org/debian$|URIs: $APT_DEBIAN_MIRROR|" \
+        -e "s|^URIs: https?://deb[.]debian[.]org/debian-security$|URIs: $APT_DEBIAN_SECURITY_MIRROR|" \
+        "$sources_file"; \
+    grep -Fqx "URIs: $APT_DEBIAN_MIRROR" "$sources_file"; \
+    grep -Fqx "URIs: $APT_DEBIAN_SECURITY_MIRROR" "$sources_file"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         git \
         gosu \
         openssh-client \
-        python3 \
-    && rm -rf /var/lib/apt/lists/*
+        python3; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker

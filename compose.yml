@@ -3,6 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Export non-secret values before building. Credentials must not be
+        # passed as build args because image metadata can expose them.
+        APT_DEBIAN_MIRROR: "${APT_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
+        APT_DEBIAN_SECURITY_MIRROR: "${APT_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}"
     image: ${CLOUDCLI_IMAGE:-cloudcli:local}
     platform: linux/amd64
     # Compose reads .env for interpolation only unless it is declared here.
