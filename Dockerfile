@@ -54,11 +54,12 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/scripts ./scripts
 COPY scripts/docker-entrypoint.sh /usr/local/bin/cloudcli-docker-entrypoint
 
-RUN chmod 0755 /usr/local/bin/cloudcli-docker-entrypoint \
+RUN sed -i 's/\r$//' /usr/local/bin/cloudcli-docker-entrypoint \
+    && chmod 0755 /usr/local/bin/cloudcli-docker-entrypoint \
     && mkdir -p /home/cloudcli \
     && chown node:node /home/cloudcli
 
 EXPOSE 3001
 
-ENTRYPOINT ["cloudcli-docker-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/cloudcli-docker-entrypoint"]
 CMD ["node", "dist-server/server/index.js"]
