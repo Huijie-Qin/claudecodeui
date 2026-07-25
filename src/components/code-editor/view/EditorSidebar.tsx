@@ -94,6 +94,7 @@ export default function EditorSidebar({
   if (isMobile || poppedOut) {
     return (
       <CodeEditor
+        key={`${editingFile.workspaceId ?? 'local'}:${editingFile.path}`}
         file={editingFile}
         onClose={() => {
           setPoppedOut(false);
@@ -136,6 +137,7 @@ export default function EditorSidebar({
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
         <CodeEditor
+          key={`${editingFile.workspaceId ?? 'local'}:${editingFile.path}`}
           file={editingFile}
           onClose={onCloseEditor}
           projectPath={projectPath}

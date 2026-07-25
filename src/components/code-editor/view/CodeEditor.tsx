@@ -1,7 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
@@ -29,6 +29,8 @@ type CodeEditorProps = {
   onToggleExpand?: (() => void) | null;
   onPopOut?: (() => void) | null;
 };
+
+const AUTO_SAVE_DELAY_MS = 2000;
 
 type MarketSkillPublishChange = {
   path: string;
@@ -78,6 +80,10 @@ export default function CodeEditor({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
   const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const contentRef = useRef('');
+  const hasUnsavedChangesRef = useRef(false);
+  const saveLatestRef = useRef<() => Promise<boolean>>(async () => true);
   const marketSkillName = useMemo(() => getImportedSkillNameFromPath(file.path), [file.path]);
   const [marketSkillSubmit, setMarketSkillSubmit] = useState<MarketSkillSubmitState>({
     skillName: null,
@@ -119,6 +125,57 @@ export default function CodeEditor({
     projectPath,
     isReadOnly,
   });
+
+  contentRef.current = content;
+  hasUnsavedChangesRef.current = hasUnsavedChanges;
+
+  const handleContentChange = useCallback((value: string) => {
+    setContent(value);
+    setHasUnsavedChanges(true);
+  }, [setContent]);
+
+  const saveLatestContent = useCallback(async () => {
+    if (isReadOnly || !hasUnsavedChangesRef.current) {
+      return true;
+    }
+
+    const contentBeingSaved = contentRef.current;
+    const saved = await handleSave();
+
+    if (saved && contentRef.current === contentBeingSaved) {
+      hasUnsavedChangesRef.current = false;
+      setHasUnsavedChanges(false);
+    }
+
+    return saved;
+  }, [handleSave, isReadOnly]);
+
+  saveLatestRef.current = saveLatestContent;
+
+  useEffect(() => {
+    if (isReadOnly || !hasUnsavedChanges) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void saveLatestContent();
+    }, AUTO_SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [content, hasUnsavedChanges, isReadOnly, saveLatestContent]);
+
+  useEffect(() => () => {
+    if (hasUnsavedChangesRef.current && !isReadOnly) {
+      void saveLatestRef.current();
+    }
+  }, [isReadOnly]);
+
+  const handleClose = useCallback(async () => {
+    const saved = await saveLatestContent();
+    if (saved) {
+      onClose();
+    }
+  }, [onClose, saveLatestContent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -444,8 +501,8 @@ export default function CodeEditor({
   ]);
 
   useEditorKeyboardShortcuts({
-    onSave: handleSave,
-    onClose,
+    onSave: saveLatestContent,
+    onClose: handleClose,
     disableSave: isReadOnly,
     dependency: content,
   });
@@ -504,14 +561,14 @@ export default function CodeEditor({
             onTogglePreview={() => setPreviewEnabled((previous) => !previous)}
             onOpenSettings={() => window.openSettings?.('appearance')}
             onDownload={handleDownload}
-            onSave={handleSave}
+            onSave={saveLatestContent}
             onSubmitSkill={marketSkillSubmit.visible ? handleSubmitMarketSkill : undefined}
             isReadOnly={isReadOnly}
             skillSubmitting={marketSkillSubmit.submitting}
             skillSubmitSuccess={marketSkillSubmit.success}
             skillSubmitDisabled={saving || marketSkillSubmit.loading}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
-            onClose={onClose}
+            onClose={() => void handleClose()}
             labels={{
               showingChanges: t('header.showingChanges'),
               editMarkdown: t('actions.editMarkdown'),
@@ -552,7 +609,7 @@ export default function CodeEditor({
           <div className="flex-1 overflow-hidden">
             <CodeEditorSurface
               content={content}
-              onChange={setContent}
+              onChange={handleContentChange}
               readOnly={isReadOnly}
               previewEnabled={previewEnabled}
               previewMode={previewMode}
