@@ -23,7 +23,7 @@ export function resolveScheduledTaskResumeSession({
 }) {
   const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
   const storedSessionMode = sessionMode == null || String(sessionMode).trim() === ''
-    ? 'merge'
+    ? 'new'
     : sessionMode;
   if (
     normalizeScheduledTaskSessionMode(storedSessionMode) !== 'merge'
@@ -58,7 +58,7 @@ export function formatScheduledTaskSessionTime(value) {
 
 export function buildScheduledTaskRunSessionSummary({ taskName, sessionMode, runStartedAt }) {
   const storedSessionMode = sessionMode == null || String(sessionMode).trim() === ''
-    ? 'merge'
+    ? 'new'
     : normalizeScheduledTaskSessionMode(sessionMode);
   if (storedSessionMode === 'merge') {
     return taskName;

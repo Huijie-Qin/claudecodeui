@@ -110,7 +110,7 @@ function mapTaskRow(row) {
     model: row.model,
     permissionMode: row.permission_mode,
     toolsSettings: parseOptionalJson(row.tools_settings_json),
-    sessionMode: row.session_mode || 'merge',
+    sessionMode: row.session_mode || 'new',
     lastRunAt: row.last_run_at,
     lastSessionId: row.last_session_id,
     lastError: row.last_error,
@@ -301,7 +301,7 @@ function createScheduledTaskOptions(task) {
     ? task.last_session_id.trim()
     : null;
   const resumableSessionId = resolveScheduledTaskResumeSession({
-    sessionMode: task.session_mode || 'merge',
+    sessionMode: task.session_mode || 'new',
     sessionId: boundSessionId,
     isResumable: isResumableSessionId,
     canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId),

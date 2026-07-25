@@ -102,7 +102,7 @@ export default function SidebarProjectSessions({
           name: String(session.scheduledTask?.name || session.summary || 'Scheduled task'),
           enabled: session.scheduledTask?.enabled !== false,
           provider: session.scheduledTask?.provider || session.__provider,
-          sessionMode: session.scheduledTask?.sessionMode === 'new' ? 'new' : 'merge',
+          sessionMode: session.scheduledTask?.sessionMode === 'merge' ? 'merge' : 'new',
           scheduleType: session.scheduledTask?.scheduleType,
           scheduleCron: session.scheduledTask?.scheduleCron,
           scheduleStartAt: session.scheduledTask?.scheduleStartAt,

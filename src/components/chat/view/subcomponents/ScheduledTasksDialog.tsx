@@ -406,7 +406,7 @@ function buildTaskEditForm(task: ScheduledTask): TaskEditForm {
     intervalMinutes: Math.max(1, Number(task.intervalMinutes) || 1),
     nextRunAt: toLocalInputValue(task.scheduleStartAt || task.nextRunAt),
     enabled: task.enabled,
-    sessionMode: task.sessionMode === 'new' ? 'new' : 'merge',
+    sessionMode: task.sessionMode === 'merge' ? 'merge' : 'new',
   };
 }
 
@@ -1755,9 +1755,9 @@ export default function ScheduledTasksDialog({
                               <DetailRow label={t('scheduledTasks.labels.session', { defaultValue: 'Session' })} value={task.lastSessionId} />
                               <DetailRow
                                 label={t('scheduledTasks.labels.sessionMode', { defaultValue: 'Session mode' })}
-                                value={task.sessionMode === 'new'
-                                  ? t('scheduledTasks.sessionModes.new', { defaultValue: 'New session for every run' })
-                                  : t('scheduledTasks.sessionModes.merge', { defaultValue: 'Merge into one session' })}
+                                value={task.sessionMode === 'merge'
+                                  ? t('scheduledTasks.sessionModes.merge', { defaultValue: 'Merge into one session' })
+                                  : t('scheduledTasks.sessionModes.new', { defaultValue: 'New session for every run' })}
                               />
                               <DetailRow label={t('scheduledTasks.labels.model', { defaultValue: 'Model' })} value={task.model} />
                               <DetailRow label={t('scheduledTasks.labels.permission', { defaultValue: 'Permission' })} value={task.permissionMode} />
