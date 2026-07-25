@@ -6,12 +6,19 @@ ARG HWY_PLATFORM=linux/amd64
 
 FROM --platform=${HWY_PLATFORM} ${HWY_DOCKER_REGISTRY}/${HWY_NODE_IMAGE} AS builder
 
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+
 WORKDIR /app
 
 # The postinstall lifecycle script references this file, so copy it before npm ci.
 COPY package.json package-lock.json ./
 COPY scripts/fix-node-pty.js ./scripts/fix-node-pty.js
-RUN HUSKY=0 npm ci
+RUN test -n "$NPM_REGISTRY" \
+    && HUSKY=0 npm ci \
+        --no-audit \
+        --no-fund \
+        --registry="$NPM_REGISTRY" \
+        --replace-registry-host=always
 
 COPY . .
 # Docker mode always supplies its own Claude wrapper, so the SDK's large
