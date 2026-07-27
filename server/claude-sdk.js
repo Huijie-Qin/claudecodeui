@@ -47,6 +47,7 @@ import {
   bindRuntimeMessagesToProviderSession,
   persistNormalizedMessages,
   persistUserPromptMessage,
+  shouldSuppressLiveUserTextMessage,
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
@@ -742,10 +743,6 @@ function buildClaudeUserMessage(command, images, options = {}) {
   };
 }
 
-function isLiveUserTextMessage(message) {
-  return message?.kind === 'text' && message?.role === 'user';
-}
-
 /**
  * Backward-compatible helper for tests/imports that expect a prompt factory.
  */
@@ -1231,7 +1228,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const normalized = await applyRuntimeMcpToolOverridesToMessages(
         sessionsService.normalizeMessage('claude', transformedMessage, sid)
       );
-      const visibleNormalized = normalized.filter((msg) => !isLiveUserTextMessage(msg));
+      const visibleNormalized = normalized.filter(
+        (msg) => !shouldSuppressLiveUserTextMessage(msg, ws),
+      );
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',

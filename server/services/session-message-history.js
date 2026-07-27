@@ -5,6 +5,7 @@ function generateUserPromptMessageId() {
 }
 
 const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+const SCHEDULED_PROMPT_DEDUP_WINDOW_MS = 60_000;
 const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
   '<local-command-caveat>',
   'Base directory for this skill:',
@@ -46,6 +47,105 @@ function isPersistableMessage(message) {
   );
 }
 
+export function shouldSuppressLiveUserTextMessage(message, writer) {
+  return (
+    message?.kind === 'text'
+    && message?.role === 'user'
+    && writer?.isBackgroundTaskWriter !== true
+  );
+}
+
+function readSessionMetadata(ownedSession) {
+  const metadata = ownedSession?.metadata_json;
+  if (metadata && typeof metadata === 'object') {
+    return metadata;
+  }
+  if (typeof metadata !== 'string' || !metadata.trim()) {
+    return {};
+  }
+  try {
+    return JSON.parse(metadata);
+  } catch {
+    return {};
+  }
+}
+
+function isScheduledTaskSession(ownedSession) {
+  const scheduledTaskId = Number(readSessionMetadata(ownedSession).scheduledTaskId);
+  return Number.isInteger(scheduledTaskId) && scheduledTaskId > 0;
+}
+
+function readMessageTimestamp(message) {
+  const timestamp = new Date(message?.timestamp || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function isMatchingUserPrompt(message, candidate) {
+  if (
+    message?.kind !== 'text'
+    || message?.role !== 'user'
+    || candidate?.kind !== 'text'
+    || candidate?.role !== 'user'
+    || String(message.content || '').trim() !== String(candidate.content || '').trim()
+  ) {
+    return false;
+  }
+
+  const messageTimestamp = readMessageTimestamp(message);
+  const candidateTimestamp = readMessageTimestamp(candidate);
+  return (
+    messageTimestamp > 0
+    && candidateTimestamp > 0
+    && Math.abs(messageTimestamp - candidateTimestamp) <= SCHEDULED_PROMPT_DEDUP_WINDOW_MS
+  );
+}
+
+function mergeScheduledTaskPrompts(jsonlMessages, databaseMessages) {
+  const merged = Array.isArray(jsonlMessages) ? [...jsonlMessages] : [];
+  const fallbackPrompts = Array.isArray(databaseMessages)
+    ? databaseMessages.filter((message) => message?.kind === 'text' && message?.role === 'user')
+    : [];
+
+  for (const prompt of fallbackPrompts) {
+    if (!merged.some((message) => isMatchingUserPrompt(message, prompt))) {
+      merged.push(prompt);
+    }
+  }
+
+  return merged
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const timestampDelta = readMessageTimestamp(left.message) - readMessageTimestamp(right.message);
+      return timestampDelta || left.index - right.index;
+    })
+    .map(({ message }) => message);
+}
+
+function paginateMessages(messages, limit, offset) {
+  const total = messages.length;
+  const normalizedOffset = Math.max(0, Number(offset) || 0);
+  if (limit == null) {
+    return {
+      messages,
+      total,
+      hasMore: false,
+      offset: 0,
+      limit: null,
+    };
+  }
+
+  const normalizedLimit = Math.max(0, Number(limit) || 0);
+  const startIndex = Math.max(0, total - normalizedOffset - normalizedLimit);
+  const endIndex = Math.max(0, total - normalizedOffset);
+  return {
+    messages: messages.slice(startIndex, endIndex),
+    total,
+    hasMore: startIndex > 0,
+    offset: normalizedOffset,
+    limit: normalizedLimit,
+  };
+}
+
 export function createSessionMessageHistoryService({
   multitenancy = multitenancyDb,
   providerSessions = null,
@@ -78,14 +178,31 @@ export function createSessionMessageHistoryService({
           });
 
         if (runtime?.runtime_home_path && providerSessions) {
+          const scheduledTaskSession = isScheduledTaskSession(ownedSession);
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
             projectName: ownedSession.workspace_slug || '',
             projectPath: ownedSession.workspace_path || '',
             runtimeHomePath: runtime.runtime_home_path,
-            limit,
-            offset,
+            limit: scheduledTaskSession ? null : limit,
+            offset: scheduledTaskSession ? 0 : offset,
           });
           if (jsonlHistory.total > 0) {
+            if (scheduledTaskSession) {
+              const databaseHistory = multitenancy.sessionMessages.listMessages({
+                tenantId,
+                userId,
+                workspaceId: ownedSession.workspace_id,
+                provider,
+                providerSessionId,
+                limit: null,
+                offset: 0,
+              });
+              const mergedMessages = mergeScheduledTaskPrompts(
+                jsonlHistory.messages,
+                databaseHistory.messages,
+              );
+              return paginateMessages(mergedMessages, limit, offset);
+            }
             return jsonlHistory;
           }
         }
@@ -139,11 +256,11 @@ export function persistNormalizedMessages({
   providerSessionId,
   runtimeId,
   messages,
+  allowClaudeMessages = false,
 }) {
-  // Claude Code already persists the canonical conversation transcript as
-  // JSONL in its isolated runtime HOME. Avoid maintaining a second message
-  // body store that can drift from the transcript.
-  if (provider === 'claude') {
+  // Claude Code already persists the canonical transcript in runtime JSONL.
+  // Only callers with an explicit fallback need a second durable message.
+  if (provider === 'claude' && !allowClaudeMessages) {
     return 0;
   }
 
@@ -205,6 +322,7 @@ export function persistUserPromptMessage({
     providerSessionId,
     runtimeId,
     messages: [message],
+    allowClaudeMessages: provider === 'claude' && options.backgroundTask === true,
   });
 }
 
