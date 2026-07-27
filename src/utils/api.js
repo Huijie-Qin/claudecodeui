@@ -505,12 +505,10 @@ export const api = {
       }),
     analyticsSummary: (rangeDays = 30) =>
       authenticatedFetch(`/api/admin/analytics/summary?rangeDays=${encodeURIComponent(String(rangeDays))}`),
-    analyticsUsers: ({ rangeDays = 30, page = 1, pageSize = 20, sortBy = 'sessionCount', search = '' } = {}) => {
+    analyticsUsers: ({ page = 1, pageSize = 20, search = '' } = {}) => {
       const params = new URLSearchParams({
-        rangeDays: String(rangeDays),
         page: String(page),
         pageSize: String(pageSize),
-        sortBy,
       });
       if (search) params.set('search', search);
       return authenticatedFetch(`/api/admin/analytics/users?${params.toString()}`);

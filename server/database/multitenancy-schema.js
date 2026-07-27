@@ -278,6 +278,9 @@ CREATE TABLE IF NOT EXISTS session_index (
 
 CREATE INDEX IF NOT EXISTS idx_session_index_owner ON session_index(tenant_id, workspace_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_session_index_lookup ON session_index(provider, provider_session_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_session_index_created_at ON session_index(created_at);
+CREATE INDEX IF NOT EXISTS idx_session_index_updated_at ON session_index(updated_at);
+CREATE INDEX IF NOT EXISTS idx_session_index_user_activity ON session_index(user_id, status, updated_at);
 
 CREATE TABLE IF NOT EXISTS user_session_favorites (
   user_id INTEGER NOT NULL,

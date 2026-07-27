@@ -506,10 +506,8 @@ export function createAdminRouter(
   router.get('/analytics/users', (req, res) => {
     try {
       const usersSummary = buildAdminAnalyticsUsers({
-        rangeDays: req.query?.rangeDays,
         page: req.query?.page,
         pageSize: req.query?.pageSize,
-        sortBy: req.query?.sortBy,
         search: req.query?.search,
       });
       res.json(usersSummary);
