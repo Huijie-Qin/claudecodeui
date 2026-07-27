@@ -1,6 +1,6 @@
-import { useCallback, useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useMemo, useRef, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, X, Loader2, Upload } from 'lucide-react';
+import { AlertTriangle, Check, X, Loader2, Upload, Move, Trash2 } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import { ICON_SIZE_CLASS, getFileIconData } from '../constants/fileIcons';
@@ -15,6 +15,8 @@ import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
+import { api } from '../../../utils/api';
+import { dispatchProjectFilesChanged } from '../utils/fileTreeEvents';
 
 import FileTreeBody from './FileTreeBody';
 import FileTreeCreateInput from './FileTreeCreateInput';
@@ -34,6 +36,13 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [internalDropTarget, setInternalDropTarget] = useState<string | null>(null);
+  const [batchMoveOpen, setBatchMoveOpen] = useState(false);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchTargetDirectory, setBatchTargetDirectory] = useState('/workspace');
+  const [batchLoading, setBatchLoading] = useState(false);
+  const draggedItemsRef = useRef<FileTreeNode[]>([]);
   const newItemInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,6 +67,25 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     files,
     expandDirectories,
   });
+
+  const allItemsByPath = useMemo(() => {
+    const result = new Map<string, FileTreeNode>();
+    const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
+      result.set(node.path, node);
+      if (node.children) visit(node.children);
+    });
+    visit(files);
+    return result;
+  }, [files]);
+
+  const selectedItems = useMemo(
+    () => Array.from(selectedPaths).map((path) => allItemsByPath.get(path)).filter((item): item is FileTreeNode => Boolean(item)),
+    [allItemsByPath, selectedPaths],
+  );
+
+  useEffect(() => {
+    setSelectedPaths((previous) => new Set(Array.from(previous).filter((path) => allItemsByPath.has(path))));
+  }, [allItemsByPath]);
 
   const refreshWorkspaceFiles = useCallback(() => {
     refreshFiles();
@@ -135,6 +163,117 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     [t],
   );
 
+  const handleSelectionChange = useCallback((item: FileTreeNode) => {
+    setSelectedPaths((previous) => {
+      const next = new Set(previous);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.add(item.path);
+      return next;
+    });
+  }, []);
+
+  const getTopLevelItems = useCallback((items: FileTreeNode[]) => items.filter((item) =>
+    !items.some((candidate) => candidate.path !== item.path && item.path.replace(/\\/g, '/').startsWith(`${candidate.path.replace(/\\/g, '/')}/`))
+  ), []);
+
+  const moveItems = useCallback(async (items: FileTreeNode[], targetDirectory: string) => {
+    if (!selectedProject || items.length === 0) return;
+    const normalizedTarget = targetDirectory.trim().replace(/\\/g, '/').replace(/\/+$/g, '') || '/workspace';
+    if (normalizedTarget !== '/workspace' && !normalizedTarget.startsWith('/workspace/')) {
+      showToast(t('fileTree.move.workspacePathRequired', 'Path must be /workspace or start with /workspace/'), 'error');
+      return;
+    }
+    const movableItems = getTopLevelItems(items);
+    const invalidDestination = movableItems.find((item) => {
+      if (item.type !== 'directory') return false;
+      const sourcePath = getFileTreeDisplayPath(item.path, selectedProject).replace(/\/+$/g, '');
+      return normalizedTarget === sourcePath || normalizedTarget.startsWith(`${sourcePath}/`);
+    });
+    if (invalidDestination) {
+      showToast(
+        t('fileTree.move.invalidDescendant', 'A folder cannot be moved into itself or one of its subfolders.'),
+        'error',
+      );
+      setInternalDropTarget(null);
+      draggedItemsRef.current = [];
+      return;
+    }
+    setBatchLoading(true);
+    try {
+      for (const item of movableItems) {
+        const response = await api.moveFile(selectedProject.name, {
+          sourcePath: getFileTreeDisplayPath(item.path, selectedProject),
+          targetDirectory: normalizedTarget,
+          workspaceId: selectedProject.workspaceId,
+        });
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || `Failed to move ${item.name}`);
+        }
+      }
+      showToast(t('fileTree.toast.itemsMoved', '{{count}} item(s) moved', { count: movableItems.length }), 'success');
+      setSelectedPaths(new Set());
+      setBatchMoveOpen(false);
+      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: normalizedTarget, reason: 'move' });
+      refreshWorkspaceFiles();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Move failed', 'error');
+    } finally {
+      setBatchLoading(false);
+      setInternalDropTarget(null);
+      draggedItemsRef.current = [];
+    }
+  }, [getTopLevelItems, refreshWorkspaceFiles, selectedProject, showToast, t]);
+
+  const deleteSelectedItems = useCallback(async () => {
+    if (!selectedProject) return;
+    const deletableItems = getTopLevelItems(selectedItems);
+    setBatchLoading(true);
+    try {
+      for (const item of deletableItems) {
+        const response = await api.deleteFile(selectedProject.name, {
+          path: item.path, type: item.type, workspaceId: selectedProject.workspaceId,
+        });
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || `Failed to delete ${item.name}`);
+        }
+      }
+      showToast(t('fileTree.toast.itemsDeleted', '{{count}} item(s) deleted', { count: deletableItems.length }), 'success');
+      setSelectedPaths(new Set());
+      setBatchDeleteOpen(false);
+      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: '', reason: 'delete' });
+      refreshWorkspaceFiles();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Delete failed', 'error');
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [getTopLevelItems, refreshWorkspaceFiles, selectedItems, selectedProject, showToast, t]);
+
+  const handleInternalDragStart = useCallback((item: FileTreeNode, event: DragEvent<HTMLDivElement>) => {
+    const items = selectedPaths.has(item.path) ? selectedItems : [item];
+    draggedItemsRef.current = items;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-cloudcli-file-tree', item.path);
+    event.dataTransfer.setData('text/plain', item.name);
+  }, [selectedItems, selectedPaths]);
+
+  const handleInternalDragOver = useCallback((item: FileTreeNode, event: DragEvent<HTMLDivElement>) => {
+    if (item.type !== 'directory' || !event.dataTransfer.types.includes('application/x-cloudcli-file-tree')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+    setInternalDropTarget(item.path);
+  }, []);
+
+  const handleInternalDrop = useCallback((item: FileTreeNode, event: DragEvent<HTMLDivElement>) => {
+    if (item.type !== 'directory' || !event.dataTransfer.types.includes('application/x-cloudcli-file-tree')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void moveItems(draggedItemsRef.current, getFileTreeDisplayPath(item.path, selectedProject));
+  }, [moveItems, selectedProject]);
+
   if (loading) {
     return <FileTreeLoadingState />;
   }
@@ -143,8 +282,12 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     <div
       ref={upload.treeRef}
       className="relative flex h-full flex-col bg-background"
-      onDragEnter={isReadOnly ? undefined : upload.handleDragEnter}
-      onDragOver={isReadOnly ? undefined : upload.handleDragOver}
+      onDragEnter={isReadOnly ? undefined : (event) => {
+        if (!event.dataTransfer.types.includes('application/x-cloudcli-file-tree')) upload.handleDragEnter(event);
+      }}
+      onDragOver={isReadOnly ? undefined : (event) => {
+        if (!event.dataTransfer.types.includes('application/x-cloudcli-file-tree')) upload.handleDragOver(event);
+      }}
       onDragLeave={isReadOnly ? undefined : upload.handleDragLeave}
       onDrop={isReadOnly ? undefined : upload.handleDrop}
     >
@@ -174,6 +317,23 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         quota={quota}
         quotaLoading={quotaLoading}
       />
+
+      {!isReadOnly && selectedItems.length > 0 && (
+        <div className="mx-2 mt-1 flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">
+          <span className="mr-auto text-xs text-muted-foreground">
+            {t('fileTree.selectedCount', '{{count}} selected', { count: selectedItems.length })}
+          </span>
+          <button onClick={() => { setBatchTargetDirectory('/workspace'); setBatchMoveOpen(true); }}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent">
+            <Move className="h-3.5 w-3.5" />{t('fileTree.move.confirm', 'Move')}
+          </button>
+          <button onClick={() => setBatchDeleteOpen(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-red-600 hover:bg-red-500/10">
+            <Trash2 className="h-3.5 w-3.5" />{t('fileTree.delete.confirm', 'Delete')}
+          </button>
+          <button onClick={() => setSelectedPaths(new Set())} className="rounded p-1 hover:bg-accent" aria-label="Clear selection"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      )}
 
       <input
         ref={upload.fileInputRef}
@@ -216,6 +376,15 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={upload.dropTarget}
+          selectedPaths={selectedPaths}
+          internalDropTarget={internalDropTarget}
+          onSelectionChange={isReadOnly ? undefined : handleSelectionChange}
+          onInternalDragStart={isReadOnly ? undefined : handleInternalDragStart}
+          onInternalDragOver={isReadOnly ? undefined : handleInternalDragOver}
+          onInternalDragLeave={isReadOnly ? undefined : (_item, event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) setInternalDropTarget(null);
+          }}
+          onInternalDrop={isReadOnly ? undefined : handleInternalDrop}
           onItemClick={handleItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
@@ -404,6 +573,43 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
                 ) : (
                   t('fileTree.move.confirm', 'Move')
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchMoveOpen && selectedItems.length > 0 && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-lg border border-border bg-background p-4 shadow-lg">
+            <h3 className="mb-1 font-medium">{t('fileTree.move.selectedTitle', 'Move selected items')}</h3>
+            <p className="mb-4 text-sm text-muted-foreground">{t('fileTree.selectedCount', '{{count}} selected', { count: selectedItems.length })}</p>
+            <Input value={batchTargetDirectory} onChange={(event) => setBatchTargetDirectory(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void moveItems(selectedItems, batchTargetDirectory); if (event.key === 'Escape') setBatchMoveOpen(false); }}
+              disabled={batchLoading} autoFocus className="mb-4" />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setBatchMoveOpen(false)} disabled={batchLoading} className="rounded-md px-3 py-1.5 text-sm hover:bg-accent">{t('fileTree.upload.overwriteCancel', 'Cancel')}</button>
+              <button onClick={() => void moveItems(selectedItems, batchTargetDirectory)} disabled={batchLoading}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">
+                {batchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : t('fileTree.move.confirm', 'Move')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchDeleteOpen && selectedItems.length > 0 && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg">
+            <h3 className="mb-2 font-medium">{t('fileTree.delete.selectedTitle', 'Delete selected items')}</h3>
+            <p className="mb-4 text-sm text-muted-foreground">
+              {t('fileTree.delete.selectedWarning', '{{count}} selected item(s) and all contents of selected folders will be permanently deleted.', { count: selectedItems.length })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setBatchDeleteOpen(false)} disabled={batchLoading} className="rounded-md px-3 py-1.5 text-sm hover:bg-accent">{t('fileTree.upload.overwriteCancel', 'Cancel')}</button>
+              <button onClick={() => void deleteSelectedItems()} disabled={batchLoading}
+                className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">
+                {batchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : t('fileTree.delete.confirm', 'Delete')}
               </button>
             </div>
           </div>

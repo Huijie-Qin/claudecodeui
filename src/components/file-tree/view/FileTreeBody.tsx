@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react';
+import type { DragEvent, ReactNode, RefObject } from 'react';
 import { Folder, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -14,6 +14,13 @@ type FileTreeBodyProps = {
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
+  selectedPaths?: Set<string>;
+  internalDropTarget?: string | null;
+  onSelectionChange?: (item: FileTreeNode, additive: boolean) => void;
+  onInternalDragStart?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragOver?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragLeave?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDrop?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
   onItemClick: (item: FileTreeNode) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
@@ -53,6 +60,13 @@ export default function FileTreeBody({
   viewMode,
   expandedDirs,
   dropTarget,
+  selectedPaths,
+  internalDropTarget,
+  onSelectionChange,
+  onInternalDragStart,
+  onInternalDragOver,
+  onInternalDragLeave,
+  onInternalDrop,
   onItemClick,
   renderFileIcon,
   formatFileSize,
@@ -105,6 +119,13 @@ export default function FileTreeBody({
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}
+          selectedPaths={selectedPaths}
+          internalDropTarget={internalDropTarget}
+          onSelectionChange={onSelectionChange}
+          onInternalDragStart={onInternalDragStart}
+          onInternalDragOver={onInternalDragOver}
+          onInternalDragLeave={onInternalDragLeave}
+          onInternalDrop={onInternalDrop}
           onItemClick={onItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
