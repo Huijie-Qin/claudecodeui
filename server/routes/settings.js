@@ -1,9 +1,17 @@
 import express from 'express';
 
-import { apiKeysDb, credentialsDb, notificationPreferencesDb, pushSubscriptionsDb } from '../database/db.js';
+import {
+  apiKeysDb,
+  credentialsDb,
+  notificationPreferencesDb,
+  pushSubscriptionsDb,
+  userDb,
+} from '../database/db.js';
 import { codeHubService } from '../services/codehub.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
+
+import { createPersonalKeyHandler } from './personal-key.js';
 
 const router = express.Router();
 
@@ -33,6 +41,10 @@ function respondSettingsError(res, error, fallbackMessage) {
   }
   return res.status(statusCode).json({ success: false, error: message });
 }
+
+router.get('/personal-key', createPersonalKeyHandler({
+  getEnvForUser: userDb.getEnvForUser,
+}));
 
 // ===============================
 // API Keys Management

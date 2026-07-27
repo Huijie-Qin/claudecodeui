@@ -94,7 +94,7 @@
     "appearance": "Appearance",
     "git": "CodeHub",
     "codeHub": "CodeHub",
-    "apiTokens": "API & Tokens",
+    "apiTokens": "Tokens",
     "tasks": "Tasks",
     "notifications": "Notifications",
     "plugins": "Plugins",
@@ -279,6 +279,14 @@
       "failed": "Failed",
       "untested": "Untested"
     }
+  },
+  "personalKey": {
+    "label": "Personal key",
+    "description": "Personal authentication required when third-party tools use MCP",
+    "get": "Get key",
+    "loading": "Getting...",
+    "copySuccess": "Copied",
+    "error": "Could not get or copy the key. Please try again."
   },
   "apiKeys": {
     "title": "API Keys",

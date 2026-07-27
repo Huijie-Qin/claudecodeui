@@ -94,7 +94,7 @@
     "appearance": "外观",
     "git": "CodeHub",
     "codeHub": "CodeHub",
-    "apiTokens": "API 和令牌",
+    "apiTokens": "令牌",
     "tasks": "任务",
     "notifications": "通知",
     "plugins": "插件",
@@ -279,6 +279,14 @@
       "failed": "失败",
       "untested": "未测试"
     }
+  },
+  "personalKey": {
+    "label": "个人密钥",
+    "description": "用于第三方工具使用mcp时需要的个人鉴权",
+    "get": "获取密钥",
+    "loading": "获取中...",
+    "copySuccess": "复制成功",
+    "error": "获取或复制密钥失败，请重试"
   },
   "apiKeys": {
     "title": "API 密钥",
