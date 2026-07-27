@@ -7,10 +7,12 @@ import path from 'node:path';
 import {
   buildClaudeDockerExecArgs,
   buildClaudeDockerWrapperScript,
+  buildClaudeWrapperDefaultEnv,
   buildContainerName,
   buildDockerPythonInstallArgs,
   buildDockerRunArgs,
   buildRuntimePaths,
+  buildWrapperHostEnv,
   createAgentSessionRuntimeManager,
   createClaudeDockerSpawn,
   ensureClaudeCleanupPeriod,
@@ -40,6 +42,27 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
     () => resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'podman' }),
     /CLAUDE_EXECUTION_MODE must be local or docker/,
   );
+});
+
+test('DAS falls back to the server environment like other Claude variables', () => {
+  const env = {
+    DAS: 'env-das',
+    ANTHROPIC_MODEL: 'env-model',
+  };
+
+  assert.equal(buildWrapperHostEnv(env).DAS, 'env-das');
+  assert.deepEqual(buildClaudeWrapperDefaultEnv(env), {
+    ANTHROPIC_MODEL: 'env-model',
+    DAS: 'env-das',
+  });
+});
+
+test('user DAS overrides the server environment', () => {
+  const env = { DAS: 'env-das' };
+  const userEnv = { DAS: 'user-das' };
+
+  assert.equal(buildWrapperHostEnv(env, userEnv).DAS, 'user-das');
+  assert.equal(buildClaudeWrapperDefaultEnv(env, userEnv).DAS, 'user-das');
 });
 
 test('parseDockerPythonPackages accepts comma and whitespace separated package names', () => {

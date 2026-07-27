@@ -705,12 +705,9 @@ function normalizeContainerEnvRecord(value) {
   );
 }
 
-function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
+export function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   const output = {};
   for (const name of WRAPPER_HOST_ENV_ALLOWLIST) {
-    if (name === DAS_ENV_NAME) {
-      continue;
-    }
     if (env[name] != null) {
       output[name] = String(env[name]);
     }
@@ -774,12 +771,12 @@ function hasNonEmptyBaseEnvValue(baseEnv, name) {
   return readEnvValue(baseEnv, name) !== null;
 }
 
-function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
+export function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
   const defaults = {};
   const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
   for (const name of CLAUDE_WRAPPER_DEFAULT_ENV_NAMES) {
     const value = readEnvValue(normalizedContainerEnv, name)
-      || (name === DAS_ENV_NAME ? null : readEnvValue(env, name));
+      || readEnvValue(env, name);
     if (value) {
       defaults[name] = value;
     }
