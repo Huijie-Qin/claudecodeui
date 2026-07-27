@@ -27,6 +27,22 @@ function mergeMcpServers(target, source) {
   return target;
 }
 
+function applyMcpConfigToSdkOptions(sdkOptions, mcpServers) {
+  // The SDK otherwise lets Claude Code discover MCP servers from persisted
+  // sessions and filesystem config. That makes a removed workspace server
+  // reappear when a conversation is resumed. loadMcpConfig already builds the
+  // complete server inventory for this turn, so make that inventory authoritative.
+  sdkOptions.strictMcpConfig = true;
+
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    sdkOptions.mcpServers = mcpServers;
+  } else {
+    delete sdkOptions.mcpServers;
+  }
+
+  return sdkOptions;
+}
+
 /**
  * Loads MCP server configurations visible to the current Claude agent turn.
  * Admin-installed workspace presets are written to <cwd>/.mcp.json and must be
@@ -90,4 +106,4 @@ async function loadMcpConfig(cwd, {
   }
 }
 
-export { loadMcpConfig };
+export { applyMcpConfigToSdkOptions, loadMcpConfig };
