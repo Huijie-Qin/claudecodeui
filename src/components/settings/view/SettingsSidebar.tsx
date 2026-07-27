@@ -1,4 +1,4 @@
-import { GitBranch, Palette } from 'lucide-react';
+import { GitBranch, Key, Palette } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
@@ -19,6 +19,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { id: 'appearance', labelKey: 'mainTabs.appearance', icon: Palette },
   { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
+  { id: 'api', labelKey: 'mainTabs.apiTokens', icon: Key },
 ];
 
 export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {

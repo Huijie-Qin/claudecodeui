@@ -6,6 +6,7 @@ import {
   createSessionMessageHistoryService,
   persistNormalizedMessages,
   persistUserPromptMessage,
+  shouldSuppressLiveUserTextMessage,
 } from './session-message-history.js';
 
 test('Claude session history prefers runtime JSONL over legacy DB rows', async () => {
@@ -56,6 +57,155 @@ test('Claude session history prefers runtime JSONL over legacy DB rows', async (
   assert.equal(historyOptions.runtimeHomePath, '/tmp/runtime/home');
 });
 
+test('background runs keep live user queries while interactive runs suppress echoed queries', () => {
+  const userMessage = { kind: 'text', role: 'user', content: 'hello' };
+
+  assert.equal(shouldSuppressLiveUserTextMessage(userMessage, {}), true);
+  assert.equal(
+    shouldSuppressLiveUserTextMessage(userMessage, { isBackgroundTaskWriter: true }),
+    false,
+  );
+  assert.equal(
+    shouldSuppressLiveUserTextMessage(
+      { kind: 'text', role: 'assistant', content: 'hello' },
+      {},
+    ),
+    false,
+  );
+});
+
+test('scheduled Claude history fills a missing user query from the database fallback', async () => {
+  let historyOptions = null;
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{
+            id: 'db-user',
+            kind: 'text',
+            role: 'user',
+            content: 'Run the scheduled check.',
+            timestamp: '2026-07-27T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async (_provider, _sessionId, options) => {
+        historyOptions = options;
+        return {
+          messages: [{
+            id: 'jsonl-assistant',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Scheduled check complete.',
+            timestamp: '2026-07-27T01:00:01.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        };
+      },
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+      metadata_json: JSON.stringify({ scheduledTaskId: 42 }),
+    },
+    limit: 50,
+    offset: 0,
+  });
+
+  assert.equal(historyOptions.limit, null);
+  assert.equal(historyOptions.offset, 0);
+  assert.equal(result.total, 2);
+  assert.deepEqual(result.messages.map((message) => message.id), ['db-user', 'jsonl-assistant']);
+});
+
+test('scheduled Claude history does not duplicate a query already present in JSONL', async () => {
+  const databasePrompt = {
+    id: 'db-user',
+    kind: 'text',
+    role: 'user',
+    content: 'Run the scheduled check.',
+    timestamp: '2026-07-27T01:00:00.000Z',
+    provider: 'claude',
+    sessionId: 's1',
+  };
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [databasePrompt],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          { ...databasePrompt, id: 'jsonl-user', timestamp: '2026-07-27T01:00:01.000Z' },
+          {
+            id: 'jsonl-assistant',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Scheduled check complete.',
+            timestamp: '2026-07-27T01:00:02.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 2,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+      metadata_json: JSON.stringify({ scheduledTaskId: 42 }),
+    },
+  });
+
+  assert.equal(result.total, 2);
+  assert.deepEqual(result.messages.map((message) => message.id), ['jsonl-user', 'jsonl-assistant']);
+});
+
 test('Claude session history falls back to legacy DB when runtime JSONL is unavailable', async () => {
   let fallbackCalled = false;
   const service = createSessionMessageHistoryService({
@@ -97,7 +247,7 @@ test('Claude session history falls back to legacy DB when runtime JSONL is unava
   assert.equal(result.messages[0].id, 'legacy-msg');
 });
 
-test('Claude user and assistant messages are not persisted to the database', () => {
+test('interactive Claude user and assistant messages are not persisted to the database', () => {
   const persisted = [];
   const multitenancy = {
     sessionMessages: {
@@ -162,6 +312,42 @@ test('Claude user and assistant messages are not persisted to the database', () 
   const history = multitenancy.sessionMessages.listMessages();
 
   assert.deepEqual(history.messages, []);
+});
+
+test('Claude background task user queries are persisted as a history fallback', () => {
+  const persisted = [];
+  const multitenancy = {
+    sessionMessages: {
+      upsertMessages: ({ providerSessionId, messages }) => {
+        persisted.push(...messages.map((message) => ({
+          ...message,
+          sessionId: providerSessionId || message.sessionId,
+        })));
+        return messages.length;
+      },
+    },
+  };
+
+  const changed = persistUserPromptMessage({
+    multitenancy,
+    options: {
+      tenantId: 1,
+      workspaceId: 3,
+      userId: 2,
+      backgroundTask: true,
+    },
+    provider: 'claude',
+    providerSessionId: 'pending:scheduled-run',
+    runtimeId: 'runtime-1',
+    command: 'Run the scheduled check.',
+    timestamp: '2026-07-27T01:00:00.000Z',
+    messageId: 'scheduled-user-1',
+  });
+
+  assert.equal(changed, 1);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].role, 'user');
+  assert.equal(persisted[0].content, 'Run the scheduled check.');
 });
 
 test('streaming control messages are not persisted into durable session history', () => {
