@@ -29,13 +29,16 @@ services:
       SERVER_PORT: 3001
       CLAUDE_EXECUTION_MODE: docker
 
-      # Mount the host home at the identical path. The entrypoint derives the
-      # database/runtime defaults from HOME. WORKSPACES_ROOT is mounted
-      # separately because child containers resolve bind sources on the host.
+      # Mount the host home at the identical path. Application storage roots
+      # are mounted separately below so they persist and child containers can
+      # resolve bind sources on the host.
       HOME: ${HOME:?HOME must be set to an absolute host path}
 
-      # The UI creates Claude containers through the host Docker socket. Keep
-      # this absolute path identical on the host and in the UI container.
+      # Keep every configured storage path identical on the host and in the UI
+      # container. Mount the database directory rather than only the SQLite file
+      # so its WAL, shared-memory, and journal files are persisted as well.
+      CLOUDCLI_DATA_ROOT: &data_root "${CLOUDCLI_DATA_ROOT:?CLOUDCLI_DATA_ROOT must be set in .env to an absolute host path}"
+      DATABASE_PATH: "${DATABASE_PATH:?DATABASE_PATH must be set in .env to an absolute host path}"
       WORKSPACES_ROOT: &workspaces_root "${WORKSPACES_ROOT:?WORKSPACES_ROOT must be set in .env to an absolute host path}"
       CLOUDCLI_RUNTIME_ROOT: &runtime_root "${CLOUDCLI_RUNTIME_ROOT:?CLOUDCLI_RUNTIME_ROOT must be set in .env to an absolute host path}"
 
@@ -56,6 +59,9 @@ services:
       - type: bind
         source: ${HOME:?HOME must be set to an absolute host path}
         target: ${HOME:?HOME must be set to an absolute host path}
+      - type: bind
+        source: *data_root
+        target: *data_root
       - type: bind
         source: *workspaces_root
         target: *workspaces_root
