@@ -569,7 +569,7 @@ router.post('/list', async (req, res) => {
  */
 router.post('/execute', async (req, res) => {
   try {
-    const { commandName, commandPath, args = [], context = {} } = req.body;
+    const { commandName, commandPath, args = [], rawArgs, context = {} } = req.body;
 
     if (!commandName) {
       return res.status(400).json({
@@ -640,8 +640,9 @@ router.post('/execute', async (req, res) => {
     // Basic argument replacement (will be enhanced in command parser utility)
     let processedContent = commandContent;
 
-    // Replace $ARGUMENTS with all arguments joined
-    const argsString = args.join(' ');
+    // Preserve the original whitespace (including newlines) for $ARGUMENTS and
+    // skill user requests. Fall back to the token list for older clients.
+    const argsString = typeof rawArgs === 'string' ? rawArgs.trim() : args.join(' ');
     const hasArgumentPlaceholder = /\$(?:ARGUMENTS|\d+\b)/.test(commandContent);
     processedContent = processedContent.replace(/\$ARGUMENTS/g, argsString);
 
