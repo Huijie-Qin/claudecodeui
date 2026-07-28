@@ -37,6 +37,7 @@ services:
       # The UI creates Claude containers through the host Docker socket. Keep
       # this absolute path identical on the host and in the UI container.
       WORKSPACES_ROOT: &workspaces_root "${WORKSPACES_ROOT:?WORKSPACES_ROOT must be set in .env to an absolute host path}"
+      CLOUDCLI_RUNTIME_ROOT: &runtime_root "${CLOUDCLI_RUNTIME_ROOT:?CLOUDCLI_RUNTIME_ROOT must be set in .env to an absolute host path}"
 
       # Optional overrides. When omitted, the entrypoint detects ownership from
       # the mounted host root and falls back to 1000 for a root-owned new path.
@@ -58,6 +59,9 @@ services:
       - type: bind
         source: *workspaces_root
         target: *workspaces_root
+      - type: bind
+        source: *runtime_root
+        target: *runtime_root
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock

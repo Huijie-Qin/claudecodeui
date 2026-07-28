@@ -186,31 +186,24 @@ Docker 模式默认把所有 runtime 的 Python user site、pip 下载/轮子缓
 
 如果代理变量使用 `localhost`、`127.0.0.1` 或 `::1`，Docker runtime 会把代理主机改写为 `host.docker.internal`，并添加 `host-gateway` 映射，避免容器把宿主机代理误认为容器自身。
 
-如果 UI 本身也通过 `compose.yml` 在容器中运行，必须在项目根目录的 `.env` 中把 `WORKSPACES_ROOT` 设置为 Docker 宿主机上的绝对路径，例如：
+如果 UI 本身也通过 `compose.yml` 在容器中运行，必须在项目根目录的 `.env` 中把 workspace 和 runtime root 都设置为 Docker 宿主机上的绝对路径，例如：
 
 ```bash
 WORKSPACES_ROOT=/data/workspaces
+CLOUDCLI_RUNTIME_ROOT=/data/runtimes
 ```
 
-如果旧 UI 容器已经在自己的可写层中生成了 `/data/workspaces` 内容，应在重新创建容器前先迁移到宿主机：
+在宿主机创建目录，然后检查配置并重新创建 UI 容器：
 
 ```bash
-container_id="$(docker-compose ps -q cloudcli)"
-sudo install -d -o "$(id -u)" -g "$(id -g)" /data/workspaces
-docker cp "${container_id}:/data/workspaces/." /data/workspaces/
-```
-
-确认数据已经迁移（或旧容器没有需要保留的内容）后，检查配置并重新创建 UI 容器：
-
-```bash
-sudo install -d -o "$(id -u)" -g "$(id -g)" /data/workspaces
+sudo install -d -o "$(id -u)" -g "$(id -g)" /data/workspaces /data/runtimes
 docker-compose config
 docker-compose up -d --force-recreate
 ```
 
-UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 Claude 的 workspace bind source 是由宿主 Docker daemon 解析的。`compose.yml` 会把 `WORKSPACES_ROOT` 以相同的宿主机和容器路径挂载；不要改成 named volume，也不要只在 UI 容器内部创建该目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
+UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 Claude 的 workspace 和 runtime bind source 都是由宿主 Docker daemon 解析的。`compose.yml` 会把 `WORKSPACES_ROOT` 和 `CLOUDCLI_RUNTIME_ROOT` 以相同的宿主机和容器路径挂载；不要改成 named volume，也不要只在 UI 容器内部创建这些目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
 
-`CLOUDCLI_RUNTIME_ROOT` 和 `CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT` 默认位于已经同路径挂载的 `HOME` 下。如果把它们改到 `HOME` 之外，也需要在 Compose 中增加对应的宿主机同路径 bind mount。
+`CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT` 默认位于 `CLOUDCLI_RUNTIME_ROOT` 下，因此会被上面的 runtime bind 一并覆盖。如果把它单独改到 `HOME` 和 `CLOUDCLI_RUNTIME_ROOT` 之外，也需要在 Compose 中增加对应的宿主机同路径 bind mount。
 
 ## 5. 启动开发模式
 
