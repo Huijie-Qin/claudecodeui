@@ -1,7 +1,7 @@
 import React from 'react';
 
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
-import type { SubagentChildTool, TaskNotificationDetails } from '../../types/types';
+import type { SubagentChildTool, TaskNotificationDetails, ToolResult } from '../../types/types';
 import {
   formatTaskNotificationUsageLabel,
   isTaskNotificationError,
@@ -11,7 +11,7 @@ import { CollapsibleSection } from './CollapsibleSection';
 
 interface SubagentContainerProps {
   toolInput: unknown;
-  toolResult?: { content?: unknown; isError?: boolean } | null;
+  toolResult?: ToolResult | null;
   completionTime?: React.ReactNode;
   taskNotification?: TaskNotificationDetails;
   subagentState: {
@@ -41,6 +41,8 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
     case 'Task':
     case 'Agent':
       return input.description || input.subagent_type || '';
+    case 'TaskOutput':
+      return input.task_id || input.taskId || '';
     case 'WebFetch':
     case 'WebSearch':
       return input.url || input.query || '';
@@ -65,6 +67,9 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   const prompt = parsedInput?.prompt || '';
   const { childTools, currentToolIndex, isComplete } = subagentState;
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
+  const hasTaskOutputHistory = childTools.some(
+    (child) => child.toolName.trim().toLowerCase() === 'taskoutput',
+  );
   const hasError = Boolean(
     toolResult?.isError ||
     (taskNotification && isTaskNotificationError(taskNotification.status)),
@@ -122,7 +127,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
 
         {/* Tool history (collapsed) */}
         {childTools.length > 0 && (
-          <Collapsible className="mt-2">
+          <Collapsible className="mt-2" defaultOpen={hasTaskOutputHistory}>
             <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
               <svg
                 className="h-2.5 w-2.5 flex-shrink-0 transition-transform duration-150 data-[state=open]:rotate-90"
@@ -136,20 +141,42 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
             </CollapsibleTrigger>
             <CollapsibleContent>
               <div className="mt-1 space-y-0.5 border-l border-border pl-3">
-                {childTools.map((child, index) => (
-                  <div key={child.toolId} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span className="w-4 flex-shrink-0 text-right text-muted-foreground/60">{index + 1}.</span>
-                    <span className="font-medium text-foreground">{child.toolName}</span>
-                    {getCompactToolDisplay(child.toolName, child.toolInput) && (
-                      <span className="truncate font-mono text-muted-foreground/70">
-                        {getCompactToolDisplay(child.toolName, child.toolInput)}
-                      </span>
-                    )}
-                    {child.toolResult?.isError && (
-                      <span className="flex-shrink-0 text-red-500">(error)</span>
-                    )}
-                  </div>
-                ))}
+                {childTools.map((child, index) => {
+                  const isTaskOutput = child.toolName.trim().toLowerCase() === 'taskoutput';
+                  const taskOutputStatus = typeof child.toolResult?.taskOutputStatus === 'string'
+                    ? child.toolResult.taskOutputStatus
+                    : undefined;
+                  const taskOutputContent = child.toolResult?.content;
+
+                  return (
+                    <div key={child.toolId} className="py-0.5 text-[11px] text-muted-foreground">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-4 flex-shrink-0 text-right text-muted-foreground/60">{index + 1}.</span>
+                        <span className="font-medium text-foreground">{child.toolName}</span>
+                        {getCompactToolDisplay(child.toolName, child.toolInput) && (
+                          <span className="truncate font-mono text-muted-foreground/70">
+                            {getCompactToolDisplay(child.toolName, child.toolInput)}
+                          </span>
+                        )}
+                        {taskOutputStatus && (
+                          <span className="flex-shrink-0 text-muted-foreground/70">
+                            ({taskOutputStatus.replace(/[-_]/g, ' ')})
+                          </span>
+                        )}
+                        {child.toolResult?.isError && (
+                          <span className="flex-shrink-0 text-red-500">(error)</span>
+                        )}
+                      </div>
+                      {isTaskOutput && taskOutputContent != null && taskOutputContent !== '' && (
+                        <div className="ml-5 mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground/80">
+                          {typeof taskOutputContent === 'string'
+                            ? taskOutputContent
+                            : JSON.stringify(taskOutputContent, null, 2)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </CollapsibleContent>
           </Collapsible>
@@ -157,6 +184,8 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
 
         {/* Final result */}
         {isComplete && toolResult && (
+          !hasTaskOutputHistory || toolResult.resultSource !== 'task_output'
+        ) && (
           <div className="mt-2 text-xs text-muted-foreground">
             {(() => {
               let content = toolResult.content;

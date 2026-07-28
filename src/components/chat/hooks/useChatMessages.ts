@@ -100,6 +100,10 @@ function isSubagentToolName(toolName: unknown): boolean {
   return normalizedName === 'task' || normalizedName === 'agent';
 }
 
+function isTaskOutputToolName(toolName: unknown): boolean {
+  return typeof toolName === 'string' && toolName.trim().toLowerCase() === 'taskoutput';
+}
+
 function readObject(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -117,7 +121,80 @@ function readObject(value: unknown): Record<string, unknown> | null {
   }
 }
 
+function readNestedStringField(
+  value: unknown,
+  fieldNames: Set<string>,
+  depth = 0,
+): string | undefined {
+  if (depth > 5 || value == null) {
+    return undefined;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    try {
+      return readNestedStringField(JSON.parse(trimmed), fieldNames, depth + 1);
+    } catch {
+      for (const fieldName of fieldNames) {
+        const escapedName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = trimmed.match(new RegExp(`<${escapedName}\\b[^>]*>([\\s\\S]*?)<\\/${escapedName}\\s*>`, 'i'));
+        if (match?.[1]?.trim()) {
+          return decodeHtmlEntities(match[1].trim());
+        }
+      }
+      return undefined;
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nestedValue = readNestedStringField(item, fieldNames, depth + 1);
+      if (nestedValue) {
+        return nestedValue;
+      }
+    }
+    return undefined;
+  }
+
+  const record = readObject(value);
+  if (!record) {
+    return undefined;
+  }
+
+  for (const [name, fieldValue] of Object.entries(record)) {
+    if (fieldNames.has(name) && (typeof fieldValue === 'string' || typeof fieldValue === 'number')) {
+      const normalizedValue = String(fieldValue).trim();
+      if (normalizedValue) {
+        return normalizedValue;
+      }
+    }
+  }
+
+  for (const nestedValue of Object.values(record)) {
+    const match = readNestedStringField(nestedValue, fieldNames, depth + 1);
+    if (match) {
+      return match;
+    }
+  }
+
+  return undefined;
+}
+
+function readSubagentTaskId(value: unknown): string | undefined {
+  return readNestedStringField(
+    value,
+    new Set(['agentId', 'agent_id', 'taskId', 'task_id']),
+  );
+}
+
 function readToolResultStatus(value: unknown): string | undefined {
+  const xmlStatus = readNestedStringField(value, new Set(['status']));
+  if (xmlStatus) {
+    return xmlStatus;
+  }
   const record = readObject(value);
   if (!record) {
     return undefined;
@@ -126,6 +203,43 @@ function readToolResultStatus(value: unknown): string | undefined {
     return record.status;
   }
   return readToolResultStatus(record.toolUseResult);
+}
+
+function readTaskOutputResult(value: unknown): { status?: string; result?: string } {
+  const status = readToolResultStatus(value);
+  const explicitResult = readNestedStringField(
+    value,
+    new Set(['output', 'result', 'last_assistant_message']),
+  );
+  const plainTextResult = typeof value === 'string' &&
+    !/<(?:retrieval_status|task_id|task_type|status)\b/i.test(value)
+    ? value.trim() || undefined
+    : undefined;
+  return {
+    status,
+    result: explicitResult || plainTextResult,
+  };
+}
+
+function readTaskNotificationMessage(msg: NormalizedMessage): ChatMessage['taskNotification'] | null {
+  if (msg.kind === 'text' && msg.role === 'user' && msg.content) {
+    return parseTaskNotification(msg.content);
+  }
+  if (msg.kind !== 'task_notification') {
+    return null;
+  }
+
+  return {
+    taskId: msg.taskId,
+    toolUseId: msg.toolUseId,
+    outputFile: msg.outputFile,
+    status: msg.status || 'completed',
+    summary: msg.summary || '',
+    result: msg.result,
+    usage: msg.usage || {},
+    extraFields: {},
+    raw: msg.content || '',
+  };
 }
 
 /**
@@ -151,22 +265,105 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       .filter((msg) => msg.kind === 'tool_use' && msg.toolId && isSubagentToolName(msg.toolName))
       .map((msg) => msg.toolId as string),
   );
+  const subagentToolIdByTaskId = new Map<string, string>();
+
+  for (const msg of messages) {
+    if (msg.kind !== 'tool_use' || !msg.toolId || !isSubagentToolName(msg.toolName)) {
+      continue;
+    }
+    const mappedToolResult = toolResultMap.get(msg.toolId);
+    const inlineToolResult = msg.toolResult as
+      | (NonNullable<NormalizedMessage['toolResult']> & Record<string, unknown>)
+      | undefined;
+    const taskId = readSubagentTaskId(
+      (inlineToolResult as any)?.toolUseResult ||
+      (mappedToolResult as any)?.toolUseResult ||
+      inlineToolResult ||
+      mappedToolResult,
+    );
+    if (taskId) {
+      subagentToolIdByTaskId.set(taskId, msg.toolId);
+    }
+  }
+
+  type SubagentChildToolRecord = {
+    toolUse: NormalizedMessage;
+    toolResult: NormalizedMessage | null;
+  };
+  const subagentChildToolsByParentToolId = new Map<string, SubagentChildToolRecord[]>();
+  const associatedSubagentChildToolIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (
+      msg.kind !== 'tool_use' ||
+      !msg.toolId ||
+      !msg.parentToolUseId ||
+      isTaskOutputToolName(msg.toolName) ||
+      !subagentToolIds.has(msg.parentToolUseId)
+    ) {
+      continue;
+    }
+    const records = subagentChildToolsByParentToolId.get(msg.parentToolUseId) || [];
+    records.push({
+      toolUse: msg,
+      toolResult: toolResultMap.get(msg.toolId) || null,
+    });
+    subagentChildToolsByParentToolId.set(msg.parentToolUseId, records);
+    associatedSubagentChildToolIds.add(msg.toolId);
+  }
+
   const taskNotificationsByToolId = new Map<string, {
     notification: NonNullable<ChatMessage['taskNotification']>;
     timestamp: TimestampValue;
   }>();
 
   for (const msg of messages) {
-    if (msg.kind !== 'text' || msg.role !== 'user' || !msg.content) {
+    const notification = readTaskNotificationMessage(msg);
+    if (!notification) {
       continue;
     }
-    const notification = parseTaskNotification(msg.content);
-    if (notification?.toolUseId && subagentToolIds.has(notification.toolUseId)) {
-      taskNotificationsByToolId.set(notification.toolUseId, {
+    const parentToolId = notification.toolUseId && subagentToolIds.has(notification.toolUseId)
+      ? notification.toolUseId
+      : notification.taskId
+        ? subagentToolIdByTaskId.get(notification.taskId)
+        : undefined;
+    if (parentToolId) {
+      taskNotificationsByToolId.set(parentToolId, {
         notification,
         timestamp: msg.timestamp,
       });
+      if (notification.taskId) {
+        subagentToolIdByTaskId.set(notification.taskId, parentToolId);
+      }
     }
+  }
+
+  type TaskOutputRecord = {
+    toolUse: NormalizedMessage;
+    toolResult: NormalizedMessage | null;
+    parsedResult: ReturnType<typeof readTaskOutputResult>;
+  };
+  const taskOutputsByParentToolId = new Map<string, TaskOutputRecord[]>();
+  const associatedTaskOutputToolIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.kind !== 'tool_use' || !msg.toolId || !isTaskOutputToolName(msg.toolName)) {
+      continue;
+    }
+    const taskId = readNestedStringField(msg.toolInput, new Set(['task_id', 'taskId']));
+    const parentToolId = taskId ? subagentToolIdByTaskId.get(taskId) : undefined;
+    if (!parentToolId) {
+      continue;
+    }
+    const taskOutputResult = toolResultMap.get(msg.toolId) || null;
+    const records = taskOutputsByParentToolId.get(parentToolId) || [];
+    records.push({
+      toolUse: msg,
+      toolResult: taskOutputResult,
+      parsedResult: readTaskOutputResult(taskOutputResult?.content),
+    });
+    taskOutputsByParentToolId.set(parentToolId, records);
+    associatedTaskOutputToolIds.add(msg.toolId);
   }
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -180,7 +377,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (msg.role === 'user') {
           const taskNotification = parseTaskNotification(content);
           if (taskNotification) {
-            if (taskNotification.toolUseId && subagentToolIds.has(taskNotification.toolUseId)) {
+            const parentToolId = taskNotification.toolUseId && subagentToolIds.has(taskNotification.toolUseId)
+              ? taskNotification.toolUseId
+              : taskNotification.taskId
+                ? subagentToolIdByTaskId.get(taskNotification.taskId)
+                : undefined;
+            if (parentToolId) {
               continue;
             }
             converted.push({
@@ -227,6 +429,15 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       }
 
       case 'tool_use': {
+        if (
+          msg.toolId &&
+          (
+            associatedSubagentChildToolIds.has(msg.toolId) ||
+            associatedTaskOutputToolIds.has(msg.toolId)
+          )
+        ) {
+          break;
+        }
         const mappedToolResult = msg.toolId ? toolResultMap.get(msg.toolId) : null;
         const inlineToolResult = msg.toolResult as (NonNullable<NormalizedMessage['toolResult']> & Record<string, unknown>) | undefined;
         const tr = inlineToolResult || mappedToolResult;
@@ -241,6 +452,23 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const taskNotificationIsTerminal = taskNotification
           ? isTaskNotificationTerminal(taskNotification.status)
           : false;
+        const taskOutputRecords = msg.toolId
+          ? [...(taskOutputsByParentToolId.get(msg.toolId) || [])].sort((left, right) => {
+              const leftTime = timestampToMs(left.toolUse.timestamp);
+              const rightTime = timestampToMs(right.toolUse.timestamp);
+              return leftTime === null || rightTime === null ? 0 : leftTime - rightTime;
+            })
+          : [];
+        const terminalTaskOutput = [...taskOutputRecords].reverse().find((record) => (
+          record.parsedResult.status &&
+          isTaskNotificationTerminal(record.parsedResult.status)
+        ));
+        const taskOutputSequence = taskOutputRecords.map((record, index) => {
+          const status = record.parsedResult.status;
+          const result = record.parsedResult.result;
+          const label = `TaskOutput ${index + 1}${status ? ` (${status})` : ''}`;
+          return result ? `${label}\n${result}` : label;
+        });
         const toolInputRecord = readObject(msg.toolInput);
         const toolResultStatus = readToolResultStatus(
           (tr as any)?.toolUseResult || inlineToolResult || tr,
@@ -253,13 +481,17 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           ? (
               taskNotification
                 ? taskNotificationIsTerminal
-                : Boolean(tr) && !isBackgroundSubagent
+                : terminalTaskOutput
+                  ? true
+                  : Boolean(tr) && !isBackgroundSubagent
             )
           : Boolean(tr);
         const toolCompletedAt = (
           taskNotificationIsTerminal
             ? notificationRecord?.timestamp
-            : explicitCompletedAt
+            : terminalTaskOutput
+              ? terminalTaskOutput.toolResult?.timestamp
+              : explicitCompletedAt
         ) || (
           isSubagentComplete && tr
             ? findNextTimestamp(messages, messageIndex, msg.timestamp)
@@ -279,6 +511,50 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             });
           }
         }
+        if (isSubagentContainer) {
+          const existingChildToolIds = new Set(childTools.map((tool) => tool.toolId));
+          const realtimeChildToolRecords = msg.toolId
+            ? subagentChildToolsByParentToolId.get(msg.toolId) || []
+            : [];
+          for (const childToolRecord of realtimeChildToolRecords) {
+            if (!childToolRecord.toolUse.toolId || existingChildToolIds.has(childToolRecord.toolUse.toolId)) {
+              continue;
+            }
+            childTools.push({
+              toolId: childToolRecord.toolUse.toolId,
+              toolName: childToolRecord.toolUse.toolName || 'UnknownTool',
+              toolInput: childToolRecord.toolUse.toolInput,
+              toolResult: childToolRecord.toolResult
+                ? {
+                    content: childToolRecord.toolResult.content,
+                    isError: Boolean(childToolRecord.toolResult.isError),
+                  }
+                : null,
+              timestamp: new Date(childToolRecord.toolUse.timestamp),
+            });
+            existingChildToolIds.add(childToolRecord.toolUse.toolId);
+          }
+          for (const taskOutputRecord of taskOutputRecords) {
+            if (!taskOutputRecord.toolUse.toolId || existingChildToolIds.has(taskOutputRecord.toolUse.toolId)) {
+              continue;
+            }
+            childTools.push({
+              toolId: taskOutputRecord.toolUse.toolId,
+              toolName: taskOutputRecord.toolUse.toolName || 'TaskOutput',
+              toolInput: taskOutputRecord.toolUse.toolInput,
+              toolResult: taskOutputRecord.toolResult
+                ? {
+                    content: taskOutputRecord.parsedResult.result,
+                    isError: Boolean(taskOutputRecord.toolResult.isError),
+                    taskOutputStatus: taskOutputRecord.parsedResult.status,
+                  }
+                : null,
+              timestamp: new Date(taskOutputRecord.toolUse.timestamp),
+            });
+            existingChildToolIds.add(taskOutputRecord.toolUse.toolId);
+          }
+          childTools.sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime());
+        }
 
         const toolResult = isSubagentContainer && taskNotification && taskNotificationIsTerminal
           ? {
@@ -288,7 +564,16 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               isError: isTaskNotificationError(taskNotification.status),
               toolUseResult: (tr as any)?.toolUseResult,
               timestamp: toolCompletedAt,
+              resultSource: 'task_notification',
             }
+          : isSubagentContainer && terminalTaskOutput
+            ? {
+                content: taskOutputSequence.join('\n\n'),
+                isError: isTaskNotificationError(terminalTaskOutput.parsedResult.status || ''),
+                toolUseResult: (tr as any)?.toolUseResult,
+                timestamp: toolCompletedAt,
+                resultSource: 'task_output',
+              }
           : tr && (!isSubagentContainer || isSubagentComplete)
             ? {
                 content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
@@ -355,6 +640,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         break;
 
       case 'task_notification':
+        if (
+          (msg.toolUseId && subagentToolIds.has(msg.toolUseId)) ||
+          (msg.taskId && subagentToolIdByTaskId.has(msg.taskId))
+        ) {
+          break;
+        }
         converted.push({
           ...getMessageIdentity(msg),
           type: 'assistant',
