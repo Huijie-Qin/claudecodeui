@@ -1690,6 +1690,30 @@ export function createMultitenancyDb(database = db) {
         `).get(normalizedWorkspaceId, normalizedPresetId));
       },
 
+      recordApplied: ({ workspaceId, presetId }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        database.prepare(`
+          UPDATE workspace_mcp_preset_installs
+          SET
+            last_applied_at = CURRENT_TIMESTAMP,
+            last_probe_status = NULL,
+            last_probe_error = NULL,
+            tool_count = 0,
+            tools_json = '[]',
+            updated_at = CURRENT_TIMESTAMP
+          WHERE workspace_id = ?
+            AND preset_id = ?
+            AND status = 'installed'
+        `).run(normalizedWorkspaceId, normalizedPresetId);
+
+        return hydrateMcpInstallRow(database.prepare(`
+          SELECT *
+          FROM workspace_mcp_preset_installs
+          WHERE workspace_id = ? AND preset_id = ?
+        `).get(normalizedWorkspaceId, normalizedPresetId));
+      },
+
       updateToolSettings: ({
         workspaceId,
         presetId,
@@ -1741,6 +1765,28 @@ export function createMultitenancyDb(database = db) {
             ${whereStatus}
           ORDER BY p.display_name ASC, p.id ASC
         `).all(normalizedWorkspaceId).map(hydrateMcpInstallRow);
+      },
+
+      listInstallsForPreset: ({ tenantId, presetId }) => {
+        const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+        const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+        return database.prepare(`
+          SELECT
+            i.*,
+            w.tenant_id AS workspace_tenant_id,
+            w.owner_user_id,
+            w.path AS workspace_path,
+            w.display_name AS workspace_display_name,
+            w.status AS workspace_status
+          FROM workspace_mcp_preset_installs i
+          JOIN workspaces w ON w.id = i.workspace_id
+          JOIN mcp_server_presets p ON p.id = i.preset_id
+          WHERE p.tenant_id = ?
+            AND i.preset_id = ?
+            AND i.status = 'installed'
+            AND w.status != 'deleted'
+          ORDER BY i.workspace_id ASC
+        `).all(normalizedTenantId, normalizedPresetId).map(hydrateMcpInstallRow);
       },
     },
 

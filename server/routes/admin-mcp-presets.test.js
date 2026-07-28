@@ -107,6 +107,14 @@ test('admin mcp preset routes create and publish presets through the service', a
         seen.create = { tenantId, userId, input };
         return { id: 2, name: input.name, displayName: input.displayName, status: 'draft' };
       },
+      updatePreset: async ({ tenantId, presetId, userId, input }) => {
+        seen.update = { tenantId, presetId, userId, input };
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return {
+          preset: { id: presetId, name: input.name, status: 'draft' },
+          sync: { total: 3, synced: 3, failed: 0, failures: [] },
+        };
+      },
       publishPreset: ({ tenantId, presetId, userId }) => {
         seen.publish = { tenantId, presetId, userId };
         return { id: presetId, status: 'published' };
@@ -151,6 +159,17 @@ test('admin mcp preset routes create and publish presets through the service', a
     },
     user: { id: 9, is_system_admin: 1 },
   });
+  const updated = await requestJson(router, '/mcp-presets/2', {
+    method: 'PUT',
+    body: {
+      tenantId: 7,
+      name: 'knowledge_v2',
+      displayName: 'Knowledge MCP v2',
+      type: 'http',
+      url: 'https://mcp.internal/knowledge-v2',
+    },
+    user: { id: 9, is_system_admin: 1 },
+  });
   const published = await requestJson(router, '/mcp-presets/2/publish', {
     method: 'POST',
     body: { tenantId: 7 },
@@ -182,6 +201,16 @@ test('admin mcp preset routes create and publish presets through the service', a
   assert.equal(created.response.status, 201);
   assert.equal(seen.create.userId, 9);
   assert.equal(seen.create.input.url, 'https://mcp.internal/knowledge');
+  assert.equal(updated.response.status, 200);
+  assert.equal(seen.update.userId, 9);
+  assert.equal(seen.update.input.url, 'https://mcp.internal/knowledge-v2');
+  assert.equal(updated.payload.preset.name, 'knowledge_v2');
+  assert.deepEqual(updated.payload.sync, {
+    total: 3,
+    synced: 3,
+    failed: 0,
+    failures: [],
+  });
   assert.equal(published.response.status, 200);
   assert.deepEqual(seen.publish, { tenantId: 7, presetId: 2, userId: 9 });
   assert.equal(published.payload.preset.status, 'published');
