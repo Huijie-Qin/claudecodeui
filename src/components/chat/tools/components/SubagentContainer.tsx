@@ -1,7 +1,11 @@
 import React from 'react';
 
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
-import type { SubagentChildTool } from '../../types/types';
+import type { SubagentChildTool, TaskNotificationDetails } from '../../types/types';
+import {
+  formatTaskNotificationUsageLabel,
+  isTaskNotificationError,
+} from '../../utils/taskNotifications';
 
 import { CollapsibleSection } from './CollapsibleSection';
 
@@ -9,6 +13,7 @@ interface SubagentContainerProps {
   toolInput: unknown;
   toolResult?: { content?: unknown; isError?: boolean } | null;
   completionTime?: React.ReactNode;
+  taskNotification?: TaskNotificationDetails;
   subagentState: {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
@@ -34,6 +39,7 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
       const cmd = input.command || '';
       return cmd.length > 40 ? `${cmd.slice(0, 40)}...` : cmd;
     case 'Task':
+    case 'Agent':
       return input.description || input.subagent_type || '';
     case 'WebFetch':
     case 'WebSearch':
@@ -47,6 +53,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   toolInput,
   toolResult,
   completionTime,
+  taskNotification,
   subagentState,
 }) => {
   const parsedInput = typeof toolInput === 'string' ? (() => {
@@ -58,6 +65,13 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   const prompt = parsedInput?.prompt || '';
   const { childTools, currentToolIndex, isComplete } = subagentState;
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
+  const hasError = Boolean(
+    toolResult?.isError ||
+    (taskNotification && isTaskNotificationError(taskNotification.status)),
+  );
+  const completionLabel = taskNotification?.status
+    ? taskNotification.status.replace(/[-_]/g, ' ')
+    : 'Completed';
 
   const title = `Subagent / ${subagentType}: ${description}`;
 
@@ -95,11 +109,14 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
 
         {/* Completion status */}
         {isComplete && (
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+          <div className={`mt-1 flex items-center gap-1.5 text-xs ${hasError ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
             <svg className="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            <span>Completed ({childTools.length} {childTools.length === 1 ? 'tool' : 'tools'})</span>
+            <span>
+              {completionLabel.charAt(0).toUpperCase() + completionLabel.slice(1)}
+              {' '}({childTools.length} {childTools.length === 1 ? 'tool' : 'tools'})
+            </span>
           </div>
         )}
 
@@ -180,6 +197,16 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
                 </pre>
               ) : null;
             })()}
+          </div>
+        )}
+
+        {taskNotification && Object.keys(taskNotification.usage).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground/80">
+            {Object.entries(taskNotification.usage).map(([name, value]) => (
+              <span key={name}>
+                {formatTaskNotificationUsageLabel(name)}: {String(value)}
+              </span>
+            ))}
           </div>
         )}
       </CollapsibleSection>

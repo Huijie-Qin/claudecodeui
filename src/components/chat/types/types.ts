@@ -51,6 +51,21 @@ export interface SubagentChildTool {
   timestamp: Date;
 }
 
+export type TaskNotificationUsageValue = string | number;
+
+export interface TaskNotificationDetails {
+  taskId?: string;
+  toolUseId?: string;
+  outputFile?: string;
+  status: string;
+  summary: string;
+  result?: string;
+  usage: Record<string, TaskNotificationUsageValue>;
+  rawUsage?: string;
+  extraFields: Record<string, string>;
+  raw: string;
+}
+
 export interface ChatMessage {
   type: string;
   content?: string;
@@ -69,6 +84,9 @@ export interface ChatMessage {
   toolCallId?: string;
   toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
+  isTaskNotification?: boolean;
+  taskStatus?: string;
+  taskNotification?: TaskNotificationDetails;
   subagentState?: {
     childTools: SubagentChildTool[];
     currentToolIndex: number;

@@ -7,6 +7,11 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 import { isClaudeInternalUserContent } from '../utils/internalMessages';
+import {
+  isTaskNotificationError,
+  isTaskNotificationTerminal,
+  parseTaskNotification,
+} from '../utils/taskNotifications';
 
 type TimestampValue = string | number | Date;
 
@@ -87,6 +92,42 @@ function isClaudeSkillToolUse(message: NormalizedMessage | undefined): boolean {
   );
 }
 
+function isSubagentToolName(toolName: unknown): boolean {
+  if (typeof toolName !== 'string') {
+    return false;
+  }
+  const normalizedName = toolName.trim().toLowerCase();
+  return normalizedName === 'task' || normalizedName === 'agent';
+}
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readToolResultStatus(value: unknown): string | undefined {
+  const record = readObject(value);
+  if (!record) {
+    return undefined;
+  }
+  if (typeof record.status === 'string') {
+    return record.status;
+  }
+  return readToolResultStatus(record.toolUseResult);
+}
+
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
  * that the existing UI components expect.
@@ -105,6 +146,29 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     }
   }
 
+  const subagentToolIds = new Set(
+    messages
+      .filter((msg) => msg.kind === 'tool_use' && msg.toolId && isSubagentToolName(msg.toolName))
+      .map((msg) => msg.toolId as string),
+  );
+  const taskNotificationsByToolId = new Map<string, {
+    notification: NonNullable<ChatMessage['taskNotification']>;
+    timestamp: TimestampValue;
+  }>();
+
+  for (const msg of messages) {
+    if (msg.kind !== 'text' || msg.role !== 'user' || !msg.content) {
+      continue;
+    }
+    const notification = parseTaskNotification(msg.content);
+    if (notification?.toolUseId && subagentToolIds.has(notification.toolUseId)) {
+      taskNotificationsByToolId.set(notification.toolUseId, {
+        notification,
+        timestamp: msg.timestamp,
+      });
+    }
+  }
+
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const msg = messages[messageIndex];
 
@@ -114,29 +178,33 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         if (!content.trim()) continue;
 
         if (msg.role === 'user') {
-          if (
-            msg.provider === 'claude' &&
-            (
-              isClaudeInternalUserContent(content) ||
-              isClaudeSkillToolUse(messages[messageIndex - 1])
-            )
-          ) {
-            continue;
-          }
-
-          // Parse task notifications
-          const taskNotifRegex = /<task-notification>\s*<task-id>[^<]*<\/task-id>\s*<output-file>[^<]*<\/output-file>\s*<status>([^<]*)<\/status>\s*<summary>([^<]*)<\/summary>\s*<\/task-notification>/g;
-          const taskNotifMatch = taskNotifRegex.exec(content);
-          if (taskNotifMatch) {
+          const taskNotification = parseTaskNotification(content);
+          if (taskNotification) {
+            if (taskNotification.toolUseId && subagentToolIds.has(taskNotification.toolUseId)) {
+              continue;
+            }
             converted.push({
               ...getMessageIdentity(msg),
               type: 'assistant',
-              content: taskNotifMatch[2]?.trim() || 'Background task finished',
+              content: taskNotification.summary ||
+                taskNotification.result ||
+                'Background task finished',
               timestamp: msg.timestamp,
               isTaskNotification: true,
-              taskStatus: taskNotifMatch[1]?.trim() || 'completed',
+              taskStatus: taskNotification.status,
+              taskNotification,
             });
           } else {
+            if (
+              msg.provider === 'claude' &&
+              (
+                isClaudeInternalUserContent(content) ||
+                isClaudeSkillToolUse(messages[messageIndex - 1])
+              )
+            ) {
+              continue;
+            }
+
             converted.push({
               ...getMessageIdentity(msg),
               type: 'user',
@@ -165,9 +233,38 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const explicitCompletedAt = mappedToolResult?.timestamp ||
           readTimestampField(inlineToolResult) ||
           readTimestampField((tr as any)?.toolUseResult);
-        const toolCompletedAt = explicitCompletedAt ||
-          (tr ? findNextTimestamp(messages, messageIndex, msg.timestamp) : undefined);
-        const isSubagentContainer = msg.toolName === 'Task';
+        const isSubagentContainer = isSubagentToolName(msg.toolName);
+        const notificationRecord = msg.toolId
+          ? taskNotificationsByToolId.get(msg.toolId)
+          : undefined;
+        const taskNotification = notificationRecord?.notification;
+        const taskNotificationIsTerminal = taskNotification
+          ? isTaskNotificationTerminal(taskNotification.status)
+          : false;
+        const toolInputRecord = readObject(msg.toolInput);
+        const toolResultStatus = readToolResultStatus(
+          (tr as any)?.toolUseResult || inlineToolResult || tr,
+        );
+        const isBackgroundSubagent = isSubagentContainer && (
+          toolInputRecord?.run_in_background === true ||
+          toolResultStatus === 'async_launched'
+        );
+        const isSubagentComplete = isSubagentContainer
+          ? (
+              taskNotification
+                ? taskNotificationIsTerminal
+                : Boolean(tr) && !isBackgroundSubagent
+            )
+          : Boolean(tr);
+        const toolCompletedAt = (
+          taskNotificationIsTerminal
+            ? notificationRecord?.timestamp
+            : explicitCompletedAt
+        ) || (
+          isSubagentComplete && tr
+            ? findNextTimestamp(messages, messageIndex, msg.timestamp)
+            : undefined
+        );
 
         // Build child tools from subagentTools
         const childTools: SubagentChildTool[] = [];
@@ -183,14 +280,23 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           }
         }
 
-        const toolResult = tr
+        const toolResult = isSubagentContainer && taskNotification && taskNotificationIsTerminal
           ? {
-              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-              isError: Boolean(tr.isError),
-              toolUseResult: (tr as any).toolUseResult,
+              content: taskNotification.result ||
+                taskNotification.summary ||
+                'Background task finished',
+              isError: isTaskNotificationError(taskNotification.status),
+              toolUseResult: (tr as any)?.toolUseResult,
               timestamp: toolCompletedAt,
             }
-          : null;
+          : tr && (!isSubagentContainer || isSubagentComplete)
+            ? {
+                content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+                isError: Boolean(tr.isError),
+                toolUseResult: (tr as any).toolUseResult,
+                timestamp: toolCompletedAt,
+              }
+            : null;
 
         converted.push({
           ...getMessageIdentity(msg),
@@ -204,11 +310,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           toolResult,
           toolCompletedAt,
           isSubagentContainer,
+          taskNotification,
           subagentState: isSubagentContainer
             ? {
                 childTools,
                 currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
-                isComplete: Boolean(toolResult),
+                isComplete: isSubagentComplete,
               }
             : undefined,
         });
