@@ -74,6 +74,24 @@ test('background runs keep live user queries while interactive runs suppress ech
   );
 });
 
+test('interactive runs keep synthetic Claude task notifications for realtime result updates', () => {
+  const taskNotification = {
+    kind: 'text',
+    role: 'user',
+    content: [
+      '  <task-notification version="2">',
+      '<task-id>agent-1</task-id>',
+      '<tool-use-id>toolu_agent_1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent completed</summary>',
+      '<result>Done</result>',
+      '</task-notification>',
+    ].join('\n'),
+  };
+
+  assert.equal(shouldSuppressLiveUserTextMessage(taskNotification, {}), false);
+});
+
 test('scheduled Claude history fills a missing user query from the database fallback', async () => {
   let historyOptions = null;
   const service = createSessionMessageHistoryService({

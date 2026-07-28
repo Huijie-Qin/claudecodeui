@@ -48,10 +48,14 @@ function isPersistableMessage(message) {
 }
 
 export function shouldSuppressLiveUserTextMessage(message, writer) {
+  const content = getMessageContent(message).trimStart();
+  const isTaskNotification = /^<task-notification\b/i.test(content);
+
   return (
     message?.kind === 'text'
     && message?.role === 'user'
     && writer?.isBackgroundTaskWriter !== true
+    && !isTaskNotification
   );
 }
 
