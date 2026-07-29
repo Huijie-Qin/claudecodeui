@@ -82,7 +82,10 @@ const createFakeSubmitEvent = () => {
 };
 
 const DRAFT_SAVE_DELAY_MS = 400;
-const MIN_TEXTAREA_HEIGHT_PX = 22;
+// One 24px line plus 8px vertical padding on each side. This also prevents a
+// transient zero scrollHeight (for example while the composer is hidden) from
+// collapsing the textarea and clipping its text.
+const MIN_TEXTAREA_HEIGHT_PX = 40;
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
@@ -717,10 +720,15 @@ export function useChatComposerState({
 
       textarea.style.height = 'auto';
       const scrollHeight = textarea.scrollHeight;
-      textarea.style.height = `${Math.max(MIN_TEXTAREA_HEIGHT_PX, scrollHeight)}px`;
+      const computedStyle = window.getComputedStyle(textarea);
+      const borderHeight =
+        Number.parseFloat(computedStyle.borderTopWidth) +
+        Number.parseFloat(computedStyle.borderBottomWidth);
+      const measuredHeight = scrollHeight > 0 ? scrollHeight + borderHeight : 0;
+      textarea.style.height = `${Math.max(MIN_TEXTAREA_HEIGHT_PX, measuredHeight)}px`;
 
       if (textareaLineHeightRef.current === null) {
-        const computedLineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight);
+        const computedLineHeight = Number.parseFloat(computedStyle.lineHeight);
         textareaLineHeightRef.current = Number.isFinite(computedLineHeight) ? computedLineHeight : 24;
       }
       const expanded = scrollHeight > textareaLineHeightRef.current * 2;
