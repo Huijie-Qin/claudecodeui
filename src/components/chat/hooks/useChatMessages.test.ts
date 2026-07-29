@@ -512,6 +512,114 @@ test('normalizedToChatMessages groups realtime subagent tools by parentToolUseId
   assert.equal(agentCard.subagentState?.childTools[0]?.toolResult?.content, 'export function authenticate() {}');
 });
 
+test('normalizedToChatMessages gives Agent sole ownership of details shared with legacy Task', () => {
+  const sharedSubagentTools = [
+    {
+      toolId: 'toolu_read_1',
+      toolName: 'Read',
+      toolInput: {
+        file_path: '/workspace/auth.ts',
+      },
+      toolResult: {
+        content: 'export function authenticate() {}',
+        isError: false,
+      },
+      timestamp: '2026-06-30T00:00:01.000Z',
+    },
+  ];
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'legacy-task-tool-use',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'tool_use',
+      toolName: 'Task',
+      toolId: 'toolu_task_1',
+      toolInput: {
+        description: 'Review authentication',
+        prompt: 'Review the authentication implementation.',
+        run_in_background: true,
+      },
+      toolResult: {
+        content: 'Agent launched successfully.',
+        isError: false,
+        toolUseResult: {
+          status: 'async_launched',
+          agentId: 'agent-1',
+        },
+      },
+      subagentTools: sharedSubagentTools,
+    },
+    {
+      id: 'agent-tool-use',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:00.100Z',
+      provider: 'claude',
+      kind: 'tool_use',
+      toolName: 'Agent',
+      toolId: 'toolu_agent_1',
+      toolInput: {
+        description: 'Review authentication',
+        prompt: 'Review the authentication implementation.',
+        run_in_background: true,
+      },
+      toolResult: {
+        content: 'Agent launched successfully.',
+        isError: false,
+        toolUseResult: {
+          status: 'async_launched',
+          agentId: 'agent-1',
+        },
+      },
+      subagentTools: sharedSubagentTools,
+    },
+    {
+      id: 'task-output-completed',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:05.000Z',
+      provider: 'claude',
+      kind: 'tool_use',
+      toolName: 'TaskOutput',
+      toolId: 'toolu_output_1',
+      toolInput: {
+        task_id: 'agent-1',
+        block: true,
+        timeout: 30000,
+      },
+    },
+    {
+      id: 'task-output-completed-result',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:05.100Z',
+      provider: 'claude',
+      kind: 'tool_result',
+      toolId: 'toolu_output_1',
+      content: [
+        '<task_id>agent-1</task_id>',
+        '<status>completed</status>',
+        '<output>Found one authentication issue.</output>',
+      ].join('\n'),
+      isError: false,
+    },
+  ];
+
+  const chatMessages = normalizedToChatMessages(messages);
+
+  assert.equal(chatMessages.length, 2);
+  const [taskCard, agentCard] = chatMessages;
+  assert.equal(taskCard.toolName, 'Task');
+  assert.equal(taskCard.subagentState?.detailsOwnerToolId, 'toolu_agent_1');
+  assert.equal(taskCard.subagentState?.childTools.length, 0);
+  assert.equal(agentCard.toolName, 'Agent');
+  assert.equal(agentCard.subagentState?.detailsOwnerToolId, undefined);
+  assert.deepEqual(
+    agentCard.subagentState?.childTools.map((tool) => tool.toolName),
+    ['Read', 'TaskOutput'],
+  );
+  assert.equal(agentCard.subagentState?.childTools[1]?.toolResult?.content, 'Found one authentication issue.');
+});
+
 test('normalizedToChatMessages attaches a structured task notification by task id', () => {
   const messages: NormalizedMessage[] = [
     {

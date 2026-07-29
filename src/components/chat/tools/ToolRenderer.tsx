@@ -35,6 +35,7 @@ interface ToolRendererProps {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
+    detailsOwnerToolId?: string;
   };
 }
 

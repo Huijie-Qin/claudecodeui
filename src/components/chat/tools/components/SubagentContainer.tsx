@@ -18,6 +18,7 @@ interface SubagentContainerProps {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
+    detailsOwnerToolId?: string;
   };
 }
 
@@ -65,7 +66,8 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   const subagentType = parsedInput?.subagent_type || 'Agent';
   const description = parsedInput?.description || 'Running task';
   const prompt = parsedInput?.prompt || '';
-  const { childTools, currentToolIndex, isComplete } = subagentState;
+  const { childTools, currentToolIndex, isComplete, detailsOwnerToolId } = subagentState;
+  const isDetailsAlias = Boolean(detailsOwnerToolId);
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
   const hasTaskOutputHistory = childTools.some(
     (child) => child.toolName.trim().toLowerCase() === 'taskoutput',
@@ -89,14 +91,20 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         meta={completionTime}
       >
         {/* Prompt/request to the subagent */}
-        {prompt && (
+        {prompt && !isDetailsAlias && (
           <div className="mb-2 line-clamp-4 whitespace-pre-wrap break-words text-xs text-muted-foreground">
             {prompt}
           </div>
         )}
 
+        {isDetailsAlias && (
+          <div className="mt-1 text-xs text-muted-foreground">
+            Execution details are shown in the corresponding Agent entry.
+          </div>
+        )}
+
         {/* Current tool indicator (while running) */}
-        {currentTool && !isComplete && (
+        {currentTool && !isComplete && !isDetailsAlias && (
           <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-purple-500 dark:bg-purple-400" />
             <span className="text-muted-foreground/60">Currently:</span>
@@ -113,7 +121,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         )}
 
         {/* Completion status */}
-        {isComplete && (
+        {isComplete && !isDetailsAlias && (
           <div className={`mt-1 flex items-center gap-1.5 text-xs ${hasError ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
             <svg className="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -126,7 +134,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         )}
 
         {/* Tool history (collapsed) */}
-        {childTools.length > 0 && (
+        {childTools.length > 0 && !isDetailsAlias && (
           <Collapsible className="mt-2" defaultOpen={hasTaskOutputHistory}>
             <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
               <svg
@@ -183,7 +191,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         )}
 
         {/* Final result */}
-        {isComplete && toolResult && (
+        {isComplete && toolResult && !isDetailsAlias && (
           !hasTaskOutputHistory || toolResult.resultSource !== 'task_output'
         ) && (
           <div className="mt-2 text-xs text-muted-foreground">
@@ -229,7 +237,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
           </div>
         )}
 
-        {taskNotification && Object.keys(taskNotification.usage).length > 0 && (
+        {taskNotification && !isDetailsAlias && Object.keys(taskNotification.usage).length > 0 && (
           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground/80">
             {Object.entries(taskNotification.usage).map(([name, value]) => (
               <span key={name}>

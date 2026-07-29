@@ -91,6 +91,7 @@ export interface ChatMessage {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
+    detailsOwnerToolId?: string;
   };
   [key: string]: unknown;
 }

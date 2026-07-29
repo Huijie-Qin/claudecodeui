@@ -266,11 +266,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       .map((msg) => msg.toolId as string),
   );
   const subagentToolIdByTaskId = new Map<string, string>();
+  const subagentToolMessageById = new Map<string, NormalizedMessage>();
+  const subagentToolCandidatesByTaskId = new Map<string, NormalizedMessage[]>();
 
   for (const msg of messages) {
     if (msg.kind !== 'tool_use' || !msg.toolId || !isSubagentToolName(msg.toolName)) {
       continue;
     }
+    subagentToolMessageById.set(msg.toolId, msg);
     const mappedToolResult = toolResultMap.get(msg.toolId);
     const inlineToolResult = msg.toolResult as
       | (NonNullable<NormalizedMessage['toolResult']> & Record<string, unknown>)
@@ -282,7 +285,38 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       mappedToolResult,
     );
     if (taskId) {
-      subagentToolIdByTaskId.set(taskId, msg.toolId);
+      const candidates = subagentToolCandidatesByTaskId.get(taskId) || [];
+      candidates.push(msg);
+      subagentToolCandidatesByTaskId.set(taskId, candidates);
+    }
+  }
+
+  // Claude can emit both the legacy Task call and the current Agent call for
+  // the same agentId. Keep the Task invocation visible, but make Agent the
+  // single owner of execution details so child tools/results are not repeated.
+  const subagentDetailsOwnerByAliasToolId = new Map<string, string>();
+  for (const [taskId, candidates] of subagentToolCandidatesByTaskId) {
+    let detailsOwner = candidates[candidates.length - 1];
+    const hasTaskCandidate = candidates.some((candidate) => (
+      candidate.toolName?.trim().toLowerCase() === 'task'
+    ));
+    const agentCandidates = candidates.filter((candidate) => (
+      candidate.toolName?.trim().toLowerCase() === 'agent'
+    ));
+    if (hasTaskCandidate && agentCandidates.length > 0) {
+      detailsOwner = agentCandidates[agentCandidates.length - 1];
+      for (const candidate of candidates) {
+        if (
+          candidate.toolId &&
+          candidate.toolId !== detailsOwner?.toolId &&
+          candidate.toolName?.trim().toLowerCase() === 'task'
+        ) {
+          subagentDetailsOwnerByAliasToolId.set(candidate.toolId, detailsOwner.toolId as string);
+        }
+      }
+    }
+    if (detailsOwner?.toolId) {
+      subagentToolIdByTaskId.set(taskId, detailsOwner.toolId);
     }
   }
 
@@ -303,13 +337,26 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     ) {
       continue;
     }
-    const records = subagentChildToolsByParentToolId.get(msg.parentToolUseId) || [];
+    const detailsParentToolId = subagentDetailsOwnerByAliasToolId.get(msg.parentToolUseId) ||
+      msg.parentToolUseId;
+    const records = subagentChildToolsByParentToolId.get(detailsParentToolId) || [];
     records.push({
       toolUse: msg,
       toolResult: toolResultMap.get(msg.toolId) || null,
     });
-    subagentChildToolsByParentToolId.set(msg.parentToolUseId, records);
+    subagentChildToolsByParentToolId.set(detailsParentToolId, records);
     associatedSubagentChildToolIds.add(msg.toolId);
+  }
+
+  const historicalSubagentToolsByParentToolId = new Map<string, any[]>();
+  for (const [toolId, msg] of subagentToolMessageById) {
+    if (!Array.isArray(msg.subagentTools) || msg.subagentTools.length === 0) {
+      continue;
+    }
+    const detailsParentToolId = subagentDetailsOwnerByAliasToolId.get(toolId) || toolId;
+    const records = historicalSubagentToolsByParentToolId.get(detailsParentToolId) || [];
+    records.push(...msg.subagentTools);
+    historicalSubagentToolsByParentToolId.set(detailsParentToolId, records);
   }
 
   const taskNotificationsByToolId = new Map<string, {
@@ -323,7 +370,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       continue;
     }
     const parentToolId = notification.toolUseId && subagentToolIds.has(notification.toolUseId)
-      ? notification.toolUseId
+      ? subagentDetailsOwnerByAliasToolId.get(notification.toolUseId) || notification.toolUseId
       : notification.taskId
         ? subagentToolIdByTaskId.get(notification.taskId)
         : undefined;
@@ -445,6 +492,10 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           readTimestampField(inlineToolResult) ||
           readTimestampField((tr as any)?.toolUseResult);
         const isSubagentContainer = isSubagentToolName(msg.toolName);
+        const detailsOwnerToolId = msg.toolId
+          ? subagentDetailsOwnerByAliasToolId.get(msg.toolId)
+          : undefined;
+        const isSubagentDetailsAlias = Boolean(detailsOwnerToolId);
         const notificationRecord = msg.toolId
           ? taskNotificationsByToolId.get(msg.toolId)
           : undefined;
@@ -500,19 +551,24 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
         // Build child tools from subagentTools
         const childTools: SubagentChildTool[] = [];
-        if (isSubagentContainer && msg.subagentTools && Array.isArray(msg.subagentTools)) {
-          for (const tool of msg.subagentTools as any[]) {
-            childTools.push({
-              toolId: tool.toolId,
-              toolName: tool.toolName,
-              toolInput: tool.toolInput,
-              toolResult: tool.toolResult || null,
-              timestamp: new Date(tool.timestamp || Date.now()),
-            });
+        const existingChildToolIds = new Set<string>();
+        const historicalChildTools = isSubagentContainer && !isSubagentDetailsAlias && msg.toolId
+          ? historicalSubagentToolsByParentToolId.get(msg.toolId) || []
+          : [];
+        for (const tool of historicalChildTools) {
+          if (!tool?.toolId || existingChildToolIds.has(tool.toolId)) {
+            continue;
           }
+          childTools.push({
+            toolId: tool.toolId,
+            toolName: tool.toolName,
+            toolInput: tool.toolInput,
+            toolResult: tool.toolResult || null,
+            timestamp: new Date(tool.timestamp || Date.now()),
+          });
+          existingChildToolIds.add(tool.toolId);
         }
-        if (isSubagentContainer) {
-          const existingChildToolIds = new Set(childTools.map((tool) => tool.toolId));
+        if (isSubagentContainer && !isSubagentDetailsAlias) {
           const realtimeChildToolRecords = msg.toolId
             ? subagentChildToolsByParentToolId.get(msg.toolId) || []
             : [];
@@ -601,6 +657,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
                 childTools,
                 currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
                 isComplete: isSubagentComplete,
+                detailsOwnerToolId,
               }
             : undefined,
         });
