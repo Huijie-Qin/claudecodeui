@@ -74,7 +74,25 @@ test('background runs keep live user queries while interactive runs suppress ech
   );
 });
 
-test('scheduled Claude history fills a missing user query from the database fallback', async () => {
+test('interactive runs keep synthetic Claude task notifications for realtime result updates', () => {
+  const taskNotification = {
+    kind: 'text',
+    role: 'user',
+    content: [
+      '  <task-notification version="2">',
+      '<task-id>agent-1</task-id>',
+      '<tool-use-id>toolu_agent_1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent completed</summary>',
+      '<result>Done</result>',
+      '</task-notification>',
+    ].join('\n'),
+  };
+
+  assert.equal(shouldSuppressLiveUserTextMessage(taskNotification, {}), false);
+});
+
+test('scheduled Claude history uses runtime JSONL without database message merging', async () => {
   let historyOptions = null;
   const service = createSessionMessageHistoryService({
     multitenancy: {
@@ -136,13 +154,13 @@ test('scheduled Claude history fills a missing user query from the database fall
     offset: 0,
   });
 
-  assert.equal(historyOptions.limit, null);
+  assert.equal(historyOptions.limit, 50);
   assert.equal(historyOptions.offset, 0);
-  assert.equal(result.total, 2);
-  assert.deepEqual(result.messages.map((message) => message.id), ['db-user', 'jsonl-assistant']);
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.messages.map((message) => message.id), ['jsonl-assistant']);
 });
 
-test('scheduled Claude history does not duplicate a query already present in JSONL', async () => {
+test('scheduled Claude history returns JSONL messages unchanged', async () => {
   const databasePrompt = {
     id: 'db-user',
     kind: 'text',
@@ -314,7 +332,7 @@ test('interactive Claude user and assistant messages are not persisted to the da
   assert.deepEqual(history.messages, []);
 });
 
-test('Claude background task user queries are persisted as a history fallback', () => {
+test('Claude background task user queries are not persisted to the database', () => {
   const persisted = [];
   const multitenancy = {
     sessionMessages: {
@@ -344,10 +362,8 @@ test('Claude background task user queries are persisted as a history fallback', 
     messageId: 'scheduled-user-1',
   });
 
-  assert.equal(changed, 1);
-  assert.equal(persisted.length, 1);
-  assert.equal(persisted[0].role, 'user');
-  assert.equal(persisted[0].content, 'Run the scheduled check.');
+  assert.equal(changed, 0);
+  assert.deepEqual(persisted, []);
 });
 
 test('streaming control messages are not persisted into durable session history', () => {
