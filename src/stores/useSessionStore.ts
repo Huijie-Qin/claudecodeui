@@ -48,6 +48,7 @@ export interface NormalizedMessage {
   toolInput?: unknown;
   toolId?: string;
   toolResult?: { content: string; isError: boolean; toolUseResult?: unknown } | null;
+  toolUseResult?: unknown;
   isError?: boolean;
   text?: string;
   tokens?: number;
@@ -59,6 +60,11 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  taskId?: string;
+  toolUseId?: string;
+  outputFile?: string;
+  result?: string;
+  usage?: Record<string, string | number>;
   exitCode?: number;
   diagnostics?: Record<string, unknown>;
   actualSessionId?: string;

@@ -984,16 +984,16 @@ export function createAdminRouter(
     }
   });
 
-  router.put('/mcp-presets/:presetId', (req, res) => {
+  router.put('/mcp-presets/:presetId', async (req, res) => {
     try {
       const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
-      const preset = mcpPresets.updatePreset({
+      const { preset, sync } = await mcpPresets.updatePreset({
         tenantId,
         presetId: parsePositiveId(req.params.presetId, 'presetId'),
         userId: req.user.id,
         input: req.body,
       });
-      return res.json({ preset });
+      return res.json({ preset, sync });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to update MCP preset');
     }
@@ -1028,11 +1028,11 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/mcp-presets/:presetId/copy', (req, res) => {
+  router.post('/mcp-presets/:presetId/copy', async (req, res) => {
     try {
       const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
       const targetTenantIds = req.body?.targetTenantIds ?? req.body?.target_tenant_ids;
-      const result = mcpPresets.copyPresetToTenants({
+      const result = await mcpPresets.copyPresetToTenants({
         tenantId,
         presetId: parsePositiveId(req.params.presetId, 'presetId'),
         targetTenantIds,

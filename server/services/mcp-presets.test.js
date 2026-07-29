@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import Database from 'better-sqlite3';
@@ -12,6 +15,7 @@ import {
   normalizePresetInput,
   toWorkspacePreset,
 } from './mcp-presets.js';
+import { readWorkspaceMcpConfig, writeWorkspaceMcpConfig } from './workspace-tools.js';
 
 function createTestDb() {
   const database = new Database(':memory:');
@@ -106,6 +110,144 @@ test('workspace mcp server config redacts helper environment secrets', () => {
   assert.deepEqual(normalized.config.helperEnv, {
     ROOT_SECRET: 'internal-root-key',
   });
+});
+
+test('admin preset updates sync every active installation and preserve unrelated workspace MCPs', async (t) => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-preset-sync-'));
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+  const database = createTestDb();
+  t.after(() => database.close());
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const userId = seedUser(database, 'alice');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  multitenancy.memberships.upsertMembership({
+    tenantId: tenant.id,
+    userId,
+    role: 'member',
+    permission: 'edit',
+    status: 'active',
+  });
+  const workspacePaths = {
+    first: path.join(tempRoot, 'first'),
+    second: path.join(tempRoot, 'second'),
+    removed: path.join(tempRoot, 'removed'),
+  };
+  await Promise.all(Object.values(workspacePaths).map((workspacePath) => (
+    fs.mkdir(workspacePath, { recursive: true })
+  )));
+  const firstWorkspace = multitenancy.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'first',
+    displayName: 'First',
+    path: workspacePaths.first,
+  });
+  const secondWorkspace = multitenancy.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'second',
+    displayName: 'Second',
+    path: workspacePaths.second,
+  });
+  const removedWorkspace = multitenancy.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'removed',
+    displayName: 'Removed',
+    path: workspacePaths.removed,
+  });
+  const preset = multitenancy.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge MCP',
+    config: { type: 'http', url: 'https://mcp.internal/v1' },
+    status: 'published',
+    createdByUserId: adminId,
+  });
+
+  await Promise.all([
+    writeWorkspaceMcpConfig(workspacePaths.first, {
+      mcpServers: {
+        knowledge: { type: 'http', url: 'https://mcp.internal/v1' },
+        custom: { type: 'http', url: 'https://user.example/custom' },
+      },
+    }),
+    writeWorkspaceMcpConfig(workspacePaths.second, {
+      mcpServers: {
+        knowledge: { type: 'http', url: 'https://mcp.internal/v1' },
+      },
+    }),
+    writeWorkspaceMcpConfig(workspacePaths.removed, {
+      mcpServers: {
+        knowledge: { type: 'http', url: 'https://mcp.internal/v1' },
+      },
+    }),
+  ]);
+  for (const workspace of [firstWorkspace, secondWorkspace, removedWorkspace]) {
+    multitenancy.mcpInstalls.upsertInstall({
+      workspaceId: workspace.id,
+      presetId: preset.id,
+      installedByUserId: userId,
+      probeStatus: 'healthy',
+      toolCount: 1,
+      tools: [{ name: 'search_docs' }],
+    });
+  }
+  multitenancy.mcpInstalls.removeInstall({
+    workspaceId: removedWorkspace.id,
+    presetId: preset.id,
+  });
+
+  const service = createMcpPresetService({ multitenancy });
+  const result = await service.updatePreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+    input: {
+      name: 'knowledge_v2',
+      displayName: 'Knowledge MCP v2',
+      description: 'Updated search',
+      type: 'http',
+      url: 'https://mcp.internal/v2',
+      headers: { Authorization: 'Bearer shared' },
+      helperEnv: { ROOT_SECRET: 'must-not-reach-workspaces' },
+    },
+  });
+  const [firstConfig, secondConfig, removedConfig] = await Promise.all([
+    readWorkspaceMcpConfig(workspacePaths.first),
+    readWorkspaceMcpConfig(workspacePaths.second),
+    readWorkspaceMcpConfig(workspacePaths.removed),
+  ]);
+
+  assert.equal(result.preset.name, 'knowledge_v2');
+  assert.deepEqual(result.sync, {
+    total: 2,
+    synced: 2,
+    failed: 0,
+    failures: [],
+  });
+  assert.equal(Object.hasOwn(firstConfig.mcpServers, 'knowledge'), false);
+  assert.deepEqual(firstConfig.mcpServers.knowledge_v2, {
+    type: 'http',
+    url: 'https://mcp.internal/v2',
+    headers: { Authorization: 'Bearer shared' },
+  });
+  assert.deepEqual(firstConfig.mcpServers.custom, {
+    type: 'http',
+    url: 'https://user.example/custom',
+  });
+  assert.equal(Object.hasOwn(secondConfig.mcpServers, 'knowledge'), false);
+  assert.equal(secondConfig.mcpServers.knowledge_v2.url, 'https://mcp.internal/v2');
+  assert.equal(removedConfig.mcpServers.knowledge.url, 'https://mcp.internal/v1');
+  assert.equal(Object.hasOwn(removedConfig.mcpServers, 'knowledge_v2'), false);
+
+  const refreshedInstall = multitenancy.mcpInstalls.listInstallsForWorkspace({
+    workspaceId: firstWorkspace.id,
+  })[0];
+  assert.equal(refreshedInstall.last_probe_status, null);
+  assert.equal(refreshedInstall.tool_count, 0);
+  assert.deepEqual(refreshedInstall.tools, []);
 });
 
 test('admin preset publish requires a successful test result', async () => {
@@ -320,7 +462,7 @@ test('admin preset helper script can be deleted and clears stale validation stat
   assert.equal(multitenancy.mcpPresetHelperScripts.getScript({ tenantId: tenant.id, presetId: preset.id }), null);
 });
 
-test('admin preset copy creates and updates target tenant presets with helper scripts', () => {
+test('admin preset copy creates and updates target tenant presets with helper scripts', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const adminId = seedUser(database, 'admin');
@@ -371,7 +513,7 @@ test('admin preset copy creates and updates target tenant presets with helper sc
     content: 'print("old")\n',
   });
 
-  const copied = service.copyPresetToTenants({
+  const copied = await service.copyPresetToTenants({
     tenantId: sourceTenant.id,
     presetId: sourcePreset.id,
     targetTenantIds: [newTargetTenant.id, existingTargetTenant.id, sourceTenant.id, 99999],
@@ -416,7 +558,7 @@ test('admin preset copy creates and updates target tenant presets with helper sc
   );
 });
 
-test('admin preset copy preserves published status and test metadata', () => {
+test('admin preset copy preserves published status and test metadata', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const adminId = seedUser(database, 'admin');
@@ -484,7 +626,7 @@ test('admin preset copy preserves published status and test metadata', () => {
     },
   });
 
-  const copied = service.copyPresetToTenants({
+  const copied = await service.copyPresetToTenants({
     tenantId: sourceTenant.id,
     presetId: sourcePreset.id,
     targetTenantIds: [targetTenant.id],
@@ -508,7 +650,7 @@ test('admin preset copy preserves published status and test metadata', () => {
   assert.deepEqual(workspacePresets.map((preset) => preset.name), ['published_knowledge']);
 });
 
-test('admin preset copy removes stale target helper scripts when the source has none', () => {
+test('admin preset copy removes stale target helper scripts when the source has none', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const adminId = seedUser(database, 'admin');
@@ -545,7 +687,7 @@ test('admin preset copy removes stale target helper scripts when the source has 
     content: 'print("old")\n',
   });
 
-  const copied = service.copyPresetToTenants({
+  const copied = await service.copyPresetToTenants({
     tenantId: sourceTenant.id,
     presetId: sourcePreset.id,
     targetTenantIds: [targetTenant.id],

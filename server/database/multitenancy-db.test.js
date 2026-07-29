@@ -576,10 +576,37 @@ test('mcp preset installs are idempotent per workspace and preset', () => {
   assert.equal(probed.last_probe_error, 'connection refused');
   assert.equal(probed.tool_count, 0);
 
+  assert.deepEqual(
+    mt.mcpInstalls.listInstallsForPreset({
+      tenantId: tenant.id,
+      presetId: preset.id,
+    }).map((row) => ({
+      workspaceId: row.workspace_id,
+      workspacePath: row.workspace_path,
+    })),
+    [{
+      workspaceId: workspace.id,
+      workspacePath: '/tmp/cloudcli/team/alice/repo',
+    }],
+  );
+
+  const applied = mt.mcpInstalls.recordApplied({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+  });
+  assert.equal(applied.last_probe_status, null);
+  assert.equal(applied.last_probe_error, null);
+  assert.equal(applied.tool_count, 0);
+  assert.deepEqual(applied.tools, []);
+
   const removed = mt.mcpInstalls.removeInstall({ workspaceId: workspace.id, presetId: preset.id });
 
   assert.equal(removed.status, 'removed');
   assert.deepEqual(mt.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id }), []);
+  assert.deepEqual(mt.mcpInstalls.listInstallsForPreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+  }), []);
 });
 
 test('session index keeps shared workspace sessions private per user', () => {

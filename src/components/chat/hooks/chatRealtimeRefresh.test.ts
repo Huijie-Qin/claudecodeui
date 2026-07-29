@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { shouldRefreshProjectsForRealtimeMessage } from './chatRealtimeRefresh';
+import {
+  shouldRefreshProjectsForRealtimeMessage,
+  shouldRefreshSessionHistoryForRealtimeMessage,
+} from './chatRealtimeRefresh';
 import { shouldAdoptCreatedSession } from './sessionCreatedRouting';
 
 test('shouldRefreshProjectsForRealtimeMessage refreshes when a provider session is created', () => {
@@ -38,6 +41,36 @@ test('shouldRefreshProjectsForRealtimeMessage refreshes after a successful compl
 test('shouldRefreshProjectsForRealtimeMessage ignores failed completions and unrelated messages', () => {
   assert.equal(shouldRefreshProjectsForRealtimeMessage({ kind: 'complete', exitCode: 1, sessionId: 'session-123' }), false);
   assert.equal(shouldRefreshProjectsForRealtimeMessage({ kind: 'text', sessionId: 'session-123' }), false);
+});
+
+test('shouldRefreshSessionHistoryForRealtimeMessage refreshes after normalized completion', () => {
+  assert.equal(
+    shouldRefreshSessionHistoryForRealtimeMessage({
+      kind: 'complete',
+      exitCode: 0,
+      sessionId: 'session-123',
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRefreshSessionHistoryForRealtimeMessage({
+      kind: 'complete',
+      exitCode: 1,
+      sessionId: 'session-123',
+    }),
+    false,
+  );
+});
+
+test('shouldRefreshSessionHistoryForRealtimeMessage preserves legacy session status refreshes', () => {
+  assert.equal(
+    shouldRefreshSessionHistoryForRealtimeMessage({
+      type: 'session-status',
+      isProcessing: false,
+      sessionId: 'session-123',
+    }),
+    true,
+  );
 });
 
 test('shouldAdoptCreatedSession ignores a new-session event after the user switched to another session', () => {

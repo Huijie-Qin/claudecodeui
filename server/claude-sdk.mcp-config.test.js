@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  applyMcpConfigToSdkOptions,
+  loadMcpConfig,
+} from './services/claude-mcp-config.js';
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -110,4 +113,42 @@ test('loadMcpConfig returns null when no MCP servers are configured', async () =
   const config = await loadMcpConfig(workspacePath, { homeDir });
 
   assert.equal(config, null);
+});
+
+test('removed MCP servers stay removed when a Claude session is resumed', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-sdk-mcp-remove-'));
+  const homeDir = path.join(tempRoot, 'home');
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const workspaceConfigPath = path.join(workspacePath, '.mcp.json');
+  await fs.mkdir(workspacePath, { recursive: true });
+
+  try {
+    await writeJson(workspaceConfigPath, {
+      mcpServers: {
+        removed_server: {
+          type: 'http',
+          url: 'https://removed.example.com/mcp',
+        },
+      },
+    });
+
+    const connectedServers = await loadMcpConfig(workspacePath, { homeDir });
+    const connectedSdkOptions = { resume: 'existing-session' };
+    applyMcpConfigToSdkOptions(connectedSdkOptions, connectedServers);
+
+    assert.deepEqual(Object.keys(connectedSdkOptions.mcpServers), ['removed_server']);
+    assert.equal(connectedSdkOptions.strictMcpConfig, true);
+
+    await fs.rm(workspaceConfigPath);
+
+    const serversAfterRemoval = await loadMcpConfig(workspacePath, { homeDir });
+    const resumedSdkOptions = { resume: 'existing-session' };
+    applyMcpConfigToSdkOptions(resumedSdkOptions, serversAfterRemoval);
+
+    assert.equal(serversAfterRemoval, null);
+    assert.equal(Object.hasOwn(resumedSdkOptions, 'mcpServers'), false);
+    assert.equal(resumedSdkOptions.strictMcpConfig, true);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });

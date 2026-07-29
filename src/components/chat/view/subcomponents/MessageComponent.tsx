@@ -11,6 +11,7 @@ import type {
 } from '../../types/types';
 import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
+import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -242,6 +243,25 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
             <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${message.taskStatus === 'completed' ? 'bg-green-400 dark:bg-green-500' : 'bg-amber-400 dark:bg-amber-500'}`} />
             <span className="text-xs text-gray-500 dark:text-gray-400">{message.content}</span>
           </div>
+          {message.taskNotification?.result && (
+            <details className="ml-3 mt-1 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+              <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground">
+                Task result
+              </summary>
+              <Markdown className="prose prose-sm mt-2 max-w-none dark:prose-invert">
+                {message.taskNotification.result}
+              </Markdown>
+            </details>
+          )}
+          {message.taskNotification && Object.keys(message.taskNotification.usage).length > 0 && (
+            <div className="ml-3 mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground/80">
+              {Object.entries(message.taskNotification.usage).map(([name, value]) => (
+                <span key={name}>
+                  {formatTaskNotificationUsageLabel(name)}: {String(value)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         /* Claude/Error/Tool messages on the left */
@@ -294,6 +314,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   toolCompletedAt={message.toolCompletedAt}
                   isSubagentContainer={message.isSubagentContainer}
                   subagentState={message.subagentState}
+                  taskNotification={message.taskNotification}
                 />
 
                 {/* Tool Result Section */}
@@ -382,6 +403,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         createDiff={createDiff}
                         selectedProject={selectedProject}
                         autoExpandTools={autoExpandTools}
+                        taskNotification={message.taskNotification}
                       />
                     </div>
                   )

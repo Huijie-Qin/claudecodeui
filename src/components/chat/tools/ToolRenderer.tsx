@@ -1,7 +1,7 @@
 import React, { memo, useMemo, useCallback } from 'react';
 
 import type { Project } from '../../../types/app';
-import type { SubagentChildTool } from '../types/types';
+import type { SubagentChildTool, TaskNotificationDetails } from '../types/types';
 import { isClaudePermissionErrorContent } from '../utils/chatPermissions';
 
 import { getToolConfig } from './configs/toolConfigs';
@@ -30,10 +30,12 @@ interface ToolRendererProps {
   rawToolInput?: string;
   toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
+  taskNotification?: TaskNotificationDetails;
   subagentState?: {
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
+    detailsOwnerToolId?: string;
   };
 }
 
@@ -43,7 +45,7 @@ function getToolCategory(toolName: string): string {
   if (toolName === 'Bash') return 'bash';
   if (['TodoWrite', 'TodoRead'].includes(toolName)) return 'todo';
   if (['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolName)) return 'task';
-  if (toolName === 'Task') return 'agent';
+  if (toolName === 'Task' || toolName === 'Agent') return 'agent';
   if (toolName === 'exit_plan_mode' || toolName === 'ExitPlanMode') return 'plan';
   if (toolName === 'AskUserQuestion') return 'question';
   return 'default';
@@ -78,6 +80,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   rawToolInput,
   toolCompletedAt,
   isSubagentContainer,
+  taskNotification,
   subagentState
 }) => {
   const config = getToolConfig(toolName);
@@ -122,6 +125,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         toolResult={toolResult}
         completionTime={completionTime}
         subagentState={subagentState}
+        taskNotification={taskNotification}
       />
     );
   }

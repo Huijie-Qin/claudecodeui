@@ -20,10 +20,10 @@ import type {
   PermissionMode,
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
-import { escapeRegExp } from '../utils/chatFormatting';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { extractSlashCommandArguments } from './useSlashCommands.utils';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -275,9 +275,10 @@ export function useChatComposerState({
 
       try {
         const effectiveInput = rawInput ?? input;
-        const commandMatch = effectiveInput.match(new RegExp(`${escapeRegExp(command.name)}\\s*(.*)`));
-        const args =
-          commandMatch && commandMatch[1] ? commandMatch[1].trim().split(/\s+/) : [];
+        const { args, rawArgs } = extractSlashCommandArguments({
+          commandName: command.name,
+          input: effectiveInput,
+        });
 
         const context = {
           projectPath: selectedProject.fullPath || selectedProject.path,
@@ -298,6 +299,7 @@ export function useChatComposerState({
             commandName: command.name,
             commandPath: command.path,
             args,
+            rawArgs,
             context,
           }),
         });

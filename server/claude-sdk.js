@@ -31,7 +31,10 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
-import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  applyMcpConfigToSdkOptions,
+  loadMcpConfig,
+} from './services/claude-mcp-config.js';
 import {
   MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
   applyMcpToolOverrides,
@@ -889,9 +892,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
     });
-    if (mcpServers) {
-      sdkOptions.mcpServers = mcpServers;
-    }
+    applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
       priority: 'next',
