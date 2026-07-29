@@ -335,7 +335,6 @@ export default function McpToolSettingsDialog({
                           <div className="border-r border-border px-3 py-3">
                             <div className="break-words font-mono text-xs font-semibold text-foreground">
                               {field.key}
-                              {field.required ? <span className="ml-1 text-destructive">*</span> : null}
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">{field.kind}</div>
                           </div>
