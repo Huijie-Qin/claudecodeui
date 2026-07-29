@@ -205,7 +205,9 @@ docker-compose up -d --force-recreate
 
 `compose.yml` 会把 `CLOUDCLI_DATA_ROOT`、`WORKSPACES_ROOT` 和 `CLOUDCLI_RUNTIME_ROOT` 以相同的宿主机和容器路径挂载。数据库挂载整个目录而不是单独挂载 `auth.db`，以便同时持久化 SQLite 的 WAL、shared-memory 和 journal 文件。UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 workspace 和 runtime bind source 也必须能被宿主 Docker daemon 解析。不要改成 named volume，也不要只在 UI 容器内部创建这些目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
 
-`CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT` 默认位于 `CLOUDCLI_RUNTIME_ROOT` 下，因此会被上面的 runtime bind 一并覆盖。如果把它单独改到 `HOME` 和 `CLOUDCLI_RUNTIME_ROOT` 之外，也需要在 Compose 中增加对应的宿主机同路径 bind mount。
+UI 容器的 `HOME` 固定为 `/home/cloudcli`，并由私有的 `cloudcli-home` named volume 持久化。Compose 不再挂载宿主机的 `HOME`，因此不会读取或修改宿主 `/root/.ssh`、`/root/.docker`、`/root/.claude` 等敏感目录。如果确实需要某个宿主 Git/SSH 配置，应只单独挂载所需文件或子目录，不要恢复整个宿主 HOME bind。
+
+`CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT` 默认位于 `CLOUDCLI_RUNTIME_ROOT` 下，因此会被上面的 runtime bind 一并覆盖。如果把它改到 `CLOUDCLI_RUNTIME_ROOT` 之外，也需要增加对应的宿主机同路径 bind mount；`cloudcli-home` named volume 内的路径不能作为宿主 Docker daemon 的 bind source。
 
 ## 5. 启动开发模式
 

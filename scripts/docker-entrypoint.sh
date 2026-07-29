@@ -13,9 +13,15 @@ CLOUDCLI_RUNTIME_ROOT="${CLOUDCLI_RUNTIME_ROOT:-${CLOUDCLI_RUNTIME_PATH:-$DATA_R
 CLOUDCLI_DATA_ROOT="$DATA_ROOT"
 export CLOUDCLI_DATA_ROOT CLOUDCLI_RUNTIME_ROOT DATABASE_PATH HOME WORKSPACES_ROOT
 
-identity_path="$HOME"
+identity_path="$WORKSPACES_ROOT"
 if [ ! -d "$identity_path" ]; then
   identity_path="$DATA_ROOT"
+fi
+if [ ! -d "$identity_path" ]; then
+  identity_path="$CLOUDCLI_RUNTIME_ROOT"
+fi
+if [ ! -d "$identity_path" ]; then
+  identity_path="$HOME"
 fi
 
 detected_uid="$(stat -c '%u' "$identity_path" 2>/dev/null || printf '1000')"

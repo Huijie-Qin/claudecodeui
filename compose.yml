@@ -29,10 +29,9 @@ services:
       SERVER_PORT: 3001
       CLAUDE_EXECUTION_MODE: docker
 
-      # Mount the host home at the identical path. Application storage roots
-      # are mounted separately below so they persist and child containers can
-      # resolve bind sources on the host.
-      HOME: ${HOME:?HOME must be set to an absolute host path}
+      # Keep the UI's home isolated from the host. A private named volume below
+      # persists optional UI-level configuration without exposing host secrets.
+      HOME: /home/cloudcli
 
       # Keep every configured storage path identical on the host and in the UI
       # container. Mount the database directory rather than only the SQLite file
@@ -43,7 +42,7 @@ services:
       CLOUDCLI_RUNTIME_ROOT: &runtime_root "${CLOUDCLI_RUNTIME_ROOT:?CLOUDCLI_RUNTIME_ROOT must be set in .env to an absolute host path}"
 
       # Optional overrides. When omitted, the entrypoint detects ownership from
-      # the mounted host root and falls back to 1000 for a root-owned new path.
+      # the mounted workspace root and falls back to 1000 for a root-owned path.
       PUID: ${PUID:-}
       PGID: ${PGID:-}
 
@@ -53,12 +52,11 @@ services:
       CLOUDCLI_DOCKER_PYTHON_PACKAGES: ${CLOUDCLI_DOCKER_PYTHON_PACKAGES:-requests}
       CLOUDCLI_DOCKER_SHARED_PYTHON: ${CLOUDCLI_DOCKER_SHARED_PYTHON:-true}
     volumes:
-      # Do not replace this with a named volume or change only the container-side
-      # path: existing workspace records and the host Docker daemon must be able
-      # to resolve these exact paths.
-      - type: bind
-        source: ${HOME:?HOME must be set to an absolute host path}
-        target: ${HOME:?HOME must be set to an absolute host path}
+      - type: volume
+        source: cloudcli-home
+        target: /home/cloudcli
+      # Keep application storage as same-path bind mounts. Existing workspace
+      # records and the host Docker daemon must resolve these exact paths.
       - type: bind
         source: *data_root
         target: *data_root
@@ -82,3 +80,6 @@ services:
       retries: 3
       start_period: 20s
     stop_grace_period: 40s
+
+volumes:
+  cloudcli-home:
