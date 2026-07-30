@@ -9,7 +9,7 @@ import { getNextCronRunAt, getNextCronRunAtWithStart, normalizeCronExpression } 
 import {
   buildScheduledTaskRunSessionSummary,
   normalizeScheduledTaskSessionMode,
-  resolveScheduledTaskProviderPrompt,
+  resolveScheduledTaskPrompts,
   resolveScheduledTaskResumeSession,
   sanitizeScheduledTaskEvent,
 } from './scheduled-task-execution.js';
@@ -341,23 +341,27 @@ function isInvalidClaudeResumeError(errorMessage) {
 
 async function runProviderTask(task, writer) {
   const options = createScheduledTaskOptions(task);
-  const prompt = resolveScheduledTaskProviderPrompt(task.prompt);
-  writer.setPromptDisplay?.({ displayPrompt: task.prompt, modelPrompt: prompt });
+  const { displayPrompt, modelPrompt } = await resolveScheduledTaskPrompts({
+    provider: task.provider,
+    prompt: task.prompt,
+    workspacePath: task.workspace_path,
+  });
+  writer.setPromptDisplay?.({ displayPrompt, modelPrompt });
 
   if (task.provider === 'cursor') {
-    await spawnCursor(prompt, options, writer);
+    await spawnCursor(modelPrompt, options, writer);
   } else if (task.provider === 'codex') {
-    await queryCodex(prompt, options, writer);
+    await queryCodex(modelPrompt, options, writer);
   } else if (task.provider === 'gemini') {
-    await spawnGemini(prompt, options, writer);
+    await spawnGemini(modelPrompt, options, writer);
   } else {
-    await queryClaudeSDK(prompt, options, writer);
+    await queryClaudeSDK(modelPrompt, options, writer);
     if (options.resume && isInvalidClaudeResumeError(writer.getLastError?.())) {
       console.warn(
         `[ScheduledTasks] Task ${task.id} could not resume Claude session ${options.sessionId}; retrying with a new session`,
       );
       writer.clearLastError?.();
-      await queryClaudeSDK(prompt, {
+      await queryClaudeSDK(modelPrompt, {
         ...options,
         sessionId: undefined,
         resume: false,
