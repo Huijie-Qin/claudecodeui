@@ -67,7 +67,6 @@ import messagesRoutes from './routes/messages.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
-import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
 import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
@@ -1014,10 +1013,6 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                         path.join(runtime.runtime_home_path, '.claude', 'projects'),
                         sessionId,
                     );
-                    await deleteClaudeDisplayCommands({
-                        runtimeHomePath: runtime.runtime_home_path,
-                        sessionId,
-                    });
                 }
             }
 

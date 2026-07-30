@@ -828,6 +828,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     try {
       await appendClaudeDisplayCommand({
         runtimeHomePath: runtimeOptions.runtimeHomePath,
+        projectPath: runtimeOptions.projectPath || runtimeOptions.cwd,
         sessionId: providerSessionId,
         ...initialDisplayCommandRecord,
       });
@@ -1730,6 +1731,7 @@ function pushClaudeSupplement({
   const claudeMessageId = createRequestId();
   void appendClaudeDisplayCommand({
     runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
     sessionId: normalizedSessionId,
     messageId: claudeMessageId,
     displayCommand: normalizedDisplayContent,

@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const DISPLAY_COMMANDS_DIRECTORY = path.join('.cloudcli', 'claude-display-commands');
+const CLAUDE_PROJECTS_DIRECTORY = path.join('.claude', 'projects');
+const DISPLAY_COMMANDS_FILE_NAME = 'display-commands.jsonl';
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 const SLASH_COMMAND_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
 const pendingWrites = new Map();
@@ -21,11 +22,27 @@ export function normalizeClaudeDisplayCommand(value) {
     : null;
 }
 
-export function resolveClaudeDisplayCommandPath(runtimeHomePath, sessionId) {
+function normalizeClaudeProjectStorageName(projectPath) {
+  const normalizedProjectPath = normalizeIdentifier(projectPath);
+  return normalizedProjectPath
+    ? normalizedProjectPath.replace(/[^a-zA-Z0-9-]/g, '-')
+    : '';
+}
+
+function resolveClaudeProjectsRoot(runtimeHomePath) {
   const normalizedRuntimeHomePath = normalizeIdentifier(runtimeHomePath);
+  return normalizedRuntimeHomePath
+    ? path.join(normalizedRuntimeHomePath, CLAUDE_PROJECTS_DIRECTORY)
+    : null;
+}
+
+export function resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId) {
+  const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
+  const projectStorageName = normalizeClaudeProjectStorageName(projectPath);
   const normalizedSessionId = normalizeIdentifier(sessionId);
   if (
-    !normalizedRuntimeHomePath
+    !projectsRoot
+    || !projectStorageName
     || !normalizedSessionId
     || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
   ) {
@@ -33,10 +50,56 @@ export function resolveClaudeDisplayCommandPath(runtimeHomePath, sessionId) {
   }
 
   return path.join(
-    normalizedRuntimeHomePath,
-    DISPLAY_COMMANDS_DIRECTORY,
-    `${normalizedSessionId}.jsonl`,
+    projectsRoot,
+    projectStorageName,
+    normalizedSessionId,
+    DISPLAY_COMMANDS_FILE_NAME,
   );
+}
+
+async function findClaudeDisplayCommandPaths(runtimeHomePath, sessionId) {
+  const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
+  const normalizedSessionId = normalizeIdentifier(sessionId);
+  if (
+    !projectsRoot
+    || !normalizedSessionId
+    || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
+  ) {
+    return [];
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(projectsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+
+  const displayCommandPaths = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const projectDirectory = path.join(projectsRoot, entry.name);
+    try {
+      await fs.access(path.join(projectDirectory, `${normalizedSessionId}.jsonl`));
+      displayCommandPaths.push(path.join(
+        projectDirectory,
+        normalizedSessionId,
+        DISPLAY_COMMANDS_FILE_NAME,
+      ));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  return displayCommandPaths;
 }
 
 async function waitForPendingWrite(filePath) {
@@ -64,12 +127,13 @@ async function serializeWrite(filePath, operation) {
 
 export async function appendClaudeDisplayCommand({
   runtimeHomePath,
+  projectPath,
   sessionId,
   messageId,
   displayCommand,
   modelContent,
 }) {
-  const filePath = resolveClaudeDisplayCommandPath(runtimeHomePath, sessionId);
+  const filePath = resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId);
   const normalizedMessageId = normalizeIdentifier(messageId);
   const normalizedDisplayCommand = normalizeClaudeDisplayCommand(displayCommand);
   const normalizedModelContent = typeof modelContent === 'string'
@@ -102,61 +166,38 @@ export async function readClaudeDisplayCommands({
   runtimeHomePath,
   sessionId,
 }) {
-  const filePath = resolveClaudeDisplayCommandPath(runtimeHomePath, sessionId);
   const displayCommands = new Map();
-  if (!filePath) {
-    return displayCommands;
-  }
+  const filePaths = await findClaudeDisplayCommandPaths(runtimeHomePath, sessionId);
+  for (const filePath of filePaths) {
+    await waitForPendingWrite(filePath);
 
-  await waitForPendingWrite(filePath);
-
-  let content;
-  try {
-    content = await fs.readFile(filePath, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return displayCommands;
-    }
-    throw error;
-  }
-
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-
+    let content;
     try {
-      const record = JSON.parse(line);
-      const messageId = normalizeIdentifier(record?.messageId);
-      const displayCommand = normalizeClaudeDisplayCommand(record?.displayCommand);
-      if (messageId && displayCommand) {
-        displayCommands.set(messageId, displayCommand);
+      content = await fs.readFile(filePath, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        continue;
       }
-    } catch {
-      // Ignore a partial final line if the process stopped during an append.
+      throw error;
+    }
+
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        const record = JSON.parse(line);
+        const messageId = normalizeIdentifier(record?.messageId);
+        const displayCommand = normalizeClaudeDisplayCommand(record?.displayCommand);
+        if (messageId && displayCommand) {
+          displayCommands.set(messageId, displayCommand);
+        }
+      } catch {
+        // Ignore a partial final line if the process stopped during an append.
+      }
     }
   }
 
   return displayCommands;
-}
-
-export async function deleteClaudeDisplayCommands({
-  runtimeHomePath,
-  sessionId,
-}) {
-  const filePath = resolveClaudeDisplayCommandPath(runtimeHomePath, sessionId);
-  if (!filePath) {
-    return false;
-  }
-
-  await waitForPendingWrite(filePath);
-  try {
-    await fs.unlink(filePath);
-    return true;
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
 }

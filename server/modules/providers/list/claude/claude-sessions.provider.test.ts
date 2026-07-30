@@ -224,7 +224,7 @@ test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user mes
 
   const sessionId = 'runtime-session-1';
   const messageId = '11111111-1111-4111-8111-111111111111';
-  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', 'workspace');
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
   await fs.mkdir(projectDirectory, { recursive: true });
   await fs.writeFile(
     path.join(projectDirectory, `${sessionId}.jsonl`),
@@ -242,6 +242,7 @@ test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user mes
   );
   await appendClaudeDisplayCommand({
     runtimeHomePath,
+    projectPath: '/workspace',
     sessionId,
     messageId,
     displayCommand: '/report-skill generate report',

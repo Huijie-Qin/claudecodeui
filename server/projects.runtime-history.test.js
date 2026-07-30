@@ -103,6 +103,11 @@ test('runtime Claude session deletion removes only the target transcript and ses
   await writeJsonl(path.join(projectDir, 'session-delete.jsonl'), []);
   await writeJsonl(path.join(projectDir, 'session-keep.jsonl'), []);
   await fs.mkdir(path.join(projectDir, 'session-delete', 'tool-results'), { recursive: true });
+  await fs.mkdir(path.join(projectDir, 'session-delete', 'subagents'), { recursive: true });
+  await writeJsonl(
+    path.join(projectDir, 'session-delete', 'display-commands.jsonl'),
+    [{ version: 1, messageId: 'message-1', displayCommand: '/report-skill' }],
+  );
 
   assert.equal(await deleteSessionFromProjectsRoot(projectsRoot, 'session-delete'), true);
   await assert.rejects(fs.access(path.join(projectDir, 'session-delete.jsonl')));
