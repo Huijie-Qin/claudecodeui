@@ -46,6 +46,102 @@ function isPersistableMessage(message) {
   );
 }
 
+function isScheduledSession(ownedSession) {
+  if (typeof ownedSession?.metadata_json !== 'string' || !ownedSession.metadata_json.trim()) {
+    return false;
+  }
+
+  try {
+    return Boolean(JSON.parse(ownedSession.metadata_json)?.scheduledTaskId);
+  } catch {
+    return false;
+  }
+}
+
+function getMessageTimestampMs(message) {
+  const value = message?.timestamp;
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function paginateHistory(messages, limit, offset) {
+  const normalizedOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
+  const normalizedLimit = limit == null
+    ? null
+    : (Number.isInteger(limit) && limit >= 0 ? limit : null);
+  const total = messages.length;
+
+  if (
+    total === 0
+    || normalizedOffset >= total
+    || normalizedLimit === 0
+  ) {
+    return {
+      messages: [],
+      total,
+      hasMore: normalizedLimit === 0 && normalizedOffset < total,
+      offset: normalizedOffset,
+      limit: normalizedLimit,
+    };
+  }
+
+  if (normalizedLimit === null) {
+    return {
+      messages,
+      total,
+      hasMore: false,
+      offset: normalizedOffset,
+      limit: normalizedLimit,
+    };
+  }
+
+  const startIndex = Math.max(0, total - normalizedOffset - normalizedLimit);
+  return {
+    messages: messages.slice(startIndex, startIndex + normalizedLimit),
+    total,
+    hasMore: startIndex > 0,
+    offset: normalizedOffset,
+    limit: normalizedLimit,
+  };
+}
+
+function mergeLegacyClaudeHistory({
+  dbMessages,
+  jsonlMessages,
+  limit,
+  offset,
+}) {
+  const legacyCutoff = dbMessages.reduce((latest, message) => {
+    const timestamp = getMessageTimestampMs(message);
+    return timestamp === null ? latest : Math.max(latest, timestamp);
+  }, Number.NEGATIVE_INFINITY);
+
+  if (!Number.isFinite(legacyCutoff)) {
+    console.warn(
+      '[SessionHistory] Legacy Claude DB messages have no valid timestamp; '
+      + 'using the DB history to avoid duplicate or expanded JSONL messages',
+    );
+    return paginateHistory(dbMessages, limit, offset);
+  }
+
+  const newJsonlMessages = jsonlMessages.filter((message) => {
+    const timestamp = getMessageTimestampMs(message);
+    return timestamp !== null && timestamp > legacyCutoff;
+  });
+
+  return paginateHistory([...dbMessages, ...newJsonlMessages], limit, offset);
+}
+
 export function shouldSuppressLiveUserTextMessage(message, writer) {
   const content = getMessageContent(message).trimStart();
   const isTaskNotification = /^<task-notification\b/i.test(content);
@@ -73,12 +169,20 @@ export function createSessionMessageHistoryService({
       offset = 0,
     }) {
       if (provider === 'claude') {
-        const runtimeLookup = {
+        const historyLookup = {
           tenantId,
           userId,
           workspaceId: ownedSession.workspace_id,
           provider,
           providerSessionId,
+        };
+        const dbHistory = multitenancy.sessionMessages.listMessages({
+          ...historyLookup,
+          limit: null,
+          offset: 0,
+        });
+        const runtimeLookup = {
+          ...historyLookup,
         };
         const runtime = multitenancy.runtimes?.findByProviderSession?.(runtimeLookup)
           || multitenancy.runtimes?.findByOwner?.({
@@ -90,29 +194,31 @@ export function createSessionMessageHistoryService({
           });
 
         if (runtime?.runtime_home_path && providerSessions) {
+          const scheduledSession = isScheduledSession(ownedSession);
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
             projectName: ownedSession.workspace_slug || '',
             projectPath: ownedSession.workspace_path || '',
             runtimeHomePath: runtime.runtime_home_path,
-            limit,
-            offset,
+            limit: scheduledSession || dbHistory.total === 0 ? limit : null,
+            offset: scheduledSession || dbHistory.total === 0 ? offset : 0,
           });
           if (jsonlHistory.total > 0) {
-            return jsonlHistory;
+            if (scheduledSession || dbHistory.total === 0) {
+              return jsonlHistory;
+            }
+
+            return mergeLegacyClaudeHistory({
+              dbMessages: dbHistory.messages,
+              jsonlMessages: jsonlHistory.messages,
+              limit,
+              offset,
+            });
           }
         }
 
         // Transitional fallback for legacy sessions whose runtime home or JSONL
         // was removed before runtime-aware history was introduced.
-        return multitenancy.sessionMessages.listMessages({
-          tenantId,
-          userId,
-          workspaceId: ownedSession.workspace_id,
-          provider,
-          providerSessionId,
-          limit,
-          offset,
-        });
+        return paginateHistory(dbHistory.messages, limit, offset);
       }
 
       const dbHistory = multitenancy.sessionMessages.listMessages({

@@ -55,7 +55,10 @@ import {
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
-import { createNormalizedMessage } from './shared/utils.js';
+import {
+  attachClaudeDisplayCommand,
+  createNormalizedMessage,
+} from './shared/utils.js';
 
 const activeSessions = new Map();
 const abortedSessions = new Set();
@@ -872,6 +875,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
+    const modelCommand = attachClaudeDisplayCommand(command, displayCommand);
 
     persistUserPromptMessage({
       options: runtimeOptions,
@@ -894,7 +898,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
-    inputQueue.push(buildClaudeUserMessage(command, options.images, {
+    inputQueue.push(buildClaudeUserMessage(modelCommand, options.images, {
       priority: 'next',
       shouldQuery: true,
     }));
@@ -1689,7 +1693,8 @@ function pushClaudeSupplement({
   });
 
   markSessionProcessing(normalizedSessionId);
-  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+  const queuedContent = attachClaudeDisplayCommand(normalizedContent, normalizedDisplayContent);
+  session.inputQueue.push(buildClaudeUserMessage(queuedContent, [], {
     priority,
     shouldQuery,
     timestamp,

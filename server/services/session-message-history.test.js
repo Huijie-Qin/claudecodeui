@@ -9,7 +9,7 @@ import {
   shouldSuppressLiveUserTextMessage,
 } from './session-message-history.js';
 
-test('Claude session history prefers runtime JSONL over legacy DB rows', async () => {
+test('Claude session history keeps legacy DB rows and appends JSONL rows after the DB cutoff', async () => {
   let historyOptions = null;
   const service = createSessionMessageHistoryService({
     multitenancy: {
@@ -18,8 +18,27 @@ test('Claude session history prefers runtime JSONL over legacy DB rows', async (
       },
       sessionMessages: {
         listMessages: () => ({
-          messages: [{ id: 'db-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
-          total: 1,
+          messages: [
+            {
+              id: 'db-user',
+              kind: 'text',
+              role: 'user',
+              content: '/report-skill old request',
+              timestamp: '2026-07-29T01:00:00.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'db-assistant',
+              kind: 'text',
+              role: 'assistant',
+              content: 'Old response',
+              timestamp: '2026-07-29T01:00:01.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+          ],
+          total: 2,
           hasMore: false,
           offset: 0,
           limit: null,
@@ -30,8 +49,45 @@ test('Claude session history prefers runtime JSONL over legacy DB rows', async (
       fetchHistory: async (_provider, _sessionId, options) => {
         historyOptions = options;
         return {
-          messages: [{ id: 'jsonl-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
-          total: 1,
+          messages: [
+            {
+              id: 'jsonl-expanded-old-user',
+              kind: 'text',
+              role: 'user',
+              content: '# Expanded old skill instructions',
+              timestamp: '2026-07-29T01:00:00.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'jsonl-old-assistant',
+              kind: 'text',
+              role: 'assistant',
+              content: 'Old response',
+              timestamp: '2026-07-29T01:00:01.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'jsonl-new-user',
+              kind: 'text',
+              role: 'user',
+              content: '/report-skill new request',
+              timestamp: '2026-07-29T01:00:02.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'jsonl-new-assistant',
+              kind: 'text',
+              role: 'assistant',
+              content: 'New response',
+              timestamp: '2026-07-29T01:00:03.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+          ],
+          total: 4,
           hasMore: false,
           offset: 0,
           limit: null,
@@ -52,9 +108,156 @@ test('Claude session history prefers runtime JSONL over legacy DB rows', async (
     },
   });
 
-  assert.equal(result.total, 1);
-  assert.equal(result.messages[0].id, 'jsonl-msg');
+  assert.equal(result.total, 4);
+  assert.deepEqual(
+    result.messages.map((message) => message.id),
+    ['db-user', 'db-assistant', 'jsonl-new-user', 'jsonl-new-assistant'],
+  );
   assert.equal(historyOptions.runtimeHomePath, '/tmp/runtime/home');
+  assert.equal(historyOptions.limit, null);
+  assert.equal(historyOptions.offset, 0);
+});
+
+test('Claude session history reads a new JSONL-only session with provider pagination', async () => {
+  let historyOptions = null;
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [],
+          total: 0,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async (_provider, _sessionId, options) => {
+        historyOptions = options;
+        return {
+          messages: [{ id: 'jsonl-msg', kind: 'text', provider: 'claude', sessionId: 's1' }],
+          total: 1,
+          hasMore: false,
+          offset: options.offset,
+          limit: options.limit,
+        };
+      },
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+    limit: 25,
+    offset: 5,
+  });
+
+  assert.equal(result.messages[0].id, 'jsonl-msg');
+  assert.equal(historyOptions.limit, 25);
+  assert.equal(historyOptions.offset, 5);
+});
+
+test('Claude mixed history paginates after applying the DB-to-JSONL cutoff', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [
+            {
+              id: 'db-1',
+              kind: 'text',
+              timestamp: '2026-07-29T01:00:00.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'db-2',
+              kind: 'text',
+              timestamp: '2026-07-29T01:00:01.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+          ],
+          total: 2,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          {
+            id: 'jsonl-overlap',
+            kind: 'text',
+            timestamp: '2026-07-29T01:00:01.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'jsonl-1',
+            kind: 'text',
+            timestamp: '2026-07-29T01:00:02.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'jsonl-2',
+            kind: 'text',
+            timestamp: '2026-07-29T01:00:03.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'jsonl-3',
+            kind: 'text',
+            timestamp: '2026-07-29T01:00:04.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 4,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+    limit: 2,
+    offset: 2,
+  });
+
+  assert.equal(result.total, 5);
+  assert.equal(result.hasMore, true);
+  assert.equal(result.limit, 2);
+  assert.equal(result.offset, 2);
+  assert.deepEqual(result.messages.map((message) => message.id), ['db-2', 'jsonl-1']);
 });
 
 test('background runs keep live user queries while interactive runs suppress echoed queries', () => {

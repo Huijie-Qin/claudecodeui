@@ -3,7 +3,12 @@ import path from 'node:path';
 import { getSessionMessages, getSessionMessagesFromProjectsRoot } from '@/projects.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
-import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
+import {
+  createNormalizedMessage,
+  extractClaudeDisplayCommand,
+  generateMessageId,
+  readObjectRecord,
+} from '@/shared/utils.js';
 
 const PROVIDER = 'claude';
 
@@ -74,34 +79,6 @@ const INTERNAL_SKILL_CONTENT_PATTERNS = [
   /^\s*skill\s+(?:body|content|detail|details|instructions|parameters|params|arguments|args)\s*:/i,
 ] as const;
 
-const SKILL_USER_REQUEST_DELIMITER = '\n\n## User request\n\n';
-const SKILL_NAME_HEADING_PATTERN = /^# ([^\r\n]+)$/m;
-
-/**
- * CCUI expands slash-invoked skills before sending them to Claude. The
- * canonical JSONL transcript therefore contains the skill body followed by
- * the original user request. Reconstruct the compact command form for
- * user-facing history while leaving the transcript itself untouched.
- */
-function extractExpandedSkillInvocation(content: string): string | null {
-  const requestIndex = content.lastIndexOf(SKILL_USER_REQUEST_DELIMITER);
-  if (requestIndex < 0) {
-    return null;
-  }
-
-  const skillContent = content.slice(0, requestIndex);
-  const skillName = SKILL_NAME_HEADING_PATTERN.exec(skillContent)?.[1]?.trim();
-  if (!skillName || /[\s/]/.test(skillName)) {
-    return null;
-  }
-
-  const userQuery = content
-    .slice(requestIndex + SKILL_USER_REQUEST_DELIMITER.length)
-    .trim();
-
-  return userQuery ? `/${skillName} ${userQuery}` : `/${skillName}`;
-}
-
 function isInternalContent(content: string): boolean {
   const normalizedContent = content.trimStart();
   return (
@@ -116,9 +93,9 @@ function cleanAssistantText(text: string): string {
 }
 
 function resolveVisibleUserText(text: string): string | null {
-  const skillInvocation = extractExpandedSkillInvocation(text);
-  if (skillInvocation) {
-    return skillInvocation;
+  const displayCommand = extractClaudeDisplayCommand(text);
+  if (displayCommand) {
+    return displayCommand;
   }
 
   return isInternalContent(text) ? null : text;

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { attachClaudeDisplayCommand } from '@/shared/utils.js';
+
 import {
   ClaudeSessionsProvider,
   resolveClaudeProjectStorageName,
@@ -136,76 +138,115 @@ test('ClaudeSessionsProvider filters skill bodies even when the meta flag is mis
   assert.deepEqual(messages, []);
 });
 
-test('ClaudeSessionsProvider reconstructs slash invocation from expanded skill history', () => {
+test('ClaudeSessionsProvider restores marked slash invocation without exposing expanded instructions', () => {
   const provider = new ClaudeSessionsProvider();
+  const secretInstruction = 'INTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE';
+  const displayCommand = [
+    '/dataops-html-report 第一行',
+    '',
+    '# 测试',
+    '',
+    '## User request',
+    '',
+    '第二行',
+  ].join('\n');
   const messages = provider.normalizeMessage({
     type: 'user',
     uuid: 'expanded-skill',
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
-      content: [
-        '# dataops-html-report',
+      content: attachClaudeDisplayCommand([
+        '## Related Skills',
         '',
-        'Analyze the supplied data and prepare a report.',
+        '# A title unrelated to the skill name',
         '',
-        '## User request',
-        '',
-        '帮我分析这份数据',
-        '',
-      ].join('\n'),
+        secretInstruction,
+      ].join('\n'), displayCommand),
     },
   }, 'session-1');
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].kind, 'text');
   assert.equal(messages[0].role, 'user');
-  assert.equal(messages[0].content, '/dataops-html-report 帮我分析这份数据');
+  assert.equal(messages[0].content, displayCommand);
+  assert.equal(messages[0].content?.includes(secretInstruction), false);
 });
 
-test('ClaudeSessionsProvider uses the first skill heading and final user request delimiter', () => {
+test('ClaudeSessionsProvider restores marked slash-only invocation', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({
     type: 'user',
-    uuid: 'expanded-skill-last-request',
+    uuid: 'expanded-skill-without-query',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: attachClaudeDisplayCommand(
+        '## Related Skills\n\n# Report Building\n\nExpanded instructions.',
+        '\n\n  /dataops-html-report  ',
+      ),
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, '/dataops-html-report');
+});
+
+test('ClaudeSessionsProvider restores marked invocation from array text content', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill-array',
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
       content: [{
         type: 'text',
-        text: [
-          'Base directory for this skill: /skills/report-skill',
-          '',
-          '# report-skill',
-          '',
-          '# Example heading that is not the skill name',
-          '',
-          '## User request',
-          '',
-          'Example request from the skill body.',
-          '',
-          'Continue following the skill instructions.',
-          '',
-          '## User request',
-          '',
-          '第一行',
-          '第二行',
-          '',
-        ].join('\n'),
+        text: attachClaudeDisplayCommand(
+          '# Display title\n\nExpanded instructions.',
+          '/report-skill 生成日报',
+        ),
       }],
     },
   }, 'session-1');
 
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].content, '/report-skill 第一行\n第二行');
+  assert.equal(messages[0].content, '/report-skill 生成日报');
 });
 
-test('ClaudeSessionsProvider leaves user text unchanged without the exact skill delimiter', () => {
+test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {
   const provider = new ClaudeSessionsProvider();
-  const content = '# report-skill\n\n## User request\nMissing required blank line.';
+  const content = [
+    '# dataops-html-report',
+    '',
+    'Expanded instructions.',
+    '',
+    '## User request',
+    '',
+    '帮我分析这份数据',
+  ].join('\n');
   const messages = provider.normalizeMessage({
     type: 'user',
-    uuid: 'not-expanded-skill',
+    uuid: 'unmarked-expanded-skill',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content,
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, content);
+});
+
+test('ClaudeSessionsProvider leaves malformed display markers unchanged', () => {
+  const provider = new ClaudeSessionsProvider();
+  const content = '<!-- ccui-display-command:v1:not+base64 -->\n# Expanded instructions';
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'malformed-display-marker',
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
