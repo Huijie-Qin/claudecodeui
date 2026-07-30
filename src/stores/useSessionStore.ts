@@ -13,7 +13,7 @@ import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
-import { computeMerged } from './sessionMerge';
+import { computeMerged, reconcileRealtimeAfterServerRefresh } from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -318,8 +318,13 @@ export function useSessionStore() {
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // drop realtime messages that the server has caught up with to prevent unbounded growth.
-      slot.realtimeMessages = [];
+      // Drop only messages confirmed by the refreshed history. The history
+      // endpoint can briefly lag the complete event, so unmatched realtime
+      // messages must remain visible until a later refresh catches up.
+      slot.realtimeMessages = reconcileRealtimeAfterServerRefresh(
+        slot.serverMessages,
+        slot.realtimeMessages,
+      );
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {
