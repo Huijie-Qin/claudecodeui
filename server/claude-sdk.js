@@ -55,10 +55,8 @@ import {
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
-import {
-  attachClaudeDisplayCommand,
-  createNormalizedMessage,
-} from './shared/utils.js';
+import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
+import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
 const abortedSessions = new Set();
@@ -713,6 +711,13 @@ class ClaudeInputQueue {
  * turns with images use content blocks so Claude receives native visual input.
  */
 function buildClaudeUserMessage(command, images, options = {}) {
+  const envelopeMetadata = {
+    ...(options.uuid ? { uuid: options.uuid } : {}),
+    priority: options.priority || 'next',
+    shouldQuery: options.shouldQuery !== false,
+    timestamp: options.timestamp || new Date().toISOString(),
+  };
+
   if (!images || images.length === 0) {
     return {
       type: 'user',
@@ -721,9 +726,7 @@ function buildClaudeUserMessage(command, images, options = {}) {
         content: command,
       },
       parent_tool_use_id: null,
-      priority: options.priority || 'next',
-      shouldQuery: options.shouldQuery !== false,
-      timestamp: options.timestamp || new Date().toISOString(),
+      ...envelopeMetadata,
     };
   }
 
@@ -743,9 +746,7 @@ function buildClaudeUserMessage(command, images, options = {}) {
       content,
     },
     parent_tool_use_id: null,
-    priority: options.priority || 'next',
-    shouldQuery: options.shouldQuery !== false,
-    timestamp: options.timestamp || new Date().toISOString(),
+    ...envelopeMetadata,
   };
 }
 
@@ -815,7 +816,29 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let runtimeContext = null;
   let runtimeBoundToProviderSession = Boolean(sessionId);
   let streamStallTimeoutPaused = false;
+  let initialDisplayCommandRecord = null;
+  let initialDisplayCommandPersisted = false;
   const inputQueue = new ClaudeInputQueue();
+
+  const persistInitialDisplayCommand = async (providerSessionId) => {
+    if (initialDisplayCommandPersisted || !initialDisplayCommandRecord) {
+      return;
+    }
+
+    try {
+      await appendClaudeDisplayCommand({
+        runtimeHomePath: runtimeOptions.runtimeHomePath,
+        sessionId: providerSessionId,
+        ...initialDisplayCommandRecord,
+      });
+      initialDisplayCommandPersisted = true;
+    } catch (error) {
+      console.warn(
+        `[ClaudeDisplayCommand] Failed to persist display metadata for ${providerSessionId}:`,
+        error?.message || error,
+      );
+    }
+  };
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -854,6 +877,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       settingSources: runtimeContext.settingSources,
       runtimeId: runtimeContext.runtimeId,
       runtimeMode: runtimeContext.mode,
+      runtimeHomePath: runtimeContext.runtimeHomePath,
     };
     processDiagnostics.updateContext({
       provider: 'claude',
@@ -875,7 +899,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
-    const modelCommand = attachClaudeDisplayCommand(command, displayCommand);
+    const initialMessageId = createRequestId();
+    initialDisplayCommandRecord = {
+      messageId: initialMessageId,
+      displayCommand,
+      modelContent: command,
+    };
 
     persistUserPromptMessage({
       options: runtimeOptions,
@@ -898,10 +927,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
-    inputQueue.push(buildClaudeUserMessage(modelCommand, options.images, {
+    inputQueue.push(buildClaudeUserMessage(command, options.images, {
+      uuid: initialMessageId,
       priority: 'next',
       shouldQuery: true,
     }));
+    if (capturedSessionId) {
+      await persistInitialDisplayCommand(capturedSessionId);
+    }
 
     const mcpOverridesWorkspaceRoot = runtimeContext.hostWorkspacePath ||
       runtimeOptions.cwd ||
@@ -1206,6 +1239,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
+        await persistInitialDisplayCommand(capturedSessionId);
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
@@ -1693,8 +1727,21 @@ function pushClaudeSupplement({
   });
 
   markSessionProcessing(normalizedSessionId);
-  const queuedContent = attachClaudeDisplayCommand(normalizedContent, normalizedDisplayContent);
-  session.inputQueue.push(buildClaudeUserMessage(queuedContent, [], {
+  const claudeMessageId = createRequestId();
+  void appendClaudeDisplayCommand({
+    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+    sessionId: normalizedSessionId,
+    messageId: claudeMessageId,
+    displayCommand: normalizedDisplayContent,
+    modelContent: normalizedContent,
+  }).catch((error) => {
+    console.warn(
+      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
+      error?.message || error,
+    );
+  });
+  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+    uuid: claudeMessageId,
     priority,
     shouldQuery,
     timestamp,
@@ -1735,5 +1782,6 @@ export {
   getPendingApprovalsForSession,
   reconnectSessionWriter,
   pushClaudeSupplement,
-  createClaudePromptFactory
+  createClaudePromptFactory,
+  buildClaudeUserMessage,
 };

@@ -10,6 +10,8 @@ import {
   readObjectRecord,
 } from '@/shared/utils.js';
 
+import { readClaudeDisplayCommands } from './claude-display-command-store.js';
+
 const PROVIDER = 'claude';
 
 type ClaudeToolResult = {
@@ -92,7 +94,16 @@ function cleanAssistantText(text: string): string {
   return text.replace(/<\|assistant\|>/g, '');
 }
 
-function resolveVisibleUserText(text: string): string | null {
+function resolveVisibleUserText(
+  text: string,
+  storedDisplayCommand: string | null = null,
+): string | null {
+  if (storedDisplayCommand) {
+    return storedDisplayCommand;
+  }
+
+  // Compatibility for sessions created by the short-lived inline-marker
+  // implementation. New messages keep this metadata outside model content.
   const displayCommand = extractClaudeDisplayCommand(text);
   if (displayCommand) {
     return displayCommand;
@@ -115,7 +126,11 @@ export class ClaudeSessionsProvider implements IProviderSessions {
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
    * message shape consumed by REST and WebSocket clients.
    */
-  normalizeMessage(rawMessage: unknown, sessionId: string | null): NormalizedMessage[] {
+  normalizeMessage(
+    rawMessage: unknown,
+    sessionId: string | null,
+    storedDisplayCommand: string | null = null,
+  ): NormalizedMessage[] {
     const raw = readObjectRecord(rawMessage);
     if (!raw) {
       return [];
@@ -154,6 +169,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
     if (conversationRole === 'user' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
+        let didUseStoredDisplayCommand = false;
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
           const part = raw.message.content[partIndex];
           if (part.type === 'tool_result') {
@@ -170,9 +186,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
+            if (storedDisplayCommand && didUseStoredDisplayCommand) {
+              continue;
+            }
             const text = part.text || '';
-            const visibleText = text ? resolveVisibleUserText(text) : null;
+            const visibleText = text
+              ? resolveVisibleUserText(
+                text,
+                didUseStoredDisplayCommand ? null : storedDisplayCommand,
+              )
+              : null;
             if (visibleText) {
+              didUseStoredDisplayCommand = Boolean(storedDisplayCommand);
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
                 sessionId,
@@ -192,7 +217,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
             .join('\n');
-          const visibleTextParts = textParts ? resolveVisibleUserText(textParts) : null;
+          const visibleTextParts = textParts
+            ? resolveVisibleUserText(textParts, storedDisplayCommand)
+            : null;
           if (visibleTextParts) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
@@ -207,7 +234,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
-        const visibleText = text ? resolveVisibleUserText(text) : null;
+        const visibleText = text
+          ? resolveVisibleUserText(text, storedDisplayCommand)
+          : null;
         if (visibleText) {
           messages.push(createNormalizedMessage({
             id: baseId,
@@ -370,6 +399,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const rawMessages = Array.isArray(result) ? result : (result.messages || []);
     const total = Array.isArray(result) ? rawMessages.length : (result.total || 0);
     const hasMore = Array.isArray(result) ? false : Boolean(result.hasMore);
+    let displayCommands = new Map<string, string>();
+    if (options.runtimeHomePath) {
+      try {
+        displayCommands = await readClaudeDisplayCommands({
+          runtimeHomePath: options.runtimeHomePath,
+          sessionId,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[ClaudeProvider] Failed to load display metadata for ${sessionId}:`, message);
+      }
+    }
 
     const toolResultMap = new Map<string, ClaudeToolResult>();
     for (const raw of rawMessages) {
@@ -389,7 +430,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
 
     const normalized: NormalizedMessage[] = [];
     for (const raw of rawMessages) {
-      normalized.push(...this.normalizeMessage(raw, sessionId));
+      const displayCommand = typeof raw.uuid === 'string'
+        ? displayCommands.get(raw.uuid) || null
+        : null;
+      normalized.push(...this.normalizeMessage(raw, sessionId, displayCommand));
     }
 
     for (const msg of normalized) {

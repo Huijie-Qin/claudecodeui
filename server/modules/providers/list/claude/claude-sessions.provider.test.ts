@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-
-import { attachClaudeDisplayCommand } from '@/shared/utils.js';
 
 import {
   ClaudeSessionsProvider,
   resolveClaudeProjectStorageName,
 } from './claude-sessions.provider.js';
+import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
+
+function attachLegacyInlineDisplayMarker(content: string, displayCommand: string): string {
+  const encoded = Buffer.from(displayCommand, 'utf8').toString('base64url');
+  return `<!-- ccui-display-command:v1:${encoded} -->\n${content}`;
+}
 
 test('resolveClaudeProjectStorageName prefers encoded workspace path for tenant workspaces', () => {
   assert.equal(
@@ -138,7 +145,7 @@ test('ClaudeSessionsProvider filters skill bodies even when the meta flag is mis
   assert.deepEqual(messages, []);
 });
 
-test('ClaudeSessionsProvider restores marked slash invocation without exposing expanded instructions', () => {
+test('ClaudeSessionsProvider restores a stored slash invocation without exposing expanded instructions', () => {
   const provider = new ClaudeSessionsProvider();
   const secretInstruction = 'INTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE';
   const displayCommand = [
@@ -156,15 +163,15 @@ test('ClaudeSessionsProvider restores marked slash invocation without exposing e
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
-      content: attachClaudeDisplayCommand([
+      content: [
         '## Related Skills',
         '',
         '# A title unrelated to the skill name',
         '',
         secretInstruction,
-      ].join('\n'), displayCommand),
+      ].join('\n'),
     },
-  }, 'session-1');
+  }, 'session-1', displayCommand);
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].kind, 'text');
@@ -173,7 +180,7 @@ test('ClaudeSessionsProvider restores marked slash invocation without exposing e
   assert.equal(messages[0].content?.includes(secretInstruction), false);
 });
 
-test('ClaudeSessionsProvider restores marked slash-only invocation', () => {
+test('ClaudeSessionsProvider restores a stored slash-only invocation', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({
     type: 'user',
@@ -181,12 +188,9 @@ test('ClaudeSessionsProvider restores marked slash-only invocation', () => {
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
-      content: attachClaudeDisplayCommand(
-        '## Related Skills\n\n# Report Building\n\nExpanded instructions.',
-        '\n\n  /dataops-html-report  ',
-      ),
+      content: '## Related Skills\n\n# Report Building\n\nExpanded instructions.',
     },
-  }, 'session-1');
+  }, 'session-1', '/dataops-html-report');
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].kind, 'text');
@@ -194,7 +198,7 @@ test('ClaudeSessionsProvider restores marked slash-only invocation', () => {
   assert.equal(messages[0].content, '/dataops-html-report');
 });
 
-test('ClaudeSessionsProvider restores marked invocation from array text content', () => {
+test('ClaudeSessionsProvider restores one stored invocation from array text content', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({
     type: 'user',
@@ -202,18 +206,80 @@ test('ClaudeSessionsProvider restores marked invocation from array text content'
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
-      content: [{
-        type: 'text',
-        text: attachClaudeDisplayCommand(
-          '# Display title\n\nExpanded instructions.',
-          '/report-skill 生成日报',
-        ),
-      }],
+      content: [
+        {
+          type: 'text',
+          text: '# Display title\n\nExpanded instructions.',
+        },
+        {
+          type: 'text',
+          text: 'More expanded instructions.',
+        },
+      ],
+    },
+  }, 'session-1', '/report-skill 生成日报');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, '/report-skill 生成日报');
+});
+
+test('ClaudeSessionsProvider reads legacy inline display markers without requiring them for new messages', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'legacy-inline-marker',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: attachLegacyInlineDisplayMarker(
+        '# Display title\n\nExpanded instructions.',
+        '/report-skill legacy request',
+      ),
     },
   }, 'session-1');
 
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].content, '/report-skill 生成日报');
+  assert.equal(messages[0].content, '/report-skill legacy request');
+});
+
+test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user message UUID', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-display-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+
+  const sessionId = 'runtime-session-1';
+  const messageId = '11111111-1111-4111-8111-111111111111';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', 'workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(projectDirectory, `${sessionId}.jsonl`),
+    `${JSON.stringify({
+      type: 'user',
+      uuid: messageId,
+      sessionId,
+      timestamp: '2026-04-29T01:19:50.247Z',
+      message: {
+        role: 'user',
+        content: '# report-skill\n\nINTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE',
+      },
+    })}\n`,
+    'utf8',
+  );
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    sessionId,
+    messageId,
+    displayCommand: '/report-skill generate report',
+    modelContent: '# report-skill\n\nINTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE',
+  });
+
+  const provider = new ClaudeSessionsProvider();
+  const result = await provider.fetchHistory(sessionId, {
+    runtimeHomePath,
+  });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].content, '/report-skill generate report');
 });
 
 test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {

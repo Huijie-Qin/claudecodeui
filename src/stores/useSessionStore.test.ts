@@ -39,7 +39,7 @@ test('computeMerged drops local optimistic user message after the server copy ar
   assert.deepEqual(merged, [serverMessage]);
 });
 
-test('computeMerged drops realtime slash invocation after marker-restored history arrives', () => {
+test('computeMerged drops realtime slash invocation after metadata-restored history arrives', () => {
   const content = '/dataops-html-report 帮我分析这份数据';
   const serverMessage = makeUserText({
     id: 'expanded-skill-jsonl',
@@ -57,7 +57,7 @@ test('computeMerged drops realtime slash invocation after marker-restored histor
   assert.deepEqual(merged, [serverMessage]);
 });
 
-test('computeMerged drops realtime slash-only invocation after marker-restored history arrives', () => {
+test('computeMerged drops realtime slash-only invocation after metadata-restored history arrives', () => {
   const content = '/dataops-html-report';
   const serverMessage = makeUserText({
     id: 'expanded-skill-without-query-jsonl',

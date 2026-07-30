@@ -75,6 +75,20 @@ test('createClaudePromptFactory keeps text-only prompts as strings', async () =>
   assert.equal(createPrompt(), 'hello');
 });
 
+test('buildClaudeUserMessage keeps display metadata out of model content', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const expandedSkillContent = '# report-skill\n\nExpanded skill instructions.';
+
+  const message = claudeSdk.buildClaudeUserMessage(expandedSkillContent, [], {
+    uuid: '11111111-1111-4111-8111-111111111111',
+  });
+
+  assert.equal(message.uuid, '11111111-1111-4111-8111-111111111111');
+  assert.equal(message.message.content, expandedSkillContent);
+  assert.equal(message.message.content.includes('ccui-display-command'), false);
+  assert.equal(message.message.content.includes('/report-skill'), false);
+});
+
 test('createClaudePromptFactory creates native image content blocks', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 
