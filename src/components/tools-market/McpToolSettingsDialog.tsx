@@ -70,6 +70,14 @@ function parseFieldValue(field: McpToolParameterField, rawValue: string): unknow
   return rawValue;
 }
 
+function formatExampleValue(field: McpToolParameterField): string | undefined {
+  if (field.exampleValue === undefined) return undefined;
+  if (field.kind === 'array' || field.kind === 'object') {
+    return JSON.stringify(field.exampleValue, null, 2);
+  }
+  return String(field.exampleValue);
+}
+
 function getInitialFormState(
   fields: McpToolParameterField[],
   overrides: Record<string, McpToolOverrideParam>,
@@ -418,6 +426,7 @@ function ParameterInput({
       <textarea
         disabled={disabled}
         value={value}
+        placeholder={formatExampleValue(field)}
         onChange={(event) => onChange(event.target.value)}
         className={`${commonClassName} min-h-[70px] font-mono`}
       />
@@ -458,6 +467,7 @@ function ParameterInput({
       disabled={disabled}
       type="text"
       value={value}
+      placeholder={formatExampleValue(field)}
       onChange={(event) => onChange(event.target.value)}
       className={commonClassName}
     />

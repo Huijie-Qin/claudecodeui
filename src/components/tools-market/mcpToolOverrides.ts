@@ -25,6 +25,7 @@ export type McpToolParameterField = {
   description: string;
   enumValues?: string[];
   defaultValue: unknown;
+  exampleValue: unknown;
 };
 
 function readObject(value: unknown): Record<string, unknown> | null {
@@ -51,6 +52,14 @@ function getFieldKind(schema: Record<string, unknown>): McpToolParameterKind {
   return 'string';
 }
 
+function readExampleValue(schema: Record<string, unknown>): unknown {
+  const examples = schema.examples;
+  if (Array.isArray(examples) && examples.length > 0) {
+    return examples[0];
+  }
+  return schema.example;
+}
+
 export function getToolParameterFields(tool: WorkspaceMcpTool | null): McpToolParameterField[] {
   const inputSchema = readObject(tool?.inputSchema);
   const properties = readObject(inputSchema?.properties);
@@ -67,6 +76,7 @@ export function getToolParameterFields(tool: WorkspaceMcpTool | null): McpToolPa
         description: typeof schema.description === 'string' ? schema.description.trim() : '',
         enumValues: readStringArray(schema.enum),
         defaultValue: schema.default,
+        exampleValue: readExampleValue(schema),
       };
     })
     .filter((field) => field.key.trim().length > 0);
