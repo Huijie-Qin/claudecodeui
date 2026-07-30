@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, Maximize2, X } from 'lucide-react';
 
+import { Dialog, DialogContent, DialogTitle } from '../../shared/view/ui';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
 
@@ -419,17 +420,96 @@ function ParameterInput({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const expandedEditorRef = useRef<HTMLTextAreaElement>(null);
   const commonClassName = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground';
+  const isStructuredField = field.kind === 'array' || field.kind === 'object';
 
-  if (field.kind === 'array' || field.kind === 'object') {
+  useEffect(() => {
+    if (!isExpanded) return undefined;
+
+    let focusFrame = 0;
+    const dialogFrame = requestAnimationFrame(() => {
+      focusFrame = requestAnimationFrame(() => expandedEditorRef.current?.focus());
+    });
+    return () => {
+      cancelAnimationFrame(dialogFrame);
+      cancelAnimationFrame(focusFrame);
+    };
+  }, [isExpanded]);
+
+  if (isStructuredField || field.kind === 'string') {
     return (
-      <textarea
-        disabled={disabled}
-        value={value}
-        placeholder={formatExampleValue(field)}
-        onChange={(event) => onChange(event.target.value)}
-        className={`${commonClassName} min-h-[70px] font-mono`}
-      />
+      <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
+        <div className="relative">
+          {isStructuredField ? (
+            <textarea
+              disabled={disabled}
+              value={value}
+              placeholder={formatExampleValue(field)}
+              onChange={(event) => onChange(event.target.value)}
+              className={`${commonClassName} min-h-[70px] resize-y pr-10 font-mono`}
+            />
+          ) : (
+            <textarea
+              disabled={disabled}
+              rows={1}
+              value={value}
+              placeholder={formatExampleValue(field)}
+              onChange={(event) => onChange(event.target.value)}
+              className={`${commonClassName} min-h-[38px] resize-y pr-10`}
+            />
+          )}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setIsExpanded(true)}
+            aria-label={`放大编辑 ${field.key}`}
+            title="放大编辑"
+            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <DialogContent className="flex h-[80vh] max-h-[720px] w-[92vw] max-w-4xl flex-col overflow-hidden rounded-lg p-0">
+          <DialogTitle>放大编辑 {field.key}</DialogTitle>
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="min-w-0">
+              <div className="truncate font-mono text-sm font-semibold text-foreground">{field.key}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{field.kind}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsExpanded(false)}
+              aria-label="关闭放大编辑"
+              title="关闭"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 p-4">
+            <textarea
+              ref={expandedEditorRef}
+              disabled={disabled}
+              value={value}
+              placeholder={formatExampleValue(field)}
+              onChange={(event) => onChange(event.target.value)}
+              className={`${commonClassName} h-full resize-none font-mono leading-6`}
+            />
+          </div>
+          <div className="flex justify-end border-t border-border px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setIsExpanded(false)}
+              className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+            >
+              完成
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     );
   }
 
