@@ -259,7 +259,7 @@
     "nextTaskPrompt": "开始下一个任务"
   },
   "scheduledTasks": {
-    "title": "定时 session 任务",
+    "title": "定时任务",
     "createTitle": "创建定时任务",
     "detailsTitle": "定时任务详情",
     "taskDetails": "任务详情",
@@ -283,12 +283,19 @@
       "cronExpression": "Cron 表达式",
       "startAfter": "开始时间",
       "repeat": "重复",
+      "period": "周期",
+      "date": "日期",
+      "runTime": "执行时间",
+      "runMinute": "执行分钟",
+      "dayOption": "{{day}} 日",
       "minuteWithValue": "分钟：{{minute}}",
       "hour": "小时",
       "weekday": "星期",
       "dayOfMonth": "每月日期",
       "enabled": "启用",
       "session": "Session",
+      "sessionMode": "Session 模式",
+      "mergeSession": "合并到同一个 Session",
       "model": "模型",
       "permission": "权限",
       "nextFiveRuns": "最近 5 次执行时间",
@@ -304,7 +311,15 @@
     "modes": {
       "interval": "间隔",
       "cron": "Cron",
-      "visual": "可视化"
+      "visual": "简单配置"
+    },
+    "sessionModes": {
+      "new": "每次执行新建 Session",
+      "merge": "合并到同一个 Session"
+    },
+    "sessionModeDescriptions": {
+      "new": "每次运行使用独立上下文，互不影响",
+      "merge": "首次运行时创建 Session，后续运行继续使用该 Session"
     },
     "frequencies": {
       "hourly": "每小时",
@@ -339,6 +354,10 @@
     "summary": {
       "cron": "Cron {{expression}}",
       "everyMinutes": "每 {{count}} 分钟",
+      "hourly": "每小时第 {{minute}} 分钟执行",
+      "monthly": "每月 {{day}} 日 {{time}} 执行",
+      "weekly": "每{{weekday}} {{time}} 执行",
+      "daily": "每天 {{time}} 执行",
       "runInfo": "{{schedule}}。下次：{{next}}。上次：{{last}}"
     },
     "errors": {

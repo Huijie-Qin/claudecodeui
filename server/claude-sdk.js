@@ -31,7 +31,17 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
-import { loadMcpConfig } from './services/claude-mcp-config.js';
+import {
+  applyMcpConfigToSdkOptions,
+  loadMcpConfig,
+} from './services/claude-mcp-config.js';
+import {
+  MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+  applyMcpToolOverrides,
+  buildMcpToolOverridePreToolUseOutput,
+  isMcpToolName,
+  readMcpToolOverridesConfig,
+} from './services/mcp-tool-overrides.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { recordProviderSession } from './services/session-ownership.js';
@@ -40,10 +50,12 @@ import {
   bindRuntimeMessagesToProviderSession,
   persistNormalizedMessages,
   persistUserPromptMessage,
+  shouldSuppressLiveUserTextMessage,
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
+import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -699,6 +711,13 @@ class ClaudeInputQueue {
  * turns with images use content blocks so Claude receives native visual input.
  */
 function buildClaudeUserMessage(command, images, options = {}) {
+  const envelopeMetadata = {
+    ...(options.uuid ? { uuid: options.uuid } : {}),
+    priority: options.priority || 'next',
+    shouldQuery: options.shouldQuery !== false,
+    timestamp: options.timestamp || new Date().toISOString(),
+  };
+
   if (!images || images.length === 0) {
     return {
       type: 'user',
@@ -707,9 +726,7 @@ function buildClaudeUserMessage(command, images, options = {}) {
         content: command,
       },
       parent_tool_use_id: null,
-      priority: options.priority || 'next',
-      shouldQuery: options.shouldQuery !== false,
-      timestamp: options.timestamp || new Date().toISOString(),
+      ...envelopeMetadata,
     };
   }
 
@@ -729,14 +746,8 @@ function buildClaudeUserMessage(command, images, options = {}) {
       content,
     },
     parent_tool_use_id: null,
-    priority: options.priority || 'next',
-    shouldQuery: options.shouldQuery !== false,
-    timestamp: options.timestamp || new Date().toISOString(),
+    ...envelopeMetadata,
   };
-}
-
-function isLiveUserTextMessage(message) {
-  return message?.kind === 'text' && message?.role === 'user';
 }
 
 /**
@@ -805,7 +816,30 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let runtimeContext = null;
   let runtimeBoundToProviderSession = Boolean(sessionId);
   let streamStallTimeoutPaused = false;
+  let initialDisplayCommandRecord = null;
+  let initialDisplayCommandPersisted = false;
   const inputQueue = new ClaudeInputQueue();
+
+  const persistInitialDisplayCommand = async (providerSessionId) => {
+    if (initialDisplayCommandPersisted || !initialDisplayCommandRecord) {
+      return;
+    }
+
+    try {
+      await appendClaudeDisplayCommand({
+        runtimeHomePath: runtimeOptions.runtimeHomePath,
+        projectPath: runtimeOptions.projectPath || runtimeOptions.cwd,
+        sessionId: providerSessionId,
+        ...initialDisplayCommandRecord,
+      });
+      initialDisplayCommandPersisted = true;
+    } catch (error) {
+      console.warn(
+        `[ClaudeDisplayCommand] Failed to persist display metadata for ${providerSessionId}:`,
+        error?.message || error,
+      );
+    }
+  };
 
   const emitNotification = (event) => {
     notifyUserIfEnabled({
@@ -844,6 +878,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       settingSources: runtimeContext.settingSources,
       runtimeId: runtimeContext.runtimeId,
       runtimeMode: runtimeContext.mode,
+      runtimeHomePath: runtimeContext.runtimeHomePath,
     };
     processDiagnostics.updateContext({
       provider: 'claude',
@@ -865,6 +900,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
+    const initialMessageId = createRequestId();
+    initialDisplayCommandRecord = {
+      messageId: initialMessageId,
+      displayCommand,
+      modelContent: command,
+    };
 
     persistUserPromptMessage({
       options: runtimeOptions,
@@ -884,18 +925,128 @@ async function queryClaudeSDK(command, options = {}, ws) {
       workspaceId: runtimeOptions.workspaceId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
-      env: runtimeOptions.executionEnv,
     });
-    if (mcpServers) {
-      sdkOptions.mcpServers = mcpServers;
-    }
+    applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
+      uuid: initialMessageId,
       priority: 'next',
       shouldQuery: true,
     }));
+    if (capturedSessionId) {
+      await persistInitialDisplayCommand(capturedSessionId);
+    }
 
+    const mcpOverridesWorkspaceRoot = runtimeContext.hostWorkspacePath ||
+      runtimeOptions.cwd ||
+      runtimeOptions.projectPath ||
+      options.cwd;
+    const mcpOverridesWorkspaceRootSource = runtimeContext.hostWorkspacePath
+      ? 'hostWorkspacePath'
+      : runtimeOptions.cwd
+        ? 'runtimeCwd'
+        : runtimeOptions.projectPath
+          ? 'runtimeProjectPath'
+          : options.cwd
+            ? 'optionsCwd'
+            : 'none';
+    console.info(`[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] MCP override trace initialized ${JSON.stringify({
+      logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+      workspaceRoot: mcpOverridesWorkspaceRoot || null,
+      workspaceRootSource: mcpOverridesWorkspaceRootSource,
+    })}`);
+
+    const readRuntimeMcpToolOverridesConfig = async () => {
+      try {
+        return await readMcpToolOverridesConfig(mcpOverridesWorkspaceRoot);
+      } catch (error) {
+        const traceMeta = {
+          logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+          workspaceRoot: mcpOverridesWorkspaceRoot || null,
+          errorCode: error?.code || null,
+          errorMessage: error?.message || String(error),
+        };
+        console.warn(
+          `[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] Failed to read MCP tool overrides ${JSON.stringify(traceMeta)}`,
+        );
+        return null;
+      }
+    };
+
+    const applyRuntimeMcpToolOverrides = async (toolName, input) => {
+      if (!isMcpToolName(toolName)) {
+        return { input, applied: false, appliedParams: [] };
+      }
+
+      const config = await readRuntimeMcpToolOverridesConfig();
+      return applyMcpToolOverrides({ toolName, input, config });
+    };
+
+    const applyRuntimeMcpToolOverridesToMessages = async (messages) => {
+      const hasMcpToolUse = Array.isArray(messages) &&
+        messages.some((msg) => msg?.kind === 'tool_use' && isMcpToolName(msg.toolName));
+      if (!hasMcpToolUse) {
+        return messages;
+      }
+
+      const config = await readRuntimeMcpToolOverridesConfig();
+      return messages.map((msg) => {
+        if (msg?.kind !== 'tool_use' || !isMcpToolName(msg.toolName)) {
+          return msg;
+        }
+
+        const overrideResult = applyMcpToolOverrides({
+          toolName: msg.toolName,
+          input: msg.toolInput,
+          config,
+        });
+        if (!overrideResult.applied) {
+          return msg;
+        }
+
+        return {
+          ...msg,
+          toolInput: overrideResult.input,
+          originalToolInput: msg.toolInput,
+          mcpToolOverrides: {
+            applied: true,
+            params: overrideResult.appliedParams,
+            serverName: overrideResult.serverName,
+            toolName: overrideResult.toolName,
+          },
+        };
+      });
+    };
+
+    // bypassPermissions skips canUseTool for auto-approved calls, so MCP input
+    // mutation must happen in PreToolUse to affect the actual server request.
     sdkOptions.hooks = {
+      PreToolUse: [{
+        matcher: 'mcp__.*',
+        hooks: [async (input) => {
+          if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
+            return {};
+          }
+
+          const config = await readRuntimeMcpToolOverridesConfig();
+          const { output, overrideResult } = buildMcpToolOverridePreToolUseOutput({
+            toolName: input.tool_name,
+            input: input.tool_input,
+            config,
+          });
+          if (overrideResult.applied) {
+            const traceMeta = {
+              logId: MCP_TOOL_OVERRIDES_TRACE_LOG_ID,
+              toolName: input.tool_name,
+              appliedParams: overrideResult.appliedParams,
+            };
+            console.info(
+              `[${MCP_TOOL_OVERRIDES_TRACE_LOG_ID}] Applied MCP tool overrides ${JSON.stringify(traceMeta)}`,
+            );
+          }
+          return output;
+        }],
+      }],
       Notification: [{
         matcher: '',
         hooks: [async (input) => {
@@ -930,17 +1081,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
         };
       }
 
+      const overrideResult = await applyRuntimeMcpToolOverrides(toolName, input);
+      const effectiveInput = overrideResult.input;
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
-        return { behavior: 'allow', updatedInput: input };
+        return { behavior: 'allow', updatedInput: effectiveInput };
       }
 
-      if ((toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') && typeof input?.plan === 'string') {
+      if ((toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode') && typeof effectiveInput?.plan === 'string') {
         try {
           const savedPlan = await savePlanMarkdownToWorkspaceRoot({
             workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || options.cwd,
-            plan: input.plan,
+            plan: effectiveInput.plan,
             sessionId: capturedSessionId || sessionId || null,
           });
           ws.send({
@@ -959,7 +1112,14 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       const requestId = createRequestId();
       const interactionMessage = getToolInteractionMessage(toolName);
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      ws.send(createNormalizedMessage({
+        kind: 'permission_request',
+        requestId,
+        toolName,
+        input: effectiveInput,
+        sessionId: capturedSessionId || sessionId || null,
+        provider: 'claude'
+      }));
       emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: capturedSessionId || sessionId || null,
@@ -978,7 +1138,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
           _toolName: toolName,
-          _input: input,
+          _input: effectiveInput,
           _receivedAt: new Date(),
         },
         onCancel: (reason) => {
@@ -1004,7 +1164,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
             sdkOptions.disallowedTools = sdkOptions.disallowedTools.filter(entry => entry !== decision.rememberEntry);
           }
         }
-        return { behavior: 'allow', updatedInput: decision.updatedInput ?? input };
+        return { behavior: 'allow', updatedInput: decision.updatedInput ?? effectiveInput };
       }
 
       return { behavior: 'deny', message: decision.message ?? 'User declined tool interaction' };
@@ -1080,6 +1240,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
+        await persistInitialDisplayCommand(capturedSessionId);
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
@@ -1104,8 +1265,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const persistenceSessionId = sid || pendingProviderSessionId;
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
-      const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
-      const visibleNormalized = normalized.filter((msg) => !isLiveUserTextMessage(msg));
+      const normalized = await applyRuntimeMcpToolOverridesToMessages(
+        sessionsService.normalizeMessage('claude', transformedMessage, sid)
+      );
+      const visibleNormalized = normalized.filter(
+        (msg) => !shouldSuppressLiveUserTextMessage(msg, ws),
+      );
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',
@@ -1167,6 +1332,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         if (completedSessionId) {
           scheduleSessionIdleClose(completedSessionId);
+          runtimeOptions.onConcurrencyIdle?.();
         }
 
         recordProviderSession({
@@ -1515,6 +1681,26 @@ function pushClaudeSupplement({
     return { success: false, error: 'Claude session is not accepting supplemental input' };
   }
 
+  const { priority, shouldQuery } = normalizeSupplementMode(mode);
+  if (shouldQuery) {
+    try {
+      session.runtimeOptions?.onConcurrencyResume?.();
+    } catch (error) {
+      if (error?.code === 'SESSION_LIMIT_EXCEEDED') {
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          activeCount: error.activeCount,
+          limit: error.limit,
+          source: error.source,
+          userId: error.userId,
+        };
+      }
+      throw error;
+    }
+  }
+
   updateSessionWriter(normalizedSessionId, writer);
 
   const timestamp = new Date().toISOString();
@@ -1541,9 +1727,23 @@ function pushClaudeSupplement({
     messages: [persistedMessage],
   });
 
-  const { priority, shouldQuery } = normalizeSupplementMode(mode);
   markSessionProcessing(normalizedSessionId);
+  const claudeMessageId = createRequestId();
+  void appendClaudeDisplayCommand({
+    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
+    sessionId: normalizedSessionId,
+    messageId: claudeMessageId,
+    displayCommand: normalizedDisplayContent,
+    modelContent: normalizedContent,
+  }).catch((error) => {
+    console.warn(
+      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
+      error?.message || error,
+    );
+  });
   session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+    uuid: claudeMessageId,
     priority,
     shouldQuery,
     timestamp,
@@ -1584,5 +1784,6 @@ export {
   getPendingApprovalsForSession,
   reconnectSessionWriter,
   pushClaudeSupplement,
-  createClaudePromptFactory
+  createClaudePromptFactory,
+  buildClaudeUserMessage,
 };

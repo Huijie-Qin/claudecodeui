@@ -11,6 +11,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
+import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
 
@@ -315,14 +316,18 @@ function ChatInterface({
 
   useEffect(() => {
     return subscribeMessage((message) => {
-      if (!message || message.type !== 'session-status' || message.isProcessing !== false) {
+      if (!message || !shouldRefreshSessionHistoryForRealtimeMessage(message)) {
         return;
       }
       if (!selectedProject) {
         return;
       }
 
-      const statusSessionId = typeof message.sessionId === 'string' ? message.sessionId : null;
+      const statusSessionId = typeof message.sessionId === 'string'
+        ? message.sessionId
+        : typeof message.actualSessionId === 'string'
+          ? message.actualSessionId
+          : null;
       if (!statusSessionId) {
         return;
       }
@@ -396,6 +401,10 @@ function ChatInterface({
     pendingPermissionRequests,
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
+  const handleProviderChange = useCallback(
+    (nextProvider: LLMProvider) => setProvider(nextProvider as Provider),
+    [setProvider],
+  );
 
   const selectedModel = provider === 'cursor'
     ? cursorModel
@@ -453,7 +462,7 @@ function ChatInterface({
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
-          setProvider={(nextProvider) => setProvider(nextProvider as Provider)}
+          setProvider={handleProviderChange}
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}

@@ -11,6 +11,7 @@ import { resolvePresetProbeConfig } from './mcp-helper-scripts.js';
 import {
   readMcpStatus,
   readWorkspaceMcpConfig,
+  normalizeMcpServerConfigForProbeRuntime,
   probeHttpMcpServer,
   writeMcpStatus,
   writeWorkspaceMcpConfig,
@@ -182,6 +183,7 @@ async function probeInstalledWorkspacePresets({
   probe,
   resolveHelperConfig,
   users,
+  env,
   now,
 }) {
   const installedPresets = presets.filter((preset) => installsByPresetId.has(Number(preset.id)));
@@ -231,10 +233,11 @@ async function probeInstalledWorkspacePresets({
         },
         multitenancy,
       });
+      const runtimeProbeConfig = normalizeMcpServerConfigForProbeRuntime(probeConfig, { env });
       const probeEnv = await buildProbeHostEnv(users, installRow?.installed_by_user_id);
       const probeResult = await withTemporaryProcessEnv(
         probeEnv,
-        () => probe(probeConfig),
+        () => probe(runtimeProbeConfig),
       );
       probeEntries.push([Number(preset.id), buildProbeStatusEntry(preset, probeResult, now().toISOString())]);
     } catch (error) {
@@ -281,6 +284,7 @@ export function createWorkspaceMcpToolsService({
   probeHttpMcpServer: probe = probeHttpMcpServer,
   resolveHelperConfig = resolvePresetProbeConfig,
   users = null,
+  env = process.env,
 } = {}) {
   const listWorkspaceMcpPresetCatalog = async ({
     tenantId,
@@ -309,6 +313,7 @@ export function createWorkspaceMcpToolsService({
       probe,
       resolveHelperConfig,
       users,
+      env,
       now,
     });
     const workspacePresets = presets.map((preset) => (

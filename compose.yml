@@ -1,0 +1,85 @@
+services:
+  cloudcli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Export non-secret mirror URLs before building. Credentials must not
+        # be passed as build args because image metadata can expose them.
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
+        # Defaults to false for private internal CAs; set true when the build
+        # environment trusts the registry certificate chain.
+        NPM_STRICT_SSL: "${NPM_STRICT_SSL:-false}"
+        APT_DEBIAN_MIRROR: "${APT_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
+        APT_DEBIAN_SECURITY_MIRROR: "${APT_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}"
+    image: ${CLOUDCLI_IMAGE:-cloudcli:local}
+    platform: linux/amd64
+    # Compose reads .env for interpolation only unless it is declared here.
+    # Keep it outside the image while injecting the same application settings
+    # used by native development/production starts.
+    env_file:
+      - ./.env
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${CLOUDCLI_PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      SERVER_PORT: 3001
+      CLAUDE_EXECUTION_MODE: docker
+
+      # Keep the UI's home isolated from the host. A private named volume below
+      # persists optional UI-level configuration without exposing host secrets.
+      HOME: /home/cloudcli
+
+      # Keep every configured storage path identical on the host and in the UI
+      # container. Mount the database directory rather than only the SQLite file
+      # so its WAL, shared-memory, and journal files are persisted as well.
+      CLOUDCLI_DATA_ROOT: &data_root "${CLOUDCLI_DATA_ROOT:?CLOUDCLI_DATA_ROOT must be set in .env to an absolute host path}"
+      DATABASE_PATH: "${DATABASE_PATH:?DATABASE_PATH must be set in .env to an absolute host path}"
+      WORKSPACES_ROOT: &workspaces_root "${WORKSPACES_ROOT:?WORKSPACES_ROOT must be set in .env to an absolute host path}"
+      CLOUDCLI_RUNTIME_ROOT: &runtime_root "${CLOUDCLI_RUNTIME_ROOT:?CLOUDCLI_RUNTIME_ROOT must be set in .env to an absolute host path}"
+
+      # Optional overrides. When omitted, the entrypoint detects ownership from
+      # the mounted workspace root and falls back to 1000 for a root-owned path.
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
+
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: ${CLOUDCLI_CLAUDE_DOCKER_IMAGE:-docker.io/cloudcliai/sandbox:claude-code}
+      CLOUDCLI_DOCKER_MEMORY: ${CLOUDCLI_DOCKER_MEMORY:-2g}
+      CLOUDCLI_DOCKER_CPUS: ${CLOUDCLI_DOCKER_CPUS:-2}
+      CLOUDCLI_DOCKER_PYTHON_PACKAGES: ${CLOUDCLI_DOCKER_PYTHON_PACKAGES:-requests}
+      CLOUDCLI_DOCKER_SHARED_PYTHON: ${CLOUDCLI_DOCKER_SHARED_PYTHON:-true}
+    volumes:
+      - type: volume
+        source: cloudcli-home
+        target: /home/cloudcli
+      # Keep application storage as same-path bind mounts. Existing workspace
+      # records and the host Docker daemon must resolve these exact paths.
+      - type: bind
+        source: *data_root
+        target: *data_root
+      - type: bind
+        source: *workspaces_root
+        target: *workspaces_root
+      - type: bind
+        source: *runtime_root
+        target: *runtime_root
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 40s
+
+volumes:
+  cloudcli-home:

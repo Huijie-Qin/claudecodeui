@@ -16,8 +16,47 @@ import { spawn } from 'child_process';
 import { extractProjectDirectory } from '../projects.js';
 import { detectTaskMasterMCPServer } from '../utils/mcp-detector.js';
 import { broadcastTaskMasterProjectUpdate, broadcastTaskMasterTasksUpdate } from '../utils/taskmaster-websocket.js';
+import { applyWorkspaceOwnership } from '../services/workspace-ownership.js';
 
 const router = express.Router();
+
+async function normalizeTaskMasterOwnership(projectPath, reason) {
+    const taskMasterPath = path.join(projectPath, '.taskmaster');
+    try {
+        await fsPromises.access(taskMasterPath);
+    } catch (error) {
+        if (error?.code === 'ENOENT') return;
+        throw error;
+    }
+    await applyWorkspaceOwnership({
+        workspaceRoot: projectPath,
+        targetPaths: [taskMasterPath],
+        recursive: true,
+        reason,
+    });
+}
+
+async function normalizeTaskMasterOwnershipOrRespond(res, projectPath, reason) {
+    try {
+        await normalizeTaskMasterOwnership(projectPath, reason);
+        return true;
+    } catch (error) {
+        console.error('Failed to prepare TaskMaster workspace ownership:', error);
+        res.status(500).json({
+            error: 'Failed to prepare TaskMaster workspace permissions',
+            message: error.message,
+        });
+        return false;
+    }
+}
+
+async function normalizeTaskMasterOwnershipAfterFailure(projectPath, reason) {
+    try {
+        await normalizeTaskMasterOwnership(projectPath, reason);
+    } catch (error) {
+        console.error('[workspace-ownership] Failed after TaskMaster command error:', error);
+    }
+}
 
 /**
  * Check if TaskMaster CLI is installed globally
@@ -374,6 +413,11 @@ router.post('/prd/:projectName', async (req, res) => {
         // Write the PRD file
         try {
             await fsPromises.writeFile(filePath, content, 'utf8');
+            await applyWorkspaceOwnership({
+                workspaceRoot: projectPath,
+                targetPaths: [filePath],
+                reason: 'taskmaster_prd_write',
+            });
             
             // Get file stats
             const stats = await fsPromises.stat(filePath);
@@ -520,8 +564,12 @@ router.post('/init/:projectName', async (req, res) => {
             stderr += data.toString();
         });
 
-        initProcess.on('close', (code) => {
+        initProcess.on('close', async (code) => {
+            if (code !== 0) {
+                await normalizeTaskMasterOwnershipAfterFailure(projectPath, 'taskmaster_init_failed');
+            }
             if (code === 0) {
+                if (!await normalizeTaskMasterOwnershipOrRespond(res, projectPath, 'taskmaster_init')) return;
                 // Broadcast TaskMaster project update via WebSocket
                 if (req.app.locals.wss) {
                     broadcastTaskMasterProjectUpdate(
@@ -623,12 +671,16 @@ router.post('/add-task/:projectName', async (req, res) => {
             stderr += data.toString();
         });
 
-        addTaskProcess.on('close', (code) => {
+        addTaskProcess.on('close', async (code) => {
             console.log('Add task process completed with code:', code);
             console.log('Stdout:', stdout);
             console.log('Stderr:', stderr);
+            if (code !== 0) {
+                await normalizeTaskMasterOwnershipAfterFailure(projectPath, 'taskmaster_add_task_failed');
+            }
             
             if (code === 0) {
+                if (!await normalizeTaskMasterOwnershipOrRespond(res, projectPath, 'taskmaster_add_task')) return;
                 // Broadcast task update via WebSocket
                 if (req.app.locals.wss) {
                     broadcastTaskMasterTasksUpdate(
@@ -703,8 +755,12 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
                 stderr += data.toString();
             });
 
-            setStatusProcess.on('close', (code) => {
+            setStatusProcess.on('close', async (code) => {
+                if (code !== 0) {
+                    await normalizeTaskMasterOwnershipAfterFailure(projectPath, 'taskmaster_set_status_failed');
+                }
                 if (code === 0) {
+                    if (!await normalizeTaskMasterOwnershipOrRespond(res, projectPath, 'taskmaster_set_status')) return;
                     // Broadcast task update via WebSocket
                     if (req.app.locals.wss) {
                         broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
@@ -755,8 +811,12 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
                 stderr += data.toString();
             });
 
-            updateProcess.on('close', (code) => {
+            updateProcess.on('close', async (code) => {
+                if (code !== 0) {
+                    await normalizeTaskMasterOwnershipAfterFailure(projectPath, 'taskmaster_update_task_failed');
+                }
                 if (code === 0) {
+                    if (!await normalizeTaskMasterOwnershipOrRespond(res, projectPath, 'taskmaster_update_task')) return;
                     // Broadcast task update via WebSocket
                     if (req.app.locals.wss) {
                         broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
@@ -854,8 +914,12 @@ router.post('/parse-prd/:projectName', async (req, res) => {
             stderr += data.toString();
         });
 
-        parsePRDProcess.on('close', (code) => {
+        parsePRDProcess.on('close', async (code) => {
+            if (code !== 0) {
+                await normalizeTaskMasterOwnershipAfterFailure(projectPath, 'taskmaster_parse_prd_failed');
+            }
             if (code === 0) {
+                if (!await normalizeTaskMasterOwnershipOrRespond(res, projectPath, 'taskmaster_parse_prd')) return;
                 // Broadcast task update via WebSocket
                 if (req.app.locals.wss) {
                     broadcastTaskMasterTasksUpdate(
@@ -1399,6 +1463,11 @@ router.post('/apply-template/:projectName', async (req, res) => {
         // Write the template content to the file
         try {
             await fsPromises.writeFile(filePath, content, 'utf8');
+            await applyWorkspaceOwnership({
+                workspaceRoot: projectPath,
+                targetPaths: [filePath],
+                reason: 'taskmaster_template_write',
+            });
 
             res.json({
                 projectName,

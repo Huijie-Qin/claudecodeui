@@ -1,4 +1,4 @@
-import { CalendarClock, Check, Clock, Edit2, Pause, Star, Trash2, X } from 'lucide-react';
+import { Check, Clock, Edit2, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { MouseEvent } from 'react';
 
@@ -22,7 +22,6 @@ type SidebarSessionItemProps = {
   onSaveEditingSession: (project: Project, sessionId: string, summary: string, provider: LLMProvider) => void;
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
-  onScheduledTaskOpen?: (project: Project, session: SessionWithProvider) => void;
   onToggleSessionFavorite: (project: Project, session: SessionWithProvider) => void;
   onDeleteSession: (
     project: Project,
@@ -46,7 +45,6 @@ export default function SidebarSessionItem({
   onSaveEditingSession,
   onProjectSelect,
   onSessionSelect,
-  onScheduledTaskOpen,
   onToggleSessionFavorite,
   onDeleteSession,
   t,
@@ -55,12 +53,7 @@ export default function SidebarSessionItem({
   const isSelected = selectedSession?.id === session.id;
   const isFavorited = session.isFavorited === true;
   const isScheduledTaskSession = session.isScheduledTaskSession === true;
-  const isScheduledTaskPaused = isScheduledTaskSession && session.scheduledTask?.enabled === false;
   const canRenameSession = !isScheduledTaskSession;
-  const scheduledTaskTitle =
-    typeof session.scheduledTask?.name === 'string'
-      ? session.scheduledTask.name
-      : 'Scheduled task session';
 
   const selectMobileSession = () => {
     onProjectSelect(project);
@@ -79,12 +72,6 @@ export default function SidebarSessionItem({
     event.stopPropagation();
     onToggleSessionFavorite(project, session);
   };
-
-  const openScheduledTask = (event: MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
-    onScheduledTaskOpen?.(project, session);
-  };
-
   return (
     <div className="group relative">
       {sessionView.isActive && (
@@ -111,31 +98,6 @@ export default function SidebarSessionItem({
                 <div className="truncate text-xs font-medium text-foreground" title={sessionView.sessionName}>
                   {sessionView.sessionName}
                 </div>
-                {isScheduledTaskSession && (
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      'shrink-0 gap-1 px-1 py-0 text-[10px]',
-                      onScheduledTaskOpen && 'cursor-pointer hover:bg-primary/10 hover:text-primary',
-                    )}
-                    role={onScheduledTaskOpen ? 'button' : undefined}
-                    onClick={onScheduledTaskOpen ? openScheduledTask : undefined}
-                    title={scheduledTaskTitle}
-                  >
-                    <CalendarClock className="h-2.5 w-2.5" />
-                    定时
-                  </Badge>
-                )}
-                {isScheduledTaskPaused && (
-                  <Badge
-                    variant="outline"
-                    className="shrink-0 gap-1 border-amber-500/30 bg-amber-500/10 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
-                    title="已暂停"
-                  >
-                    <Pause className="h-2.5 w-2.5" />
-                    暂停
-                  </Badge>
-                )}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
@@ -195,31 +157,6 @@ export default function SidebarSessionItem({
                 <div className="truncate text-xs font-medium text-foreground" title={sessionView.sessionName}>
                   {sessionView.sessionName}
                 </div>
-                {isScheduledTaskSession && (
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      'shrink-0 gap-1 px-1 py-0 text-[10px]',
-                      onScheduledTaskOpen && 'cursor-pointer hover:bg-primary/10 hover:text-primary',
-                    )}
-                    role={onScheduledTaskOpen ? 'button' : undefined}
-                    onClick={onScheduledTaskOpen ? openScheduledTask : undefined}
-                    title={scheduledTaskTitle}
-                  >
-                    <CalendarClock className="h-2.5 w-2.5" />
-                    定时
-                  </Badge>
-                )}
-                {isScheduledTaskPaused && (
-                  <Badge
-                    variant="outline"
-                    className="shrink-0 gap-1 border-amber-500/30 bg-amber-500/10 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
-                    title="已暂停"
-                  >
-                    <Pause className="h-2.5 w-2.5" />
-                    暂停
-                  </Badge>
-                )}
               </div>
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />

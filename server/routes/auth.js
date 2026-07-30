@@ -43,20 +43,20 @@ function hashPasswordResetToken(token) {
 
 function getInvitationFailure(invitation) {
   if (!invitation) {
-    return { statusCode: 404, message: 'Invitation not found' };
+    return { statusCode: 404, message: '邀请不存在' };
   }
 
   if (invitation.accepted_at || invitation.is_active === 1) {
-    return { statusCode: 410, message: 'Invitation has already been accepted' };
+    return { statusCode: 410, message: '该邀请已被接受' };
   }
 
   if (invitation.revoked_at) {
-    return { statusCode: 410, message: 'Invitation has been revoked' };
+    return { statusCode: 410, message: '该邀请已被撤销' };
   }
 
   const expiresAt = Date.parse(invitation.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    return { statusCode: 410, message: 'Invitation has expired' };
+    return { statusCode: 410, message: '该邀请已过期' };
   }
 
   return null;
@@ -118,12 +118,12 @@ export function createAuthRouter({
 
       // Validate input
       if (!username || !password || !gitEmail) {
-        return res.status(400).json({ error: 'Username, password, and git email are required' });
+        return res.status(400).json({ error: '用户名、密码和邮箱不能为空' });
       }
 
       const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!gitEmailPattern.test(gitEmail)) {
-        return res.status(400).json({ error: 'Invalid git email format' });
+        return res.status(400).json({ error: '邮箱格式不正确' });
       }
 
       if (username.length < 3 || password.length < 6) {
@@ -229,7 +229,7 @@ export function createAuthRouter({
   router.get('/invitations/:token', (req, res) => {
     try {
       if (typeof userDb.getInvitationByTokenHash !== 'function') {
-        return res.status(404).json({ error: 'Invitation not found' });
+        return res.status(404).json({ error: '邀请不存在' });
       }
 
       const invitation = userDb.getInvitationByTokenHash(hashInvitationToken(req.params.token));
@@ -246,7 +246,7 @@ export function createAuthRouter({
       });
     } catch (error) {
       console.error('Invitation lookup error:', error);
-      return res.status(500).json({ error: 'Internal server error' });
+      return res.status(500).json({ error: '服务器内部错误' });
     }
   });
 
@@ -254,23 +254,23 @@ export function createAuthRouter({
     try {
       const { password, gitEmail } = req.body;
       if (!password || !gitEmail) {
-        return res.status(400).json({ error: 'Password and git email are required' });
+        return res.status(400).json({ error: '密码和邮箱不能为空' });
       }
 
       if (password.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        return res.status(400).json({ error: '密码长度至少为 6 个字符' });
       }
 
       const gitEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!gitEmailPattern.test(gitEmail)) {
-        return res.status(400).json({ error: 'Invalid git email format' });
+        return res.status(400).json({ error: '邮箱格式不正确' });
       }
 
       if (
         typeof userDb.getInvitationByTokenHash !== 'function'
         || typeof userDb.acceptInvitation !== 'function'
       ) {
-        return res.status(404).json({ error: 'Invitation not found' });
+        return res.status(404).json({ error: '邀请不存在' });
       }
 
       const tokenHash = hashInvitationToken(req.params.token);
@@ -284,7 +284,7 @@ export function createAuthRouter({
       const passwordHash = await bcrypt.hash(password, saltRounds);
       const user = userDb.acceptInvitation({ tokenHash, passwordHash });
       if (!user) {
-        return res.status(410).json({ error: 'Invitation is no longer available' });
+        return res.status(410).json({ error: '该邀请已失效' });
       }
 
       const trimmedGitEmail = gitEmail.trim();
@@ -309,7 +309,7 @@ export function createAuthRouter({
       });
     } catch (error) {
       console.error('Invitation acceptance error:', error);
-      return res.status(500).json({ error: 'Internal server error' });
+      return res.status(500).json({ error: '服务器内部错误' });
     }
   });
 

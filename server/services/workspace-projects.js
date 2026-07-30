@@ -103,14 +103,28 @@ function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
   return mapped;
 }
 
-export function mapWorkspaceRowsToProjects(rows, { tenantId, userId, listSessions }) {
+export function mapWorkspaceRowsToProjects(rows, {
+  tenantId,
+  userId,
+  listSessions,
+  listScheduledTasks = scheduledTasksDb.listWorkspaceTasks,
+  getScheduledTaskMap = scheduledTasksDb.getSessionTaskMap,
+}) {
   return rows.map((row) => {
     const sessionRows = listSessions({
       tenantId,
       workspaceId: row.id,
       userId,
+    }).filter((session) => (
+      !String(session.provider_session_id || '').startsWith('scheduled-task-')
+      && !String(session.provider_session_id || '').startsWith('pending:')
+    ));
+    const scheduledTasks = listScheduledTasks({
+      tenantId,
+      workspaceId: row.id,
+      userId,
     });
-    const scheduledTaskMap = scheduledTasksDb.getSessionTaskMap({
+    const scheduledTaskMap = getScheduledTaskMap({
       tenantId,
       workspaceId: row.id,
       userId,
@@ -127,6 +141,7 @@ export function mapWorkspaceRowsToProjects(rows, { tenantId, userId, listSession
       displayName: row.display_name,
       accessRole: row.accessRole,
       isCustomName: true,
+      scheduledTasks,
       sessions: sessionRows
         .filter((session) => session.provider === 'claude')
         .map((session) => mapSession(session, row.id, scheduledTaskMap)),

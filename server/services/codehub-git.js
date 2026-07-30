@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 
 import { userDb } from '../database/db.js';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 const execFileAsync = promisify(execFile);
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
 const GIT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
@@ -32,6 +34,77 @@ function normalizeRelativePath(value) {
     .replace(/^\.\/+/, '')
     .replace(/^\/+/, '')
     .trim();
+}
+
+async function normalizeRepositoryOwnership(repoPath, reason, targetPaths = [repoPath]) {
+  const existingTargets = [];
+  for (const targetPath of targetPaths) {
+    if (await pathExists(targetPath)) {
+      existingTargets.push(targetPath);
+    }
+  }
+  if (existingTargets.length === 0) return;
+
+  return applyWorkspaceOwnership({
+    workspaceRoot: repoPath,
+    targetPaths: existingTargets,
+    recursive: true,
+    includeParents: true,
+    reason,
+  });
+}
+
+async function withOwnershipFinalizer(operation, finalizer) {
+  let primaryError = null;
+  try {
+    return await operation();
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      await finalizer();
+    } catch (ownershipError) {
+      if (!primaryError) throw ownershipError;
+      console.error('[workspace-ownership] Failed while preserving primary CodeHub Git error:', ownershipError);
+    }
+  }
+}
+
+async function normalizeChangedRepositoryOwnership(repoPath, reason, {
+  beforeHead = '',
+  knownPaths = [],
+  includeStatus = false,
+} = {}) {
+  const relativePaths = new Set(knownPaths.map(normalizeRelativePath).filter(Boolean));
+
+  if (beforeHead) {
+    const { stdout: currentHeadOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath })
+      .catch(() => ({ stdout: '' }));
+    const currentHead = currentHeadOutput.trim();
+    if (currentHead && currentHead !== beforeHead) {
+      const { stdout: changedOutput } = await runGit(
+        ['diff', '--name-only', `${beforeHead}..${currentHead}`],
+        { cwd: repoPath },
+      ).catch(() => ({ stdout: '' }));
+      for (const changedPath of changedOutput.split(/\r?\n/)) {
+        const normalized = normalizeRelativePath(changedPath);
+        if (normalized) relativePaths.add(normalized);
+      }
+    }
+  }
+
+  if (includeStatus) {
+    const entries = await listStatusEntries(repoPath).catch(() => []);
+    for (const entry of entries) {
+      if (entry.path) relativePaths.add(entry.path);
+    }
+  }
+
+  await normalizeRepositoryOwnership(repoPath, reason, [
+    path.join(repoPath, '.git'),
+    ...Array.from(relativePaths, (relativePath) => path.join(repoPath, relativePath)),
+  ]);
 }
 
 function normalizeGitFilePath(value) {
@@ -118,6 +191,7 @@ async function runGit(args, { cwd, userId, repositoryUrl, timeoutMs = GIT_TIMEOU
       maxBuffer: GIT_MAX_BUFFER_BYTES,
       env: {
         ...process.env,
+        GIT_OPTIONAL_LOCKS: '0',
         ...(token ? { [PRIVATE_TOKEN_ENV_NAME]: token } : {}),
         ...(askPass ? {
           GIT_ASKPASS: askPass.filePath,
@@ -277,21 +351,30 @@ async function getRemoteChangedFiles(repoPath, remoteBranch) {
 }
 
 async function detectMergeConflicts(repoPath, remoteBranch) {
-  try {
-    await execFileAsync('git', ['merge-tree', '--write-tree', '--name-only', '--messages', 'HEAD', `origin/${remoteBranch}`], {
-      cwd: repoPath,
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: GIT_MAX_BUFFER_BYTES,
-      env: process.env,
-    });
-    return { status: 'clean', files: [] };
-  } catch (error) {
-    const files = parseMergeTreeNameOnlyOutput(error?.stdout || '');
-    if (files.length > 0) {
-      return { status: 'conflict', files };
+  return withOwnershipFinalizer(async () => {
+    try {
+      await execFileAsync('git', ['merge-tree', '--write-tree', '--name-only', '--messages', 'HEAD', `origin/${remoteBranch}`], {
+        cwd: repoPath,
+        timeout: GIT_TIMEOUT_MS,
+        maxBuffer: GIT_MAX_BUFFER_BYTES,
+        env: {
+          ...process.env,
+          GIT_OPTIONAL_LOCKS: '0',
+        },
+      });
+      return { status: 'clean', files: [] };
+    } catch (error) {
+      const files = parseMergeTreeNameOnlyOutput(error?.stdout || '');
+      if (files.length > 0) {
+        return { status: 'conflict', files };
+      }
+      return { status: 'unknown', files: [] };
     }
-    return { status: 'unknown', files: [] };
-  }
+  }, () => normalizeRepositoryOwnership(
+    repoPath,
+    'codehub_merge_conflict_preview',
+    [path.join(repoPath, '.git')],
+  ));
 }
 
 async function listStatusEntries(repoPath) {
@@ -365,15 +448,19 @@ export const codeHubGitService = {
   validateBranchName,
 
   async cloneRepository({ repositoryUrl, destinationPath, userId, branch }) {
+    let canCleanupDestination = false;
     if (await pathExists(destinationPath)) {
-      const stat = await fs.stat(destinationPath);
-      if (!stat.isDirectory()) {
+      const stat = await fs.lstat(destinationPath);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
         throw createHttpError('Clone destination exists and is not a directory', 409);
       }
       const entries = await fs.readdir(destinationPath);
       if (entries.length > 0) {
         throw createHttpError('Clone destination directory is not empty', 409);
       }
+      canCleanupDestination = true;
+    } else {
+      canCleanupDestination = true;
     }
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
     const cloneArgs = ['clone', '--progress'];
@@ -382,12 +469,29 @@ export const codeHubGitService = {
       cloneArgs.push('--branch', validateBranchName(branchName));
     }
     cloneArgs.push(repositoryUrl, destinationPath);
-    await runGit(cloneArgs, {
-      userId,
-      repositoryUrl,
-      timeoutMs: 10 * 60 * 1000,
-    });
-    await runGit(['remote', 'set-url', 'origin', repositoryUrl], { cwd: destinationPath });
+    try {
+      await runGit(cloneArgs, {
+        userId,
+        repositoryUrl,
+        timeoutMs: 10 * 60 * 1000,
+      });
+    } catch (error) {
+      if (canCleanupDestination) {
+        await fs.rm(destinationPath, { recursive: true, force: true }).catch(() => {});
+      }
+      throw error;
+    }
+    try {
+      await withOwnershipFinalizer(
+        () => runGit(['remote', 'set-url', 'origin', repositoryUrl], { cwd: destinationPath }),
+        () => normalizeRepositoryOwnership(destinationPath, 'codehub_clone'),
+      );
+    } catch (error) {
+      if (canCleanupDestination) {
+        await fs.rm(destinationPath, { recursive: true, force: true }).catch(() => {});
+      }
+      throw error;
+    }
   },
 
   async getRepositorySummary(repoPath) {
@@ -450,6 +554,11 @@ export const codeHubGitService = {
       userId,
       repositoryUrl,
     }).catch(() => null);
+    await normalizeRepositoryOwnership(
+      repoPath,
+      'codehub_submission_fetch',
+      [path.join(repoPath, '.git')],
+    );
 
     const { stdout: headOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
     const headSha = headOutput.trim();
@@ -488,10 +597,17 @@ export const codeHubGitService = {
 
   async pullPreview(repoPath, { branch, userId, repositoryUrl }) {
     const remoteBranch = validateBranchName(branch || await getCurrentBranch(repoPath));
-    const [statusResult] = await Promise.all([
-      runGit(['status', '--porcelain'], { cwd: repoPath }),
-      runGit(['fetch', 'origin', remoteBranch], { cwd: repoPath, userId, repositoryUrl }),
-    ]);
+    const [statusResult] = await withOwnershipFinalizer(
+      () => Promise.all([
+        runGit(['status', '--porcelain'], { cwd: repoPath }),
+        runGit(['fetch', 'origin', remoteBranch], { cwd: repoPath, userId, repositoryUrl }),
+      ]),
+      () => normalizeRepositoryOwnership(
+        repoPath,
+        'codehub_pull_preview_fetch',
+        [path.join(repoPath, '.git')],
+      ),
+    );
     let ahead = 0;
     let behind = 0;
     try {
@@ -543,32 +659,40 @@ export const codeHubGitService = {
 
   async pull(repoPath, { branch, userId, repositoryUrl }) {
     const remoteBranch = validateBranchName(branch || await getCurrentBranch(repoPath));
-    try {
-      const { stdout, stderr } = await runGit(['pull', 'origin', remoteBranch], {
-        cwd: repoPath,
-        userId,
-        repositoryUrl,
-        timeoutMs: 10 * 60 * 1000,
-      });
-      return { success: true, output: stdout || stderr || 'Pull completed', remote: 'origin', branch: remoteBranch };
-    } catch (error) {
-      const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
-      const conflicts = parseConflictFilesFromStatus(status.stdout);
-      if (conflicts.length > 0) {
-        return { success: false, conflict: true, conflictFiles: conflicts, error: error.message };
+    const { stdout: beforeHeadOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath })
+      .catch(() => ({ stdout: '' }));
+    const beforeHead = beforeHeadOutput.trim();
+    return withOwnershipFinalizer(async () => {
+      try {
+        const { stdout, stderr } = await runGit(['pull', 'origin', remoteBranch], {
+          cwd: repoPath,
+          userId,
+          repositoryUrl,
+          timeoutMs: 10 * 60 * 1000,
+        });
+        return { success: true, output: stdout || stderr || 'Pull completed', remote: 'origin', branch: remoteBranch };
+      } catch (error) {
+        const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+        const conflicts = parseConflictFilesFromStatus(status.stdout);
+        if (conflicts.length > 0) {
+          return { success: false, conflict: true, conflictFiles: conflicts, error: error.message };
+        }
+        const overwrittenFiles = parseOverwrittenFilesFromGitError(error.message);
+        if (overwrittenFiles.length > 0 || /Please commit your changes or stash/i.test(String(error.message || ''))) {
+          return {
+            success: false,
+            localChangesBlockPull: true,
+            conflict: false,
+            changedFiles: overwrittenFiles,
+            error: error.message,
+          };
+        }
+        throw error;
       }
-      const overwrittenFiles = parseOverwrittenFilesFromGitError(error.message);
-      if (overwrittenFiles.length > 0 || /Please commit your changes or stash/i.test(String(error.message || ''))) {
-        return {
-          success: false,
-          localChangesBlockPull: true,
-          conflict: false,
-          changedFiles: overwrittenFiles,
-          error: error.message,
-        };
-      }
-      throw error;
-    }
+    }, () => normalizeChangedRepositoryOwnership(repoPath, 'codehub_pull', {
+      beforeHead,
+      includeStatus: true,
+    }));
   },
 
   async stashLocalChanges(repoPath, { message } = {}) {
@@ -577,18 +701,22 @@ export const codeHubGitService = {
       return { success: true, stashed: false, message: 'No local changes to stash' };
     }
     const stashMessage = String(message || `CodeHub pull preview ${new Date().toISOString()}`).slice(0, 200);
-    const { stdout, stderr } = await runGit(['stash', 'push', '-u', '-m', stashMessage], { cwd: repoPath });
-    const listResult = await runGit(['stash', 'list', '-n', '1', '--format=%gd%x1f%H%x1f%s'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
-    const [stashRef = '', stashSha = '', stashSubject = ''] = listResult.stdout.trim().split('\x1f');
-    return {
-      success: true,
-      stashed: true,
-      stashRef,
-      stashSha,
-      stashSubject,
-      files: entries.map((entry) => entry.path),
-      output: stdout || stderr || '',
-    };
+    return withOwnershipFinalizer(async () => {
+      const { stdout, stderr } = await runGit(['stash', 'push', '-u', '-m', stashMessage], { cwd: repoPath });
+      const listResult = await runGit(['stash', 'list', '-n', '1', '--format=%gd%x1f%H%x1f%s'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+      const [stashRef = '', stashSha = '', stashSubject = ''] = listResult.stdout.trim().split('\x1f');
+      return {
+        success: true,
+        stashed: true,
+        stashRef,
+        stashSha,
+        stashSubject,
+        files: entries.map((entry) => entry.path),
+        output: stdout || stderr || '',
+      };
+    }, () => normalizeChangedRepositoryOwnership(repoPath, 'codehub_stash', {
+      knownPaths: entries.map((entry) => entry.path),
+    }));
   },
 
   async restoreStash(repoPath, { stashRef } = {}) {
@@ -596,31 +724,35 @@ export const codeHubGitService = {
     if (!/^stash@\{\d+\}$/.test(ref)) {
       throw createHttpError('Invalid stash reference', 400);
     }
-    try {
-      const { stdout, stderr } = await runGit(['stash', 'pop', ref], {
-        cwd: repoPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
-      return {
-        success: true,
-        restored: true,
-        stashRef: ref,
-        output: stdout || stderr || '',
-      };
-    } catch (error) {
-      const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
-      const conflicts = parseConflictFilesFromStatus(status.stdout);
-      if (conflicts.length > 0) {
+    return withOwnershipFinalizer(async () => {
+      try {
+        const { stdout, stderr } = await runGit(['stash', 'pop', ref], {
+          cwd: repoPath,
+          timeoutMs: 10 * 60 * 1000,
+        });
         return {
-          success: false,
-          conflict: true,
+          success: true,
+          restored: true,
           stashRef: ref,
-          conflictFiles: conflicts,
-          error: error.message,
+          output: stdout || stderr || '',
         };
+      } catch (error) {
+        const status = await runGit(['status', '--porcelain'], { cwd: repoPath }).catch(() => ({ stdout: '' }));
+        const conflicts = parseConflictFilesFromStatus(status.stdout);
+        if (conflicts.length > 0) {
+          return {
+            success: false,
+            conflict: true,
+            stashRef: ref,
+            conflictFiles: conflicts,
+            error: error.message,
+          };
+        }
+        throw error;
       }
-      throw error;
-    }
+    }, () => normalizeChangedRepositoryOwnership(repoPath, 'codehub_restore_stash', {
+      includeStatus: true,
+    }));
   },
 
   async resolveConflictFile(repoPath, { file } = {}) {
@@ -650,18 +782,23 @@ export const codeHubGitService = {
       };
     }
 
-    await runGit(['add', '--', normalized], { cwd: repoPath });
-    const nextStatusOutput = await runGit(['status', '--porcelain', '--', normalized], { cwd: repoPath });
-    const nextStatusEntry = parsePorcelainStatus(nextStatusOutput.stdout)[0] || null;
-    const stillConflicting = Boolean(nextStatusEntry && isConflictStatus(nextStatusEntry.status));
-    return {
-      success: true,
-      file: normalized,
-      conflict: stillConflicting,
-      resolved: !stillConflicting,
-      hasConflictMarkers: false,
-      status: nextStatusEntry?.status || '',
-    };
+    return withOwnershipFinalizer(async () => {
+      await runGit(['add', '--', normalized], { cwd: repoPath });
+      const nextStatusOutput = await runGit(['status', '--porcelain', '--', normalized], { cwd: repoPath });
+      const nextStatusEntry = parsePorcelainStatus(nextStatusOutput.stdout)[0] || null;
+      const stillConflicting = Boolean(nextStatusEntry && isConflictStatus(nextStatusEntry.status));
+      return {
+        success: true,
+        file: normalized,
+        conflict: stillConflicting,
+        resolved: !stillConflicting,
+        hasConflictMarkers: false,
+        status: nextStatusEntry?.status || '',
+      };
+    }, () => normalizeRepositoryOwnership(repoPath, 'codehub_resolve_conflict', [
+      absolutePath,
+      path.join(repoPath, '.git'),
+    ]));
   },
 
   async discardLocalChanges(repoPath, { files } = {}) {
@@ -687,12 +824,17 @@ export const codeHubGitService = {
       .filter((entry) => entry.status !== '??')
       .map((entry) => entry.path);
 
-    if (trackedFiles.length > 0) {
-      await runGit(['restore', '--staged', '--worktree', '--', ...trackedFiles], { cwd: repoPath });
-    }
-    if (untrackedFiles.length > 0) {
-      await runGit(['clean', '-fd', '--', ...untrackedFiles], { cwd: repoPath });
-    }
+    await withOwnershipFinalizer(async () => {
+      if (trackedFiles.length > 0) {
+        await runGit(['restore', '--staged', '--worktree', '--', ...trackedFiles], { cwd: repoPath });
+      }
+      if (untrackedFiles.length > 0) {
+        await runGit(['clean', '-fd', '--', ...untrackedFiles], { cwd: repoPath });
+      }
+    }, () => normalizeRepositoryOwnership(repoPath, 'codehub_discard_changes', [
+      ...trackedFiles.map((file) => path.join(repoPath, file)),
+      path.join(repoPath, '.git'),
+    ]));
 
     return {
       success: true,
@@ -717,33 +859,38 @@ export const codeHubGitService = {
       throw createHttpError('Git name and email must be configured before committing CodeHub changes', 400);
     }
 
-    await runGit(['config', 'user.name', gitName], { cwd: repoPath });
-    await runGit(['config', 'user.email', gitEmail], { cwd: repoPath });
+    return withOwnershipFinalizer(async () => {
+      await runGit(['config', 'user.name', gitName], { cwd: repoPath });
+      await runGit(['config', 'user.email', gitEmail], { cwd: repoPath });
 
-    const selectedFiles = files.map(normalizeRelativePath).filter(Boolean);
-    if (selectedFiles.length === 0) {
-      throw createHttpError('At least one file must be selected', 400);
-    }
-    await runGit(['reset', '--'], { cwd: repoPath });
-    await runGit(['add', '--', ...selectedFiles], { cwd: repoPath });
-    const { stdout: numstatOutput } = await runGit(['diff', '--cached', '--numstat'], { cwd: repoPath });
-    const fileStats = parseNumstat(numstatOutput);
-    if (fileStats.length === 0) {
-      throw createHttpError('No staged changes to commit', 400);
-    }
-    await runGit(['commit', '-m', message], { cwd: repoPath });
-    const { stdout: commitShaOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
-    const commitSha = commitShaOutput.trim();
-    const committedStats = await getCommitStats(repoPath, commitSha);
-    const stats = committedStats.files.length > 0 ? committedStats : {
-      commitSha,
-      files: fileStats.map((file) => ({ ...file, status: 'modified' })),
-      additions: fileStats.reduce((sum, file) => sum + file.additions, 0),
-      deletions: fileStats.reduce((sum, file) => sum + file.deletions, 0),
-      filesChanged: fileStats.length,
-      binaryFilesChanged: fileStats.filter((file) => file.isBinary).length,
-    };
-    return stats;
+      const selectedFiles = files.map(normalizeRelativePath).filter(Boolean);
+      if (selectedFiles.length === 0) {
+        throw createHttpError('At least one file must be selected', 400);
+      }
+      await runGit(['reset', '--'], { cwd: repoPath });
+      await runGit(['add', '--', ...selectedFiles], { cwd: repoPath });
+      const { stdout: numstatOutput } = await runGit(['diff', '--cached', '--numstat'], { cwd: repoPath });
+      const fileStats = parseNumstat(numstatOutput);
+      if (fileStats.length === 0) {
+        throw createHttpError('No staged changes to commit', 400);
+      }
+      await runGit(['commit', '-m', message], { cwd: repoPath });
+      const { stdout: commitShaOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
+      const commitSha = commitShaOutput.trim();
+      const committedStats = await getCommitStats(repoPath, commitSha);
+      return committedStats.files.length > 0 ? committedStats : {
+        commitSha,
+        files: fileStats.map((file) => ({ ...file, status: 'modified' })),
+        additions: fileStats.reduce((sum, file) => sum + file.additions, 0),
+        deletions: fileStats.reduce((sum, file) => sum + file.deletions, 0),
+        filesChanged: fileStats.length,
+        binaryFilesChanged: fileStats.filter((file) => file.isBinary).length,
+      };
+    }, () => normalizeRepositoryOwnership(
+      repoPath,
+      'codehub_commit',
+      [path.join(repoPath, '.git')],
+    ));
   },
 
   async pushHead({
@@ -762,12 +909,15 @@ export const codeHubGitService = {
       throw createHttpError('Remote branch does not exist', 404);
     }
 
-    await runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
-      cwd: repoPath,
-      userId,
-      repositoryUrl,
-      timeoutMs: 10 * 60 * 1000,
-    });
+    await withOwnershipFinalizer(
+      () => runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
+        cwd: repoPath,
+        userId,
+        repositoryUrl,
+        timeoutMs: 10 * 60 * 1000,
+      }),
+      () => normalizeRepositoryOwnership(repoPath, 'codehub_push', [path.join(repoPath, '.git')]),
+    );
     const { stdout: headShaOutput } = await runGit(['rev-parse', 'HEAD'], { cwd: repoPath });
     return {
       success: true,

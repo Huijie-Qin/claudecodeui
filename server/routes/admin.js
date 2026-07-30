@@ -11,6 +11,7 @@ import { skillPresetService } from '../services/skill-presets.js';
 import { platformAnalyticsService } from '../services/platform-analytics.js';
 import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
+import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -505,15 +506,25 @@ export function createAdminRouter(
   router.get('/analytics/users', (req, res) => {
     try {
       const usersSummary = buildAdminAnalyticsUsers({
-        rangeDays: req.query?.rangeDays,
         page: req.query?.page,
         pageSize: req.query?.pageSize,
-        sortBy: req.query?.sortBy,
         search: req.query?.search,
       });
       res.json(usersSummary);
     } catch (error) {
       sendRouteError(res, error, 'Failed to load analytics users');
+    }
+  });
+
+  router.get('/mcp/tool-usage', (req, res) => {
+    try {
+      const summary = buildMcpToolUsageSummary({
+        rangeDays: req.query?.rangeDays,
+        provider: req.query?.provider,
+      });
+      res.json(summary);
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to load MCP tool usage');
     }
   });
 
@@ -973,16 +984,16 @@ export function createAdminRouter(
     }
   });
 
-  router.put('/mcp-presets/:presetId', (req, res) => {
+  router.put('/mcp-presets/:presetId', async (req, res) => {
     try {
       const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
-      const preset = mcpPresets.updatePreset({
+      const { preset, sync } = await mcpPresets.updatePreset({
         tenantId,
         presetId: parsePositiveId(req.params.presetId, 'presetId'),
         userId: req.user.id,
         input: req.body,
       });
-      return res.json({ preset });
+      return res.json({ preset, sync });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to update MCP preset');
     }
@@ -1017,11 +1028,11 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/mcp-presets/:presetId/copy', (req, res) => {
+  router.post('/mcp-presets/:presetId/copy', async (req, res) => {
     try {
       const tenantId = parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId');
       const targetTenantIds = req.body?.targetTenantIds ?? req.body?.target_tenant_ids;
-      const result = mcpPresets.copyPresetToTenants({
+      const result = await mcpPresets.copyPresetToTenants({
         tenantId,
         presetId: parsePositiveId(req.params.presetId, 'presetId'),
         targetTenantIds,

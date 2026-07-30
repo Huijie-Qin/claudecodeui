@@ -274,7 +274,7 @@
     "startChatWithProvider": "Select a project to start chatting with {{provider}}"
   },
   "scheduledTasks": {
-    "title": "Scheduled session tasks",
+    "title": "Scheduled tasks",
     "createTitle": "Create scheduled task",
     "detailsTitle": "Scheduled task details",
     "taskDetails": "Task details",
@@ -298,12 +298,19 @@
       "cronExpression": "Cron expression",
       "startAfter": "Start after",
       "repeat": "Repeat",
+      "period": "Period",
+      "date": "Date",
+      "runTime": "Run time",
+      "runMinute": "Run minute",
+      "dayOption": "Day {{day}}",
       "minuteWithValue": "Minute: {{minute}}",
       "hour": "Hour",
       "weekday": "Weekday",
       "dayOfMonth": "Day of month",
       "enabled": "Enabled",
       "session": "Session",
+      "sessionMode": "Session mode",
+      "mergeSession": "Merge runs into one session",
       "model": "Model",
       "permission": "Permission",
       "nextFiveRuns": "Next 5 runs",
@@ -319,7 +326,15 @@
     "modes": {
       "interval": "Interval",
       "cron": "Cron",
-      "visual": "Visual"
+      "visual": "Simple"
+    },
+    "sessionModes": {
+      "new": "New session for every run",
+      "merge": "Merge into one session"
+    },
+    "sessionModeDescriptions": {
+      "new": "Each run uses an independent context and does not affect other runs.",
+      "merge": "Create a session on the first run and continue it on later runs."
     },
     "frequencies": {
       "hourly": "Hourly",
@@ -354,6 +369,10 @@
     "summary": {
       "cron": "Cron {{expression}}",
       "everyMinutes": "Every {{count}} min",
+      "hourly": "Every hour at minute {{minute}}",
+      "monthly": "Every month on day {{day}} at {{time}}",
+      "weekly": "Every {{weekday}} at {{time}}",
+      "daily": "Every day at {{time}}",
       "runInfo": "{{schedule}}. Next: {{next}}. Last: {{last}}"
     },
     "errors": {

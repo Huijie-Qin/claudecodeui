@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+
 import type { Project } from '../../../types/app';
 import type { CodeEditorDiffInfo, CodeEditorFile } from '../types/types';
 
@@ -22,6 +23,7 @@ export const useEditorSidebar = ({
   const [isResizing, setIsResizing] = useState(false);
   const [hasManualWidth, setHasManualWidth] = useState(false);
   const resizeHandleRef = useRef<HTMLDivElement | null>(null);
+  const activeResizePointerIdRef = useRef<number | null>(null);
 
   const handleFileOpen = useCallback(
     (filePath: string, diffInfo: CodeEditorDiffInfo | null = null, source: FileOpenSource = 'chat') => {
@@ -204,10 +206,13 @@ export const useEditorSidebar = ({
   }, []);
 
   const handleResizeStart = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (isMobile) {
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (isMobile || event.button !== 0) {
         return;
       }
+
+      activeResizePointerIdRef.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId);
 
       // After first drag interaction, the editor width is user-controlled.
       setHasManualWidth(true);
@@ -218,8 +223,8 @@ export const useEditorSidebar = ({
   );
 
   useEffect(() => {
-    const handleMouseMove = (event: globalThis.MouseEvent) => {
-      if (!isResizing) {
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      if (!isResizing || event.pointerId !== activeResizePointerIdRef.current) {
         return;
       }
 
@@ -242,20 +247,41 @@ export const useEditorSidebar = ({
       }
     };
 
-    const handleMouseUp = () => {
+    const stopResizing = () => {
+      activeResizePointerIdRef.current = null;
       setIsResizing(false);
     };
 
+    const handlePointerEnd = (event: globalThis.PointerEvent) => {
+      if (event.pointerId === activeResizePointerIdRef.current) {
+        stopResizing();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopResizing();
+      }
+    };
+
     if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('pointermove', handlePointerMove);
+      document.addEventListener('pointerup', handlePointerEnd);
+      document.addEventListener('pointercancel', handlePointerEnd);
+      document.addEventListener('lostpointercapture', handlePointerEnd);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('blur', stopResizing);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     }
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerEnd);
+      document.removeEventListener('pointercancel', handlePointerEnd);
+      document.removeEventListener('lostpointercapture', handlePointerEnd);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', stopResizing);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
@@ -265,6 +291,7 @@ export const useEditorSidebar = ({
     editingFile,
     editorWidth,
     editorExpanded,
+    isResizing,
     hasManualWidth,
     resizeHandleRef,
     handleFileOpen,

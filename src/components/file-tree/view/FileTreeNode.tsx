@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react';
+import type { DragEvent, ReactNode, RefObject } from 'react';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -15,6 +15,13 @@ type FileTreeNodeProps = {
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
+  selectedPaths?: Set<string>;
+  internalDropTarget?: string | null;
+  onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
+  onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragLeave?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDrop?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onItemClick: (item: FileTreeNodeType) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
@@ -81,6 +88,13 @@ export default function FileTreeNode({
   viewMode,
   expandedDirs,
   dropTarget,
+  selectedPaths = new Set(),
+  internalDropTarget,
+  onSelectionChange,
+  onInternalDragStart,
+  onInternalDragOver,
+  onInternalDragLeave,
+  onInternalDrop,
   onItemClick,
   renderFileIcon,
   formatFileSize,
@@ -116,6 +130,8 @@ export default function FileTreeNode({
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
   const isRenaming = renamingItem?.path === item.path;
   const isDropTarget = isDirectory && dropTarget === item.path;
+  const isSelected = selectedPaths.has(item.path);
+  const isInternalDropTarget = isDirectory && internalDropTarget === item.path;
   const shouldRenderCreateInput = Boolean(isDirectory && isCreating && newItemParent === item.path);
   const shouldRenderChildren = Boolean(isDirectory && (shouldRenderCreateInput || (isOpen && hasChildren)));
   const dropTargetAttributes: Record<string, string> = isDirectory
@@ -137,6 +153,8 @@ export default function FileTreeNode({
     isDirectory && isOpen && 'border-l-2 border-primary/30',
     (isDirectory && !isOpen) || !isDirectory ? 'border-l-2 border-transparent' : '',
     isDropTarget && 'bg-blue-500/15 ring-1 ring-inset ring-blue-500/50',
+    isSelected && 'bg-primary/15 ring-1 ring-inset ring-primary/40',
+    isInternalDropTarget && 'bg-green-500/15 ring-1 ring-inset ring-green-500/60',
   );
 
   // Render rename input if this item is being renamed
@@ -189,7 +207,19 @@ export default function FileTreeNode({
       className={rowClassName}
       {...dropTargetAttributes}
       style={{ paddingLeft: `${level * 16 + 4}px` }}
-      onClick={() => onItemClick(item)}
+      draggable={Boolean(onInternalDragStart)}
+      onDragStart={(event) => onInternalDragStart?.(item, event)}
+      onDragOver={(event) => onInternalDragOver?.(item, event)}
+      onDragLeave={(event) => onInternalDragLeave?.(item, event)}
+      onDrop={(event) => onInternalDrop?.(item, event)}
+      onClick={(event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+          event.preventDefault();
+          onSelectionChange?.(item, true);
+          return;
+        }
+        onItemClick(item);
+      }}
     >
       {viewMode === 'detailed' ? (
         <>
@@ -287,6 +317,13 @@ export default function FileTreeNode({
               viewMode={viewMode}
               expandedDirs={expandedDirs}
               dropTarget={dropTarget}
+              selectedPaths={selectedPaths}
+              internalDropTarget={internalDropTarget}
+              onSelectionChange={onSelectionChange}
+              onInternalDragStart={onInternalDragStart}
+              onInternalDragOver={onInternalDragOver}
+              onInternalDragLeave={onInternalDragLeave}
+              onInternalDrop={onInternalDrop}
               onItemClick={onItemClick}
               renderFileIcon={renderFileIcon}
               formatFileSize={formatFileSize}

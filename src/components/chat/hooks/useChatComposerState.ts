@@ -20,10 +20,10 @@ import type {
   PermissionMode,
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
-import { escapeRegExp } from '../utils/chatFormatting';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { extractSlashCommandArguments } from './useSlashCommands.utils';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -80,6 +80,12 @@ interface CommandExecutionResult {
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
+
+const DRAFT_SAVE_DELAY_MS = 400;
+// One 24px line plus 8px vertical padding on each side. This also prevents a
+// transient zero scrollHeight (for example while the composer is hidden) from
+// collapsing the textarea and clipping its text.
+const MIN_TEXTAREA_HEIGHT_PX = 40;
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
@@ -160,6 +166,7 @@ export function useChatComposerState({
   >(null);
   const inputValueRef = useRef(input);
   const pendingDisplayInputRef = useRef<string | null>(null);
+  const textareaLineHeightRef = useRef<number | null>(null);
 
   const handleBuiltInCommand = useCallback(
     (result: CommandExecutionResult) => {
@@ -268,9 +275,10 @@ export function useChatComposerState({
 
       try {
         const effectiveInput = rawInput ?? input;
-        const commandMatch = effectiveInput.match(new RegExp(`${escapeRegExp(command.name)}\\s*(.*)`));
-        const args =
-          commandMatch && commandMatch[1] ? commandMatch[1].trim().split(/\s+/) : [];
+        const { args, rawArgs } = extractSlashCommandArguments({
+          commandName: command.name,
+          input: effectiveInput,
+        });
 
         const context = {
           projectPath: selectedProject.fullPath || selectedProject.path,
@@ -291,6 +299,7 @@ export function useChatComposerState({
             commandName: command.name,
             commandPath: command.path,
             args,
+            rawArgs,
             context,
           }),
         });
@@ -686,31 +695,49 @@ export function useChatComposerState({
     if (!selectedProject) {
       return;
     }
-    if (input !== '') {
-      safeLocalStorage.setItem(`draft_input_${selectedProject.name}`, input);
-    } else {
-      safeLocalStorage.removeItem(`draft_input_${selectedProject.name}`);
-    }
-  }, [input, selectedProject]);
+    const draftKey = `draft_input_${selectedProject.name}`;
+    const timeoutId = window.setTimeout(() => {
+      if (input !== '') {
+        safeLocalStorage.setItem(draftKey, input);
+      } else {
+        safeLocalStorage.removeItem(draftKey);
+      }
+    }, DRAFT_SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [input, selectedProject?.name]);
 
   useEffect(() => {
-    if (!textareaRef.current) {
+    const textarea = textareaRef.current;
+    if (!textarea) {
       return;
     }
-    // Re-run when input changes so restored drafts get the same autosize behavior as typed text.
-    textareaRef.current.style.height = 'auto';
-    textareaRef.current.style.height = `${Math.max(22, textareaRef.current.scrollHeight)}px`;
-    const lineHeight = parseInt(window.getComputedStyle(textareaRef.current).lineHeight);
-    const expanded = textareaRef.current.scrollHeight > lineHeight * 2;
-    setIsTextareaExpanded(expanded);
-  }, [input]);
+    // Coalesce layout reads/writes into one animation frame. This also handles restored drafts.
+    const frameId = window.requestAnimationFrame(() => {
+      if (!input.trim()) {
+        textarea.style.height = 'auto';
+        setIsTextareaExpanded((previous) => (previous ? false : previous));
+        return;
+      }
 
-  useEffect(() => {
-    if (!textareaRef.current || input.trim()) {
-      return;
-    }
-    textareaRef.current.style.height = 'auto';
-    setIsTextareaExpanded(false);
+      textarea.style.height = 'auto';
+      const scrollHeight = textarea.scrollHeight;
+      const computedStyle = window.getComputedStyle(textarea);
+      const borderHeight =
+        Number.parseFloat(computedStyle.borderTopWidth) +
+        Number.parseFloat(computedStyle.borderBottomWidth);
+      const measuredHeight = scrollHeight > 0 ? scrollHeight + borderHeight : 0;
+      textarea.style.height = `${Math.max(MIN_TEXTAREA_HEIGHT_PX, measuredHeight)}px`;
+
+      if (textareaLineHeightRef.current === null) {
+        const computedLineHeight = Number.parseFloat(computedStyle.lineHeight);
+        textareaLineHeightRef.current = Number.isFinite(computedLineHeight) ? computedLineHeight : 24;
+      }
+      const expanded = scrollHeight > textareaLineHeightRef.current * 2;
+      setIsTextareaExpanded((previous) => (previous === expanded ? previous : expanded));
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
   }, [input]);
 
   const handleInputChange = useCallback(
@@ -785,13 +812,8 @@ export function useChatComposerState({
   const handleTextareaInput = useCallback(
     (event: FormEvent<HTMLTextAreaElement>) => {
       const target = event.currentTarget;
-      target.style.height = 'auto';
-      target.style.height = `${Math.max(22, target.scrollHeight)}px`;
       setCursorPosition(target.selectionStart);
       syncInputOverlayScroll(target);
-
-      const lineHeight = parseInt(window.getComputedStyle(target).lineHeight);
-      setIsTextareaExpanded(target.scrollHeight > lineHeight * 2);
     },
     [setCursorPosition, syncInputOverlayScroll],
   );

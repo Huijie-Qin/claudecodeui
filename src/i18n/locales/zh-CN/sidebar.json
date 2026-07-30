@@ -32,7 +32,8 @@
     "loadingSessions": "加载会话中...",
     "unnamed": "未命名",
     "loading": "加载中...",
-    "showMore": "显示更多会话"
+    "showMore": "显示更多会话",
+    "noTaskRuns": "暂无执行记录"
   },
   "tooltips": {
     "viewEnvironments": "查看环境",
@@ -48,7 +49,8 @@
     "save": "保存",
     "cancel": "取消",
     "clearSearch": "清除搜索",
-    "scheduledTasks": "定时任务"
+    "scheduledTasks": "定时任务",
+    "editScheduledTask": "编辑定时任务"
   },
   "navigation": {
     "chat": "聊天",

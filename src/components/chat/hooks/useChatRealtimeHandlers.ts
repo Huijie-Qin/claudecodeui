@@ -292,6 +292,8 @@ export function useChatRealtimeHandlers({
           currentSessionId,
           selectedSessionId: selectedSession?.id || null,
           hasPendingViewSession: Boolean(pendingViewSessionRef.current),
+          isBackgroundSession: msg.scheduledTaskId != null
+            && Number.isFinite(Number(msg.scheduledTaskId)),
         });
 
         if (shouldAdoptSession) {

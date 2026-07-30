@@ -856,6 +856,7 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
   await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Folder\nchanged\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'guide.md'), '# Guide\n', 'utf8');
   await fs.writeFile(path.join(skillPath, 'references', 'asset.bin'), Buffer.from([0, 1, 2, 255]));
+  await fs.writeFile(path.join(skillPath, 'references', 'changed.bin'), Buffer.from([0, 1, 3, 255]));
   await writeLegacyMarketImport(workspacePath, 'local-folder', {
     name: 'local-folder',
     skillId: 'remote-uploaded-id',
@@ -870,7 +871,15 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
   const remoteFiles = {
     'local-folder/SKILL.md': '# Local Folder\n',
     'local-folder/references/guide.md': '# Guide\n',
+    'local-folder/references/asset.bin': '',
+    'local-folder/references/changed.bin': '',
   };
+  const remoteZip = new JSZip();
+  remoteZip.file('local-folder/SKILL.md', '# Local Folder\n');
+  remoteZip.file('local-folder/references/guide.md', '# Guide\n');
+  remoteZip.file('local-folder/references/asset.bin', Buffer.from([0, 1, 2, 255]));
+  remoteZip.file('local-folder/references/changed.bin', Buffer.from([0, 1, 2, 255]));
+  const remoteZipBuffer = await remoteZip.generateAsync({ type: 'nodebuffer' });
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
@@ -908,6 +917,12 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
       return;
     }
 
+    if (endpoint === '/data-agent/api/skill/download') {
+      res.writeHead(200, { 'Content-Type': 'application/zip' });
+      res.end(remoteZipBuffer);
+      return;
+    }
+
     res.writeHead(404);
     res.end();
   });
@@ -930,8 +945,8 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
 
     assert.deepEqual(preview.changes, [
       {
-        path: 'references/asset.bin',
-        status: 'added',
+        path: 'references/changed.bin',
+        status: 'modified',
         isBinary: true,
         oldContent: '',
         newContent: '',

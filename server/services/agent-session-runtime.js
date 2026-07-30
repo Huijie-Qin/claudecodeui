@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn as spawnChildProcess } from 'node:child_process';
 import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,12 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 import { codeHubService } from './codehub.js';
+import { resolveContainerUser } from './container-user.js';
 import { sanitizePathSegment } from './workspace-projects.js';
+import { mapWorkspacePathForContainer } from './workspace-path-mapping.js';
+import { migratePathOwnership } from './workspace-ownership.js';
+
+export { migratePathOwnership } from './workspace-ownership.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,8 +39,46 @@ const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
+const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
+const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
+const DOCKER_SHARED_PYTHON_CONTAINER_PATH = '/opt/cloudcli/python';
+const DOCKER_SHARED_PYTHON_USER_BASE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/user-base`;
+const DOCKER_SHARED_PIP_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pip-cache`;
+const DOCKER_SHARED_UV_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/uv-cache`;
+const DOCKER_SHARED_PIPX_HOME = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pipx`;
+const DEFAULT_DOCKER_CONTAINER_PATH = [
+  '/home/agent/.local/bin',
+  '/usr/local/share/npm-global/bin',
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+].join(':');
+const DOCKER_SHARED_PYTHON_PATH = `${DOCKER_SHARED_PYTHON_USER_BASE}/bin:${DEFAULT_DOCKER_CONTAINER_PATH}`;
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
-const DOCKER_RUN_ENV_DENYLIST = new Set([PRIVATE_TOKEN_ENV_NAME]);
+const DOCKER_RUNTIME_MANAGED_ENV_NAMES = new Set([
+  'HOME',
+  'PATH',
+  'PYTHONUSERBASE',
+  'PYTHONNOUSERSITE',
+  'PIP_CACHE_DIR',
+  'PIP_DISABLE_PIP_VERSION_CHECK',
+  'PIP_BREAK_SYSTEM_PACKAGES',
+  'PIP_USER',
+  'PIP_PREFIX',
+  'PIP_TARGET',
+  'PIP_REQUIRE_VIRTUALENV',
+  'VIRTUAL_ENV',
+  'UV_CACHE_DIR',
+  'PIPX_HOME',
+  'PIPX_BIN_DIR',
+]);
+const DOCKER_RUN_ENV_DENYLIST = new Set([
+  PRIVATE_TOKEN_ENV_NAME,
+  ...DOCKER_RUNTIME_MANAGED_ENV_NAMES,
+]);
 const NPM_PROXY_ENV_NAMES = [
   'npm_config_proxy',
   'npm_config_https_proxy',
@@ -84,6 +127,7 @@ const WRAPPER_HOST_ENV_ALLOWLIST = [
   'XDG_RUNTIME_DIR',
 ];
 const CONTAINER_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LOOPBACK_PROXY_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 function requireValue(value, name) {
   if (value == null || String(value).trim() === '') {
@@ -120,21 +164,35 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function currentUid() {
-  return typeof process.getuid === 'function' ? process.getuid() : 1000;
+function rewriteDockerProxyValue(value) {
+  const input = String(value || '').trim();
+  if (!input) return input;
+  try {
+    const parsed = new URL(input);
+    if (!LOOPBACK_PROXY_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return input;
+    }
+    parsed.hostname = 'host.docker.internal';
+    return parsed.toString();
+  } catch {
+    return input;
+  }
 }
 
-function currentGid() {
-  return typeof process.getgid === 'function' ? process.getgid() : 1000;
-}
-
-function resolveContainerUser(env = process.env) {
-  const defaultUid = currentUid();
-  const defaultGid = currentGid();
-  return {
-    uid: Number.parseInt(env.CLOUDCLI_DOCKER_UID || String(defaultUid > 0 ? defaultUid : 1000), 10),
-    gid: Number.parseInt(env.CLOUDCLI_DOCKER_GID || String(defaultGid > 0 ? defaultGid : 1000), 10),
-  };
+export function rewriteDockerProxyEnv(value) {
+  const normalized = normalizeContainerEnvRecord(value);
+  for (const name of [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'http_proxy',
+    'https_proxy',
+    ...NPM_PROXY_ENV_NAMES,
+  ]) {
+    if (normalized[name]) {
+      normalized[name] = rewriteDockerProxyValue(normalized[name]);
+    }
+  }
+  return normalized;
 }
 
 function isNonNegativeInteger(value) {
@@ -161,6 +219,57 @@ export function parseDockerPythonPackages(value) {
     .split(/[\s,]+/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function buildDockerPythonInstallArgs(containerName, packages = []) {
+  const requestedPackages = Array.isArray(packages)
+    ? packages.map((entry) => String(entry).trim()).filter(Boolean)
+    : parseDockerPythonPackages(packages);
+  if (requestedPackages.length === 0) return [];
+
+  return [
+    'exec',
+    '-e',
+    'HOME=/home/cloudcli',
+    requireValue(containerName, 'containerName'),
+    'python3',
+    '-m',
+    'pip',
+    'install',
+    '--user',
+    '--break-system-packages',
+    '--disable-pip-version-check',
+    ...requestedPackages,
+  ];
+}
+
+function parseBoolean(value, fallback) {
+  if (value == null || String(value).trim() === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  throw new Error(`${DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME} must be a boolean`);
+}
+
+export function resolveDockerSharedPythonPath(env = process.env, image = DEFAULT_CLAUDE_DOCKER_IMAGE) {
+  if (!parseBoolean(env[DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME], true)) {
+    return null;
+  }
+
+  const runtimeRoot = path.resolve(expandHome(env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT));
+  const sharedRoot = path.resolve(expandHome(
+    env[DOCKER_SHARED_PYTHON_ROOT_ENV_NAME]
+      || path.join(runtimeRoot, '.shared', 'python'),
+  ));
+  const imageScope = crypto
+    .createHash('sha256')
+    .update(requireValue(image, 'image'))
+    .digest('hex')
+    .slice(0, 20);
+
+  // Keep incompatible images out of the same Python user base. Python itself
+  // adds another layer by placing packages under lib/pythonX.Y/site-packages.
+  return path.join(sharedRoot, `image-${imageScope}`);
 }
 
 export function buildRuntimePaths({
@@ -264,13 +373,38 @@ export function buildDockerRunArgs({
   gid,
   workspaceHostPath,
   runtimeHomePath,
+  sharedPythonHostPath = null,
   containerEnv = {},
   memory = DEFAULT_DOCKER_MEMORY,
   cpus = DEFAULT_DOCKER_CPUS,
 }) {
-  const containerEnvArgs = Object.entries(normalizeContainerEnvRecord(containerEnv))
+  const containerEnvArgs = Object.entries(rewriteDockerProxyEnv(containerEnv))
     .filter(([key]) => !DOCKER_RUN_ENV_DENYLIST.has(key))
     .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+  const sharedPythonArgs = sharedPythonHostPath
+    ? [
+        '--mount',
+        `type=bind,src=${requireValue(sharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
+        '-e',
+        `PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`,
+        '-e',
+        `PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`,
+        '-e',
+        'PIP_DISABLE_PIP_VERSION_CHECK=1',
+        '-e',
+        'PIP_BREAK_SYSTEM_PACKAGES=1',
+        '-e',
+        'PIP_USER=1',
+        '-e',
+        `UV_CACHE_DIR=${DOCKER_SHARED_UV_CACHE}`,
+        '-e',
+        `PIPX_HOME=${DOCKER_SHARED_PIPX_HOME}`,
+        '-e',
+        `PIPX_BIN_DIR=${DOCKER_SHARED_PYTHON_USER_BASE}/bin`,
+        '-e',
+        `PATH=${DOCKER_SHARED_PYTHON_PATH}`,
+      ]
+    : [];
 
   return [
     'run',
@@ -289,12 +423,15 @@ export function buildDockerRunArgs({
     '--cpus',
     requireValue(cpus, 'cpus'),
     '--read-only',
+    '--add-host',
+    'host.docker.internal:host-gateway',
     '--tmpfs',
     '/tmp:rw,nosuid,size=512m',
     '--mount',
     `type=bind,src=${requireValue(workspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
     '--mount',
     `type=bind,src=${requireValue(runtimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
+    ...sharedPythonArgs,
     '-e',
     'HOME=/home/cloudcli',
     ...containerEnvArgs,
@@ -343,57 +480,217 @@ exec docker exec -i \\
 `;
 }
 
+export function buildClaudeDockerExecArgs({
+  containerName,
+  args = [],
+  env = {},
+  envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  executable = 'claude',
+}) {
+  const normalizedEnv = normalizeContainerEnvRecord(env);
+  const dockerEnvArgs = envAllowlist.flatMap((name) => (
+    Object.prototype.hasOwnProperty.call(normalizedEnv, name)
+      ? ['-e', `${name}=${normalizedEnv[name]}`]
+      : []
+  ));
+
+  return [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    ...dockerEnvArgs,
+    requireValue(containerName, 'containerName'),
+    requireValue(executable, 'executable'),
+    ...(Array.isArray(args) ? args : []),
+  ];
+}
+
+export function createClaudeDockerSpawn({
+  containerName,
+  envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  spawnImpl = spawnChildProcess,
+} = {}) {
+  return (options = {}) => spawnImpl(
+    'docker',
+    buildClaudeDockerExecArgs({
+      containerName,
+      args: options.args,
+      env: options.env,
+      envAllowlist,
+    }),
+    {
+      env: options.env,
+      signal: options.signal,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
+}
+
 export async function ensureRuntimeHomeWritable(fsImpl, runtimeHomePath, { uid, gid } = {}) {
   await fsImpl.mkdir(runtimeHomePath, { recursive: true });
 
-  let chownSucceeded = false;
-  if (
-    typeof fsImpl.chown === 'function'
-    && isNonNegativeInteger(uid)
-    && isNonNegativeInteger(gid)
-  ) {
-    try {
-      await fsImpl.chown(runtimeHomePath, uid, gid);
-      chownSucceeded = true;
-    } catch {
-      // Some deployments run without permission to chown bind mounts. In that
-      // case, fall back to a writable runtime home so the sandbox user can
-      // create Claude config files.
+  const runtimeDirectoryPath = path.dirname(runtimeHomePath);
+  const permissionTargets = [...new Set([runtimeDirectoryPath, runtimeHomePath])];
+  for (const targetPath of permissionTargets) {
+    let chownSucceeded = false;
+    if (
+      typeof fsImpl.chown === 'function'
+      && isNonNegativeInteger(uid)
+      && isNonNegativeInteger(gid)
+    ) {
+      try {
+        await fsImpl.chown(targetPath, uid, gid);
+        chownSucceeded = true;
+      } catch {
+        // Some deployments run without permission to chown bind mounts. In
+        // that case, fall back to writable permissions for both the
+        // workspace-specific runtime directory and its home directory.
+      }
     }
-  }
 
-  if (typeof fsImpl.chmod === 'function') {
-    await fsImpl.chmod(runtimeHomePath, chownSucceeded ? 0o700 : 0o777);
+    if (typeof fsImpl.chmod === 'function') {
+      await fsImpl.chmod(targetPath, chownSucceeded ? 0o700 : 0o777);
+    }
   }
 }
 
-export async function ensureClaudeCleanupPeriod(fsImpl, runtimeHomePath) {
+async function lstatIfExists(fsImpl, targetPath) {
+  try {
+    return await fsImpl.lstat(targetPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function assertRuntimeConfigPathType(stats, targetPath, expectedType) {
+  if (stats?.isSymbolicLink?.()) {
+    throw new Error(`Claude runtime config path must not be a symbolic link: ${targetPath}`);
+  }
+  if (expectedType === 'directory' && !stats?.isDirectory?.()) {
+    throw new Error(`Claude runtime config path must be a directory: ${targetPath}`);
+  }
+  if (expectedType === 'file' && !stats?.isFile?.()) {
+    throw new Error(`Claude runtime config path must be a regular file: ${targetPath}`);
+  }
+}
+
+async function ensureRuntimeConfigPathPermissions(
+  fsImpl,
+  targetPath,
+  {
+    uid,
+    gid,
+    mode,
+    expectedType,
+  },
+) {
+  const stats = await fsImpl.lstat(targetPath);
+  assertRuntimeConfigPathType(stats, targetPath, expectedType);
+
+  let ownershipChanged = false;
+  if (
+    isNonNegativeInteger(uid)
+    && isNonNegativeInteger(gid)
+    && (stats.uid !== uid || stats.gid !== gid)
+  ) {
+    if (typeof fsImpl.chown !== 'function') {
+      throw new Error(`Unable to set Claude runtime config ownership: ${targetPath}`);
+    }
+    await fsImpl.chown(targetPath, uid, gid);
+    ownershipChanged = true;
+  }
+
+  const currentMode = Number.isInteger(stats.mode) ? stats.mode & 0o777 : null;
+  let modeChanged = false;
+  if (currentMode !== mode) {
+    if (typeof fsImpl.chmod !== 'function') {
+      throw new Error(`Unable to set Claude runtime config permissions: ${targetPath}`);
+    }
+    await fsImpl.chmod(targetPath, mode);
+    modeChanged = true;
+  }
+
+  return { ownershipChanged, modeChanged };
+}
+
+export async function ensureClaudeCleanupPeriod(
+  fsImpl,
+  runtimeHomePath,
+  {
+    uid,
+    gid,
+    logger = null,
+    context = {},
+  } = {},
+) {
   const claudeDir = path.join(runtimeHomePath, '.claude');
   const settingsPath = path.join(claudeDir, 'settings.json');
   let settings = {};
+  let settingsUpdated = false;
 
-  try {
+  await fsImpl.mkdir(claudeDir, { recursive: true, mode: 0o700 });
+  const claudeDirStats = await fsImpl.lstat(claudeDir);
+  assertRuntimeConfigPathType(claudeDirStats, claudeDir, 'directory');
+
+  const existingSettingsStats = await lstatIfExists(fsImpl, settingsPath);
+  if (existingSettingsStats) {
+    assertRuntimeConfigPathType(existingSettingsStats, settingsPath, 'file');
     const content = await fsImpl.readFile(settingsPath, 'utf8');
     settings = JSON.parse(content);
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
       throw new Error('Claude settings must be a JSON object');
     }
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      throw error;
-    }
   }
 
-  if (settings.cleanupPeriodDays === CLAUDE_CLEANUP_PERIOD_DAYS) {
-    return false;
+  if (settings.cleanupPeriodDays !== CLAUDE_CLEANUP_PERIOD_DAYS) {
+    await fsImpl.writeFile(settingsPath, `${JSON.stringify({
+      ...settings,
+      cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
+    }, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    settingsUpdated = true;
   }
 
-  await fsImpl.mkdir(claudeDir, { recursive: true });
-  await fsImpl.writeFile(settingsPath, `${JSON.stringify({
-    ...settings,
-    cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
-  }, null, 2)}\n`, 'utf8');
-  return true;
+  const directoryPermissions = await ensureRuntimeConfigPathPermissions(fsImpl, claudeDir, {
+    uid,
+    gid,
+    mode: 0o700,
+    expectedType: 'directory',
+  });
+  const settingsPermissions = await ensureRuntimeConfigPathPermissions(fsImpl, settingsPath, {
+    uid,
+    gid,
+    mode: 0o600,
+    expectedType: 'file',
+  });
+  const ownershipEntries = Number(directoryPermissions.ownershipChanged)
+    + Number(settingsPermissions.ownershipChanged);
+  const modeEntries = Number(directoryPermissions.modeChanged)
+    + Number(settingsPermissions.modeChanged);
+
+  if (ownershipEntries > 0 || modeEntries > 0) {
+    logger?.log?.('[agent-session-runtime]', JSON.stringify({
+      event: 'runtime_settings_permissions_updated',
+      ...context,
+      targetUser: isNonNegativeInteger(uid) && isNonNegativeInteger(gid)
+        ? `${uid}:${gid}`
+        : null,
+      ownershipEntries,
+      modeEntries,
+      settingsUpdated,
+    }));
+  }
+
+  return settingsUpdated;
 }
 
 function normalizeContainerEnvRecord(value) {
@@ -408,20 +705,20 @@ function normalizeContainerEnvRecord(value) {
   );
 }
 
-function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
+export function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   const output = {};
   for (const name of WRAPPER_HOST_ENV_ALLOWLIST) {
-    if (name === DAS_ENV_NAME) {
-      continue;
-    }
     if (env[name] != null) {
       output[name] = String(env[name]);
     }
   }
-  Object.assign(output, normalizeContainerEnvRecord(containerEnv));
+  Object.assign(output, Object.fromEntries(
+    Object.entries(normalizeContainerEnvRecord(containerEnv))
+      .filter(([name]) => !DOCKER_RUNTIME_MANAGED_ENV_NAMES.has(name)),
+  ));
   if (!output.PATH) output.PATH = process.env.PATH || '';
   if (!output.HOME) output.HOME = os.homedir();
-  return output;
+  return rewriteDockerProxyEnv(output);
 }
 
 function buildRuntimeProcessEnv(env = process.env) {
@@ -431,7 +728,7 @@ function buildRuntimeProcessEnv(env = process.env) {
       output[name] = String(env[name]);
     }
   }
-  return normalizeContainerEnvRecord(output);
+  return rewriteDockerProxyEnv(output);
 }
 
 function buildContainerEnvAllowlist(containerEnv = {}) {
@@ -439,7 +736,7 @@ function buildContainerEnvAllowlist(containerEnv = {}) {
     ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
     ...NPM_PROXY_ENV_NAMES,
     ...Object.keys(normalizeContainerEnvRecord(containerEnv)),
-  ]));
+  ])).filter((name) => !DOCKER_RUNTIME_MANAGED_ENV_NAMES.has(name));
 }
 
 function readEnvValue(record, name) {
@@ -447,16 +744,39 @@ function readEnvValue(record, name) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
+function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
+  // Lightweight test doubles and third-party Docker clients may only expose
+  // state. In that case preserve the previous reuse behavior.
+  if (!Array.isArray(inspected?.mounts) || !Array.isArray(inspected?.env)) {
+    return true;
+  }
+
+  const sharedMount = inspected.mounts.find(
+    (mount) => mount?.Destination === DOCKER_SHARED_PYTHON_CONTAINER_PATH,
+  );
+  if (!sharedPythonHostPath) {
+    return !sharedMount;
+  }
+
+  const envSet = new Set(inspected.env);
+  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(sharedPythonHostPath)
+    && envSet.has(`PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`)
+    && envSet.has(`PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`)
+    && envSet.has('PIP_BREAK_SYSTEM_PACKAGES=1')
+    && envSet.has('PIP_USER=1')
+    && envSet.has(`PATH=${DOCKER_SHARED_PYTHON_PATH}`);
+}
+
 function hasNonEmptyBaseEnvValue(baseEnv, name) {
   return readEnvValue(baseEnv, name) !== null;
 }
 
-function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
+export function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
   const defaults = {};
   const normalizedContainerEnv = normalizeContainerEnvRecord(containerEnv);
   for (const name of CLAUDE_WRAPPER_DEFAULT_ENV_NAMES) {
     const value = readEnvValue(normalizedContainerEnv, name)
-      || (name === DAS_ENV_NAME ? null : readEnvValue(env, name));
+      || readEnvValue(env, name);
     if (value) {
       defaults[name] = value;
     }
@@ -541,14 +861,18 @@ export class DockerCliClient {
       const { stdout } = await execFileAsync('docker', [
         'inspect',
         '-f',
-        '{{json .State}}',
+        '{{json .}}',
         containerName,
       ]);
-      const state = JSON.parse(stdout.trim());
+      const inspected = JSON.parse(stdout.trim());
+      const state = inspected.State || {};
       return {
         exists: true,
         running: state.Running === true,
+        user: inspected.Config?.User ?? null,
         state,
+        env: Array.isArray(inspected.Config?.Env) ? inspected.Config.Env : [],
+        mounts: Array.isArray(inspected.Mounts) ? inspected.Mounts : [],
         status: state.Status ?? null,
         exitCode: state.ExitCode ?? null,
         startedAt: state.StartedAt ?? null,
@@ -596,31 +920,9 @@ export class DockerCliClient {
   }
 
   async installPythonPackages(containerName, packages = []) {
-    const requestedPackages = Array.isArray(packages)
-      ? packages.map((entry) => String(entry).trim()).filter(Boolean)
-      : parseDockerPythonPackages(packages);
-    if (requestedPackages.length === 0) {
-      return;
-    }
-
-    const execArgs = [
-      'exec',
-      '-e',
-      'HOME=/home/cloudcli',
-      requireValue(containerName, 'containerName'),
-    ];
-
-    await execFileAsync('docker', [
-      ...execArgs,
-      'python3',
-      '-m',
-      'pip',
-      'install',
-      '--user',
-      '--no-cache-dir',
-      '--disable-pip-version-check',
-      ...requestedPackages,
-    ]);
+    const args = buildDockerPythonInstallArgs(containerName, packages);
+    if (args.length === 0) return;
+    await execFileAsync('docker', args);
   }
 
   async statsContainers(containerNames) {
@@ -699,13 +1001,53 @@ export function createAgentSessionRuntimeManager({
     }
   }
 
-  async function resolveWorkspaceHostPath(workspacePath) {
-    const resolved = await fs.realpath(requireValue(workspacePath, 'cwd'));
-    const stats = await fs.stat(resolved);
+  async function assertWorkspaceDirectory(workspacePath) {
+    const stats = await fs.stat(workspacePath);
     if (!stats.isDirectory()) {
       throw new Error('workspace path must be a directory');
     }
-    return resolved;
+  }
+
+  async function resolveWorkspaceHostPath(workspacePath) {
+    const requestedPath = requireValue(workspacePath, 'cwd');
+    try {
+      const resolved = await fs.realpath(requestedPath);
+      await assertWorkspaceDirectory(resolved);
+      return resolved;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+        throw error;
+      }
+
+      const containerWorkspacePath = mapWorkspacePathForContainer(requestedPath, env);
+      if (!containerWorkspacePath || containerWorkspacePath === requestedPath) {
+        throw error;
+      }
+
+      const resolvedContainerPath = await fs.realpath(containerWorkspacePath);
+      await assertWorkspaceDirectory(resolvedContainerPath);
+    }
+
+    return requestedPath;
+  }
+
+  async function resolveWorkspaceOwnershipPath(workspaceHostPath) {
+    const requestedPath = requireValue(workspaceHostPath, 'workspaceHostPath');
+    try {
+      await fs.lstat(requestedPath);
+      return requestedPath;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+        throw error;
+      }
+    }
+
+    const mappedPath = mapWorkspacePathForContainer(requestedPath, env);
+    if (!mappedPath || mappedPath === requestedPath) {
+      throw new Error(`workspace ownership path is not accessible: ${requestedPath}`);
+    }
+    await fs.lstat(mappedPath);
+    return mappedPath;
   }
 
   function beginRuntimeUse(runtimeId) {
@@ -760,10 +1102,15 @@ export function createAgentSessionRuntimeManager({
 
   async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
     const requestId = logContext.requestId || null;
+    const containerUser = resolveContainerUser(env);
+    const expectedContainerUser = `${containerUser.uid}:${containerUser.gid}`;
+    const sharedPythonHostPath = resolveDockerSharedPythonPath(env, runtime.image);
     const createContainer = async () => {
-      const containerUser = resolveContainerUser(env);
       const memory = env.CLOUDCLI_DOCKER_MEMORY || DEFAULT_DOCKER_MEMORY;
       const cpus = env.CLOUDCLI_DOCKER_CPUS || DEFAULT_DOCKER_CPUS;
+      if (sharedPythonHostPath) {
+        await ensureRuntimeHomeWritable(fs, sharedPythonHostPath, containerUser);
+      }
       const args = buildDockerRunArgs({
         containerName: runtime.container_name,
         image: runtime.image,
@@ -771,6 +1118,7 @@ export function createAgentSessionRuntimeManager({
         gid: containerUser.gid,
         workspaceHostPath: runtime.workspace_host_path,
         runtimeHomePath: runtime.runtime_home_path,
+        sharedPythonHostPath,
         containerEnv,
         memory,
         cpus,
@@ -781,6 +1129,7 @@ export function createAgentSessionRuntimeManager({
         cpus,
         uid: containerUser.uid,
         gid: containerUser.gid,
+        sharedPythonHostPath,
       }));
       await docker.runDetached(args);
       logRuntimeEvent('container_created', createRuntimeLogDetails(runtime, {
@@ -827,7 +1176,69 @@ export function createAgentSessionRuntimeManager({
       await createContainer();
     };
 
+    const migrateContainerUser = async (inspected) => {
+      if (typeof docker.removeContainer !== 'function') {
+        throw new Error('Docker runtime container user changed and the existing container cannot be removed');
+      }
+
+      logRuntimeEvent('container_user_migration_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        previousUser: inspected.user,
+        targetUser: expectedContainerUser,
+      }));
+
+      if (inspected.running) {
+        await docker.stopContainer(runtime.container_name);
+      }
+
+      const workspaceOwnershipPath = await resolveWorkspaceOwnershipPath(runtime.workspace_host_path);
+      const workspaceEntries = await migratePathOwnership(fs, workspaceOwnershipPath, containerUser);
+      const runtimeHomeEntries = await migratePathOwnership(fs, runtime.runtime_home_path, containerUser);
+
+      await docker.removeContainer(runtime.container_name);
+      await createContainer();
+
+      logRuntimeEvent('container_user_migration_completed', createRuntimeLogDetails(runtime, {
+        requestId,
+        previousUser: inspected.user,
+        targetUser: expectedContainerUser,
+        workspaceEntries,
+        runtimeHomeEntries,
+      }));
+    };
+
+    const prepareNewContainerOwnership = async () => {
+      logRuntimeEvent('container_ownership_prepare_start', createRuntimeLogDetails(runtime, {
+        requestId,
+        targetUser: expectedContainerUser,
+      }));
+
+      const workspaceOwnershipPath = await resolveWorkspaceOwnershipPath(runtime.workspace_host_path);
+      const workspaceEntries = await migratePathOwnership(fs, workspaceOwnershipPath, containerUser);
+      const runtimeHomeEntries = await migratePathOwnership(fs, runtime.runtime_home_path, containerUser);
+
+      logRuntimeEvent('container_ownership_prepare_completed', createRuntimeLogDetails(runtime, {
+        requestId,
+        targetUser: expectedContainerUser,
+        workspaceEntries,
+        runtimeHomeEntries,
+      }));
+    };
+
     const inspected = await docker.inspectContainer(runtime.container_name);
+    if (
+      inspected?.exists
+      && typeof inspected.user === 'string'
+      && inspected.user.trim() !== ''
+      && inspected.user.trim() !== expectedContainerUser
+    ) {
+      await migrateContainerUser(inspected);
+      return;
+    }
+    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath)) {
+      await recreateContainer('shared_python_config_changed');
+      return;
+    }
     if (inspected?.running) {
       const healthy = await verifyContainerWorkspace(runtime, { requestId });
       if (healthy) {
@@ -863,6 +1274,7 @@ export function createAgentSessionRuntimeManager({
       return;
     }
 
+    await prepareNewContainerOwnership();
     await createContainer();
   }
 
@@ -1060,8 +1472,15 @@ export function createAgentSessionRuntimeManager({
       ...buildRuntimeProcessEnv(env),
       ...userEnv,
     };
-    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
-    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path);
+    const containerUser = resolveContainerUser(env);
+    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, containerUser);
+    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path, {
+      ...containerUser,
+      logger: console,
+      context: createRuntimeLogDetails(runtimeContext.runtime, {
+        requestId: runtimeContext.logRequestId || null,
+      }),
+    });
     await ensureContainer(runtimeContext.runtime, containerEnv, {
       requestId: runtimeContext.logRequestId || null,
     });
@@ -1096,6 +1515,10 @@ export function createAgentSessionRuntimeManager({
       projectPath: '/workspace',
       hostWorkspacePath: workspaceHostPath,
       pathToClaudeCodeExecutable: wrapperPath,
+      spawnClaudeCodeProcess: createClaudeDockerSpawn({
+        containerName: runtime.container_name,
+        envAllowlist: buildContainerEnvAllowlist(userEnv),
+      }),
       executionEnv: buildWrapperHostEnv(env, userEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,

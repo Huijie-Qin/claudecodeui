@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import type { MouseEvent, MutableRefObject } from 'react';
+import type { MutableRefObject, PointerEvent } from 'react';
+
 import type { CodeEditorFile } from '../types/types';
+
 import CodeEditor from './CodeEditor';
 
 type EditorSidebarProps = {
@@ -8,9 +10,10 @@ type EditorSidebarProps = {
   isMobile: boolean;
   editorExpanded: boolean;
   editorWidth: number;
+  isResizing: boolean;
   hasManualWidth: boolean;
   resizeHandleRef: MutableRefObject<HTMLDivElement | null>;
-  onResizeStart: (event: MouseEvent<HTMLDivElement>) => void;
+  onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
   onCloseEditor: () => void;
   onToggleEditorExpand: () => void;
   projectPath?: string;
@@ -28,6 +31,7 @@ export default function EditorSidebar({
   isMobile,
   editorExpanded,
   editorWidth,
+  isResizing,
   hasManualWidth,
   resizeHandleRef,
   onResizeStart,
@@ -90,6 +94,7 @@ export default function EditorSidebar({
   if (isMobile || poppedOut) {
     return (
       <CodeEditor
+        key={`${editingFile.workspaceId ?? 'local'}:${editingFile.path}`}
         file={editingFile}
         onClose={() => {
           setPoppedOut(false);
@@ -113,12 +118,16 @@ export default function EditorSidebar({
       {!editorExpanded && (
         <div
           ref={resizeHandleRef}
-          onMouseDown={onResizeStart}
+          onPointerDown={onResizeStart}
           className="group relative w-1 flex-shrink-0 cursor-col-resize bg-gray-200 transition-colors hover:bg-blue-500 dark:bg-gray-700 dark:hover:bg-blue-600"
           title="Drag to resize"
         >
           <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-blue-500 opacity-0 transition-opacity group-hover:opacity-100 dark:bg-blue-600" />
         </div>
+      )}
+
+      {isResizing && (
+        <div className="fixed inset-0 z-[10000] cursor-col-resize" aria-hidden="true" />
       )}
 
       <div
@@ -128,6 +137,7 @@ export default function EditorSidebar({
         style={useFlexLayout ? undefined : { width: `${effectiveWidth}px`, minWidth: `${MIN_EDITOR_WIDTH}px` }}
       >
         <CodeEditor
+          key={`${editingFile.workspaceId ?? 'local'}:${editingFile.path}`}
           file={editingFile}
           onClose={onCloseEditor}
           projectPath={projectPath}

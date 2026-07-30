@@ -173,9 +173,41 @@ ANTHROPIC_MODEL=your-model-name
 CLAUDE_EXECUTION_MODE=docker
 CLOUDCLI_CLAUDE_DOCKER_IMAGE=docker.io/cloudcliai/sandbox:claude-code
 CLOUDCLI_RUNTIME_ROOT=~/.cloudcli/runtimes
+CLOUDCLI_DOCKER_SHARED_PYTHON=true
+# 可选；默认值为 $CLOUDCLI_RUNTIME_ROOT/.shared/python
+CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT=~/.cloudcli/runtimes/.shared/python
 ```
 
 本地普通开发可以不设置这些变量；默认执行模式是 `local`。开启 Docker 模式前，需要本机 Docker 可用，并且镜像里能运行 `claude`。
+
+Docker 模式默认把所有 runtime 的 Python user site、pip 下载/轮子缓存、uv 缓存和 pipx 环境挂载到同一个宿主机目录。目录先按 Claude Docker 镜像引用分桶，Python 包再按 `pythonX.Y` 存放，因此同一镜像、同一 Python 小版本下安装的包只保存一份。用户的 `/home/cloudcli`、Claude 配置和 workspace 仍然独立。
+
+容器会设置 `PIP_USER=1` 和 `PIP_BREAK_SYSTEM_PACKAGES=1`，因此 Claude 在非 virtualenv 环境中执行普通的 `pip install <package>` 或 `python3 -m pip install <package>` 时，会绕过 Debian/Ubuntu 的 PEP 668 限制并写入共享 user site；共享 `bin` 目录也会加入 `PATH`。显式使用 `--target`、`--prefix`、`--no-user` 或在 virtualenv 内安装属于主动绕过共享策略的行为。共享 user site 是一个全局环境：安装另一个版本或卸载包会影响使用同一镜像的其他 runtime，生产环境建议固定版本，并只允许受信任用户安装依赖。如需恢复原有的每用户存储方式，设置 `CLOUDCLI_DOCKER_SHARED_PYTHON=false`。
+
+如果代理变量使用 `localhost`、`127.0.0.1` 或 `::1`，Docker runtime 会把代理主机改写为 `host.docker.internal`，并添加 `host-gateway` 映射，避免容器把宿主机代理误认为容器自身。
+
+如果 UI 本身也通过 `compose.yml` 在容器中运行，必须在项目根目录的 `.env` 中把数据、workspace 和 runtime 路径都设置为 Docker 宿主机上的绝对路径，例如：
+
+```bash
+CLOUDCLI_DATA_ROOT=/data/db
+DATABASE_PATH=/data/db/auth.db
+WORKSPACES_ROOT=/data/workspaces
+CLOUDCLI_RUNTIME_ROOT=/data/runtimes
+```
+
+在宿主机创建目录，然后检查配置并重新创建 UI 容器：
+
+```bash
+sudo install -d -o "$(id -u)" -g "$(id -g)" /data/db /data/workspaces /data/runtimes
+docker-compose config
+docker-compose up -d --force-recreate
+```
+
+`compose.yml` 会把 `CLOUDCLI_DATA_ROOT`、`WORKSPACES_ROOT` 和 `CLOUDCLI_RUNTIME_ROOT` 以相同的宿主机和容器路径挂载。数据库挂载整个目录而不是单独挂载 `auth.db`，以便同时持久化 SQLite 的 WAL、shared-memory 和 journal 文件。UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 workspace 和 runtime bind source 也必须能被宿主 Docker daemon 解析。不要改成 named volume，也不要只在 UI 容器内部创建这些目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
+
+UI 容器的 `HOME` 固定为 `/home/cloudcli`，并由私有的 `cloudcli-home` named volume 持久化。Compose 不再挂载宿主机的 `HOME`，因此不会读取或修改宿主 `/root/.ssh`、`/root/.docker`、`/root/.claude` 等敏感目录。如果确实需要某个宿主 Git/SSH 配置，应只单独挂载所需文件或子目录，不要恢复整个宿主 HOME bind。
+
+`CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT` 默认位于 `CLOUDCLI_RUNTIME_ROOT` 下，因此会被上面的 runtime bind 一并覆盖。如果把它改到 `CLOUDCLI_RUNTIME_ROOT` 之外，也需要增加对应的宿主机同路径 bind mount；`cloudcli-home` named volume 内的路径不能作为宿主 Docker daemon 的 bind source。
 
 ## 5. 启动开发模式
 

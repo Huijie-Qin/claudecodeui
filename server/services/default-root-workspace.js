@@ -8,6 +8,7 @@ import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 import { createWorkspaceMcpToolsService } from './workspace-mcp-tools.js';
 import { createSkillPresetService } from './skill-presets.js';
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
 import { buildTenantWorkspacePath } from './workspace-projects.js';
 
 export const ROOT_WORKSPACE_NAME = 'workspace';
@@ -31,6 +32,7 @@ async function pathExists(targetPath) {
 async function copyDefaultSkills(workspacePath) {
   await fs.mkdir(workspacePath, { recursive: true });
 
+  const copiedPaths = [];
   if (await pathExists(SOURCE_SKILLS_PATH)) {
     const entries = await fs.readdir(SOURCE_SKILLS_PATH, { withFileTypes: true });
     await Promise.all(entries.map((entry) => fs.cp(
@@ -41,7 +43,9 @@ async function copyDefaultSkills(workspacePath) {
         force: true,
       },
     )));
+    copiedPaths.push(...entries.map((entry) => path.join(workspacePath, entry.name)));
   }
+  return copiedPaths;
 }
 
 async function installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace }) {
@@ -125,7 +129,7 @@ export async function ensureDefaultRootWorkspace({
     path: workspacePath,
   });
 
-  await copyDefaultSkills(workspace.path);
+  const copiedDefaultPaths = await copyDefaultSkills(workspace.path);
   if (createdDefaultWorkspace) {
     await installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace });
     await installPreinstalledSkillPresets(skillPresets, {
@@ -134,6 +138,33 @@ export async function ensureDefaultRootWorkspace({
       userId,
       username: user?.username,
       workspace,
+    });
+  }
+  if (createdDefaultWorkspace) {
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspace.path,
+      targetPaths: [workspace.path],
+      recursive: true,
+      includeParents: false,
+      reason: 'default_workspace_create',
+      context: { tenantId, userId, workspaceId: workspace.id },
+    });
+  } else {
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspace.path,
+      targetPaths: [workspace.path],
+      recursive: false,
+      includeParents: false,
+      reason: 'default_workspace_root_refresh',
+      context: { tenantId, userId, workspaceId: workspace.id },
+    });
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspace.path,
+      targetPaths: copiedDefaultPaths,
+      recursive: true,
+      includeParents: false,
+      reason: 'default_workspace_refresh',
+      context: { tenantId, userId, workspaceId: workspace.id },
     });
   }
   return workspace;

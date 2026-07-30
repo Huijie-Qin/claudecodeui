@@ -5,17 +5,29 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildClaudeDockerExecArgs,
   buildClaudeDockerWrapperScript,
+  buildClaudeWrapperDefaultEnv,
   buildContainerName,
+  buildDockerPythonInstallArgs,
   buildDockerRunArgs,
   buildRuntimePaths,
+  buildWrapperHostEnv,
   createAgentSessionRuntimeManager,
+  createClaudeDockerSpawn,
   ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
+  migratePathOwnership,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
+  resolveDockerSharedPythonPath,
+  rewriteDockerProxyEnv,
 } from './agent-session-runtime.js';
 import { MCP_CONTAINER_CONFIG_PATH } from './mcp-presets.js';
+import {
+  WORKSPACE_CONTAINER_ROOT_ENV,
+  WORKSPACE_HOST_ROOT_ENV,
+} from './workspace-path-mapping.js';
 
 const emptyUserEnvDb = {
   getUserById: (userId) => ({ id: userId, username: `user-${userId}` }),
@@ -32,6 +44,27 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   );
 });
 
+test('DAS falls back to the server environment like other Claude variables', () => {
+  const env = {
+    DAS: 'env-das',
+    ANTHROPIC_MODEL: 'env-model',
+  };
+
+  assert.equal(buildWrapperHostEnv(env).DAS, 'env-das');
+  assert.deepEqual(buildClaudeWrapperDefaultEnv(env), {
+    ANTHROPIC_MODEL: 'env-model',
+    DAS: 'env-das',
+  });
+});
+
+test('user DAS overrides the server environment', () => {
+  const env = { DAS: 'env-das' };
+  const userEnv = { DAS: 'user-das' };
+
+  assert.equal(buildWrapperHostEnv(env, userEnv).DAS, 'user-das');
+  assert.equal(buildClaudeWrapperDefaultEnv(env, userEnv).DAS, 'user-das');
+});
+
 test('parseDockerPythonPackages accepts comma and whitespace separated package names', () => {
   assert.deepEqual(parseDockerPythonPackages('requests, httpx pyyaml\nrich'), [
     'requests',
@@ -40,6 +73,63 @@ test('parseDockerPythonPackages accepts comma and whitespace separated package n
     'rich',
   ]);
   assert.deepEqual(parseDockerPythonPackages('  ,  '), []);
+});
+
+test('configured Docker Python installs use the shared pip cache', () => {
+  const args = buildDockerPythonInstallArgs('cloudcli-claude-test', ['requests', 'httpx']);
+  assert.deepEqual(args, [
+    'exec',
+    '-e',
+    'HOME=/home/cloudcli',
+    'cloudcli-claude-test',
+    'python3',
+    '-m',
+    'pip',
+    'install',
+    '--user',
+    '--break-system-packages',
+    '--disable-pip-version-check',
+    'requests',
+    'httpx',
+  ]);
+  assert.equal(args.includes('--no-cache-dir'), false);
+  assert.deepEqual(buildDockerPythonInstallArgs('cloudcli-claude-test', []), []);
+});
+
+test('shared Python path is stable per image and can be disabled', () => {
+  const env = {
+    CLOUDCLI_RUNTIME_ROOT: '/var/cloudcli/runtimes',
+    CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT: '/var/cloudcli/python',
+  };
+  const first = resolveDockerSharedPythonPath(env, 'cloudcli/python:3.12');
+  const second = resolveDockerSharedPythonPath(env, 'cloudcli/python:3.12');
+  const otherImage = resolveDockerSharedPythonPath(env, 'cloudcli/python:3.11');
+
+  assert.equal(first, second);
+  assert.ok(first.startsWith('/var/cloudcli/python/image-'));
+  assert.notEqual(first, otherImage);
+  assert.equal(resolveDockerSharedPythonPath({
+    ...env,
+    CLOUDCLI_DOCKER_SHARED_PYTHON: 'false',
+  }, 'cloudcli/python:3.12'), null);
+  assert.throws(
+    () => resolveDockerSharedPythonPath({ CLOUDCLI_DOCKER_SHARED_PYTHON: 'sometimes' }),
+    /CLOUDCLI_DOCKER_SHARED_PYTHON must be a boolean/,
+  );
+});
+
+test('Docker proxy env rewrites host loopback without changing remote proxies', () => {
+  assert.deepEqual(rewriteDockerProxyEnv({
+    HTTP_PROXY: 'http://127.0.0.1:7890',
+    https_proxy: 'http://localhost:7891',
+    HTTPS_PROXY: 'http://proxy.example:8443',
+    NO_PROXY: 'localhost,127.0.0.1',
+  }), {
+    HTTP_PROXY: 'http://host.docker.internal:7890/',
+    https_proxy: 'http://host.docker.internal:7891/',
+    HTTPS_PROXY: 'http://proxy.example:8443',
+    NO_PROXY: 'localhost,127.0.0.1',
+  });
 });
 
 test('runtime paths stay under the configured runtime root', () => {
@@ -97,8 +187,45 @@ test('docker run args mount only workspace and runtime home', () => {
   assert.ok(joined.includes('--cap-drop=ALL'));
   assert.ok(joined.includes('--security-opt no-new-privileges'));
   assert.ok(joined.includes('--read-only'));
+  assert.ok(joined.includes('--add-host host.docker.internal:host-gateway'));
   assert.equal(joined.includes('/.claude'), false);
   assert.equal(joined.includes('/var/run/docker.sock'), false);
+});
+
+test('docker run args mount a shared Python user base and pip cache', () => {
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rabc',
+    image: 'cloudcli/test:claude',
+    uid: 501,
+    gid: 20,
+    workspaceHostPath: '/tmp/team-a/workspace',
+    runtimeHomePath: '/tmp/runtime/home',
+    sharedPythonHostPath: '/var/cloudcli/python/image-abc',
+    containerEnv: {
+      PYTHONUSERBASE: '/tmp/user-controlled',
+      PIP_CACHE_DIR: '/tmp/user-cache',
+      PIP_USER: '0',
+      PIP_BREAK_SYSTEM_PACKAGES: '0',
+      PIP_TARGET: '/tmp/user-target',
+      PATH: '/tmp/user-bin',
+      HTTP_PROXY: 'http://127.0.0.1:7890',
+    },
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes('src=/var/cloudcli/python/image-abc,dst=/opt/cloudcli/python'));
+  assert.ok(joined.includes('PYTHONUSERBASE=/opt/cloudcli/python/user-base'));
+  assert.ok(joined.includes('PIP_CACHE_DIR=/opt/cloudcli/python/pip-cache'));
+  assert.ok(joined.includes('PIP_BREAK_SYSTEM_PACKAGES=1'));
+  assert.ok(joined.includes('PIP_USER=1'));
+  assert.ok(joined.includes('UV_CACHE_DIR=/opt/cloudcli/python/uv-cache'));
+  assert.ok(joined.includes('PIPX_HOME=/opt/cloudcli/python/pipx'));
+  assert.ok(joined.includes('PATH=/opt/cloudcli/python/user-base/bin:'));
+  assert.ok(joined.includes('HTTP_PROXY=http://host.docker.internal:7890/'));
+  assert.equal(joined.includes('/tmp/user-controlled'), false);
+  assert.equal(joined.includes('/tmp/user-cache'), false);
+  assert.equal(joined.includes('/tmp/user-target'), false);
+  assert.equal(joined.includes('/tmp/user-bin'), false);
 });
 
 test('docker workspace bind mount exposes project-level Claude skills to the container', () => {
@@ -173,7 +300,76 @@ test('claude docker wrapper tolerates an empty forwarded env array', () => {
   assert.match(wrapper, /set -euo pipefail/);
 });
 
-test('docker runtime home is owned by the sandbox user when possible', async () => {
+test('docker exec args forward allowed environment and Claude arguments', () => {
+  const args = buildClaudeDockerExecArgs({
+    containerName: 'cloudcli-claude-test',
+    args: ['--model', 'glm-5.1'],
+    env: {
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test',
+      ANTHROPIC_MODEL: 'glm-5.1',
+      PRIVATE_TOKEN: 'private-token',
+      'BAD-NAME': 'ignored',
+    },
+  });
+
+  assert.deepEqual(args.slice(0, 7), [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    '-e',
+  ]);
+  assert.ok(args.includes('ANTHROPIC_BASE_URL=https://gateway.example.test'));
+  assert.ok(args.includes('ANTHROPIC_MODEL=glm-5.1'));
+  assert.ok(args.includes('PRIVATE_TOKEN=private-token'));
+  assert.equal(args.includes('BAD-NAME=ignored'), false);
+  assert.deepEqual(args.slice(-4), ['cloudcli-claude-test', 'claude', '--model', 'glm-5.1']);
+});
+
+test('custom docker spawn bypasses host wrapper execution', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    envAllowlist: ['ANTHROPIC_MODEL'],
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  const result = spawnClaudeCodeProcess({
+    command: 'C:\\runtime\\claude-docker-wrapper',
+    args: ['--model', 'glm-5.1'],
+    env: { ANTHROPIC_MODEL: 'glm-5.1', PATH: 'C:\\bin' },
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result, child);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'docker');
+  assert.deepEqual(calls[0][1], [
+    'exec',
+    '-i',
+    '-w',
+    '/workspace',
+    '-e',
+    'HOME=/home/cloudcli',
+    '-e',
+    'ANTHROPIC_MODEL=glm-5.1',
+    'cloudcli-claude-test',
+    'claude',
+    '--model',
+    'glm-5.1',
+  ]);
+  assert.equal(calls[0][2].env.PATH, 'C:\\bin');
+  assert.deepEqual(calls[0][2].stdio, ['pipe', 'pipe', 'pipe']);
+  assert.equal(calls[0][2].windowsHide, true);
+});
+
+test('docker runtime directory and home are owned by the sandbox user when possible', async () => {
   const calls = [];
   const fsMock = {
     mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
@@ -185,12 +381,14 @@ test('docker runtime home is owned by the sandbox user when possible', async () 
 
   assert.deepEqual(calls, [
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chown', '/tmp/runtime', 1000, 1000],
+    ['chmod', '/tmp/runtime', 0o700],
     ['chown', '/tmp/runtime/home', 1000, 1000],
     ['chmod', '/tmp/runtime/home', 0o700],
   ]);
 });
 
-test('docker runtime home falls back to writable permissions when chown fails', async () => {
+test('docker runtime directory and home fall back to writable permissions when chown fails', async () => {
   const calls = [];
   const fsMock = {
     mkdir: async (targetPath, options) => calls.push(['mkdir', targetPath, options]),
@@ -204,7 +402,38 @@ test('docker runtime home falls back to writable permissions when chown fails', 
 
   assert.deepEqual(calls, [
     ['mkdir', '/tmp/runtime/home', { recursive: true }],
+    ['chmod', '/tmp/runtime', 0o777],
     ['chmod', '/tmp/runtime/home', 0o777],
+  ]);
+});
+
+test('runtime ownership migration recursively chowns entries without following symlinks', async () => {
+  const calls = [];
+  const linkPath = path.join('/workspace', 'link');
+  const fsMock = {
+    lstat: async (targetPath) => ({
+      isDirectory: () => targetPath === '/workspace',
+      isSymbolicLink: () => targetPath === linkPath,
+    }),
+    readdir: async () => [
+      { name: 'file.txt' },
+      { name: 'link' },
+    ],
+    chown: async (targetPath, uid, gid) => calls.push(['chown', targetPath, uid, gid]),
+    lchown: async (targetPath, uid, gid) => calls.push(['lchown', targetPath, uid, gid]),
+  };
+
+  const migratedEntries = await migratePathOwnership(
+    fsMock,
+    '/workspace',
+    { uid: 1000, gid: 1000 },
+  );
+
+  assert.equal(migratedEntries, 3);
+  assert.deepEqual(calls, [
+    ['chown', path.join('/workspace', 'file.txt'), 1000, 1000],
+    ['lchown', linkPath, 1000, 1000],
+    ['chown', '/workspace', 1000, 1000],
   ]);
 });
 
@@ -222,22 +451,183 @@ test('claude runtime settings preserve existing values and set the cleanup perio
   });
 });
 
-test('claude runtime settings are not rewritten when the cleanup period is already configured', async () => {
+test('claude runtime settings permissions are corrected even when content is not rewritten', async () => {
   const calls = [];
+  const logs = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
   const fsMock = {
+    lstat: async (targetPath) => ({
+      uid: 0,
+      gid: 0,
+      mode: targetPath === claudeDir ? 0o755 : 0o644,
+      isSymbolicLink: () => false,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => targetPath === settingsPath,
+    }),
     readFile: async () => JSON.stringify({ cleanupPeriodDays: 36500 }),
     mkdir: async (...args) => calls.push(['mkdir', ...args]),
     writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
   };
 
-  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home'), false);
-  assert.deepEqual(calls, []);
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+    logger: {
+      log: (...args) => logs.push(args),
+    },
+    context: {
+      runtimeId: 'runtime-1',
+    },
+  }), false);
+  assert.equal(calls.some(([operation]) => operation === 'writeFile'), false);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chown'), [
+    ['chown', claudeDir, 1000, 1000],
+    ['chown', settingsPath, 1000, 1000],
+  ]);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chmod'), [
+    ['chmod', claudeDir, 0o700],
+    ['chmod', settingsPath, 0o600],
+  ]);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], '[agent-session-runtime]');
+  assert.deepEqual(JSON.parse(logs[0][1]), {
+    event: 'runtime_settings_permissions_updated',
+    runtimeId: 'runtime-1',
+    targetUser: '1000:1000',
+    ownershipEntries: 2,
+    modeEntries: 2,
+    settingsUpdated: false,
+  });
+});
+
+test('new claude runtime settings use secure mode and target container ownership', async () => {
+  const calls = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settingsCreated = false;
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => {
+      if (targetPath === settingsPath && !settingsCreated) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return {
+        uid: 0,
+        gid: 0,
+        mode: targetPath === claudeDir ? 0o755 : 0o600,
+        isSymbolicLink: () => false,
+        isDirectory: () => targetPath === claudeDir,
+        isFile: () => targetPath === settingsPath,
+      };
+    },
+    writeFile: async (...args) => {
+      settingsCreated = true;
+      calls.push(['writeFile', ...args]);
+    },
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+  }), true);
+  const writeCall = calls.find(([operation]) => operation === 'writeFile');
+  assert.equal(writeCall[1], settingsPath);
+  assert.deepEqual(writeCall[3], {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chown'), [
+    ['chown', claudeDir, 1000, 1000],
+    ['chown', settingsPath, 1000, 1000],
+  ]);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'chmod'), [
+    ['chmod', claudeDir, 0o700],
+  ]);
+});
+
+test('claude runtime settings permission handling is idempotent', async () => {
+  const calls = [];
+  const logs = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => ({
+      uid: 1000,
+      gid: 1000,
+      mode: targetPath === claudeDir ? 0o700 : 0o600,
+      isSymbolicLink: () => false,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => targetPath === settingsPath,
+    }),
+    readFile: async () => JSON.stringify({ cleanupPeriodDays: 36500 }),
+    writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    uid: 1000,
+    gid: 1000,
+    logger: {
+      log: (...args) => logs.push(args),
+    },
+  }), false);
+  assert.equal(calls.some(([operation]) => (
+    operation === 'writeFile'
+    || operation === 'chown'
+    || operation === 'chmod'
+  )), false);
+  assert.deepEqual(logs, []);
+});
+
+test('claude runtime settings reject a symbolic-link settings file before reading it', async () => {
+  const calls = [];
+  const claudeDir = path.join('/tmp/runtime/home', '.claude');
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  const fsMock = {
+    mkdir: async (...args) => calls.push(['mkdir', ...args]),
+    lstat: async (targetPath) => ({
+      uid: 1000,
+      gid: 1000,
+      mode: targetPath === claudeDir ? 0o700 : 0o600,
+      isSymbolicLink: () => targetPath === settingsPath,
+      isDirectory: () => targetPath === claudeDir,
+      isFile: () => false,
+    }),
+    readFile: async (...args) => calls.push(['readFile', ...args]),
+    writeFile: async (...args) => calls.push(['writeFile', ...args]),
+    chown: async (...args) => calls.push(['chown', ...args]),
+    chmod: async (...args) => calls.push(['chmod', ...args]),
+  };
+
+  await assert.rejects(
+    ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+      uid: 1000,
+      gid: 1000,
+    }),
+    /must not be a symbolic link/,
+  );
+  assert.equal(calls.some(([operation]) => (
+    operation === 'readFile'
+    || operation === 'writeFile'
+    || operation === 'chown'
+    || operation === 'chmod'
+  )), false);
 });
 
 test('docker mode creates runtime home, wrapper, DB row, and container', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   const runtimeRoot = path.join(tempRoot, 'runtimes');
+  const sharedPythonRoot = path.join(tempRoot, 'shared-python');
   await fs.mkdir(workspacePath, { recursive: true });
   const workspaceRealPath = await fs.realpath(workspacePath);
 
@@ -251,6 +641,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT: sharedPythonRoot,
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
       CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests, httpx',
       ANTHROPIC_API_KEY: 'key-1',
@@ -324,8 +715,13 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.cwd, workspaceRealPath);
   assert.equal(runtime.containerCwd, '/workspace');
   assert.equal(runtime.projectPath, '/workspace');
+  assert.equal(typeof runtime.spawnClaudeCodeProcess, 'function');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${sharedPythonRoot}/image-`));
+  assert.ok(dockerCalls[0].join(' ').includes('dst=/opt/cloudcli/python'));
+  assert.ok(dockerCalls[0].join(' ').includes('PYTHONUSERBASE=/opt/cloudcli/python/user-base'));
+  assert.equal((await fs.stat(sharedPythonRoot)).isDirectory(), true);
   assert.deepEqual(pythonPackageInstalls, [{
     containerName: createdRuntimes[0].containerName,
     packages: ['requests', 'httpx'],
@@ -366,6 +762,157 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
+});
+
+test('docker mode prepares new workspace ownership before creating its first container', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-new-ownership-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.writeFile(path.join(workspacePath, 'root-owned.txt'), 'test');
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const events = [];
+  const ownershipChanges = [];
+  const logs = [];
+  let runtimeRow = null;
+  const fsMock = {
+    ...fs,
+    chown: async (targetPath, uid, gid) => {
+      ownershipChanges.push({ targetPath, uid, gid });
+    },
+    lchown: async (targetPath, uid, gid) => {
+      ownershipChanges.push({ targetPath, uid, gid, symlink: true });
+    },
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_DOCKER_UID: '1000',
+      CLOUDCLI_DOCKER_GID: '1000',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => null,
+        findByOwner: () => null,
+        createRuntime: (input) => {
+          runtimeRow = {
+            runtime_id: input.runtimeId,
+            tenant_id: input.tenantId,
+            workspace_id: input.workspaceId,
+            user_id: input.userId,
+            provider: input.provider,
+            container_name: input.containerName,
+            image: input.image,
+            workspace_host_path: input.workspaceHostPath,
+            runtime_home_path: input.runtimeHomePath,
+            status: input.status,
+          };
+          return runtimeRow;
+        },
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    fs: fsMock,
+    docker: {
+      inspectContainer: async () => null,
+      runDetached: async (args) => events.push(`run:${args[args.indexOf('--user') + 1]}`),
+      verifyWorkspaceCwd: async () => events.push('verify'),
+    },
+  });
+
+  const originalConsoleLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.deepEqual(events, ['run:1000:1000', 'verify']);
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.join(workspaceRealPath, 'root-owned.txt')));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeRow.runtime_home_path));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.dirname(runtimeRow.runtime_home_path)));
+  assert.ok(ownershipChanges.every((entry) => entry.uid === 1000 && entry.gid === 1000));
+  assert.ok(logs.some((entry) => entry.includes('container_ownership_prepare_completed')));
+  assert.ok(logs.some((entry) => entry.includes('"targetUser":"1000:1000"')));
+});
+
+test('docker mode validates a mapped container workspace while keeping the host path', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-mapped-workspace-'));
+  const runtimeRoot = path.join(tempRoot, 'runtimes');
+  const containerRoot = path.join(tempRoot, 'host-home');
+  const mappedWorkspacePath = path.join(containerRoot, 'default', 'j00939207', 'test');
+  await fs.mkdir(mappedWorkspacePath, { recursive: true });
+
+  const hostRoot = `C:\\cloudcli-missing-${Date.now()}-${process.pid}`;
+  const workspacePath = `${hostRoot}\\default\\j00939207\\test`;
+  const createdRuntimes = [];
+  const dockerCalls = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      [WORKSPACE_HOST_ROOT_ENV]: hostRoot,
+      [WORKSPACE_CONTAINER_ROOT_ENV]: containerRoot,
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: (runtime) => {
+          createdRuntimes.push(runtime);
+          return {
+            runtime_id: runtime.runtimeId,
+            tenant_id: runtime.tenantId,
+            workspace_id: runtime.workspaceId,
+            user_id: runtime.userId,
+            provider: runtime.provider,
+            container_name: runtime.containerName,
+            image: runtime.image,
+            workspace_host_path: runtime.workspaceHostPath,
+            runtime_home_path: runtime.runtimeHomePath,
+            status: 'pending',
+          };
+        },
+        findByProviderSession: () => null,
+        updateStatus: (input) => ({
+          runtime_id: createdRuntimes[0].runtimeId,
+          container_name: createdRuntimes[0].containerName,
+          image: createdRuntimes[0].image,
+          workspace_host_path: createdRuntimes[0].workspaceHostPath,
+          runtime_home_path: createdRuntimes[0].runtimeHomePath,
+          status: input.status,
+        }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => null,
+      runDetached: async (args) => {
+        dockerCalls.push(args);
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 1,
+    userId: 2,
+    workspaceId: 3,
+    cwd: workspacePath,
+  });
+
+  assert.equal(runtime.cwd, workspacePath);
+  assert.equal(runtime.hostWorkspacePath, workspacePath);
+  assert.equal(createdRuntimes[0].workspaceHostPath, workspacePath);
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${workspacePath},dst=/workspace`));
 });
 
 test('docker mode does not wait for configured Python package installation', async () => {
@@ -516,6 +1063,84 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(startedContainer, 'cloudcli-claude-existing');
   assert.equal(runtime.runtimeHomePath, runtimeHomePath);
   assert.equal(runtime.runtimeId, 'existing');
+});
+
+test('docker mode migrates an existing root container to the configured non-root user', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-user-migration-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  await fs.writeFile(path.join(workspacePath, 'project.txt'), 'project');
+  await fs.writeFile(path.join(runtimeHomePath, 'session.json'), '{}');
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  const runtimeRow = {
+    runtime_id: 'existing-root-runtime',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-root',
+    container_name: 'cloudcli-claude-existing-root',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  const events = [];
+  const ownershipChanges = [];
+  const logs = [];
+  const fsMock = {
+    ...fs,
+    chown: async (targetPath, uid, gid) => ownershipChanges.push({ targetPath, uid, gid }),
+    lchown: async (targetPath, uid, gid) => ownershipChanges.push({ targetPath, uid, gid, symlink: true }),
+  };
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_DOCKER_UID: '1000',
+      CLOUDCLI_DOCKER_GID: '1000',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    fs: fsMock,
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, user: '0:0' }),
+      stopContainer: async () => events.push('stop'),
+      removeContainer: async () => events.push('remove'),
+      runDetached: async (args) => events.push(`run:${args[args.indexOf('--user') + 1]}`),
+      verifyWorkspaceCwd: async () => events.push('verify'),
+    },
+  });
+
+  const originalConsoleLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    await manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+      sessionId: 'claude-session-root',
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.deepEqual(events, ['stop', 'remove', 'run:1000:1000', 'verify']);
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
+  assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeHomePath));
+  assert.ok(ownershipChanges.every((entry) => entry.uid === 1000 && entry.gid === 1000));
+  assert.ok(logs.some((entry) => entry.includes('container_user_migration_completed')));
+  assert.ok(logs.some((entry) => entry.includes('"previousUser":"0:0"')));
+  assert.ok(logs.some((entry) => entry.includes('"targetUser":"1000:1000"')));
 });
 
 test('docker mode recreates a running container when workspace cwd is unhealthy', async () => {

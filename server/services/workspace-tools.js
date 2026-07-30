@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const EMPTY_MCP_CONFIG = Object.freeze({ mcpServers: {} });
 const EMPTY_STATUS = Object.freeze({ version: 1, servers: {} });
@@ -11,6 +13,15 @@ const HEADER_HELPER_TIMEOUT_MS = 10_000;
 const HEADER_HELPER_MAX_BUFFER_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
 const mcpStatusCache = new Map();
+const DOCKER_HOST_MCP_HOSTNAME = 'host.docker.internal';
+const HOST_LOOPBACK_MCP_HOSTNAME = '127.0.0.1';
+const DOCKER_LOCAL_MCP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
+const HOST_SHELL_COMMAND = process.platform === 'win32'
+  ? (process.env.ComSpec || 'cmd.exe')
+  : '/bin/sh';
+const HOST_SHELL_ARGS = process.platform === 'win32'
+  ? ['/d', '/c']
+  : ['-lc'];
 
 const BUILT_IN_TOOLS = Object.freeze([
   {
@@ -87,14 +98,19 @@ export async function readWorkspaceMcpConfig(workspacePath) {
   }
 }
 
-export async function writeWorkspaceMcpConfig(workspacePath, config) {
+export async function writeWorkspaceMcpConfig(workspacePath, config, { env = process.env } = {}) {
   const { mcpConfigPath } = getWorkspaceToolsPaths(workspacePath);
-  const normalized = normalizeMcpConfig(config);
+  const normalized = normalizeWorkspaceMcpConfigForRuntime(config, { env });
   if (Object.keys(normalized.mcpServers).length === 0) {
     await removeJsonFile(mcpConfigPath);
     return;
   }
   await writeJsonFile(mcpConfigPath, normalized);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [mcpConfigPath],
+    reason: 'workspace_mcp_config',
+  });
 }
 
 export async function readMcpStatus(workspacePath) {
@@ -132,6 +148,11 @@ export async function writeMcpDrafts(workspacePath, drafts) {
     return;
   }
   await writeJsonFile(draftsPath, normalized);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [draftsPath],
+    reason: 'workspace_mcp_drafts',
+  });
 }
 
 export async function listWorkspaceTools(workspacePath, { accessRole = 'view' } = {}) {
@@ -164,9 +185,11 @@ export async function probeWorkspaceMcpServer({
   server,
   now = () => new Date(),
   probe = probeHttpMcpServer,
+  env = process.env,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: false });
-  const result = await probe({ ...normalized.config, name: normalized.name });
+  const runtimeConfig = normalizeMcpServerConfigForProbeRuntime(normalized.config, { env });
+  const result = await probe({ ...runtimeConfig, name: normalized.name });
   const checkedAt = now().toISOString();
   const entry = {
     ...result,
@@ -190,6 +213,7 @@ export async function upsertWorkspaceMcpServer({
   server,
   now = () => new Date(),
   probe = probeHttpMcpServer,
+  env = process.env,
 }) {
   const normalized = normalizeHttpMcpInput(server, { allowDraft: true });
   const timestamp = now().toISOString();
@@ -218,7 +242,8 @@ export async function upsertWorkspaceMcpServer({
     };
   }
 
-  const probeResult = await probe({ ...normalized.config, name: normalized.name });
+  const runtimeConfig = normalizeMcpServerConfigForProbeRuntime(normalized.config, { env });
+  const probeResult = await probe({ ...runtimeConfig, name: normalized.name });
   if (probeResult.status !== 'healthy') {
     const status = await readMcpStatus(workspacePath);
     await writeMcpStatus(workspacePath, {
@@ -243,6 +268,11 @@ export async function upsertWorkspaceMcpServer({
     readMcpStatus(workspacePath),
     readMcpDrafts(workspacePath),
   ]);
+  const persistedConfig = preserveExistingHeadersHelper({
+    normalizedConfig: normalized.config,
+    requestedServer: server,
+    existingConfig: config.mcpServers?.[normalized.name],
+  });
   const nextDrafts = { ...drafts.drafts };
   delete nextDrafts[normalized.name];
 
@@ -251,7 +281,7 @@ export async function upsertWorkspaceMcpServer({
       ...config,
       mcpServers: {
         ...config.mcpServers,
-        [normalized.name]: normalized.config,
+        [normalized.name]: persistedConfig,
       },
     }),
     writeMcpStatus(workspacePath, {
@@ -273,7 +303,7 @@ export async function upsertWorkspaceMcpServer({
 
   return {
     savedAsDraft: false,
-    server: toMcpTool(normalized.name, normalized.config, {
+    server: toMcpTool(normalized.name, persistedConfig, {
       ...probeResult,
       name: normalized.name,
       checkedAt: timestamp,
@@ -592,6 +622,18 @@ function normalizeHttpMcpInput(server, { allowDraft }) {
   };
 }
 
+function preserveExistingHeadersHelper({ normalizedConfig, requestedServer, existingConfig }) {
+  const requestedRecord = readPlainObject(requestedServer) || {};
+  if (Object.prototype.hasOwnProperty.call(requestedRecord, 'headersHelper')) {
+    return normalizedConfig;
+  }
+
+  const existingHeadersHelper = firstString(readPlainObject(existingConfig)?.headersHelper);
+  return existingHeadersHelper
+    ? { ...normalizedConfig, headersHelper: existingHeadersHelper }
+    : normalizedConfig;
+}
+
 function normalizeHttpConfig(config) {
   const record = readPlainObject(config) || {};
   const url = firstString(record.url);
@@ -625,7 +667,7 @@ async function resolveHeadersHelper(config) {
   });
   let stdout = '';
   try {
-    const result = await execFileAsync('/bin/sh', ['-lc', config.headersHelper], {
+    const result = await execFileAsync(HOST_SHELL_COMMAND, [...HOST_SHELL_ARGS, config.headersHelper], {
       timeout: HEADER_HELPER_TIMEOUT_MS,
       maxBuffer: HEADER_HELPER_MAX_BUFFER_BYTES,
       env: {
@@ -836,6 +878,97 @@ function normalizeMcpConfig(config) {
     ...readPlainObject(config),
     mcpServers: readPlainObject(config?.mcpServers) || {},
   };
+}
+
+function normalizeWorkspaceMcpConfigForRuntime(config, { env = process.env } = {}) {
+  const normalized = normalizeMcpConfig(config);
+  if (String(env.CLAUDE_EXECUTION_MODE || 'local').trim().toLowerCase() !== 'docker') {
+    return normalized;
+  }
+
+  return {
+    ...normalized,
+    mcpServers: Object.fromEntries(
+      Object.entries(normalized.mcpServers).map(([name, serverConfig]) => [
+        name,
+        rewriteLocalHttpMcpServerForDocker(serverConfig),
+      ]),
+    ),
+  };
+}
+
+function normalizeMcpServerConfigForRuntime(serverConfig, { env = process.env } = {}) {
+  if (String(env.CLAUDE_EXECUTION_MODE || 'local').trim().toLowerCase() !== 'docker') {
+    return serverConfig;
+  }
+  return rewriteLocalHttpMcpServerForDocker(serverConfig);
+}
+
+export function normalizeMcpServerConfigForProbeRuntime(serverConfig, { env = process.env } = {}) {
+  return resolveMcpProbeRuntime(env) === 'docker'
+    ? rewriteLocalHttpMcpServerForDocker(serverConfig)
+    : rewriteDockerHostHttpMcpServerForHost(serverConfig);
+}
+
+function resolveMcpProbeRuntime(env = process.env) {
+  const configured = String(env.CLOUDCLI_MCP_PROBE_RUNTIME || '').trim().toLowerCase();
+  if (configured === 'docker' || configured === 'container') return 'docker';
+  if (configured === 'host' || configured === 'local') return 'host';
+  return isRunningInsideContainer() ? 'docker' : 'host';
+}
+
+function isRunningInsideContainer() {
+  if (process.platform === 'win32') return false;
+  if (existsSync('/.dockerenv')) return true;
+  try {
+    return /docker|kubepods|containerd/i.test(readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+function rewriteLocalHttpMcpServerForDocker(serverConfig) {
+  const record = readPlainObject(serverConfig);
+  const url = firstString(record?.url);
+  if (!record || !url) {
+    return serverConfig;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!DOCKER_LOCAL_MCP_HOSTNAMES.has(parsed.hostname)) {
+      return serverConfig;
+    }
+    parsed.hostname = DOCKER_HOST_MCP_HOSTNAME;
+    return {
+      ...record,
+      url: parsed.toString(),
+    };
+  } catch {
+    return serverConfig;
+  }
+}
+
+function rewriteDockerHostHttpMcpServerForHost(serverConfig) {
+  const record = readPlainObject(serverConfig);
+  const url = firstString(record?.url);
+  if (!record || !url) {
+    return serverConfig;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== DOCKER_HOST_MCP_HOSTNAME) {
+      return serverConfig;
+    }
+    parsed.hostname = HOST_LOOPBACK_MCP_HOSTNAME;
+    return {
+      ...record,
+      url: parsed.toString(),
+    };
+  } catch {
+    return serverConfig;
+  }
 }
 
 function normalizeStatus(status) {

@@ -3,6 +3,35 @@ interface CommandInsertionResult {
   cursorPosition: number;
 }
 
+interface SlashCommandArguments {
+  args: string[];
+  rawArgs: string;
+}
+
+export const extractSlashCommandArguments = ({
+  commandName,
+  input,
+}: {
+  commandName: string;
+  input: string;
+}): SlashCommandArguments => {
+  const normalizedInput = input.trimStart();
+  if (!normalizedInput.startsWith(commandName)) {
+    return { args: [], rawArgs: '' };
+  }
+
+  const remainder = normalizedInput.slice(commandName.length);
+  if (remainder && !/^\s/.test(remainder)) {
+    return { args: [], rawArgs: '' };
+  }
+
+  const rawArgs = remainder.trim();
+  return {
+    args: rawArgs ? rawArgs.split(/\s+/) : [],
+    rawArgs,
+  };
+};
+
 export const buildInputWithSelectedSlashCommand = ({
   commandName,
   cursorPosition,

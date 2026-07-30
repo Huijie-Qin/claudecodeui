@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
@@ -7,7 +9,13 @@ import {
   resolvePresetProbeConfig,
   savePresetHelperScript,
 } from './mcp-helper-scripts.js';
-import { probeHttpMcpServer } from './workspace-tools.js';
+import {
+  probeHttpMcpServer,
+  readMcpStatus,
+  readWorkspaceMcpConfig,
+  writeMcpStatus,
+  writeWorkspaceMcpConfig,
+} from './workspace-tools.js';
 
 export const WORKSPACE_MCP_CONFIG_FILE = '.mcp.json';
 export const MCP_CONTAINER_CONFIG_PATH = '/workspace/.mcp.json';
@@ -317,6 +325,79 @@ export function toWorkspaceMcpServerConfig(config = {}) {
   return safeConfig;
 }
 
+async function syncPresetToInstalledWorkspaces(multitenancy, {
+  tenantId,
+  preset,
+  previousName,
+}) {
+  const installs = multitenancy.mcpInstalls.listInstallsForPreset({
+    tenantId,
+    presetId: preset.id,
+  });
+  const results = await Promise.all(installs.map(async (install) => {
+    try {
+      const workspaceStat = await fs.stat(install.workspace_path);
+      if (!workspaceStat.isDirectory()) {
+        throw new Error('Workspace path is not a directory');
+      }
+      const [config, status] = await Promise.all([
+        readWorkspaceMcpConfig(install.workspace_path),
+        readMcpStatus(install.workspace_path),
+      ]);
+      const nextServers = { ...config.mcpServers };
+      const nextStatus = { ...status.servers };
+
+      if (previousName && previousName !== preset.name) {
+        delete nextServers[previousName];
+        delete nextStatus[previousName];
+      }
+      nextServers[preset.name] = toWorkspaceMcpServerConfig(preset.config);
+      delete nextStatus[preset.name];
+
+      await Promise.all([
+        writeWorkspaceMcpConfig(install.workspace_path, {
+          ...config,
+          mcpServers: nextServers,
+        }),
+        writeMcpStatus(install.workspace_path, {
+          version: 1,
+          servers: nextStatus,
+        }),
+      ]);
+      multitenancy.mcpInstalls.recordApplied({
+        workspaceId: install.workspace_id,
+        presetId: preset.id,
+      });
+      return {
+        workspaceId: install.workspace_id,
+        synced: true,
+      };
+    } catch (error) {
+      return {
+        workspaceId: install.workspace_id,
+        synced: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }));
+  const failures = results.filter((result) => !result.synced);
+
+  if (failures.length > 0) {
+    console.error('[MCP Preset Sync] Failed to sync updated preset', {
+      tenantId,
+      presetId: preset.id,
+      failures,
+    });
+  }
+
+  return {
+    total: results.length,
+    synced: results.length - failures.length,
+    failed: failures.length,
+    failures,
+  };
+}
+
 export function toAdminPreset(row, helperScript = null) {
   if (!row) return null;
   return {
@@ -444,12 +525,14 @@ export function createMcpPresetService({
       return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId: preset.id }));
     },
 
-    updatePreset: ({ tenantId, presetId, userId, input }) => {
+    updatePreset: async ({ tenantId, presetId, userId, input }) => {
       const existing = getExistingPreset({ tenantId, presetId });
       const normalized = normalizePresetInput(input);
+      const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+      const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
       const preset = multitenancy.mcpPresets.updatePreset({
-        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
-        presetId: requirePositiveInteger(presetId, 'presetId'),
+        tenantId: normalizedTenantId,
+        presetId: normalizedPresetId,
         name: normalized.name,
         displayName: normalized.displayName,
         description: normalized.description,
@@ -458,7 +541,18 @@ export function createMcpPresetService({
         status: normalizeEditableStatus(input?.status, existing.status === 'disabled' ? 'disabled' : 'draft'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
-      return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId: preset.id }));
+      const sync = await syncPresetToInstalledWorkspaces(multitenancy, {
+        tenantId: normalizedTenantId,
+        preset,
+        previousName: existing.name,
+      });
+      return {
+        preset: toAdminPreset(
+          preset,
+          getPresetHelperScript(multitenancy, { tenantId: normalizedTenantId, presetId: preset.id }),
+        ),
+        sync,
+      };
     },
 
     testPreset: async ({ tenantId, presetId, userId, input = null }) => {
@@ -508,8 +602,9 @@ export function createMcpPresetService({
         toolCount: Number(probeResult.toolCount || 0),
         error: probeResult.error || null,
       });
+      let sync = null;
       if (normalizedInput) {
-        multitenancy.mcpPresets.updatePreset({
+        const updatedPreset = multitenancy.mcpPresets.updatePreset({
           tenantId: requirePositiveInteger(tenantId, 'tenantId'),
           presetId: requirePositiveInteger(presetId, 'presetId'),
           name: normalizedInput.name,
@@ -519,6 +614,11 @@ export function createMcpPresetService({
           preinstallScope: normalizedInput.preinstallScope,
           status: normalizeEditableStatus(input?.status, preset.status === 'disabled' ? 'disabled' : 'draft'),
           updatedByUserId: normalizedUserId,
+        });
+        sync = await syncPresetToInstalledWorkspaces(multitenancy, {
+          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+          preset: updatedPreset,
+          previousName: preset.name,
         });
       }
 
@@ -535,6 +635,7 @@ export function createMcpPresetService({
       return {
         ...toAdminPreset(tested, getPresetHelperScript(multitenancy, { tenantId, presetId })),
         probe: probeResult,
+        sync,
       };
     },
 
@@ -606,7 +707,7 @@ export function createMcpPresetService({
       return toAdminPreset(preset, getPresetHelperScript(multitenancy, { tenantId, presetId }));
     },
 
-    copyPresetToTenants: ({ tenantId, presetId, targetTenantIds, userId }) => {
+    copyPresetToTenants: async ({ tenantId, presetId, targetTenantIds, userId }) => {
       const sourceTenantId = requirePositiveInteger(tenantId, 'tenantId');
       const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
       const normalizedUserId = requirePositiveInteger(userId, 'userId');
@@ -698,6 +799,13 @@ export function createMcpPresetService({
             tenantId: targetTenantId,
             presetId: restoredPreset.id,
           });
+          const sync = existingPreset
+            ? await syncPresetToInstalledWorkspaces(multitenancy, {
+                tenantId: targetTenantId,
+                preset: finalPreset,
+                previousName: existingPreset.name,
+              })
+            : null;
           results.push({
             tenantId: targetTenantId,
             action: existingPreset ? 'updated' : 'created',
@@ -708,6 +816,7 @@ export function createMcpPresetService({
                 presetId: restoredPreset.id,
               }),
             ),
+            sync,
           });
         } catch (error) {
           results.push({

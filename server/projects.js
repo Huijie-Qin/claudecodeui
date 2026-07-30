@@ -1038,11 +1038,19 @@ async function parseAgentTools(filePath) {
 
 // Get messages for a specific session from an explicit Claude project directory.
 // Docker runtimes keep their own HOME, so callers must not always assume os.homedir().
-async function getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit = null, offset = 0) {
+async function getSessionMessagesFromProjectDirectory(
+  projectDir,
+  sessionId,
+  limit = null,
+  offset = 0,
+  transcriptFiles = null,
+) {
   try {
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
+    const jsonlFiles = Array.isArray(transcriptFiles)
+      ? transcriptFiles.filter((file) => files.includes(file))
+      : files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
     const agentFiles = files.filter(file => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
     if (jsonlFiles.length === 0) {
@@ -1139,7 +1147,19 @@ async function getSessionMessagesFromProjectDirectory(projectDir, sessionId, lim
 // Get messages for a specific session with pagination support.
 async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
   const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-  return getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit, offset);
+  const directFileName = `${sessionId}.jsonl`;
+  try {
+    await fs.access(path.join(projectDir, directFileName));
+    return getSessionMessagesFromProjectDirectory(
+      projectDir,
+      sessionId,
+      limit,
+      offset,
+      [directFileName],
+    );
+  } catch {
+    return getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit, offset);
+  }
 }
 
 async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0) {
@@ -1179,7 +1199,13 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
   const candidateDirs = directMatches.length > 0 ? directMatches : remainingDirs;
   const allMessages = [];
   for (const projectDir of candidateDirs) {
-    const result = await getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, null, 0);
+    const result = await getSessionMessagesFromProjectDirectory(
+      projectDir,
+      safeSessionId,
+      null,
+      0,
+      directMatches.length > 0 ? [directFileName] : null,
+    );
     const messages = Array.isArray(result) ? result : (result.messages || []);
     allMessages.push(...messages);
     if (directMatches.length === 0 && messages.length > 0) {

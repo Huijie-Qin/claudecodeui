@@ -13,6 +13,7 @@ import { useMcpServers } from '../hooks/useMcpServers';
 import { maskSecret } from '../utils/mcpFormatting';
 
 import McpServerFormModal from './modals/McpServerFormModal';
+import McpToolUsagePanel from './McpToolUsagePanel';
 
 type McpServersProps = {
   selectedProvider: McpProvider;
@@ -140,6 +141,8 @@ export default function McpServers({ selectedProvider, currentProjects }: McpSer
           {deleteError || loadError}
         </div>
       )}
+
+      <McpToolUsagePanel selectedProvider={selectedProvider} />
 
       <div className="space-y-2">
         {isLoading && servers.length === 0 && (

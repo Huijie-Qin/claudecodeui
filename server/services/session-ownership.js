@@ -19,6 +19,7 @@ export function createSessionOwnershipRecorder(multitenancy = multitenancyDb) {
       providerSessionId,
       summary: options.sessionSummary || null,
       status,
+      ...(options.sessionMetadata ? { metadata: options.sessionMetadata } : {}),
     });
   };
 }

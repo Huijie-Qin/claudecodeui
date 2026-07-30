@@ -83,6 +83,7 @@ import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
+import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
     getWorkspaceStorageQuota
@@ -1525,6 +1526,13 @@ app.post('/api/create-folder', authenticateToken, async (req, res) => {
         }
         try {
             await fs.promises.mkdir(targetPath, { recursive: false });
+            await applyWorkspaceOwnership({
+                workspaceRoot: targetPath,
+                targetPaths: [targetPath],
+                recursive: false,
+                includeParents: false,
+                reason: 'host_folder_create',
+            });
             res.json({ success: true, path: targetPath });
         } catch (mkdirError) {
             if (mkdirError.code === 'EEXIST') {
@@ -1628,10 +1636,22 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Content is required' });
         }
 
-        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
+        const {
+            workspace,
+            resolvedPath: resolved,
+            runtimeMounted,
+        } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
+        if (!runtimeMounted) {
+            await applyWorkspaceOwnership({
+                workspaceRoot: workspace.path,
+                targetPaths: [resolved],
+                reason: 'file_manager_save',
+                context: { workspaceId: workspace.id },
+            });
+        }
 
         res.json({
             success: true,
@@ -1725,7 +1745,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
       workspace,
     });
     if (mappedPath) {
-      return { workspace, accessRole, resolvedPath: mappedPath };
+      return { workspace, accessRole, resolvedPath: mappedPath, runtimeMounted: true };
     }
 
     const validation = validatePathInProject(workspace.path, targetPath || '');
@@ -1734,7 +1754,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
         error.statusCode = 403;
         throw error;
     }
-    return { workspace, accessRole, resolvedPath: validation.resolved };
+    return { workspace, accessRole, resolvedPath: validation.resolved, runtimeMounted: false };
 }
 
 /**
@@ -1816,6 +1836,13 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             }
             await fsPromises.writeFile(resolvedPath, '', 'utf8');
         }
+        await applyWorkspaceOwnership({
+            workspaceRoot: projectRoot,
+            targetPaths: [resolvedPath],
+            recursive: type === 'directory',
+            reason: 'file_manager_create',
+            context: { workspaceId: workspace.id, type },
+        });
 
         res.json({
             success: true,
@@ -1895,6 +1922,13 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
 
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
+        await applyWorkspaceOwnership({
+            workspaceRoot: projectRoot,
+            targetPaths: [resolvedNewPath],
+            recursive: true,
+            reason: 'file_manager_rename',
+            context: { workspaceId: workspace.id },
+        });
 
         res.json({
             success: true,
@@ -2153,7 +2187,9 @@ const uploadFilesHandler = async (req, res) => {
 
             // Move uploaded files from temp to target directory
             const uploadedFiles = [];
+            let uploadOperationError = null;
             console.log('[DEBUG] Processing files:', req.files.map(f => ({ originalname: f.originalname, path: f.path })));
+            try {
             for (let i = 0; i < req.files.length; i++) {
                 const file = req.files[i];
                 // Use relative path if provided (for folder uploads), otherwise use originalname
@@ -2188,6 +2224,27 @@ const uploadFilesHandler = async (req, res) => {
                     size: file.size,
                     mimeType: file.mimetype
                 });
+            }
+            } catch (error) {
+                uploadOperationError = error;
+            }
+
+            try {
+                await applyWorkspaceOwnership({
+                    workspaceRoot: projectRoot,
+                    targetPaths: [resolvedTargetDir, ...uploadedFiles.map((file) => file.path)],
+                    reason: 'file_manager_upload',
+                    context: { workspaceId: workspace.id, files: uploadedFiles.length },
+                });
+            } catch (ownershipError) {
+                if (uploadOperationError) {
+                    console.error('[workspace-ownership] Failed after partial file upload:', ownershipError);
+                } else {
+                    uploadOperationError = ownershipError;
+                }
+            }
+            if (uploadOperationError) {
+                throw uploadOperationError;
             }
 
             res.json({
@@ -2475,6 +2532,26 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
+    // Claude keeps its SDK stream alive while idle for fast follow-up turns.
+    // Tie the concurrency lease to processing, not to that reusable stream.
+    const acquireConcurrencyLease = () => {
+        if (lease) return;
+        lease = sessionConcurrencyLimiter.acquire({
+            userId: data.options?.userId ?? writer.userId,
+        });
+    };
+    const releaseConcurrencyLease = () => {
+        lease?.release();
+        lease = null;
+    };
+    if (provider === 'claude') {
+        data.options = {
+            ...(data.options || {}),
+            onConcurrencyResume: acquireConcurrencyLease,
+            onConcurrencyIdle: releaseConcurrencyLease,
+        };
+    }
+
     try {
         activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
         activeProviderCommands.set(activeCommandId, {
@@ -2496,10 +2573,26 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         });
         throw error;
     } finally {
+        if (provider !== 'claude' && data.options?.workspaceId && data.options?.cwd) {
+            void applyWorkspaceOwnership({
+                workspaceRoot: data.options.cwd,
+                targetPaths: [data.options.cwd],
+                recursive: true,
+                includeParents: false,
+                reason: 'provider_command_completed',
+                context: {
+                    provider,
+                    workspaceId: data.options.workspaceId,
+                    sessionId: data.options.sessionId || null,
+                },
+            }).catch((error) => {
+                console.error('[workspace-ownership] Failed after provider command:', error);
+            });
+        }
         if (activeCommandId) {
             activeProviderCommands.delete(activeCommandId);
         }
-        lease?.release();
+        releaseConcurrencyLease();
     }
 }
 
@@ -2534,6 +2627,18 @@ function handleChatConnection(ws, request) {
                     });
                     if (pushedToExistingSession.success) {
                         logChatSessionEvent('pushed_to_existing_stream', logContext);
+                        return;
+                    }
+                    if (pushedToExistingSession.code === 'SESSION_LIMIT_EXCEEDED') {
+                        writer.send(createNormalizedMessage({
+                            kind: 'error',
+                            content: createSessionLimitExceededMessage(pushedToExistingSession),
+                            code: pushedToExistingSession.code,
+                            provider: 'claude',
+                            sessionId: data.options.sessionId,
+                            currentConcurrentRequests: pushedToExistingSession.activeCount,
+                            sessionLimit: pushedToExistingSession.limit,
+                        }));
                         return;
                     }
                 }
@@ -3033,6 +3138,16 @@ function handleShellConnection(ws, request) {
 
                     // Handle process exit
                     shellProcess.onExit((exitCode) => {
+                        void applyWorkspaceOwnership({
+                            workspaceRoot: resolvedProjectPath,
+                            targetPaths: [resolvedProjectPath],
+                            recursive: true,
+                            includeParents: false,
+                            reason: 'shell_process_exit',
+                            context: { provider: isPlainShell ? 'plain-shell' : provider, sessionId: sessionId || null },
+                        }).catch((error) => {
+                            console.error('[workspace-ownership] Failed after shell process exit:', error);
+                        });
                         console.log('🔚 Shell process exited with code:', exitCode.exitCode, 'signal:', exitCode.signal);
                         const session = ptySessionsMap.get(ptySessionKey);
                         if (session && session.ws && session.ws.readyState === WebSocket.OPEN) {

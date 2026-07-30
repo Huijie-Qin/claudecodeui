@@ -155,7 +155,7 @@ export default function ChatComposer({
   scheduledTasksDisabledReason,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
-  const textareaRect = textareaRef.current?.getBoundingClientRect();
+  const textareaRect = isCommandMenuOpen ? textareaRef.current?.getBoundingClientRect() : undefined;
   const commandMenuPosition = {
     top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
     left: textareaRect ? textareaRect.left : 16,

@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
 const MARKET_RESPONSE_LOG_SNIPPET_CHARS = 500;
@@ -263,6 +265,13 @@ export async function downloadMarketSkill({
       },
     },
   });
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [runtimePath],
+    recursive: true,
+    reason: 'skill_market_import',
+    context: { workspaceId: workspaceId || null, skillName },
+  });
 
   return getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
 }
@@ -293,10 +302,24 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
 
   const runtimePath = getRuntimeSkillPath(workspacePath, status.skillName);
   const localFiles = await readSkillDirectoryFiles(runtimePath);
-  const remoteFiles = await readRemoteSkillFiles(remoteSkill, {
+  const downloadedRemoteSkill = await downloadRemoteSkillFiles(remoteSkill, {
     tenantCode,
     accountId: remoteAccountId,
     skillRootName: status.skillName,
+  });
+  const remoteFiles = Object.entries(downloadedRemoteSkill.files).map(([filePath, fileContent]) => {
+    const rawContent = Buffer.isBuffer(fileContent)
+      ? fileContent
+      : Buffer.from(typeof fileContent === 'string' ? fileContent : '', 'utf8');
+    const isBinary = isBinaryContent(rawContent);
+    return {
+      path: filePath,
+      content: isBinary ? '' : rawContent.toString('utf8'),
+      rawContent,
+      isBinary,
+      digest: createContentDigest(rawContent),
+      size: rawContent.length,
+    };
   });
   const changes = compareSkillFiles(remoteFiles, localFiles);
 
@@ -795,7 +818,7 @@ async function readRemoteSkillFiles(remoteSkill, { tenantCode, accountId, skillR
   return files.sort(sortFileEntries);
 }
 
-export async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId } = {}) {
+export async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId, skillRootName } = {}) {
   const { response, payload } = await requestMarketMaybeJson('/api/skill/download', {
     method: 'POST',
     tenantCode,
@@ -820,7 +843,7 @@ export async function downloadRemoteSkillFiles(remoteSkill, { tenantCode, accoun
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('zip') || contentType.includes('octet-stream')) {
     const zipBuffer = Buffer.from(await response.arrayBuffer());
-    const downloadedSkill = await readZipFiles(zipBuffer, { remoteSkill });
+    const downloadedSkill = await readZipFiles(zipBuffer, { remoteSkill, skillRootName });
     if (Object.keys(downloadedSkill.files).length > 0) {
       return downloadedSkill;
     }
@@ -1165,6 +1188,11 @@ async function writeMarketImports({ workspaceId, workspacePath } = {}, metadata)
   if (!workspacePath) return;
   const { importsPath } = getSkillMarketPaths(workspacePath);
   await writeJsonAtomic(importsPath, normalizedMetadata);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [importsPath],
+    reason: 'skill_market_metadata',
+  });
 }
 
 async function getSkillMarketImportsDb() {
@@ -1297,6 +1325,7 @@ async function collectSkillDirectoryFiles(rootDirectory, currentDirectory, files
       content,
       rawContent,
       isBinary,
+      digest: createContentDigest(rawContent),
       size: rawContent.length,
     });
   }
@@ -1331,9 +1360,10 @@ async function readZipFiles(buffer, { remoteSkill, skillRootName } = {}) {
     Object.values(zip.files).map(async (entry) => {
       if (entry.dir) return;
       const normalizedPath = normalizeRelativeFilePath(entry.name);
+      const content = await entry.async('nodebuffer');
       fileEntries.push({
         path: normalizedPath,
-        content: await entry.async('string'),
+        content,
       });
     }),
   );
@@ -1653,7 +1683,7 @@ function filesToContentMap(files) {
   return Object.fromEntries(
     files.map((file) => [
       file.path,
-      typeof file.content === 'string' ? file.content : '',
+      typeof file.content === 'string' || Buffer.isBuffer(file.content) ? file.content : '',
     ]),
   );
 }
@@ -1685,7 +1715,10 @@ function compareSkillFiles(remoteFiles, localFiles) {
       }];
     }
     const isBinary = Boolean(remoteFile.isBinary || localFile.isBinary);
-    if (isBinary || remoteFile.content !== localFile.content) {
+    const contentChanged = isBinary
+      ? getFileContentDigest(remoteFile) !== getFileContentDigest(localFile)
+      : remoteFile.content !== localFile.content;
+    if (contentChanged) {
       return [{
         path: filePath,
         status: 'modified',
@@ -1707,6 +1740,16 @@ function isBinaryContent(buffer) {
     if (byte < 7 || (byte > 13 && byte < 32)) suspiciousBytes += 1;
   }
   return suspiciousBytes / sample.length > 0.1;
+}
+
+function createContentDigest(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function getFileContentDigest(file) {
+  if (file.digest) return file.digest;
+  if (Buffer.isBuffer(file.rawContent)) return createContentDigest(file.rawContent);
+  return createContentDigest(Buffer.from(file.content ?? '', 'utf8'));
 }
 
 function toLocalImportState(status, remoteSkill, currentUsername) {

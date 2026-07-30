@@ -207,6 +207,65 @@ test('workspace mcp tools catalog probes installed presets and records connectio
   }
 });
 
+test('workspace mcp tools catalog rewrites docker host URLs for local probe state', async () => {
+  const database = createTestDb();
+  const { workspacePath, cleanup } = await createWorkspacePath();
+  try {
+    const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
+    const seen = [];
+    const service = createWorkspaceMcpToolsService({
+      multitenancy,
+      env: { CLOUDCLI_MCP_PROBE_RUNTIME: 'host' },
+      probeHttpMcpServer: async (config) => {
+        seen.push(config);
+        return {
+          status: 'healthy',
+          phase: 'tools_list',
+          error: '',
+          latencyMs: 8,
+          toolCount: 1,
+          tools: [{ name: 'fresh_search' }],
+        };
+      },
+    });
+    await writeWorkspaceMcpConfig(
+      workspacePath,
+      {
+        mcpServers: {
+          knowledge: {
+            type: 'http',
+            url: 'http://127.0.0.1:39999/mcp',
+          },
+        },
+      },
+      { env: { CLAUDE_EXECUTION_MODE: 'docker' } },
+    );
+    multitenancy.mcpInstalls.upsertInstall({
+      workspaceId: workspace.id,
+      presetId: published.id,
+      installedByUserId: userId,
+      probeStatus: 'probe_failed',
+      probeError: 'previous failure',
+      toolCount: 0,
+      tools: [],
+    });
+
+    const catalog = await service.listWorkspaceMcpPresetCatalog({
+      tenantId: tenant.id,
+      workspaceId: workspace.id,
+      workspacePath,
+      accessRole: 'view',
+    });
+
+    assert.equal(seen[0].url, 'http://127.0.0.1:39999/mcp');
+    assert.equal(catalog.presets[0].installed, true);
+    assert.equal(catalog.presets[0].connectionStatus, 'connected');
+    assert.equal(catalog.presets[0].probeStatus, 'healthy');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('workspace mcp tools catalog resolves uploaded helper scripts before probing', async () => {
   const database = createTestDb();
   const { workspacePath, cleanup } = await createWorkspacePath();

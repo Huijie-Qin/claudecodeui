@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react';
+import type { DragEvent, ReactNode, RefObject } from 'react';
 
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
 
@@ -9,6 +9,13 @@ type FileTreeListProps = {
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
+  selectedPaths?: Set<string>;
+  internalDropTarget?: string | null;
+  onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
+  onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDragLeave?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
+  onInternalDrop?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onItemClick: (item: FileTreeNodeType) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
@@ -46,6 +53,13 @@ export default function FileTreeList({
   viewMode,
   expandedDirs,
   dropTarget,
+  selectedPaths,
+  internalDropTarget,
+  onSelectionChange,
+  onInternalDragStart,
+  onInternalDragOver,
+  onInternalDragLeave,
+  onInternalDrop,
   onItemClick,
   renderFileIcon,
   formatFileSize,
@@ -86,6 +100,13 @@ export default function FileTreeList({
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}
+          selectedPaths={selectedPaths}
+          internalDropTarget={internalDropTarget}
+          onSelectionChange={onSelectionChange}
+          onInternalDragStart={onInternalDragStart}
+          onInternalDragOver={onInternalDragOver}
+          onInternalDragLeave={onInternalDragLeave}
+          onInternalDrop={onInternalDrop}
           onItemClick={onItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}

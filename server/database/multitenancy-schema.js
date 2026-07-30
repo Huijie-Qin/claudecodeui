@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS workspace_mcp_preset_installs (
   last_probe_error TEXT,
   tool_count INTEGER NOT NULL DEFAULT 0,
   tools_json TEXT,
+  tool_settings_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (workspace_id, preset_id),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
   FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE,
@@ -277,6 +278,9 @@ CREATE TABLE IF NOT EXISTS session_index (
 
 CREATE INDEX IF NOT EXISTS idx_session_index_owner ON session_index(tenant_id, workspace_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_session_index_lookup ON session_index(provider, provider_session_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_session_index_created_at ON session_index(created_at);
+CREATE INDEX IF NOT EXISTS idx_session_index_updated_at ON session_index(updated_at);
+CREATE INDEX IF NOT EXISTS idx_session_index_user_activity ON session_index(user_id, status, updated_at);
 
 CREATE TABLE IF NOT EXISTS user_session_favorites (
   user_id INTEGER NOT NULL,
@@ -370,6 +374,7 @@ CREATE TABLE IF NOT EXISTS scheduled_session_tasks (
   model TEXT,
   permission_mode TEXT,
   tools_settings_json TEXT,
+  session_mode TEXT NOT NULL DEFAULT 'new' CHECK (session_mode IN ('new', 'merge')),
   last_run_at TEXT,
   last_session_id TEXT,
   last_error TEXT,

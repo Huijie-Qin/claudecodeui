@@ -16,6 +16,7 @@ import {
   readSkillsMetadata,
   writeSkillsMetadata,
 } from './workspace-skills.js';
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const SKILL_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 
@@ -231,7 +232,15 @@ async function validateDownloadedSkill(downloadedSkill) {
   }
 }
 
-function assertNoSkillConflict({ metadata, skillName, sourcePath, runtimePath, presetId, overwrite }) {
+function assertNoSkillConflict({
+  metadata,
+  skillName,
+  sourcePath,
+  runtimePath,
+  presetId,
+  overwrite,
+  allowExistingRuntime = false,
+}) {
   const entry = metadata.skills?.[skillName];
   const managedByPreset = entry?.managedBy === 'admin-skill-preset'
     && String(entry?.adminPresetId || '') === String(presetId);
@@ -242,19 +251,56 @@ function assertNoSkillConflict({ metadata, skillName, sourcePath, runtimePath, p
     pathExists(sourcePath),
     pathExists(runtimePath),
   ]).then(([sourceExists, runtimeExists]) => {
-    if (!entry && (sourceExists || runtimeExists) && !overwrite) {
+    const hasUnexpectedSource = sourceExists && !managedByPreset;
+    const hasUnexpectedRuntime = runtimeExists && !managedByPreset && !allowExistingRuntime;
+    if (!entry && (hasUnexpectedSource || hasUnexpectedRuntime) && !overwrite) {
       throw createHttpError(`Skill "${skillName}" already exists in the workspace`, 409, 'SKILL_PRESET_CONFLICT');
     }
   });
 }
 
-async function installDownloadedSkillAsManaged({
+async function removeLegacyPresetSkillSource({
+  workspacePath,
+  metadata,
+  skillName,
+  sourcePath,
+  presetId,
+  overwrite = false,
+}) {
+  const entry = metadata.skills?.[skillName];
+  const managedByPreset = entry?.managedBy === 'admin-skill-preset'
+    && String(entry?.adminPresetId || '') === String(presetId);
+  if (!managedByPreset && !overwrite) {
+    return;
+  }
+
+  await fs.rm(sourcePath, { recursive: true, force: true });
+  if (!entry) {
+    return;
+  }
+
+  const nextSkills = { ...metadata.skills };
+  delete nextSkills[skillName];
+  const { metadataPath } = getWorkspaceSkillsPaths(workspacePath);
+
+  if (Object.keys(nextSkills).length === 0) {
+    await fs.rm(metadataPath, { force: true });
+    return;
+  }
+  await writeSkillsMetadata(workspacePath, {
+    version: 1,
+    skills: nextSkills,
+  });
+}
+
+async function installDownloadedPresetSkill({
   workspacePath,
   skillName,
   downloadedSkill,
   preset,
   remoteSkill,
   overwrite = false,
+  allowExistingRuntime = false,
   now = () => new Date(),
 }) {
   const metadata = await readSkillsMetadata(workspacePath);
@@ -268,12 +314,17 @@ async function installDownloadedSkillAsManaged({
     runtimePath,
     presetId: preset.id,
     overwrite,
+    allowExistingRuntime,
   });
 
-  const stagePath = path.join(sourceRoot, `.${skillName}.${process.pid}.${Date.now()}.stage`);
-  await fs.mkdir(sourceRoot, { recursive: true });
+  const operationToken = `${process.pid}.${Date.now()}`;
+  const stagePath = path.join(runtimeRoot, `.${skillName}.${operationToken}.stage`);
+  const backupPath = path.join(runtimeRoot, `.${skillName}.${operationToken}.backup`);
   await fs.mkdir(runtimeRoot, { recursive: true });
   await fs.rm(stagePath, { recursive: true, force: true });
+  await fs.rm(backupPath, { recursive: true, force: true });
+  let runtimeBackedUp = false;
+  let runtimeInstalled = false;
   try {
     await writeDownloadedFiles(stagePath, downloadedSkill.files);
     const manifest = await parseSkillManifest(stagePath);
@@ -281,43 +332,45 @@ async function installDownloadedSkillAsManaged({
       throw createHttpError(`Selected skill has an invalid SKILL.md: ${manifest.parseError}`, 400);
     }
 
-    await fs.rm(sourcePath, { recursive: true, force: true });
-    await fs.rename(stagePath, sourcePath);
-
-    const timestamp = now().toISOString();
-    await writeSkillsMetadata(workspacePath, {
-      version: 1,
-      skills: {
-        ...metadata.skills,
-        [skillName]: compactObject({
-          name: skillName,
-          description: manifest.description || preset.description || remoteSkill.description || '',
-          enabled: true,
-          sourceType: 'skill-market-api',
-          skillId: preset.skill_id || remoteSkill.skillId,
-          remoteId: preset.remote_id || remoteSkill.id,
-          nspPath: preset.nsp_path || remoteSkill.nspPath,
-          version: Number(remoteSkill.version ?? preset.version ?? 0),
-          installedAt: metadata.skills?.[skillName]?.installedAt || timestamp,
-          updatedAt: timestamp,
-          managedBy: 'admin-skill-preset',
-          adminPresetId: String(preset.id),
-        }),
-      },
+    if (await pathExists(runtimePath)) {
+      await fs.rename(runtimePath, backupPath);
+      runtimeBackedUp = true;
+    }
+    await fs.rename(stagePath, runtimePath);
+    runtimeInstalled = true;
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [runtimePath],
+      recursive: true,
+      reason: 'skill_preset_install',
+      context: { presetId: preset.id, skillName },
     });
-
-    await fs.rm(runtimePath, { recursive: true, force: true });
-    await fs.cp(sourcePath, runtimePath, { recursive: true });
+    await removeLegacyPresetSkillSource({
+      workspacePath,
+      metadata,
+      skillName,
+      sourcePath,
+      presetId: preset.id,
+      overwrite,
+    });
+    await fs.rm(backupPath, { recursive: true, force: true }).catch((error) => {
+      console.warn('[skill-presets] Failed to remove installed skill backup:', error?.message || error);
+    });
 
     return {
       name: skillName,
       displayName: manifest.name || preset.display_name || skillName,
       description: manifest.description || preset.description || '',
-      sourcePath,
       runtimePath,
     };
   } catch (error) {
     await fs.rm(stagePath, { recursive: true, force: true });
+    if (runtimeBackedUp) {
+      await fs.rm(runtimePath, { recursive: true, force: true });
+      await fs.rename(backupPath, runtimePath).catch(() => {});
+    } else if (runtimeInstalled) {
+      await fs.rm(runtimePath, { recursive: true, force: true });
+    }
     throw error;
   }
 }
@@ -422,6 +475,9 @@ export function createSkillPresetService({
     if (preset.status !== 'published') {
       throw createHttpError('Skill preset is not published', 404);
     }
+    const existingPresetInstall = multitenancy.skillPresetInstalls
+      ?.listInstallsForWorkspace?.({ workspaceId: normalizedWorkspaceId, includeRemoved: true })
+      ?.find((install) => Number(install.preset_id) === Number(preset.id));
 
     let attemptedSkillName = preset.name;
     try {
@@ -431,13 +487,15 @@ export function createSkillPresetService({
       );
       const downloadedSkill = await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
       attemptedSkillName = resolveRemoteSkillPresetName(remoteSkill, downloadedSkill);
-      const skill = await installDownloadedSkillAsManaged({
+      const skill = await installDownloadedPresetSkill({
         workspacePath,
         skillName: attemptedSkillName,
         downloadedSkill,
         preset,
         remoteSkill,
         overwrite,
+        allowExistingRuntime: existingPresetInstall?.status === 'installed'
+          && existingPresetInstall?.skill_name === attemptedSkillName,
         now,
       });
       upsertSkillMarketImport(multitenancy, {

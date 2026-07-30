@@ -11,7 +11,7 @@ import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 import { createMultitenancyDb } from '../database/multitenancy-db.js';
 
 import { createSkillPresetService } from './skill-presets.js';
-import { readSkillsMetadata } from './workspace-skills.js';
+import { readSkillsMetadata, writeSkillsMetadata } from './workspace-skills.js';
 
 const REMOTE_SKILL = {
   id: 'remote-code-reviewer',
@@ -90,7 +90,7 @@ function seedTenantWorkspace({ database, multitenancy, workspacePath }) {
   return { adminId, userId, tenant, workspace };
 }
 
-test('admin skill presets validate, publish, and install managed Skill files into a workspace', async () => {
+test('admin skill presets install only into the Claude workspace skill directory', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const workspacePath = await makeWorkspace();
@@ -131,6 +131,21 @@ test('admin skill presets validate, publish, and install managed Skill files int
   assert.equal(validated.validation.status, 'healthy');
   assert.equal(published.status, 'published');
 
+  const legacySourcePath = path.join(workspacePath, '.cloudcli', 'skills', 'sources', 'code-reviewer');
+  await fs.mkdir(legacySourcePath, { recursive: true });
+  await fs.writeFile(path.join(legacySourcePath, 'SKILL.md'), '# Legacy managed copy\n', 'utf8');
+  await writeSkillsMetadata(workspacePath, {
+    version: 1,
+    skills: {
+      'code-reviewer': {
+        name: 'code-reviewer',
+        enabled: true,
+        managedBy: 'admin-skill-preset',
+        adminPresetId: String(preset.id),
+      },
+    },
+  });
+
   const installed = await service.installWorkspaceSkillPreset({
     tenantId: tenant.id,
     workspaceId: workspace.id,
@@ -143,30 +158,20 @@ test('admin skill presets validate, publish, and install managed Skill files int
   });
 
   assert.equal(installed.installed.skillName, 'code-reviewer');
-  assert.equal(
-    await fs.readFile(path.join(workspacePath, '.cloudcli', 'skills', 'sources', 'code-reviewer', 'references', 'checklist.md'), 'utf8'),
-    'Look for regressions and missing tests.\n',
-  );
+  assert.equal(installed.installed.skill.sourcePath, undefined);
+  assert.equal(installed.installed.skill.runtimePath, path.join(workspacePath, '.claude', 'skills', 'code-reviewer'));
   assert.equal(
     await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'code-reviewer', 'SKILL.md'), 'utf8'),
     ['---', 'name: code-reviewer', 'description: Review code changes.', '---'].join('\n'),
   );
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'code-reviewer', 'references', 'checklist.md'), 'utf8'),
+    'Look for regressions and missing tests.\n',
+  );
+  await assert.rejects(fs.access(legacySourcePath), (error) => error?.code === 'ENOENT');
 
   const metadata = await readSkillsMetadata(workspacePath);
-  assert.deepEqual(metadata.skills['code-reviewer'], {
-    name: 'code-reviewer',
-    description: 'Review code changes.',
-    enabled: true,
-    sourceType: 'skill-market-api',
-    skillId: 'code-reviewer',
-    remoteId: 'remote-code-reviewer',
-    nspPath: 'mock://skills/code-reviewer',
-    version: 7,
-    installedAt: '2026-05-15T00:00:00.000Z',
-    updatedAt: '2026-05-15T00:00:00.000Z',
-    managedBy: 'admin-skill-preset',
-    adminPresetId: String(preset.id),
-  });
+  assert.deepEqual(metadata, { version: 1, skills: {} });
 
   assert.deepEqual(multitenancy.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), [{
     name: 'code-reviewer',
@@ -196,6 +201,19 @@ test('admin skill presets validate, publish, and install managed Skill files int
       version: 7,
     }],
   );
+
+  const reinstalled = await service.installWorkspaceSkillPreset({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    workspacePath,
+    presetId: preset.id,
+    userId,
+    tenantCode: tenant.code,
+    accountId: 'alice',
+    now: () => new Date('2026-05-16T00:00:00.000Z'),
+  });
+  assert.equal(reinstalled.installed.skill.runtimePath, path.join(workspacePath, '.claude', 'skills', 'code-reviewer'));
+  assert.deepEqual(await readSkillsMetadata(workspacePath), { version: 1, skills: {} });
 });
 
 test('applying a published preset to existing workspaces skips unmanaged Skill name conflicts', async () => {

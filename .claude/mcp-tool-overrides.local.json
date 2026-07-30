@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "mcpServers": {
+    "knowledge_retrieval": {
+      "tools": {
+        "search_docs": {
+          "params": {
+            "indexes": {
+              "custom": true,
+              "value": ["engineering", "policy"]
+            },
+            "maxResults": {
+              "custom": true,
+              "value": 8
+            },
+            "freshOnly": {
+              "custom": false,
+              "value": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

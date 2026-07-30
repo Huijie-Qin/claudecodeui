@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
   ClaudeSessionsProvider,
   resolveClaudeProjectStorageName,
 } from './claude-sessions.provider.js';
+import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
 
 test('resolveClaudeProjectStorageName prefers encoded workspace path for tenant workspaces', () => {
   assert.equal(
@@ -134,6 +138,150 @@ test('ClaudeSessionsProvider filters skill bodies even when the meta flag is mis
   }, 'session-1');
 
   assert.deepEqual(messages, []);
+});
+
+test('ClaudeSessionsProvider restores a stored slash invocation without exposing expanded instructions', () => {
+  const provider = new ClaudeSessionsProvider();
+  const secretInstruction = 'INTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE';
+  const displayCommand = [
+    '/dataops-html-report 第一行',
+    '',
+    '# 测试',
+    '',
+    '## User request',
+    '',
+    '第二行',
+  ].join('\n');
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: [
+        '## Related Skills',
+        '',
+        '# A title unrelated to the skill name',
+        '',
+        secretInstruction,
+      ].join('\n'),
+    },
+  }, 'session-1', displayCommand);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, displayCommand);
+  assert.equal(messages[0].content?.includes(secretInstruction), false);
+});
+
+test('ClaudeSessionsProvider restores a stored slash-only invocation', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill-without-query',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: '## Related Skills\n\n# Report Building\n\nExpanded instructions.',
+    },
+  }, 'session-1', '/dataops-html-report');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'text');
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, '/dataops-html-report');
+});
+
+test('ClaudeSessionsProvider restores one stored invocation from array text content', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'expanded-skill-array',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: '# Display title\n\nExpanded instructions.',
+        },
+        {
+          type: 'text',
+          text: 'More expanded instructions.',
+        },
+      ],
+    },
+  }, 'session-1', '/report-skill 生成日报');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, '/report-skill 生成日报');
+});
+
+test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user message UUID', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-display-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+
+  const sessionId = 'runtime-session-1';
+  const messageId = '11111111-1111-4111-8111-111111111111';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(projectDirectory, `${sessionId}.jsonl`),
+    `${JSON.stringify({
+      type: 'user',
+      uuid: messageId,
+      sessionId,
+      timestamp: '2026-04-29T01:19:50.247Z',
+      message: {
+        role: 'user',
+        content: '# report-skill\n\nINTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE',
+      },
+    })}\n`,
+    'utf8',
+  );
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath: '/workspace',
+    sessionId,
+    messageId,
+    displayCommand: '/report-skill generate report',
+    modelContent: '# report-skill\n\nINTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE',
+  });
+
+  const provider = new ClaudeSessionsProvider();
+  const result = await provider.fetchHistory(sessionId, {
+    runtimeHomePath,
+  });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].content, '/report-skill generate report');
+});
+
+test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {
+  const provider = new ClaudeSessionsProvider();
+  const content = [
+    '# dataops-html-report',
+    '',
+    'Expanded instructions.',
+    '',
+    '## User request',
+    '',
+    '帮我分析这份数据',
+  ].join('\n');
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'unmarked-expanded-skill',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content,
+    },
+  }, 'session-1');
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, content);
 });
 
 test('ClaudeSessionsProvider filters snake-case sidechain messages from user-visible messages', () => {

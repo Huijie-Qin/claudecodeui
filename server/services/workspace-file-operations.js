@@ -1,6 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
+import { applyWorkspaceOwnership } from './workspace-ownership.js';
+
 function assertUnderRoot(workspaceRoot, targetPath) {
   const root = path.resolve(workspaceRoot);
   const target = path.resolve(targetPath);
@@ -120,6 +122,12 @@ export async function moveWorkspaceItem({
   }
 
   await fs.rename(resolvedSourcePath, destinationPath);
+  await applyWorkspaceOwnership({
+    workspaceRoot: root,
+    targetPaths: [destinationPath],
+    recursive: sourceStat.isDirectory(),
+    reason: 'file_manager_move',
+  });
 
   return {
     success: true,
@@ -155,6 +163,11 @@ export async function savePlanMarkdownToWorkspaceRoot({
   const normalizedPlan = plan.replace(/\\n/g, '\n').trimEnd() + '\n';
 
   await fs.writeFile(targetPath, normalizedPlan, 'utf8');
+  await applyWorkspaceOwnership({
+    workspaceRoot: root,
+    targetPaths: [targetPath],
+    reason: 'workspace_plan_save',
+  });
 
   return {
     success: true,

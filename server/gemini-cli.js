@@ -241,7 +241,7 @@ async function spawnGemini(command, options = {}, ws) {
 
         // Save user message to session when starting
         if (command && capturedSessionId) {
-            sessionManager.addMessage(capturedSessionId, 'user', command);
+            sessionManager.addMessage(capturedSessionId, 'user', options.displayCommand || command);
         }
 
         // Create response handler for NDJSON buffering
@@ -305,7 +305,7 @@ async function spawnGemini(command, options = {}, ws) {
 
                 // Save the user message now that we have a session ID
                 if (command) {
-                    sessionManager.addMessage(capturedSessionId, 'user', command);
+                    sessionManager.addMessage(capturedSessionId, 'user', options.displayCommand || command);
                 }
 
                 // Update process key with captured session ID

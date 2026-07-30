@@ -9,6 +9,7 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import { checkOpenApiAgentList } from '../services/openapi-agent.js';
 import { skillPresetService } from '../services/skill-presets.js';
 import { workspaceAccess } from '../services/workspace-access.js';
+import { applyWorkspaceOwnership } from '../services/workspace-ownership.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
 
 const router = express.Router();
@@ -409,6 +410,14 @@ router.post('/create-workspace', async (req, res) => {
           path: clonePath,
         });
         await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+        await applyWorkspaceOwnership({
+          workspaceRoot: workspace.path,
+          targetPaths: [workspace.path],
+          recursive: true,
+          includeParents: false,
+          reason: 'workspace_clone',
+          context: { tenantId, userId: req.user.id, workspaceId: workspace.id },
+        });
 
         return res.json({
           success: true,
@@ -427,6 +436,14 @@ router.post('/create-workspace', async (req, res) => {
         path: absolutePath,
       });
       await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+      await applyWorkspaceOwnership({
+        workspaceRoot: workspace.path,
+        targetPaths: [workspace.path],
+        recursive: true,
+        includeParents: false,
+        reason: 'workspace_create',
+        context: { tenantId, userId: req.user.id, workspaceId: workspace.id },
+      });
 
       return res.json({
         success: true,
@@ -663,6 +680,14 @@ router.get('/clone-progress', async (req, res) => {
             path: clonePath,
           });
           await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+          await applyWorkspaceOwnership({
+            workspaceRoot: workspace.path,
+            targetPaths: [workspace.path],
+            recursive: true,
+            includeParents: false,
+            reason: 'workspace_clone_progress',
+            context: { tenantId, userId: req.user.id, workspaceId: workspace.id },
+          });
           const project = createWorkspaceProject(workspace);
           sendEvent('complete', { project, message: 'Repository cloned successfully' });
         } catch (error) {

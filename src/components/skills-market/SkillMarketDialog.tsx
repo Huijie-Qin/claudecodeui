@@ -474,7 +474,7 @@ export default function SkillMarketDialog({
         </header>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[300px_280px_minmax(0,1fr)]">
-          <aside className="flex min-h-0 flex-col border-b border-border lg:border-b-0 lg:border-r">
+          <aside className="flex min-h-0 min-w-0 flex-col border-b border-border lg:w-[300px] lg:border-b-0 lg:border-r">
             <div className="border-b border-border p-3">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -491,20 +491,20 @@ export default function SkillMarketDialog({
             <div
               ref={listScrollRef}
               onScroll={handleSkillListScroll}
-              className="min-h-0 flex-1 overflow-auto p-2"
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-2"
             >
               {listLoading ? (
                 <CenteredState icon={<Loader2 className="h-4 w-4 animate-spin" />} text={t('skillMarketDialog.loading', 'Loading...')} />
               ) : visibleSkills.length === 0 ? (
                 <CenteredState icon={<AlertCircle className="h-4 w-4" />} text={t('skillMarketDialog.empty', 'No matching skills.')} />
               ) : (
-                <div className="grid gap-1.5">
+                <div className="grid min-w-0 gap-1.5">
                   {visibleSkills.map((skill) => (
                     <button
                       key={getSkillListKey(skill)}
                       type="button"
                       onClick={() => selectSkill(skill.name)}
-                      className={`rounded-md border p-3 text-left transition ${
+                      className={`w-full min-w-0 max-w-full overflow-hidden rounded-md border p-3 text-left transition ${
                         selectedName === skill.name
                           ? 'border-primary bg-primary/5'
                           : 'border-border hover:bg-accent/50'
@@ -512,7 +512,12 @@ export default function SkillMarketDialog({
                     >
                       <div className="flex min-w-0 items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-foreground">{skill.displayName || skill.name}</div>
+                          <div
+                            className="truncate text-sm font-medium text-foreground"
+                            title={skill.displayName || skill.name}
+                          >
+                            {skill.displayName || skill.name}
+                          </div>
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{skill.description}</p>
                         </div>
                         {skill.conflict ? <ConflictWarningIcon /> : <SkillStatusBadge skill={skill} />}

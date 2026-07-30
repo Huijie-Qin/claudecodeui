@@ -1,4 +1,4 @@
-import type { LoadingProgress, Project, ProjectSession, LLMProvider, Tenant } from '../../../types/app';
+import type { LoadingProgress, Project, ProjectScheduledTask, ProjectSession, LLMProvider, Tenant } from '../../../types/app';
 
 export type ProjectSortOrder = 'name' | 'date';
 
@@ -29,7 +29,7 @@ export type SidebarProps = {
   onProjectSelect: (project: Project) => void;
   onShareProject?: (project: Project) => void;
   onSessionSelect: (session: ProjectSession) => void;
-  onScheduledTaskOpen?: (project: Project, session: ProjectSession) => void;
+  onScheduledTaskOpen?: (project: Project, task: ProjectScheduledTask) => void;
   onScheduledTasksListOpen?: (project: Project) => void;
   onNewSession: (project: Project) => void;
   onSessionDelete?: (sessionId: string) => void;

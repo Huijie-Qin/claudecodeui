@@ -2,6 +2,7 @@ import type { NormalizedMessage } from './useSessionStore';
 
 const OPTIMISTIC_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const OPTIMISTIC_USER_CLOCK_SKEW_MS = 2_000;
+const FINALIZED_STREAM_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 
 function isLocalOptimisticUserText(message: NormalizedMessage): boolean {
   return message.id.startsWith('local_') &&
@@ -32,6 +33,85 @@ function isPersistedCopyOfOptimisticUserText(
   if (serverTime + OPTIMISTIC_USER_CLOCK_SKEW_MS < realtimeTime) return false;
 
   return Math.abs(serverTime - realtimeTime) <= OPTIMISTIC_USER_DEDUPE_WINDOW_MS;
+}
+
+function isFinalizedStreamingAssistantText(message: NormalizedMessage): boolean {
+  return message.id.startsWith('text_') &&
+    message.kind === 'text' &&
+    message.role === 'assistant' &&
+    typeof message.content === 'string' &&
+    message.content.trim().length > 0;
+}
+
+function isPersistedCopyOfFinalizedStream(
+  serverMessage: NormalizedMessage,
+  realtimeMessage: NormalizedMessage,
+): boolean {
+  if (!isFinalizedStreamingAssistantText(realtimeMessage)) return false;
+  if (serverMessage.kind !== 'text' || serverMessage.role !== 'assistant') return false;
+  if (serverMessage.sessionId !== realtimeMessage.sessionId) return false;
+  if (serverMessage.provider !== realtimeMessage.provider) return false;
+  if (serverMessage.content?.trim() !== realtimeMessage.content?.trim()) return false;
+
+  const serverTime = getMessageTime(serverMessage);
+  const realtimeTime = getMessageTime(realtimeMessage);
+  if (serverTime === null || realtimeTime === null) return false;
+
+  return Math.abs(serverTime - realtimeTime) <= FINALIZED_STREAM_DEDUPE_WINDOW_MS;
+}
+
+function isPersistedRealtimeCopy(
+  serverMessage: NormalizedMessage,
+  realtimeMessage: NormalizedMessage,
+): boolean {
+  return isPersistedCopyOfOptimisticUserText(serverMessage, realtimeMessage) ||
+    isPersistedCopyOfFinalizedStream(serverMessage, realtimeMessage);
+}
+
+function dropPersistedRealtimeCopies(
+  server: NormalizedMessage[],
+  realtime: NormalizedMessage[],
+  serverIds: Set<string>,
+): NormalizedMessage[] {
+  const claimedServerIndexes = new Set<number>();
+  const extra: NormalizedMessage[] = [];
+
+  for (const realtimeMessage of realtime) {
+    if (serverIds.has(realtimeMessage.id)) {
+      continue;
+    }
+
+    let matchedServerIndex = -1;
+    let closestTimeDelta = Number.POSITIVE_INFINITY;
+
+    for (let serverIndex = 0; serverIndex < server.length; serverIndex++) {
+      if (claimedServerIndexes.has(serverIndex)) {
+        continue;
+      }
+
+      const serverMessage = server[serverIndex];
+      if (!isPersistedCopyOfOptimisticUserText(serverMessage, realtimeMessage)) {
+        continue;
+      }
+
+      const serverTime = new Date(serverMessage.timestamp).getTime();
+      const realtimeTime = new Date(realtimeMessage.timestamp).getTime();
+      const timeDelta = Math.abs(serverTime - realtimeTime);
+      if (timeDelta < closestTimeDelta) {
+        matchedServerIndex = serverIndex;
+        closestTimeDelta = timeDelta;
+      }
+    }
+
+    if (matchedServerIndex >= 0) {
+      claimedServerIndexes.add(matchedServerIndex);
+      continue;
+    }
+
+    extra.push(realtimeMessage);
+  }
+
+  return extra;
 }
 
 function getMessageTime(message: NormalizedMessage): number | null {
@@ -134,10 +214,37 @@ export function computeMerged(server: NormalizedMessage[], realtime: NormalizedM
   if (realtimeUnique.length === 0) return server;
   if (server.length === 0) return realtimeUnique;
   const serverIds = new Set(server.map(m => m.id));
-  const extra = realtimeUnique.filter(m =>
-    !serverIds.has(m.id) &&
-    !server.some(serverMessage => isPersistedCopyOfOptimisticUserText(serverMessage, m))
-  );
+  const extra = dropPersistedRealtimeCopies(server, realtimeUnique, serverIds);
   if (extra.length === 0) return server;
   return extra.reduce(insertByTimestamp, server);
+}
+
+/**
+ * Remove only realtime messages that are already represented in a freshly
+ * fetched server history. Messages that have not been persisted yet must stay
+ * visible; clearing the whole realtime buffer here races the provider's JSONL
+ * write at the end of a stream.
+ */
+export function reconcileRealtimeAfterServerRefresh(
+  server: NormalizedMessage[],
+  realtime: NormalizedMessage[],
+): NormalizedMessage[] {
+  if (realtime.length === 0 || server.length === 0) return realtime;
+
+  const serverIds = new Set(server.map(message => message.id));
+  const claimedServerIndexes = new Set<number>();
+
+  return realtime.filter((realtimeMessage) => {
+    if (serverIds.has(realtimeMessage.id)) return false;
+
+    for (let serverIndex = 0; serverIndex < server.length; serverIndex++) {
+      if (claimedServerIndexes.has(serverIndex)) continue;
+      if (!isPersistedRealtimeCopy(server[serverIndex], realtimeMessage)) continue;
+
+      claimedServerIndexes.add(serverIndex);
+      return false;
+    }
+
+    return true;
+  });
 }
