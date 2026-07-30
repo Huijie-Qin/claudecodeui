@@ -21,46 +21,6 @@ type NormalizedMessageInput =
     timestamp?: string | null;
   } & Record<string, unknown>;
 
-const DISPLAY_COMMAND_MARKER_PATTERN =
-  /^<!-- ccui-display-command:v1:([A-Za-z0-9_-]+) -->\r?\n/;
-const SLASH_COMMAND_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
-
-function normalizeSlashDisplayCommand(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const normalized = value.trim();
-  return normalized && SLASH_COMMAND_PATTERN.test(normalized)
-    ? normalized
-    : null;
-}
-
-function encodeDisplayCommand(displayCommand: string): string {
-  return Buffer.from(displayCommand, 'utf8').toString('base64url');
-}
-
-function decodeDisplayCommand(encoded: string): string | null {
-  try {
-    const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
-    if (encodeDisplayCommand(decoded) !== encoded) {
-      return null;
-    }
-    return normalizeSlashDisplayCommand(decoded);
-  } catch {
-    return null;
-  }
-}
-
-export function extractClaudeDisplayCommand(content: unknown): string | null {
-  if (typeof content !== 'string') {
-    return null;
-  }
-
-  const match = DISPLAY_COMMAND_MARKER_PATTERN.exec(content);
-  return match ? decodeDisplayCommand(match[1]) : null;
-}
-
 export function createApiSuccessResponse<TData>(
   data: TData,
 ): ApiSuccessShape<TData> {

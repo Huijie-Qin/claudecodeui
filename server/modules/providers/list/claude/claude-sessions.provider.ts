@@ -5,7 +5,6 @@ import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import {
   createNormalizedMessage,
-  extractClaudeDisplayCommand,
   generateMessageId,
   readObjectRecord,
 } from '@/shared/utils.js';
@@ -100,13 +99,6 @@ function resolveVisibleUserText(
 ): string | null {
   if (storedDisplayCommand) {
     return storedDisplayCommand;
-  }
-
-  // Compatibility for sessions created by the short-lived inline-marker
-  // implementation. New messages keep this metadata outside model content.
-  const displayCommand = extractClaudeDisplayCommand(text);
-  if (displayCommand) {
-    return displayCommand;
   }
 
   return isInternalContent(text) ? null : text;

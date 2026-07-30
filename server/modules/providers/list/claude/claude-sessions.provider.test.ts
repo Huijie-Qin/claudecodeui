@@ -10,11 +10,6 @@ import {
 } from './claude-sessions.provider.js';
 import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
 
-function attachLegacyInlineDisplayMarker(content: string, displayCommand: string): string {
-  const encoded = Buffer.from(displayCommand, 'utf8').toString('base64url');
-  return `<!-- ccui-display-command:v1:${encoded} -->\n${content}`;
-}
-
 test('resolveClaudeProjectStorageName prefers encoded workspace path for tenant workspaces', () => {
   assert.equal(
     resolveClaudeProjectStorageName({
@@ -223,25 +218,6 @@ test('ClaudeSessionsProvider restores one stored invocation from array text cont
   assert.equal(messages[0].content, '/report-skill 生成日报');
 });
 
-test('ClaudeSessionsProvider reads legacy inline display markers without requiring them for new messages', () => {
-  const provider = new ClaudeSessionsProvider();
-  const messages = provider.normalizeMessage({
-    type: 'user',
-    uuid: 'legacy-inline-marker',
-    timestamp: '2026-04-29T01:19:50.247Z',
-    message: {
-      role: 'user',
-      content: attachLegacyInlineDisplayMarker(
-        '# Display title\n\nExpanded instructions.',
-        '/report-skill legacy request',
-      ),
-    },
-  }, 'session-1');
-
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].content, '/report-skill legacy request');
-});
-
 test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user message UUID', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-display-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
@@ -296,23 +272,6 @@ test('ClaudeSessionsProvider does not infer skill names from unmarked markdown h
   const messages = provider.normalizeMessage({
     type: 'user',
     uuid: 'unmarked-expanded-skill',
-    timestamp: '2026-04-29T01:19:50.247Z',
-    message: {
-      role: 'user',
-      content,
-    },
-  }, 'session-1');
-
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].content, content);
-});
-
-test('ClaudeSessionsProvider leaves malformed display markers unchanged', () => {
-  const provider = new ClaudeSessionsProvider();
-  const content = '<!-- ccui-display-command:v1:not+base64 -->\n# Expanded instructions';
-  const messages = provider.normalizeMessage({
-    type: 'user',
-    uuid: 'malformed-display-marker',
     timestamp: '2026-04-29T01:19:50.247Z',
     message: {
       role: 'user',
