@@ -339,6 +339,7 @@ export default function McpToolSettingsDialog({
                   ) : (
                     fields.map((field) => {
                       const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
+                      const exampleValue = formatExampleValue(field);
                       return (
                         <div key={field.key} className="grid min-h-[76px] grid-cols-[160px_minmax(260px,1fr)_260px] border-t border-border">
                           <div className="border-r border-border px-3 py-3">
@@ -358,7 +359,15 @@ export default function McpToolSettingsDialog({
                                 type="checkbox"
                                 checked={state.custom}
                                 disabled={!canManage}
-                                onChange={(event) => updateField(field.key, { custom: event.target.checked })}
+                                onChange={(event) => {
+                                  const custom = event.target.checked;
+                                  updateField(field.key, {
+                                    custom,
+                                    ...(custom && state.rawValue.length === 0 && exampleValue
+                                      ? { rawValue: exampleValue }
+                                      : {}),
+                                  });
+                                }}
                               />
                               自定义
                             </label>
@@ -421,9 +430,28 @@ function ParameterInput({
   onChange: (value: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const compactEditorRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const expandedEditorRef = useRef<HTMLTextAreaElement>(null);
+  const wasDisabledRef = useRef(disabled);
   const commonClassName = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground';
   const isStructuredField = field.kind === 'array' || field.kind === 'object';
+  const exampleText = formatExampleValue(field);
+
+  useEffect(() => {
+    const wasDisabled = wasDisabledRef.current;
+    wasDisabledRef.current = disabled;
+    if (!wasDisabled || disabled) return undefined;
+
+    const focusFrame = requestAnimationFrame(() => {
+      compactEditorRef.current?.focus();
+      compactEditorRef.current?.select();
+    });
+    return () => cancelAnimationFrame(focusFrame);
+  }, [disabled]);
+
+  const setCompactEditorRef = (element: HTMLInputElement | HTMLTextAreaElement | null) => {
+    compactEditorRef.current = element;
+  };
 
   useEffect(() => {
     if (!isExpanded) return undefined;
@@ -444,18 +472,20 @@ function ParameterInput({
         <div className="relative">
           {isStructuredField ? (
             <textarea
+              ref={setCompactEditorRef}
               disabled={disabled}
               value={value}
-              placeholder={formatExampleValue(field)}
+              placeholder={exampleText}
               onChange={(event) => onChange(event.target.value)}
               className={`${commonClassName} min-h-[70px] resize-y pr-10 font-mono`}
             />
           ) : (
             <textarea
+              ref={setCompactEditorRef}
               disabled={disabled}
               rows={1}
               value={value}
-              placeholder={formatExampleValue(field)}
+              placeholder={exampleText}
               onChange={(event) => onChange(event.target.value)}
               className={`${commonClassName} min-h-[38px] resize-y pr-10`}
             />
@@ -466,7 +496,7 @@ function ParameterInput({
             onClick={() => setIsExpanded(true)}
             aria-label={`放大编辑 ${field.key}`}
             title="放大编辑"
-            className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="absolute right-4 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
@@ -490,14 +520,16 @@ function ParameterInput({
             </button>
           </div>
           <div className="min-h-0 flex-1 p-4">
-            <textarea
-              ref={expandedEditorRef}
-              disabled={disabled}
-              value={value}
-              placeholder={formatExampleValue(field)}
-              onChange={(event) => onChange(event.target.value)}
-              className={`${commonClassName} h-full resize-none font-mono leading-6`}
-            />
+            <div className="relative h-full">
+              <textarea
+                ref={expandedEditorRef}
+                disabled={disabled}
+                value={value}
+                placeholder={exampleText}
+                onChange={(event) => onChange(event.target.value)}
+                className={`${commonClassName} h-full resize-none font-mono leading-6`}
+              />
+            </div>
           </div>
           <div className="flex justify-end border-t border-border px-4 py-3">
             <button
@@ -543,13 +575,16 @@ function ParameterInput({
   }
 
   return (
-    <input
-      disabled={disabled}
-      type="text"
-      value={value}
-      placeholder={formatExampleValue(field)}
-      onChange={(event) => onChange(event.target.value)}
-      className={commonClassName}
-    />
+    <div className="relative">
+      <input
+        ref={setCompactEditorRef}
+        disabled={disabled}
+        type="text"
+        value={value}
+        placeholder={exampleText}
+        onChange={(event) => onChange(event.target.value)}
+        className={commonClassName}
+      />
+    </div>
   );
 }
