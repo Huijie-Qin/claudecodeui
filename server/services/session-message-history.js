@@ -5,6 +5,8 @@ function generateUserPromptMessageId() {
 }
 
 const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+const SCHEDULED_SKILL_MATCH_WINDOW_MS = 60_000;
+const SLASH_INVOCATION_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
 const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
   '<local-command-caveat>',
   'Base directory for this skill:',
@@ -72,6 +74,104 @@ function getMessageTimestampMs(message) {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isScheduledSlashInvocation(message) {
+  const content = getMessageContent(message).trim();
+  return (
+    message?.kind === 'text'
+    && message?.role === 'user'
+    && SLASH_INVOCATION_PATTERN.test(content)
+  );
+}
+
+function isScheduledUserText(message) {
+  const content = getMessageContent(message).trimStart();
+  return (
+    message?.kind === 'text'
+    && message?.role === 'user'
+    && !/^<task-notification\b/i.test(content)
+  );
+}
+
+function findScheduledInvocationMatch(jsonlMessages, invocation, matchedIndexes) {
+  const invocationTimestamp = getMessageTimestampMs(invocation);
+  if (invocationTimestamp === null) {
+    return -1;
+  }
+
+  const invocationContent = getMessageContent(invocation).trim();
+  const candidates = jsonlMessages
+    .map((message, index) => ({
+      index,
+      message,
+      timestamp: getMessageTimestampMs(message),
+    }))
+    .filter(({ index, message, timestamp }) => (
+      !matchedIndexes.has(index)
+      && timestamp !== null
+      && isScheduledUserText(message)
+      && Math.abs(timestamp - invocationTimestamp) <= SCHEDULED_SKILL_MATCH_WINDOW_MS
+    ))
+    .sort((left, right) => {
+      const leftExact = getMessageContent(left.message).trim() === invocationContent;
+      const rightExact = getMessageContent(right.message).trim() === invocationContent;
+      if (leftExact !== rightExact) {
+        return leftExact ? -1 : 1;
+      }
+      return Math.abs(left.timestamp - invocationTimestamp)
+        - Math.abs(right.timestamp - invocationTimestamp);
+    });
+
+  return candidates[0]?.index ?? -1;
+}
+
+function mergeLegacyScheduledSkillInvocations(jsonlMessages, dbMessages) {
+  const normalizedJsonlMessages = Array.isArray(jsonlMessages) ? jsonlMessages : [];
+  const invocations = Array.isArray(dbMessages)
+    ? dbMessages.filter(isScheduledSlashInvocation)
+    : [];
+  const matchedIndexes = new Set();
+  const replacedIndexes = new Set();
+  const fallbackInvocations = [];
+
+  for (const invocation of invocations) {
+    const matchIndex = findScheduledInvocationMatch(
+      normalizedJsonlMessages,
+      invocation,
+      matchedIndexes,
+    );
+    if (matchIndex === -1) {
+      fallbackInvocations.push(invocation);
+      continue;
+    }
+
+    matchedIndexes.add(matchIndex);
+    const matchedContent = getMessageContent(normalizedJsonlMessages[matchIndex]).trim();
+    if (matchedContent !== getMessageContent(invocation).trim()) {
+      replacedIndexes.add(matchIndex);
+      fallbackInvocations.push(invocation);
+    }
+  }
+
+  return [
+    ...normalizedJsonlMessages.filter((_, index) => !replacedIndexes.has(index)),
+    ...fallbackInvocations,
+  ]
+    .map((message, index) => ({
+      message,
+      index,
+      timestamp: getMessageTimestampMs(message),
+    }))
+    .sort((left, right) => {
+      if (left.timestamp === null && right.timestamp === null) {
+        return left.index - right.index;
+      }
+      if (left.timestamp === null) return 1;
+      if (right.timestamp === null) return -1;
+      return left.timestamp - right.timestamp || left.index - right.index;
+    })
+    .map(({ message }) => message);
 }
 
 function paginateHistory(messages, limit, offset) {
@@ -195,14 +295,35 @@ export function createSessionMessageHistoryService({
 
         if (runtime?.runtime_home_path && providerSessions) {
           const scheduledSession = isScheduledSession(ownedSession);
+          const legacyScheduledSkillInvocations = scheduledSession
+            ? dbHistory.messages.filter(isScheduledSlashInvocation)
+            : [];
+          const shouldMergeScheduledSkills = legacyScheduledSkillInvocations.length > 0;
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
             projectName: ownedSession.workspace_slug || '',
             projectPath: ownedSession.workspace_path || '',
             runtimeHomePath: runtime.runtime_home_path,
-            limit: scheduledSession || dbHistory.total === 0 ? limit : null,
-            offset: scheduledSession || dbHistory.total === 0 ? offset : 0,
+            limit: (
+              (scheduledSession && !shouldMergeScheduledSkills)
+              || dbHistory.total === 0
+            ) ? limit : null,
+            offset: (
+              (scheduledSession && !shouldMergeScheduledSkills)
+              || dbHistory.total === 0
+            ) ? offset : 0,
           });
           if (jsonlHistory.total > 0) {
+            if (shouldMergeScheduledSkills) {
+              return paginateHistory(
+                mergeLegacyScheduledSkillInvocations(
+                  jsonlHistory.messages,
+                  legacyScheduledSkillInvocations,
+                ),
+                limit,
+                offset,
+              );
+            }
+
             if (scheduledSession || dbHistory.total === 0) {
               return jsonlHistory;
             }

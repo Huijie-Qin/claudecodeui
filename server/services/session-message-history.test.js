@@ -363,6 +363,137 @@ test('scheduled Claude history uses runtime JSONL without database message mergi
   assert.deepEqual(result.messages.map((message) => message.id), ['jsonl-assistant']);
 });
 
+test('scheduled Claude history restores legacy database skill invocations without duplicates or expanded bodies', async () => {
+  const databaseInvocation = {
+    id: 'db-skill',
+    kind: 'text',
+    role: 'user',
+    content: '/report-skill weekly status',
+    timestamp: '2026-07-27T01:00:00.000Z',
+    provider: 'claude',
+    sessionId: 's1',
+  };
+  const assistantMessage = {
+    id: 'jsonl-assistant',
+    kind: 'text',
+    role: 'assistant',
+    content: 'Scheduled report complete.',
+    timestamp: '2026-07-27T01:00:01.000Z',
+    provider: 'claude',
+    sessionId: 's1',
+  };
+  let historyOptions = null;
+  let databaseMessages = [databaseInvocation];
+  let jsonlMessages = [assistantMessage];
+  let jsonlTotal = 2;
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: databaseMessages,
+          total: databaseMessages.length,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async (_provider, _sessionId, options) => {
+        historyOptions = options;
+        return {
+          messages: jsonlMessages,
+          total: jsonlTotal,
+          hasMore: false,
+          offset: options.offset,
+          limit: options.limit,
+        };
+      },
+    },
+  });
+  const fetchHistory = () => service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+      metadata_json: JSON.stringify({ scheduledTaskId: 42 }),
+    },
+    limit: 50,
+    offset: 0,
+  });
+
+  const missingInvocation = await fetchHistory();
+  assert.equal(historyOptions.limit, null);
+  assert.equal(historyOptions.offset, 0);
+  assert.deepEqual(
+    missingInvocation.messages.map((message) => message.id),
+    ['db-skill', 'jsonl-assistant'],
+  );
+
+  jsonlMessages = [
+    {
+      ...databaseInvocation,
+      id: 'jsonl-skill',
+      timestamp: '2026-07-27T01:00:00.100Z',
+    },
+    assistantMessage,
+  ];
+  jsonlTotal = 2;
+  const restoredInvocation = await fetchHistory();
+  assert.deepEqual(
+    restoredInvocation.messages.map((message) => message.id),
+    ['jsonl-skill', 'jsonl-assistant'],
+  );
+
+  jsonlMessages = [
+    {
+      ...databaseInvocation,
+      id: 'jsonl-expanded-skill',
+      content: '# Report Skill\n\nExpanded internal instructions.',
+      timestamp: '2026-07-27T01:00:00.100Z',
+    },
+    assistantMessage,
+  ];
+  const expandedInvocation = await fetchHistory();
+  assert.deepEqual(
+    expandedInvocation.messages.map((message) => message.id),
+    ['db-skill', 'jsonl-assistant'],
+  );
+  assert.equal(
+    expandedInvocation.messages.some((message) => message.content.includes('Expanded internal')),
+    false,
+  );
+
+  databaseMessages = [
+    databaseInvocation,
+    {
+      ...databaseInvocation,
+      id: 'db-skill-repeat',
+      timestamp: '2026-07-27T01:00:10.000Z',
+    },
+  ];
+  jsonlMessages = [
+    {
+      ...databaseInvocation,
+      id: 'jsonl-skill',
+      timestamp: '2026-07-27T01:00:00.100Z',
+    },
+    assistantMessage,
+  ];
+  const repeatedInvocation = await fetchHistory();
+  assert.deepEqual(
+    repeatedInvocation.messages.map((message) => message.id),
+    ['jsonl-skill', 'jsonl-assistant', 'db-skill-repeat'],
+  );
+});
+
 test('scheduled Claude history returns JSONL messages unchanged', async () => {
   const databasePrompt = {
     id: 'db-user',
