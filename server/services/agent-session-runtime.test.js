@@ -785,6 +785,7 @@ test('docker mode prepares new workspace ownership before creating its first con
       ownershipChanges.push({ targetPath, uid, gid, symlink: true });
     },
   };
+  let preparedRuntime;
   const manager = createAgentSessionRuntimeManager({
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
@@ -826,7 +827,7 @@ test('docker mode prepares new workspace ownership before creating its first con
   const originalConsoleLog = console.log;
   console.log = (...args) => logs.push(args.join(' '));
   try {
-    await manager.prepareClaudeRuntime({
+    preparedRuntime = await manager.prepareClaudeRuntime({
       tenantId: 3,
       userId: 4,
       workspaceId: 5,
@@ -837,6 +838,8 @@ test('docker mode prepares new workspace ownership before creating its first con
   }
 
   assert.deepEqual(events, ['run:1000:1000', 'verify']);
+  assert.equal(preparedRuntime.runtimeUid, 1000);
+  assert.equal(preparedRuntime.runtimeGid, 1000);
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === workspaceRealPath));
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === path.join(workspaceRealPath, 'root-owned.txt')));
   assert.ok(ownershipChanges.some((entry) => entry.targetPath === runtimeRow.runtime_home_path));
