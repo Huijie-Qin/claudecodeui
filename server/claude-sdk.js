@@ -830,6 +830,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
         runtimeHomePath: runtimeOptions.runtimeHomePath,
         projectPath: runtimeOptions.projectPath || runtimeOptions.cwd,
         sessionId: providerSessionId,
+        uid: runtimeOptions.runtimeUid,
+        gid: runtimeOptions.runtimeGid,
         ...initialDisplayCommandRecord,
       });
       initialDisplayCommandPersisted = true;
@@ -879,6 +881,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
       runtimeId: runtimeContext.runtimeId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
+      runtimeUid: runtimeContext.runtimeUid,
+      runtimeGid: runtimeContext.runtimeGid,
     };
     processDiagnostics.updateContext({
       provider: 'claude',
@@ -1736,6 +1740,8 @@ function pushClaudeSupplement({
     messageId: claudeMessageId,
     displayCommand: normalizedDisplayContent,
     modelContent: normalizedContent,
+    uid: session.runtimeOptions?.runtimeUid,
+    gid: session.runtimeOptions?.runtimeGid,
   }).catch((error) => {
     console.warn(
       `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,

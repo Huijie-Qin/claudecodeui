@@ -23,6 +23,16 @@ async function createSessionTranscript({ runtimeHomePath, projectPath, sessionId
   return displayCommandPath;
 }
 
+function currentRuntimeOwnership() {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') {
+    return {};
+  }
+  return {
+    uid: process.getuid(),
+    gid: process.getgid(),
+  };
+}
+
 test('Claude display command store records only expanded slash invocations', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
@@ -115,4 +125,81 @@ test('Claude display command store keeps the latest command inside the session d
     ),
   );
   await fs.access(displayCommandPath);
+});
+
+test('Claude display command store hardens the session directory and metadata file', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  const displayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-permissions',
+  });
+  const sessionDirectory = path.dirname(displayCommandPath);
+
+  await fs.mkdir(sessionDirectory, { recursive: true, mode: 0o777 });
+  await fs.chmod(sessionDirectory, 0o777);
+  await fs.writeFile(displayCommandPath, '', { encoding: 'utf8', mode: 0o666 });
+  await fs.chmod(displayCommandPath, 0o666);
+
+  assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-permissions',
+    messageId: 'message-permissions',
+    displayCommand: '/report-skill secure',
+    modelContent: '# expanded',
+    ...currentRuntimeOwnership(),
+  }), true);
+
+  const storedContent = await fs.readFile(displayCommandPath, 'utf8');
+  assert.match(storedContent, /"messageId":"message-permissions"/);
+
+  if (process.platform !== 'win32') {
+    const claudeDirectory = path.join(runtimeHomePath, '.claude');
+    const projectsDirectory = path.join(claudeDirectory, 'projects');
+    const projectDirectory = path.dirname(sessionDirectory);
+    const directoryStats = await fs.stat(sessionDirectory);
+    const fileStats = await fs.stat(displayCommandPath);
+    assert.equal((await fs.stat(claudeDirectory)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(projectsDirectory)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(projectDirectory)).mode & 0o777, 0o700);
+    assert.equal(directoryStats.mode & 0o777, 0o700);
+    assert.equal(fileStats.mode & 0o777, 0o600);
+    assert.equal(directoryStats.uid, process.getuid());
+    assert.equal(directoryStats.gid, process.getgid());
+    assert.equal(fileStats.uid, process.getuid());
+    assert.equal(fileStats.gid, process.getgid());
+  }
+});
+
+test('Claude display command store rejects a symbolic-link metadata file', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  const displayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-symlink',
+  });
+  const sessionDirectory = path.dirname(displayCommandPath);
+  const symlinkTarget = path.join(runtimeHomePath, 'must-not-change.jsonl');
+
+  await fs.mkdir(sessionDirectory, { recursive: true });
+  await fs.writeFile(symlinkTarget, 'unchanged\n', 'utf8');
+  await fs.symlink(symlinkTarget, displayCommandPath, 'file');
+
+  await assert.rejects(appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-symlink',
+    messageId: 'message-symlink',
+    displayCommand: '/report-skill blocked',
+    modelContent: '# expanded',
+    ...currentRuntimeOwnership(),
+  }), /must not be a symbolic link/);
+  assert.equal(await fs.readFile(symlinkTarget, 'utf8'), 'unchanged\n');
 });

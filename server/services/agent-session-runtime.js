@@ -1509,6 +1509,8 @@ export function createAgentSessionRuntimeManager({
       mode: 'docker',
       runtimeId: runtime.runtime_id,
       runtimeHomePath: runtime.runtime_home_path,
+      runtimeUid: containerUser.uid,
+      runtimeGid: containerUser.gid,
       containerName: runtime.container_name,
       cwd: workspaceHostPath,
       containerCwd: '/workspace',
@@ -1526,7 +1528,8 @@ export function createAgentSessionRuntimeManager({
   }
 
   async function activateLocalRuntimeContext({ runtimeContext, workspaceHostPath, userEnv, logRequestId = null }) {
-    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, resolveContainerUser(env));
+    const runtimeUser = resolveContainerUser(env);
+    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, runtimeUser);
     const updatedRuntime = multitenancy.runtimes.updateStatus({
       runtimeId: runtimeContext.runtime.runtime_id,
       status: 'active',
@@ -1546,6 +1549,8 @@ export function createAgentSessionRuntimeManager({
       mode: 'local',
       runtimeId: runtime.runtime_id,
       runtimeHomePath: runtime.runtime_home_path,
+      runtimeUid: runtimeUser.uid,
+      runtimeGid: runtimeUser.gid,
       cwd: workspaceHostPath,
       projectPath: workspaceHostPath,
       hostWorkspacePath: workspaceHostPath,
