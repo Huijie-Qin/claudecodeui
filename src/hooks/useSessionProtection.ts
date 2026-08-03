@@ -62,6 +62,22 @@ export function replaceTemporaryProcessingSessions(
   return next;
 }
 
+export function reconcileProcessingSessions(
+  sessions: ProcessingSessions,
+  activeSessionIds: Iterable<string>,
+  startedAt = Date.now(),
+) {
+  const next = new Map<string, number>();
+
+  for (const sessionId of activeSessionIds) {
+    if (sessionId) {
+      next.set(sessionId, sessions.get(sessionId) ?? startedAt);
+    }
+  }
+
+  return next;
+}
+
 export function useSessionProtection() {
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
   const [processingSessions, setProcessingSessions] = useState<ProcessingSessions>(new Map());
@@ -117,6 +133,10 @@ export function useSessionProtection() {
     setProcessingSessions((prev) => replaceTemporaryProcessingSessions(prev, realSessionId));
   }, []);
 
+  const syncProcessingSessions = useCallback((activeSessionIds: Iterable<string>) => {
+    setProcessingSessions((prev) => reconcileProcessingSessions(prev, activeSessionIds));
+  }, []);
+
   return {
     activeSessions,
     processingSessions,
@@ -124,6 +144,7 @@ export function useSessionProtection() {
     markSessionAsInactive,
     markSessionAsProcessing,
     markSessionAsNotProcessing,
+    syncProcessingSessions,
     replaceTemporarySession,
   };
 }

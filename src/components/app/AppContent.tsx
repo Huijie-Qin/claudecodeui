@@ -42,6 +42,7 @@ export default function AppContent() {
     markSessionAsInactive,
     markSessionAsProcessing,
     markSessionAsNotProcessing,
+    syncProcessingSessions,
     replaceTemporarySession,
   } = useSessionProtection();
 
@@ -205,6 +206,32 @@ export default function AppContent() {
     }
   }, [isConnected, selectedSession?.id, sendMessage]);
 
+  useEffect(() => {
+    const unsubscribe = subscribeMessage((message) => {
+      if (message?.type !== 'active-sessions') return;
+
+      const providerSessions = message.sessions || {};
+      const sessionIds = ['claude', 'cursor', 'codex', 'gemini'].flatMap((provider) => {
+        const sessions = Array.isArray(providerSessions[provider]) ? providerSessions[provider] : [];
+        return sessions
+          .map((session: unknown) => typeof session === 'string'
+            ? session
+            : typeof session === 'object' && session !== null && 'id' in session
+              ? String((session as { id: unknown }).id || '')
+              : '')
+          .filter(Boolean);
+      });
+
+      syncProcessingSessions(sessionIds);
+    });
+
+    if (isConnected) {
+      sendMessage({ type: 'get-active-sessions' });
+    }
+
+    return unsubscribe;
+  }, [isConnected, sendMessage, subscribeMessage, syncProcessingSessions]);
+
   // Adjust the app container to stay above the virtual keyboard on iOS Safari.
   // On Chrome for Android the layout viewport already shrinks when the keyboard opens,
   // so inset-0 adjusts automatically. On iOS the layout viewport stays full-height and
@@ -231,6 +258,7 @@ export default function AppContent() {
         <div className="h-full flex-shrink-0 border-r border-border/50">
           <Sidebar
             {...sidebarSharedProps}
+            processingSessions={processingSessions}
             onScheduledTaskOpen={handleScheduledTaskOpen}
             onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
             showAdminEntry={isSystemAdmin}
@@ -266,6 +294,7 @@ export default function AppContent() {
           >
             <Sidebar
               {...sidebarSharedProps}
+              processingSessions={processingSessions}
               onScheduledTaskOpen={handleScheduledTaskOpen}
               onScheduledTasksListOpen={handleWorkspaceScheduledTasksOpen}
               showAdminEntry={isSystemAdmin}

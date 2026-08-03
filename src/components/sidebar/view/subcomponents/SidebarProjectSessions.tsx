@@ -12,6 +12,7 @@ type SidebarProjectSessionsProps = {
   project: Project;
   isExpanded: boolean;
   sessions: SessionWithProvider[];
+  processingSessions: ReadonlyMap<string, number>;
   selectedSession: ProjectSession | null;
   initialSessionsLoaded: boolean;
   isLoadingSessions: boolean;
@@ -59,6 +60,7 @@ export default function SidebarProjectSessions({
   project,
   isExpanded,
   sessions,
+  processingSessions,
   selectedSession,
   initialSessionsLoaded,
   isLoadingSessions,
@@ -152,6 +154,7 @@ export default function SidebarProjectSessions({
       key={`${session.__provider}:${session.id}`}
       project={project}
       session={session}
+      isProcessing={processingSessions.has(session.id)}
       selectedSession={selectedSession}
       currentTime={currentTime}
       editingSession={editingSession}

@@ -32,6 +32,7 @@ type TaskMasterSidebarContext = {
 
 function Sidebar({
   projects,
+  processingSessions,
   selectedProject,
   selectedSession,
   onProjectSelect,
@@ -226,6 +227,7 @@ function Sidebar({
     filteredProjects,
     selectedProject,
     selectedSession,
+    processingSessions,
     isLoading,
     loadingProgress,
     expandedProjects,

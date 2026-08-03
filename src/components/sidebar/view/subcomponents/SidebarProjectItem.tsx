@@ -18,6 +18,7 @@ type SidebarProjectItemProps = {
   editingProject: string | null;
   editingName: string;
   sessions: SessionWithProvider[];
+  processingSessions: ReadonlyMap<string, number>;
   initialSessionsLoaded: boolean;
   isLoadingSessions: boolean;
   currentTime: Date;
@@ -72,6 +73,7 @@ export default function SidebarProjectItem({
   editingProject,
   editingName,
   sessions,
+  processingSessions,
   initialSessionsLoaded,
   isLoadingSessions,
   currentTime,
@@ -441,6 +443,7 @@ export default function SidebarProjectItem({
         project={project}
         isExpanded={isExpanded}
         sessions={sessions}
+        processingSessions={processingSessions}
         selectedSession={selectedSession}
         initialSessionsLoaded={initialSessionsLoaded}
         isLoadingSessions={isLoadingSessions}
