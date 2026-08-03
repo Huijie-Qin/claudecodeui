@@ -31,7 +31,7 @@ export interface ToolDisplayConfig {
   result?: {
     hidden?: boolean;
     hideOnSuccess?: boolean;
-    type?: 'one-line' | 'collapsible' | 'plan' | 'special';
+    type?: 'one-line' | 'collapsible' | 'plan' | 'special' | 'bash-output';
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
     // Special result handlers
@@ -355,7 +355,6 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       type: 'one-line',
       icon: 'terminal',
       getValue: (input) => input.command,
-      getSecondary: (input) => input.description,
       action: 'copy',
       style: 'terminal',
       wrapText: true,
@@ -368,8 +367,7 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
       }
     },
     result: {
-      hideOnSuccess: true,
-      type: 'special'
+      type: 'bash-output'
     }
   },
 

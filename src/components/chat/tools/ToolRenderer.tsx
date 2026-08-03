@@ -5,7 +5,7 @@ import type { SubagentChildTool, TaskNotificationDetails } from '../types/types'
 import { isClaudePermissionErrorContent } from '../utils/chatPermissions';
 
 import { getToolConfig } from './configs/toolConfigs';
-import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, ToolCompletionTimeBadge } from './components';
+import { OneLineDisplay, CollapsibleDisplay, ToolDiffViewer, MarkdownContent, FileListContent, TodoListContent, TaskListContent, TextContent, QuestionAnswerContent, SubagentContainer, ToolCompletionTimeBadge, BashOutputContent } from './components';
 import { PlanDisplay } from './components/PlanDisplay';
 import { ToolStatusBadge } from './components/ToolStatusBadge';
 import type { ToolStatus } from './components/ToolStatusBadge';
@@ -131,6 +131,11 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   }
 
   if (!displayConfig) return null;
+
+  if (displayConfig.type === 'bash-output') {
+    if (mode !== 'result') return null;
+    return <BashOutputContent toolResult={toolResult} />;
+  }
 
   if (displayConfig.type === 'one-line') {
     const value = displayConfig.getValue?.(parsedData) || '';

@@ -290,7 +290,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
           <div className="w-full">
 
             {message.isToolUse ? (
-              <>
+              <div className={message.toolName === 'Bash'
+                ? 'my-2 rounded-r-md border-l-2 border-green-500/50 bg-muted/20 py-1.5 pl-2.5 pr-1 dark:border-green-400/40 dark:bg-muted/10'
+                : undefined}
+              >
                 <div className="flex flex-col">
                   <div className="flex flex-col">
                     <Markdown className="prose prose-sm max-w-none dark:prose-invert">
@@ -408,7 +411,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     </div>
                   )
                 )}
-              </>
+              </div>
             ) : message.isInteractivePrompt ? (
               // Special handling for interactive prompts
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
