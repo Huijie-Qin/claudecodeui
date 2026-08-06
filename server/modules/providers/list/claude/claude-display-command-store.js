@@ -303,3 +303,25 @@ export async function readClaudeDisplayCommands({
 
   return displayCommands;
 }
+
+export async function deleteClaudeDisplayCommands({
+  runtimeHomePath,
+  sessionId,
+}) {
+  const filePaths = await findClaudeDisplayCommandPaths(runtimeHomePath, sessionId);
+  let deleted = false;
+
+  for (const filePath of filePaths) {
+    await waitForPendingWrite(filePath);
+    try {
+      await fs.unlink(filePath);
+      deleted = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  return deleted;
+}

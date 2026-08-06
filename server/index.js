@@ -71,6 +71,7 @@ import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/
 import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
+import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
 import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
 import {noApiCache} from './middleware/no-api-cache.js';
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
@@ -1009,6 +1010,10 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                     workspaceHostPath: workspace.path,
                 });
                 if (runtime?.runtime_home_path) {
+                    await deleteClaudeDisplayCommands({
+                        runtimeHomePath: runtime.runtime_home_path,
+                        sessionId,
+                    });
                     await deleteSessionFromProjectsRoot(
                         path.join(runtime.runtime_home_path, '.claude', 'projects'),
                         sessionId,

@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   appendClaudeDisplayCommand,
+  deleteClaudeDisplayCommands,
   readClaudeDisplayCommands,
   resolveClaudeDisplayCommandPath,
 } from './claude-display-command-store.js';
@@ -125,6 +126,50 @@ test('Claude display command store keeps the latest command inside the session d
     ),
   );
   await fs.access(displayCommandPath);
+});
+
+test('Claude display command store deletes metadata for one session only', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  const firstDisplayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-delete',
+  });
+  const secondDisplayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-keep',
+  });
+
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-delete',
+    messageId: 'message-delete',
+    displayCommand: '/report-skill delete',
+    modelContent: '# expanded',
+  });
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-keep',
+    messageId: 'message-keep',
+    displayCommand: '/report-skill keep',
+    modelContent: '# expanded',
+  });
+
+  assert.equal(await deleteClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-delete',
+  }), true);
+  await assert.rejects(fs.access(firstDisplayCommandPath), { code: 'ENOENT' });
+  await fs.access(secondDisplayCommandPath);
+  assert.equal(await deleteClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-delete',
+  }), false);
 });
 
 test('Claude display command store hardens the session directory and metadata file', async (t) => {
