@@ -43,6 +43,11 @@ export const persistStarredProjects = (starredProjects: Set<string>) => {
 
 export const isSessionFavorited = (session: SessionWithProvider): boolean => session.isFavorited === true;
 
+export const getWorkspaceDeleteRequest = (sessionCount: number) => ({
+  force: sessionCount > 0,
+  deleteData: true,
+});
+
 export const getSessionDate = (session: SessionWithProvider): Date => {
   if (session.__provider === 'cursor') {
     return parseTimestamp(session.createdAt || 0);

@@ -2,7 +2,7 @@
   "projects": {
     "title": "Projeler",
     "newProject": "Yeni Proje",
-    "deleteProject": "Projeyi Kaldır",
+    "deleteProject": "Workspace'i Sil",
     "renameProject": "Projeyi Yeniden Adlandır",
     "noProjects": "Proje bulunamadı",
     "loadingProjects": "Projeler yükleniyor...",
@@ -40,7 +40,7 @@
     "createProject": "Yeni proje oluştur",
     "refresh": "Projeleri ve oturumları yenile (Ctrl+R)",
     "renameProject": "Projeyi yeniden adlandır (F2)",
-    "deleteProject": "Projeyi kenar çubuğundan kaldır (Delete)",
+    "deleteProject": "Workspace'i sil (Delete)",
     "addToFavorites": "Favorilere ekle",
     "removeFromFavorites": "Favorilerden çıkar",
     "editSessionName": "Oturum adını elle düzenle",
@@ -96,14 +96,14 @@
     "deleteSuccess": "Silme başarılı",
     "errorOccurred": "Bir hata oluştu",
     "deleteSessionConfirm": "Bu oturumu silmek istediğinden emin misin? Bu işlem geri alınamaz.",
-    "deleteProjectConfirm": "Bu proje kenar çubuğundan kaldırılsın mı? Proje dosyaların, bellek verilerin ve oturum verilerin silinmeyecek.",
+    "deleteProjectConfirm": "Bu workspace ve ilişkili veriler kalıcı olarak silinsin mi? Bu işlem geri alınamaz.",
     "enterProjectPath": "Lütfen bir proje yolu gir",
     "deleteSessionFailed": "Oturum silinemedi. Lütfen tekrar dene.",
     "deleteSessionError": "Oturum silinirken hata oluştu. Lütfen tekrar dene.",
     "renameSessionFailed": "Oturum yeniden adlandırılamadı. Lütfen tekrar dene.",
     "renameSessionError": "Oturum yeniden adlandırılırken hata oluştu. Lütfen tekrar dene.",
-    "deleteProjectFailed": "Proje kaldırılamadı. Lütfen tekrar dene.",
-    "deleteProjectError": "Proje kaldırılırken hata oluştu. Lütfen tekrar dene.",
+    "deleteProjectFailed": "Workspace silinemedi. Lütfen tekrar dene.",
+    "deleteProjectError": "Workspace silinirken hata oluştu. Lütfen tekrar dene.",
     "createProjectFailed": "Proje oluşturulamadı. Lütfen tekrar dene.",
     "createProjectError": "Proje oluşturulurken hata oluştu. Lütfen tekrar dene."
   },
@@ -123,14 +123,13 @@
     "projectsScanned_other": "{{count}} proje tarandı"
   },
   "deleteConfirmation": {
-    "deleteProject": "Projeyi Kaldır",
+    "deleteProject": "Workspace'i Sil",
     "deleteSession": "Oturumu Sil",
-    "confirmDelete": "Ne yapmak istersin:",
-    "sessionCount_one": "Bu proje {{count}} konuşma içeriyor.",
-    "sessionCount_other": "Bu proje {{count}} konuşma içeriyor.",
-    "removeFromSidebar": "Yalnızca kenar çubuğundan kaldır",
-    "deleteAllData": "Tüm veriyi kalıcı olarak sil",
-    "allConversationsDeleted": "Proje kenar çubuğundan kaldırılacak. Dosyaların, bellek verilerin ve oturum verilerin korunacak.",
-    "cannotUndo": "Projeyi sonra tekrar ekleyebilirsin."
+    "confirmDelete": "{{name}} workspace'i kalıcı olarak silinsin mi?",
+    "sessionCount_one": "Bu workspace {{count}} konuşma içeriyor.",
+    "sessionCount_other": "Bu workspace {{count}} konuşma içeriyor.",
+    "deleteWorkspace": "Workspace'i sil",
+    "workspaceDeletionWarning": "Workspace ve ilişkili çalışma zamanı, bellek ve oturum verileri kalıcı olarak silinecek.",
+    "cannotUndo": "Bu işlem geri alınamaz."
   }
 }

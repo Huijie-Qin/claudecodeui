@@ -2,7 +2,7 @@
   "projects": {
     "title": "Projekte",
     "newProject": "Neues Projekt",
-    "deleteProject": "Projekt entfernen",
+    "deleteProject": "Workspace löschen",
     "renameProject": "Projekt umbenennen",
     "noProjects": "Keine Projekte gefunden",
     "loadingProjects": "Projekte werden geladen...",
@@ -40,7 +40,7 @@
     "createProject": "Neues Projekt erstellen",
     "refresh": "Projekte und Sitzungen aktualisieren (Strg+R)",
     "renameProject": "Projekt umbenennen (F2)",
-    "deleteProject": "Projekt aus Seitenleiste entfernen (Entf)",
+    "deleteProject": "Workspace löschen (Entf)",
     "addToFavorites": "Zu Favoriten hinzufügen",
     "removeFromFavorites": "Aus Favoriten entfernen",
     "editSessionName": "Sitzungsname manuell bearbeiten",
@@ -96,14 +96,14 @@
     "deleteSuccess": "Erfolgreich gelöscht",
     "errorOccurred": "Ein Fehler ist aufgetreten",
     "deleteSessionConfirm": "Möchtest du diese Sitzung wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
-    "deleteProjectConfirm": "Projekt aus der Seitenleiste entfernen? Deine Projektdateien, Erinnerungen und Sitzungsdaten werden nicht gelöscht.",
+    "deleteProjectConfirm": "Diesen Workspace und die zugehörigen Daten dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
     "enterProjectPath": "Bitte gib einen Projektpfad ein",
     "deleteSessionFailed": "Sitzung konnte nicht gelöscht werden. Bitte erneut versuchen.",
     "deleteSessionError": "Fehler beim Löschen der Sitzung. Bitte erneut versuchen.",
     "renameSessionFailed": "Sitzung konnte nicht umbenannt werden. Bitte erneut versuchen.",
     "renameSessionError": "Fehler beim Umbenennen der Sitzung. Bitte erneut versuchen.",
-    "deleteProjectFailed": "Projekt konnte nicht entfernt werden. Bitte erneut versuchen.",
-    "deleteProjectError": "Fehler beim Entfernen des Projekts. Bitte erneut versuchen.",
+    "deleteProjectFailed": "Workspace konnte nicht gelöscht werden. Bitte erneut versuchen.",
+    "deleteProjectError": "Fehler beim Löschen des Workspace. Bitte erneut versuchen.",
     "createProjectFailed": "Projekt konnte nicht erstellt werden. Bitte erneut versuchen.",
     "createProjectError": "Fehler beim Erstellen des Projekts. Bitte erneut versuchen."
   },
@@ -123,14 +123,13 @@
     "projectsScanned_other": "{{count}} Projekte durchsucht"
   },
   "deleteConfirmation": {
-    "deleteProject": "Projekt entfernen",
+    "deleteProject": "Workspace löschen",
     "deleteSession": "Sitzung löschen",
-    "confirmDelete": "Was möchtest du mit",
-    "sessionCount_one": "Dieses Projekt enthält {{count}} Unterhaltung.",
-    "sessionCount_other": "Dieses Projekt enthält {{count}} Unterhaltungen.",
-    "removeFromSidebar": "Nur aus der Seitenleiste entfernen",
-    "deleteAllData": "Alle Daten dauerhaft löschen",
-    "allConversationsDeleted": "Das Projekt wird aus der Seitenleiste entfernt. Deine Dateien, Erinnerungen und Sitzungsdaten bleiben erhalten.",
-    "cannotUndo": "Du kannst das Projekt später erneut hinzufügen."
+    "confirmDelete": "Workspace „{{name}}“ dauerhaft löschen?",
+    "sessionCount_one": "Dieser Workspace enthält {{count}} Unterhaltung.",
+    "sessionCount_other": "Dieser Workspace enthält {{count}} Unterhaltungen.",
+    "deleteWorkspace": "Workspace löschen",
+    "workspaceDeletionWarning": "Der Workspace und die zugehörigen Laufzeit-, Speicher- und Sitzungsdaten werden dauerhaft gelöscht.",
+    "cannotUndo": "Diese Aktion kann nicht rückgängig gemacht werden."
   }
 }

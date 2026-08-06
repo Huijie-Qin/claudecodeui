@@ -2,7 +2,7 @@
   "projects": {
     "title": "项目",
     "newProject": "新建项目",
-    "deleteProject": "移除项目",
+    "deleteProject": "删除 workspace",
     "renameProject": "重命名项目",
     "noProjects": "未找到项目",
     "loadingProjects": "加载项目中...",
@@ -41,7 +41,7 @@
     "createProject": "创建新项目",
     "refresh": "刷新项目和会话 (Ctrl+R)",
     "renameProject": "重命名项目 (F2)",
-    "deleteProject": "从侧边栏移除项目 (Delete)",
+    "deleteProject": "删除 workspace (Delete)",
     "addToFavorites": "添加到收藏",
     "removeFromFavorites": "从收藏移除",
     "editSessionName": "手动编辑会话名称",
@@ -105,14 +105,14 @@
     "deleteSuccess": "删除成功",
     "errorOccurred": "发生错误",
     "deleteSessionConfirm": "确定要删除此会话吗？此操作无法撤销。",
-    "deleteProjectConfirm": "从侧边栏移除此项目？您的项目文件、记忆和会话数据不会被删除。",
+    "deleteProjectConfirm": "永久删除此 workspace 及其关联数据？此操作无法撤销。",
     "enterProjectPath": "请输入项目路径",
     "deleteSessionFailed": "删除会话失败，请重试。",
     "deleteSessionError": "删除会话时出错，请重试。",
     "renameSessionFailed": "重命名会话失败，请重试。",
     "renameSessionError": "重命名会话时出错，请重试。",
-    "deleteProjectFailed": "移除项目失败，请重试。",
-    "deleteProjectError": "移除项目时出错，请重试。",
+    "deleteProjectFailed": "删除 workspace 失败，请重试。",
+    "deleteProjectError": "删除 workspace 时出错，请重试。",
     "createProjectFailed": "创建项目失败，请重试。",
     "createProjectError": "创建项目时出错，请重试。"
   },
@@ -132,14 +132,13 @@
     "projectsScanned_other": "{{count}} 个项目已扫描"
   },
   "deleteConfirmation": {
-    "deleteProject": "移除项目",
+    "deleteProject": "删除 workspace",
     "deleteSession": "删除会话",
-    "confirmDelete": "您想如何处理",
-    "sessionCount_one": "此项目包含 {{count}} 个对话。",
-    "sessionCount_other": "此项目包含 {{count}} 个对话。",
-    "removeFromSidebar": "仅从侧边栏移除",
-    "deleteAllData": "永久删除所有数据",
-    "allConversationsDeleted": "项目将从侧边栏中移除。您的文件、记忆和会话数据将会保留。",
-    "cannotUndo": "您可以稍后重新添加此项目。"
+    "confirmDelete": "确定要永久删除 workspace“{{name}}”吗？",
+    "sessionCount_one": "该 workspace 包含 {{count}} 个对话。",
+    "sessionCount_other": "该 workspace 包含 {{count}} 个对话。",
+    "deleteWorkspace": "删除 workspace",
+    "workspaceDeletionWarning": "该 workspace 及其关联的运行环境、记忆和会话数据将被永久删除。",
+    "cannotUndo": "此操作无法撤销。"
   }
 }

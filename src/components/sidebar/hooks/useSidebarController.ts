@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import type { TFunction } from 'i18next';
+
 import { api } from '../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type {
@@ -14,6 +15,7 @@ import type {
 import {
   filterProjects,
   getAllSessions,
+  getWorkspaceDeleteRequest,
   isSessionFavorited,
   loadStarredProjects,
   persistStarredProjects,
@@ -458,19 +460,19 @@ export function useSidebarController({
     [getProjectSessions],
   );
 
-  const confirmDeleteProject = useCallback(async (deleteData = false) => {
+  const confirmDeleteProject = useCallback(async () => {
     if (!deleteConfirmation) {
       return;
     }
 
     const { project, sessionCount } = deleteConfirmation;
-    const isEmpty = sessionCount === 0;
+    const { force, deleteData } = getWorkspaceDeleteRequest(sessionCount);
 
     setDeleteConfirmation(null);
     setDeletingProjects((prev) => new Set([...prev, project.name]));
 
     try {
-      const response = await api.deleteProject(project.name, !isEmpty, deleteData, project.workspaceId);
+      const response = await api.deleteProject(project.name, force, deleteData, project.workspaceId);
 
       if (response.ok) {
         onProjectDelete?.(project);
