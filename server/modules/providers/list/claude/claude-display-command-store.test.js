@@ -34,6 +34,31 @@ function currentRuntimeOwnership() {
   };
 }
 
+test('Claude display command paths reject traversal-only session ids', () => {
+  const runtimeHomePath = path.join(os.tmpdir(), 'claude-display-command-path-safety');
+  const projectPath = '/workspace';
+
+  for (const sessionId of ['.', '..', '../outside', '..\\outside']) {
+    assert.equal(
+      resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId),
+      null,
+      sessionId,
+    );
+  }
+
+  assert.equal(
+    resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, 'session.v1'),
+    path.join(
+      runtimeHomePath,
+      '.claude',
+      'projects',
+      '-workspace',
+      'session.v1',
+      'display-commands.jsonl',
+    ),
+  );
+});
+
 test('Claude display command store records only expanded slash invocations', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));

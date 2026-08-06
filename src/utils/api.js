@@ -128,7 +128,7 @@ export const api = {
       body: JSON.stringify({ displayName }),
     }),
   deleteSession: (projectName, sessionId, provider = 'claude', workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/sessions/${sessionId}`, workspaceId), {
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/sessions/${encodeURIComponent(sessionId)}`, workspaceId), {
       method: 'DELETE',
       body: JSON.stringify({ provider }),
     }),
@@ -155,7 +155,7 @@ export const api = {
     if (force) params.set('force', 'true');
     if (deleteData) params.set('deleteData', 'true');
     const qs = params.toString();
-    const url = withTenantAndWorkspaceParam(`/api/projects/${projectName}${qs ? `?${qs}` : ''}`, workspaceId);
+    const url = withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}${qs ? `?${qs}` : ''}`, workspaceId);
     return authenticatedFetch(url, {
       method: 'DELETE',
     });

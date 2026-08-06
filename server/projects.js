@@ -66,6 +66,27 @@ import Database from 'better-sqlite3';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames } from './database/db.js';
+import { requireSafePathSegment, resolveDirectChildPath } from './utils/runtime-paths.js';
+
+const CLAUDE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+function validateClaudeSessionId(sessionId) {
+  return requireSafePathSegment(sessionId, {
+    label: 'Claude session id',
+    pattern: CLAUDE_SESSION_ID_PATTERN,
+  });
+}
+
+function validateClaudeProjectName(projectName) {
+  return requireSafePathSegment(projectName, { label: 'Claude project name' });
+}
+
+function resolveClaudeProjectDirectory(
+  projectName,
+  projectsRoot = path.join(os.homedir(), '.claude', 'projects'),
+) {
+  return resolveDirectChildPath(projectsRoot, projectName, { label: 'Claude project name' });
+}
 
 function createConversationSearchHelpers(query) {
   const terms = String(query || '')
@@ -321,6 +342,8 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
 
 // Extract the actual project directory from JSONL sessions (with caching)
 async function extractProjectDirectory(projectName) {
+  validateClaudeProjectName(projectName);
+
   // Check cache first
   if (projectDirectoryCache.has(projectName)) {
     return projectDirectoryCache.get(projectName);
@@ -335,7 +358,7 @@ async function extractProjectDirectory(projectName) {
     return originalPath;
   }
 
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
   const cwdCounts = new Map();
   let latestTimestamp = 0;
   let latestCwd = null;
@@ -699,7 +722,7 @@ async function getProjects(progressCallback = null) {
 }
 
 async function getSessions(projectName, limit = 5, offset = 0) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const files = await fs.readdir(projectDir);
@@ -1146,27 +1169,28 @@ async function getSessionMessagesFromProjectDirectory(
 
 // Get messages for a specific session with pagination support.
 async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-  const directFileName = `${sessionId}.jsonl`;
+  const safeSessionId = validateClaudeSessionId(sessionId);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
+  const directFileName = `${safeSessionId}.jsonl`;
+  const directFilePath = resolveDirectChildPath(projectDir, directFileName, {
+    label: 'Claude transcript name',
+  });
   try {
-    await fs.access(path.join(projectDir, directFileName));
+    await fs.access(directFilePath);
     return getSessionMessagesFromProjectDirectory(
       projectDir,
-      sessionId,
+      safeSessionId,
       limit,
       offset,
       [directFileName],
     );
   } catch {
-    return getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit, offset);
+    return getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, limit, offset);
   }
 }
 
 async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0) {
-  const safeSessionId = String(sessionId || '');
-  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
-    throw new Error('Invalid Claude session id');
-  }
+  const safeSessionId = validateClaudeSessionId(sessionId);
 
   let entries;
   try {
@@ -1187,7 +1211,9 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
 
   for (const projectDir of projectDirs) {
     try {
-      await fs.access(path.join(projectDir, directFileName));
+      await fs.access(resolveDirectChildPath(projectDir, directFileName, {
+        label: 'Claude transcript name',
+      }));
       directMatches.push(projectDir);
     } catch {
       remainingDirs.push(projectDir);
@@ -1233,10 +1259,7 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
 }
 
 async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
-  const safeSessionId = String(sessionId || '');
-  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
-    throw new Error('Invalid Claude session id');
-  }
+  const safeSessionId = validateClaudeSessionId(sessionId);
 
   let entries;
   try {
@@ -1250,7 +1273,9 @@ async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const projectDir = path.join(projectsRoot, entry.name);
-    const transcriptPath = path.join(projectDir, `${safeSessionId}.jsonl`);
+    const transcriptPath = resolveDirectChildPath(projectDir, `${safeSessionId}.jsonl`, {
+      label: 'Claude transcript name',
+    });
     try {
       await fs.unlink(transcriptPath);
       deleted = true;
@@ -1260,7 +1285,10 @@ async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
 
     // Claude stores tool results and subagent history below a session-specific
     // directory. It is safe to remove only the directory named by this session.
-    const sessionDataDir = path.join(projectDir, safeSessionId);
+    const sessionDataDir = resolveDirectChildPath(projectDir, safeSessionId, {
+      label: 'Claude session id',
+      pattern: CLAUDE_SESSION_ID_PATTERN,
+    });
     try {
       await fs.rm(sessionDataDir, { recursive: true, force: true });
     } catch (error) {
@@ -1293,7 +1321,8 @@ async function renameProject(projectName, newDisplayName) {
 
 // Delete a session from a project
 async function deleteSession(projectName, sessionId) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const safeSessionId = validateClaudeSessionId(sessionId);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const files = await fs.readdir(projectDir);
@@ -1313,7 +1342,7 @@ async function deleteSession(projectName, sessionId) {
       const hasSession = lines.some(line => {
         try {
           const data = JSON.parse(line);
-          return data.sessionId === sessionId;
+          return data.sessionId === safeSessionId;
         } catch {
           return false;
         }
@@ -1324,7 +1353,7 @@ async function deleteSession(projectName, sessionId) {
         const filteredLines = lines.filter(line => {
           try {
             const data = JSON.parse(line);
-            return data.sessionId !== sessionId;
+            return data.sessionId !== safeSessionId;
           } catch {
             return true; // Keep malformed lines
           }
@@ -1336,7 +1365,7 @@ async function deleteSession(projectName, sessionId) {
       }
     }
 
-    throw new Error(`Session ${sessionId} not found in any files`);
+    throw new Error(`Session ${safeSessionId} not found in any files`);
   } catch (error) {
     console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
     throw error;
@@ -1361,7 +1390,7 @@ async function isProjectEmpty(projectName, { allowMissingDirectory = false } = {
 // When deleteData=true, also delete session/memory files on disk (destructive).
 async function deleteProject(projectName, force = false, deleteData = false, options = {}) {
   const { skipSessionCheck = false } = options;
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const isEmpty = skipSessionCheck
@@ -1436,7 +1465,7 @@ async function addProjectManually(projectPath, displayName = null) {
 
   // Check if project already exists in config
   const config = await loadProjectConfig();
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   if (config[projectName]) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
@@ -2688,6 +2717,9 @@ export {
   getSessionMessages,
   getSessionMessagesFromProjectDirectory,
   getSessionMessagesFromProjectsRoot,
+  validateClaudeSessionId,
+  validateClaudeProjectName,
+  resolveClaudeProjectDirectory,
   deleteSessionFromProjectsRoot,
   parseJsonlSessions,
   renameProject,

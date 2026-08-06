@@ -26,7 +26,9 @@ import {
     getProjects,
     getSessions,
     renameProject,
-    searchConversations
+    searchConversations,
+    validateClaudeProjectName,
+    validateClaudeSessionId
 } from './projects.js';
 import {
     abortClaudeSDKSession,
@@ -977,9 +979,13 @@ app.put('/api/projects/:projectName/rename', authenticateToken, attachTenantCont
 // Delete session endpoint
 app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        const projectName = validateClaudeProjectName(req.params.projectName);
+        const provider = req.body?.provider || 'claude';
+        const sessionId = provider === 'claude'
+            ? validateClaudeSessionId(req.params.sessionId)
+            : req.params.sessionId;
+
         if (req.tenant) {
-            const { projectName, sessionId } = req.params;
-            const provider = req.body?.provider || 'claude';
             console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
 
             const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
@@ -1036,8 +1042,6 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
             return;
         }
 
-        const { projectName, sessionId } = req.params;
-        const provider = req.body?.provider || 'claude';
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         if (provider === 'claude') {
             await abortClaudeSDKSession(sessionId);
@@ -1120,7 +1124,7 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, attachTenantContex
 // Platform workspaces always remove their Docker runtimes and workspace filesystem.
 app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
-        const { projectName } = req.params;
+        const projectName = validateClaudeProjectName(req.params.projectName);
         const resolvedWorkspace = resolveWorkspaceDeleteContext(req, { projectName });
         const { workspace } = resolvedWorkspace ?? {};
         if (req.tenant && !workspace) {

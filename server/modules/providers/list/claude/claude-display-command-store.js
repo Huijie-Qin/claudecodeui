@@ -1,6 +1,8 @@
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { requireSafePathSegment } from '../../../../utils/runtime-paths.js';
+
 const CLAUDE_PROJECTS_DIRECTORY = path.join('.claude', 'projects');
 const DISPLAY_COMMANDS_FILE_NAME = 'display-commands.jsonl';
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
@@ -15,6 +17,18 @@ const pendingWrites = new Map();
 
 function normalizeIdentifier(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeClaudeSessionId(value) {
+  const normalized = normalizeIdentifier(value);
+  try {
+    return requireSafePathSegment(normalized, {
+      label: 'Claude session id',
+      pattern: SAFE_SESSION_ID_PATTERN,
+    });
+  } catch {
+    return '';
+  }
 }
 
 function isNonNegativeInteger(value) {
@@ -138,12 +152,11 @@ function resolveClaudeProjectsRoot(runtimeHomePath) {
 export function resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId) {
   const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
   const projectStorageName = normalizeClaudeProjectStorageName(projectPath);
-  const normalizedSessionId = normalizeIdentifier(sessionId);
+  const normalizedSessionId = normalizeClaudeSessionId(sessionId);
   if (
     !projectsRoot
     || !projectStorageName
     || !normalizedSessionId
-    || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
   ) {
     return null;
   }
@@ -158,11 +171,10 @@ export function resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, se
 
 async function findClaudeDisplayCommandPaths(runtimeHomePath, sessionId) {
   const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
-  const normalizedSessionId = normalizeIdentifier(sessionId);
+  const normalizedSessionId = normalizeClaudeSessionId(sessionId);
   if (
     !projectsRoot
     || !normalizedSessionId
-    || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
   ) {
     return [];
   }
