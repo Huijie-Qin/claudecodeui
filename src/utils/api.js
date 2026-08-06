@@ -339,11 +339,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    remoteBranches: (workspaceId, repoId) =>
-      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches`)),
-    submissionCommits: (workspaceId, repoId, targetBranch) => {
-      const params = targetBranch ? `?targetBranch=${encodeURIComponent(targetBranch)}` : '';
-      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submission-commits${params}`));
+    remoteBranches: (workspaceId, repoId, repository = 'personal') => {
+      const params = new URLSearchParams({ repository });
+      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches?${params.toString()}`));
+    },
+    submissionCommits: (workspaceId, repoId, targetBranch, mrTargetRepository = 'personal', sourceBranch = '') => {
+      const params = new URLSearchParams();
+      if (sourceBranch) params.set('sourceBranch', sourceBranch);
+      if (targetBranch) params.set('targetBranch', targetBranch);
+      params.set('mrTargetRepository', mrTargetRepository);
+      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submission-commits?${params.toString()}`));
     },
     syncFork: (workspaceId, repoId, payload) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/sync-fork`), {

@@ -1667,6 +1667,37 @@ const aiMrSubmissionsDb = {
     String(commitSha || ''),
   ).map(hydrateAiMrSubmission),
 
+  listActiveForBranches: ({
+    tenantId,
+    userId,
+    workspaceId,
+    repoRelativePath,
+    sourceBranch,
+    targetBranch,
+    mrProjectId,
+  }) => db.prepare(`
+    SELECT *
+    FROM ai_mr_submissions
+    WHERE tenant_id = ?
+      AND user_id = ?
+      AND workspace_id = ?
+      AND repo_relative_path = ?
+      AND source_branch = ?
+      AND target_branch = ?
+      AND mr_project_id = ?
+      AND status = 'pending'
+      AND mr_id IS NOT NULL
+    ORDER BY created_at DESC, id DESC
+  `).all(
+    Number(tenantId),
+    Number(userId),
+    Number(workspaceId),
+    String(repoRelativePath || ''),
+    String(sourceBranch || ''),
+    String(targetBranch || ''),
+    Number(mrProjectId),
+  ).map(hydrateAiMrSubmission),
+
   listPendingDue: ({ now = new Date(), limit = 50 } = {}) => db.prepare(`
     SELECT *
     FROM ai_mr_submissions

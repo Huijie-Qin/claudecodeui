@@ -202,6 +202,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [activeFile, setActiveFile] = useState('');
   const [diff, setDiff] = useState('');
   const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
+  const [mrTargetBranches, setMrTargetBranches] = useState<string[]>([]);
   const [cloneUrl, setCloneUrl] = useState('');
   const [cloneDirectory, setCloneDirectory] = useState('');
   const [cloneBranch, setCloneBranch] = useState('');
@@ -211,6 +212,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [sourceBranchMode, setSourceBranchMode] = useState<'new' | 'existing'>('new');
   const [sourceBranch, setSourceBranch] = useState('');
   const [targetBranch, setTargetBranch] = useState('develop');
+  const [mrSourceBranch, setMrSourceBranch] = useState('');
+  const [mrTargetBranch, setMrTargetBranch] = useState('develop');
   const [mrTargetRepository, setMrTargetRepository] = useState<MrTargetRepository>('personal');
   const [mrTitle, setMrTitle] = useState('');
   const [workflowOpen, setWorkflowOpen] = useState(false);
@@ -221,6 +224,13 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [headSha, setHeadSha] = useState('');
   const [remoteBranchesAtHead, setRemoteBranchesAtHead] = useState<string[]>([]);
   const [activeMergeRequests, setActiveMergeRequests] = useState<ExistingMergeRequest[]>([]);
+  const [mrCommitRecords, setMrCommitRecords] = useState<CommitRecord[]>([]);
+  const [mrSourceSha, setMrSourceSha] = useState('');
+  const [mrTargetSha, setMrTargetSha] = useState('');
+  const [mrAnalysisKey, setMrAnalysisKey] = useState('');
+  const [mrOptionsError, setMrOptionsError] = useState<string | null>(null);
+  const [mrAnalysisError, setMrAnalysisError] = useState<string | null>(null);
+  const [isMrAnalysisLoading, setIsMrAnalysisLoading] = useState(false);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [mrResult, setMrResult] = useState<MrResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -233,6 +243,8 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   const [isWorking, setIsWorking] = useState(false);
   const initializedRepoIdRef = useRef<number | null>(null);
   const conflictStateRef = useRef<ConflictState | null>(null);
+  const mrAnalysisRequestRef = useRef(0);
+  const mrTargetBranchesRequestRef = useRef(0);
 
   const clearDiffPreview = useCallback(() => {
     setActiveFile('');
@@ -261,17 +273,28 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       ),
   );
   const selectedMrProjectId = mrTargetRepository === 'upstream' ? selectedRepo?.publicProjectId : selectedRepo?.projectId;
+  const mrSelectionKey = `${selectedRepoId || ''}:${mrSourceBranch}:${mrTargetRepository}:${mrTargetBranch}`;
   const existingMergeRequest = useMemo(
     () => activeMergeRequests.find((mr) => (
-      mr.sourceBranch === sourceBranch
-      && mr.targetBranch === targetBranch
+      mr.sourceBranch === mrSourceBranch
+      && mr.targetBranch === mrTargetBranch
       && Number(mr.mrProjectId || 0) === Number(selectedMrProjectId || 0)
     )) || null,
-    [activeMergeRequests, selectedMrProjectId, sourceBranch, targetBranch],
+    [activeMergeRequests, mrSourceBranch, mrTargetBranch, selectedMrProjectId],
   );
-  const canCreateMr = Boolean(headSha && hasActiveCommitBatch && sourceBranchPushedAtHead && !existingMergeRequest);
+  const canOpenMrWorkflow = Boolean(selectedRepo?.projectId);
+  const canCreateMr = Boolean(
+    mrSourceSha
+      && mrTargetSha
+      && mrCommitRecords.length > 0
+      && mrAnalysisKey === mrSelectionKey
+      && !existingMergeRequest
+      && !isMrAnalysisLoading
+      && !mrOptionsError
+      && !mrAnalysisError,
+  );
   const canOpenPushStep = hasActiveCommitBatch;
-  const canOpenMrStep = sourceBranchPushedAtHead || remoteBranchesAtHead.length > 0 || Boolean(pushResult?.success);
+  const canOpenMrStep = canOpenMrWorkflow;
   const canRestoreLastStash = Boolean(lastStash && !pullPreview && !conflictState);
   const pullPreviewRecommendation = useMemo(() => {
     if (!pullPreview) return null;
@@ -282,12 +305,12 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     if (pullPreview.conflictCheckStatus === 'unknown') return t('pull.recommendation.unknown');
     return t('pull.recommendation.pull');
   }, [pullPreview, t]);
-  const batchCommitMessage = useMemo(
-    () => commitRecords
+  const mrCommitMessage = useMemo(
+    () => mrCommitRecords
       .map((commit) => commit.commitMessage || commit.commitSha)
       .filter(Boolean)
       .join('\n\n'),
-    [commitRecords],
+    [mrCommitRecords],
   );
 
   const loadRepositories = useCallback(async () => {
@@ -417,10 +440,48 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     }
   }, [selectedRepoId, workspaceId]);
 
+  const loadMrTargetBranches = useCallback(async () => {
+    const requestId = mrTargetBranchesRequestRef.current + 1;
+    mrTargetBranchesRequestRef.current = requestId;
+    if (!workspaceId || !selectedRepoId) return;
+    setMrOptionsError(null);
+    try {
+      const response = await api.codehub.remoteBranches(workspaceId, selectedRepoId, mrTargetRepository);
+      if (!response.ok) {
+        const message = await readError(response, t('errors.loadRemoteBranches'));
+        if (mrTargetBranchesRequestRef.current !== requestId) return;
+        setMrTargetBranches([]);
+        setMrOptionsError(message);
+        return;
+      }
+      const payload = await response.json();
+      if (mrTargetBranchesRequestRef.current !== requestId) return;
+      const branches = payload.branches || [];
+      setMrTargetBranches(branches);
+      setMrTargetBranch((current) => {
+        if (current && branches.includes(current)) return current;
+        if (selectedRepo?.branch && branches.includes(selectedRepo.branch)) return selectedRepo.branch;
+        if (branches.includes('develop')) return 'develop';
+        if (branches.includes('main')) return 'main';
+        return branches[0] || '';
+      });
+    } catch (caughtError) {
+      if (mrTargetBranchesRequestRef.current !== requestId) return;
+      console.warn('[CodeHubPanel] Failed to load MR target branches:', caughtError);
+      setMrTargetBranches([]);
+      setMrOptionsError(t('errors.loadRemoteBranches'));
+    }
+  }, [mrTargetRepository, selectedRepo?.branch, selectedRepoId, t, workspaceId]);
+
   const loadSubmissionCommits = useCallback(async () => {
     if (!workspaceId || !selectedRepoId) return;
     try {
-      const response = await api.codehub.submissionCommits(workspaceId, selectedRepoId, targetBranch);
+      const response = await api.codehub.submissionCommits(
+        workspaceId,
+        selectedRepoId,
+        targetBranch,
+        'personal',
+      );
       if (!response.ok) return;
       const payload = await response.json();
       const commits = payload.commits || [];
@@ -428,16 +489,81 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       setCommitRecords(commits);
       setHeadSha(payload.headSha || '');
       setRemoteBranchesAtHead(branchesAtHead);
-      setActiveMergeRequests(payload.activeMergeRequests || []);
       setSourceBranch((current) => {
-        if (current && branchesAtHead.includes(current)) return current;
+        if (current) return current;
         if (branchesAtHead[0]) return branchesAtHead[0];
-        return current || payload.currentBranch || '';
+        return payload.currentBranch || '';
       });
     } catch (caughtError) {
       console.warn('[CodeHubPanel] Failed to load submission commits:', caughtError);
     }
   }, [selectedRepoId, targetBranch, workspaceId]);
+
+  const loadMrAnalysis = useCallback(async () => {
+    const requestId = mrAnalysisRequestRef.current + 1;
+    mrAnalysisRequestRef.current = requestId;
+    if (
+      !workspaceId
+      || !selectedRepoId
+      || !mrSourceBranch
+      || !mrTargetBranch
+      || !remoteBranches.includes(mrSourceBranch)
+      || !mrTargetBranches.includes(mrTargetBranch)
+    ) {
+      setMrCommitRecords([]);
+      setMrSourceSha('');
+      setMrTargetSha('');
+      setMrAnalysisKey('');
+      setActiveMergeRequests([]);
+      setMrAnalysisError(null);
+      setIsMrAnalysisLoading(false);
+      return;
+    }
+
+    setIsMrAnalysisLoading(true);
+    setMrAnalysisKey('');
+    setMrAnalysisError(null);
+    try {
+      const response = await api.codehub.submissionCommits(
+        workspaceId,
+        selectedRepoId,
+        mrTargetBranch,
+        mrTargetRepository,
+        mrSourceBranch,
+      );
+      if (!response.ok) {
+        const message = await readError(response, t('errors.loadMrAnalysis'));
+        if (mrAnalysisRequestRef.current !== requestId) return;
+        setMrCommitRecords([]);
+        setMrSourceSha('');
+        setMrTargetSha('');
+        setMrAnalysisKey('');
+        setActiveMergeRequests([]);
+        setMrAnalysisError(message);
+        return;
+      }
+      const payload = await response.json();
+      if (mrAnalysisRequestRef.current !== requestId) return;
+      setMrCommitRecords(payload.commits || []);
+      setMrSourceSha(payload.sourceSha || payload.headSha || '');
+      setMrTargetSha(payload.targetSha || '');
+      setMrAnalysisKey(`${selectedRepoId}:${mrSourceBranch}:${mrTargetRepository}:${mrTargetBranch}`);
+      setActiveMergeRequests(payload.activeMergeRequests || []);
+    } catch (caughtError) {
+      if (mrAnalysisRequestRef.current !== requestId) return;
+      console.warn('[CodeHubPanel] Failed to analyze merge request:', caughtError);
+      setMrCommitRecords([]);
+      setMrSourceSha('');
+      setMrTargetSha('');
+      setMrAnalysisKey('');
+      setActiveMergeRequests([]);
+      setMrAnalysisError(t('errors.loadMrAnalysis'));
+    } finally {
+      if (mrAnalysisRequestRef.current === requestId) {
+        setIsMrAnalysisLoading(false);
+      }
+    }
+  }, [mrSourceBranch, mrTargetBranch, mrTargetBranches, mrTargetRepository, remoteBranches, selectedRepoId, t, workspaceId]);
 
   useEffect(() => {
     void loadRepositories();
@@ -467,6 +593,27 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   }, [loadSubmissionCommits]);
 
   useEffect(() => {
+    if (!workflowOpen || workflowStep !== 'mr') return;
+    void loadRemoteBranches();
+    void loadMrTargetBranches();
+  }, [loadMrTargetBranches, loadRemoteBranches, workflowOpen, workflowStep]);
+
+  useEffect(() => {
+    if (!workflowOpen || workflowStep !== 'mr' || remoteBranches.length === 0) return;
+    setMrSourceBranch((current) => {
+      if (current && remoteBranches.includes(current)) return current;
+      if (pushResult?.branch && remoteBranches.includes(pushResult.branch)) return pushResult.branch;
+      if (selectedRepo?.branch && remoteBranches.includes(selectedRepo.branch)) return selectedRepo.branch;
+      return remoteBranches[0];
+    });
+  }, [pushResult?.branch, remoteBranches, selectedRepo?.branch, workflowOpen, workflowStep]);
+
+  useEffect(() => {
+    if (!workflowOpen || workflowStep !== 'mr') return;
+    void loadMrAnalysis();
+  }, [loadMrAnalysis, workflowOpen, workflowStep]);
+
+  useEffect(() => {
     if (!selectedRepo) {
       initializedRepoIdRef.current = null;
       return;
@@ -474,17 +621,28 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
     const repoChanged = initializedRepoIdRef.current !== selectedRepo.repoId;
     initializedRepoIdRef.current = selectedRepo.repoId;
     if (!repoChanged) return;
+    mrAnalysisRequestRef.current += 1;
+    mrTargetBranchesRequestRef.current += 1;
 
     setPullBranch(selectedRepo.branch || 'develop');
     setSourceBranch(selectedRepo.branch || '');
     setTargetBranch(selectedRepo.branch || 'develop');
+    setMrSourceBranch('');
+    setMrTargetBranch(selectedRepo.branch || 'develop');
     setMrTargetRepository('personal');
     setPullPreview(null);
     setWorkflowOpen(false);
     setCommitRecords([]);
     setHeadSha('');
     setRemoteBranchesAtHead([]);
+    setMrTargetBranches([]);
     setActiveMergeRequests([]);
+    setMrCommitRecords([]);
+    setMrSourceSha('');
+    setMrTargetSha('');
+    setMrAnalysisKey('');
+    setMrOptionsError(null);
+    setMrAnalysisError(null);
     setPushResult(null);
     setMrResult(null);
     setLastStash(null);
@@ -564,6 +722,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
 
   const openMrWorkflow = useCallback(() => {
     setDialogError(null);
+    setMrResult(null);
     setWorkflowStep('mr');
     setWorkflowOpen(true);
   }, []);
@@ -877,6 +1036,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
         pushedAt: new Date().toISOString(),
       });
       setSourceBranch(payload.branch || sourceBranch);
+      setMrSourceBranch(payload.branch || sourceBranch);
       setMrResult(null);
       setWorkflowStep('mr');
       await loadRepositories();
@@ -888,18 +1048,16 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   }, [commitRecords.length, committedCommitShas, loadRemoteBranches, loadRepositories, loadSubmissionCommits, selectedRepoId, sourceBranch, sourceBranchMode, t, workspaceId]);
 
   const createMergeRequest = useCallback(async () => {
-    if (!workspaceId || !selectedRepoId || !headSha || !sourceBranch || !sourceBranchPushedAtHead) return;
+    if (!workspaceId || !selectedRepoId || !canCreateMr) return;
     setIsWorking(true);
     setDialogError(null);
     setMrResult(null);
     try {
-      const mrDescription = batchCommitMessage || commitRecords.map((commit) => commit.commitSha).join('\n');
+      const mrDescription = mrCommitMessage || mrCommitRecords.map((commit) => commit.commitSha).join('\n');
       const response = await api.codehub.createMergeRequest(workspaceId, selectedRepoId, {
-        commitSha: headSha,
-        commitShas: committedCommitShas,
         commitMessage: mrDescription,
-        sourceBranch,
-        targetBranch,
+        sourceBranch: mrSourceBranch,
+        targetBranch: mrTargetBranch,
         mrTargetRepository,
         mrTitle: mrTitle || mrDescription.split(/\r?\n/).find((line) => line.trim())?.trim() || t('title'),
       });
@@ -921,26 +1079,26 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       await loadChanges();
       await loadRemoteBranches();
       await loadSubmissionCommits();
+      await loadMrAnalysis();
     } finally {
       setIsWorking(false);
     }
   }, [
-    batchCommitMessage,
-    commitRecords,
-    committedCommitShas,
+    canCreateMr,
     clearDiffPreview,
-    headSha,
     loadChanges,
+    loadMrAnalysis,
     loadRemoteBranches,
     loadRepositories,
     loadSubmissionCommits,
     mrTargetRepository,
+    mrCommitMessage,
+    mrCommitRecords,
+    mrSourceBranch,
+    mrTargetBranch,
     mrTitle,
     selectedRepoId,
-    sourceBranch,
-    sourceBranchPushedAtHead,
     t,
-    targetBranch,
     workspaceId,
   ]);
 
@@ -1281,7 +1439,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                       variant="outline"
                       size="sm"
                       onClick={openMrWorkflow}
-                      disabled={isReadOnly || isWorking || !canCreateMr}
+                      disabled={isReadOnly || isWorking || !canOpenMrWorkflow}
                     >
                       <GitPullRequest className="h-4 w-4" />
                       {t('submission.createMr')}
@@ -1578,44 +1736,111 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                   <span className="text-xs font-medium text-muted-foreground">{t('workflow.sourceBranch')}</span>
                   <select
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
-                    value={sourceBranch}
-                    onChange={(event) => setSourceBranch(event.target.value)}
-                    disabled={remoteBranchesAtHead.length === 0}
+                    value={mrSourceBranch}
+                    onChange={(event) => {
+                      setMrSourceBranch(event.target.value);
+                      setMrResult(null);
+                      setDialogError(null);
+                    }}
+                    disabled={isWorking || remoteBranches.length === 0}
                   >
-                    {remoteBranchesAtHead.length === 0 ? (
-                      <option value="">{t('workflow.pushHeadFirst')}</option>
-                    ) : null}
-                    {remoteBranchesAtHead.map((branch) => (
+                    <option value="">{t('workflow.selectSourceBranch')}</option>
+                    {remoteBranches.map((branch) => (
                       <option key={branch} value={branch}>{branch}</option>
                     ))}
                   </select>
                 </label>
-                <Input value={targetBranch} onChange={(event) => setTargetBranch(event.target.value)} placeholder={t('workflow.targetBranchPlaceholder')} />
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-muted-foreground">{t('workflow.mergeTargetRepository')}</div>
                   <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-1">
                     <Button
                       variant={mrTargetRepository === 'personal' ? 'default' : 'ghost'}
                       size="sm"
-                      onClick={() => setMrTargetRepository('personal')}
+                      onClick={() => {
+                        if (mrTargetRepository === 'personal') return;
+                        setMrTargetBranches([]);
+                        setMrTargetRepository('personal');
+                        setMrResult(null);
+                        setDialogError(null);
+                      }}
+                      disabled={isWorking}
                     >
                       {t('workflow.personalRepo')}
                     </Button>
                     <Button
                       variant={mrTargetRepository === 'upstream' ? 'default' : 'ghost'}
                       size="sm"
-                      onClick={() => setMrTargetRepository('upstream')}
-                      disabled={!selectedRepo?.publicProjectId}
-                      title={selectedRepo?.publicProjectId ? t('workflow.upstreamRepoTitle') : t('workflow.noUpstreamRepoTitle')}
+                      onClick={() => {
+                        if (mrTargetRepository === 'upstream') return;
+                        setMrTargetBranches([]);
+                        setMrTargetRepository('upstream');
+                        setMrResult(null);
+                        setDialogError(null);
+                      }}
+                      disabled={isWorking || !selectedRepo?.publicProjectId || !selectedRepo?.publicRepositoryUrl}
+                      title={selectedRepo?.publicProjectId && selectedRepo?.publicRepositoryUrl ? t('workflow.upstreamRepoTitle') : t('workflow.noUpstreamRepoTitle')}
                     >
                       {t('workflow.upstreamRepo')}
                     </Button>
                   </div>
                 </div>
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-muted-foreground">{t('workflow.targetBranch')}</span>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground shadow-sm"
+                    value={mrTargetBranch}
+                    onChange={(event) => {
+                      setMrTargetBranch(event.target.value);
+                      setMrResult(null);
+                      setDialogError(null);
+                    }}
+                    disabled={isWorking || mrTargetBranches.length === 0}
+                  >
+                    <option value="">{t('workflow.selectTargetBranch')}</option>
+                    {mrTargetBranches.map((branch) => (
+                      <option key={branch} value={branch}>{branch}</option>
+                    ))}
+                  </select>
+                </label>
                 <Input value={mrTitle} onChange={(event) => setMrTitle(event.target.value)} placeholder={t('workflow.mrTitlePlaceholder')} />
                 <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  {t('workflow.mrDescriptionMessage', { targetBranch })}
+                  {isMrAnalysisLoading
+                    ? t('workflow.analyzingMr')
+                    : t('workflow.mrDescriptionMessage', {
+                      sourceBranch: mrSourceBranch || '-',
+                      targetBranch: mrTargetBranch || '-',
+                      count: mrCommitRecords.length,
+                    })}
                 </div>
+                {mrOptionsError ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    {mrOptionsError}
+                  </div>
+                ) : null}
+                {mrAnalysisError ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    {mrAnalysisError}
+                  </div>
+                ) : null}
+                {!isMrAnalysisLoading
+                  && !mrAnalysisError
+                  && remoteBranches.includes(mrSourceBranch)
+                  && mrTargetBranches.includes(mrTargetBranch)
+                  && mrCommitRecords.length === 0 ? (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                    {t('workflow.noMrCommits')}
+                  </div>
+                ) : null}
+                {mrCommitRecords.length > 0 ? (
+                  <div className="max-h-28 overflow-y-auto rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    {mrCommitRecords.map((commit) => (
+                      <div key={commit.commitSha} className="flex min-w-0 items-center justify-between gap-3 py-0.5">
+                        <span className="min-w-0 truncate">{commit.commitMessage?.split(/\r?\n/)[0] || commit.commitSha}</span>
+                        <span className="shrink-0 font-mono">{commit.commitSha.slice(0, 8)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {existingMergeRequest ? (
                   <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                     {t('workflow.existingMrMessage')}

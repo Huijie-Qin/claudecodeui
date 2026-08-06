@@ -533,8 +533,8 @@ export const codeHubGitService = {
     return stdout;
   },
 
-  async listRemoteBranches(repoPath, { userId, repositoryUrl }) {
-    const { stdout } = await runGit(['ls-remote', '--heads', 'origin'], {
+  async listRemoteBranches(repoPath, { userId, repositoryUrl, remote = 'origin' }) {
+    const { stdout } = await runGit(['ls-remote', '--heads', remote], {
       cwd: repoPath,
       userId,
       repositoryUrl,
@@ -546,14 +546,114 @@ export const codeHubGitService = {
       .map((ref) => ref.replace(/^refs\/heads\//, ''));
   },
 
-  async listSubmissionCommits(repoPath, { targetBranch, userId, repositoryUrl } = {}) {
+  async listSubmissionCommits(repoPath, {
+    sourceBranch,
+    targetBranch,
+    mrTargetRepository = 'personal',
+    userId,
+    repositoryUrl,
+    publicRepositoryUrl,
+  } = {}) {
     const currentBranch = await getCurrentBranch(repoPath).catch(() => '');
     const baseBranch = validateBranchName(targetBranch || currentBranch || 'develop');
-    await runGit(['fetch', 'origin', baseBranch], {
-      cwd: repoPath,
-      userId,
-      repositoryUrl,
-    }).catch(() => null);
+    const useUpstreamTarget = mrTargetRepository === 'upstream';
+
+    if (sourceBranch) {
+      const remoteSourceBranch = validateBranchName(sourceBranch);
+      const sourceRef = `refs/codehub/source/${remoteSourceBranch}`;
+      const targetRef = `refs/codehub/target/${useUpstreamTarget ? 'upstream' : 'personal'}/${baseBranch}`;
+      const targetRepositoryUrl = useUpstreamTarget ? publicRepositoryUrl : repositoryUrl;
+      if (!repositoryUrl) {
+        throw createHttpError('Personal repository URL is not configured', 400);
+      }
+      if (!targetRepositoryUrl) {
+        throw createHttpError('Target repository URL is not configured', 400);
+      }
+
+      return withOwnershipFinalizer(async () => {
+        await runGit([
+          'fetch',
+          '--no-tags',
+          repositoryUrl,
+          `+refs/heads/${remoteSourceBranch}:${sourceRef}`,
+        ], {
+          cwd: repoPath,
+          userId,
+          repositoryUrl,
+        });
+        await runGit([
+          'fetch',
+          '--no-tags',
+          targetRepositoryUrl,
+          `+refs/heads/${baseBranch}:${targetRef}`,
+        ], {
+          cwd: repoPath,
+          userId,
+          repositoryUrl: targetRepositoryUrl,
+        });
+        const [{ stdout: sourceOutput }, { stdout: targetOutput }, remoteRefs] = await Promise.all([
+          runGit(['rev-parse', sourceRef], { cwd: repoPath }),
+          runGit(['rev-parse', targetRef], { cwd: repoPath }),
+          runGit(['ls-remote', '--heads', 'origin'], {
+            cwd: repoPath,
+            userId,
+            repositoryUrl,
+          }).then((result) => parseRemoteHeadRefs(result.stdout)).catch(() => []),
+        ]);
+        const sourceSha = sourceOutput.trim();
+        const targetSha = targetOutput.trim();
+        const { stdout: commitOutput } = await runGit([
+          'log',
+          '--reverse',
+          '--format=%H%x1f%ct%x1f%s',
+          `${targetRef}..${sourceRef}`,
+        ], { cwd: repoPath });
+
+        return {
+          currentBranch,
+          sourceBranch: remoteSourceBranch,
+          targetBranch: baseBranch,
+          mrTargetRepository: useUpstreamTarget ? 'upstream' : 'personal',
+          sourceSha,
+          targetSha,
+          headSha: sourceSha,
+          commits: parseCommitLog(commitOutput),
+          remoteBranchesAtHead: remoteRefs
+            .filter((entry) => entry.commitSha === sourceSha)
+            .map((entry) => entry.branch),
+        };
+      }, () => normalizeRepositoryOwnership(
+        repoPath,
+        'codehub_mr_analysis_fetch',
+        [path.join(repoPath, '.git')],
+      ));
+    }
+
+    const baseRef = useUpstreamTarget
+      ? `refs/codehub/upstream/${baseBranch}`
+      : `origin/${baseBranch}`;
+
+    if (useUpstreamTarget) {
+      if (!publicRepositoryUrl) {
+        throw createHttpError('Upstream repository URL is not configured', 400);
+      }
+      await runGit([
+        'fetch',
+        '--no-tags',
+        publicRepositoryUrl,
+        `+refs/heads/${baseBranch}:${baseRef}`,
+      ], {
+        cwd: repoPath,
+        userId,
+        repositoryUrl: publicRepositoryUrl,
+      });
+    } else {
+      await runGit(['fetch', 'origin', baseBranch], {
+        cwd: repoPath,
+        userId,
+        repositoryUrl,
+      }).catch(() => null);
+    }
     await normalizeRepositoryOwnership(
       repoPath,
       'codehub_submission_fetch',
@@ -568,7 +668,7 @@ export const codeHubGitService = {
         'log',
         '--reverse',
         '--format=%H%x1f%ct%x1f%s',
-        `origin/${baseBranch}..HEAD`,
+        `${baseRef}..HEAD`,
       ], { cwd: repoPath });
       commits = parseCommitLog(stdout);
     } catch {
