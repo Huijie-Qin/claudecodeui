@@ -832,6 +832,55 @@ test('agent session runtime binds provider session id for resume', () => {
   );
 });
 
+test('agent session runtime image updates preserve runtime identity and skip deleted rows', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:old',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+  mt.runtimes.bindProviderSession({
+    runtimeId: 'runtime-1',
+    providerSessionId: 'claude-session-1',
+  });
+
+  const updated = mt.runtimes.updateImage({
+    runtimeId: 'runtime-1',
+    image: 'cloudcli/test:new',
+  });
+
+  assert.equal(updated.image, 'cloudcli/test:new');
+  assert.equal(updated.runtime_id, 'runtime-1');
+  assert.equal(updated.provider_session_id, 'claude-session-1');
+  assert.equal(updated.status, 'active');
+  assert.equal(updated.container_name, 'cloudcli-claude-t1-u1-w1-r1');
+  assert.equal(updated.runtime_home_path, '/tmp/cloudcli/runtimes/runtime-1/home');
+  assert.equal(mt.runtimes.updateImage({ runtimeId: 'missing', image: 'cloudcli/test:new' }), null);
+
+  mt.runtimes.updateStatus({ runtimeId: 'runtime-1', status: 'deleted' });
+  assert.equal(mt.runtimes.updateImage({ runtimeId: 'runtime-1', image: 'cloudcli/test:later' }), null);
+  const deleted = database.prepare('SELECT image, status FROM agent_session_runtime WHERE runtime_id = ?').get('runtime-1');
+  assert.deepEqual(deleted, { image: 'cloudcli/test:new', status: 'deleted' });
+});
+
 test('agent session messages persist normalized history idempotently', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

@@ -2648,6 +2648,31 @@ export function createMultitenancyDb(database = db) {
         return database.prepare('SELECT * FROM agent_session_runtime WHERE runtime_id = ?').get(normalizedRuntimeId) ?? null;
       },
 
+      updateImage: ({ runtimeId, image }) => {
+        const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
+        const normalizedImage = requireNonEmptyString(image, 'image');
+
+        const result = database.prepare(`
+          UPDATE agent_session_runtime
+          SET
+            image = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE runtime_id = ?
+            AND status != 'deleted'
+        `).run(normalizedImage, normalizedRuntimeId);
+
+        if (result.changes === 0) {
+          return null;
+        }
+
+        return database.prepare(`
+          SELECT *
+          FROM agent_session_runtime
+          WHERE runtime_id = ?
+            AND status != 'deleted'
+        `).get(normalizedRuntimeId) ?? null;
+      },
+
       updateStatus: ({ runtimeId, status }) => {
         const normalizedRuntimeId = requireNonEmptyString(runtimeId, 'runtimeId');
         const normalizedStatus = requireEnum(status, RUNTIME_STATUSES, 'status');

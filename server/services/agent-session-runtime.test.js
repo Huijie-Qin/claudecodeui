@@ -1068,6 +1068,262 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(runtime.runtimeId, 'existing');
 });
 
+test('docker mode recreates an existing runtime container when the configured image changes', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-change-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  let runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let containerExists = true;
+  let containerRunning = false;
+  let containerImage = runtimeRow.image;
+  let created = false;
+  const events = [];
+  const dockerRuns = [];
+  const imageUpdates = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: () => {
+          created = true;
+        },
+        findByProviderSession: () => runtimeRow,
+        updateImage: (input) => {
+          events.push(`persist:${input.image}`);
+          imageUpdates.push(input);
+          runtimeRow = { ...runtimeRow, image: input.image };
+          return runtimeRow;
+        },
+        updateStatus: (input) => {
+          events.push(`mark:${input.status}`);
+          runtimeRow = { ...runtimeRow, status: input.status };
+          return runtimeRow;
+        },
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => {
+        events.push('inspect');
+        return containerExists
+          ? { exists: true, running: containerRunning, image: containerImage }
+          : null;
+      },
+      startContainer: async () => {
+        throw new Error('must not start a container created from the old image');
+      },
+      removeContainer: async (name) => {
+        events.push(`remove:${name}`);
+        containerExists = false;
+        containerRunning = false;
+      },
+      runDetached: async (args) => {
+        dockerRuns.push(args);
+        containerImage = args.at(-3);
+        containerExists = true;
+        containerRunning = true;
+        events.push(`run:${containerImage}`);
+      },
+      verifyWorkspaceCwd: async () => {
+        events.push('verify');
+      },
+    },
+  });
+
+  const first = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+  const second = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+
+  assert.equal(created, false);
+  assert.deepEqual(imageUpdates, [{ runtimeId: 'existing', image: 'cloudcli/test:new' }]);
+  assert.equal(dockerRuns.length, 1);
+  assert.equal(dockerRuns[0].at(-3), 'cloudcli/test:new');
+  assert.equal(dockerRuns[0].includes('cloudcli/test:old'), false);
+  assert.equal(first.runtimeId, 'existing');
+  assert.equal(first.runtimeHomePath, runtimeHomePath);
+  assert.equal(second.runtimeId, 'existing');
+  assert.deepEqual(events, [
+    'inspect',
+    'remove:cloudcli-claude-existing',
+    'run:cloudcli/test:new',
+    'verify',
+    'persist:cloudcli/test:new',
+    'mark:active',
+    'inspect',
+    'verify',
+    'mark:active',
+  ]);
+});
+
+test('docker mode persists a configured image already applied to the container without rebuilding it', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-persist-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  const imageUpdates = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateImage: (input) => {
+          imageUpdates.push(input);
+          return { ...runtimeRow, image: input.image };
+        },
+        updateStatus: (input) => ({ ...runtimeRow, image: 'cloudcli/test:new', status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({
+        exists: true,
+        running: true,
+        image: 'cloudcli/test:new',
+      }),
+      verifyWorkspaceCwd: async () => undefined,
+      removeContainer: async () => {
+        throw new Error('must not remove a container that already uses the configured image');
+      },
+      runDetached: async () => {
+        throw new Error('must not recreate a container that already uses the configured image');
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+
+  assert.equal(runtime.runtimeId, 'existing');
+  assert.deepEqual(imageUpdates, [{ runtimeId: 'existing', image: 'cloudcli/test:new' }]);
+});
+
+test('docker mode does not persist a configured image when the recreated container fails verification', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-failure-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let imageUpdated = false;
+  let statusUpdated = false;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateImage: () => {
+          imageUpdated = true;
+          return { ...runtimeRow, image: 'cloudcli/test:new' };
+        },
+        updateStatus: () => {
+          statusUpdated = true;
+          return runtimeRow;
+        },
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({
+        exists: true,
+        running: false,
+        image: 'cloudcli/test:old',
+      }),
+      removeContainer: async () => undefined,
+      runDetached: async () => undefined,
+      verifyWorkspaceCwd: async () => {
+        throw new Error('new image workspace is unavailable');
+      },
+    },
+  });
+
+  await assert.rejects(
+    manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+      sessionId: 'claude-session-1',
+    }),
+    /new image workspace is unavailable/,
+  );
+
+  assert.equal(imageUpdated, false);
+  assert.equal(statusUpdated, false);
+  assert.equal(runtimeRow.image, 'cloudcli/test:old');
+});
+
 test('docker mode migrates an existing root container to the configured non-root user', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-user-migration-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
@@ -1103,6 +1359,7 @@ test('docker mode migrates an existing root container to the configured non-root
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
       CLOUDCLI_DOCKER_UID: '1000',
       CLOUDCLI_DOCKER_GID: '1000',
     },

@@ -214,6 +214,10 @@ export function resolveClaudeExecutionMode(env = process.env) {
   throw new Error('CLAUDE_EXECUTION_MODE must be local or docker');
 }
 
+function resolveClaudeDockerImage(env = process.env) {
+  return readEnvValue(env, 'CLOUDCLI_CLAUDE_DOCKER_IMAGE') || DEFAULT_CLAUDE_DOCKER_IMAGE;
+}
+
 export function parseDockerPythonPackages(value) {
   return String(value || '')
     .split(/[\s,]+/)
@@ -869,6 +873,8 @@ export class DockerCliClient {
       return {
         exists: true,
         running: state.Running === true,
+        image: inspected.Config?.Image ?? null,
+        imageId: inspected.Image ?? null,
         user: inspected.Config?.User ?? null,
         state,
         env: Array.isArray(inspected.Config?.Env) ? inspected.Config.Env : [],
@@ -1102,6 +1108,7 @@ export function createAgentSessionRuntimeManager({
 
   async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
     const requestId = logContext.requestId || null;
+    const previousImage = logContext.previousImage || null;
     const containerUser = resolveContainerUser(env);
     const expectedContainerUser = `${containerUser.uid}:${containerUser.gid}`;
     const sharedPythonHostPath = resolveDockerSharedPythonPath(env, runtime.image);
@@ -1235,6 +1242,14 @@ export function createAgentSessionRuntimeManager({
       await migrateContainerUser(inspected);
       return;
     }
+    const configuredImageChanged = Boolean(previousImage && previousImage !== runtime.image);
+    const containerImageChanged = inspected?.image
+      ? inspected.image !== runtime.image
+      : configuredImageChanged;
+    if (inspected?.exists && containerImageChanged) {
+      await recreateContainer('configured_image_changed');
+      return;
+    }
     if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath)) {
       await recreateContainer('shared_python_config_changed');
       return;
@@ -1347,7 +1362,7 @@ export function createAgentSessionRuntimeManager({
       workspaceId,
       provider: 'claude',
       containerName,
-      image: env.CLOUDCLI_CLAUDE_DOCKER_IMAGE || DEFAULT_CLAUDE_DOCKER_IMAGE,
+      image: resolveClaudeDockerImage(env),
       workspaceHostPath,
       runtimeHomePath: runtimePaths.runtimeHomePath,
       status: 'pending',
@@ -1472,32 +1487,70 @@ export function createAgentSessionRuntimeManager({
       ...buildRuntimeProcessEnv(env),
       ...userEnv,
     };
+    const persistedRuntime = runtimeContext.runtime;
+    const desiredImage = resolveClaudeDockerImage(env);
+    const imageChanged = persistedRuntime.image !== desiredImage;
+    const desiredRuntime = imageChanged
+      ? { ...persistedRuntime, image: desiredImage }
+      : persistedRuntime;
     const containerUser = resolveContainerUser(env);
-    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, containerUser);
-    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path, {
+    await ensureRuntimeHomeWritable(fs, desiredRuntime.runtime_home_path, containerUser);
+    await ensureClaudeCleanupPeriod(fs, desiredRuntime.runtime_home_path, {
       ...containerUser,
       logger: console,
-      context: createRuntimeLogDetails(runtimeContext.runtime, {
+      context: createRuntimeLogDetails(desiredRuntime, {
         requestId: runtimeContext.logRequestId || null,
       }),
     });
-    await ensureContainer(runtimeContext.runtime, containerEnv, {
+    if (imageChanged) {
+      logRuntimeEvent('runtime_image_reconcile_start', createRuntimeLogDetails(desiredRuntime, {
+        requestId: runtimeContext.logRequestId || null,
+        previousImage: persistedRuntime.image,
+        desiredImage,
+      }));
+    }
+    await ensureContainer(desiredRuntime, containerEnv, {
       requestId: runtimeContext.logRequestId || null,
+      previousImage: imageChanged ? persistedRuntime.image : null,
     });
+    let imageRuntime = desiredRuntime;
+    if (imageChanged) {
+      if (typeof multitenancy.runtimes.updateImage !== 'function') {
+        throw new Error('Claude Docker runtime image persistence is unavailable');
+      }
+      const updatedImageRuntime = multitenancy.runtimes.updateImage({
+        runtimeId: desiredRuntime.runtime_id,
+        image: desiredImage,
+      });
+      if (!updatedImageRuntime || updatedImageRuntime.image !== desiredImage) {
+        throw new Error('Claude Docker runtime image could not be persisted');
+      }
+      imageRuntime = {
+        ...desiredRuntime,
+        ...updatedImageRuntime,
+        image: desiredImage,
+      };
+      logRuntimeEvent('runtime_image_reconciled', createRuntimeLogDetails(imageRuntime, {
+        requestId: runtimeContext.logRequestId || null,
+        previousImage: persistedRuntime.image,
+        desiredImage,
+      }));
+    }
     const wrapperPath = await writeWrapper({
       ...runtimeContext,
       runtime: {
-        ...runtimeContext.runtime,
+        ...imageRuntime,
         userEnv,
       },
     });
     const updatedRuntime = multitenancy.runtimes.updateStatus({
-      runtimeId: runtimeContext.runtime.runtime_id,
+      runtimeId: imageRuntime.runtime_id,
       status: 'active',
     });
     const runtime = {
-      ...runtimeContext.runtime,
+      ...imageRuntime,
       ...(updatedRuntime || {}),
+      image: desiredImage,
     };
     beginRuntimeUse(runtime.runtime_id);
     logRuntimeEvent('runtime_ready', createRuntimeLogDetails(runtime, {
