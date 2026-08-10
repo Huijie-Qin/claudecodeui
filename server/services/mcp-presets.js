@@ -23,6 +23,7 @@ export const MCP_CONTAINER_CONFIG_PATH = '/workspace/.mcp.json';
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const MCP_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const TENANT_ID_ENV_NAME = 'TENANT_ID';
 
 function createHttpError(message, statusCode = 400, code = undefined) {
   const error = new Error(message);
@@ -220,6 +221,7 @@ function summarizePresetTestEnv(env = {}) {
   const userKey = env[USER_KEY_ENV_NAME];
   return {
     W3_NAME: env[W3_NAME_ENV_NAME] || null,
+    TENANT_ID: env[TENANT_ID_ENV_NAME] || null,
     USER_KEY: userKey
       ? {
           present: true,
@@ -259,11 +261,13 @@ async function getPresetTestUserContext(users, userId) {
   };
 }
 
-async function buildPresetTestHostEnv(users, userId) {
+async function buildPresetTestHostEnv(users, userId, tenantId) {
   const normalizedUserId = requirePositiveInteger(userId, 'userId');
+  const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
   const { username, userEnv } = await getPresetTestUserContext(users, normalizedUserId);
   const env = {
     [W3_NAME_ENV_NAME]: username,
+    [TENANT_ID_ENV_NAME]: String(normalizedTenantId),
   };
 
   const userKey = userEnv?.[USER_KEY_ENV_NAME];
@@ -570,7 +574,7 @@ export function createMcpPresetService({
         hasDraftInput: Boolean(normalizedInput),
         config: summarizePresetTestConfig(baseProbeConfig),
       });
-      const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId);
+      const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId, tenantId);
       logPresetTest('env_ready', {
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),

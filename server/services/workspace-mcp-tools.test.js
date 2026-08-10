@@ -283,6 +283,7 @@ test('workspace mcp tools catalog resolves uploaded helper scripts before probin
           headersHelper: config.headersHelper,
           W3_NAME: process.env.W3_NAME,
           USER_KEY: process.env.USER_KEY,
+          TENANT_ID: process.env.TENANT_ID,
         });
         return {
           status: 'healthy',
@@ -325,6 +326,7 @@ test('workspace mcp tools catalog resolves uploaded helper scripts before probin
     assert.match(seen[0].headersHelper, /python3 auth\.py/);
     assert.equal(seen[0].W3_NAME, 'alice');
     assert.equal(seen[0].USER_KEY, 'security:test-user-key');
+    assert.equal(seen[0].TENANT_ID, String(tenant.id));
   } finally {
     await cleanup();
   }

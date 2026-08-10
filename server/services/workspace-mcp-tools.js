@@ -24,6 +24,7 @@ function createHttpError(message, statusCode = 400) {
 }
 
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const TENANT_ID_ENV_NAME = 'TENANT_ID';
 
 function requirePositiveInteger(value, name) {
   const number = Number(value);
@@ -79,10 +80,11 @@ async function getUserStore(users) {
   return userDb;
 }
 
-async function buildProbeHostEnv(users, userId) {
+async function buildProbeHostEnv(users, userId, tenantId) {
   if (!userId) {
     return {};
   }
+  const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
 
   let userStore;
   let user;
@@ -101,6 +103,7 @@ async function buildProbeHostEnv(users, userId) {
 
   const env = {
     [W3_NAME_ENV_NAME]: username,
+    [TENANT_ID_ENV_NAME]: String(normalizedTenantId),
   };
   let userEnv = {};
   try {
@@ -234,7 +237,7 @@ async function probeInstalledWorkspacePresets({
         multitenancy,
       });
       const runtimeProbeConfig = normalizeMcpServerConfigForProbeRuntime(probeConfig, { env });
-      const probeEnv = await buildProbeHostEnv(users, installRow?.installed_by_user_id);
+      const probeEnv = await buildProbeHostEnv(users, installRow?.installed_by_user_id, tenantId);
       const probeResult = await withTemporaryProcessEnv(
         probeEnv,
         () => probe(runtimeProbeConfig),

@@ -310,20 +310,25 @@ test('admin preset test temporarily injects user env into host process', async (
   const hadOriginalUserKey = Object.hasOwn(process.env, 'USER_KEY');
   const originalW3Name = process.env.W3_NAME;
   const hadOriginalW3Name = Object.hasOwn(process.env, 'W3_NAME');
+  const originalTenantId = process.env.TENANT_ID;
+  const hadOriginalTenantId = Object.hasOwn(process.env, 'TENANT_ID');
   let observedEnv = null;
 
   try {
     process.env.USER_KEY = 'outer-user-key';
     delete process.env.W3_NAME;
+    process.env.TENANT_ID = 'outer-tenant-id';
 
     const service = createMcpPresetService({
       multitenancy,
       users: createTestUsers(database, new Map([[adminId, { USER_KEY: 'security:admin-user-key' }]])),
       probeHttpMcpServer: async () => {
         assert.equal(process.env.W3_NAME, 'admin');
+        assert.equal(process.env.TENANT_ID, String(tenant.id));
         observedEnv = {
           USER_KEY: process.env.USER_KEY,
           W3_NAME: process.env.W3_NAME,
+          TENANT_ID: process.env.TENANT_ID,
         };
         return {
           status: 'healthy',
@@ -354,9 +359,11 @@ test('admin preset test temporarily injects user env into host process', async (
     assert.deepEqual(observedEnv, {
       USER_KEY: 'security:admin-user-key',
       W3_NAME: 'admin',
+      TENANT_ID: String(tenant.id),
     });
     assert.equal(process.env.USER_KEY, 'outer-user-key');
     assert.equal(Object.hasOwn(process.env, 'W3_NAME'), false);
+    assert.equal(process.env.TENANT_ID, 'outer-tenant-id');
   } finally {
     if (hadOriginalUserKey) {
       process.env.USER_KEY = originalUserKey;
@@ -367,6 +374,11 @@ test('admin preset test temporarily injects user env into host process', async (
       process.env.W3_NAME = originalW3Name;
     } else {
       delete process.env.W3_NAME;
+    }
+    if (hadOriginalTenantId) {
+      process.env.TENANT_ID = originalTenantId;
+    } else {
+      delete process.env.TENANT_ID;
     }
   }
 });
