@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -13,7 +13,8 @@ import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useModelResponseBrowserNotifications } from '../../hooks/useModelResponseBrowserNotifications';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
-import type { LLMProvider, Project, ProjectScheduledTask, Tenant } from '../../types/app';
+import { useAgentGraphFeatureStatus } from '../../features/agent-graph/agentGraphFeature';
+import type { AppTab, LLMProvider, Project, ProjectScheduledTask, Tenant } from '../../types/app';
 
 type ScheduledTaskEditorState = {
   project: Project;
@@ -34,6 +35,8 @@ export default function AppContent() {
   const wasConnectedRef = useRef(false);
   const [scheduledTaskEditor, setScheduledTaskEditor] = useState<ScheduledTaskEditorState | null>(null);
   const isSystemAdmin = isSystemAdminUser(user);
+  const isAgentGraphRoute = location.pathname === '/agent-graph';
+  const agentGraphFeature = useAgentGraphFeatureStatus();
 
   const {
     activeSessions,
@@ -67,6 +70,35 @@ export default function AppContent() {
     isMobile,
     activeSessions,
   });
+
+  useEffect(() => {
+    if (!agentGraphFeature.loaded) return;
+
+    if (isAgentGraphRoute && agentGraphFeature.enabled) {
+      if (activeTab !== 'agent-graph') {
+        setActiveTab('agent-graph');
+      }
+      return;
+    }
+
+    if (activeTab === 'agent-graph') {
+      setActiveTab('chat');
+    }
+    if (isAgentGraphRoute) {
+      navigate('/', { replace: true });
+    }
+  }, [activeTab, agentGraphFeature.enabled, agentGraphFeature.loaded, isAgentGraphRoute, navigate, setActiveTab]);
+
+  const handleActiveTabChange = useCallback((nextTabAction: SetStateAction<AppTab>) => {
+    const nextTab = typeof nextTabAction === 'function'
+      ? nextTabAction(activeTab)
+      : nextTabAction;
+
+    setActiveTab(nextTab);
+    if (isAgentGraphRoute && nextTab !== 'agent-graph') {
+      navigate('/');
+    }
+  }, [activeTab, isAgentGraphRoute, navigate, setActiveTab]);
 
   const handleTenantSwitch = useCallback((tenant: Tenant) => {
     selectTenant(tenant);
@@ -312,7 +344,7 @@ export default function AppContent() {
           selectedProject={selectedProject}
           selectedSession={selectedSession}
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={handleActiveTabChange}
           ws={ws}
           sendMessage={sendMessage}
           latestMessage={latestMessage}

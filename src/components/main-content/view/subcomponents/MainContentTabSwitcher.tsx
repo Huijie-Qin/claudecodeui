@@ -10,7 +10,6 @@ type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   disabledTabs?: ReadonlySet<AppTab>;
-  agentGraphEnabled?: boolean;
 };
 
 type TabDefinition = BuiltInMainContentTab;
@@ -19,10 +18,9 @@ export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
   disabledTabs,
-  agentGraphEnabled = false,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
-  const tabs: TabDefinition[] = buildMainContentTabs(agentGraphEnabled);
+  const tabs: TabDefinition[] = buildMainContentTabs();
 
   return (
     <PillBar>

@@ -3,14 +3,9 @@ import test from 'node:test';
 
 import { buildMainContentTabs } from './mainContentTabs';
 
-test('buildMainContentTabs hides Agent Graph by default', () => {
+test('buildMainContentTabs never exposes the address-only Agent Graph entry', () => {
   const tabs = buildMainContentTabs().map((tab) => tab.id);
 
   assert.deepEqual(tabs, ['chat', 'files', 'codehub', 'mcp-tools', 'sql-check']);
-});
-
-test('buildMainContentTabs exposes Agent Graph only when its experiment is enabled', () => {
-  const tabs = buildMainContentTabs(true).map((tab) => tab.id);
-
-  assert.deepEqual(tabs, ['chat', 'files', 'codehub', 'mcp-tools', 'sql-check', 'agent-graph']);
+  assert.equal(tabs.includes('agent-graph'), false);
 });
