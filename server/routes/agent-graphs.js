@@ -5,7 +5,11 @@ import { agentGraphsService } from '../services/agent-graphs.js';
 import { agentGraphExecutorService } from '../services/agent-graph-executor.js';
 import { topSkillJobsService } from '../services/top-skill-jobs.js';
 import { workspaceAccess } from '../services/workspace-access.js';
-import { FEATURE_FLAGS, featureFlagsService } from '../services/feature-flags.js';
+import {
+  FEATURE_FLAGS,
+  featureFlagsService,
+  isAgentGraphVisibleToUser,
+} from '../services/feature-flags.js';
 import {
   getRequestTenantId,
   getRequestUserId,
@@ -37,11 +41,12 @@ export function createAgentGraphsRouter({
   jobs = topSkillJobsService,
   executor = agentGraphExecutorService,
   featureFlags = featureFlagsService,
+  canUseAgentGraph = isAgentGraphVisibleToUser,
 } = {}) {
   const router = express.Router();
   router.use(tenantMiddleware);
   router.use('/:workspaceId/agent-graphs', (req, res, next) => {
-    if (!featureFlags.isEnabled(FEATURE_FLAGS.AGENT_GRAPH)) {
+    if (!featureFlags.isEnabled(FEATURE_FLAGS.AGENT_GRAPH) || !canUseAgentGraph(req.user)) {
       return res.status(404).json({ error: 'Agent Graph is not enabled' });
     }
     return next();

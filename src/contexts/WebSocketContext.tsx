@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
-import { publishAgentGraphFeatureEnabled } from '../features/agent-graph/agentGraphFeature';
+import { refreshAgentGraphFeatureEnabled } from '../features/agent-graph/agentGraphFeature';
 
 import { useTenant } from './TenantContext';
 import {
@@ -104,7 +104,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         try {
           const data = JSON.parse(event.data);
           if (data?.type === 'feature-flags-updated') {
-            publishAgentGraphFeatureEnabled(data.features?.agentGraph === true);
+            void refreshAgentGraphFeatureEnabled(true);
           }
           publishMessage(data);
         } catch (error) {

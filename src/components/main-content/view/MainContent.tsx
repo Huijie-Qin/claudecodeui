@@ -144,6 +144,7 @@ function MainContent({
         isMobile={isMobile}
         onMenuClick={onMenuClick}
         onSkillMarketClick={() => setShowSkillMarket(true)}
+        agentGraphEnabled={agentGraphEnabled}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">

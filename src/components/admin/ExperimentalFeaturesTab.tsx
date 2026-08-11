@@ -3,9 +3,7 @@ import { FlaskConical } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
-  publishAgentGraphFeatureEnabled,
   refreshAgentGraphFeatureEnabled,
-  useAgentGraphFeatureStatus,
 } from '../../features/agent-graph/agentGraphFeature';
 import { api } from '../../utils/api';
 import SettingsToggle from '../settings/view/SettingsToggle';
@@ -21,13 +19,36 @@ async function readError(response: Response, fallback: string): Promise<string> 
 
 export default function ExperimentalFeaturesTab() {
   const { t } = useTranslation('admin');
-  const { enabled, loaded } = useAgentGraphFeatureStatus();
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    void refreshAgentGraphFeatureEnabled(true);
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api.admin.featureFlags();
+        if (!response.ok) {
+          throw new Error(await readError(response, t('experimental.updateError')));
+        }
+        const payload = await response.json() as { features?: { agentGraph?: boolean } };
+        if (!cancelled) {
+          setEnabled(payload.features?.agentGraph === true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const text = error instanceof Error ? error.message : t('experimental.updateError');
+          setMessage({ type: 'error', text });
+        }
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
   const updateAgentGraph = async (nextEnabled: boolean) => {
     setIsSaving(true);
@@ -39,7 +60,8 @@ export default function ExperimentalFeaturesTab() {
       }
       const payload = await response.json() as { features?: { agentGraph?: boolean } };
       const savedValue = payload.features?.agentGraph === true;
-      publishAgentGraphFeatureEnabled(savedValue);
+      setEnabled(savedValue);
+      await refreshAgentGraphFeatureEnabled(true);
       setMessage({ type: 'success', text: t('experimental.updateSuccess') });
     } catch (error) {
       const text = error instanceof Error ? error.message : t('experimental.updateError');

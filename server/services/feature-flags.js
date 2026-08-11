@@ -5,6 +5,7 @@ export const FEATURE_FLAGS = Object.freeze({
 });
 
 export const SHOW_EXPERIMENTAL_FEATURES_ENV = 'CCUI_SHOW_EXPERIMENTAL_FEATURES';
+export const AGENT_GRAPH_VISIBLE_USERS_ENV = 'CCUI_AGENT_GRAPH_VISIBLE_USERS';
 
 const CONFIG_KEYS = Object.freeze({
   [FEATURE_FLAGS.AGENT_GRAPH]: 'feature.agent_graph.enabled',
@@ -16,6 +17,34 @@ function parseEnabled(value) {
 
 export function shouldShowExperimentalFeatures(env = process.env) {
   return parseEnabled(env[SHOW_EXPERIMENTAL_FEATURES_ENV]);
+}
+
+export function getAgentGraphVisibleUsers(env = process.env) {
+  return new Set(
+    String(env[AGENT_GRAPH_VISIBLE_USERS_ENV] || '')
+      .split(/[\s,;]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function isAgentGraphVisibleToUser(user, env = process.env) {
+  const whitelist = getAgentGraphVisibleUsers(env);
+  if (whitelist.has('*')) return true;
+  if (!user || whitelist.size === 0) return false;
+
+  return [user.id, user.user_id, user.username, user.email]
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .some((value) => whitelist.has(String(value).trim().toLowerCase()));
+}
+
+export function getFeatureFlagsForUser(featureFlags, user, env = process.env) {
+  const features = featureFlags.getAll();
+  return {
+    ...features,
+    [FEATURE_FLAGS.AGENT_GRAPH]: features[FEATURE_FLAGS.AGENT_GRAPH] === true
+      && isAgentGraphVisibleToUser(user, env),
+  };
 }
 
 export function createFeatureFlagsService(config = appConfigDb) {

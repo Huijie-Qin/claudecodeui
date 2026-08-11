@@ -10,14 +10,14 @@ import {
 import { codeHubService } from '../services/codehub.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
-import { featureFlagsService } from '../services/feature-flags.js';
+import { featureFlagsService, getFeatureFlagsForUser } from '../services/feature-flags.js';
 
 import { createPersonalKeyHandler } from './personal-key.js';
 
 const router = express.Router();
 
 router.get('/feature-flags', (req, res) => {
-  res.json({ features: featureFlagsService.getAll() });
+  res.json({ features: getFeatureFlagsForUser(featureFlagsService, req.user) });
 });
 
 function broadcastModelResponseHookConfig(clients, userId, config) {

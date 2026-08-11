@@ -31,7 +31,14 @@ async function requestJson(router, requestPath, { method = 'GET', body = null } 
   });
 }
 
-function createRouter({ accessRole = 'view', service = {}, jobs = {}, executor = {}, requireWorkspace } = {}) {
+function createRouter({
+  accessRole = 'view',
+  service = {},
+  jobs = {},
+  executor = {},
+  requireWorkspace,
+  canUseAgentGraph = () => true,
+} = {}) {
   return createAgentGraphsRouter({
     tenantMiddleware: (req, res, next) => {
       req.tenant = { id: 2 };
@@ -67,6 +74,7 @@ function createRouter({ accessRole = 'view', service = {}, jobs = {}, executor =
     featureFlags: {
       isEnabled: () => true,
     },
+    canUseAgentGraph,
   });
 }
 
@@ -206,6 +214,14 @@ test('Agent Graph endpoints are hidden while the global feature flag is disabled
     },
     featureFlags: { isEnabled: () => false },
   });
+
+  const { response, payload } = await requestJson(router, '/10/agent-graphs?tenantId=2');
+  assert.equal(response.status, 404);
+  assert.equal(payload.error, 'Agent Graph is not enabled');
+});
+
+test('Agent Graph endpoints are hidden from users outside the environment whitelist', async () => {
+  const router = createRouter({ canUseAgentGraph: () => false });
 
   const { response, payload } = await requestJson(router, '/10/agent-graphs?tenantId=2');
   assert.equal(response.status, 404);
