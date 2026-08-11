@@ -4,8 +4,8 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 
 import {
-  HOOK_CONFIG_POST_MIGRATION_SQL,
   HOOK_CONFIG_SCHEMA_SQL,
+  migrateHookActivationModel,
 } from '../database/hook-config-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
@@ -17,8 +17,8 @@ function createFixture() {
     CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);
     CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ${HOOK_CONFIG_SCHEMA_SQL}
-    ${HOOK_CONFIG_POST_MIGRATION_SQL}
   `);
+  migrateHookActivationModel(database);
   database.prepare('INSERT INTO users (id, username) VALUES (1, ?)').run('admin');
   database.prepare('INSERT INTO users (id, username) VALUES (2, ?)').run('member');
   const values = new Map();
@@ -74,24 +74,40 @@ test('Hook configuration CRUD persists ordered actions and publication state', (
     const published = service.publishHook({ hookId: created.id, userId: 1 });
     assert.equal(published.status, 'published');
     assert.equal(published.version, 1);
-    assert.equal(published.globalEnabled, false);
     assert.equal(published.boundUserCount, 0);
     assert.ok(published.publishedAt);
 
     const started = service.startHook({ hookId: created.id, userId: 1 });
     assert.equal(started.status, 'published');
-    assert.equal(started.globalEnabled, true);
+    assert.equal(started.activationScope, 'all_users');
     assert.equal(started.boundUserCount, 2);
     assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
     assert.equal(service.getHook(created.id).boundUserCount, 3);
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
 
     const stopped = service.stopHook({ hookId: created.id, userId: 1 });
     assert.equal(stopped.status, 'published');
-    assert.equal(stopped.globalEnabled, false);
-    assert.equal(stopped.boundUserCount, 3);
+    assert.equal(stopped.activationScope, 'manual');
+    assert.equal(stopped.boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+
+    database.prepare(`
+      INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+      VALUES (?, ?, ?)
+    `).run(3, created.id, 3);
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+
+    const restarted = service.startHook({ hookId: created.id, userId: 1 });
+    assert.equal(restarted.boundUserCount, 3);
+    database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
+    assert.equal(service.getHook(created.id).boundUserCount, 4);
+    const stoppedAgain = service.stopHook({ hookId: created.id, userId: 1 });
+    assert.equal(stoppedAgain.boundUserCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(4), []);
     const listed = service.listHooks()[0];
     assert.equal(listed.actionCount, 2);
     assert.deepEqual(listed.actions.map((action) => action.id), ['context', 'tool']);
@@ -148,6 +164,65 @@ test('visible event settings are validated and persisted', () => {
     );
     assert.deepEqual(service.getSettings().visibleEvents, ['StopFailure', 'PreToolUse']);
     assert.throws(() => service.updateSettings({ visibleEvents: [] }), /Select at least one/);
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy global activation migrates to activation scope and sourced bindings', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY
+      );
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'published',
+        global_enabled INTEGER NOT NULL DEFAULT 0,
+        updated_by INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE user_hook_bindings (
+        user_id INTEGER NOT NULL,
+        hook_id TEXT NOT NULL,
+        bound_by INTEGER,
+        PRIMARY KEY (user_id, hook_id)
+      );
+      INSERT INTO users (id) VALUES (1);
+      INSERT INTO hooks (id, global_enabled) VALUES ('active', 1), ('stopped', 0);
+      INSERT INTO user_hook_bindings (user_id, hook_id) VALUES (1, 'active'), (1, 'stopped');
+    `);
+
+    assert.deepEqual(migrateHookActivationModel(database), {
+      migratedGlobalEnabled: true,
+      addedActivationScope: true,
+      addedBindingSource: true,
+    });
+    assert.equal(
+      database.prepare('PRAGMA table_info(hooks)').all().some((column) => column.name === 'global_enabled'),
+      false,
+    );
+    assert.deepEqual(
+      database.prepare('SELECT user_id, hook_id, binding_source FROM user_hook_bindings ORDER BY hook_id').all(),
+      [{ user_id: 1, hook_id: 'active', binding_source: 'admin_global' }],
+    );
+    assert.equal(
+      database.prepare("SELECT activation_scope FROM hooks WHERE id = 'active'").get().activation_scope,
+      'all_users',
+    );
+    database.prepare('INSERT INTO users (id) VALUES (2)').run();
+    assert.deepEqual(
+      database.prepare('SELECT user_id, binding_source FROM user_hook_bindings WHERE hook_id = ? ORDER BY user_id').all('active'),
+      [
+        { user_id: 1, binding_source: 'admin_global' },
+        { user_id: 2, binding_source: 'admin_global' },
+      ],
+    );
+    assert.deepEqual(migrateHookActivationModel(database), {
+      migratedGlobalEnabled: false,
+      addedActivationScope: false,
+      addedBindingSource: false,
+    });
   } finally {
     database.close();
   }

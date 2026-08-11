@@ -678,6 +678,7 @@ export default function HookConfigEditor({
   const [expandedActions, setExpandedActions] = useState<Set<string>>(() => new Set(hook.actions.map((action) => action.id)));
   const isPersisted = 'id' in hook;
   const status = isPersisted ? hook.status : 'draft';
+  const isRunning = isPersisted && hook.activationScope === 'all_users';
   const eventDefinition = EVENT_BY_NAME.get(hook.eventName);
   const fields = useMemo(() => buildFieldChoices(hook, resources), [hook, resources]);
   const gateFields = fields.filter((field) => field.gateAllowed !== false);
@@ -800,13 +801,13 @@ export default function HookConfigEditor({
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
         </div>
-        {isPersisted && status === 'published' && hook.globalEnabled ? (
+        {isPersisted && status === 'published' && isRunning ? (
           <Button type="button" variant="outline" size="sm" onClick={onStop} disabled={busy}>
             <PowerOff className="h-4 w-4" />
             {t('hooks.stop')}
           </Button>
         ) : null}
-        {isPersisted && status === 'published' && !hook.globalEnabled ? (
+        {isPersisted && status === 'published' && !isRunning ? (
           <Button type="button" variant="outline" size="sm" onClick={onStart} disabled={busy}>
             <Power className="h-4 w-4" />
             {t('hooks.start')}

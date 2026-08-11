@@ -413,7 +413,7 @@ function mapHookRow(row, actions = []) {
     name: row.name,
     description: row.description || '',
     status: row.status,
-    globalEnabled: Boolean(row.global_enabled),
+    activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
     gate: parseJson(row.gate_json, { mode: 'all', conditions: [] }),
@@ -604,7 +604,6 @@ export function createHookConfigService({ database = db, configStore = appConfig
           ON binding.hook_id = h.id
          AND binding.user_id = ?
         WHERE h.status = 'published'
-          AND h.global_enabled = 1
         ORDER BY h.updated_at DESC, h.created_at DESC
       `).all(userId);
       const loadActions = database.prepare(`
@@ -649,7 +648,7 @@ export function createHookConfigService({ database = db, configStore = appConfig
           UPDATE hooks
           SET name = ?, description = ?, status = 'draft', event_name = ?,
               matcher_json = ?, gate_json = ?, advanced_script_json = ?,
-              global_enabled = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+              updated_by = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(
           normalized.name,
@@ -670,13 +669,24 @@ export function createHookConfigService({ database = db, configStore = appConfig
     publishHook: ({ hookId, userId }) => {
       const hook = requireHook(hookId);
       normalizeHookInput(hook, { strict: true });
-      database.prepare(`
-        UPDATE hooks
-        SET status = 'published', version = version + 1,
-            global_enabled = 0, published_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP, updated_by = ?
-        WHERE id = ?
-      `).run(userId, hookId);
+      const publish = database.transaction(() => {
+        database.prepare(`
+          UPDATE hooks
+          SET status = 'published', version = version + 1,
+              published_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          WHERE id = ?
+        `).run(userId, hookId);
+        if (hook.activationScope === 'all_users') {
+          database.prepare(`
+            INSERT OR IGNORE INTO user_hook_bindings (
+              user_id, hook_id, bound_by, binding_source
+            )
+            SELECT id, ?, ?, 'admin_global' FROM users
+          `).run(hookId, userId);
+        }
+      });
+      publish();
       return getHook(hookId);
     },
 
@@ -688,12 +698,14 @@ export function createHookConfigService({ database = db, configStore = appConfig
       const start = database.transaction(() => {
         database.prepare(`
           UPDATE hooks
-          SET global_enabled = 1, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          SET activation_scope = 'all_users', updated_at = CURRENT_TIMESTAMP, updated_by = ?
           WHERE id = ?
         `).run(userId, hookId);
         database.prepare(`
-          INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
-          SELECT id, ?, ? FROM users
+          INSERT OR IGNORE INTO user_hook_bindings (
+            user_id, hook_id, bound_by, binding_source
+          )
+          SELECT id, ?, ?, 'admin_global' FROM users
         `).run(hookId, userId);
       });
       start();
@@ -705,11 +717,18 @@ export function createHookConfigService({ database = db, configStore = appConfig
       if (hook.status !== 'published') {
         throw createHttpError('Only a published Hook can be stopped');
       }
-      database.prepare(`
-        UPDATE hooks
-        SET global_enabled = 0, updated_at = CURRENT_TIMESTAMP, updated_by = ?
-        WHERE id = ?
-      `).run(userId, hookId);
+      const stop = database.transaction(() => {
+        database.prepare(`
+          DELETE FROM user_hook_bindings
+          WHERE hook_id = ? AND binding_source = 'admin_global'
+        `).run(hookId);
+        database.prepare(`
+          UPDATE hooks
+          SET activation_scope = 'manual', updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          WHERE id = ?
+        `).run(userId, hookId);
+      });
+      stop();
       return getHook(hookId);
     },
 

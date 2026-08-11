@@ -112,7 +112,7 @@ export type HookConfig = HookConfigDraft & {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
-  globalEnabled: boolean;
+  activationScope: 'manual' | 'all_users';
   boundUserCount: number;
   actionCount?: number;
 };

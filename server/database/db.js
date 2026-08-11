@@ -32,7 +32,7 @@ import {
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
-import { HOOK_CONFIG_POST_MIGRATION_SQL, HOOK_CONFIG_SCHEMA_SQL } from './hook-config-schema.js';
+import { HOOK_CONFIG_SCHEMA_SQL, migrateHookActivationModel } from './hook-config-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
@@ -192,8 +192,7 @@ const runMigrations = () => {
     migrateSqlCheckPreferencesToWorkspaceScope();
     db.exec(MULTITENANCY_SCHEMA_SQL);
     db.exec(HOOK_CONFIG_SCHEMA_SQL);
-    ensureColumn('hooks', 'global_enabled', 'INTEGER NOT NULL DEFAULT 0');
-    db.exec(HOOK_CONFIG_POST_MIGRATION_SQL);
+    migrateHookActivationModel(db);
     runMultitenancyMigrations();
 
     console.log('Database migrations completed successfully');
@@ -416,8 +415,7 @@ const initializeDatabase = async () => {
   try {
     db.exec(DATABASE_SCHEMA_SQL);
     db.exec(HOOK_CONFIG_SCHEMA_SQL);
-    ensureColumn('hooks', 'global_enabled', 'INTEGER NOT NULL DEFAULT 0');
-    db.exec(HOOK_CONFIG_POST_MIGRATION_SQL);
+    migrateHookActivationModel(db);
     console.log('Database initialized successfully');
     runMigrations();
   } catch (error) {

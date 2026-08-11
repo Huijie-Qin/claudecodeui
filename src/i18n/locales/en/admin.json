@@ -413,7 +413,8 @@
     "publish": "Publish",
     "start": "Start",
     "stop": "Stop",
-    "started": "Started",
+    "started": "Enabled for all users",
+    "partiallyStarted": "Enabled by some users",
     "stopped": "Not started",
     "delete": "Delete",
     "edit": "Edit",
@@ -673,8 +674,8 @@
     "toast": {
       "saved": "Hook draft saved",
       "published": "Hook published",
-      "started": "Hook started for all users; {{count}} users are bound",
-      "stopped": "Hook stopped",
+      "started": "Hook enabled for all current users; {{count}} bindings written",
+      "stopped": "Global distribution stopped; user bindings were preserved",
       "deleted": "Hook deleted",
       "eventsSaved": "Visible trigger events saved"
     }

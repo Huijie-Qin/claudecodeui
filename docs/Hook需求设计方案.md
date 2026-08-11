@@ -9,9 +9,9 @@
 - Hook 由系统管理员统一创建、编辑、发布、启动、停止和删除。
 - 不提供普通用户点击安装、启用或停用 Hook 的入口。
 - 新发布 Hook 默认未启动；管理员点击“启动”后为全部现有用户绑定并开启。
-- Hook 启动后创建的新用户会自动绑定该 Hook。
+- 管理员全局启动的 Hook 会自动绑定后续新建用户。
 - Hook 不按项目单独配置，不在基本信息中配置用户权限。
-- Hook 配置、全局启动状态、用户绑定关系和运行记录均保存到 CCUI 数据库，不写入 .claude/settings.json。
+- Hook 配置、用户绑定关系和运行记录均保存到 CCUI 数据库，不写入 .claude/settings.json。
 - 继续使用当前安装的 @anthropic-ai/claude-agent-sdk 0.2.116，不要求升级版本。
 
 ### 1.1 当前实现状态
@@ -27,7 +27,7 @@
 | Claude Agent SDK Hook 执行接入 | 未实现 | 尚未把已发布配置编译到 options.hooks |
 | 高级脚本真实执行 | 未实现 | 配置模板已定义只读 workspace API；当前仍只保存脚本配置 |
 | 基础行为真实执行 | 未实现 | 当前只保存行为配置 |
-| 用户 Hook 绑定 | 已实现 | 启动时绑定全部用户，新用户自动绑定；不提供用户安装入口 |
+| 用户 Hook 绑定 | 已实现 | 绑定记录是实际启用依据，并区分管理员全局绑定和用户自主绑定 |
 | 模拟测试与运行记录 | 未实现 | 作为执行引擎阶段实现 |
 
 ## 2. 背景与目标
@@ -94,7 +94,7 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 
 ### 4.2 普通用户
 
-普通用户不需要安装或手动启停 Hook。管理员启动后，系统通过 `user_hook_bindings` 将 Hook 绑定到全部用户；后续执行器只加载当前用户已绑定且全局已启动的 Hook。
+当前版本不提供普通用户安装或手动启停页面。管理员全局启动后，系统通过 `user_hook_bindings` 将 Hook 绑定到当前用户和后续新建用户；后续执行器只加载当前用户存在绑定记录的已发布 Hook。未来增加用户自行添加功能时，只需为该用户插入一条 `binding_source = user` 的绑定记录。
 
 普通用户不能：
 
@@ -631,7 +631,7 @@ type HookConfig = {
     config: Record<string, unknown>;
   }>;
   version: number;
-  globalEnabled: boolean;
+  activationScope: 'manual' | 'all_users';
   boundUserCount: number;
   createdBy: number;
   updatedBy: number;
@@ -647,8 +647,8 @@ type HookConfig = {
 stateDiagram-v2
   [*] --> draft
   draft --> publishedStopped: 发布
-  publishedStopped --> publishedStarted: 启动（绑定全部用户）
-  publishedStarted --> publishedStopped: 停止
+  publishedStopped --> publishedStarted: 启动（持续向全部用户分发）
+  publishedStarted --> publishedStopped: 停止（移除管理员全局绑定）
   publishedStarted --> draft: 编辑并保存
   publishedStopped --> draft: 编辑并保存
   draft --> [*]: 删除
@@ -656,17 +656,20 @@ stateDiagram-v2
   publishedStopped --> [*]: 删除
 ~~~
 
+图中的 `publishedStarted` 和 `publishedStopped` 是页面逻辑状态，数据库中的 `status` 都是 `published`；两者通过 `activation_scope` 区分。`manual` 模式下仍可能存在部分用户自主绑定。
+
 规则：
 
 - 新建 Hook 状态为 draft。
 - 保存已发布 Hook 后重新变为 draft。
 - 发布前执行严格校验。
 - 发布成功后版本号加 1。
-- 发布成功后 `global_enabled = 0`，必须由管理员点击“启动”。
-- 启动时在一个事务中设置 `global_enabled = 1`，并为 `users` 表中的全部用户写入绑定关系。
-- Hook 启动期间新增用户时，数据库触发器自动写入绑定关系。
-- 停止只设置 `global_enabled = 0`，不删除绑定记录。
-- 后续执行器只加载 `published + global_enabled + 当前用户已绑定` 的 Hook。
+- 新 Hook 发布后没有用户绑定，必须由管理员点击“启动”。
+- 启动时把 `activation_scope` 设置为 `all_users`，并为当前 `users` 表中的全部用户写入 `admin_global` 绑定。
+- `all_users` Hook 在新用户创建后自动写入 `admin_global` 绑定。
+- 停止时把 `activation_scope` 设置为 `manual`，只删除 `admin_global` 绑定，保留未来用户自主添加的 `user` 绑定。
+- 用户是否启用 Hook 只由 `user_hook_bindings` 是否存在对应记录决定。
+- 后续执行器只加载 `published + 当前用户已绑定` 的 Hook。
 - 发布至少包含一个基础行为。
 
 ### 12.1 当前配置限制
@@ -695,7 +698,7 @@ hooks：
 - gate_json
 - advanced_script_json
 - version
-- global_enabled
+- activation_scope：`manual` 或 `all_users`
 - created_by
 - updated_by
 - created_at
@@ -717,10 +720,11 @@ user_hook_bindings：
 - user_id
 - hook_id
 - bound_by
+- binding_source：`user`、`admin_manual` 或 `admin_global`
 - bound_at
 - updated_at
 
-`(user_id, hook_id)` 是主键。该表表示用户与 Hook 的绑定关系，不表示用户自行安装，也不提供用户侧开关。执行器通过该表查询当前用户可加载的 Hook。
+`(user_id, hook_id)` 是主键。绑定记录本身就是该用户启用 Hook 的状态：插入表示启用，删除表示停用。`activation_scope` 只描述管理员是否向全部用户持续分发，不直接参与单次执行判断。`binding_source` 用于保证管理员停止全局分发时不会误删用户自主绑定。
 
 ### 13.2 执行阶段新增表
 
@@ -762,7 +766,7 @@ user_hook_bindings：
 | PUT | /api/admin/hooks/:hookId | 保存 Hook |
 | POST | /api/admin/hooks/:hookId/publish | 发布 |
 | POST | /api/admin/hooks/:hookId/start | 为全部用户启动 |
-| POST | /api/admin/hooks/:hookId/stop | 停止全局执行 |
+| POST | /api/admin/hooks/:hookId/stop | 停止全局分发并移除 admin_global 绑定 |
 | DELETE | /api/admin/hooks/:hookId | 删除 |
 | GET | /api/admin/hooks/settings | 获取可见事件 |
 | PUT | /api/admin/hooks/settings | 保存可见事件 |
@@ -1094,8 +1098,8 @@ const compiledAdminHooks = {
 ~~~mermaid
 flowchart TD
   A["取得服务端认证 userId"] --> B["查询 published Hook"]
-  B --> C["筛选 global_enabled = 1"]
-  C --> D["联查当前用户的 Hook 绑定"]
+  B --> C["联查当前用户的 Hook 绑定"]
+  C --> D["过滤无绑定记录的 Hook"]
   D --> E["校验 Event 是否属于 SDK HOOK_EVENTS"]
   E --> F["读取 Hook 发布版本快照"]
   F --> G["校验 Matcher 与事件能力"]
@@ -1111,7 +1115,7 @@ flowchart TD
 
 1. 从 ws.userId 读取当前认证用户，不接收前端提交的 userId。
 2. 查询 status 为 published 的 Hook。
-3. 联查 `user_hook_bindings`，只保留 `global_enabled = 1` 且当前用户存在绑定记录的 Hook。
+3. 联查 `user_hook_bindings`，只保留当前用户存在绑定记录的 Hook。
 4. 加载不可变的发布版本，避免运行中读取到正在编辑的草稿。
 5. 使用 SDK 导出的 HOOK_EVENTS 校验 eventName。
 6. 校验当前事件是否支持已配置的基础行为。
@@ -1397,12 +1401,12 @@ Skill：send-sms
 11. 调用工具只展示真实可用的 MCP 工具，并根据 inputSchema 生成参数表单。
 12. PreToolUse 未精确选择工具时不能发布修改输入行为。
 13. 发布前后端必须完成严格校验。
-14. 发布后 Hook 默认未启动；启动后为全部现有用户建立绑定，新用户自动绑定。
+14. 新 Hook 发布后默认没有用户绑定；全局启动覆盖当前和后续新用户，停止时保留用户自主绑定。
 15. 高级脚本模板提供只读 workspace API 及 @output 到基础行为的注释示例。
 
 ### 18.2 执行阶段
 
-1. 每次 query 只加载全局已启动、当前用户已绑定的 published Hook。
+1. 每次 query 只加载当前用户已绑定的 published Hook。
 2. Matcher、高级脚本、统一门槛和基础行为按规定顺序执行。
 3. 高级脚本在安全隔离环境中运行。
 4. 修改输入返回完整 updatedInput。
@@ -1423,7 +1427,7 @@ Skill：send-sms
 - src/components/admin/hook-config/catalog.ts：28 个事件、字段和行为能力矩阵。
 - src/components/admin/hook-config/types.ts：前端配置类型。
 - server/services/hook-configs.js：后端校验、CRUD、资源目录。
-- server/database/hook-config-schema.js：hooks、hook_actions 与 user_hook_bindings 数据库表及新用户自动绑定触发器。
+- server/database/hook-config-schema.js：Hook 表、用户绑定来源、全局分发范围、新用户自动绑定及旧字段迁移。
 - server/routes/admin.js：Admin Hook API。
 - server/services/hook-configs.test.js：Hook 配置服务测试。
 

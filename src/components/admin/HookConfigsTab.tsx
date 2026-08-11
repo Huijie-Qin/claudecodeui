@@ -464,8 +464,12 @@ export default function HookConfigsTab() {
                         <h3 className="truncate text-sm font-semibold text-foreground">{hook.name}</h3>
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
                         {hook.status === 'published' ? (
-                          <Badge variant={hook.globalEnabled ? 'default' : 'outline'}>
-                            {t(hook.globalEnabled ? 'hooks.started' : 'hooks.stopped')}
+                          <Badge variant={hook.activationScope === 'all_users' ? 'default' : 'outline'}>
+                            {t(hook.activationScope === 'all_users'
+                              ? 'hooks.started'
+                              : hook.boundUserCount > 0
+                                ? 'hooks.partiallyStarted'
+                                : 'hooks.stopped')}
                           </Badge>
                         ) : null}
                       </div>
@@ -488,7 +492,7 @@ export default function HookConfigsTab() {
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
                   </Button>
-                  {hook.status === 'published' && hook.globalEnabled ? (
+                  {hook.status === 'published' && hook.activationScope === 'all_users' ? (
                     <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void setRunning(false, hook.id)}>
                       <PowerOff className="h-3.5 w-3.5" />
                       {t('hooks.stop')}

@@ -367,7 +367,8 @@
     "publish": "发布",
     "start": "启动",
     "stop": "停止",
-    "started": "已启动",
+    "started": "全局已启用",
+    "partiallyStarted": "部分用户已启用",
     "stopped": "未启动",
     "delete": "删除",
     "edit": "编辑",
@@ -627,8 +628,8 @@
     "toast": {
       "saved": "Hook 草稿已保存",
       "published": "Hook 已发布",
-      "started": "Hook 已为全部用户启动，共绑定 {{count}} 个用户",
-      "stopped": "Hook 已停止",
+      "started": "已为当前全部用户启用 Hook，共写入 {{count}} 条绑定",
+      "stopped": "Hook 已停止全局分发，用户自主绑定已保留",
       "deleted": "Hook 已删除",
       "eventsSaved": "可见触发位置已保存"
     }

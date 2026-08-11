@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   gate_json TEXT NOT NULL DEFAULT '{"mode":"all","conditions":[]}',
   advanced_script_json TEXT,
   version INTEGER NOT NULL DEFAULT 0,
-  global_enabled INTEGER NOT NULL DEFAULT 0 CHECK (global_enabled IN (0, 1)),
+  activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users')),
   created_by INTEGER NOT NULL,
   updated_by INTEGER NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS user_hook_bindings (
   user_id INTEGER NOT NULL,
   hook_id TEXT NOT NULL,
   bound_by INTEGER,
+  binding_source TEXT NOT NULL DEFAULT 'user' CHECK (binding_source IN ('user', 'admin_manual', 'admin_global')),
   bound_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, hook_id),
@@ -55,16 +56,66 @@ CREATE INDEX IF NOT EXISTS idx_user_hook_bindings_hook
   ON user_hook_bindings(hook_id, user_id);
 `;
 
-export const HOOK_CONFIG_POST_MIGRATION_SQL = `
-CREATE INDEX IF NOT EXISTS idx_hooks_global_enabled
-  ON hooks(global_enabled, status);
+export function migrateHookActivationModel(database) {
+  database.exec(`
+    DROP TRIGGER IF EXISTS trg_bind_active_hooks_after_user_insert;
+    DROP INDEX IF EXISTS idx_hooks_global_enabled;
+  `);
+  const hookColumns = database.prepare('PRAGMA table_info(hooks)').all();
+  const bindingColumns = database.prepare('PRAGMA table_info(user_hook_bindings)').all();
+  const hasGlobalEnabled = hookColumns.some((column) => column.name === 'global_enabled');
+  const hasActivationScope = hookColumns.some((column) => column.name === 'activation_scope');
+  const hasBindingSource = bindingColumns.some((column) => column.name === 'binding_source');
 
-CREATE TRIGGER IF NOT EXISTS trg_bind_active_hooks_after_user_insert
-AFTER INSERT ON users
-BEGIN
-  INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
-  SELECT NEW.id, id, updated_by
-  FROM hooks
-  WHERE status = 'published' AND global_enabled = 1;
-END;
-`;
+  const migrate = database.transaction(() => {
+    if (!hasActivationScope) {
+      database.exec("ALTER TABLE hooks ADD COLUMN activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users'))");
+    }
+    if (!hasBindingSource) {
+      database.exec("ALTER TABLE user_hook_bindings ADD COLUMN binding_source TEXT NOT NULL DEFAULT 'user' CHECK (binding_source IN ('user', 'admin_manual', 'admin_global'))");
+    }
+    if (hasGlobalEnabled) {
+      database.prepare(`
+        UPDATE hooks
+        SET activation_scope = CASE global_enabled WHEN 1 THEN 'all_users' ELSE 'manual' END
+      `).run();
+      database.prepare(`
+        UPDATE user_hook_bindings
+        SET binding_source = 'admin_global'
+        WHERE hook_id IN (
+          SELECT id FROM hooks WHERE global_enabled = 1
+        )
+      `).run();
+      database.prepare(`
+        DELETE FROM user_hook_bindings
+        WHERE hook_id IN (
+          SELECT id FROM hooks WHERE global_enabled = 0
+        )
+      `).run();
+      database.exec('ALTER TABLE hooks DROP COLUMN global_enabled');
+    }
+  });
+  migrate();
+
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_hooks_activation_scope
+      ON hooks(activation_scope, status);
+
+    CREATE TRIGGER IF NOT EXISTS trg_bind_all_user_hooks_after_user_insert
+    AFTER INSERT ON users
+    BEGIN
+      INSERT OR IGNORE INTO user_hook_bindings (
+        user_id, hook_id, bound_by, binding_source
+      )
+      SELECT NEW.id, id, updated_by, 'admin_global'
+      FROM hooks
+      WHERE status = 'published' AND activation_scope = 'all_users';
+    END;
+  `);
+
+  return {
+    migratedGlobalEnabled: hasGlobalEnabled,
+    addedActivationScope: !hasActivationScope,
+    addedBindingSource: !hasBindingSource,
+  };
+}
