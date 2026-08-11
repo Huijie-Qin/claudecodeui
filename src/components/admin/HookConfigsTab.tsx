@@ -270,9 +270,7 @@ export default function HookConfigsTab() {
       const payload = await response.json() as { hook: HookConfig };
       replaceHook(payload.hook);
       if (editor && 'id' in editor && editor.id === payload.hook.id) setEditor(payload.hook);
-      showToast(t(enabled ? 'hooks.toast.started' : 'hooks.toast.stopped', {
-        count: payload.hook.boundUserCount,
-      }), 'success');
+      showToast(t(enabled ? 'hooks.toast.started' : 'hooks.toast.stopped'), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error
         ? caughtError.message
@@ -482,7 +480,9 @@ export default function HookConfigsTab() {
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
                     <span>{t('hooks.actionCount', { count: hook.actionCount ?? hook.actions.length })}</span>
-                    {hook.boundUserCount > 0 ? <span>{t('hooks.boundUserCount', { count: hook.boundUserCount })}</span> : null}
+                    {hook.activationScope === 'manual' && hook.boundUserCount > 0
+                      ? <span>{t('hooks.boundUserCount', { count: hook.boundUserCount })}</span>
+                      : null}
                     {hook.version > 0 ? <span>v{hook.version}</span> : null}
                     <span className="ml-auto flex items-center gap-1"><Clock3 className="h-3 w-3" />{formatDate(hook.updatedAt, i18n.language)}</span>
                   </div>

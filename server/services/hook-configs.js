@@ -600,10 +600,16 @@ export function createHookConfigService({ database = db, configStore = appConfig
         SELECT h.*,
           (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count
         FROM hooks h
-        JOIN user_hook_bindings binding
-          ON binding.hook_id = h.id
-         AND binding.user_id = ?
         WHERE h.status = 'published'
+          AND (
+            h.activation_scope = 'all_users'
+            OR EXISTS (
+              SELECT 1
+              FROM user_hook_bindings binding
+              WHERE binding.hook_id = h.id
+                AND binding.user_id = ?
+            )
+          )
         ORDER BY h.updated_at DESC, h.created_at DESC
       `).all(userId);
       const loadActions = database.prepare(`
@@ -669,24 +675,13 @@ export function createHookConfigService({ database = db, configStore = appConfig
     publishHook: ({ hookId, userId }) => {
       const hook = requireHook(hookId);
       normalizeHookInput(hook, { strict: true });
-      const publish = database.transaction(() => {
-        database.prepare(`
-          UPDATE hooks
-          SET status = 'published', version = version + 1,
-              published_at = CURRENT_TIMESTAMP,
-              updated_at = CURRENT_TIMESTAMP, updated_by = ?
-          WHERE id = ?
-        `).run(userId, hookId);
-        if (hook.activationScope === 'all_users') {
-          database.prepare(`
-            INSERT OR IGNORE INTO user_hook_bindings (
-              user_id, hook_id, bound_by, binding_source
-            )
-            SELECT id, ?, ?, 'admin_global' FROM users
-          `).run(hookId, userId);
-        }
-      });
-      publish();
+      database.prepare(`
+        UPDATE hooks
+        SET status = 'published', version = version + 1,
+            published_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, updated_by = ?
+        WHERE id = ?
+      `).run(userId, hookId);
       return getHook(hookId);
     },
 
@@ -695,20 +690,11 @@ export function createHookConfigService({ database = db, configStore = appConfig
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before starting it');
       }
-      const start = database.transaction(() => {
-        database.prepare(`
-          UPDATE hooks
-          SET activation_scope = 'all_users', updated_at = CURRENT_TIMESTAMP, updated_by = ?
-          WHERE id = ?
-        `).run(userId, hookId);
-        database.prepare(`
-          INSERT OR IGNORE INTO user_hook_bindings (
-            user_id, hook_id, bound_by, binding_source
-          )
-          SELECT id, ?, ?, 'admin_global' FROM users
-        `).run(hookId, userId);
-      });
-      start();
+      database.prepare(`
+        UPDATE hooks
+        SET activation_scope = 'all_users', updated_at = CURRENT_TIMESTAMP, updated_by = ?
+        WHERE id = ?
+      `).run(userId, hookId);
       return getHook(hookId);
     },
 
@@ -717,18 +703,11 @@ export function createHookConfigService({ database = db, configStore = appConfig
       if (hook.status !== 'published') {
         throw createHttpError('Only a published Hook can be stopped');
       }
-      const stop = database.transaction(() => {
-        database.prepare(`
-          DELETE FROM user_hook_bindings
-          WHERE hook_id = ? AND binding_source = 'admin_global'
-        `).run(hookId);
-        database.prepare(`
-          UPDATE hooks
-          SET activation_scope = 'manual', updated_at = CURRENT_TIMESTAMP, updated_by = ?
-          WHERE id = ?
-        `).run(userId, hookId);
-      });
-      stop();
+      database.prepare(`
+        UPDATE hooks
+        SET activation_scope = 'manual', updated_at = CURRENT_TIMESTAMP, updated_by = ?
+        WHERE id = ?
+      `).run(userId, hookId);
       return getHook(hookId);
     },
 

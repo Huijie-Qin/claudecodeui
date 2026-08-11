@@ -8,8 +8,8 @@
 
 - Hook 由系统管理员统一创建、编辑、发布、启动、停止和删除。
 - 不提供普通用户点击安装、启用或停用 Hook 的入口。
-- 新发布 Hook 默认未启动；管理员点击“启动”后为全部现有用户绑定并开启。
-- 管理员全局启动的 Hook 会自动绑定后续新建用户。
+- 新发布 Hook 默认不是全局 Hook；管理员点击“启动”后切换为全局 Hook。
+- 全局 Hook 不写逐用户绑定，当前和后续新建用户天然生效。
 - Hook 不按项目单独配置，不在基本信息中配置用户权限。
 - Hook 配置、用户绑定关系和运行记录均保存到 CCUI 数据库，不写入 .claude/settings.json。
 - 继续使用当前安装的 @anthropic-ai/claude-agent-sdk 0.2.116，不要求升级版本。
@@ -27,7 +27,7 @@
 | Claude Agent SDK Hook 执行接入 | 未实现 | 尚未把已发布配置编译到 options.hooks |
 | 高级脚本真实执行 | 未实现 | 配置模板已定义只读 workspace API；当前仍只保存脚本配置 |
 | 基础行为真实执行 | 未实现 | 当前只保存行为配置 |
-| 用户 Hook 绑定 | 已实现 | 绑定记录是实际启用依据，并区分管理员全局绑定和用户自主绑定 |
+| Hook 生效范围 | 已实现 | 支持全局 Hook 与用户自主绑定 Hook 两种场景，无数据库触发器 |
 | 模拟测试与运行记录 | 未实现 | 作为执行引擎阶段实现 |
 
 ## 2. 背景与目标
@@ -94,7 +94,7 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 
 ### 4.2 普通用户
 
-当前版本不提供普通用户安装或手动启停页面。管理员全局启动后，系统通过 `user_hook_bindings` 将 Hook 绑定到当前用户和后续新建用户；后续执行器只加载当前用户存在绑定记录的已发布 Hook。未来增加用户自行添加功能时，只需为该用户插入一条 `binding_source = user` 的绑定记录。
+当前版本不提供普通用户安装或手动启停页面。管理员全局启动后，Hook 通过 `activation_scope = all_users` 对所有用户生效，不写用户绑定。未来增加用户自行添加功能时，只需向 `user_hook_bindings` 为该用户插入一条记录。
 
 普通用户不能：
 
@@ -646,17 +646,17 @@ type HookConfig = {
 ~~~mermaid
 stateDiagram-v2
   [*] --> draft
-  draft --> publishedStopped: 发布
-  publishedStopped --> publishedStarted: 启动（持续向全部用户分发）
-  publishedStarted --> publishedStopped: 停止（移除管理员全局绑定）
-  publishedStarted --> draft: 编辑并保存
-  publishedStopped --> draft: 编辑并保存
+  draft --> publishedUserScope: 发布
+  publishedUserScope --> publishedGlobal: 启动全局 Hook
+  publishedGlobal --> publishedUserScope: 停止全局 Hook
+  publishedGlobal --> draft: 编辑并保存
+  publishedUserScope --> draft: 编辑并保存
   draft --> [*]: 删除
-  publishedStarted --> [*]: 删除
-  publishedStopped --> [*]: 删除
+  publishedGlobal --> [*]: 删除
+  publishedUserScope --> [*]: 删除
 ~~~
 
-图中的 `publishedStarted` 和 `publishedStopped` 是页面逻辑状态，数据库中的 `status` 都是 `published`；两者通过 `activation_scope` 区分。`manual` 模式下仍可能存在部分用户自主绑定。
+图中的两个 published 状态在数据库中的 `status` 都是 `published`，通过 `activation_scope` 区分。
 
 规则：
 
@@ -664,12 +664,12 @@ stateDiagram-v2
 - 保存已发布 Hook 后重新变为 draft。
 - 发布前执行严格校验。
 - 发布成功后版本号加 1。
-- 新 Hook 发布后没有用户绑定，必须由管理员点击“启动”。
-- 启动时把 `activation_scope` 设置为 `all_users`，并为当前 `users` 表中的全部用户写入 `admin_global` 绑定。
-- `all_users` Hook 在新用户创建后自动写入 `admin_global` 绑定。
-- 停止时把 `activation_scope` 设置为 `manual`，只删除 `admin_global` 绑定，保留未来用户自主添加的 `user` 绑定。
-- 用户是否启用 Hook 只由 `user_hook_bindings` 是否存在对应记录决定。
-- 后续执行器只加载 `published + 当前用户已绑定` 的 Hook。
+- 新 Hook 发布后默认 `activation_scope = manual`。
+- 管理员启动时只把 `activation_scope` 设置为 `all_users`，不批量写用户绑定。
+- 管理员停止时只把 `activation_scope` 设置为 `manual`，不修改用户自主绑定。
+- 全局 Hook 对所有当前用户和后续新用户直接生效，因此不需要新用户触发器。
+- 用户 Hook 只通过 `user_hook_bindings` 的记录判断是否生效。
+- 后续执行器加载：`published AND (all_users OR 当前用户已绑定)`。
 - 发布至少包含一个基础行为。
 
 ### 12.1 当前配置限制
@@ -720,11 +720,10 @@ user_hook_bindings：
 - user_id
 - hook_id
 - bound_by
-- binding_source：`user`、`admin_manual` 或 `admin_global`
 - bound_at
 - updated_at
 
-`(user_id, hook_id)` 是主键。绑定记录本身就是该用户启用 Hook 的状态：插入表示启用，删除表示停用。`activation_scope` 只描述管理员是否向全部用户持续分发，不直接参与单次执行判断。`binding_source` 用于保证管理员停止全局分发时不会误删用户自主绑定。
+`(user_id, hook_id)` 是主键。这里只保存用户自主绑定：插入表示该用户启用，删除表示该用户停用。全局 Hook 由 `activation_scope = all_users` 表示，不在该表为每个用户生成记录。
 
 ### 13.2 执行阶段新增表
 
@@ -766,7 +765,7 @@ user_hook_bindings：
 | PUT | /api/admin/hooks/:hookId | 保存 Hook |
 | POST | /api/admin/hooks/:hookId/publish | 发布 |
 | POST | /api/admin/hooks/:hookId/start | 为全部用户启动 |
-| POST | /api/admin/hooks/:hookId/stop | 停止全局分发并移除 admin_global 绑定 |
+| POST | /api/admin/hooks/:hookId/stop | 从全局 Hook 切换为用户绑定 Hook |
 | DELETE | /api/admin/hooks/:hookId | 删除 |
 | GET | /api/admin/hooks/settings | 获取可见事件 |
 | PUT | /api/admin/hooks/settings | 保存可见事件 |
@@ -1406,7 +1405,7 @@ Skill：send-sms
 
 ### 18.2 执行阶段
 
-1. 每次 query 只加载当前用户已绑定的 published Hook。
+1. 每次 query 加载全局 published Hook，以及当前用户已绑定的 published Hook。
 2. Matcher、高级脚本、统一门槛和基础行为按规定顺序执行。
 3. 高级脚本在安全隔离环境中运行。
 4. 修改输入返回完整 updatedInput。
@@ -1427,7 +1426,7 @@ Skill：send-sms
 - src/components/admin/hook-config/catalog.ts：28 个事件、字段和行为能力矩阵。
 - src/components/admin/hook-config/types.ts：前端配置类型。
 - server/services/hook-configs.js：后端校验、CRUD、资源目录。
-- server/database/hook-config-schema.js：Hook 表、用户绑定来源、全局分发范围、新用户自动绑定及旧字段迁移。
+- server/database/hook-config-schema.js：全局/用户两种生效范围、用户绑定表及旧字段迁移。
 - server/routes/admin.js：Admin Hook API。
 - server/services/hook-configs.test.js：Hook 配置服务测试。
 

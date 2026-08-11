@@ -628,8 +628,8 @@
     "toast": {
       "saved": "Hook 草稿已保存",
       "published": "Hook 已发布",
-      "started": "已为当前全部用户启用 Hook，共写入 {{count}} 条绑定",
-      "stopped": "Hook 已停止全局分发，用户自主绑定已保留",
+      "started": "Hook 已设为全局，对当前和后续新用户生效",
+      "stopped": "Hook 已取消全局生效，用户自主绑定已保留",
       "deleted": "Hook 已删除",
       "eventsSaved": "可见触发位置已保存"
     }

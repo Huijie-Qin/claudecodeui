@@ -80,18 +80,21 @@ test('Hook configuration CRUD persists ordered actions and publication state', (
     const started = service.startHook({ hookId: created.id, userId: 1 });
     assert.equal(started.status, 'published');
     assert.equal(started.activationScope, 'all_users');
-    assert.equal(started.boundUserCount, 2);
+    assert.equal(started.boundUserCount, 0);
+    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
     assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
-    assert.equal(service.getHook(created.id).boundUserCount, 3);
+    assert.equal(service.getHook(created.id).boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
 
     const stopped = service.stopHook({ hookId: created.id, userId: 1 });
     assert.equal(stopped.status, 'published');
     assert.equal(stopped.activationScope, 'manual');
     assert.equal(stopped.boundUserCount, 0);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.deepEqual(service.listActiveHooksForUser(3), []);
 
     database.prepare(`
       INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
@@ -101,9 +104,12 @@ test('Hook configuration CRUD persists ordered actions and publication state', (
     assert.deepEqual(service.listActiveHooksForUser(2), []);
 
     const restarted = service.startHook({ hookId: created.id, userId: 1 });
-    assert.equal(restarted.boundUserCount, 3);
+    assert.equal(restarted.boundUserCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
     database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
-    assert.equal(service.getHook(created.id).boundUserCount, 4);
+    assert.equal(service.getHook(created.id).boundUserCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(4).map((hook) => hook.id), [created.id]);
     const stoppedAgain = service.stopHook({ hookId: created.id, userId: 1 });
     assert.equal(stoppedAgain.boundUserCount, 1);
     assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
@@ -169,7 +175,7 @@ test('visible event settings are validated and persisted', () => {
   }
 });
 
-test('legacy global activation migrates to activation scope and sourced bindings', () => {
+test('legacy global activation migrates to scope-only global execution without triggers', () => {
   const database = new Database(':memory:');
   try {
     database.exec(`
@@ -196,15 +202,15 @@ test('legacy global activation migrates to activation scope and sourced bindings
     assert.deepEqual(migrateHookActivationModel(database), {
       migratedGlobalEnabled: true,
       addedActivationScope: true,
-      addedBindingSource: true,
+      removedBindingSource: false,
     });
     assert.equal(
       database.prepare('PRAGMA table_info(hooks)').all().some((column) => column.name === 'global_enabled'),
       false,
     );
     assert.deepEqual(
-      database.prepare('SELECT user_id, hook_id, binding_source FROM user_hook_bindings ORDER BY hook_id').all(),
-      [{ user_id: 1, hook_id: 'active', binding_source: 'admin_global' }],
+      database.prepare('SELECT user_id, hook_id FROM user_hook_bindings ORDER BY hook_id').all(),
+      [],
     );
     assert.equal(
       database.prepare("SELECT activation_scope FROM hooks WHERE id = 'active'").get().activation_scope,
@@ -212,17 +218,60 @@ test('legacy global activation migrates to activation scope and sourced bindings
     );
     database.prepare('INSERT INTO users (id) VALUES (2)').run();
     assert.deepEqual(
-      database.prepare('SELECT user_id, binding_source FROM user_hook_bindings WHERE hook_id = ? ORDER BY user_id').all('active'),
-      [
-        { user_id: 1, binding_source: 'admin_global' },
-        { user_id: 2, binding_source: 'admin_global' },
-      ],
+      database.prepare('SELECT user_id FROM user_hook_bindings WHERE hook_id = ? ORDER BY user_id').all('active'),
+      [],
+    );
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger'").get().count,
+      0,
     );
     assert.deepEqual(migrateHookActivationModel(database), {
       migratedGlobalEnabled: false,
       addedActivationScope: false,
-      addedBindingSource: false,
+      removedBindingSource: false,
     });
+  } finally {
+    database.close();
+  }
+});
+
+test('binding-source migration keeps user bindings and removes global materializations', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY);
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'published',
+        activation_scope TEXT NOT NULL DEFAULT 'manual',
+        updated_by INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE user_hook_bindings (
+        user_id INTEGER NOT NULL,
+        hook_id TEXT NOT NULL,
+        bound_by INTEGER,
+        binding_source TEXT NOT NULL DEFAULT 'user',
+        PRIMARY KEY (user_id, hook_id)
+      );
+      INSERT INTO users (id) VALUES (1), (2);
+      INSERT INTO hooks (id, activation_scope) VALUES ('global', 'all_users'), ('personal', 'manual');
+      INSERT INTO user_hook_bindings (user_id, hook_id, binding_source)
+      VALUES (1, 'global', 'admin_global'), (2, 'personal', 'user');
+    `);
+
+    assert.deepEqual(migrateHookActivationModel(database), {
+      migratedGlobalEnabled: false,
+      addedActivationScope: false,
+      removedBindingSource: true,
+    });
+    assert.deepEqual(
+      database.prepare('SELECT user_id, hook_id FROM user_hook_bindings').all(),
+      [{ user_id: 2, hook_id: 'personal' }],
+    );
+    assert.equal(
+      database.prepare('PRAGMA table_info(user_hook_bindings)').all().some((column) => column.name === 'binding_source'),
+      false,
+    );
   } finally {
     database.close();
   }
