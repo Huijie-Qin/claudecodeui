@@ -484,12 +484,21 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/hooks/:hookId/disable', (req, res) => {
+  router.post('/hooks/:hookId/start', (req, res) => {
     try {
-      const hook = hookConfigs.disableHook({ hookId: req.params.hookId, userId: req.user.id });
+      const hook = hookConfigs.startHook({ hookId: req.params.hookId, userId: req.user.id });
       return res.json({ hook });
     } catch (error) {
-      return sendRouteError(res, error, 'Failed to disable Hook');
+      return sendRouteError(res, error, 'Failed to start Hook');
+    }
+  });
+
+  router.post('/hooks/:hookId/stop', (req, res) => {
+    try {
+      const hook = hookConfigs.stopHook({ hookId: req.params.hookId, userId: req.user.id });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to stop Hook');
     }
   });
 

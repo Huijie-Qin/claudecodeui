@@ -413,8 +413,12 @@ export const api = {
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/publish`, {
         method: 'POST',
       }),
-    disableHook: (hookId) =>
-      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/disable`, {
+    startHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/start`, {
+        method: 'POST',
+      }),
+    stopHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/stop`, {
         method: 'POST',
       }),
     deleteHook: (hookId) =>

@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import Database from 'better-sqlite3';
 
-import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
+import {
+  HOOK_CONFIG_POST_MIGRATION_SQL,
+  HOOK_CONFIG_SCHEMA_SQL,
+} from '../database/hook-config-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
 
@@ -14,8 +17,10 @@ function createFixture() {
     CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);
     CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ${HOOK_CONFIG_SCHEMA_SQL}
+    ${HOOK_CONFIG_POST_MIGRATION_SQL}
   `);
   database.prepare('INSERT INTO users (id, username) VALUES (1, ?)').run('admin');
+  database.prepare('INSERT INTO users (id, username) VALUES (2, ?)').run('member');
   const values = new Map();
   const configStore = {
     get: (key) => values.get(key) || null,
@@ -69,10 +74,24 @@ test('Hook configuration CRUD persists ordered actions and publication state', (
     const published = service.publishHook({ hookId: created.id, userId: 1 });
     assert.equal(published.status, 'published');
     assert.equal(published.version, 1);
+    assert.equal(published.globalEnabled, false);
+    assert.equal(published.boundUserCount, 0);
     assert.ok(published.publishedAt);
 
-    const disabled = service.disableHook({ hookId: created.id, userId: 1 });
-    assert.equal(disabled.status, 'disabled');
+    const started = service.startHook({ hookId: created.id, userId: 1 });
+    assert.equal(started.status, 'published');
+    assert.equal(started.globalEnabled, true);
+    assert.equal(started.boundUserCount, 2);
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+
+    database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
+    assert.equal(service.getHook(created.id).boundUserCount, 3);
+
+    const stopped = service.stopHook({ hookId: created.id, userId: 1 });
+    assert.equal(stopped.status, 'published');
+    assert.equal(stopped.globalEnabled, false);
+    assert.equal(stopped.boundUserCount, 3);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
     const listed = service.listHooks()[0];
     assert.equal(listed.actionCount, 2);
     assert.deepEqual(listed.actions.map((action) => action.id), ['context', 'tool']);
@@ -129,6 +148,41 @@ test('visible event settings are validated and persisted', () => {
     );
     assert.deepEqual(service.getSettings().visibleEvents, ['StopFailure', 'PreToolUse']);
     assert.throws(() => service.updateSettings({ visibleEvents: [] }), /Select at least one/);
+  } finally {
+    database.close();
+  }
+});
+
+test('matcher supports exact and validated regular-expression modes', () => {
+  const { database, service } = createFixture();
+  try {
+    const exact = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'PreToolUse',
+        matcher: { mode: 'exact', value: 'mcp__data__query' },
+      }),
+    });
+    assert.deepEqual(exact.matcher, { mode: 'exact', value: 'mcp__data__query' });
+
+    const regex = service.updateHook({
+      hookId: exact.id,
+      userId: 1,
+      input: publishableHook({
+        eventName: 'PreToolUse',
+        matcher: { mode: 'regex', value: '^mcp__data_.*__query$' },
+      }),
+    });
+    assert.deepEqual(regex.matcher, { mode: 'regex', value: '^mcp__data_.*__query$' });
+
+    assert.throws(
+      () => service.updateHook({
+        hookId: exact.id,
+        userId: 1,
+        input: publishableHook({ matcher: { mode: 'regex', value: '[invalid' } }),
+      }),
+      /not a valid regular expression/,
+    );
   } finally {
     database.close();
   }

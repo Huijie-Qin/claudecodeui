@@ -4,6 +4,8 @@ import {
   Clock3,
   Pencil,
   Plus,
+  Power,
+  PowerOff,
   RefreshCw,
   Trash2,
   Webhook,
@@ -255,19 +257,26 @@ export default function HookConfigsTab() {
     }
   };
 
-  const disable = async (hookId?: string) => {
+  const setRunning = async (enabled: boolean, hookId?: string) => {
     const targetId = hookId || (editor && 'id' in editor ? editor.id : null);
     if (!targetId) return;
     setBusy(true);
     try {
-      const response = await api.admin.disableHook(targetId);
-      if (!response.ok) throw new Error(await readError(response, t('hooks.errors.disable')));
+      const response = enabled
+        ? await api.admin.startHook(targetId)
+        : await api.admin.stopHook(targetId);
+      const errorKey = enabled ? 'hooks.errors.start' : 'hooks.errors.stop';
+      if (!response.ok) throw new Error(await readError(response, t(errorKey)));
       const payload = await response.json() as { hook: HookConfig };
       replaceHook(payload.hook);
       if (editor && 'id' in editor && editor.id === payload.hook.id) setEditor(payload.hook);
-      showToast(t('hooks.toast.disabled'), 'success');
+      showToast(t(enabled ? 'hooks.toast.started' : 'hooks.toast.stopped', {
+        count: payload.hook.boundUserCount,
+      }), 'success');
     } catch (caughtError) {
-      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.disable'), 'error');
+      showToast(caughtError instanceof Error
+        ? caughtError.message
+        : t(enabled ? 'hooks.errors.start' : 'hooks.errors.stop'), 'error');
     } finally {
       setBusy(false);
     }
@@ -363,7 +372,8 @@ export default function HookConfigsTab() {
           onBack={() => setEditor(null)}
           onSave={() => void save()}
           onPublish={() => void publish()}
-          onDisable={() => void disable()}
+          onStart={() => void setRunning(true)}
+          onStop={() => void setRunning(false)}
           onManageEvents={openVisibleEvents}
         />
         {moreEventsDialog}
@@ -453,6 +463,11 @@ export default function HookConfigsTab() {
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="truncate text-sm font-semibold text-foreground">{hook.name}</h3>
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
+                        {hook.status === 'published' ? (
+                          <Badge variant={hook.globalEnabled ? 'default' : 'outline'}>
+                            {t(hook.globalEnabled ? 'hooks.started' : 'hooks.stopped')}
+                          </Badge>
+                        ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
                         {hook.description || t('hooks.noDescription')}
@@ -463,6 +478,7 @@ export default function HookConfigsTab() {
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
                     <span>{t('hooks.actionCount', { count: hook.actionCount ?? hook.actions.length })}</span>
+                    {hook.boundUserCount > 0 ? <span>{t('hooks.boundUserCount', { count: hook.boundUserCount })}</span> : null}
                     {hook.version > 0 ? <span>v{hook.version}</span> : null}
                     <span className="ml-auto flex items-center gap-1"><Clock3 className="h-3 w-3" />{formatDate(hook.updatedAt, i18n.language)}</span>
                   </div>
@@ -472,9 +488,15 @@ export default function HookConfigsTab() {
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
                   </Button>
-                  {hook.status === 'published' ? (
-                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void disable(hook.id)}>
-                      {t('hooks.disable')}
+                  {hook.status === 'published' && hook.globalEnabled ? (
+                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void setRunning(false, hook.id)}>
+                      <PowerOff className="h-3.5 w-3.5" />
+                      {t('hooks.stop')}
+                    </Button>
+                  ) : hook.status === 'published' ? (
+                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void setRunning(true, hook.id)}>
+                      <Power className="h-3.5 w-3.5" />
+                      {t('hooks.start')}
                     </Button>
                   ) : (
                     <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void publishFromList(hook)}>

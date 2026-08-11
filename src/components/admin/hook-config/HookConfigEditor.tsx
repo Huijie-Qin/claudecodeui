@@ -19,6 +19,8 @@ import {
   Filter,
   Info,
   Plus,
+  Power,
+  PowerOff,
   RotateCcw,
   Save,
   Settings2,
@@ -69,7 +71,8 @@ type HookConfigEditorProps = {
   onBack: () => void;
   onSave: () => void;
   onPublish: () => void;
-  onDisable: () => void;
+  onStart: () => void;
+  onStop: () => void;
   onManageEvents: () => void;
 };
 
@@ -666,7 +669,8 @@ export default function HookConfigEditor({
   onBack,
   onSave,
   onPublish,
-  onDisable,
+  onStart,
+  onStop,
   onManageEvents,
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
@@ -768,7 +772,17 @@ export default function HookConfigEditor({
     updateDraft({ actions });
   };
 
-  const matchedTool = findMatchedTool(resources, hook.matcher.value);
+  const matcherMode = hook.matcher.mode || 'exact';
+  const matchedTool = findMatchedTool(resources, hook.matcher.value, matcherMode);
+  const matcherRegexError = useMemo(() => {
+    if (matcherMode !== 'regex' || !hook.matcher.value) return false;
+    try {
+      new RegExp(hook.matcher.value);
+      return false;
+    } catch {
+      return true;
+    }
+  }, [hook.matcher.value, matcherMode]);
   const scriptOutputs = hook.advancedScript?.outputs || [];
 
   return (
@@ -786,16 +800,23 @@ export default function HookConfigEditor({
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
         </div>
-        {isPersisted && status === 'published' ? (
-          <Button type="button" variant="outline" size="sm" onClick={onDisable} disabled={busy}>
-            {t('hooks.disable')}
+        {isPersisted && status === 'published' && hook.globalEnabled ? (
+          <Button type="button" variant="outline" size="sm" onClick={onStop} disabled={busy}>
+            <PowerOff className="h-4 w-4" />
+            {t('hooks.stop')}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={busy || !hook.name.trim()}>
+        {isPersisted && status === 'published' && !hook.globalEnabled ? (
+          <Button type="button" variant="outline" size="sm" onClick={onStart} disabled={busy}>
+            <Power className="h-4 w-4" />
+            {t('hooks.start')}
+          </Button>
+        ) : null}
+        <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={busy || !hook.name.trim() || matcherRegexError}>
           <Save className="h-4 w-4" />
           <span className="hidden sm:inline">{t('hooks.saveDraft')}</span>
         </Button>
-        <Button type="button" size="sm" onClick={onPublish} disabled={busy || !hook.name.trim()}>
+        <Button type="button" size="sm" onClick={onPublish} disabled={busy || !hook.name.trim() || matcherRegexError}>
           {t('hooks.publish')}
         </Button>
       </div>
@@ -867,19 +888,60 @@ export default function HookConfigEditor({
           <Section number={2} title={t('hooks.sections.matcher')}>
             {TOOL_EVENTS.has(hook.eventName) ? (
               <div className="space-y-2">
-                <HookSelect
-                  value={hook.matcher.value || ''}
-                  options={toolMatcherOptions}
-                  onChange={(value) => {
-                    const actions = hook.actions.filter((action) => actionAvailability(hook.eventName, value, action.type).available);
-                    updateDraft({ matcher: { value }, gate: { mode: 'all', conditions: [] }, actions });
-                  }}
-                  placeholder={t('hooks.matcher.selectTool')}
-                  ariaLabel={t('hooks.matcher.selectTool')}
-                  className="max-w-xl"
-                  menuClassName="sm:min-w-[520px]"
-                />
-                {!isConcreteToolMatcher(hook.matcher.value) ? (
+                <div className="grid max-w-3xl gap-2 sm:grid-cols-[160px_minmax(0,1fr)]">
+                  <HookSelect
+                    value={matcherMode}
+                    options={[
+                      { value: 'exact', label: t('hooks.matcher.exact') },
+                      { value: 'regex', label: t('hooks.matcher.regex') },
+                    ]}
+                    onChange={(value) => {
+                      const mode = value as 'exact' | 'regex';
+                      const actions = hook.actions.filter((action) => actionAvailability(
+                        hook.eventName,
+                        undefined,
+                        action.type,
+                        mode,
+                      ).available);
+                      updateDraft({ matcher: { mode }, gate: { mode: 'all', conditions: [] }, actions });
+                    }}
+                    placeholder={t('hooks.matcher.mode')}
+                    ariaLabel={t('hooks.matcher.mode')}
+                  />
+                  {matcherMode === 'exact' ? (
+                    <HookSelect
+                      value={hook.matcher.value || ''}
+                      options={toolMatcherOptions}
+                      onChange={(value) => {
+                        const actions = hook.actions.filter((action) => actionAvailability(
+                          hook.eventName,
+                          value,
+                          action.type,
+                          'exact',
+                        ).available);
+                        updateDraft({ matcher: { mode: 'exact', value }, gate: { mode: 'all', conditions: [] }, actions });
+                      }}
+                      placeholder={t('hooks.matcher.selectTool')}
+                      ariaLabel={t('hooks.matcher.selectTool')}
+                      menuClassName="sm:min-w-[520px]"
+                    />
+                  ) : (
+                    <Input
+                      value={hook.matcher.value || ''}
+                      onChange={(event) => updateDraft({ matcher: { mode: 'regex', value: event.target.value } })}
+                      placeholder={t('hooks.matcher.regexPlaceholder')}
+                      className={cn('h-10 rounded-xl font-mono', matcherRegexError && 'border-destructive')}
+                      aria-invalid={matcherRegexError}
+                    />
+                  )}
+                </div>
+                {matcherRegexError ? (
+                  <div className="flex items-center gap-2 text-xs text-destructive">
+                    <CircleAlert className="h-3.5 w-3.5" />
+                    {t('hooks.matcher.invalidRegex')}
+                  </div>
+                ) : null}
+                {matcherMode === 'exact' && !isConcreteToolMatcher(hook.matcher.value, matcherMode) ? (
                   <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
                     <CircleAlert className="h-3.5 w-3.5" />
                     {t('hooks.matcher.specificToolHint')}
@@ -889,17 +951,34 @@ export default function HookConfigEditor({
                 ) : null}
               </div>
             ) : eventDefinition?.matcherField ? (
-              <div className="max-w-xl space-y-1.5">
+              <div className="max-w-3xl space-y-1.5">
                 <label htmlFor="hook-matcher" className="text-xs font-medium text-foreground">
                   {t(`hooks.matcherFields.${eventDefinition.matcherField}`, { defaultValue: eventDefinition.matcherField })}
                 </label>
-                <Input
-                  id="hook-matcher"
-                  value={hook.matcher.value || ''}
-                  onChange={(event) => updateDraft({ matcher: event.target.value ? { value: event.target.value } : {} })}
-                  placeholder={t('hooks.matcher.optional')}
-                  className="h-10 rounded-xl"
-                />
+                <div className="grid gap-2 sm:grid-cols-[160px_minmax(0,1fr)]">
+                  <HookSelect
+                    value={matcherMode}
+                    options={[
+                      { value: 'exact', label: t('hooks.matcher.exact') },
+                      { value: 'regex', label: t('hooks.matcher.regex') },
+                    ]}
+                    onChange={(value) => updateDraft({ matcher: { mode: value as 'exact' | 'regex' } })}
+                    placeholder={t('hooks.matcher.mode')}
+                    ariaLabel={t('hooks.matcher.mode')}
+                  />
+                  <Input
+                    id="hook-matcher"
+                    value={hook.matcher.value || ''}
+                    onChange={(event) => updateDraft({ matcher: {
+                      mode: matcherMode,
+                      ...(event.target.value ? { value: event.target.value } : {}),
+                    } })}
+                    placeholder={matcherMode === 'regex' ? t('hooks.matcher.regexPlaceholder') : t('hooks.matcher.optional')}
+                    className={cn('h-10 rounded-xl', matcherMode === 'regex' && 'font-mono', matcherRegexError && 'border-destructive')}
+                    aria-invalid={matcherRegexError}
+                  />
+                </div>
+                {matcherRegexError ? <div className="text-xs text-destructive">{t('hooks.matcher.invalidRegex')}</div> : null}
               </div>
             ) : (
               <div className="text-sm text-muted-foreground">{t('hooks.matcher.notNeeded')}</div>
@@ -969,6 +1048,10 @@ export default function HookConfigEditor({
                       <div>
                         <div className="text-xs font-semibold text-foreground">{t('hooks.script.availableInputs')}</div>
                         <div className="mt-2 space-y-1.5">
+                          <div className="rounded bg-background px-2 py-1 text-[10px] text-muted-foreground">
+                            <div className="truncate text-foreground">{t('hooks.script.workspaceFiles')}</div>
+                            <code className="block truncate">workspace</code>
+                          </div>
                           {scriptInputFields.map((field) => (
                             <div key={field.path} className="rounded bg-background px-2 py-1 text-[10px] text-muted-foreground">
                               <div className="truncate text-foreground">{getFieldLabel(t, field)}</div>
@@ -1106,7 +1189,7 @@ export default function HookConfigEditor({
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {ACTION_TYPES.map((type) => {
                 const Icon = ACTION_ICONS[type];
-                const availability = actionAvailability(hook.eventName, hook.matcher.value, type);
+                const availability = actionAvailability(hook.eventName, hook.matcher.value, type, matcherMode);
                 if (!availability.available && !availability.reasonKey) return null;
                 return (
                   <button

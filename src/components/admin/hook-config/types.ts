@@ -30,6 +30,13 @@ export type HookEventName =
 
 export type HookStatus = 'draft' | 'published' | 'disabled';
 
+export type HookMatcherMode = 'exact' | 'regex';
+
+export type HookMatcher = {
+  mode?: HookMatcherMode;
+  value?: string;
+};
+
 export type HookActionType =
   | 'record_data'
   | 'call_tool'
@@ -90,7 +97,7 @@ export type HookConfigDraft = {
   name: string;
   description: string;
   eventName: HookEventName;
-  matcher: { value?: string };
+  matcher: HookMatcher;
   gate: HookGate;
   advancedScript: HookAdvancedScript | null;
   actions: HookAction[];
@@ -105,6 +112,8 @@ export type HookConfig = HookConfigDraft & {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
+  globalEnabled: boolean;
+  boundUserCount: number;
   actionCount?: number;
 };
 

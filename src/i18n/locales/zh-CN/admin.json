@@ -365,7 +365,10 @@
     "backToList": "返回列表",
     "saveDraft": "保存草稿",
     "publish": "发布",
-    "disable": "停用",
+    "start": "启动",
+    "stop": "停止",
+    "started": "已启动",
+    "stopped": "未启动",
     "delete": "删除",
     "edit": "编辑",
     "save": "保存",
@@ -377,6 +380,7 @@
     "noMatches": "没有匹配的 Hook",
     "noDescription": "暂无功能说明",
     "actionCount": "{{count}} 个行为",
+    "boundUserCount": "已绑定 {{count}} 个用户",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
     "triggerEvent": "触发位置",
     "selectEvent": "选择触发位置",
@@ -456,12 +460,17 @@
       "value": "值"
     },
     "matcher": {
+      "mode": "匹配方式",
+      "exact": "精确匹配",
+      "regex": "正则匹配",
       "selectTool": "选择工具",
       "allTools": "全部工具",
       "scope": "范围",
       "claudeTools": "Claude Code 工具",
       "mcpTools": "MCP 工具",
       "specificToolHint": "选择具体工具后，才能配置可修改的输入字段。",
+      "regexPlaceholder": "例如：^mcp__data_.*__query$",
+      "invalidRegex": "正则表达式格式不正确",
       "optional": "留空表示全部匹配",
       "notNeeded": "该触发位置不需要额外的匹配条件。"
     },
@@ -482,6 +491,7 @@
       "optional": "只有基础行为无法表达需求时再启用。",
       "outputsCount": "{{count}} 个输出字段",
       "availableInputs": "脚本可用输入",
+      "workspaceFiles": "当前用户工作空间文件（只读）",
       "returnFields": "返回字段",
       "noOutputs": "使用 @output 声明返回字段。"
     },
@@ -609,14 +619,16 @@
       "loadResources": "加载 Hook 可用资源失败",
       "save": "保存 Hook 失败",
       "publish": "发布 Hook 失败",
-      "disable": "停用 Hook 失败",
+      "start": "启动 Hook 失败",
+      "stop": "停止 Hook 失败",
       "delete": "删除 Hook 失败",
       "saveSettings": "保存 Hook 事件设置失败"
     },
     "toast": {
       "saved": "Hook 草稿已保存",
       "published": "Hook 已发布",
-      "disabled": "Hook 已停用",
+      "started": "Hook 已为全部用户启动，共绑定 {{count}} 个用户",
+      "stopped": "Hook 已停止",
       "deleted": "Hook 已删除",
       "eventsSaved": "可见触发位置已保存"
     }

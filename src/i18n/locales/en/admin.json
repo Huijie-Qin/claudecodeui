@@ -411,7 +411,10 @@
     "backToList": "Back to list",
     "saveDraft": "Save draft",
     "publish": "Publish",
-    "disable": "Disable",
+    "start": "Start",
+    "stop": "Stop",
+    "started": "Started",
+    "stopped": "Not started",
     "delete": "Delete",
     "edit": "Edit",
     "save": "Save",
@@ -423,6 +426,7 @@
     "noMatches": "No matching Hooks",
     "noDescription": "No description",
     "actionCount": "{{count}} actions",
+    "boundUserCount": "{{count}} users bound",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
     "triggerEvent": "Trigger event",
     "selectEvent": "Select trigger event",
@@ -502,12 +506,17 @@
       "value": "Value"
     },
     "matcher": {
+      "mode": "Match mode",
+      "exact": "Exact match",
+      "regex": "Regular expression",
       "selectTool": "Select tool",
       "allTools": "All tools",
       "scope": "Scope",
       "claudeTools": "Claude Code tools",
       "mcpTools": "MCP tools",
       "specificToolHint": "Select a specific tool to configure editable input fields.",
+      "regexPlaceholder": "For example: ^mcp__data_.*__query$",
+      "invalidRegex": "Enter a valid regular expression",
       "optional": "Leave empty to match all",
       "notNeeded": "This trigger event does not need an additional matcher."
     },
@@ -528,6 +537,7 @@
       "optional": "Enable this only when basic actions cannot express the requirement.",
       "outputsCount": "{{count}} output fields",
       "availableInputs": "Available inputs",
+      "workspaceFiles": "Current user's workspace files (read-only)",
       "returnFields": "Return fields",
       "noOutputs": "Declare return fields with @output."
     },
@@ -655,14 +665,16 @@
       "loadResources": "Failed to load Hook resources",
       "save": "Failed to save Hook",
       "publish": "Failed to publish Hook",
-      "disable": "Failed to disable Hook",
+      "start": "Failed to start Hook",
+      "stop": "Failed to stop Hook",
       "delete": "Failed to delete Hook",
       "saveSettings": "Failed to save Hook event settings"
     },
     "toast": {
       "saved": "Hook draft saved",
       "published": "Hook published",
-      "disabled": "Hook disabled",
+      "started": "Hook started for all users; {{count}} users are bound",
+      "stopped": "Hook stopped",
       "deleted": "Hook deleted",
       "eventsSaved": "Visible trigger events saved"
     }

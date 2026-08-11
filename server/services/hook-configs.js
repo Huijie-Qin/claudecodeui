@@ -150,13 +150,21 @@ function normalizeEventName(value) {
   return eventName;
 }
 
-function normalizeMatcher(value, eventName) {
+function normalizeMatcher(value) {
   const source = isPlainObject(value) ? value : {};
+  const mode = source.mode === 'regex' ? 'regex' : 'exact';
   const matcherValue = typeof source.value === 'string' ? source.value.trim() : '';
   if (matcherValue.length > 240) {
     throw createHttpError('matcher.value must be 240 characters or fewer');
   }
-  return matcherValue ? { value: matcherValue } : {};
+  if (mode === 'regex' && matcherValue) {
+    try {
+      new RegExp(matcherValue);
+    } catch {
+      throw createHttpError('matcher.value is not a valid regular expression');
+    }
+  }
+  return matcherValue ? { mode, value: matcherValue } : {};
 }
 
 function normalizeCondition(condition, index) {
@@ -295,14 +303,15 @@ function allowedActionTypes(eventName, matcher) {
   if (APPEND_CONTEXT_EVENTS.has(eventName)) allowed.add('append_context');
   if (DECISION_EVENTS.has(eventName)) allowed.add('decision');
   if (eventName === 'StopFailure') allowed.add('invoke_skill_recovery');
-  if (eventName === 'PreToolUse' && isConcreteToolMatcher(matcher?.value)) allowed.add('update_input');
+  if (eventName === 'PreToolUse' && isConcreteToolMatcher(matcher)) allowed.add('update_input');
   if (eventName === 'PostToolUse') allowed.add('update_output');
   return allowed;
 }
 
-function isConcreteToolMatcher(value) {
-  if (typeof value !== 'string' || !value || value === '*') return false;
-  return !/[.*+?()[\]{}|^$\\]/.test(value);
+function isConcreteToolMatcher(matcher) {
+  if (!isPlainObject(matcher) || matcher.mode === 'regex') return false;
+  const value = matcher.value;
+  return typeof value === 'string' && Boolean(value) && value !== '*';
 }
 
 function requireConfigString(config, key, actionIndex, { max = 20000 } = {}) {
@@ -372,7 +381,7 @@ function validateActionForPublish(action, index, eventName, matcher) {
 function normalizeHookInput(input, { strict = false } = {}) {
   if (!isPlainObject(input)) throw createHttpError('Hook payload must be an object');
   const eventName = normalizeEventName(input.eventName);
-  const matcher = normalizeMatcher(input.matcher, eventName);
+  const matcher = normalizeMatcher(input.matcher);
   const normalized = {
     name: requireString(input.name, 'name', { max: 120 }),
     description: requireString(
@@ -404,6 +413,7 @@ function mapHookRow(row, actions = []) {
     name: row.name,
     description: row.description || '',
     status: row.status,
+    globalEnabled: Boolean(row.global_enabled),
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
     gate: parseJson(row.gate_json, { mode: 'all', conditions: [] }),
@@ -420,6 +430,7 @@ function mapHookRow(row, actions = []) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publishedAt: row.published_at || null,
+    boundUserCount: Number(row.bound_user_count || 0),
   };
 }
 
@@ -542,7 +553,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
     const actions = database.prepare(`
       SELECT * FROM hook_actions WHERE hook_id = ? ORDER BY position ASC
     `).all(hookId);
-    return mapHookRow(row, actions);
+    const bindingCount = database.prepare(`
+      SELECT COUNT(*) AS count FROM user_hook_bindings WHERE hook_id = ?
+    `).get(hookId);
+    return mapHookRow({ ...row, bound_user_count: bindingCount?.count || 0 }, actions);
   };
   const requireHook = (hookId) => {
     const hook = getHook(hookId);
@@ -563,10 +577,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
   return {
     listHooks: () => {
       const rows = database.prepare(`
-        SELECT h.*, COUNT(a.id) AS action_count
+        SELECT h.*,
+          (SELECT COUNT(*) FROM hook_actions a WHERE a.hook_id = h.id) AS action_count,
+          (SELECT COUNT(*) FROM user_hook_bindings b WHERE b.hook_id = h.id) AS bound_user_count
         FROM hooks h
-        LEFT JOIN hook_actions a ON a.hook_id = h.id
-        GROUP BY h.id
         ORDER BY h.updated_at DESC, h.created_at DESC
       `).all();
       const loadActions = database.prepare(`
@@ -579,6 +593,24 @@ export function createHookConfigService({ database = db, configStore = appConfig
           actionCount: Number(row.action_count || 0),
         };
       });
+    },
+
+    listActiveHooksForUser: (userId) => {
+      const rows = database.prepare(`
+        SELECT h.*,
+          (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count
+        FROM hooks h
+        JOIN user_hook_bindings binding
+          ON binding.hook_id = h.id
+         AND binding.user_id = ?
+        WHERE h.status = 'published'
+          AND h.global_enabled = 1
+        ORDER BY h.updated_at DESC, h.created_at DESC
+      `).all(userId);
+      const loadActions = database.prepare(`
+        SELECT * FROM hook_actions WHERE hook_id = ? ORDER BY position ASC
+      `);
+      return rows.map((row) => mapHookRow(row, loadActions.all(row.id)));
     },
 
     getHook,
@@ -617,7 +649,7 @@ export function createHookConfigService({ database = db, configStore = appConfig
           UPDATE hooks
           SET name = ?, description = ?, status = 'draft', event_name = ?,
               matcher_json = ?, gate_json = ?, advanced_script_json = ?,
-              updated_by = ?, updated_at = CURRENT_TIMESTAMP
+              global_enabled = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(
           normalized.name,
@@ -641,17 +673,41 @@ export function createHookConfigService({ database = db, configStore = appConfig
       database.prepare(`
         UPDATE hooks
         SET status = 'published', version = version + 1,
-            published_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+            global_enabled = 0, published_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
       `).run(userId, hookId);
       return getHook(hookId);
     },
 
-    disableHook: ({ hookId, userId }) => {
-      requireHook(hookId);
+    startHook: ({ hookId, userId }) => {
+      const hook = requireHook(hookId);
+      if (hook.status !== 'published') {
+        throw createHttpError('Publish the Hook before starting it');
+      }
+      const start = database.transaction(() => {
+        database.prepare(`
+          UPDATE hooks
+          SET global_enabled = 1, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          WHERE id = ?
+        `).run(userId, hookId);
+        database.prepare(`
+          INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
+          SELECT id, ?, ? FROM users
+        `).run(hookId, userId);
+      });
+      start();
+      return getHook(hookId);
+    },
+
+    stopHook: ({ hookId, userId }) => {
+      const hook = requireHook(hookId);
+      if (hook.status !== 'published') {
+        throw createHttpError('Only a published Hook can be stopped');
+      }
       database.prepare(`
         UPDATE hooks
-        SET status = 'disabled', updated_at = CURRENT_TIMESTAMP, updated_by = ?
+        SET global_enabled = 0, updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
       `).run(userId, hookId);
       return getHook(hookId);

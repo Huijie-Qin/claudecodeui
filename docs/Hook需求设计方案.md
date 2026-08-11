@@ -6,27 +6,28 @@
 
 当前设计采用方案 A：
 
-- Hook 由系统管理员统一创建、编辑、发布、停用和删除。
-- 普通用户只能查看已发布 Hook，并决定是否为自己启用。
-- 新发布 Hook 对普通用户默认关闭。
+- Hook 由系统管理员统一创建、编辑、发布、启动、停止和删除。
+- 不提供普通用户点击安装、启用或停用 Hook 的入口。
+- 新发布 Hook 默认未启动；管理员点击“启动”后为全部现有用户绑定并开启。
+- Hook 启动后创建的新用户会自动绑定该 Hook。
 - Hook 不按项目单独配置，不在基本信息中配置用户权限。
-- Hook 配置、用户启停状态和运行记录均保存到 CCUI 数据库，不写入 .claude/settings.json。
+- Hook 配置、全局启动状态、用户绑定关系和运行记录均保存到 CCUI 数据库，不写入 .claude/settings.json。
 - 继续使用当前安装的 @anthropic-ai/claude-agent-sdk 0.2.116，不要求升级版本。
 
 ### 1.1 当前实现状态
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| Admin Hook 列表 | 已实现 | 支持搜索、创建、编辑、发布、停用、删除 |
-| Admin Hook 单页配置器 | 已实现 | 支持事件、Matcher、统一门槛、高级脚本和基础行为配置 |
+| Admin Hook 列表 | 已实现 | 支持搜索、创建、编辑、发布、启动、停止、删除 |
+| Admin Hook 单页配置器 | 已实现 | 支持事件、精确/正则 Matcher、统一门槛、高级脚本和基础行为配置 |
 | 更多事件管理 | 已实现 | 28 个事件可配置为创建页可见事件 |
-| Hook 配置数据库 | 已实现 | hooks、hook_actions |
-| Admin Hook API | 已实现 | CRUD、发布、停用、设置、资源目录 |
+| Hook 配置数据库 | 已实现 | hooks、hook_actions、user_hook_bindings |
+| Admin Hook API | 已实现 | CRUD、发布、启动、停止、设置、资源目录 |
 | Hook 配置发布校验 | 已实现 | 校验事件、门槛、脚本输出和行为参数 |
 | Claude Agent SDK Hook 执行接入 | 未实现 | 尚未把已发布配置编译到 options.hooks |
-| 高级脚本真实执行 | 未实现 | 当前只保存脚本配置，不执行脚本 |
+| 高级脚本真实执行 | 未实现 | 配置模板已定义只读 workspace API；当前仍只保存脚本配置 |
 | 基础行为真实执行 | 未实现 | 当前只保存行为配置 |
-| 普通用户启停页面与 API | 未实现 | 作为后续阶段实现 |
+| 用户 Hook 绑定 | 已实现 | 启动时绑定全部用户，新用户自动绑定；不提供用户安装入口 |
 | 模拟测试与运行记录 | 未实现 | 作为执行引擎阶段实现 |
 
 ## 2. 背景与目标
@@ -41,7 +42,8 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 4. 基础行为无法表达需求时，可以选择性启用内联高级脚本。
 5. 脚本计算结果可以被统一门槛和后续基础行为直接使用。
 6. Hook 真实执行时，环境变量必须替换为当前用户、租户和会话的实时值。
-7. 所有运行过程可审计、可追溯，并对敏感信息脱敏。
+7. 高级脚本可以通过受限只读 API 读取当前用户工作空间内的文件。
+8. 所有运行过程可审计、可追溯，并对敏感信息脱敏。
 
 ## 3. 范围与约束
 
@@ -57,6 +59,7 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 - 每个 Hook 只配置一次统一执行门槛。
 - 基础行为不再单独配置执行条件。
 - 高级脚本是可选能力，不是必须执行的流程步骤。
+- 匹配条件支持精确匹配和正则匹配。
 - 调用工具第一期只允许调用 CCUI 已接入的 MCP 工具。
 - 回答异常结束时，可以通过“发起恢复回合”让模型在新回合中调用指定 Skill。
 
@@ -83,7 +86,7 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 
 - 查看和搜索所有 Hook。
 - 创建、编辑和保存 Hook 草稿。
-- 发布或停用 Hook。
+- 发布、启动或停止 Hook。
 - 删除 Hook。
 - 配置创建页可见事件。
 - 编辑高级脚本和基础行为。
@@ -91,10 +94,7 @@ Claude Code 在回答、工具调用、权限请求、上下文压缩等环节�
 
 ### 4.2 普通用户
 
-普通用户后续可以：
-
-- 查看已发布 Hook 的名称、功能说明和触发时机。
-- 为自己启用或停用 Hook。
+普通用户不需要安装或手动启停 Hook。管理员启动后，系统通过 `user_hook_bindings` 将 Hook 绑定到全部用户；后续执行器只加载当前用户已绑定且全局已启动的 Hook。
 
 普通用户不能：
 
@@ -137,6 +137,13 @@ Matcher 只匹配当前事件规定的固定对象，用于在进入 CCUI Hook E
 
 Matcher 不负责分析回答是否包含 SQL，也不负责判断工具参数内容。此类业务判断由高级脚本和统一执行门槛完成。
 
+匹配方式：
+
+- 精确匹配：用于明确指定一个工具或一个事件值，例如 `mcp__database__query`。
+- 正则匹配：用于覆盖一组符合命名规则的值，例如 `^mcp__data_.*__query$`。
+- 正则表达式在前端即时校验，后端保存时再次校验。
+- “修改输入”依赖具体工具的 `inputSchema`，因此只允许精确匹配一个具体工具；正则匹配不能配置该行为。
+
 ### 5.3 高级脚本 Advanced Script
 
 高级脚本是当前 Hook 内部的可选 JavaScript 计算逻辑：
@@ -147,6 +154,7 @@ Matcher 不负责分析回答是否包含 SQL，也不负责判断工具参数�
 - 默认不预置任何输出字段。
 - 管理员通过 @output 声明需要暴露的输出。
 - 输出自动进入统一门槛和基础行为字段选择器。
+- 脚本入参提供 `workspace` 只读文件 API，只能使用相对当前用户工作空间根目录的路径。
 
 ### 5.4 统一执行门槛 Gate
 
@@ -379,11 +387,13 @@ Matcher 不负责分析回答是否包含 SQL，也不负责判断工具参数�
  * @output sqlLineCount:number SQL 有效行数
  */
 export async function run({
+  workspace,            // WorkspaceFiles：当前用户工作空间的只读文件 API
   lastAssistantMessage, // string：模型本轮回答
   userId,               // number：当前用户 ID
   tenantId,             // number：当前租户 ID
 }) {
   // ===== 在这里编写业务逻辑 =====
+  const packageJson = await workspace.readJson('package.json');
   const hasSql = typeof lastAssistantMessage === 'string'
     && /\b(select|with|insert|update|delete)\b/i.test(lastAssistantMessage);
 
@@ -396,6 +406,22 @@ export async function run({
 }
 ~~~
 
+`workspace` 由后续高级脚本执行器按当前认证用户的工作空间注入，不暴露 Node.js 原生 `fs`：
+
+~~~ts
+interface WorkspaceFiles {
+  readText(relativePath: string): Promise<string>;
+  readJson(relativePath: string): Promise<unknown>;
+  list(relativeDirectory?: string): Promise<Array<{
+    path: string;
+    type: 'file' | 'directory';
+  }>>;
+  exists(relativePath: string): Promise<boolean>;
+}
+~~~
+
+所有路径必须相对工作空间根目录；执行器必须解析真实路径并阻止 `..`、绝对路径、符号链接越界和超限读取。
+
 ### 9.3 输出规则
 
 - output 是 CCUI 自定义结构化结果，不等同于 SDK 原生 Hook 返回值。
@@ -403,7 +429,18 @@ export async function run({
 - @output 声明格式为：字段名、类型、中文说明。
 - 支持 string、number、boolean、object、array。
 - 页面解析 @output 后自动生成 $script.output.字段名。
+- `$script.output.字段名` 会自动出现在统一门槛、记录数据、调用工具参数、追加上下文和其他支持变量的基础行为选择器中。
 - 脚本输出必须是 JSON 可序列化数据。
+
+脚本模板中的注释示例使用 `@output-example`，因此不会产生虚假字段。管理员把它改成真正的 `@output` 并返回同名值后，页面才会暴露该字段：
+
+~~~js
+/**
+ * @output sqlLineCount:number SQL 有效行数
+ */
+const sqlLineCount = 12;
+return { output: { sqlLineCount } };
+~~~
 
 ### 9.4 执行安全要求
 
@@ -411,7 +448,8 @@ export async function run({
 
 - 不在 CCUI 主进程中直接 eval。
 - 使用隔离进程或受限沙箱。
-- 默认禁止文件系统、网络、process、require、动态 import 和 child_process。
+- 禁止直接访问文件系统、网络、process、require、动态 import 和 child_process。
+- 文件访问只能通过执行器注入的只读 `workspace` API，并强制限定到当前用户工作空间。
 - 输入只允许来自白名单上下文。
 - 默认超时 5 秒。
 - 脚本源码最大 128 KB。
@@ -551,6 +589,7 @@ type HookConfig = {
   status: 'draft' | 'published' | 'disabled';
   eventName: HookEventName;
   matcher: {
+    mode?: 'exact' | 'regex';
     value?: string;
   };
   gate: {
@@ -592,6 +631,8 @@ type HookConfig = {
     config: Record<string, unknown>;
   }>;
   version: number;
+  globalEnabled: boolean;
+  boundUserCount: number;
   createdBy: number;
   updatedBy: number;
   createdAt: string;
@@ -605,13 +646,14 @@ type HookConfig = {
 ~~~mermaid
 stateDiagram-v2
   [*] --> draft
-  draft --> published: 发布
-  published --> draft: 编辑并保存
-  published --> disabled: 停用
-  disabled --> published: 重新发布
+  draft --> publishedStopped: 发布
+  publishedStopped --> publishedStarted: 启动（绑定全部用户）
+  publishedStarted --> publishedStopped: 停止
+  publishedStarted --> draft: 编辑并保存
+  publishedStopped --> draft: 编辑并保存
   draft --> [*]: 删除
-  published --> [*]: 删除
-  disabled --> [*]: 删除
+  publishedStarted --> [*]: 删除
+  publishedStopped --> [*]: 删除
 ~~~
 
 规则：
@@ -620,8 +662,11 @@ stateDiagram-v2
 - 保存已发布 Hook 后重新变为 draft。
 - 发布前执行严格校验。
 - 发布成功后版本号加 1。
-- published Hook 才能进入后续执行引擎。
-- disabled Hook 不参与运行。
+- 发布成功后 `global_enabled = 0`，必须由管理员点击“启动”。
+- 启动时在一个事务中设置 `global_enabled = 1`，并为 `users` 表中的全部用户写入绑定关系。
+- Hook 启动期间新增用户时，数据库触发器自动写入绑定关系。
+- 停止只设置 `global_enabled = 0`，不删除绑定记录。
+- 后续执行器只加载 `published + global_enabled + 当前用户已绑定` 的 Hook。
 - 发布至少包含一个基础行为。
 
 ### 12.1 当前配置限制
@@ -650,6 +695,7 @@ hooks：
 - gate_json
 - advanced_script_json
 - version
+- global_enabled
 - created_by
 - updated_by
 - created_at
@@ -666,6 +712,16 @@ hook_actions：
 - created_at
 - updated_at
 
+user_hook_bindings：
+
+- user_id
+- hook_id
+- bound_by
+- bound_at
+- updated_at
+
+`(user_id, hook_id)` 是主键。该表表示用户与 Hook 的绑定关系，不表示用户自行安装，也不提供用户侧开关。执行器通过该表查询当前用户可加载的 Hook。
+
 ### 13.2 执行阶段新增表
 
 建议增加：
@@ -673,17 +729,6 @@ hook_actions：
 #### hook_versions
 
 保存每次发布的不可变配置快照，运行时只引用已发布版本。
-
-#### user_hook_preferences
-
-保存普通用户启停状态：
-
-- user_id
-- hook_id
-- enabled
-- updated_at
-
-无偏好记录时默认关闭。
 
 #### hook_runs
 
@@ -716,7 +761,8 @@ hook_actions：
 | GET | /api/admin/hooks/:hookId | Hook 详情 |
 | PUT | /api/admin/hooks/:hookId | 保存 Hook |
 | POST | /api/admin/hooks/:hookId/publish | 发布 |
-| POST | /api/admin/hooks/:hookId/disable | 停用 |
+| POST | /api/admin/hooks/:hookId/start | 为全部用户启动 |
+| POST | /api/admin/hooks/:hookId/stop | 停止全局执行 |
 | DELETE | /api/admin/hooks/:hookId | 删除 |
 | GET | /api/admin/hooks/settings | 获取可见事件 |
 | PUT | /api/admin/hooks/settings | 保存可见事件 |
@@ -732,8 +778,6 @@ hook_actions：
 | POST | /api/admin/hooks/:hookId/test | 模拟测试 |
 | GET | /api/admin/hooks/:hookId/runs | 运行记录 |
 | GET | /api/admin/hook-runs/:runId | 运行详情 |
-| GET | /api/hooks | 普通用户可用 Hook |
-| PUT | /api/hooks/:hookId/enabled | 普通用户启停 |
 
 ## 15. Claude Agent SDK 对接与编译
 
@@ -1050,8 +1094,8 @@ const compiledAdminHooks = {
 ~~~mermaid
 flowchart TD
   A["取得服务端认证 userId"] --> B["查询 published Hook"]
-  B --> C["读取当前用户启用状态"]
-  C --> D["过滤未启用 Hook"]
+  B --> C["筛选 global_enabled = 1"]
+  C --> D["联查当前用户的 Hook 绑定"]
   D --> E["校验 Event 是否属于 SDK HOOK_EVENTS"]
   E --> F["读取 Hook 发布版本快照"]
   F --> G["校验 Matcher 与事件能力"]
@@ -1067,11 +1111,11 @@ flowchart TD
 
 1. 从 ws.userId 读取当前认证用户，不接收前端提交的 userId。
 2. 查询 status 为 published 的 Hook。
-3. 查询 user_hook_preferences，只保留当前用户已启用的 Hook。
+3. 联查 `user_hook_bindings`，只保留 `global_enabled = 1` 且当前用户存在绑定记录的 Hook。
 4. 加载不可变的发布版本，避免运行中读取到正在编辑的草稿。
 5. 使用 SDK 导出的 HOOK_EVENTS 校验 eventName。
 6. 校验当前事件是否支持已配置的基础行为。
-7. 把 matcher.value 转换为 HookCallbackMatcher.matcher；空值时省略 matcher。
+7. 把 Matcher 编译为 SDK 正则字符串：正则模式原样使用；精确模式转义后添加起止锚点；空值或 `*` 时省略 matcher。
 8. 为每个 Hook 创建一个 Callback 闭包，闭包持有 Hook ID、版本和当前运行时上下文。
 9. Callback 统一调用 Hook Engine，不把脚本和行为直接编译成多个 SDK Callback。
 10. 按 eventName 组成 Partial<Record<HookEvent, HookCallbackMatcher[]>>。
@@ -1086,7 +1130,7 @@ function compileHookDefinitions(definitions, runtime) {
 
   for (const definition of definitions) {
     const eventName = definition.eventName;
-    const matcher = definition.matcher?.value?.trim();
+    const matcher = compileSdkMatcher(definition.matcher);
 
     const callbackMatcher = {
       ...(matcher ? { matcher } : {}),
@@ -1103,6 +1147,14 @@ function compileHookDefinitions(definitions, runtime) {
   }
 
   return compiled;
+}
+
+function compileSdkMatcher(matcher) {
+  const value = matcher?.value?.trim();
+  if (!value || value === '*') return undefined;
+  if (matcher.mode === 'regex') return value;
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `^(?:${escaped})$`;
 }
 
 function createAdminHookCallback(definition, runtime) {
@@ -1314,7 +1366,7 @@ Skill：send-sms
 最多执行轮数：3
 ~~~
 
-当前用户是否启用该 Hook 是执行器的系统前置条件，不由管理员重复配置。短信 Skill 或其后端服务根据已认证的 userId 查询真实的短信授权状态和接收号码；Hook 配置不预置手机号、短信开关或接收对象。
+当前用户是否已绑定该 Hook 是执行器的系统前置条件，不由管理员重复配置。短信 Skill 或其后端服务根据已认证的 userId 查询真实的短信授权状态和接收号码；Hook 配置不预置手机号、短信开关或接收对象。
 
 实际执行：
 
@@ -1332,12 +1384,12 @@ Skill：send-sms
 
 ### 18.1 配置阶段
 
-1. 管理员可以创建、编辑、发布、停用和删除 Hook。
+1. 管理员可以创建、编辑、发布、启动、停止和删除 Hook。
 2. 默认显示四个常用事件，并能通过“更多事件”配置 28 个事件的可见范围。
 3. 名称和触发位置等宽对齐，事件说明使用悬浮提示。
 4. 功能说明横跨整个内容区。
 5. 页面不展示用户权限配置。
-6. 匹配条件根据事件动态展示。
+6. 匹配条件根据事件动态展示，并支持精确匹配和通过前后端校验的正则匹配。
 7. 统一门槛只配置一次，基础行为不出现独立执行条件。
 8. 高级脚本默认关闭，默认输出为空。
 9. @output 声明的脚本字段会自动进入门槛和基础行为选择器。
@@ -1345,19 +1397,22 @@ Skill：send-sms
 11. 调用工具只展示真实可用的 MCP 工具，并根据 inputSchema 生成参数表单。
 12. PreToolUse 未精确选择工具时不能发布修改输入行为。
 13. 发布前后端必须完成严格校验。
+14. 发布后 Hook 默认未启动；启动后为全部现有用户建立绑定，新用户自动绑定。
+15. 高级脚本模板提供只读 workspace API 及 @output 到基础行为的注释示例。
 
 ### 18.2 执行阶段
 
-1. 每次 query 只加载当前用户已启用的 published Hook。
+1. 每次 query 只加载全局已启动、当前用户已绑定的 published Hook。
 2. Matcher、高级脚本、统一门槛和基础行为按规定顺序执行。
 3. 高级脚本在安全隔离环境中运行。
 4. 修改输入返回完整 updatedInput。
 5. MCP 调用使用真实工具执行器，不使用 Mock。
 6. 恢复 Skill 使用新模型回合并具备递归保护。
-7. 普通用户可以启停 Hook，默认关闭。
-8. 管理员可以查看脱敏运行记录。
-9. 普通用户不能查看完整脚本、参数和其他用户记录。
-10. Hook 执行失败不会泄露 Secret 或破坏非相关会话。
+7. 普通用户不需要也不能在用户侧安装或启停 Hook。
+8. 高级脚本只通过受限只读 workspace API 访问当前用户工作空间，不能越界。
+9. 管理员可以查看脱敏运行记录。
+10. 普通用户不能查看完整脚本、参数和其他用户记录。
+11. Hook 执行失败不会泄露 Secret 或破坏非相关会话。
 
 ## 19. 代码位置
 
@@ -1368,7 +1423,7 @@ Skill：send-sms
 - src/components/admin/hook-config/catalog.ts：28 个事件、字段和行为能力矩阵。
 - src/components/admin/hook-config/types.ts：前端配置类型。
 - server/services/hook-configs.js：后端校验、CRUD、资源目录。
-- server/database/hook-config-schema.js：hooks 与 hook_actions 数据库表。
+- server/database/hook-config-schema.js：hooks、hook_actions 与 user_hook_bindings 数据库表及新用户自动绑定触发器。
 - server/routes/admin.js：Admin Hook API。
 - server/services/hook-configs.test.js：Hook 配置服务测试。
 
@@ -1377,12 +1432,11 @@ Skill：send-sms
 建议按以下顺序继续：
 
 1. 发布版本快照 hook_versions。
-2. 普通用户 Hook 列表与启停状态。
-3. Hook Compiler 与 Agent SDK options.hooks 接入。
-4. Event Adapter 与 Result Adapter。
-5. 高级脚本安全执行器。
-6. 基础行为执行器。
-7. 模拟测试。
-8. 运行记录、结构化记录与指标。
-9. Chat 中的简化 Hook 执行状态展示。
-10. 完整集成测试与安全测试。
+2. Hook Compiler 与 Agent SDK options.hooks 接入，并使用 user_hook_bindings 加载当前用户 Hook。
+3. Event Adapter 与 Result Adapter。
+4. 高级脚本安全执行器及只读 workspace API。
+5. 基础行为执行器。
+6. 模拟测试。
+7. 运行记录、结构化记录与指标。
+8. Chat 中的简化 Hook 执行状态展示。
+9. 完整集成测试与安全测试。

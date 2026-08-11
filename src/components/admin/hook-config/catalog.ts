@@ -88,18 +88,23 @@ export const ACTION_TYPES: HookActionType[] = [
   'update_output',
 ];
 
-export function isConcreteToolMatcher(value?: string) {
-  return Boolean(value && value !== '*' && !/[.*+?()[\]{}|^$\\]/.test(value));
+export function isConcreteToolMatcher(value?: string, mode: 'exact' | 'regex' = 'exact') {
+  return mode === 'exact' && Boolean(value && value !== '*');
 }
 
-export function actionAvailability(eventName: HookEventName, matcherValue: string | undefined, type: HookActionType) {
+export function actionAvailability(
+  eventName: HookEventName,
+  matcherValue: string | undefined,
+  type: HookActionType,
+  matcherMode: 'exact' | 'regex' = 'exact',
+) {
   if (type === 'record_data' || type === 'call_tool') return { available: true };
   if (type === 'append_context') return { available: APPEND_CONTEXT_EVENTS.has(eventName) };
   if (type === 'invoke_skill_recovery') return { available: eventName === 'StopFailure' };
   if (type === 'decision') return { available: DECISION_EVENTS.has(eventName) };
   if (type === 'update_input') {
     if (eventName !== 'PreToolUse') return { available: false };
-    return isConcreteToolMatcher(matcherValue)
+    return isConcreteToolMatcher(matcherValue, matcherMode)
       ? { available: true }
       : { available: false, reasonKey: 'hooks.actions.selectToolFirst' };
   }
@@ -127,8 +132,12 @@ function normalizePropertyType(type?: string): FieldType {
   return 'string';
 }
 
-export function findMatchedTool(resources: HookResources, matcherValue?: string): HookToolResource | undefined {
-  if (!matcherValue) return undefined;
+export function findMatchedTool(
+  resources: HookResources,
+  matcherValue?: string,
+  matcherMode: 'exact' | 'regex' = 'exact',
+): HookToolResource | undefined {
+  if (!matcherValue || matcherMode !== 'exact') return undefined;
   return [...resources.builtinTools, ...resources.mcpTools].find((tool) => tool.name === matcherValue);
 }
 
@@ -146,7 +155,7 @@ export function buildFieldChoices(
     group: 'event',
   }));
 
-  const matchedTool = findMatchedTool(resources, draft.matcher.value);
+  const matchedTool = findMatchedTool(resources, draft.matcher.value, draft.matcher.mode);
   const properties = matchedTool?.inputSchema?.properties || {};
   for (const [key, property] of Object.entries(properties)) {
     fields.push({
@@ -267,18 +276,29 @@ export function buildScriptTemplate({
     path: scriptCommentText(input.path),
     name: scriptParameterName(input.path, usedNames),
   }));
-  const parameterLines = parameters.length
-    ? parameters.map((input) => `  ${input.name}, // ${input.type}：${input.label}；来源 ${input.path}`).join('\n')
-    : '  // 当前事件没有额外输入字段';
+  const parameterLines = [
+    '  workspace, // WorkspaceFiles：当前用户工作空间的只读文件 API',
+    ...parameters.map((input) => `  ${input.name}, // ${input.type}：${input.label}；来源 ${input.path}`),
+  ].join('\n');
   return `/**
  * 高级脚本：${scriptCommentText(eventLabel)}（${eventName}）
  * 触发说明：${scriptCommentText(eventDescription)}
  *
  * 输入参数已经展开，可在“业务逻辑区”直接使用变量名，不需要再读取 ctx.event 或 ctx.context。
  *
+ * workspace 只能访问当前用户工作空间内的文件，并且只接受相对工作空间根目录的路径：
+ * await workspace.readText('src/index.ts');
+ * await workspace.readJson('package.json');
+ * await workspace.list('src');
+ * await workspace.exists('README.md');
+ *
  * output 是可选的 CCUI 自定义计算结果，不是 Claude Code SDK 的原生 Hook 返回值。
  * 不需要自定义结果时保持 output 为空；需要时使用 @output 字段名:类型 中文说明 声明字段。
  * 声明后的字段会以 $script.output.<字段名> 提供给执行门槛和后续基础行为。
+ *
+ * 示例：将下面的 @output-example 改成 @output 后，sqlLineCount 就会出现在基础行为的变量选择器中：
+ * @output-example sqlLineCount:number SQL 有效行数
+ * 对应返回值：return { output: { sqlLineCount } };
  */
 export async function run({
 ${parameterLines}
