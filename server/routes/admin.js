@@ -13,6 +13,7 @@ import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
+import { hookConfigService } from '../services/hook-configs.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -380,6 +381,7 @@ export function createAdminRouter(
   platformAnalytics = platformAnalyticsService,
   aiSubmissions = aiMrSubmissionsDb,
   skillPresets = skillPresetService,
+  hookConfigs = hookConfigService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -407,6 +409,96 @@ export function createAdminRouter(
 
   router.get('/tenants', (req, res) => {
     res.json({ tenants: multitenancy.tenants.listTenants() });
+  });
+
+  router.get('/hooks', (req, res) => {
+    try {
+      return res.json({ hooks: hookConfigs.listHooks() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Hooks');
+    }
+  });
+
+  router.post('/hooks', (req, res) => {
+    try {
+      const hook = hookConfigs.createHook({ input: req.body, userId: req.user.id });
+      return res.status(201).json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook');
+    }
+  });
+
+  router.get('/hooks/settings', (req, res) => {
+    try {
+      return res.json(hookConfigs.getSettings());
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook settings');
+    }
+  });
+
+  router.put('/hooks/settings', (req, res) => {
+    try {
+      return res.json(hookConfigs.updateSettings(req.body));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook settings');
+    }
+  });
+
+  router.get('/hooks/resources', (req, res) => {
+    try {
+      return res.json(hookConfigs.getResources());
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook resources');
+    }
+  });
+
+  router.get('/hooks/:hookId', (req, res) => {
+    try {
+      const hook = hookConfigs.getHook(req.params.hookId);
+      if (!hook) return res.status(404).json({ error: 'Hook not found' });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook');
+    }
+  });
+
+  router.put('/hooks/:hookId', (req, res) => {
+    try {
+      const hook = hookConfigs.updateHook({
+        hookId: req.params.hookId,
+        input: req.body,
+        userId: req.user.id,
+      });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook');
+    }
+  });
+
+  router.post('/hooks/:hookId/publish', (req, res) => {
+    try {
+      const hook = hookConfigs.publishHook({ hookId: req.params.hookId, userId: req.user.id });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish Hook');
+    }
+  });
+
+  router.post('/hooks/:hookId/disable', (req, res) => {
+    try {
+      const hook = hookConfigs.disableHook({ hookId: req.params.hookId, userId: req.user.id });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to disable Hook');
+    }
+  });
+
+  router.delete('/hooks/:hookId', (req, res) => {
+    try {
+      return res.json({ deleted: hookConfigs.deleteHook(req.params.hookId) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Hook');
+    }
   });
 
   router.post('/tenants', (req, res) => {

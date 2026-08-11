@@ -397,6 +397,37 @@ export const api = {
 
   admin: {
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    hooks: () => authenticatedFetch('/api/admin/hooks'),
+    hook: (hookId) => authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`),
+    createHook: (payload) =>
+      authenticatedFetch('/api/admin/hooks', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateHook: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    publishHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/publish`, {
+        method: 'POST',
+      }),
+    disableHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/disable`, {
+        method: 'POST',
+      }),
+    deleteHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'DELETE',
+      }),
+    hookSettings: () => authenticatedFetch('/api/admin/hooks/settings'),
+    updateHookSettings: (payload) =>
+      authenticatedFetch('/api/admin/hooks/settings', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    hookResources: () => authenticatedFetch('/api/admin/hooks/resources'),
     analytics: (days = 30, tenantIds = []) => {
       const params = new URLSearchParams({ days: String(days) });
       if (Array.isArray(tenantIds) && tenantIds.length > 0) {

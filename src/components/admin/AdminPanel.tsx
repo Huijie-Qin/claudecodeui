@@ -18,6 +18,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  Webhook,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -45,6 +46,7 @@ import {
 } from './adminPanelUtils';
 import AiCodeStatsTab from './AiCodeStatsTab';
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
+import HookConfigsTab from './HookConfigsTab';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 import SkillPresetsTab from './SkillPresetsTab';
@@ -88,7 +90,7 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'runtimes' | 'sqlCheck';
+type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'sqlCheck';
 
 type AdminTabConfig = {
   id: AdminTab;
@@ -103,6 +105,7 @@ const ADMIN_TABS: AdminTabConfig[] = [
   { id: 'claudeEnv', labelKey: 'tabs.claudeEnv', defaultLabel: 'Claude Env', icon: KeyRound },
   { id: 'mcpPresets', labelKey: 'tabs.mcpPresets', defaultLabel: 'MCP Server Presets', icon: Server },
   { id: 'skillPresets', labelKey: 'tabs.skillPresets', defaultLabel: 'Skill Presets', icon: PackagePlus },
+  { id: 'hooks', labelKey: 'tabs.hooks', defaultLabel: 'Hooks', icon: Webhook },
   { id: 'sqlCheck', labelKey: 'tabs.sqlCheck', defaultLabel: 'SQL Check', icon: Database },
   { id: 'runtimes', labelKey: 'tabs.runtimes', defaultLabel: 'Runtime Monitor', icon: RefreshCw },
   { id: 'analytics', labelKey: 'tabs.analytics', defaultLabel: 'Analytics', icon: BarChart3 },
@@ -2044,6 +2047,12 @@ export default function AdminPanel() {
           {activeTab === 'sqlCheck' ? (
             <div className="h-full overflow-y-auto px-5 py-4">
               <SqlCheckConfigTab tenants={tenants} currentTenantId={currentTenant?.id} />
+            </div>
+          ) : null}
+
+          {activeTab === 'hooks' ? (
+            <div className="h-full overflow-hidden">
+              <HookConfigsTab />
             </div>
           ) : null}
 
