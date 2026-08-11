@@ -41,12 +41,17 @@ const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
 const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
 const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
+export const DOCKER_BIND_HOST_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_BIND_HOST_ROOT';
+export const DOCKER_BIND_CONTAINER_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_BIND_CONTAINER_ROOT';
 const DOCKER_SHARED_PYTHON_CONTAINER_PATH = '/opt/cloudcli/python';
 const DOCKER_SHARED_PYTHON_USER_BASE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/user-base`;
 const DOCKER_SHARED_PIP_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pip-cache`;
 const DOCKER_SHARED_UV_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/uv-cache`;
 const DOCKER_SHARED_PIPX_HOME = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pipx`;
 const DEFAULT_DOCKER_CONTAINER_PATH = [
+  // Prefer a runtime-home installation so an explicitly pinned Claude Code
+  // version survives container recreation. Fall back to the image binary.
+  '/home/cloudcli/.local/bin',
   '/home/agent/.local/bin',
   '/usr/local/share/npm-global/bin',
   '/usr/local/sbin',
@@ -177,6 +182,41 @@ function rewriteDockerProxyValue(value) {
   } catch {
     return input;
   }
+}
+
+function isWindowsAbsolutePath(value) {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+}
+
+function isRelativePathInsideRoot(relativePath, pathApi) {
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..${pathApi.sep}`)
+    && !pathApi.isAbsolute(relativePath)
+  );
+}
+
+export function resolveDockerBindSourcePath(sourcePath, {
+  containerRoot = null,
+  hostRoot = null,
+} = {}) {
+  const source = requireValue(sourcePath, 'sourcePath');
+  const normalizedContainerRoot = String(containerRoot || '').trim().replace(/[\\/]+$/, '');
+  const normalizedHostRoot = String(hostRoot || '').trim().replace(/[\\/]+$/, '');
+  if (!normalizedContainerRoot || !normalizedHostRoot) return source;
+
+  const sourcePathApi = isWindowsAbsolutePath(source) || isWindowsAbsolutePath(normalizedContainerRoot)
+    ? path.win32
+    : path.posix;
+  const relativePath = sourcePathApi.relative(
+    sourcePathApi.resolve(normalizedContainerRoot),
+    sourcePathApi.resolve(source),
+  );
+  if (!isRelativePathInsideRoot(relativePath, sourcePathApi)) return source;
+
+  const hostPathApi = isWindowsAbsolutePath(normalizedHostRoot) ? path.win32 : path.posix;
+  const relativeSegments = relativePath.split(/[\\/]+/).filter(Boolean);
+  return hostPathApi.join(normalizedHostRoot, ...relativeSegments);
 }
 
 export function rewriteDockerProxyEnv(value) {
@@ -381,14 +421,22 @@ export function buildDockerRunArgs({
   containerEnv = {},
   memory = DEFAULT_DOCKER_MEMORY,
   cpus = DEFAULT_DOCKER_CPUS,
+  bindHostRoot = null,
+  bindContainerRoot = null,
 }) {
+  const bindRootOptions = { hostRoot: bindHostRoot, containerRoot: bindContainerRoot };
+  const dockerWorkspaceHostPath = resolveDockerBindSourcePath(workspaceHostPath, bindRootOptions);
+  const dockerRuntimeHomePath = resolveDockerBindSourcePath(runtimeHomePath, bindRootOptions);
+  const dockerSharedPythonHostPath = sharedPythonHostPath
+    ? resolveDockerBindSourcePath(sharedPythonHostPath, bindRootOptions)
+    : null;
   const containerEnvArgs = Object.entries(rewriteDockerProxyEnv(containerEnv))
     .filter(([key]) => !DOCKER_RUN_ENV_DENYLIST.has(key))
     .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
-  const sharedPythonArgs = sharedPythonHostPath
+  const sharedPythonArgs = dockerSharedPythonHostPath
     ? [
         '--mount',
-        `type=bind,src=${requireValue(sharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
+        `type=bind,src=${requireValue(dockerSharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
         '-e',
         `PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`,
         '-e',
@@ -432,9 +480,9 @@ export function buildDockerRunArgs({
     '--tmpfs',
     '/tmp:rw,nosuid,size=512m',
     '--mount',
-    `type=bind,src=${requireValue(workspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
+    `type=bind,src=${requireValue(dockerWorkspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
     '--mount',
-    `type=bind,src=${requireValue(runtimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
+    `type=bind,src=${requireValue(dockerRuntimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
     ...sharedPythonArgs,
     '-e',
     'HOME=/home/cloudcli',
@@ -748,7 +796,11 @@ function readEnvValue(record, name) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
+export function inspectedContainerUsesSharedPython(
+  inspected,
+  sharedPythonHostPath,
+  bindRootOptions = {},
+) {
   // Lightweight test doubles and third-party Docker clients may only expose
   // state. In that case preserve the previous reuse behavior.
   if (!Array.isArray(inspected?.mounts) || !Array.isArray(inspected?.env)) {
@@ -762,8 +814,12 @@ function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
     return !sharedMount;
   }
 
+  const dockerSharedPythonHostPath = resolveDockerBindSourcePath(
+    sharedPythonHostPath,
+    bindRootOptions,
+  );
   const envSet = new Set(inspected.env);
-  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(sharedPythonHostPath)
+  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(dockerSharedPythonHostPath)
     && envSet.has(`PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`)
     && envSet.has(`PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`)
     && envSet.has('PIP_BREAK_SYSTEM_PACKAGES=1')
@@ -1129,6 +1185,8 @@ export function createAgentSessionRuntimeManager({
         containerEnv,
         memory,
         cpus,
+        bindHostRoot: env[DOCKER_BIND_HOST_ROOT_ENV_NAME],
+        bindContainerRoot: env[DOCKER_BIND_CONTAINER_ROOT_ENV_NAME],
       });
       logRuntimeEvent('container_create_start', createRuntimeLogDetails(runtime, {
         requestId,
@@ -1250,7 +1308,10 @@ export function createAgentSessionRuntimeManager({
       await recreateContainer('configured_image_changed');
       return;
     }
-    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath)) {
+    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath, {
+      hostRoot: env[DOCKER_BIND_HOST_ROOT_ENV_NAME],
+      containerRoot: env[DOCKER_BIND_CONTAINER_ROOT_ENV_NAME],
+    })) {
       await recreateContainer('shared_python_config_changed');
       return;
     }

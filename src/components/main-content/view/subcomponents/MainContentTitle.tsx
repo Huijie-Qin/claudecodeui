@@ -21,6 +21,10 @@ function getTabTitle(activeTab: AppTab, t: (key: string) => string) {
     return t('tabs.sqlCheck');
   }
 
+  if (activeTab === 'agent-graph') {
+    return t('tabs.agentGraph');
+  }
+
   return 'Project';
 }
 

@@ -33,7 +33,7 @@
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",
-    "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json",
+    "build:server": "tsc -p server/tsconfig.json && tsc-alias -p server/tsconfig.json && node -e \"require('node:fs').cpSync('server/skills', 'dist-server/server/skills', { recursive: true })\"",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "test:codehub": "node --test server/services/codehub-git.test.js",

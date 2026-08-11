@@ -15,11 +15,15 @@ import {
   buildWrapperHostEnv,
   createAgentSessionRuntimeManager,
   createClaudeDockerSpawn,
+  DOCKER_BIND_CONTAINER_ROOT_ENV_NAME,
+  DOCKER_BIND_HOST_ROOT_ENV_NAME,
   ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
+  inspectedContainerUsesSharedPython,
   migratePathOwnership,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
+  resolveDockerBindSourcePath,
   resolveDockerSharedPythonPath,
   rewriteDockerProxyEnv,
 } from './agent-session-runtime.js';
@@ -106,7 +110,7 @@ test('shared Python path is stable per image and can be disabled', () => {
   const otherImage = resolveDockerSharedPythonPath(env, 'cloudcli/python:3.11');
 
   assert.equal(first, second);
-  assert.ok(first.startsWith('/var/cloudcli/python/image-'));
+  assert.ok(first.startsWith(path.join(path.resolve('/var/cloudcli/python'), 'image-')));
   assert.notEqual(first, otherImage);
   assert.equal(resolveDockerSharedPythonPath({
     ...env,
@@ -192,6 +196,59 @@ test('docker run args mount only workspace and runtime home', () => {
   assert.equal(joined.includes('/var/run/docker.sock'), false);
 });
 
+test('docker run args map container-local data paths to Docker daemon bind sources', () => {
+  const containerRoot = '/var/lib/cloudcli';
+  const hostRoot = '/var/lib/docker/volumes/ccui-data/_data';
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rnested',
+    image: 'cloudcli/test:claude',
+    uid: 1000,
+    gid: 1000,
+    workspaceHostPath: `${containerRoot}/workspaces/default/user/project`,
+    runtimeHomePath: `${containerRoot}/runtimes/claude/default/user/project/home`,
+    sharedPythonHostPath: `${containerRoot}/runtimes/.shared/python/image-abc`,
+    bindContainerRoot: containerRoot,
+    bindHostRoot: hostRoot,
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes(`src=${hostRoot}/workspaces/default/user/project,dst=/workspace`));
+  assert.ok(joined.includes(`src=${hostRoot}/runtimes/claude/default/user/project/home,dst=/home/cloudcli`));
+  assert.ok(joined.includes(`src=${hostRoot}/runtimes/.shared/python/image-abc,dst=/opt/cloudcli/python`));
+  assert.equal(joined.includes(`src=${containerRoot}/`), false);
+});
+
+test('Docker bind source mapping leaves paths outside the configured container root unchanged', () => {
+  assert.equal(resolveDockerBindSourcePath('/external/workspace', {
+    containerRoot: '/var/lib/cloudcli',
+    hostRoot: '/var/lib/docker/volumes/ccui-data/_data',
+  }), '/external/workspace');
+  assert.equal(DOCKER_BIND_HOST_ROOT_ENV_NAME, 'CLOUDCLI_DOCKER_BIND_HOST_ROOT');
+  assert.equal(DOCKER_BIND_CONTAINER_ROOT_ENV_NAME, 'CLOUDCLI_DOCKER_BIND_CONTAINER_ROOT');
+});
+
+test('shared Python inspection compares the Docker daemon bind source after root mapping', () => {
+  const containerRoot = '/var/lib/cloudcli';
+  const hostRoot = '/var/lib/docker/volumes/ccui-data/_data';
+  const sharedPythonHostPath = `${containerRoot}/runtimes/.shared/python/image-abc`;
+  assert.equal(inspectedContainerUsesSharedPython({
+    mounts: [{
+      Destination: '/opt/cloudcli/python',
+      Source: `${hostRoot}/runtimes/.shared/python/image-abc`,
+    }],
+    env: [
+      'PYTHONUSERBASE=/opt/cloudcli/python/user-base',
+      'PIP_CACHE_DIR=/opt/cloudcli/python/pip-cache',
+      'PIP_BREAK_SYSTEM_PACKAGES=1',
+      'PIP_USER=1',
+      'PATH=/opt/cloudcli/python/user-base/bin:/home/cloudcli/.local/bin:/home/agent/.local/bin:/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    ],
+  }, sharedPythonHostPath, {
+    containerRoot,
+    hostRoot,
+  }), true);
+});
+
 test('docker run args mount a shared Python user base and pip cache', () => {
   const args = buildDockerRunArgs({
     containerName: 'cloudcli-claude-t1-u2-w3-rabc',
@@ -220,7 +277,7 @@ test('docker run args mount a shared Python user base and pip cache', () => {
   assert.ok(joined.includes('PIP_USER=1'));
   assert.ok(joined.includes('UV_CACHE_DIR=/opt/cloudcli/python/uv-cache'));
   assert.ok(joined.includes('PIPX_HOME=/opt/cloudcli/python/pipx'));
-  assert.ok(joined.includes('PATH=/opt/cloudcli/python/user-base/bin:'));
+  assert.ok(joined.includes('PATH=/opt/cloudcli/python/user-base/bin:/home/cloudcli/.local/bin:'));
   assert.ok(joined.includes('HTTP_PROXY=http://host.docker.internal:7890/'));
   assert.equal(joined.includes('/tmp/user-controlled'), false);
   assert.equal(joined.includes('/tmp/user-cache'), false);
@@ -718,7 +775,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(typeof runtime.spawnClaudeCodeProcess, 'function');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
-  assert.ok(dockerCalls[0].join(' ').includes(`src=${sharedPythonRoot}/image-`));
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${path.join(sharedPythonRoot, 'image-')}`));
   assert.ok(dockerCalls[0].join(' ').includes('dst=/opt/cloudcli/python'));
   assert.ok(dockerCalls[0].join(' ').includes('PYTHONUSERBASE=/opt/cloudcli/python/user-base'));
   assert.equal((await fs.stat(sharedPythonRoot)).isDirectory(), true);

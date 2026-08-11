@@ -8,6 +8,7 @@ import {
   Code2,
   Copy,
   Database,
+  FlaskConical,
   KeyRound,
   PackagePlus,
   Plus,
@@ -51,6 +52,7 @@ import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
 import SkillPresetsTab from './SkillPresetsTab';
 import SqlCheckConfigTab from './SqlCheckConfigTab';
+import ExperimentalFeaturesTab from './ExperimentalFeaturesTab';
 
 type AdminTenant = {
   id: number;
@@ -90,7 +92,7 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'sqlCheck';
+type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'sqlCheck' | 'experimental';
 
 type AdminTabConfig = {
   id: AdminTab;
@@ -108,6 +110,7 @@ const ADMIN_TABS: AdminTabConfig[] = [
   { id: 'hooks', labelKey: 'tabs.hooks', defaultLabel: 'Hooks', icon: Webhook },
   { id: 'sqlCheck', labelKey: 'tabs.sqlCheck', defaultLabel: 'SQL Check', icon: Database },
   { id: 'runtimes', labelKey: 'tabs.runtimes', defaultLabel: 'Runtime Monitor', icon: RefreshCw },
+  { id: 'experimental', labelKey: 'tabs.experimental', defaultLabel: 'Experimental', icon: FlaskConical },
   { id: 'analytics', labelKey: 'tabs.analytics', defaultLabel: 'Analytics', icon: BarChart3 },
   { id: 'aiCode', labelKey: 'tabs.aiCode', defaultLabel: 'AI Code', icon: Code2 },
 ];
@@ -121,6 +124,10 @@ type AdminTenantsPayload = {
 type AdminUsersPayload = {
   users?: AdminUser[];
   error?: string;
+};
+
+type AdminFeatureFlagsPayload = {
+  showExperimentalFeatures?: boolean;
 };
 
 type AdminCreateUserPayload = {
@@ -405,6 +412,7 @@ export default function AdminPanel() {
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
   const [hasOpenedSkillPresets, setHasOpenedSkillPresets] = useState(false);
+  const [showExperimentalFeatures, setShowExperimentalFeatures] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -436,10 +444,11 @@ export default function AdminPanel() {
     setError(null);
 
     try {
-      const [tenantResponse, userResponse, membershipResponse] = await Promise.all([
+      const [tenantResponse, userResponse, membershipResponse, featureFlagsResponse] = await Promise.all([
         api.admin.tenants(),
         api.admin.users(),
         api.admin.memberships(),
+        api.admin.featureFlags(),
       ]);
 
       if (!tenantResponse.ok) {
@@ -460,7 +469,11 @@ export default function AdminPanel() {
       const tenantPayload = await tenantResponse.json() as AdminTenantsPayload;
       const userPayload = await userResponse.json() as AdminUsersPayload;
       const membershipPayload = await membershipResponse.json() as AdminMembershipsPayload;
+      const featureFlagsPayload = featureFlagsResponse.ok
+        ? await featureFlagsResponse.json() as AdminFeatureFlagsPayload
+        : {};
       const loadedTenants = tenantPayload.tenants || [];
+      setShowExperimentalFeatures(featureFlagsPayload.showExperimentalFeatures === true);
       setTenants(loadedTenants);
       setTenantCodeDrafts((current) => loadedTenants.reduce<Record<number, TenantCodeDraft>>((drafts, tenant) => {
         drafts[tenant.id] = current[tenant.id] || createTenantCodeDraft(tenant);
@@ -1215,7 +1228,7 @@ export default function AdminPanel() {
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside className="shrink-0 border-b border-border bg-muted/20 lg:w-64 lg:border-b-0 lg:border-r">
           <nav className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible lg:p-3" aria-label={t('title')}>
-            {ADMIN_TABS.map((tab) => {
+            {ADMIN_TABS.filter((tab) => tab.id !== 'experimental' || showExperimentalFeatures).map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
 
@@ -2059,6 +2072,12 @@ export default function AdminPanel() {
           {activeTab === 'runtimes' ? (
             <div className="h-full overflow-y-auto px-5 py-4">
               <RuntimeMonitorTab />
+            </div>
+          ) : null}
+
+          {showExperimentalFeatures && activeTab === 'experimental' ? (
+            <div className="h-full overflow-y-auto px-5 py-4">
+              <ExperimentalFeaturesTab />
             </div>
           ) : null}
         </div>

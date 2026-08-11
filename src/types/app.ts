@@ -7,7 +7,8 @@ export type AppTab =
   | 'files'
   | 'codehub'
   | 'mcp-tools'
-  | 'sql-check';
+  | 'sql-check'
+  | 'agent-graph';
 
 export interface Tenant {
   id: number;

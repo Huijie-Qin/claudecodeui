@@ -66,6 +66,7 @@ export type MainContentHeaderProps = {
   isMobile: boolean;
   onMenuClick: () => void;
   onSkillMarketClick: () => void;
+  agentGraphEnabled: boolean;
 };
 
 export type MainContentStateViewProps = {

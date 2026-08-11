@@ -2,6 +2,7 @@
   "title": "系统管理",
   "subtitle": "租户、用户、内部 MCP 预置和运行时",
   "tabs": {
+    "experimental": "实验功能",
     "analytics": "统计面板",
     "users": "用户",
     "tenants": "租户权限",
@@ -10,6 +11,16 @@
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "运行时监控"
+  },
+  "experimental": {
+    "warningTitle": "实验功能控制",
+    "warningDescription": "这些是影响全部 CCUI 用户的全局设置。Agent Graph 关闭后，界面入口和服务端接口都会不可用。",
+    "agentGraph": {
+      "label": "启用 Agent Graph Studio",
+      "description": "为所有用户显示 Agent Graph 工作区入口，并启用图谱管理接口。"
+    },
+    "updateSuccess": "Agent Graph 设置已更新",
+    "updateError": "更新 Agent Graph 设置失败"
   },
   "common": {
     "select": "选择",
