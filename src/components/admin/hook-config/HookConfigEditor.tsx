@@ -44,6 +44,7 @@ import {
   isConcreteToolMatcher,
   TOOL_EVENTS,
 } from './catalog';
+import { createHookItemId } from './editorUtils';
 import HookSelect, { type HookSelectOption } from './HookSelect';
 import type {
   FieldChoice,
@@ -728,7 +729,7 @@ export default function HookConfigEditor({
         conditions: [
           ...hook.gate.conditions,
           {
-            id: crypto.randomUUID(),
+            id: createHookItemId(),
             field: field.path,
             operator: defaultOperator(field.type),
             ...(!['boolean', 'object', 'array'].includes(field.type) ? { value: '' } : {}),
@@ -751,7 +752,7 @@ export default function HookConfigEditor({
 
   const addAction = (type: HookActionType) => {
     const action: HookAction = {
-      id: crypto.randomUUID(),
+      id: createHookItemId(),
       type,
       config: initialActionConfig(type),
     };
