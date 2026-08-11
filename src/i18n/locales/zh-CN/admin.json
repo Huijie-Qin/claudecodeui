@@ -446,9 +446,7 @@
       "username": "当前用户名",
       "tenantId": "当前租户 ID",
       "sessionId": "当前会话 ID",
-      "projectId": "当前项目 ID",
-      "smsNotificationEnabled": "用户已开启短信通知",
-      "notificationRecipient": "当前用户的受保护通知接收对象"
+      "projectId": "当前项目 ID"
     },
     "fieldGroups": {
       "event": "事件数据",

@@ -492,9 +492,7 @@
       "username": "Current username",
       "tenantId": "Current tenant ID",
       "sessionId": "Current session ID",
-      "projectId": "Current project ID",
-      "smsNotificationEnabled": "User enabled SMS notifications",
-      "notificationRecipient": "Protected notification recipient for the current user"
+      "projectId": "Current project ID"
     },
     "fieldGroups": {
       "event": "Event data",

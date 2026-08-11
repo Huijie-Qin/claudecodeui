@@ -165,7 +165,7 @@ export function buildFieldChoices(
       path: variable.path,
       labelKey: `hooks.variables.${variable.path.replace('$context.', '')}`,
       type: normalizePropertyType(variable.type),
-      gateAllowed: variable.path === '$context.smsNotificationEnabled',
+      gateAllowed: false,
       group: 'environment',
     });
   }

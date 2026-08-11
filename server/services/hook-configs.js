@@ -71,7 +71,6 @@ const GATE_EXCLUDED_FIELDS = new Set([
   '$context.cwd',
   '$context.userId',
   '$context.tenantId',
-  '$context.notificationRecipient',
   '$context.projectId',
 ]);
 const APPEND_CONTEXT_EVENTS = new Set([
@@ -698,8 +697,6 @@ export function createHookConfigService({ database = db, configStore = appConfig
         { path: '$context.tenantId', type: 'number' },
         { path: '$context.sessionId', type: 'string' },
         { path: '$context.projectId', type: 'number' },
-        { path: '$context.smsNotificationEnabled', type: 'boolean' },
-        { path: '$context.notificationRecipient', type: 'string', protected: true },
       ],
     }),
   };

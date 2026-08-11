@@ -326,10 +326,8 @@ Matcher 不负责分析回答是否包含 SQL，也不负责判断工具参数�
 - $context.tenantId
 - $context.sessionId
 - $context.projectId
-- $context.smsNotificationEnabled
-- $context.notificationRecipient
 
-notificationRecipient 属于受保护字段。页面和日志不得展示真实手机号等敏感值。
+资源接口只暴露能够从当前认证用户、会话和项目中真实解析的字段。没有数据库字段或运行时解析逻辑的数据不得预置到配置页面。
 
 ### 8.3 统一门槛限制
 
@@ -341,9 +339,8 @@ notificationRecipient 属于受保护字段。页面和日志不得展示真实�
 - sessionId
 - transcriptPath
 - cwd
-- notificationRecipient
 
-管理员应选择业务属性，例如“当前用户是否允许短信通知”，而不是填写某个具体用户 ID。
+管理员不应填写某个具体用户、租户、项目或会话 ID；这类信息只在 Hook 实际执行时从当前运行环境注入。
 
 ### 8.4 模板变量
 
@@ -1263,7 +1260,6 @@ Skill 不是 Hook 可以直接调用的普通函数。
 - access_token
 - refresh_token
 - credential
-- notificationRecipient
 
 字段名大小写不敏感，超长内容必须截断。
 
@@ -1312,12 +1308,13 @@ Skill 不是 Hook 可以直接调用的普通函数。
 
 ~~~text
 触发位置：回答异常结束 StopFailure
-统一执行门槛：当前用户允许短信通知 等于 是
 基础行为：发起恢复回合
 Skill：send-sms
-参数：给 ${context.notificationRecipient} 发送：本轮模型执行失败，请稍后重试。
+参数：给当前用户 ${context.userId} 发送：本轮模型执行失败，请稍后重试。
 最多执行轮数：3
 ~~~
+
+当前用户是否启用该 Hook 是执行器的系统前置条件，不由管理员重复配置。短信 Skill 或其后端服务根据已认证的 userId 查询真实的短信授权状态和接收号码；Hook 配置不预置手机号、短信开关或接收对象。
 
 实际执行：
 

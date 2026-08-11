@@ -133,3 +133,21 @@ test('visible event settings are validated and persisted', () => {
     database.close();
   }
 });
+
+test('resource catalog exposes only runtime-backed environment fields', () => {
+  const { database, service } = createFixture();
+  try {
+    assert.deepEqual(
+      service.getResources().environmentVariables,
+      [
+        { path: '$context.userId', type: 'number' },
+        { path: '$context.username', type: 'string' },
+        { path: '$context.tenantId', type: 'number' },
+        { path: '$context.sessionId', type: 'string' },
+        { path: '$context.projectId', type: 'number' },
+      ],
+    );
+  } finally {
+    database.close();
+  }
+});
