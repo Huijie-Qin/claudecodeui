@@ -365,6 +365,8 @@ test('docker exec args forward allowed environment and Claude arguments', () => 
       ANTHROPIC_BASE_URL: 'https://gateway.example.test',
       ANTHROPIC_MODEL: 'glm-5.1',
       PRIVATE_TOKEN: 'private-token',
+      codehub_email: 'developer@example.com',
+      CODEHUB_EMAIL: 'developer@example.com',
       'BAD-NAME': 'ignored',
     },
   });
@@ -381,8 +383,23 @@ test('docker exec args forward allowed environment and Claude arguments', () => 
   assert.ok(args.includes('ANTHROPIC_BASE_URL=https://gateway.example.test'));
   assert.ok(args.includes('ANTHROPIC_MODEL=glm-5.1'));
   assert.ok(args.includes('PRIVATE_TOKEN=private-token'));
+  assert.ok(args.includes('codehub_email=developer@example.com'));
+  assert.ok(args.includes('CODEHUB_EMAIL=developer@example.com'));
   assert.equal(args.includes('BAD-NAME=ignored'), false);
   assert.deepEqual(args.slice(-4), ['cloudcli-claude-test', 'claude', '--model', 'glm-5.1']);
+});
+
+test('docker exec args explicitly clear CodeHub email variables when git_email is empty', () => {
+  const args = buildClaudeDockerExecArgs({
+    containerName: 'cloudcli-claude-test',
+    env: {
+      codehub_email: '',
+      CODEHUB_EMAIL: '',
+    },
+  });
+
+  assert.ok(args.includes('codehub_email='));
+  assert.ok(args.includes('CODEHUB_EMAIL='));
 });
 
 test('custom docker spawn bypasses host wrapper execution', () => {
@@ -746,9 +763,14 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
         envUserId = userId;
         return {
           USER_KEY: encryptedUserKey,
+          codehub_email: 'attempted-lowercase-override@example.com',
+          CODEHUB_EMAIL: 'attempted-uppercase-override@example.com',
           'BAD-NAME': 'do-not-forward',
         };
       },
+      getGitConfig: () => ({
+        git_email: 'alice@example.com',
+      }),
     },
     docker: {
       inspectContainer: async () => null,
@@ -789,6 +811,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
   assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+  assert.equal(runtime.executionEnv.codehub_email, 'alice@example.com');
+  assert.equal(runtime.executionEnv.CODEHUB_EMAIL, 'alice@example.com');
   assert.equal(runtime.executionEnv.TENANT_ID, '3');
   assert.equal(runtime.executionEnv.WORKSPACE_ID, '5');
   assert.equal(runtime.executionEnv.HTTP_PROXY, 'http://proxy.example:8080');
@@ -799,6 +823,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
   assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
+  assert.ok(dockerCalls[0].join(' ').includes('codehub_email=alice@example.com'));
+  assert.ok(dockerCalls[0].join(' ').includes('CODEHUB_EMAIL=alice@example.com'));
   assert.ok(dockerCalls[0].join(' ').includes('TENANT_ID=3'));
   assert.ok(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'));
   assert.ok(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'));
@@ -814,6 +840,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e https_proxy/);
   assert.match(wrapper, /-e USER_KEY/);
   assert.match(wrapper, /-e W3_NAME/);
+  assert.match(wrapper, /-e codehub_email/);
+  assert.match(wrapper, /-e CODEHUB_EMAIL/);
   assert.match(wrapper, /-e TENANT_ID/);
   assert.match(wrapper, /-e WORKSPACE_ID/);
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
