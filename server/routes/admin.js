@@ -14,6 +14,11 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
+import {
+  FEATURE_FLAGS,
+  featureFlagsService,
+  shouldShowExperimentalFeatures,
+} from '../services/feature-flags.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -36,6 +41,23 @@ function sendRouteError(res, error, fallbackMessage) {
   const isConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || error?.code === 'SQLITE_CONSTRAINT';
   const statusCode = error?.statusCode || (isConstraint ? 409 : 400);
   return res.status(statusCode).json({ error: message || fallbackMessage });
+}
+
+function broadcastFeatureFlags(req, features) {
+  const message = JSON.stringify({
+    type: 'feature-flags-updated',
+    features,
+    timestamp: new Date().toISOString(),
+  });
+  req.app?.locals?.chatClients?.forEach((client) => {
+    if (client.readyState === 1) {
+      try {
+        client.send(message);
+      } catch (error) {
+        console.warn('Failed to broadcast feature flag update:', error?.message || error);
+      }
+    }
+  });
 }
 
 function createInvitationToken() {
@@ -382,9 +404,31 @@ export function createAdminRouter(
   aiSubmissions = aiMrSubmissionsDb,
   skillPresets = skillPresetService,
   hookConfigs = hookConfigService,
+  featureFlags = featureFlagsService,
+  showExperimentalFeatures = shouldShowExperimentalFeatures,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
+
+  router.get('/feature-flags', (req, res) => {
+    res.json({
+      features: featureFlags.getAll(),
+      showExperimentalFeatures: showExperimentalFeatures(),
+    });
+  });
+
+  router.put('/feature-flags/agent-graph', (req, res) => {
+    if (!showExperimentalFeatures()) {
+      return res.status(404).json({ error: 'Experimental feature settings are disabled' });
+    }
+    try {
+      const features = featureFlags.setEnabled(FEATURE_FLAGS.AGENT_GRAPH, req.body?.enabled);
+      broadcastFeatureFlags(req, features);
+      res.json({ features });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to update Agent Graph feature flag');
+    }
+  });
 
   const upsertTenantUserAccess = async ({ tenantId, userId, body }) => {
     const membership = multitenancy.memberships.upsertMembership({

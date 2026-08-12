@@ -1,13 +1,16 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { Tooltip, PillBar, Pill } from '../../../../shared/view/ui';
 import type { AppTab } from '../../../../types/app';
+
 import { buildMainContentTabs, type BuiltInMainContentTab } from './mainContentTabs';
 
 type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   disabledTabs?: ReadonlySet<AppTab>;
+  agentGraphEnabled?: boolean;
 };
 
 type TabDefinition = BuiltInMainContentTab;
@@ -16,9 +19,10 @@ export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
   disabledTabs,
+  agentGraphEnabled = false,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
-  const tabs: TabDefinition[] = buildMainContentTabs();
+  const tabs: TabDefinition[] = buildMainContentTabs(agentGraphEnabled);
 
   return (
     <PillBar>

@@ -54,6 +54,8 @@ import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
+import agentGraphsRoutes from './routes/agent-graphs.js';
+import agentGraphDemoDataRoutes from './routes/agent-graph-demo-data.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -638,6 +640,10 @@ app.use('/api', noApiCache, validateApiKey);
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
 
+// Public synthetic demo datasets used by Agent Graph test skills. The route is
+// completely hidden when the Agent Graph feature flag is disabled.
+app.use('/api/demo-data', agentGraphDemoDataRoutes);
+
 // Multitenancy routes (protected)
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
@@ -646,6 +652,7 @@ app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
+app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectsRoutes);

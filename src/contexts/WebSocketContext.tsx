@@ -1,7 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+
 import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
+import { refreshAgentGraphFeatureEnabled } from '../features/agent-graph/agentGraphFeature';
+
 import { useTenant } from './TenantContext';
 import {
   createWebSocketLifecycleState,
@@ -100,6 +103,9 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         if (!isCurrentWebSocketConnectionAttempt(lifecycleRef, attemptGeneration)) return;
         try {
           const data = JSON.parse(event.data);
+          if (data?.type === 'feature-flags-updated') {
+            void refreshAgentGraphFeatureEnabled(true);
+          }
           publishMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
