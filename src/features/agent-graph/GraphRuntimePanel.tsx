@@ -1,15 +1,17 @@
 import { Activity, CheckCircle2, Clock3, OctagonX, Square, X, XCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
-import type { AgentGraphRun, AgentGraphRunAgentStatus, AgentGraphRunStatus } from './types';
+import type { AgentGraphArtifactRead, AgentGraphRun, AgentGraphRunAgentStatus, AgentGraphRunStatus } from './types';
 
 type GraphRuntimePanelProps = {
   run: AgentGraphRun;
   recentRuns: AgentGraphRun[];
   canManage: boolean;
   onSelectRun: (run: AgentGraphRun) => void;
+  onReadArtifact: (artifactId: string) => Promise<AgentGraphArtifactRead>;
   onCancel: () => void;
   onClose: () => void;
 };
@@ -60,10 +62,19 @@ export default function GraphRuntimePanel({
   recentRuns,
   canManage,
   onSelectRun,
+  onReadArtifact,
   onCancel,
   onClose,
 }: GraphRuntimePanelProps) {
   const { t } = useTranslation('agentGraph');
+  const [artifactRead, setArtifactRead] = useState<AgentGraphArtifactRead | null>(null);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [readingArtifactId, setReadingArtifactId] = useState<string | null>(null);
+  useEffect(() => {
+    setArtifactRead(null);
+    setArtifactError(null);
+    setReadingArtifactId(null);
+  }, [run.id]);
   const trace = [...run.trace];
   const iteration = run.context.iteration || 0;
   const sessionsByAgent = new Map(run.agentSessions.map((session) => [session.agentId, session]));
@@ -258,7 +269,8 @@ export default function GraphRuntimePanel({
             <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('runtime.currentNeed')}</p>
             <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{run.context.currentNeed || '—'}</p>
             <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-              <span className="rounded-full bg-muted px-2 py-1">{t('runtime.evidenceCount', { count: run.context.evidenceIds.length })}</span>
+              <span className="rounded-full bg-muted px-2 py-1">{t('runtime.artifactCount', { count: run.context.artifactIds.length })}</span>
+              <span className="rounded-full bg-muted px-2 py-1">{t('runtime.findingCount', { count: run.context.findingIds.length })}</span>
               <span className="rounded-full bg-muted px-2 py-1">{t('runtime.resultCount', { count: run.context.resultIds.length })}</span>
             </div>
           </div>
@@ -266,21 +278,65 @@ export default function GraphRuntimePanel({
         </section>
 
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-foreground">{t('runtime.evidenceStore')}</h3>
-          {run.evidenceStore.length ? (
+          <h3 className="text-sm font-semibold text-foreground">{t('runtime.artifactRegistry')}</h3>
+          {run.artifactRegistry.length ? (
             <div className="space-y-2">
-              {run.evidenceStore.map((evidence) => (
-                <div key={evidence.evidenceId} className="rounded-lg border border-border bg-background p-3">
+              {run.artifactRegistry.map((artifact) => (
+                <div key={artifact.artifactId} className="rounded-lg border border-border bg-background p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs font-medium text-primary">{evidence.sourceAgent}</p>
-                    <span className="text-[10px] text-muted-foreground">{Math.round(evidence.confidence * 100)}%</span>
+                    <p className="text-xs font-medium text-primary">{artifact.name}</p>
+                    <span className="text-[10px] text-muted-foreground">{artifact.type}</span>
                   </div>
-                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{evidence.claim}</p>
-                  <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{evidence.evidenceId}</p>
+                  <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{artifact.artifactId}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 h-7 text-xs"
+                    disabled={readingArtifactId === artifact.artifactId}
+                    onClick={() => {
+                      setReadingArtifactId(artifact.artifactId);
+                      setArtifactError(null);
+                      void onReadArtifact(artifact.artifactId)
+                        .then(setArtifactRead)
+                        .catch((error) => setArtifactError(error instanceof Error ? error.message : String(error)))
+                        .finally(() => setReadingArtifactId(null));
+                    }}
+                  >
+                    {readingArtifactId === artifact.artifactId ? t('runtime.readingArtifact') : t('runtime.readArtifact')}
+                  </Button>
+                </div>
+              ))}
+              {artifactError ? <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">{artifactError}</p> : null}
+              {artifactRead ? (
+                <details className="rounded-lg border border-primary/20 bg-primary/5" open>
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-primary">{artifactRead.artifact.name}</summary>
+                  <div className="border-t border-primary/20 p-3">
+                    <p className="mb-2 text-[10px] text-muted-foreground">{t('runtime.artifactReadStatus', { count: artifactRead.nextOffset, complete: artifactRead.complete ? t('runtime.artifactComplete') : t('runtime.partial') })}</p>
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-foreground">{artifactRead.content}</pre>
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noArtifacts')}</p>}
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">{t('runtime.findingStore')}</h3>
+          {run.findingStore.length ? (
+            <div className="space-y-2">
+              {run.findingStore.map((finding) => (
+                <div key={finding.id} className="rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-primary">{finding.sourceAgent}</p>
+                    <span className="text-[10px] text-muted-foreground">{Math.round(finding.confidence * 100)}%</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{finding.content}</p>
+                  {finding.sourceArtifacts.length ? <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">Artifacts: {finding.sourceArtifacts.join(', ')}</p> : null}
+                  <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{finding.id}</p>
                 </div>
               ))}
             </div>
-          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noEvidence')}</p>}
+          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noFindings')}</p>}
         </section>
 
         <section className="space-y-2">
@@ -292,9 +348,9 @@ export default function GraphRuntimePanel({
                   <summary className="cursor-pointer list-none px-3 py-2.5">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-medium text-primary">{result.agentName}</p>
-                      <span className="text-[10px] text-muted-foreground">{result.type}</span>
+                      <span className="text-[10px] text-muted-foreground">{result.status}</span>
                     </div>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">{result.summary}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">{result.message}</p>
                   </summary>
                   <div className="border-t border-border p-3">
                     <TracePayload label={t('runtime.outputResult')} value={result} />
@@ -307,9 +363,9 @@ export default function GraphRuntimePanel({
 
         <section className="space-y-2">
           <h3 className="text-sm font-semibold text-foreground">{t('runtime.pendingQuestions')}</h3>
-          {run.context.pendingQuestions?.length ? (
+          {run.context.questions?.length ? (
             <ul className="space-y-2">
-              {run.context.pendingQuestions.map((question, index) => (
+              {run.context.questions.map((question, index) => (
                 <li key={`${question}-${index}`} className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs leading-5 text-foreground">
                   {question}
                 </li>

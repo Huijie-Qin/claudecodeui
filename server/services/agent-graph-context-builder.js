@@ -43,7 +43,7 @@ function relevanceScore(entry, agent, incomingSourceIds, currentNeed, index, tot
     agent.businessContext,
     currentNeed,
   ].join(' ').toLowerCase();
-  const entryText = [entry.claim, entry.summary, entry.type].join(' ').toLowerCase();
+  const entryText = [entry.content, entry.claim, entry.message, entry.summary, entry.status].join(' ').toLowerCase();
   for (const token of keywordTokens(targetText)) {
     if (entryText.includes(token)) score += 2;
   }
@@ -78,20 +78,28 @@ export function executionContextSnapshot(context) {
     status: context?.status || 'queued',
     iteration: Number(context?.iteration) || 0,
     currentNeed: context?.currentNeed || '',
-    evidenceIds: uniqueStrings(context?.evidenceIds),
+    artifactIds: uniqueStrings(context?.artifactIds),
+    findingIds: uniqueStrings(context?.findingIds ?? context?.evidenceIds),
     resultIds: uniqueStrings(context?.resultIds),
-    pendingQuestions: uniqueStrings(context?.pendingQuestions),
+    questions: uniqueStrings(context?.questions ?? context?.pendingQuestions),
   });
 }
 
 export function buildControllerContext(run) {
   const context = executionContextSnapshot(run.context);
-  const evidence = entriesReferencedBy(context.evidenceIds, run.evidenceStore, 'evidenceId')
+  const findingStore = (run.findingStore ?? run.evidenceStore ?? []).map((entry) => entry.id ? entry : ({
+    ...entry,
+    id: entry.findingId || entry.evidenceId,
+    content: entry.content || entry.claim,
+    sourceArtifacts: entry.sourceArtifacts || [],
+  }));
+  const findings = entriesReferencedBy(context.findingIds, findingStore, 'id')
     .slice(-MAX_CONTROLLER_EVIDENCE)
     .map((entry) => ({
-      evidenceId: entry.evidenceId,
+      id: entry.id,
       sourceAgent: entry.sourceAgent,
-      claim: truncate(entry.claim),
+      content: truncate(entry.content),
+      sourceArtifacts: uniqueStrings(entry.sourceArtifacts),
       confidence: entry.confidence,
     }));
   const agentResults = entriesReferencedBy(context.resultIds, run.resultStore, 'resultId')
@@ -100,11 +108,21 @@ export function buildControllerContext(run) {
       resultId: entry.resultId,
       agentId: entry.agentId,
       agentName: entry.agentName,
-      type: entry.type,
-      summary: truncate(entry.summary),
-      evidenceIds: uniqueStrings(entry.evidenceIds),
+      status: entry.status,
+      message: truncate(entry.message),
+      artifacts: Array.isArray(entry.artifacts) ? entry.artifacts : [],
+      findings: Array.isArray(entry.findings) ? entry.findings : [],
     }));
-  return { ...context, evidence, agentResults };
+  const artifacts = entriesReferencedBy(context.artifactIds, run.artifactRegistry, 'artifactId')
+    .slice(-MAX_CONTROLLER_EVIDENCE)
+    .map((entry) => ({
+      artifactId: entry.artifactId,
+      type: entry.type,
+      name: entry.name,
+      producerAgentId: entry.producerAgentId,
+      metadata: entry.metadata || {},
+    }));
+  return { ...context, artifacts, findings, agentResults };
 }
 
 export function buildAgentSpecificContext({ run, agent, agentSession }) {
@@ -113,18 +131,26 @@ export function buildAgentSpecificContext({ run, agent, agentSession }) {
     .filter((relation) => relation.targetAgent === agent.id)
     .map((relation) => relation.sourceAgent));
   const resumed = Boolean(agentSession?.providerSessionId);
-  const injectedEvidenceIds = new Set(uniqueStrings(agentSession?.injectedEvidenceIds));
+  const injectedFindingIds = new Set(uniqueStrings(agentSession?.injectedFindingIds ?? agentSession?.injectedEvidenceIds));
   const injectedResultIds = new Set(uniqueStrings(agentSession?.injectedResultIds));
+  const injectedArtifactIds = new Set(uniqueStrings(agentSession?.injectedArtifactIds));
 
-  const evidenceEntries = entriesReferencedBy(context.evidenceIds, run.evidenceStore, 'evidenceId');
+  const findingStore = (run.findingStore ?? run.evidenceStore ?? []).map((entry) => entry.id ? entry : ({
+    ...entry,
+    id: entry.findingId || entry.evidenceId,
+    content: entry.content || entry.claim,
+    sourceArtifacts: entry.sourceArtifacts || [],
+  }));
+  const findingEntries = entriesReferencedBy(context.findingIds, findingStore, 'id');
   const resultEntries = entriesReferencedBy(context.resultIds, run.resultStore, 'resultId');
+  const artifactEntries = entriesReferencedBy(context.artifactIds, run.artifactRegistry, 'artifactId');
 
-  const relevantEvidence = selectRelevant(evidenceEntries, {
+  const relevantFindings = selectRelevant(findingEntries, {
     agent,
     incomingSourceIds,
     currentNeed: context.currentNeed,
-    excludedIds: injectedEvidenceIds,
-    idKey: 'evidenceId',
+    excludedIds: injectedFindingIds,
+    idKey: 'id',
     maximum: MAX_AGENT_EVIDENCE,
   }).filter((entry) => !(resumed && entry.sourceAgentId === agent.id));
 
@@ -137,28 +163,45 @@ export function buildAgentSpecificContext({ run, agent, agentSession }) {
     maximum: MAX_AGENT_RESULTS,
   }).filter((entry) => !(resumed && entry.agentId === agent.id));
 
+  const relevantArtifactIds = uniqueStrings([
+    ...relevantFindings.flatMap((entry) => entry.sourceArtifacts || []),
+    ...relevantResults.flatMap((entry) => (entry.artifacts || []).map((artifact) => artifact.artifactId)),
+  ]);
+  const relevantArtifacts = artifactEntries
+    .filter((entry) => relevantArtifactIds.includes(entry.artifactId) && !injectedArtifactIds.has(entry.artifactId))
+    .slice(-MAX_AGENT_EVIDENCE);
+
   return {
     executionId: context.executionId,
     goal: context.goal,
     iteration: context.iteration,
     currentNeed: context.currentNeed,
-    pendingQuestions: context.pendingQuestions,
-    relevantEvidence: relevantEvidence.map((entry) => ({
-      evidenceId: entry.evidenceId,
-      sourceAgent: entry.sourceAgent,
-      claim: truncate(entry.claim),
-      confidence: entry.confidence,
+    questions: context.questions,
+    relevantArtifacts: relevantArtifacts.map((entry) => ({
+      artifactId: entry.artifactId,
+      type: entry.type,
+      name: entry.name,
+      producerAgentId: entry.producerAgentId,
       metadata: entry.metadata || {},
+    })),
+    relevantFindings: relevantFindings.map((entry) => ({
+      id: entry.id,
+      sourceAgent: entry.sourceAgent,
+      content: truncate(entry.content),
+      sourceArtifacts: uniqueStrings(entry.sourceArtifacts),
+      confidence: entry.confidence,
     })),
     relevantResults: relevantResults.map((entry) => ({
       resultId: entry.resultId,
       agentId: entry.agentId,
       agentName: entry.agentName,
-      type: entry.type,
-      summary: truncate(entry.summary),
-      evidenceIds: uniqueStrings(entry.evidenceIds),
+      status: entry.status,
+      message: truncate(entry.message),
+      artifacts: Array.isArray(entry.artifacts) ? entry.artifacts : [],
+      findings: Array.isArray(entry.findings) ? entry.findings : [],
     })),
-    includedEvidenceIds: relevantEvidence.map((entry) => entry.evidenceId),
+    includedArtifactIds: relevantArtifacts.map((entry) => entry.artifactId),
+    includedFindingIds: relevantFindings.map((entry) => entry.id),
     includedResultIds: relevantResults.map((entry) => entry.resultId),
     resumedSession: resumed,
   };

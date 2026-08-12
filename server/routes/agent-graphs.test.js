@@ -68,6 +68,15 @@ function createRouter({
       startRun: async ({ graph }) => ({ id: 'run-one', graphId: graph.id, status: 'queued' }),
       listRuns: async () => [],
       getRun: async ({ runId, graphId }) => ({ id: runId, graphId, status: 'running' }),
+      listRunArtifacts: async () => [],
+      readRunArtifact: async ({ artifactId }) => ({
+        artifact: { artifactId, name: 'Report', type: 'report' },
+        offset: 0,
+        nextOffset: 5,
+        complete: true,
+        encoding: 'utf8',
+        content: 'hello',
+      }),
       cancelRun: async ({ runId, graphId }) => ({ id: runId, graphId, status: 'cancelling' }),
       ...executor,
     },
@@ -218,6 +227,34 @@ test('Agent Graph endpoints are hidden while the global feature flag is disabled
   const { response, payload } = await requestJson(router, '/10/agent-graphs?tenantId=2');
   assert.equal(response.status, 404);
   assert.equal(payload.error, 'Agent Graph is not enabled');
+});
+
+test('Graph run Artifact Registry and bounded content allow view access', async () => {
+  const seen = {};
+  const router = createRouter({
+    accessRole: 'view',
+    executor: {
+      listRunArtifacts: async (args) => {
+        seen.list = args;
+        return [{ artifactId: 'artifact-one', type: 'dataset', name: 'Metrics' }];
+      },
+      readRunArtifact: async (args) => {
+        seen.read = args;
+        return { artifact: { artifactId: args.artifactId }, content: 'bounded', complete: true };
+      },
+    },
+  });
+
+  const list = await requestJson(router, '/10/agent-graphs/graph-one/runs/run-one/artifacts?tenantId=2');
+  assert.equal(list.response.status, 200);
+  assert.equal(list.payload.artifacts[0].artifactId, 'artifact-one');
+  assert.equal(seen.list.workspacePath, '/tmp/workspace');
+
+  const read = await requestJson(router, '/10/agent-graphs/graph-one/runs/run-one/artifacts/artifact-one?offset=10&limit=100&tenantId=2');
+  assert.equal(read.response.status, 200);
+  assert.equal(read.payload.artifact.content, 'bounded');
+  assert.equal(seen.read.offset, '10');
+  assert.equal(seen.read.limit, '100');
 });
 
 test('Agent Graph endpoints are hidden from users outside the environment whitelist', async () => {

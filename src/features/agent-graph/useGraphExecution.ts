@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../../utils/api';
 
-import type { AgentGraphRun } from './types';
+import type { AgentGraphArtifactRead, AgentGraphRun } from './types';
 
 const ACTIVE_STATUSES = new Set<AgentGraphRun['status']>(['queued', 'running', 'cancelling']);
 const POLL_INTERVAL_MS = 1_200;
@@ -109,6 +109,13 @@ export function useGraphExecution(workspaceId?: number, graphId?: string | null)
     }
   }, [graphId, run, workspaceId]);
 
+  const readArtifact = useCallback(async (artifactId: string) => {
+    if (!workspaceId || !graphId || !run) throw new Error('Agent Graph run is unavailable.');
+    const response = await api.agentGraphs.readRunArtifact(workspaceId, graphId, run.id, artifactId);
+    const payload = await readPayload<{ artifact: AgentGraphArtifactRead }>(response, 'Could not read the Artifact.');
+    return payload.artifact;
+  }, [graphId, run, workspaceId]);
+
   return {
     run,
     recentRuns,
@@ -118,6 +125,7 @@ export function useGraphExecution(workspaceId?: number, graphId?: string | null)
     active: Boolean(run && ACTIVE_STATUSES.has(run.status)),
     startRun,
     cancelRun,
+    readArtifact,
     selectRun: setRun,
     reload: loadRuns,
   };

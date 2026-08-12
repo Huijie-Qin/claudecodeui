@@ -16,21 +16,25 @@ function createRun() {
       status: 'running',
       iteration: 3,
       currentNeed: 'Validate profile differences',
-      evidenceIds: ['e1', 'e2', 'e3'],
+      artifactIds: ['a1'],
+      findingIds: ['f1', 'f2', 'f3'],
       resultIds: ['r1', 'r2'],
-      pendingQuestions: ['Which profile differs?'],
+      questions: ['Which profile differs?'],
     },
     graphSnapshot: {
       relations: [{ sourceAgent: 'reports', targetAgent: 'profile' }],
     },
-    evidenceStore: [
-      { evidenceId: 'e1', sourceAgentId: 'reports', sourceAgent: 'Report Agent', claim: 'July churn was stable', confidence: 0.9 },
-      { evidenceId: 'e2', sourceAgentId: 'profile', sourceAgent: 'Profile Agent', claim: 'Previous profile observation', confidence: 0.7 },
-      { evidenceId: 'e3', sourceAgentId: 'reports', sourceAgent: 'Report Agent', claim: 'Young users increased', confidence: 0.8 },
+    artifactRegistry: [
+      { artifactId: 'a1', type: 'dataset', name: 'July metrics', producerAgentId: 'reports', metadata: { rowCount: 20 } },
+    ],
+    findingStore: [
+      { id: 'f1', sourceAgentId: 'reports', sourceAgent: 'Report Agent', content: 'July churn was stable', sourceArtifacts: ['a1'], confidence: 0.9 },
+      { id: 'f2', sourceAgentId: 'profile', sourceAgent: 'Profile Agent', content: 'Previous profile observation', sourceArtifacts: [], confidence: 0.7 },
+      { id: 'f3', sourceAgentId: 'reports', sourceAgent: 'Report Agent', content: 'Young users increased', sourceArtifacts: ['a1'], confidence: 0.8 },
     ],
     resultStore: [
-      { resultId: 'r1', agentId: 'reports', agentName: 'Report Agent', type: 'data', summary: 'Metrics summary', content: 'large private output', evidenceIds: ['e1', 'e3'] },
-      { resultId: 'r2', agentId: 'profile', agentName: 'Profile Agent', type: 'profile', summary: 'Previous own result', content: 'large own history', evidenceIds: ['e2'] },
+      { resultId: 'r1', agentId: 'reports', agentName: 'Report Agent', status: 'completed', message: 'Metrics summary', artifacts: [{ artifactId: 'a1', type: 'dataset', description: 'Metrics' }], findings: [{ id: 'f1' }, { id: 'f3' }] },
+      { resultId: 'r2', agentId: 'profile', agentName: 'Profile Agent', status: 'partial', message: 'Previous own result', artifacts: [], findings: [{ id: 'f2' }] },
     ],
   };
 }
@@ -44,49 +48,39 @@ test('Execution Context snapshot contains task state and references only', () =>
   });
 
   assert.deepEqual(Object.keys(snapshot), [
-    'executionId',
-    'goal',
-    'status',
-    'iteration',
-    'currentNeed',
-    'evidenceIds',
-    'resultIds',
-    'pendingQuestions',
+    'executionId', 'goal', 'status', 'iteration', 'currentNeed',
+    'artifactIds', 'findingIds', 'resultIds', 'questions',
   ]);
   assert.equal(snapshot.userInput, undefined);
   assert.equal(snapshot.findings, undefined);
   assert.equal(snapshot.agentResults, undefined);
 });
 
-test('Agent Context Builder injects relevant deltas without repeating resumed Agent history', () => {
-  const run = createRun();
+test('Agent Context Builder injects relevant reference deltas without repeating resumed Agent history', () => {
   const context = buildAgentSpecificContext({
-    run,
-    agent: {
-      id: 'profile',
-      name: 'Profile Agent',
-      workingDescription: 'Analyze user profiles',
-      businessContext: '',
-    },
+    run: createRun(),
+    agent: { id: 'profile', name: 'Profile Agent', workingDescription: 'Analyze user profiles', businessContext: '' },
     agentSession: {
       providerSessionId: 'session-profile',
-      injectedEvidenceIds: ['e1'],
+      injectedArtifactIds: [],
+      injectedFindingIds: ['f1'],
       injectedResultIds: [],
     },
   });
 
   assert.equal(context.resumedSession, true);
-  assert.deepEqual(context.includedEvidenceIds, ['e3']);
+  assert.deepEqual(context.includedFindingIds, ['f3']);
   assert.deepEqual(context.includedResultIds, ['r1']);
-  assert.equal(context.relevantEvidence[0].claim, 'Young users increased');
-  assert.equal(context.relevantResults[0].content, undefined);
-  assert.doesNotMatch(JSON.stringify(context), /large private output|large own history/);
+  assert.deepEqual(context.includedArtifactIds, ['a1']);
+  assert.equal(context.relevantFindings[0].content, 'Young users increased');
+  assert.equal(context.relevantArtifacts[0].artifactId, 'a1');
 });
 
-test('Controller Context resolves referenced summaries without full Agent output', () => {
+test('Controller Context resolves referenced Messages, Findings, and Artifact metadata', () => {
   const context = buildControllerContext(createRun());
 
   assert.deepEqual(context.agentResults.map((result) => result.resultId), ['r1', 'r2']);
-  assert.deepEqual(context.evidence.map((evidence) => evidence.evidenceId), ['e1', 'e2', 'e3']);
-  assert.doesNotMatch(JSON.stringify(context), /large private output|large own history/);
+  assert.deepEqual(context.findings.map((finding) => finding.id), ['f1', 'f2', 'f3']);
+  assert.deepEqual(context.artifacts.map((artifact) => artifact.artifactId), ['a1']);
+  assert.equal(context.agentResults[0].message, 'Metrics summary');
 });

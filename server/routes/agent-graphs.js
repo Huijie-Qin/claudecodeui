@@ -185,6 +185,37 @@ export function createAgentGraphsRouter({
     }
   });
 
+  router.get('/:workspaceId/agent-graphs/:graphId/runs/:runId/artifacts', async (req, res) => {
+    try {
+      const { workspace } = resolveWorkspace(req, access, { requireEdit: false });
+      const artifacts = await executor.listRunArtifacts({
+        workspacePath: workspace.path,
+        graphId: req.params.graphId,
+        runId: req.params.runId,
+      });
+      return res.json({ artifacts });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
+  router.get('/:workspaceId/agent-graphs/:graphId/runs/:runId/artifacts/:artifactId', async (req, res) => {
+    try {
+      const { workspace } = resolveWorkspace(req, access, { requireEdit: false });
+      const artifact = await executor.readRunArtifact({
+        workspacePath: workspace.path,
+        graphId: req.params.graphId,
+        runId: req.params.runId,
+        artifactId: req.params.artifactId,
+        offset: req.query.offset,
+        limit: req.query.limit,
+      });
+      return res.json({ artifact });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
   router.post('/:workspaceId/agent-graphs/:graphId/runs/:runId/cancel', async (req, res) => {
     try {
       const { workspace } = resolveWorkspace(req, access, { requireEdit: true });

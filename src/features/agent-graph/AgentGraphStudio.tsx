@@ -354,6 +354,7 @@ export default function AgentGraphStudio({ selectedProject, readOnly }: AgentGra
                 recentRuns={execution.recentRuns}
                 canManage={!effectiveReadOnly}
                 onSelectRun={execution.selectRun}
+                onReadArtifact={execution.readArtifact}
                 onCancel={() => void execution.cancelRun()}
                 onClose={() => setShowRuntime(false)}
               />

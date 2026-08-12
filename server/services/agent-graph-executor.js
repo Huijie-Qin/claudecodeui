@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import { agentGraphArtifactWorkspace } from './agent-graph-artifact-workspace.js';
 import { agentGraphRunStore } from './agent-graph-run-store.js';
 import { buildAgentSpecificContext, executionContextSnapshot } from './agent-graph-context-builder.js';
 import {
@@ -22,7 +23,7 @@ const SENSITIVE_FIELD_PATTERN = /(?:authorization|cookie|password|passwd|secret|
 
 export function getAgentGraphExecutorConfig(maxIterations = DEFAULT_MAX_ITERATIONS) {
   return structuredClone({
-    version: 4,
+    version: 5,
     executionModel: 'context-driven-collaboration-loop',
     relationSemantics: 'collaboration-and-capability-hints-only',
     communicationModel: 'shared-execution-context',
@@ -50,7 +51,8 @@ export function getAgentGraphExecutorConfig(maxIterations = DEFAULT_MAX_ITERATIO
     contextPolicy: {
       executionContextStoresFullAgentOutput: false,
       agentResultsStoredSeparately: true,
-      evidenceStoredSeparately: true,
+      findingsStoredSeparately: true,
+      artifactsStoredInExecutionWorkspace: true,
       agentInputBuiltPerActivation: true,
     },
     safetyLimits: {
@@ -140,16 +142,29 @@ function contextSnapshot(context) {
   return executionContextSnapshot(context);
 }
 
-function normalizeAgentResult(response, agent) {
-  if (response?.agentResult && typeof response.agentResult === 'object') return response.agentResult;
-  const summary = String(response?.text || '').trim();
+function normalizeAgentResult(response) {
+  if (response?.agentResult && typeof response.agentResult === 'object') {
+    const raw = response.agentResult;
+    const message = String(raw.message ?? raw.summary ?? response.text ?? '').trim();
+    return {
+      status: ['completed', 'failed', 'partial'].includes(raw.status) ? raw.status : 'completed',
+      message,
+      artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
+      findings: (Array.isArray(raw.findings) ? raw.findings : []).map((finding) => (
+        typeof finding === 'string'
+          ? { content: finding, sourceArtifacts: [], confidence: Number(raw.confidence) || 0.5 }
+          : finding
+      )),
+      questions: uniqueStrings(raw.questions ?? raw.newQuestions),
+    };
+  }
+  const message = String(response?.text || '').trim();
   return {
-    agent: agent.name,
-    summary,
-    type: 'agent_result',
-    findings: summary ? [summary] : [],
-    newQuestions: [],
-    confidence: 0.5,
+    status: message ? 'partial' : 'failed',
+    message,
+    artifacts: [],
+    findings: message ? [{ content: message, sourceArtifacts: [], confidence: 0.5 }] : [],
+    questions: [],
   };
 }
 
@@ -172,7 +187,7 @@ function countConsecutiveAgentResults(run, agentId) {
 
 function fallbackResult(run, message) {
   const latest = run.resultStore.at(-1);
-  return latest?.content || latest?.summary || message;
+  return latest?.message || message;
 }
 
 function normalizeCurrentNeed(input, goal) {
@@ -187,13 +202,13 @@ function normalizeCurrentNeed(input, goal) {
 
 function legacyEvidenceStore(run) {
   return (run.context?.findings || []).map((finding) => ({
-    evidenceId: finding.id,
+    id: finding.id,
     executionId: run.id,
     sourceAgentId: finding.agentId,
     sourceAgent: finding.agentName,
-    claim: finding.content,
+    content: finding.content,
+    sourceArtifacts: [],
     confidence: 0.5,
-    metadata: { migratedFromVersion: run.version || 1 },
     createdAt: finding.createdAt,
   }));
 }
@@ -205,19 +220,56 @@ function legacyResultStore(run) {
     agentId: result.agentId,
     agentName: result.agentName,
     activation: result.activation,
-    summary: result.summary,
-    type: result.type || 'agent_result',
-    evidenceIds: [],
-    newQuestions: result.newQuestions || [],
-    confidence: result.confidence,
-    content: result.content || result.summary,
+    status: 'completed',
+    message: result.summary || result.content || '',
+    artifacts: [],
+    findings: [],
+    questions: result.newQuestions || [],
     createdAt: result.createdAt,
   }));
 }
 
+function migrateCurrentResult(result) {
+  if (result?.message !== undefined && Array.isArray(result?.artifacts) && Array.isArray(result?.findings)) return result;
+  return {
+    resultId: result.resultId,
+    executionId: result.executionId,
+    agentId: result.agentId,
+    agentName: result.agentName,
+    activation: result.activation,
+    status: 'completed',
+    message: result.summary || result.content || '',
+    artifacts: [],
+    findings: [],
+    questions: result.newQuestions || [],
+    createdAt: result.createdAt,
+  };
+}
+
+function migrateEvidence(evidence) {
+  if (evidence?.id) return evidence;
+  return {
+    id: evidence.findingId || evidence.evidenceId,
+    executionId: evidence.executionId,
+    sourceAgentId: evidence.sourceAgentId,
+    sourceAgent: evidence.sourceAgent,
+    content: evidence.claim,
+    sourceArtifacts: [],
+    confidence: evidence.confidence,
+    createdAt: evidence.createdAt,
+  };
+}
+
 function normalizePublicRunShape(run) {
-  const resultStore = Array.isArray(run.resultStore) ? run.resultStore : legacyResultStore(run);
-  const evidenceStore = Array.isArray(run.evidenceStore) ? run.evidenceStore : legacyEvidenceStore(run);
+  const resultStore = Array.isArray(run.resultStore)
+    ? run.resultStore.map(migrateCurrentResult)
+    : legacyResultStore(run);
+  const findingStore = Array.isArray(run.findingStore)
+    ? run.findingStore
+    : Array.isArray(run.evidenceStore)
+      ? run.evidenceStore.map(migrateEvidence)
+      : legacyEvidenceStore(run);
+  const artifactRegistry = Array.isArray(run.artifactRegistry) ? run.artifactRegistry : [];
   const legacySessionsByAgent = new Map();
   for (const result of run.context?.agentResults || []) {
     if (!result.providerSessionId) continue;
@@ -230,7 +282,8 @@ function normalizePublicRunShape(run) {
       createdAt: result.createdAt,
       lastUsedAt: result.createdAt,
       endedAt: run.completedAt || result.createdAt,
-      injectedEvidenceIds: [],
+      injectedArtifactIds: [],
+      injectedFindingIds: [],
       injectedResultIds: [],
     });
   }
@@ -238,7 +291,8 @@ function normalizePublicRunShape(run) {
   return {
     ...run,
     resultStore,
-    evidenceStore,
+    artifactRegistry,
+    findingStore,
     agentSessions: Array.isArray(run.agentSessions) ? run.agentSessions : [...legacySessionsByAgent.values()],
     context: {
       executionId: context.executionId || run.id,
@@ -246,20 +300,25 @@ function normalizePublicRunShape(run) {
       status: context.status || run.status,
       iteration: Number(context.iteration) || 0,
       currentNeed: context.currentNeed || context.pendingQuestions?.[0] || '',
-      evidenceIds: Array.isArray(context.evidenceIds)
-        ? context.evidenceIds
-        : evidenceStore.map((entry) => entry.evidenceId),
+      artifactIds: Array.isArray(context.artifactIds) ? context.artifactIds : artifactRegistry.map((entry) => entry.artifactId),
+      findingIds: Array.isArray(context.findingIds)
+        ? context.findingIds
+        : Array.isArray(context.evidenceIds)
+          ? context.evidenceIds
+          : findingStore.map((entry) => entry.id),
       resultIds: Array.isArray(context.resultIds)
         ? context.resultIds
         : resultStore.map((entry) => entry.resultId),
-      pendingQuestions: Array.isArray(context.pendingQuestions) ? context.pendingQuestions : [],
+      questions: Array.isArray(context.questions)
+        ? context.questions
+        : Array.isArray(context.pendingQuestions) ? context.pendingQuestions : [],
     },
   };
 }
 
 function toPublicRun(run) {
   const normalized = normalizePublicRunShape(run);
-  const { workspacePath, tenantId, userId, workspaceId, ...safe } = normalized;
+  const { workspacePath, tenantId, userId, workspaceId, evidenceStore, ...safe } = normalized;
   safe.maxIterations = safe.maxIterations ?? safe.maxActivations ?? DEFAULT_MAX_ITERATIONS;
   safe.executorConfig = safe.executorConfig || getAgentGraphExecutorConfig(safe.maxIterations);
   return structuredClone(safe);
@@ -273,6 +332,7 @@ export function createAgentGraphExecutorService({
   idFactory = () => crypto.randomUUID(),
   now = () => Date.now(),
   schedule = (callback) => queueMicrotask(callback),
+  artifactWorkspace = agentGraphArtifactWorkspace,
 } = {}) {
   const activeRuns = new Map();
 
@@ -289,7 +349,8 @@ export function createAgentGraphExecutorService({
       createdAt,
       lastUsedAt: null,
       endedAt: null,
-      injectedEvidenceIds: [],
+      injectedArtifactIds: [],
+      injectedFindingIds: [],
       injectedResultIds: [],
     };
     run.agentSessions.push(session);
@@ -297,9 +358,13 @@ export function createAgentGraphExecutorService({
   }
 
   function rememberAgentContext(session, agentContext) {
-    session.injectedEvidenceIds = uniqueStrings([
-      ...(session.injectedEvidenceIds || []),
-      ...(agentContext.includedEvidenceIds || []),
+    session.injectedArtifactIds = uniqueStrings([
+      ...(session.injectedArtifactIds || []),
+      ...(agentContext.includedArtifactIds || []),
+    ]);
+    session.injectedFindingIds = uniqueStrings([
+      ...(session.injectedFindingIds || session.injectedEvidenceIds || []),
+      ...(agentContext.includedFindingIds || []),
     ]);
     session.injectedResultIds = uniqueStrings([
       ...(session.injectedResultIds || []),
@@ -332,9 +397,10 @@ export function createAgentGraphExecutorService({
     }
   }
 
-  async function persist(run) {
+  async function persist(run, result = null) {
     run.updatedAt = timestamp(now);
     await store.saveAgentGraphRun({ workspacePath: run.workspacePath, run });
+    await artifactWorkspace.syncExecutionWorkspace({ workspacePath: run.workspacePath, run, result });
   }
 
   async function markInterruptedRuns(workspacePath, graphId) {
@@ -470,41 +536,66 @@ export function createAgentGraphExecutorService({
           agentSession.providerSessionId = agentSession.providerSessionId || response.sessionId;
           agentSession.status = 'active';
           agentSession.lastUsedAt = timestamp(now);
-          const agentResult = normalizeAgentResult(response, agent);
+          const agentResult = normalizeAgentResult(response);
           const completedAt = timestamp(now);
           const resultId = idFactory();
-          const knownEvidenceByClaim = new Map((run.evidenceStore || []).map((evidence) => [
-            evidence.claim.trim().toLowerCase(),
-            evidence,
+          run.artifactRegistry = await artifactWorkspace.listArtifacts({
+            workspacePath: run.workspacePath,
+            executionId: run.id,
+          });
+          const existingArtifactIds = new Set(run.context.artifactIds);
+          const addedArtifacts = run.artifactRegistry.filter((entry) => !existingArtifactIds.has(entry.artifactId));
+          const knownFindingsByContent = new Map((run.findingStore || []).map((finding) => [
+            String(finding.content || '').trim().toLowerCase(),
+            finding,
           ]));
-          const evidenceIds = [];
-          const addedEvidence = [];
-          for (const finding of uniqueStrings(agentResult.findings)) {
-            const normalizedClaim = finding.toLowerCase();
-            const existing = knownEvidenceByClaim.get(normalizedClaim);
+          const resultFindings = [];
+          const addedFindings = [];
+          for (const extractedFinding of Array.isArray(agentResult.findings) ? agentResult.findings : []) {
+            const content = String(extractedFinding?.content || '').trim();
+            if (!content) continue;
+            const normalizedContent = content.toLowerCase();
+            const existing = knownFindingsByContent.get(normalizedContent);
             if (existing) {
-              evidenceIds.push(existing.evidenceId);
+              existing.sourceArtifacts = uniqueStrings([
+                ...(existing.sourceArtifacts || []),
+                ...(extractedFinding.sourceArtifacts || []),
+              ]);
+              existing.confidence = Math.max(existing.confidence || 0, Number(extractedFinding.confidence) || 0);
+              resultFindings.push({
+                id: existing.id,
+                content: existing.content,
+                sourceArtifacts: existing.sourceArtifacts || [],
+                confidence: existing.confidence,
+              });
               continue;
             }
-            const evidence = {
-              evidenceId: idFactory(),
+            const finding = {
+              id: idFactory(),
               executionId: run.id,
               sourceAgentId: agent.id,
               sourceAgent: agent.name,
-              claim: finding,
-              confidence: agentResult.confidence,
+              content,
+              sourceArtifacts: uniqueStrings(extractedFinding.sourceArtifacts),
+              confidence: Number.isFinite(Number(extractedFinding.confidence))
+                ? Math.max(0, Math.min(1, Number(extractedFinding.confidence)))
+                : 0.5,
               metadata: {
                 resultId,
-                resultType: agentResult.type || 'agent_result',
                 iteration: run.context.iteration,
                 activation: agentState.activationCount,
               },
               createdAt: completedAt,
             };
-            run.evidenceStore.push(evidence);
-            knownEvidenceByClaim.set(normalizedClaim, evidence);
-            evidenceIds.push(evidence.evidenceId);
-            addedEvidence.push(evidence);
+            run.findingStore.push(finding);
+            knownFindingsByContent.set(normalizedContent, finding);
+            resultFindings.push({
+              id: finding.id,
+              content: finding.content,
+              sourceArtifacts: finding.sourceArtifacts,
+              confidence: finding.confidence,
+            });
+            addedFindings.push(finding);
           }
           const result = {
             resultId,
@@ -512,19 +603,50 @@ export function createAgentGraphExecutorService({
             agentId: agent.id,
             agentName: agent.name,
             activation: agentState.activationCount,
-            summary: agentResult.summary,
-            type: agentResult.type || 'agent_result',
-            evidenceIds,
-            newQuestions: uniqueStrings(agentResult.newQuestions),
-            confidence: agentResult.confidence,
-            content: response.text || agentResult.summary,
+            status: agentResult.status,
+            message: agentResult.message,
+            artifacts: Array.isArray(agentResult.artifacts) ? agentResult.artifacts : [],
+            findings: resultFindings,
+            questions: uniqueStrings(agentResult.questions),
             createdAt: completedAt,
           };
+          for (const interaction of Array.isArray(response.toolInteractions) ? response.toolInteractions : []) {
+            addTrace(run, 'agent_tool_completed', {
+              iteration: run.context.iteration,
+              agentId: agent.id,
+              agentName: agent.name,
+              message: `${agent.name} called ${interaction.toolName}; the output was stored as Artifact ${interaction.artifact?.artifactId}.`,
+              input: {
+                toolName: interaction.toolName,
+                toolUseId: interaction.toolUseId,
+                parameters: interaction.input,
+              },
+              output: {
+                artifact: interaction.artifact,
+                originalSizeBytes: interaction.originalSizeBytes,
+                truncatedForClaude: interaction.truncatedForClaude,
+              },
+            });
+          }
           run.resultStore.push(result);
           run.context.resultIds.push(result.resultId);
-          run.context.evidenceIds = uniqueStrings([...run.context.evidenceIds, ...addedEvidence.map((entry) => entry.evidenceId)]);
+          run.context.artifactIds = uniqueStrings([
+            ...run.context.artifactIds,
+            ...run.artifactRegistry.map((entry) => entry.artifactId),
+          ]);
+          run.context.findingIds = uniqueStrings([
+            ...run.context.findingIds,
+            ...addedFindings.map((entry) => entry.id),
+          ]);
           agentSession.injectedResultIds = uniqueStrings([...agentSession.injectedResultIds, result.resultId]);
-          agentSession.injectedEvidenceIds = uniqueStrings([...agentSession.injectedEvidenceIds, ...evidenceIds]);
+          agentSession.injectedArtifactIds = uniqueStrings([
+            ...agentSession.injectedArtifactIds,
+            ...result.artifacts.map((entry) => entry.artifactId),
+          ]);
+          agentSession.injectedFindingIds = uniqueStrings([
+            ...agentSession.injectedFindingIds,
+            ...resultFindings.map((entry) => entry.id),
+          ]);
           agentState.status = 'completed';
           agentState.lastCompletedAt = completedAt;
           agentState.lastResultId = result.resultId;
@@ -554,31 +676,33 @@ export function createAgentGraphExecutorService({
           });
 
           const previousContext = {
-            evidenceCount: run.context.evidenceIds.length - addedEvidence.length,
+            artifactCount: run.context.artifactIds.length - addedArtifacts.length,
+            findingCount: run.context.findingIds.length - addedFindings.length,
             resultCount: run.context.resultIds.length - 1,
-            pendingQuestions: [...run.context.pendingQuestions],
+            questions: [...run.context.questions],
             currentNeed: run.context.currentNeed,
             staleIterations: run.staleIterations,
           };
-          run.context.pendingQuestions = result.newQuestions;
-          run.context.currentNeed = result.newQuestions[0] || '';
-          run.staleIterations = addedEvidence.length ? 0 : run.staleIterations + 1;
+          run.context.questions = result.questions;
+          run.context.currentNeed = result.questions[0] || '';
+          run.staleIterations = addedFindings.length || addedArtifacts.length ? 0 : run.staleIterations + 1;
           addTrace(run, 'context_updated', {
             iteration: run.context.iteration,
             agentId: agent.id,
             agentName: agent.name,
-            message: addedEvidence.length
-              ? `${addedEvidence.length} new Evidence item(s) and one Agent Result reference were added to Execution Context.`
-              : 'One Agent Result reference was added; no new Evidence item was created.',
+            message: addedFindings.length || addedArtifacts.length
+              ? `${addedFindings.length} Finding(s), ${addedArtifacts.length} Artifact(s), and one Agent Result reference were added to Execution Context.`
+              : 'One Agent Result reference was added; no new Finding or Artifact reference was created.',
             input: { previousContext, agentResult },
             output: {
-              addedEvidenceIds: addedEvidence.map((entry) => entry.evidenceId),
+              addedArtifactIds: addedArtifacts.map((entry) => entry.artifactId),
+              addedFindingIds: addedFindings.map((entry) => entry.id),
               addedResultId: result.resultId,
               context: contextSnapshot(run.context),
               staleIterations: run.staleIterations,
             },
           });
-          await persist(run);
+          await persist(run, result);
 
           const completionInput = {
             goal: run.context.goal,
@@ -603,7 +727,7 @@ export function createAgentGraphExecutorService({
             run.context.status = 'completed';
             run.context.currentNeed = '';
             run.finalResultId = finalAgentResult.resultId;
-            run.result = finalAgentResult.content || finalAgentResult.summary;
+            run.result = finalAgentResult.message;
             run.completedAt = timestamp(now);
             endAgentSessions(run);
             addTrace(run, 'run_completed', {
@@ -626,13 +750,13 @@ export function createAgentGraphExecutorService({
             addTrace(run, 'loop_stopped_no_new_info', {
               iteration: run.context.iteration,
               message: `The loop stopped after ${run.staleIterations} consecutive iteration(s) without a new finding.`,
-              input: { staleIterations: run.staleIterations, pendingQuestions: run.context.pendingQuestions },
+              input: { staleIterations: run.staleIterations, questions: run.context.questions },
               output: { result: run.result },
             });
             await persist(run);
             return;
           }
-          run.context.currentNeed = run.context.pendingQuestions[0] || completion.reason;
+          run.context.currentNeed = run.context.questions[0] || completion.reason;
           await persist(run);
         } catch (error) {
           const errorMessage = error?.message || String(error);
@@ -717,9 +841,10 @@ export function createAgentGraphExecutorService({
     }
 
     const createdAt = timestamp(now);
+    const runId = idFactory();
     const run = {
-      version: 3,
-      id: idFactory(),
+      version: 4,
+      id: runId,
       graphId: graph.id,
       graphName: graph.name,
       graphSnapshot: structuredClone(graph),
@@ -734,17 +859,19 @@ export function createAgentGraphExecutorService({
       executorConfig: getAgentGraphExecutorConfig(iterationLimit),
       staleIterations: 0,
       resultStore: [],
-      evidenceStore: [],
+      artifactRegistry: [],
+      findingStore: [],
       agentSessions: [],
       context: {
-        executionId: null,
+        executionId: runId,
         goal: executionGoal,
         status: 'queued',
         iteration: 0,
         currentNeed: executionGoal,
-        evidenceIds: [],
+        artifactIds: [],
+        findingIds: [],
         resultIds: [],
-        pendingQuestions: [],
+        questions: [],
       },
       agentStates: graph.agents.map((agent) => ({
         agentId: agent.id,
@@ -765,12 +892,17 @@ export function createAgentGraphExecutorService({
       startedAt: null,
       completedAt: null,
     };
-    run.context.executionId = run.id;
     addTrace(run, 'run_created', { message: 'Execution Context created.', input: userInput });
     const abortController = new AbortController();
     activeRuns.set(run.id, abortController);
     try {
-      await store.saveAgentGraphRun({ workspacePath, run });
+      await artifactWorkspace.initializeExecutionWorkspace({
+        workspacePath,
+        executionId: run.id,
+        context: run.context,
+        trace: run.trace,
+      });
+      await persist(run);
     } catch (error) {
       activeRuns.delete(run.id);
       throw error;
@@ -783,6 +915,9 @@ export function createAgentGraphExecutorService({
     await markInterruptedRuns(workspacePath, graphId);
     const run = await store.getAgentGraphRun({ workspacePath, runId });
     if (run.graphId !== graphId) throw createHttpError('Agent Graph run not found', 404);
+    if (Number(run.version) >= 4) {
+      run.artifactRegistry = await artifactWorkspace.listArtifacts({ workspacePath, executionId: runId });
+    }
     return toPublicRun(run);
   }
 
@@ -816,11 +951,25 @@ export function createAgentGraphExecutorService({
     return toPublicRun(run);
   }
 
+  async function listRunArtifacts({ workspacePath, graphId, runId }) {
+    const run = await store.getAgentGraphRun({ workspacePath, runId });
+    if (run.graphId !== graphId) throw createHttpError('Agent Graph run not found', 404);
+    return artifactWorkspace.listArtifacts({ workspacePath, executionId: runId });
+  }
+
+  async function readRunArtifact({ workspacePath, graphId, runId, artifactId, offset, limit }) {
+    const run = await store.getAgentGraphRun({ workspacePath, runId });
+    if (run.graphId !== graphId) throw createHttpError('Agent Graph run not found', 404);
+    return artifactWorkspace.readArtifact({ workspacePath, executionId: runId, artifactId, offset, limit });
+  }
+
   return {
     startRun,
     getRun,
     listRuns,
     cancelRun,
+    listRunArtifacts,
+    readRunArtifact,
     getConfig: () => getAgentGraphExecutorConfig(),
   };
 }

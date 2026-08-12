@@ -606,4 +606,53 @@ for iteration in 1..maxIterations:
 return latestAgentResult
 ```
 
+## 13. Runtime V1 Agent Result 与 Artifact Workspace
+
+每次 Agent 激活统一产生以下结果，不再由用户配置 Agent 类型或输出类型：
+
+```typescript
+interface AgentResult {
+  resultId: string;
+  executionId: string;
+  agentId: string;
+  status: 'running' | 'completed' | 'failed' | 'partial';
+  message: string;
+  artifacts: ArtifactReference[];
+  findings: Finding[];
+  questions: string[];
+}
+```
+
+Result Extractor 负责把 Claude 结构化输出规范化为 Message、Artifact 引用、Finding 和 Question。Execution Context 只保存 `artifactIds`、`findingIds`、`resultIds` 和 `questions` 等轻量引用；完整 AgentResult、Artifact 数据和 Trace 分别持久化。
+
+每次执行使用独立目录：
+
+```text
+.ccui/agent-graph-executions/<executionId>/
+├── context/execution_context.json
+├── artifacts/registry.json
+├── artifacts/<artifactId>.<ext>
+├── results/<resultId>.json
+└── trace/execution_trace.json
+```
+
+业务 MCP 每次调用的原始返回都会先写入 Artifact Workspace。大结果只向 Claude 返回 Artifact Reference 和有界预览。Agent 只能通过执行期内置的 `artifact_list`、`artifact_get_metadata`、`artifact_read` 和 `artifact_write` 工具访问 Artifact，不能获得或传递物理路径。
+
+Artifact Registry 元数据模型：
+
+```typescript
+interface Artifact {
+  artifactId: string;
+  executionId: string;
+  type: 'dataset' | 'file' | 'report' | 'other';
+  name: string;
+  location: string;
+  producerAgentId: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+```
+
+运行详情展示 Result Store、Finding Store、Artifact Registry、轻量 Shared Context 和调度 Trace。Artifact 内容通过受权限保护的有界读取 API 查看，API 不返回 Workspace 物理路径。Artifact 随 Execution 保留；自动清理与跨 Execution Agent Memory 不属于当前版本。
+
 该伪代码中的 `select` 是基于 Goal、Context、Agent Profile、Top Skill、Relation 和历史激活情况的语义选择，而不是沿 Relation 顺序遍历节点。

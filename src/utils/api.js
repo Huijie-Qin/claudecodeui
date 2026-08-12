@@ -802,6 +802,10 @@ export const api = {
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs?limit=${encodeURIComponent(String(limit))}`)),
     getRun: (workspaceId, graphId, runId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}`)),
+    listRunArtifacts: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts`)),
+    readRunArtifact: (workspaceId, graphId, runId, artifactId, offset = 0, limit = 16000) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`)),
     cancelRun: (workspaceId, graphId, runId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/cancel`), {
         method: 'POST',

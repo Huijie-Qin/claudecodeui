@@ -91,11 +91,12 @@ test('Graph Executor dynamically activates Agents through shared Context and com
   assert.equal(completed.status, 'completed');
   assert.equal(completed.result, 'Profile Agent result');
   assert.deepEqual(completed.resultStore.map((result) => result.agentId), ['reports', 'profile']);
-  assert.equal(completed.evidenceStore.length, 2);
+  assert.equal(completed.findingStore.length, 2);
+  assert.equal(completed.artifactRegistry.length, 0);
   assert.equal(completed.context.resultIds.length, 2);
-  assert.equal(completed.context.evidenceIds.length, 2);
+  assert.equal(completed.context.findingIds.length, 2);
   assert.equal(completed.context.iteration, 2);
-  assert.deepEqual(completed.context.pendingQuestions, []);
+  assert.deepEqual(completed.context.questions, []);
   assert.equal(completed.agentStates[0].activationCount, 1);
   assert.equal(completed.agentStates[1].activationCount, 1);
   assert.equal(seenContexts[1].resultIds.length, 1);
@@ -107,7 +108,7 @@ test('Graph Executor dynamically activates Agents through shared Context and com
   assert.equal(activationTrace.input.context.iteration, 2);
   assert.equal(activationTrace.output.selectedAgentId, 'profile');
   const contextTrace = completed.trace.find((event) => event.type === 'context_updated' && event.agentId === 'reports');
-  assert.deepEqual(contextTrace.output.context.pendingQuestions, ['Which audience is affected?']);
+  assert.deepEqual(contextTrace.output.context.questions, ['Which audience is affected?']);
   assert.ok(completed.trace.some((event) => event.type === 'completion_decision' && event.complete === true));
 });
 
@@ -198,9 +199,9 @@ test('Graph Executor exposes legacy runs through the lightweight Context and sep
   assert.equal(migrated.context.agentResults, undefined);
   assert.equal(migrated.context.findings, undefined);
   assert.deepEqual(migrated.context.resultIds, ['legacy-result']);
-  assert.deepEqual(migrated.context.evidenceIds, ['legacy-evidence']);
-  assert.equal(migrated.resultStore[0].content, 'Legacy full report');
-  assert.equal(migrated.evidenceStore[0].claim, 'Stable churn');
+  assert.deepEqual(migrated.context.findingIds, ['legacy-evidence']);
+  assert.equal(migrated.resultStore[0].message, 'Legacy report');
+  assert.equal(migrated.findingStore[0].content, 'Stable churn');
   assert.equal(migrated.agentSessions[0].providerSessionId, 'legacy-session');
 });
 
@@ -249,7 +250,7 @@ test('Graph Executor reuses one Claude Session per execution and Agent', async (
   assert.deepEqual(observedSessions, [null, 'one-agent-session']);
   assert.equal(observedContexts[0].resumedSession, false);
   assert.equal(observedContexts[1].resumedSession, true);
-  assert.deepEqual(observedContexts[1].includedEvidenceIds, []);
+  assert.deepEqual(observedContexts[1].includedFindingIds, []);
   assert.equal(completed.agentSessions.length, 1);
   assert.equal(completed.agentSessions[0].providerSessionId, 'one-agent-session');
   assert.equal(completed.agentSessions[0].activationCount, 2);

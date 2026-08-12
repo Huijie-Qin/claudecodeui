@@ -32,16 +32,18 @@ function createRun() {
     },
     agentStates: [{ agentId: 'reports', activationCount: 0 }],
     resultStore: [],
-    evidenceStore: [],
+    artifactRegistry: [],
+    findingStore: [],
     context: {
       executionId: 'execution-one',
       goal: 'Explain music-app churn with evidence.',
       status: 'running',
       iteration: 1,
       currentNeed: 'Analyze churn',
-      evidenceIds: [],
+      artifactIds: [],
+      findingIds: [],
       resultIds: [],
-      pendingQuestions: [],
+      questions: [],
     },
   };
 }
@@ -151,12 +153,11 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
         type: 'result',
         session_id: 'agent-session-one',
         structured_output: {
-          agent: 'Report Agent',
-          summary: 'Evidence-backed report',
-          type: 'report',
-          findings: ['Churn is stable'],
-          newQuestions: [],
-          confidence: 0.9,
+          status: 'completed',
+          message: 'Evidence-backed report',
+          artifacts: [],
+          findings: [{ content: 'Churn is stable', sourceArtifacts: [], confidence: 0.9 }],
+          questions: [],
         },
       },
     ], (value) => { options = value; }),
@@ -173,10 +174,12 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
       goal: run.context.goal,
       iteration: 2,
       currentNeed: 'Create the report',
-      pendingQuestions: [],
-      relevantEvidence: [],
+      questions: [],
+      relevantArtifacts: [],
+      relevantFindings: [],
       relevantResults: [],
-      includedEvidenceIds: [],
+      includedArtifactIds: [],
+      includedFindingIds: [],
       includedResultIds: [],
       resumedSession: true,
     },
@@ -186,7 +189,8 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
   assert.equal(options.persistSession, true);
   assert.equal(options.resume, 'agent-session-one');
   assert.equal(response.sessionId, 'agent-session-one');
-  assert.equal(response.agentResult.type, 'report');
+  assert.equal(response.agentResult.status, 'completed');
+  assert.equal(response.agentResult.message, 'Evidence-backed report');
 });
 
 test('Agent Tool labels resolve to the configured Demo MCP server names', () => {

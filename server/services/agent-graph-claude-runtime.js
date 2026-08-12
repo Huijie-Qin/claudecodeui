@@ -1,8 +1,15 @@
 import { promises as fs } from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import { agentSessionRuntimeManager } from './agent-session-runtime.js';
+import {
+  captureMcpToolResult,
+  createArtifactAccessMcpServer,
+  listArtifacts,
+} from './agent-graph-artifact-workspace.js';
 import { buildAgentSpecificContext, buildControllerContext } from './agent-graph-context-builder.js';
+import { extractAgentResult, formatAgentResult } from './agent-graph-result-extractor.js';
 import { applyMcpConfigToSdkOptions, loadMcpConfig } from './claude-mcp-config.js';
 import { listWorkspaceSkills, reconcileWorkspaceSkillsForAgentTurn } from './workspace-skills.js';
 
@@ -55,14 +62,37 @@ const AGENT_RESULT_OUTPUT_FORMAT = {
   schema: {
     type: 'object',
     properties: {
-      agent: { type: 'string' },
-      summary: { type: 'string' },
-      type: { type: 'string' },
-      findings: { type: 'array', items: { type: 'string' } },
-      newQuestions: { type: 'array', items: { type: 'string' } },
-      confidence: { type: 'number' },
+      status: { type: 'string', enum: ['completed', 'failed', 'partial'] },
+      message: { type: 'string' },
+      artifacts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            artifactId: { type: 'string' },
+            type: { type: 'string', enum: ['dataset', 'file', 'report', 'other'] },
+            description: { type: 'string' },
+          },
+          required: ['artifactId', 'type', 'description'],
+          additionalProperties: false,
+        },
+      },
+      findings: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            content: { type: 'string' },
+            sourceArtifacts: { type: 'array', items: { type: 'string' } },
+            confidence: { type: 'number' },
+          },
+          required: ['content', 'sourceArtifacts', 'confidence'],
+          additionalProperties: false,
+        },
+      },
+      questions: { type: 'array', items: { type: 'string' } },
     },
-    required: ['agent', 'summary', 'type', 'findings', 'newQuestions', 'confidence'],
+    required: ['status', 'message', 'artifacts', 'findings', 'questions'],
     additionalProperties: false,
   },
 };
@@ -116,6 +146,7 @@ async function runClaudeTurn({
   outputFormat = null,
   persistSession = false,
   resumeSessionId = null,
+  hooks = null,
   abortController,
   runQuery = null,
   runtimeManager = agentSessionRuntimeManager,
@@ -156,6 +187,7 @@ async function runClaudeTurn({
     sdkOptions.allowedTools = capabilities.tools;
     sdkOptions.tools = capabilities.tools.filter((toolName) => !toolName.startsWith('mcp__'));
     if (abortController) sdkOptions.abortController = abortController;
+    if (hooks) sdkOptions.hooks = hooks;
     applyMcpConfigToSdkOptions(sdkOptions, capabilities.mcpServers);
 
     let responseText = '';
@@ -246,44 +278,6 @@ function parseCompletionDecision(raw, resultIds) {
       : completed ? 'The Graph goal is complete.' : 'More collaboration is required.',
     finalAgentResultId: completed ? finalAgentResultId : '',
   };
-}
-
-function normalizeStringList(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value
-    .filter((entry) => typeof entry === 'string')
-    .map((entry) => entry.trim())
-    .filter(Boolean))].slice(0, 50);
-}
-
-function parseAgentResult(raw, agentName, fallbackText = '') {
-  let parsed;
-  try {
-    parsed = parseJsonObject(raw, 'Agent Runtime could not parse the structured Agent result');
-  } catch {
-    const summary = String(fallbackText || raw || '').trim();
-    if (!summary) throw createHttpError('Agent Runtime returned an empty result', 502);
-    return { agent: agentName, summary, type: 'agent_result', findings: [summary], newQuestions: [], confidence: 0.5 };
-  }
-  const summary = typeof parsed?.summary === 'string' ? parsed.summary.trim() : '';
-  if (!summary) throw createHttpError('Agent Runtime returned an empty result summary', 502);
-  const confidence = Number(parsed?.confidence);
-  return {
-    agent: typeof parsed?.agent === 'string' && parsed.agent.trim() ? parsed.agent.trim() : agentName,
-    summary,
-    type: typeof parsed?.type === 'string' && parsed.type.trim() ? parsed.type.trim() : 'agent_result',
-    findings: normalizeStringList(parsed?.findings),
-    newQuestions: normalizeStringList(parsed?.newQuestions),
-    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5,
-  };
-}
-
-function formatAgentResult(result) {
-  const sections = [`Type: ${result.type}`, result.summary];
-  if (result.findings.length) sections.push(`Findings:\n${result.findings.map((entry) => `- ${entry}`).join('\n')}`);
-  if (result.newQuestions.length) sections.push(`New questions:\n${result.newQuestions.map((entry) => `- ${entry}`).join('\n')}`);
-  sections.push(`Confidence: ${result.confidence}`);
-  return sections.join('\n\n');
 }
 
 export async function selectAgentWithClaude({
@@ -417,8 +411,32 @@ export async function executeAgentWithClaude({
   abortController,
   dependencies = {},
 }) {
-  const { loadSkills = loadBoundSkills, ...runtimeDependencies } = dependencies;
+  const {
+    loadSkills = loadBoundSkills,
+    artifactWorkspace = {
+      captureMcpToolResult,
+      createArtifactAccessMcpServer,
+      listArtifacts,
+    },
+    artifactIdFactory = () => crypto.randomUUID(),
+    ...runtimeDependencies
+  } = dependencies;
   const skills = await loadSkills(run.workspacePath, agent.skills);
+  const executionId = run.id || run.context?.executionId;
+  const activationArtifactIds = [];
+  const toolInteractions = [];
+  const rememberArtifact = (artifact) => {
+    if (artifact?.artifactId && !activationArtifactIds.includes(artifact.artifactId)) {
+      activationArtifactIds.push(artifact.artifactId);
+    }
+  };
+  const artifactMcpServer = await artifactWorkspace.createArtifactAccessMcpServer({
+    workspacePath: run.workspacePath,
+    executionId,
+    producerAgentId: agent.id,
+    idFactory: artifactIdFactory,
+    onArtifactCreated: rememberArtifact,
+  });
   const skillInstructions = skills.map((skill) => [
     `### Bound Skill: ${skill.name}`,
     `Runtime directory: ${skill.runtimePath}`,
@@ -433,13 +451,15 @@ export async function executeAgentWithClaude({
     'Use only the bound Skills and Tool/MCP capabilities listed below. Decide autonomously which of them are needed.',
     'Do not invoke or communicate with another Agent. Your internal analysis loop belongs to Agent Runtime; independently investigate hypotheses with your bound Skills and Tools before returning.',
     `Your activation has a bounded execution budget. Use no more than ${MAX_AGENT_TOOL_CALLS} tool calls, avoid repeating an equivalent query, and reserve enough turns to return the required AgentResult.`,
-    'A bound Tool/MCP name is only callable when a matching tool is actually present in your runtime tool list. If it is absent, treat it as not configured, do not retry or emulate it, and record the limitation in findings or newQuestions.',
-    'Return a structured AgentResult containing: agent, summary, type, findings, newQuestions, and confidence from 0 to 1. Keep evidence and important limitations in summary/findings.',
+    'A bound Tool/MCP name is only callable when a matching tool is actually present in your runtime tool list. If it is absent, treat it as not configured, do not retry or emulate it, and record the limitation in findings or questions.',
+    'Return the system AgentResult protocol only: status, message, artifacts, findings, questions. Do not invent another output schema.',
+    'Each finding must contain content, sourceArtifacts, and confidence from 0 to 1. Cite Artifact ids whenever a finding depends on Tool/MCP data.',
+    'Use artifact_write for durable files, datasets, or reports you create. Use artifact_list, artifact_get_metadata, and artifact_read to consume shared Artifacts; never use or expose physical Artifact paths.',
     'Do not modify the Graph or your Top Skill.',
     '',
     skillInstructions || 'No Skills are bound.',
     '',
-    `Bound Tool/MCP names: ${agent.tools.length ? agent.tools.join(', ') : 'None'}`,
+    `Bound Tool/MCP names: ${agent.tools.length ? agent.tools.join(', ') : 'None'}. Artifact Workspace tools are always available.`,
   ].join('\n');
   const specificContext = agentContext || buildAgentSpecificContext({ run, agent, agentSession });
   const prompt = [
@@ -451,7 +471,7 @@ export async function executeAgentWithClaude({
     '',
     `Agent-specific Context:\n${JSON.stringify(specificContext, null, 2)}`,
     '',
-    `Continue according to your Top Skill. Complete the most valuable analysis within at most ${MAX_AGENT_TOOL_CALLS} tool calls, then stop investigating and return the structured AgentResult for the shared Context. If evidence is incomplete, return what is supported and put the remaining gaps in newQuestions.`,
+    `Continue according to your Top Skill. Complete the most valuable analysis within at most ${MAX_AGENT_TOOL_CALLS} tool calls, then stop investigating and return the structured AgentResult for the shared Context. If evidence is incomplete, use status "partial" and put remaining gaps in questions.`,
   ].join('\n');
   const result = await runClaudeTurn({
     workspacePath: run.workspacePath,
@@ -471,19 +491,70 @@ export async function executeAgentWithClaude({
         runtimeHomePath: runtimeContext.runtimeHomePath,
       });
       const capabilities = resolveAgentTools(agent, allMcpServers);
+      capabilities.mcpServers['artifact-workspace'] = artifactMcpServer;
+      capabilities.toolNames.push('mcp__artifact-workspace__*');
       return { tools: capabilities.toolNames, mcpServers: capabilities.mcpServers };
     },
     maxTurns: MAX_AGENT_RUNTIME_TURNS,
     outputFormat: AGENT_RESULT_OUTPUT_FORMAT,
     persistSession: true,
     resumeSessionId: agentSession?.providerSessionId || null,
+    hooks: {
+      PostToolUse: [{
+        matcher: 'mcp__.*',
+        hooks: [async (input) => {
+          if (
+            input?.hook_event_name !== 'PostToolUse'
+            || !String(input.tool_name || '').startsWith('mcp__')
+            || String(input.tool_name || '').startsWith('mcp__artifact-workspace__')
+          ) return {};
+          const captured = await artifactWorkspace.captureMcpToolResult({
+            workspacePath: run.workspacePath,
+            executionId,
+            producerAgentId: agent.id,
+            artifactId: artifactIdFactory(),
+            toolName: input.tool_name,
+            toolUseId: input.tool_use_id,
+            toolResponse: input.tool_response,
+            createdAt: new Date().toISOString(),
+          });
+          rememberArtifact(captured.artifact);
+          toolInteractions.push({
+            toolName: input.tool_name,
+            toolUseId: input.tool_use_id,
+            input: input.tool_input,
+            artifact: captured.reference,
+            originalSizeBytes: captured.claudePayload.originalSizeBytes,
+            truncatedForClaude: captured.claudePayload.truncated,
+          });
+          return {
+            hookSpecificOutput: {
+              hookEventName: 'PostToolUse',
+              additionalContext: `The MCP output was saved as Artifact ${captured.artifact.artifactId}. Cite this Artifact id in findings that use the data.`,
+              updatedMCPToolOutput: captured.claudePayload,
+            },
+          };
+        }],
+      }],
+    },
     abortController,
     ...runtimeDependencies,
   });
-  const agentResult = parseAgentResult(result.structuredOutput ?? result.text, agent.name, result.text);
+  const availableArtifacts = await artifactWorkspace.listArtifacts({
+    workspacePath: run.workspacePath,
+    executionId,
+  });
+  const agentResult = extractAgentResult({
+    raw: result.structuredOutput ?? result.text,
+    fallbackText: result.text,
+    availableArtifacts,
+    automaticArtifactIds: activationArtifactIds,
+  });
   return {
     ...result,
     text: formatAgentResult(agentResult),
     agentResult,
+    artifacts: availableArtifacts.filter((entry) => activationArtifactIds.includes(entry.artifactId)),
+    toolInteractions,
   };
 }
