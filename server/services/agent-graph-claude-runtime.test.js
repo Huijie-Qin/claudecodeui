@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  executeAgentWithClaude,
   evaluateCompletionWithClaude,
   resolveAgentTools,
   selectAgentWithClaude,
@@ -30,11 +31,17 @@ function createRun() {
       relations: [],
     },
     agentStates: [{ agentId: 'reports', activationCount: 0 }],
+    resultStore: [],
+    evidenceStore: [],
     context: {
+      executionId: 'execution-one',
       goal: 'Explain music-app churn with evidence.',
-      userInput: 'Analyze churn',
-      findings: [],
-      agentResults: [],
+      status: 'running',
+      iteration: 1,
+      currentNeed: 'Analyze churn',
+      evidenceIds: [],
+      resultIds: [],
+      pendingQuestions: [],
     },
   };
 }
@@ -72,6 +79,8 @@ test('Agent Activation uses SDK structured output when available', async () => {
   assert.deepEqual(result, decision);
   assert.equal(options.outputFormat.type, 'json_schema');
   assert.equal(options.maxTurns, 3);
+  assert.equal(options.persistSession, false);
+  assert.equal(options.resume, undefined);
   assert.deepEqual(options.outputFormat.schema.required, [
     'selectedAgentId',
     'reason',
@@ -99,14 +108,18 @@ test('Agent Activation keeps text JSON as a compatibility fallback', async () =>
 
 test('Loop completion is evaluated independently after Context updates', async () => {
   const run = createRun();
-  run.context.agentResults = [{
-    id: 'result-one',
+  run.resultStore = [{
+    resultId: 'result-one',
+    executionId: 'execution-one',
     agentId: 'reports',
     agentName: 'Report Agent',
+    type: 'report',
     summary: 'Evidence-backed report',
     content: 'Evidence-backed report',
+    evidenceIds: [],
     newQuestions: [],
   }];
+  run.context.resultIds = ['result-one'];
   const decision = await evaluateCompletionWithClaude({
     run,
     dependencies: createDependencies([
@@ -115,7 +128,7 @@ test('Loop completion is evaluated independently after Context updates', async (
         structured_output: {
           completed: true,
           reason: 'Evidence is sufficient.',
-          finalAnswer: 'Synthesized final report.',
+          finalAgentResultId: 'result-one',
         },
       },
     ]),
@@ -124,8 +137,56 @@ test('Loop completion is evaluated independently after Context updates', async (
   assert.deepEqual(decision, {
     completed: true,
     reason: 'Evidence is sufficient.',
-    finalAnswer: 'Synthesized final report.',
+    finalAgentResultId: 'result-one',
   });
+});
+
+test('Agent Runtime persists and resumes the execution-scoped Agent Session', async () => {
+  const run = createRun();
+  const agent = run.graphSnapshot.agents[0];
+  let options;
+  const dependencies = {
+    ...createDependencies([
+      {
+        type: 'result',
+        session_id: 'agent-session-one',
+        structured_output: {
+          agent: 'Report Agent',
+          summary: 'Evidence-backed report',
+          type: 'report',
+          findings: ['Churn is stable'],
+          newQuestions: [],
+          confidence: 0.9,
+        },
+      },
+    ], (value) => { options = value; }),
+    loadSkills: async () => [],
+  };
+
+  const response = await executeAgentWithClaude({
+    run,
+    agent,
+    decision: { selectedAgentId: 'reports', reason: 'Need report', task: 'Create the report' },
+    agentSession: { agentId: 'reports', providerSessionId: 'agent-session-one' },
+    agentContext: {
+      executionId: 'execution-one',
+      goal: run.context.goal,
+      iteration: 2,
+      currentNeed: 'Create the report',
+      pendingQuestions: [],
+      relevantEvidence: [],
+      relevantResults: [],
+      includedEvidenceIds: [],
+      includedResultIds: [],
+      resumedSession: true,
+    },
+    dependencies,
+  });
+
+  assert.equal(options.persistSession, true);
+  assert.equal(options.resume, 'agent-session-one');
+  assert.equal(response.sessionId, 'agent-session-one');
+  assert.equal(response.agentResult.type, 'report');
 });
 
 test('Agent Tool labels resolve to the configured Demo MCP server names', () => {

@@ -2,11 +2,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { agentSessionRuntimeManager } from './agent-session-runtime.js';
+import { buildAgentSpecificContext, buildControllerContext } from './agent-graph-context-builder.js';
 import { applyMcpConfigToSdkOptions, loadMcpConfig } from './claude-mcp-config.js';
 import { listWorkspaceSkills, reconcileWorkspaceSkillsForAgentTurn } from './workspace-skills.js';
 
 const MAX_SELECTOR_AGENT_PROFILE = 4_000;
-const MAX_CONTEXT_RESULT = 8_000;
 const MAX_AGENT_RESULT = 120_000;
 const MAX_AGENT_RUNTIME_TURNS = 24;
 const MAX_AGENT_TOOL_CALLS = 8;
@@ -18,6 +18,10 @@ export const AGENT_GRAPH_CLAUDE_RUNTIME_CONFIG = Object.freeze({
   agentMaxTurns: MAX_AGENT_RUNTIME_TURNS,
   agentMaxToolCalls: MAX_AGENT_TOOL_CALLS,
   structuredAgentResult: true,
+  controllerSessionsPersisted: false,
+  agentSessionsPersisted: true,
+  agentSessionsReusedWithinExecution: true,
+  agentSessionsReusedAcrossExecutions: false,
 });
 const SKILL_RUNTIME_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];
 const ACTIVATION_OUTPUT_FORMAT = {
@@ -40,9 +44,9 @@ const COMPLETION_OUTPUT_FORMAT = {
     properties: {
       completed: { type: 'boolean' },
       reason: { type: 'string' },
-      finalAnswer: { type: 'string' },
+      finalAgentResultId: { type: 'string' },
     },
-    required: ['completed', 'reason', 'finalAnswer'],
+    required: ['completed', 'reason', 'finalAgentResultId'],
     additionalProperties: false,
   },
 };
@@ -53,11 +57,12 @@ const AGENT_RESULT_OUTPUT_FORMAT = {
     properties: {
       agent: { type: 'string' },
       summary: { type: 'string' },
+      type: { type: 'string' },
       findings: { type: 'array', items: { type: 'string' } },
       newQuestions: { type: 'array', items: { type: 'string' } },
       confidence: { type: 'number' },
     },
-    required: ['agent', 'summary', 'findings', 'newQuestions', 'confidence'],
+    required: ['agent', 'summary', 'type', 'findings', 'newQuestions', 'confidence'],
     additionalProperties: false,
   },
 };
@@ -109,6 +114,8 @@ async function runClaudeTurn({
   capabilityResolver = null,
   maxTurns,
   outputFormat = null,
+  persistSession = false,
+  resumeSessionId = null,
   abortController,
   runQuery = null,
   runtimeManager = agentSessionRuntimeManager,
@@ -137,7 +144,8 @@ async function runClaudeTurn({
       settingSources: runtimeContext.settingSources,
       permissionMode: 'bypassPermissions',
     });
-    sdkOptions.persistSession = false;
+    sdkOptions.persistSession = persistSession;
+    if (resumeSessionId) sdkOptions.resume = resumeSessionId;
     sdkOptions.includePartialMessages = false;
     sdkOptions.maxTurns = maxTurns;
     sdkOptions.systemPrompt = systemPrompt;
@@ -185,26 +193,6 @@ async function runClaudeTurn({
   }
 }
 
-function contextForPrompt(context) {
-  return {
-    goal: context.goal,
-    userInput: context.userInput,
-    findings: (context.findings || []).slice(-12).map((finding) => ({
-      agentName: finding.agentName,
-      content: String(finding.content || '').slice(0, MAX_CONTEXT_RESULT),
-    })),
-    agentResults: (context.agentResults || []).slice(-8).map((result) => ({
-      agentId: result.agentId,
-      agentName: result.agentName,
-      summary: String(result.summary || '').slice(0, MAX_CONTEXT_RESULT),
-      content: String(result.content || '').slice(0, MAX_CONTEXT_RESULT),
-      newQuestions: Array.isArray(result.newQuestions) ? result.newQuestions.slice(0, 12) : [],
-    })),
-    pendingQuestions: Array.isArray(context.pendingQuestions) ? context.pendingQuestions.slice(0, 20) : [],
-    iteration: Number(context.iteration) || 0,
-  };
-}
-
 function parseJsonObject(raw, errorMessage) {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     return raw;
@@ -242,15 +230,21 @@ function parseActivationDecision(raw, agentIds, excludedAgentIds = new Set()) {
   };
 }
 
-function parseCompletionDecision(raw) {
+function parseCompletionDecision(raw, resultIds) {
   const parsed = parseJsonObject(raw, 'Graph Executor could not parse the Loop completion decision');
   const completed = parsed?.completed === true;
+  const finalAgentResultId = typeof parsed?.finalAgentResultId === 'string'
+    ? parsed.finalAgentResultId.trim()
+    : '';
+  if (completed && !resultIds.has(finalAgentResultId)) {
+    throw createHttpError('Completion Controller selected an Agent Result that is not in this Graph execution', 502);
+  }
   return {
     completed,
     reason: typeof parsed?.reason === 'string' && parsed.reason.trim()
       ? parsed.reason.trim()
       : completed ? 'The Graph goal is complete.' : 'More collaboration is required.',
-    finalAnswer: typeof parsed?.finalAnswer === 'string' ? parsed.finalAnswer.trim() : '',
+    finalAgentResultId: completed ? finalAgentResultId : '',
   };
 }
 
@@ -269,7 +263,7 @@ function parseAgentResult(raw, agentName, fallbackText = '') {
   } catch {
     const summary = String(fallbackText || raw || '').trim();
     if (!summary) throw createHttpError('Agent Runtime returned an empty result', 502);
-    return { agent: agentName, summary, findings: [summary], newQuestions: [], confidence: 0.5 };
+    return { agent: agentName, summary, type: 'agent_result', findings: [summary], newQuestions: [], confidence: 0.5 };
   }
   const summary = typeof parsed?.summary === 'string' ? parsed.summary.trim() : '';
   if (!summary) throw createHttpError('Agent Runtime returned an empty result summary', 502);
@@ -277,6 +271,7 @@ function parseAgentResult(raw, agentName, fallbackText = '') {
   return {
     agent: typeof parsed?.agent === 'string' && parsed.agent.trim() ? parsed.agent.trim() : agentName,
     summary,
+    type: typeof parsed?.type === 'string' && parsed.type.trim() ? parsed.type.trim() : 'agent_result',
     findings: normalizeStringList(parsed?.findings),
     newQuestions: normalizeStringList(parsed?.newQuestions),
     confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5,
@@ -284,7 +279,7 @@ function parseAgentResult(raw, agentName, fallbackText = '') {
 }
 
 function formatAgentResult(result) {
-  const sections = [result.summary];
+  const sections = [`Type: ${result.type}`, result.summary];
   if (result.findings.length) sections.push(`Findings:\n${result.findings.map((entry) => `- ${entry}`).join('\n')}`);
   if (result.newQuestions.length) sections.push(`New questions:\n${result.newQuestions.map((entry) => `- ${entry}`).join('\n')}`);
   sections.push(`Confidence: ${result.confidence}`);
@@ -321,7 +316,7 @@ export async function selectAgentWithClaude({
     '',
     `Graph: ${JSON.stringify({ id: graph.id, name: graph.name, goal: graph.goal, agents: profiles, relations: graph.relations })}`,
     '',
-    `Execution Context: ${JSON.stringify(contextForPrompt(run.context))}`,
+    `Execution Context and referenced store summaries: ${JSON.stringify(buildControllerContext(run))}`,
     '',
     'Return JSON only using this Executor-internal decision shape:',
     '{"selectedAgentId":"agent-id","reason":"why this Agent fits now","task":"natural-language task for this activation"}',
@@ -348,16 +343,18 @@ export async function selectAgentWithClaude({
 }
 
 export async function evaluateCompletionWithClaude({ run, abortController, dependencies = {} }) {
+  const controllerContext = buildControllerContext(run);
   const prompt = [
     'Decide whether the Agent Graph collaboration goal is complete after the latest Agent result updated the shared Context.',
     'The Graph is not a workflow. Judge evidence sufficiency, unresolved questions, limitations, and the original user goal.',
-    'Do not call Skills, Tools, MCP, or Agents.',
+    'Do not call Skills, Tools, MCP, or Agents. Do not write, synthesize, rewrite, or improve any business answer.',
+    'When complete, select exactly one existing Agent Result as the final result source.',
     '',
     `Graph goal: ${run.graphSnapshot.goal}`,
-    `Execution Context: ${JSON.stringify(contextForPrompt(run.context))}`,
+    `Execution Context, Evidence, and Agent Results: ${JSON.stringify(controllerContext)}`,
     '',
     'Return JSON only:',
-    '{"completed":false,"reason":"why collaboration should continue or stop","finalAnswer":"complete synthesized answer when completed, otherwise empty"}',
+    '{"completed":false,"reason":"why collaboration should continue or stop","finalAgentResultId":"existing result id when completed, otherwise empty"}',
   ].join('\n');
   const result = await runClaudeTurn({
     workspacePath: run.workspacePath,
@@ -365,7 +362,7 @@ export async function evaluateCompletionWithClaude({ run, abortController, depen
     userId: run.userId,
     workspaceId: run.workspaceId,
     prompt,
-    systemPrompt: 'You are the completion-control component of Graph Executor. Evaluate the shared Context only. Return only the requested JSON.',
+    systemPrompt: 'You are the stateless completion-control component of Graph Executor. Evaluate existing state only. Never author a business answer. Return only the requested JSON.',
     tools: [],
     mcpServers: null,
     maxTurns: MAX_CONTROL_PLANE_TURNS,
@@ -373,7 +370,10 @@ export async function evaluateCompletionWithClaude({ run, abortController, depen
     abortController,
     ...dependencies,
   });
-  return parseCompletionDecision(result.structuredOutput ?? result.text);
+  return parseCompletionDecision(
+    result.structuredOutput ?? result.text,
+    new Set((run.resultStore || []).map((entry) => entry.resultId)),
+  );
 }
 
 async function loadBoundSkills(workspacePath, skillNames) {
@@ -408,8 +408,17 @@ export function resolveAgentTools(agent, mcpServers) {
   return { toolNames: [...selected], mcpServers: selectedMcp };
 }
 
-export async function executeAgentWithClaude({ run, agent, decision, abortController, dependencies = {} }) {
-  const skills = await loadBoundSkills(run.workspacePath, agent.skills);
+export async function executeAgentWithClaude({
+  run,
+  agent,
+  decision,
+  agentSession,
+  agentContext,
+  abortController,
+  dependencies = {},
+}) {
+  const { loadSkills = loadBoundSkills, ...runtimeDependencies } = dependencies;
+  const skills = await loadSkills(run.workspacePath, agent.skills);
   const skillInstructions = skills.map((skill) => [
     `### Bound Skill: ${skill.name}`,
     `Runtime directory: ${skill.runtimePath}`,
@@ -425,21 +434,22 @@ export async function executeAgentWithClaude({ run, agent, decision, abortContro
     'Do not invoke or communicate with another Agent. Your internal analysis loop belongs to Agent Runtime; independently investigate hypotheses with your bound Skills and Tools before returning.',
     `Your activation has a bounded execution budget. Use no more than ${MAX_AGENT_TOOL_CALLS} tool calls, avoid repeating an equivalent query, and reserve enough turns to return the required AgentResult.`,
     'A bound Tool/MCP name is only callable when a matching tool is actually present in your runtime tool list. If it is absent, treat it as not configured, do not retry or emulate it, and record the limitation in findings or newQuestions.',
-    'Return a structured AgentResult containing: agent, summary, findings, newQuestions, and confidence from 0 to 1. Keep evidence and important limitations in summary/findings.',
+    'Return a structured AgentResult containing: agent, summary, type, findings, newQuestions, and confidence from 0 to 1. Keep evidence and important limitations in summary/findings.',
     'Do not modify the Graph or your Top Skill.',
     '',
     skillInstructions || 'No Skills are bound.',
     '',
     `Bound Tool/MCP names: ${agent.tools.length ? agent.tools.join(', ') : 'None'}`,
   ].join('\n');
+  const specificContext = agentContext || buildAgentSpecificContext({ run, agent, agentSession });
   const prompt = [
-    `Graph goal:\n${run.context.goal}`,
-    '',
-    `Original user input:\n${typeof run.context.userInput === 'string' ? run.context.userInput : JSON.stringify(run.context.userInput)}`,
+    specificContext.resumedSession
+      ? 'Continue this Agent task in your existing execution-scoped Claude Session. Use only the new task and context delta below; do not repeat completed investigation unless needed.'
+      : 'Start this Agent task using the execution-scoped context below.',
     '',
     `Your current task:\n${decision.task || decision.reason}`,
     '',
-    `Current shared Execution Context:\n${JSON.stringify(contextForPrompt(run.context), null, 2)}`,
+    `Agent-specific Context:\n${JSON.stringify(specificContext, null, 2)}`,
     '',
     `Continue according to your Top Skill. Complete the most valuable analysis within at most ${MAX_AGENT_TOOL_CALLS} tool calls, then stop investigating and return the structured AgentResult for the shared Context. If evidence is incomplete, return what is supported and put the remaining gaps in newQuestions.`,
   ].join('\n');
@@ -465,8 +475,10 @@ export async function executeAgentWithClaude({ run, agent, decision, abortContro
     },
     maxTurns: MAX_AGENT_RUNTIME_TURNS,
     outputFormat: AGENT_RESULT_OUTPUT_FORMAT,
+    persistSession: true,
+    resumeSessionId: agentSession?.providerSessionId || null,
     abortController,
-    ...dependencies,
+    ...runtimeDependencies,
   });
   const agentResult = parseAgentResult(result.structuredOutput ?? result.text, agent.name, result.text);
   return {

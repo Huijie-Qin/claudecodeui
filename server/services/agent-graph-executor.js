@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { agentGraphRunStore } from './agent-graph-run-store.js';
+import { buildAgentSpecificContext, executionContextSnapshot } from './agent-graph-context-builder.js';
 import {
   AGENT_GRAPH_CLAUDE_RUNTIME_CONFIG,
   AGENT_GRAPH_MCP_BINDING_ALIASES,
@@ -21,7 +22,7 @@ const SENSITIVE_FIELD_PATTERN = /(?:authorization|cookie|password|passwd|secret|
 
 export function getAgentGraphExecutorConfig(maxIterations = DEFAULT_MAX_ITERATIONS) {
   return structuredClone({
-    version: 3,
+    version: 4,
     executionModel: 'context-driven-collaboration-loop',
     relationSemantics: 'collaboration-and-capability-hints-only',
     communicationModel: 'shared-execution-context',
@@ -34,10 +35,23 @@ export function getAgentGraphExecutorConfig(maxIterations = DEFAULT_MAX_ITERATIO
     completionPolicy: {
       evaluatedAfterEveryAgentResult: true,
       controllerMayCallTools: false,
-      controllerMaySynthesizeBusinessAnswer: true,
-      finalResultSource: 'completion-controller-synthesis',
+      controllerMaySynthesizeBusinessAnswer: false,
+      finalResultSource: 'existing-agent-result',
       requiresUserReadyDeliverable: true,
       skipsIrrelevantAgents: true,
+    },
+    sessionPolicy: {
+      activationController: 'ephemeral',
+      completionController: 'ephemeral',
+      agentSessionScope: 'executionId+agentId',
+      reuseAgentSessionWithinExecution: true,
+      reuseAgentSessionAcrossExecutions: false,
+    },
+    contextPolicy: {
+      executionContextStoresFullAgentOutput: false,
+      agentResultsStoredSeparately: true,
+      evidenceStoredSeparately: true,
+      agentInputBuiltPerActivation: true,
     },
     safetyLimits: {
       maxIterations,
@@ -123,16 +137,7 @@ function sanitizeTraceValue(value, key = '', depth = 0, seen = new WeakSet()) {
 }
 
 function contextSnapshot(context) {
-  return structuredClone({
-    executionId: context.executionId,
-    goal: context.goal,
-    userInput: context.userInput,
-    findings: context.findings || [],
-    agentResults: context.agentResults || [],
-    pendingQuestions: context.pendingQuestions || [],
-    iteration: context.iteration || 0,
-    status: context.status,
-  });
+  return executionContextSnapshot(context);
 }
 
 function normalizeAgentResult(response, agent) {
@@ -141,6 +146,7 @@ function normalizeAgentResult(response, agent) {
   return {
     agent: agent.name,
     summary,
+    type: 'agent_result',
     findings: summary ? [summary] : [],
     newQuestions: [],
     confidence: 0.5,
@@ -157,23 +163,103 @@ function uniqueStrings(value) {
 
 function countConsecutiveAgentResults(run, agentId) {
   let count = 0;
-  for (let index = run.context.agentResults.length - 1; index >= 0; index -= 1) {
-    if (run.context.agentResults[index].agentId !== agentId) break;
+  for (let index = run.resultStore.length - 1; index >= 0; index -= 1) {
+    if (run.resultStore[index].agentId !== agentId) break;
     count += 1;
   }
   return count;
 }
 
 function fallbackResult(run, message) {
-  const latest = run.context.agentResults.at(-1);
-  return latest?.summary || latest?.content || message;
+  const latest = run.resultStore.at(-1);
+  return latest?.content || latest?.summary || message;
+}
+
+function normalizeCurrentNeed(input, goal) {
+  if (typeof input === 'string' && input.trim()) return input.trim();
+  try {
+    const serialized = JSON.stringify(input);
+    return serialized && serialized !== '{}' ? serialized : goal;
+  } catch {
+    return goal;
+  }
+}
+
+function legacyEvidenceStore(run) {
+  return (run.context?.findings || []).map((finding) => ({
+    evidenceId: finding.id,
+    executionId: run.id,
+    sourceAgentId: finding.agentId,
+    sourceAgent: finding.agentName,
+    claim: finding.content,
+    confidence: 0.5,
+    metadata: { migratedFromVersion: run.version || 1 },
+    createdAt: finding.createdAt,
+  }));
+}
+
+function legacyResultStore(run) {
+  return (run.context?.agentResults || []).map((result) => ({
+    resultId: result.id,
+    executionId: run.id,
+    agentId: result.agentId,
+    agentName: result.agentName,
+    activation: result.activation,
+    summary: result.summary,
+    type: result.type || 'agent_result',
+    evidenceIds: [],
+    newQuestions: result.newQuestions || [],
+    confidence: result.confidence,
+    content: result.content || result.summary,
+    createdAt: result.createdAt,
+  }));
+}
+
+function normalizePublicRunShape(run) {
+  const resultStore = Array.isArray(run.resultStore) ? run.resultStore : legacyResultStore(run);
+  const evidenceStore = Array.isArray(run.evidenceStore) ? run.evidenceStore : legacyEvidenceStore(run);
+  const legacySessionsByAgent = new Map();
+  for (const result of run.context?.agentResults || []) {
+    if (!result.providerSessionId) continue;
+    legacySessionsByAgent.set(result.agentId, {
+      agentId: result.agentId,
+      agentName: result.agentName,
+      providerSessionId: result.providerSessionId,
+      status: 'ended',
+      activationCount: result.activation || 1,
+      createdAt: result.createdAt,
+      lastUsedAt: result.createdAt,
+      endedAt: run.completedAt || result.createdAt,
+      injectedEvidenceIds: [],
+      injectedResultIds: [],
+    });
+  }
+  const context = run.context || {};
+  return {
+    ...run,
+    resultStore,
+    evidenceStore,
+    agentSessions: Array.isArray(run.agentSessions) ? run.agentSessions : [...legacySessionsByAgent.values()],
+    context: {
+      executionId: context.executionId || run.id,
+      goal: context.goal || run.graphSnapshot?.goal || '',
+      status: context.status || run.status,
+      iteration: Number(context.iteration) || 0,
+      currentNeed: context.currentNeed || context.pendingQuestions?.[0] || '',
+      evidenceIds: Array.isArray(context.evidenceIds)
+        ? context.evidenceIds
+        : evidenceStore.map((entry) => entry.evidenceId),
+      resultIds: Array.isArray(context.resultIds)
+        ? context.resultIds
+        : resultStore.map((entry) => entry.resultId),
+      pendingQuestions: Array.isArray(context.pendingQuestions) ? context.pendingQuestions : [],
+    },
+  };
 }
 
 function toPublicRun(run) {
-  const { workspacePath, tenantId, userId, workspaceId, ...safe } = run;
-  safe.context = safe.context || {};
-  safe.context.pendingQuestions = Array.isArray(safe.context.pendingQuestions) ? safe.context.pendingQuestions : [];
-  safe.context.iteration = Number(safe.context.iteration) || 0;
+  const normalized = normalizePublicRunShape(run);
+  const { workspacePath, tenantId, userId, workspaceId, ...safe } = normalized;
   safe.maxIterations = safe.maxIterations ?? safe.maxActivations ?? DEFAULT_MAX_ITERATIONS;
   safe.executorConfig = safe.executorConfig || getAgentGraphExecutorConfig(safe.maxIterations);
   return structuredClone(safe);
@@ -189,6 +275,50 @@ export function createAgentGraphExecutorService({
   schedule = (callback) => queueMicrotask(callback),
 } = {}) {
   const activeRuns = new Map();
+
+  function getOrCreateAgentSession(run, agent) {
+    let session = run.agentSessions.find((entry) => entry.agentId === agent.id);
+    if (session) return session;
+    const createdAt = timestamp(now);
+    session = {
+      agentId: agent.id,
+      agentName: agent.name,
+      providerSessionId: null,
+      status: 'starting',
+      activationCount: 0,
+      createdAt,
+      lastUsedAt: null,
+      endedAt: null,
+      injectedEvidenceIds: [],
+      injectedResultIds: [],
+    };
+    run.agentSessions.push(session);
+    return session;
+  }
+
+  function rememberAgentContext(session, agentContext) {
+    session.injectedEvidenceIds = uniqueStrings([
+      ...(session.injectedEvidenceIds || []),
+      ...(agentContext.includedEvidenceIds || []),
+    ]);
+    session.injectedResultIds = uniqueStrings([
+      ...(session.injectedResultIds || []),
+      ...(agentContext.includedResultIds || []),
+    ]);
+  }
+
+  function endAgentSessions(run, status = 'ended') {
+    const endedAt = timestamp(now);
+    for (const session of run.agentSessions || []) {
+      if (session.status === 'failed') continue;
+      session.status = status;
+      session.endedAt = endedAt;
+    }
+  }
+
+  function resultById(run, resultId) {
+    return run.resultStore.find((entry) => entry.resultId === resultId) || null;
+  }
 
   function addTrace(run, type, details = {}) {
     run.trace.push({
@@ -215,6 +345,8 @@ export function createAgentGraphExecutorService({
       run.context.status = 'failed';
       run.error = 'Agent Graph run was interrupted by a server restart.';
       run.completedAt = timestamp(now);
+      run.agentSessions = Array.isArray(run.agentSessions) ? run.agentSessions : [];
+      endAgentSessions(run, 'failed');
       addTrace(run, 'run_failed', { message: run.error });
       await store.saveAgentGraphRun({ workspacePath, run });
     }
@@ -288,6 +420,13 @@ export function createAgentGraphExecutorService({
         agentState.activationCount += 1;
         agentState.lastStartedAt = timestamp(now);
         agentState.error = null;
+        run.context.currentNeed = decision.task || decision.reason;
+        const agentSession = getOrCreateAgentSession(run, agent);
+        const resumedSession = Boolean(agentSession.providerSessionId);
+        agentSession.status = resumedSession ? 'active' : 'starting';
+        agentSession.activationCount += 1;
+        const agentContext = buildAgentSpecificContext({ run, agent, agentSession });
+        rememberAgentContext(agentSession, agentContext);
         const agentInput = {
           role: {
             id: agent.id,
@@ -296,10 +435,13 @@ export function createAgentGraphExecutorService({
             skills: agent.skills,
             tools: agent.tools,
           },
-          goal: run.context.goal,
-          userInput: run.context.userInput,
           task: decision.task || decision.reason,
-          context: contextSnapshot(run.context),
+          agentContext,
+          session: {
+            executionId: run.id,
+            providerSessionId: agentSession.providerSessionId,
+            resumed: resumedSession,
+          },
         };
         addTrace(run, 'agent_started', {
           iteration: run.context.iteration,
@@ -311,26 +453,81 @@ export function createAgentGraphExecutorService({
         await persist(run);
 
         try {
-          const response = await executeAgent({ run, agent, decision, abortController });
+          const response = await executeAgent({
+            run,
+            agent,
+            decision,
+            agentSession,
+            agentContext,
+            abortController,
+          });
+          if (!agentSession.providerSessionId && !response.sessionId) {
+            throw createHttpError('Agent Runtime did not return a provider Session ID', 502);
+          }
+          if (agentSession.providerSessionId && response.sessionId && response.sessionId !== agentSession.providerSessionId) {
+            throw createHttpError('Agent Runtime returned a different provider Session while resuming the Agent', 502);
+          }
+          agentSession.providerSessionId = agentSession.providerSessionId || response.sessionId;
+          agentSession.status = 'active';
+          agentSession.lastUsedAt = timestamp(now);
           const agentResult = normalizeAgentResult(response, agent);
           const completedAt = timestamp(now);
+          const resultId = idFactory();
+          const knownEvidenceByClaim = new Map((run.evidenceStore || []).map((evidence) => [
+            evidence.claim.trim().toLowerCase(),
+            evidence,
+          ]));
+          const evidenceIds = [];
+          const addedEvidence = [];
+          for (const finding of uniqueStrings(agentResult.findings)) {
+            const normalizedClaim = finding.toLowerCase();
+            const existing = knownEvidenceByClaim.get(normalizedClaim);
+            if (existing) {
+              evidenceIds.push(existing.evidenceId);
+              continue;
+            }
+            const evidence = {
+              evidenceId: idFactory(),
+              executionId: run.id,
+              sourceAgentId: agent.id,
+              sourceAgent: agent.name,
+              claim: finding,
+              confidence: agentResult.confidence,
+              metadata: {
+                resultId,
+                resultType: agentResult.type || 'agent_result',
+                iteration: run.context.iteration,
+                activation: agentState.activationCount,
+              },
+              createdAt: completedAt,
+            };
+            run.evidenceStore.push(evidence);
+            knownEvidenceByClaim.set(normalizedClaim, evidence);
+            evidenceIds.push(evidence.evidenceId);
+            addedEvidence.push(evidence);
+          }
           const result = {
-            id: idFactory(),
+            resultId,
+            executionId: run.id,
             agentId: agent.id,
             agentName: agent.name,
             activation: agentState.activationCount,
             summary: agentResult.summary,
-            findings: uniqueStrings(agentResult.findings),
+            type: agentResult.type || 'agent_result',
+            evidenceIds,
             newQuestions: uniqueStrings(agentResult.newQuestions),
             confidence: agentResult.confidence,
             content: response.text || agentResult.summary,
-            providerSessionId: response.sessionId || null,
             createdAt: completedAt,
           };
-          run.context.agentResults.push(result);
+          run.resultStore.push(result);
+          run.context.resultIds.push(result.resultId);
+          run.context.evidenceIds = uniqueStrings([...run.context.evidenceIds, ...addedEvidence.map((entry) => entry.evidenceId)]);
+          agentSession.injectedResultIds = uniqueStrings([...agentSession.injectedResultIds, result.resultId]);
+          agentSession.injectedEvidenceIds = uniqueStrings([...agentSession.injectedEvidenceIds, ...evidenceIds]);
           agentState.status = 'completed';
           agentState.lastCompletedAt = completedAt;
-          agentState.lastResult = result.content;
+          agentState.lastResultId = result.resultId;
           addTrace(run, 'agent_completed', {
             iteration: run.context.iteration,
             agentId: agent.id,
@@ -340,36 +537,44 @@ export function createAgentGraphExecutorService({
             output: agentResult,
           });
 
+          addTrace(run, resumedSession ? 'agent_session_resumed' : 'agent_session_created', {
+            iteration: run.context.iteration,
+            agentId: agent.id,
+            agentName: agent.name,
+            message: resumedSession
+              ? `${agent.name} continued its execution-scoped Claude Session.`
+              : `${agent.name} created its execution-scoped Claude Session.`,
+            output: {
+              executionId: run.id,
+              agentId: agent.id,
+              providerSessionId: agentSession.providerSessionId,
+              activationCount: agentSession.activationCount,
+              status: agentSession.status,
+            },
+          });
+
           const previousContext = {
-            findingCount: run.context.findings.length,
+            evidenceCount: run.context.evidenceIds.length - addedEvidence.length,
+            resultCount: run.context.resultIds.length - 1,
             pendingQuestions: [...run.context.pendingQuestions],
+            currentNeed: run.context.currentNeed,
             staleIterations: run.staleIterations,
           };
-          const knownFindings = new Set(run.context.findings.map((finding) => finding.content.trim().toLowerCase()));
-          const addedFindings = result.findings.filter((finding) => !knownFindings.has(finding.toLowerCase()));
-          for (const finding of addedFindings) {
-            run.context.findings.push({
-              id: idFactory(),
-              agentId: agent.id,
-              agentName: agent.name,
-              content: finding,
-              createdAt: completedAt,
-            });
-          }
           run.context.pendingQuestions = result.newQuestions;
-          run.staleIterations = addedFindings.length ? 0 : run.staleIterations + 1;
+          run.context.currentNeed = result.newQuestions[0] || '';
+          run.staleIterations = addedEvidence.length ? 0 : run.staleIterations + 1;
           addTrace(run, 'context_updated', {
             iteration: run.context.iteration,
             agentId: agent.id,
             agentName: agent.name,
-            message: addedFindings.length
-              ? `${addedFindings.length} new finding(s) were added to the shared Context.`
-              : 'The Agent added no new finding to the shared Context.',
+            message: addedEvidence.length
+              ? `${addedEvidence.length} new Evidence item(s) and one Agent Result reference were added to Execution Context.`
+              : 'One Agent Result reference was added; no new Evidence item was created.',
             input: { previousContext, agentResult },
             output: {
-              addedFindings,
-              pendingQuestions: run.context.pendingQuestions,
-              iteration: run.context.iteration,
+              addedEvidenceIds: addedEvidence.map((entry) => entry.evidenceId),
+              addedResultId: result.resultId,
+              context: contextSnapshot(run.context),
               staleIterations: run.staleIterations,
             },
           });
@@ -390,14 +595,21 @@ export function createAgentGraphExecutorService({
           });
 
           if (completion.completed) {
+            const finalAgentResult = resultById(run, completion.finalAgentResultId);
+            if (!finalAgentResult) {
+              throw createHttpError('Completion Controller did not select an existing Agent Result', 502);
+            }
             run.status = 'completed';
             run.context.status = 'completed';
-            run.result = completion.finalAnswer || fallbackResult(run, 'Graph goal completed.');
+            run.context.currentNeed = '';
+            run.finalResultId = finalAgentResult.resultId;
+            run.result = finalAgentResult.content || finalAgentResult.summary;
             run.completedAt = timestamp(now);
+            endAgentSessions(run);
             addTrace(run, 'run_completed', {
               iteration: run.context.iteration,
               message: completion.reason,
-              output: { result: run.result },
+              output: { finalResultId: run.finalResultId, result: run.result },
             });
             await persist(run);
             return;
@@ -406,8 +618,11 @@ export function createAgentGraphExecutorService({
           if (run.staleIterations >= MAX_STALE_ITERATIONS) {
             run.status = 'completed';
             run.context.status = 'completed';
+            run.context.currentNeed = '';
+            run.finalResultId = run.resultStore.at(-1)?.resultId || null;
             run.result = fallbackResult(run, 'The collaboration loop stopped because it found no new information.');
             run.completedAt = timestamp(now);
+            endAgentSessions(run);
             addTrace(run, 'loop_stopped_no_new_info', {
               iteration: run.context.iteration,
               message: `The loop stopped after ${run.staleIterations} consecutive iteration(s) without a new finding.`,
@@ -417,6 +632,7 @@ export function createAgentGraphExecutorService({
             await persist(run);
             return;
           }
+          run.context.currentNeed = run.context.pendingQuestions[0] || completion.reason;
           await persist(run);
         } catch (error) {
           const errorMessage = error?.message || String(error);
@@ -433,6 +649,8 @@ export function createAgentGraphExecutorService({
             agentState.status = abortController.signal.aborted ? 'cancelled' : 'failed';
             agentState.lastCompletedAt = timestamp(now);
             agentState.error = errorMessage;
+            agentSession.status = abortController.signal.aborted ? 'ended' : 'failed';
+            agentSession.endedAt = timestamp(now);
             addTrace(run, 'agent_failed', {
               iteration: run.context.iteration,
               agentId: agent.id,
@@ -448,8 +666,11 @@ export function createAgentGraphExecutorService({
 
       run.status = 'completed';
       run.context.status = 'completed';
+      run.context.currentNeed = '';
+      run.finalResultId = run.resultStore.at(-1)?.resultId || null;
       run.result = fallbackResult(run, 'The iteration limit was reached without an Agent result.');
       run.completedAt = timestamp(now);
+      endAgentSessions(run);
       addTrace(run, 'run_completed', {
         iteration: run.context.iteration,
         message: `The run stopped after reaching the ${run.maxIterations}-iteration safety limit.`,
@@ -461,8 +682,10 @@ export function createAgentGraphExecutorService({
       const cancelled = abortController.signal.aborted;
       run.status = cancelled ? 'cancelled' : 'failed';
       run.context.status = run.status;
+      run.context.currentNeed = '';
       run.error = cancelled ? 'Agent Graph run was cancelled.' : error?.message || String(error);
       run.completedAt = timestamp(now);
+      endAgentSessions(run, cancelled ? 'ended' : 'failed');
       addTrace(run, cancelled ? 'run_cancelled' : 'run_failed', { message: run.error });
       await persist(run).catch((persistError) => {
         console.error('[agent-graph-executor] Failed to persist terminal run state:', persistError);
@@ -486,6 +709,7 @@ export function createAgentGraphExecutorService({
       throw createHttpError('Add at least one Agent before running this Graph');
     }
     const userInput = normalizeUserInput(input);
+    const executionGoal = normalizeCurrentNeed(userInput, graph.goal);
     const iterationLimit = normalizeMaxIterations(maxIterations ?? maxActivations);
     const priorRuns = await markInterruptedRuns(workspacePath, graph.id);
     if (priorRuns.some((run) => ACTIVE_STATUSES.has(run.status) && activeRuns.has(run.id))) {
@@ -494,7 +718,7 @@ export function createAgentGraphExecutorService({
 
     const createdAt = timestamp(now);
     const run = {
-      version: 2,
+      version: 3,
       id: idFactory(),
       graphId: graph.id,
       graphName: graph.name,
@@ -509,15 +733,18 @@ export function createAgentGraphExecutorService({
       maxActivations: iterationLimit,
       executorConfig: getAgentGraphExecutorConfig(iterationLimit),
       staleIterations: 0,
+      resultStore: [],
+      evidenceStore: [],
+      agentSessions: [],
       context: {
         executionId: null,
-        goal: graph.goal,
-        userInput,
-        findings: [],
-        agentResults: [],
-        pendingQuestions: [],
-        iteration: 0,
+        goal: executionGoal,
         status: 'queued',
+        iteration: 0,
+        currentNeed: executionGoal,
+        evidenceIds: [],
+        resultIds: [],
+        pendingQuestions: [],
       },
       agentStates: graph.agents.map((agent) => ({
         agentId: agent.id,
@@ -526,10 +753,11 @@ export function createAgentGraphExecutorService({
         activationCount: 0,
         lastStartedAt: null,
         lastCompletedAt: null,
-        lastResult: null,
+        lastResultId: null,
         error: null,
       })),
       trace: [],
+      finalResultId: null,
       result: null,
       error: null,
       createdAt,
@@ -574,6 +802,8 @@ export function createAgentGraphExecutorService({
       run.context.status = 'failed';
       run.error = 'Agent Graph run was interrupted and cannot be cancelled.';
       run.completedAt = timestamp(now);
+      run.agentSessions = Array.isArray(run.agentSessions) ? run.agentSessions : [];
+      endAgentSessions(run, 'failed');
       addTrace(run, 'run_failed', { message: run.error });
       await store.saveAgentGraphRun({ workspacePath, run });
       return toPublicRun(run);

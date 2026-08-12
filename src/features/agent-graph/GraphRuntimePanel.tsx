@@ -66,6 +66,7 @@ export default function GraphRuntimePanel({
   const { t } = useTranslation('agentGraph');
   const trace = [...run.trace];
   const iteration = run.context.iteration || 0;
+  const sessionsByAgent = new Map(run.agentSessions.map((session) => [session.agentId, session]));
   const schedulingIterations = [...new Set(trace
     .map((event) => event.iteration)
     .filter((value): value is number => typeof value === 'number' && value > 0))]
@@ -138,10 +139,33 @@ export default function GraphRuntimePanel({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{agent.agentName}</p>
                   <p className="text-xs text-muted-foreground">{t(`runtime.agent.${agent.status}`)} · {t('runtime.activationCount', { count: agent.activationCount })}</p>
+                  {sessionsByAgent.get(agent.agentId)?.providerSessionId ? (
+                    <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                      {t('runtime.providerSession')}: {sessionsByAgent.get(agent.agentId)?.providerSessionId}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">{t('runtime.agentSessions')}</h3>
+          {run.agentSessions.length ? (
+            <div className="space-y-2">
+              {run.agentSessions.map((session) => (
+                <div key={session.agentId} className="rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-primary">{session.agentName}</p>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{t(`runtime.sessionStatus.${session.status}`)}</span>
+                  </div>
+                  <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{session.providerSessionId || t('runtime.sessionPending')}</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">{t('runtime.sessionActivations', { count: session.activationCount })}</p>
+                </div>
+              ))}
+            </div>
+          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noAgentSessions')}</p>}
         </section>
 
         <section className="space-y-2">
@@ -230,16 +254,55 @@ export default function GraphRuntimePanel({
 
         <section className="space-y-2">
           <h3 className="text-sm font-semibold text-foreground">{t('runtime.context')}</h3>
-          {run.context.findings.length ? (
+          <div className="rounded-lg border border-border bg-background p-3">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('runtime.currentNeed')}</p>
+            <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{run.context.currentNeed || '—'}</p>
+            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+              <span className="rounded-full bg-muted px-2 py-1">{t('runtime.evidenceCount', { count: run.context.evidenceIds.length })}</span>
+              <span className="rounded-full bg-muted px-2 py-1">{t('runtime.resultCount', { count: run.context.resultIds.length })}</span>
+            </div>
+          </div>
+          <TracePayload label={t('runtime.lightweightContext')} value={run.context} />
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">{t('runtime.evidenceStore')}</h3>
+          {run.evidenceStore.length ? (
             <div className="space-y-2">
-              {run.context.findings.map((finding) => (
-                <div key={finding.id} className="rounded-lg border border-border bg-background p-3">
-                  <p className="text-xs font-medium text-primary">{finding.agentName}</p>
-                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{finding.content}</p>
+              {run.evidenceStore.map((evidence) => (
+                <div key={evidence.evidenceId} className="rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-primary">{evidence.sourceAgent}</p>
+                    <span className="text-[10px] text-muted-foreground">{Math.round(evidence.confidence * 100)}%</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground">{evidence.claim}</p>
+                  <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{evidence.evidenceId}</p>
                 </div>
               ))}
             </div>
-          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noFindings')}</p>}
+          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noEvidence')}</p>}
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">{t('runtime.resultStore')}</h3>
+          {run.resultStore.length ? (
+            <div className="space-y-2">
+              {run.resultStore.map((result) => (
+                <details key={result.resultId} className="rounded-lg border border-border bg-background">
+                  <summary className="cursor-pointer list-none px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-medium text-primary">{result.agentName}</p>
+                      <span className="text-[10px] text-muted-foreground">{result.type}</span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground">{result.summary}</p>
+                  </summary>
+                  <div className="border-t border-border p-3">
+                    <TracePayload label={t('runtime.outputResult')} value={result} />
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('runtime.noResults')}</p>}
         </section>
 
         <section className="space-y-2">

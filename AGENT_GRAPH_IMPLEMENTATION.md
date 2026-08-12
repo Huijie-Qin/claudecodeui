@@ -44,10 +44,11 @@ flowchart TD
     AgentRuntime --> TopSkill["Agent Top Skill"]
     AgentRuntime --> Skills["Bound Skills"]
     AgentRuntime --> MCP["Tool / MCP"]
-    AgentRuntime --> Context["Shared Execution Context"]
+    AgentRuntime --> Stores["Result Store / Evidence Store"]
+    Stores --> Context["Lightweight Execution Context\nIDs + task state"]
     Context --> Completion["Completion Controller\nClaude，无 Tool"]
     Completion -->|继续| Activation
-    Completion -->|完成并综合 finalAnswer| Result["最终结果"]
+    Completion -->|完成并选择 finalAgentResultId| Result["已有 Agent Result"]
 
     Executor --> RunStore[".ccui/agent-graph-runs/<runId>.json"]
     Context --> RunStore
@@ -135,23 +136,24 @@ Relation 会作为 Activation Controller 的判断材料，但不会被转换成
 interface ExecutionContext {
   executionId: string;
   goal: string;
-  userInput: unknown;
-  findings: Finding[];
-  agentResults: AgentResult[];
-  pendingQuestions: string[];
-  iteration: number;
   status: RunStatus;
+  iteration: number;
+  currentNeed: string;
+  evidenceIds: string[];
+  resultIds: string[];
+  pendingQuestions: string[];
 }
 ```
 
-Context 是 Agent 间唯一的业务信息交换空间：
+Context 只保存一次 Graph 任务的轻量状态：
 
-- `findings`：所有 Agent 产生的去重发现；
-- `agentResults`：每次 Agent 激活的完整结构化结果和文本内容；
+- `currentNeed`：当前最需要解决的问题；
+- `evidenceIds`：引用 Evidence Store 中的事实；
+- `resultIds`：引用 Result Store 中的 Agent 结果；
 - `pendingQuestions`：当前建议下一轮关注的问题；
 - `iteration`：当前协作轮次。
 
-当前 `pendingQuestions` 的行为是用本轮 Agent 的 `newQuestions` 整体替换，而不是累积的问题队列。历史问题仍保留在相应的 `agentResults` 与 Trace 中，但没有显式的“待处理、处理中、已解决、无法解决”状态。
+完整 Agent 输出、Claude 历史和 Tool 结果不进入 Execution Context。Agent 间仍通过 Context 通信，但由 Context Builder 根据这些引用从 Store 中选择相关摘要与 Evidence。
 
 ### 3.5 Agent Result
 
@@ -159,15 +161,21 @@ Context 是 Agent 间唯一的业务信息交换空间：
 
 ```typescript
 interface AgentResult {
-  agent: string;
+  resultId: string;
+  executionId: string;
+  agentId: string;
   summary: string;
-  findings: string[];
+  type: string;
+  evidenceIds: string[];
   newQuestions: string[];
   confidence: number;
+  content: string;
 }
 ```
 
-Executor 会补充 Agent ID、激活次数、完整文本、Provider Session ID 和时间戳，然后写入 Context。
+完整结果写入顶层 `resultStore`，Context 只追加 `resultId`。每条 Finding 会转换为独立 Evidence，写入 `evidenceStore`。Provider Session ID 不再属于 AgentResult，而是保存在 `execution.agentSessions[]`。
+
+同一次 Graph Execution 内采用 `executionId + agentId` 唯一确定 Agent Claude Session。同一 Agent 再次激活时通过 Claude SDK `resume` 复用；不同 Execution 不复用。Activation Controller 和 Completion Controller 始终使用不持久化的无状态调用。
 
 ## 4. Graph Studio
 
@@ -232,14 +240,16 @@ sequenceDiagram
     loop 每一轮
         E->>S: Goal + Context + Agent Profiles + Relations + Activation History
         S-->>E: selectedAgentId + reason + task
-        E->>A: Top Skill + task + Context + bound Skills/Tools
+        E->>E: 获取/创建 executionId + agentId Session
+        E->>E: Context Builder 生成 Agent 专属上下文
+        E->>A: Top Skill + task + Agent Context + bound Skills/Tools
         A->>A: 自主调用 Skill / Tool / MCP
         A-->>E: AgentResult
-        E->>C: 追加 AgentResult、去重 Findings、更新 PendingQuestions
+        E->>C: 保存 Result/Evidence，Context 追加 ID 并更新任务状态
         E->>D: Goal + 更新后的 Context + 最新 AgentResult
-        D-->>E: completed + reason + finalAnswer
+        D-->>E: completed + reason + finalAgentResultId
         alt completed = true
-            E-->>U: finalAnswer
+            E-->>U: 已有 Agent Result
         else completed = false
             E->>S: 进入下一轮
         end
@@ -269,9 +279,9 @@ sequenceDiagram
   context: {
     executionId,
     goal,
-    userInput,
-    findings,
-    agentResults,
+    currentNeed,
+    evidenceIds,
+    resultIds,
     pendingQuestions,
     iteration,
     status
@@ -337,13 +347,14 @@ Relation 与 Agent Profile 一起传给选择器。选择器可以据此理解�
 被选中 Agent 收到：
 
 - Agent Top Skill；
-- Graph Goal 和原始用户输入；
 - 当前轮自然语言任务；
-- Shared Context；
+- Context Builder 生成的 Agent 专属 Context（Goal、CurrentNeed、相关 Evidence 与 Result 摘要增量）；
 - 绑定 Skills 的完整说明；
 - 解析后的 Tool/MCP 能力。
 
 Agent Runtime 自主决定是否以及如何调用 Skill、Tool、MCP。Graph Executor 和 Activation/Completion Controller 都不直接调用业务工具。
+
+Agent 第一次激活时创建可持久化 Claude Session；同一 Execution 再次激活时使用该 Agent 的 `providerSessionId` 恢复历史。Context Builder 记录已经注入该 Session 的 Evidence/Result ID，后续只发送新的相关增量，且不重复发送该 Agent 自己已经在 Session 历史中的结果。
 
 当前单次 Agent 激活限制：
 
@@ -355,11 +366,11 @@ Agent Runtime 自主决定是否以及如何调用 Skill、Tool、MCP。Graph Ex
 
 Agent 执行完成后：
 
-1. 结构化结果追加到 `agentResults`；
-2. Findings 按忽略大小写的完整文本去重后追加；
-3. `pendingQuestions` 替换为本轮 `newQuestions`；
-4. 有新增 Finding 时将 `staleIterations` 清零；
-5. 没有新增 Finding 时将 `staleIterations` 加一。
+1. 完整结构化结果写入 `resultStore`；
+2. Findings 转换为 Evidence，按忽略大小写的 Claim 去重后写入 `evidenceStore`；
+3. Context 只追加 `resultId` 与新增 `evidenceId`；
+4. `pendingQuestions` 替换为本轮 `newQuestions`，并更新 `currentNeed`；
+5. 有新增 Evidence 时将 `staleIterations` 清零，否则加一。
 
 下一轮 Agent 不接收上一个 Agent 的直接消息，而是读取更新后的 Context。
 
@@ -378,18 +389,18 @@ Agent 执行完成后：
 {
   "completed": true,
   "reason": "为什么可以结束",
-  "finalAnswer": "基于 Shared Context 综合生成的最终答案"
+  "finalAgentResultId": "已有 Agent Result ID"
 }
 ```
 
 当前配置为：
 
 ```text
-finalResultSource = completion-controller-synthesis
-controllerMaySynthesizeBusinessAnswer = true
+finalResultSource = existing-agent-result
+controllerMaySynthesizeBusinessAnswer = false
 ```
 
-也就是说，Completion Controller 可以根据已有 Agent 结果整理并撰写最终答案，但它没有 Tool/MCP 权限，不能补查数据。由于它可以综合答案，Graph 中并不保证每个 Agent 都被执行；只要 Controller 判断 Context 已足够，就可以完成 Run。
+Completion Controller 是每轮新建的无状态判断调用，没有 Tool/MCP 权限，也禁止撰写、改写或补全业务答案。完成时必须选择已有 `finalAgentResultId`，最终返回内容直接来自该 Result Store 条目。
 
 ### 6.9 终止条件
 
@@ -397,7 +408,7 @@ Run 在以下任一条件下结束：
 
 1. Completion Controller 返回 `completed = true`；
 2. 达到最大迭代次数；
-3. 连续三轮没有新增 Finding；
+3. 连续三轮没有新增 Evidence；
 4. 用户取消；
 5. Agent、Controller、认证或 Runtime 发生不可恢复错误；
 6. 服务重启后检测到失去进程内执行控制器的活动 Run，将其标记为中断失败。
@@ -527,10 +538,10 @@ Demo 数据是确定性生成的模拟音乐 App 数据，用于验证 Graph 与
 1. Activation 是 Claude 语义判断，可解释但不是完全确定性的评分算法。
 2. 每轮串行执行一个 Agent，不支持并行专家分析。
 3. PendingQuestions 只是最新一轮问题列表，不是任务队列。
-4. Completion Controller 可以综合最终答案，因此可能跳过看似相关但非必要的 Agent。
+4. Completion Controller 只能选择已有 Agent Result，最终可交付内容依赖专业 Agent 的输出质量。
 5. Top Skill Job 存储在内存中，服务重启不恢复。
 6. 活动 Run 依赖进程内 AbortController，服务重启后会标记为中断失败。
-7. Context 发给模型时会裁剪，超长历史不会全部进入当前 Prompt。
+7. Context Builder 只选择有限数量的相关 Evidence 和 Result 摘要，未入选的 Store 内容不会进入当前 Prompt。
 8. Demo MCP 数据用于验证能力，不能用于真实业务决策。
 
 ### 11.2 可选演进方向
@@ -541,8 +552,8 @@ Demo 数据是确定性生成的模拟音乐 App 数据，用于验证 Graph 与
 - Activation 决策的规则约束与语义评分混合模式；
 - 多候选 Agent 并行分析后写入同一 Context；
 - 可恢复的持久化任务队列；
-- Context 摘要压缩与长期记忆策略；
-- Completion Policy 可配置，例如“Controller 综合答案”或“必须选择 AgentResult”；
+- 跨 Execution 的 Agent Memory（当前明确不实现）；
+- 更精细的 Evidence 相关性排序与 Context 预算；
 - Run 成本、Token、Tool 调用次数和时延指标。
 
 这些演进项应继续遵守 Relation 不是执行 Edge、Agent 自主使用 Skill/Tool、Executor 只负责协调的架构原则。
@@ -566,25 +577,28 @@ for iteration in 1..maxIterations:
   if selectedAgent has run 3 consecutive times:
     decision = activationController.selectAgain(exclude = selectedAgent)
 
+  agentSession = getOrCreateSession(executionId, selectedAgent.id)
+  agentContext = contextBuilder.build(selectedAgent, sharedContext, resultStore, evidenceStore)
+
   agentInput = {
     topSkill,
     boundSkills,
     boundTools,
-    goal,
-    userInput,
     decision.task,
-    sharedContext
+    agentContext
   }
 
-  agentResult = selectedAgent.execute(agentInput)
-  sharedContext.agentResults.append(agentResult)
-  sharedContext.findings.appendUnique(agentResult.findings)
+  agentResult = selectedAgent.execute(agentInput, resume = agentSession.providerSessionId)
+  resultStore.append(agentResult)
+  evidenceStore.appendUnique(agentResult.findings)
+  sharedContext.resultIds.append(agentResult.resultId)
+  sharedContext.evidenceIds.appendNew(agentResult.evidenceIds)
   sharedContext.pendingQuestions = agentResult.newQuestions
 
   completion = completionController.evaluate(goal, sharedContext)
 
   if completion.completed:
-    return completion.finalAnswer
+    return resultStore.get(completion.finalAgentResultId)
 
   if noNewFindingFor3Iterations:
     return latestAgentResult

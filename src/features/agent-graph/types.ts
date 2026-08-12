@@ -56,6 +56,19 @@ export type AgentGraphExecutorConfig = {
     requiresUserReadyDeliverable: boolean;
     skipsIrrelevantAgents: boolean;
   };
+  sessionPolicy: {
+    activationController: string;
+    completionController: string;
+    agentSessionScope: string;
+    reuseAgentSessionWithinExecution: boolean;
+    reuseAgentSessionAcrossExecutions: boolean;
+  };
+  contextPolicy: {
+    executionContextStoresFullAgentOutput: boolean;
+    agentResultsStoredSeparately: boolean;
+    evidenceStoredSeparately: boolean;
+    agentInputBuiltPerActivation: boolean;
+  };
   safetyLimits: {
     maxIterations: number;
     defaultMaxIterations: number;
@@ -72,6 +85,10 @@ export type AgentGraphExecutorConfig = {
     agentMaxTurns: number;
     agentMaxToolCalls: number;
     structuredAgentResult: boolean;
+    controllerSessionsPersisted: boolean;
+    agentSessionsPersisted: boolean;
+    agentSessionsReusedWithinExecution: boolean;
+    agentSessionsReusedAcrossExecutions: boolean;
   };
   toolBindingAliases: Record<string, string>;
   tracePolicy: {
@@ -117,36 +134,55 @@ export type AgentGraphRunStatus = 'queued' | 'running' | 'cancelling' | 'complet
 export type AgentGraphRunAgentStatus = 'waiting' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type AgentGraphRunResult = {
-  id: string;
+  resultId: string;
+  executionId: string;
   agentId: string;
   agentName: string;
   activation: number;
   summary: string;
-  findings: string[];
+  type: string;
+  evidenceIds: string[];
   newQuestions: string[];
   confidence: number;
   content: string;
-  providerSessionId: string | null;
   createdAt: string;
 };
 
-export type AgentGraphFinding = {
-  id: string;
+export type AgentGraphEvidence = {
+  evidenceId: string;
+  executionId: string;
+  sourceAgentId: string;
+  sourceAgent: string;
+  claim: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type AgentGraphAgentSessionStatus = 'starting' | 'active' | 'ended' | 'failed';
+
+export type AgentGraphAgentSession = {
   agentId: string;
   agentName: string;
-  content: string;
+  providerSessionId: string | null;
+  status: AgentGraphAgentSessionStatus;
+  activationCount: number;
   createdAt: string;
+  lastUsedAt: string | null;
+  endedAt: string | null;
+  injectedEvidenceIds: string[];
+  injectedResultIds: string[];
 };
 
 export type AgentGraphExecutionContext = {
   executionId: string;
   goal: string;
-  userInput: unknown;
-  findings: AgentGraphFinding[];
-  agentResults: AgentGraphRunResult[];
-  pendingQuestions: string[];
-  iteration: number;
   status: AgentGraphRunStatus;
+  iteration: number;
+  currentNeed: string;
+  evidenceIds: string[];
+  resultIds: string[];
+  pendingQuestions: string[];
 };
 
 export type AgentGraphRunAgentState = {
@@ -156,7 +192,7 @@ export type AgentGraphRunAgentState = {
   activationCount: number;
   lastStartedAt: string | null;
   lastCompletedAt: string | null;
-  lastResult: string | null;
+  lastResultId: string | null;
   error: string | null;
 };
 
@@ -188,8 +224,12 @@ export type AgentGraphRun = {
   maxActivations?: number;
   executorConfig: AgentGraphExecutorConfig;
   context: AgentGraphExecutionContext;
+  resultStore: AgentGraphRunResult[];
+  evidenceStore: AgentGraphEvidence[];
+  agentSessions: AgentGraphAgentSession[];
   agentStates: AgentGraphRunAgentState[];
   trace: AgentGraphTraceEvent[];
+  finalResultId: string | null;
   result: string | null;
   error: string | null;
   createdAt: string;
