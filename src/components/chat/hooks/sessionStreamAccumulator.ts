@@ -9,6 +9,7 @@ export interface SessionStreamAccumulator {
   appendDelta(sessionId: string, delta: string, timestamp?: string): string;
   get(sessionId: string): string;
   getSnapshot(sessionId: string): SessionStreamSnapshot | null;
+  drainSnapshots(): SessionStreamSnapshot[];
   finishSnapshot(sessionId: string): SessionStreamSnapshot | null;
   finish(sessionId: string): string;
   clear(sessionId: string): void;
@@ -47,6 +48,12 @@ export function createSessionStreamAccumulator(): SessionStreamAccumulator {
 
     getSnapshot(sessionId) {
       return streams.get(sessionId) || null;
+    },
+
+    drainSnapshots() {
+      const snapshots = Array.from(streams.values());
+      streams.clear();
+      return snapshots;
     },
 
     finishSnapshot(sessionId) {

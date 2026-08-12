@@ -69,14 +69,6 @@ function ChatInterface({
   const lastSessionStatusProbeAtRef = useRef(0);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
 
-  const resetStreamingState = useCallback(() => {
-    for (const timerId of streamTimersRef.current.values()) {
-      clearTimeout(timerId);
-    }
-    streamTimersRef.current.clear();
-    streamAccumulatorRef.current.clearAll();
-  }, []);
-
   const {
     provider,
     setProvider,
@@ -95,6 +87,23 @@ function ChatInterface({
   } = useChatProviderState({
     selectedSession,
   });
+
+  const resetStreamingState = useCallback(() => {
+    // A route/session transition can happen before the 100 ms streaming timer
+    // publishes the opening chunks. Persist every buffered snapshot first so
+    // the next view observes the same realtime content.
+    for (const snapshot of streamAccumulatorRef.current.drainSnapshots()) {
+      if (!snapshot.content) continue;
+      sessionStore.updateStreaming(snapshot.sessionId, snapshot.content, provider, {
+        id: snapshot.id,
+        timestamp: snapshot.timestamp,
+      });
+    }
+    for (const timerId of streamTimersRef.current.values()) {
+      clearTimeout(timerId);
+    }
+    streamTimersRef.current.clear();
+  }, [provider, sessionStore]);
 
   const {
     chatMessages,
