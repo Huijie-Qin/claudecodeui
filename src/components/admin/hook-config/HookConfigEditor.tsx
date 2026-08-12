@@ -1,31 +1,20 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-} from 'react';
-import {
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   Braces,
-  ChevronDown,
-  ChevronRight,
   CircleAlert,
   Code2,
   Database,
-  Filter,
+  FileCode2,
   Info,
   Plus,
   Power,
   PowerOff,
-  RotateCcw,
+  RefreshCcw,
   Save,
   Settings2,
-  ShieldCheck,
   Sparkles,
+  TerminalSquare,
   Trash2,
   Wrench,
 } from 'lucide-react';
@@ -35,30 +24,27 @@ import { cn } from '../../../lib/utils';
 import { Badge, Button, Card, Input, Tooltip } from '../../../shared/view/ui';
 
 import {
-  ACTION_TYPES,
+  CCUI_SCRIPT_APIS,
   EVENT_BY_NAME,
-  actionAvailability,
   buildFieldChoices,
+  buildReferenceChoices,
   buildScriptTemplate,
-  findMatchedTool,
-  getToolTargetFields,
-  inferScriptOutputs,
-  isConcreteToolMatcher,
-  TOOL_EVENTS,
+  getClaudeOutputFields,
+  inferNativeMatcherMode,
+  scriptApiName,
 } from './catalog';
-import { createHookItemId } from './editorUtils';
 import HookSelect, { type HookSelectOption } from './HookSelect';
 import type {
   FieldChoice,
   FieldType,
-  HookAction,
-  HookActionType,
-  HookCondition,
-  HookConditionOperator,
   HookConfig,
   HookConfigDraft,
   HookEventName,
+  HookPostAction,
   HookResources,
+  HookScriptLanguage,
+  HookScriptOutput,
+  HookValueBinding,
   JsonSchemaProperty,
 } from './types';
 
@@ -76,16 +62,34 @@ type HookConfigEditorProps = {
   onManageEvents: () => void;
 };
 
-type Translator = ReturnType<typeof useTranslation>['t'];
-
-function getFieldLabel(t: Translator, field: FieldChoice) {
-  if (field.label) return field.label;
-  if (field.labelKey) return t(field.labelKey, { defaultValue: field.path });
-  return field.path;
-}
-
-function getFieldGroup(t: Translator, field: FieldChoice) {
-  return t(`hooks.fieldGroups.${field.group}`);
+function Section({
+  number,
+  title,
+  description,
+  children,
+  action,
+}: {
+  number: number;
+  title: string;
+  description?: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <Card className="overflow-visible border-border/80 shadow-none">
+      <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3.5 sm:px-5">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
+          {number}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          {description ? <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
+      <div className="p-4 sm:p-5">{children}</div>
+    </Card>
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -94,305 +98,268 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function asString(value: unknown) {
-  return typeof value === 'string' ? value : '';
+function fieldLabel(t: ReturnType<typeof useTranslation>['t'], field: FieldChoice) {
+  if (field.label) return field.label;
+  if (field.labelKey) return t(field.labelKey, { defaultValue: field.path });
+  return field.path;
 }
 
-function asStringArray(value: unknown) {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+function fieldGroup(t: ReturnType<typeof useTranslation>['t'], field: FieldChoice) {
+  return t(`hooks.fieldGroups.${field.group}`, { defaultValue: field.group });
 }
 
-function fieldTypeForPath(fields: FieldChoice[], path: string): FieldType {
-  return fields.find((field) => field.path === path)?.type || 'string';
+function pythonEnvironmentPath(path: string) {
+  return path.replace(/[A-Z]/g, (value) => `_${value.toLowerCase()}`);
 }
 
-function defaultOperator(type: FieldType): HookConditionOperator {
-  if (type === 'boolean') return 'is_true';
-  if (type === 'number') return 'equals';
-  if (type === 'object' || type === 'array') return 'is_not_empty';
-  return 'contains';
+function literalDefault(type: FieldType, property?: JsonSchemaProperty): unknown {
+  if (property && Object.prototype.hasOwnProperty.call(property, 'default')) return property.default;
+  if (type === 'boolean') return false;
+  if (type === 'number') return 0;
+  if (type === 'array') return [];
+  if (type === 'object') return {};
+  return '';
 }
 
-function operatorOptions(t: Translator, type: FieldType): HookSelectOption[] {
-  const byType: Record<FieldType, HookConditionOperator[]> = {
-    string: ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'matches_regex', 'is_empty', 'is_not_empty'],
-    number: ['equals', 'not_equals', 'greater_than', 'less_than', 'is_empty', 'is_not_empty'],
-    boolean: ['is_true', 'is_false'],
-    object: ['is_empty', 'is_not_empty'],
-    array: ['is_empty', 'is_not_empty'],
-  };
-  return byType[type].map((operator) => ({
-    value: operator,
-    label: t(`hooks.operators.${operator}`),
-  }));
+function propertyType(property?: JsonSchemaProperty): FieldType {
+  if (property?.type === 'number' || property?.type === 'integer') return 'number';
+  if (property?.type === 'boolean') return 'boolean';
+  if (property?.type === 'array') return 'array';
+  if (property?.type === 'object') return 'object';
+  return 'string';
 }
 
-function Section({
-  number,
-  title,
-  children,
-  action,
-}: {
-  number: number;
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <Card className="overflow-visible border-border/80 shadow-none">
-      <div className="flex items-center gap-3 border-b border-border/70 px-4 py-3.5 sm:px-5">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary">
-          {number}
-        </span>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        {action ? <div className="ml-auto">{action}</div> : null}
-      </div>
-      <div className="p-4 sm:p-5">{children}</div>
-    </Card>
-  );
-}
-
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        'relative h-6 w-11 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15',
-        checked ? 'border-primary bg-primary' : 'border-input bg-muted',
-      )}
-    >
-      <span className={cn(
-        'absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform',
-        checked ? 'translate-x-5' : 'translate-x-0',
-      )} />
-    </button>
-  );
-}
-
-function TemplateEditor({
-  value,
-  onChange,
-  fields,
-  label,
-  placeholder,
-  rows = 5,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  fields: FieldChoice[];
-  label: string;
-  placeholder: string;
-  rows?: number;
-}) {
-  const { t } = useTranslation('admin');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [slashIndex, setSlashIndex] = useState<number | null>(null);
-
-  const insertField = (field: FieldChoice) => {
-    const textarea = textareaRef.current;
-    const cursor = textarea?.selectionStart ?? value.length;
-    const start = slashIndex == null ? cursor : slashIndex;
-    const token = `\${${field.path.slice(1)}}`;
-    const nextValue = `${value.slice(0, start)}${token}${value.slice(cursor)}`;
-    onChange(nextValue);
-    setPickerOpen(false);
-    setSlashIndex(null);
-    requestAnimationFrame(() => {
-      const nextCursor = start + token.length;
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
-    });
-  };
-
-  const updatePicker = (nextValue: string, cursor: number) => {
-    if (cursor > 0 && nextValue[cursor - 1] === '/') {
-      setSlashIndex(cursor - 1);
-      setPickerOpen(true);
-    } else if (pickerOpen && slashIndex != null && cursor <= slashIndex) {
-      setPickerOpen(false);
-      setSlashIndex(null);
-    }
-  };
-
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-foreground">{label}</span>
-      <div className="relative">
-        <textarea
-          ref={textareaRef}
-          rows={rows}
-          value={value}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            onChange(nextValue);
-            updatePicker(nextValue, event.target.selectionStart);
-          }}
-          onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-            if (event.key === 'Escape') setPickerOpen(false);
-          }}
-          placeholder={placeholder}
-          className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground shadow-sm outline-none transition focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10"
-        />
-        <button
-          type="button"
-          className="absolute bottom-2.5 right-2.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-sm hover:text-foreground"
-          onClick={() => {
-            setSlashIndex(textareaRef.current?.selectionStart ?? value.length);
-            setPickerOpen((current) => !current);
-          }}
-        >
-          / {t('hooks.insertVariable')}
-        </button>
-        {pickerOpen ? (
-          <div className="absolute left-2 right-2 top-full z-40 mt-1 max-h-64 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-            {fields.map((field) => (
-              <button
-                key={field.path}
-                type="button"
-                onClick={() => insertField(field)}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent"
-              >
-                <span className="min-w-0 flex-1 truncate font-medium">{getFieldLabel(t, field)}</span>
-                <code className="shrink-0 text-[10px] text-muted-foreground">{field.path}</code>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <span className="text-[11px] text-muted-foreground">{t('hooks.slashHint')}</span>
-    </label>
-  );
-}
-
-function ValueInput({
+function LiteralInput({
+  type,
   property,
   value,
   onChange,
 }: {
+  type: FieldType;
   property?: JsonSchemaProperty;
   value: unknown;
   onChange: (value: unknown) => void;
 }) {
-  const { t } = useTranslation('admin');
+  const [jsonText, setJsonText] = useState(() => {
+    try {
+      return JSON.stringify(value ?? literalDefault(type, property), null, 2);
+    } catch {
+      return type === 'array' ? '[]' : '{}';
+    }
+  });
+  const [jsonError, setJsonError] = useState(false);
+
   if (property?.enum?.length) {
     return (
       <HookSelect
         value={String(value ?? '')}
-        options={property.enum.map((entry) => ({ value: String(entry), label: String(entry) }))}
+        options={property.enum.map((item) => ({ value: String(item), label: String(item) }))}
         onChange={onChange}
-        placeholder={t('hooks.selectValue')}
-        ariaLabel={t('hooks.selectValue')}
+        placeholder="选择值"
+        ariaLabel="选择固定值"
       />
     );
   }
-  if (property?.type === 'boolean') {
+  if (type === 'boolean') {
     return (
       <HookSelect
-        value={String(value ?? '')}
-        options={[
-          { value: 'true', label: t('hooks.boolean.true') },
-          { value: 'false', label: t('hooks.boolean.false') },
-        ]}
+        value={String(Boolean(value))}
+        options={[{ value: 'true', label: '是' }, { value: 'false', label: '否' }]}
         onChange={(next) => onChange(next === 'true')}
-        placeholder={t('hooks.selectValue')}
-        ariaLabel={t('hooks.selectValue')}
+        placeholder="选择值"
+        ariaLabel="选择布尔值"
       />
+    );
+  }
+  if (type === 'object' || type === 'array') {
+    return (
+      <div>
+        <textarea
+          rows={4}
+          value={jsonText}
+          onChange={(event) => {
+            const next = event.target.value;
+            setJsonText(next);
+            try {
+              const parsed = JSON.parse(next);
+              const valid = type === 'array' ? Array.isArray(parsed) : parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+              setJsonError(!valid);
+              if (valid) onChange(parsed);
+            } catch {
+              setJsonError(true);
+            }
+          }}
+          className={cn(
+            'w-full resize-y rounded-xl border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:ring-4 focus-visible:ring-primary/10',
+            jsonError ? 'border-destructive' : 'border-input',
+          )}
+        />
+        {jsonError ? <p className="mt-1 text-[10px] text-destructive">请输入有效的 JSON</p> : null}
+      </div>
     );
   }
   return (
     <Input
-      value={value == null ? '' : String(value)}
-      type={property?.type === 'number' || property?.type === 'integer' ? 'number' : 'text'}
-      onChange={(event) => onChange(
-        property?.type === 'number' || property?.type === 'integer'
-          ? Number(event.target.value)
-          : event.target.value,
-      )}
-      placeholder={property?.description || t('hooks.fixedValue')}
+      type={type === 'number' ? 'number' : 'text'}
+      value={typeof value === 'string' || typeof value === 'number' ? value : ''}
+      onChange={(event) => onChange(type === 'number' ? Number(event.target.value) : event.target.value)}
       className="h-10 rounded-xl"
     />
   );
 }
 
-function RecordActionEditor({
-  action,
-  fields,
-  onConfigChange,
-}: ActionEditorProps) {
+function BindingEditor({
+  binding,
+  type,
+  property,
+  references,
+  onChange,
+}: {
+  binding: HookValueBinding;
+  type: FieldType;
+  property?: JsonSchemaProperty;
+  references: FieldChoice[];
+  onChange: (binding: HookValueBinding) => void;
+}) {
   const { t } = useTranslation('admin');
-  const selected = asStringArray(action.config.fields);
+  const sourceValue = binding.source === 'reference' ? binding.path : '__literal__';
+  const options: HookSelectOption[] = [
+    { value: '__literal__', label: t('hooks.fixedValue'), group: t('hooks.fieldGroups.value') },
+    ...references.map((field) => ({
+      value: field.path,
+      label: fieldLabel(t, field),
+      description: field.path,
+      group: fieldGroup(t, field),
+    })),
+  ];
+
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {fields.map((field) => {
-        const checked = selected.includes(field.path);
-        return (
-          <button
-            key={field.path}
-            type="button"
-            onClick={() => onConfigChange({
-              fields: checked
-                ? selected.filter((path) => path !== field.path)
-                : [...selected, field.path],
-            })}
-            className={cn(
-              'flex items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors',
-              checked ? 'border-primary/50 bg-primary/5' : 'border-border bg-background hover:bg-muted/30',
-            )}
-          >
-            <span className={cn(
-              'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]',
-              checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
-            )}>{checked ? '✓' : ''}</span>
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-foreground">{getFieldLabel(t, field)}</span>
-              <code className="mt-0.5 block truncate text-[10px] text-muted-foreground">{field.path}</code>
-            </span>
-          </button>
-        );
-      })}
+    <div className="grid gap-2 lg:grid-cols-[minmax(180px,0.8fr)_minmax(240px,1.2fr)]">
+      <HookSelect
+        value={sourceValue}
+        options={options}
+        onChange={(source) => onChange(source === '__literal__'
+          ? { source: 'literal', value: literalDefault(type, property) }
+          : { source: 'reference', path: source })}
+        placeholder={t('hooks.actions.valueSource')}
+        ariaLabel={t('hooks.actions.valueSource')}
+      />
+      {binding.source !== 'reference' ? (
+        <LiteralInput
+          type={type}
+          property={property}
+          value={binding.source === 'literal' ? binding.value : binding.template}
+          onChange={(value) => onChange({ source: 'literal', value })}
+        />
+      ) : (
+        <div className="flex min-h-10 items-center rounded-xl border border-dashed border-border px-3 text-xs text-muted-foreground">
+          <code className="truncate">{binding.path}</code>
+        </div>
+      )}
     </div>
   );
 }
 
-type ActionEditorProps = {
-  action: HookAction;
-  fields: FieldChoice[];
-  resources: HookResources;
-  matcherValue?: string;
-  eventName: HookEventName;
-  onConfigChange: (patch: Record<string, unknown>) => void;
-};
-
-function CallToolActionEditor({ action, fields, resources, onConfigChange }: ActionEditorProps) {
-  const { t } = useTranslation('admin');
-  const toolName = asString(action.config.toolName);
-  const tool = resources.mcpTools.find((item) => item.name === toolName);
-  const inputs = asRecord(action.config.inputs);
-  const properties = tool?.inputSchema?.properties || {};
-  const required = new Set(tool?.inputSchema?.required || []);
-  const sourceOptions: HookSelectOption[] = [
-    { value: '__literal__', label: t('hooks.fixedValue'), group: t('hooks.fieldGroups.value') },
-    ...fields.map((field) => ({
-      value: field.path,
-      label: getFieldLabel(t, field),
-      description: field.path,
-      group: getFieldGroup(t, field),
-    })),
-  ];
-
-  const updateInput = (key: string, binding: Record<string, unknown>) => {
-    onConfigChange({ inputs: { ...inputs, [key]: binding } });
+function ScriptOutputsEditor({
+  outputs,
+  onChange,
+}: {
+  outputs: HookScriptOutput[];
+  onChange: (outputs: HookScriptOutput[]) => void;
+}) {
+  const addOutput = () => {
+    let index = outputs.length + 1;
+    while (outputs.some((output) => output.name === `output${index}`)) index += 1;
+    onChange([...outputs, { name: `output${index}`, type: 'string', description: '' }]);
   };
 
   return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold text-foreground">脚本输出变量</div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">脚本在 output 中返回同名字段，供后续行为和最终返回配置引用。</div>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={addOutput}>
+          <Plus className="h-3.5 w-3.5" />
+          添加变量
+        </Button>
+      </div>
+      {!outputs.length ? (
+        <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+          没有声明输出。脚本仍可使用文件、记录和日志 API。
+        </div>
+      ) : null}
+      {outputs.map((output, index) => (
+        <div key={`${output.name}-${index}`} className="grid gap-2 rounded-xl border border-border bg-background p-3 md:grid-cols-[minmax(130px,0.7fr)_130px_minmax(180px,1fr)_auto]">
+          <Input
+            value={output.name}
+            onChange={(event) => {
+              const next = [...outputs];
+              next[index] = { ...output, name: event.target.value.replace(/[^A-Za-z0-9_$]/g, '') };
+              onChange(next);
+            }}
+            placeholder="变量名"
+            className="h-9 rounded-lg font-mono text-xs"
+          />
+          <HookSelect
+            value={output.type}
+            options={(['string', 'number', 'boolean', 'object', 'array'] as FieldType[]).map((value) => ({ value, label: value }))}
+            onChange={(value) => {
+              const next = [...outputs];
+              next[index] = { ...output, type: value as FieldType };
+              onChange(next);
+            }}
+            placeholder="类型"
+            ariaLabel="输出变量类型"
+          />
+          <Input
+            value={output.description}
+            onChange={(event) => {
+              const next = [...outputs];
+              next[index] = { ...output, description: event.target.value };
+              onChange(next);
+            }}
+            placeholder="变量说明"
+            className="h-9 rounded-lg text-xs"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => onChange(outputs.filter((_, outputIndex) => outputIndex !== index))}
+            aria-label="删除脚本输出变量"
+          >
+            <Trash2 className="h-4 w-4 text-muted-foreground" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MpcActionEditor({
+  action,
+  resources,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  resources: HookResources;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const toolName = typeof config.toolName === 'string' ? config.toolName : '';
+  const tool = resources.mcpTools.find((item) => item.name === toolName);
+  const inputs = asRecord(config.inputs);
+  const properties = tool?.inputSchema?.properties || {};
+  const required = new Set(tool?.inputSchema?.required || []);
+
+  return (
     <div className="space-y-4">
-      <label className="block max-w-xl space-y-1.5">
-        <span className="text-xs font-medium text-foreground">{t('hooks.actions.tool')}</span>
+      <label className="block max-w-2xl space-y-1.5">
+        <span className="text-xs font-medium text-foreground">MCP 工具</span>
         <HookSelect
           value={toolName}
           options={resources.mcpTools.map((item) => ({
@@ -402,262 +369,543 @@ function CallToolActionEditor({ action, fields, resources, onConfigChange }: Act
           }))}
           onChange={(nextToolName) => {
             const nextTool = resources.mcpTools.find((item) => item.name === nextToolName);
-            const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => [
-              key,
-              { source: 'literal', value: property.default ?? '' },
-            ]));
-            onConfigChange({ toolName: nextToolName, inputs: nextInputs });
+            const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => {
+              const type = propertyType(property);
+              return [key, { source: 'literal', value: literalDefault(type, property) }];
+            }));
+            onChange({ toolName: nextToolName, inputs: nextInputs });
           }}
-          placeholder={resources.mcpTools.length ? t('hooks.actions.selectMcpTool') : t('hooks.actions.noMcpTools')}
-          ariaLabel={t('hooks.actions.selectMcpTool')}
+          placeholder={resources.mcpTools.length ? '选择 MCP 工具' : '暂无可调用的 MCP 工具'}
+          ariaLabel="选择 MCP 工具"
         />
       </label>
 
-      {tool ? (
-        Object.keys(properties).length ? (
-          <div className="space-y-2">
-            <div className="text-xs font-medium text-foreground">{t('hooks.actions.toolInputs')}</div>
-            {Object.entries(properties).map(([key, property]) => {
-              const binding = asRecord(inputs[key]);
-              const sourceValue = binding.source === 'reference' ? asString(binding.path) : '__literal__';
-              return (
-                <div key={key} className="grid gap-2 rounded-xl border border-border bg-muted/10 p-3 lg:grid-cols-[minmax(150px,0.7fr)_minmax(180px,0.9fr)_minmax(220px,1.2fr)]">
-                  <div className="min-w-0 self-center">
-                    <div className="truncate text-xs font-medium text-foreground">
-                      {key}{required.has(key) ? <span className="ml-1 text-destructive">*</span> : null}
-                    </div>
-                    <div className="truncate text-[10px] text-muted-foreground">{property.description || property.type || 'string'}</div>
-                  </div>
-                  <HookSelect
-                    value={sourceValue}
-                    options={sourceOptions}
-                    onChange={(source) => updateInput(key, source === '__literal__'
-                      ? { source: 'literal', value: property.default ?? '' }
-                      : { source: 'reference', path: source })}
-                    placeholder={t('hooks.actions.valueSource')}
-                    ariaLabel={`${key} ${t('hooks.actions.valueSource')}`}
-                  />
-                  {sourceValue === '__literal__' ? (
-                    <ValueInput
-                      property={property}
-                      value={binding.value}
-                      onChange={(value) => updateInput(key, { source: 'literal', value })}
-                    />
-                  ) : (
-                    <div className="flex h-10 items-center rounded-xl border border-dashed border-border px-3 text-xs text-muted-foreground">
-                      <code className="truncate">{sourceValue}</code>
-                    </div>
-                  )}
+      {tool && Object.keys(properties).length ? (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-foreground">工具参数</div>
+          {Object.entries(properties).map(([key, property]) => {
+            const type = propertyType(property);
+            const rawBinding = asRecord(inputs[key]);
+            const binding: HookValueBinding = rawBinding.source === 'reference'
+              ? { source: 'reference', path: String(rawBinding.path || '') }
+              : { source: 'literal', value: Object.prototype.hasOwnProperty.call(rawBinding, 'value') ? rawBinding.value : literalDefault(type, property) };
+            return (
+              <div key={key} className="space-y-2 rounded-xl border border-border bg-muted/10 p-3">
+                <div>
+                  <span className="text-xs font-medium text-foreground">{key}</span>
+                  {required.has(key) ? <span className="ml-1 text-destructive">*</span> : null}
+                  <span className="ml-2 text-[10px] text-muted-foreground">{property.description || property.type || 'string'}</span>
                 </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
-            {t('hooks.actions.toolNoInputs')}
-          </div>
-        )
+                <BindingEditor
+                  binding={binding}
+                  type={type}
+                  property={property}
+                  references={references}
+                  onChange={(nextBinding) => onChange({ ...config, inputs: { ...inputs, [key]: nextBinding } })}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {tool && !Object.keys(properties).length ? (
+        <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">该工具没有输入参数。</div>
       ) : null}
     </div>
   );
 }
 
-function AppendContextActionEditor({ action, fields, onConfigChange }: ActionEditorProps) {
-  const { t } = useTranslation('admin');
-  return (
-    <TemplateEditor
-      value={asString(action.config.template)}
-      onChange={(template) => onConfigChange({ template })}
-      fields={fields}
-      label={t('hooks.actions.contextTemplate')}
-      placeholder={t('hooks.actions.contextPlaceholder')}
-    />
-  );
-}
+function SkillActionEditor({
+  action,
+  resources,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  resources: HookResources;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const skillName = typeof config.skillName === 'string' ? config.skillName : '';
+  const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
+  const maxTurns = Number(config.maxTurns || 3);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectionRef = useRef({ start: template.length, end: template.length });
+  const referenceOptions = references.map((field) => ({
+    value: field.path,
+    label: field.path,
+    description: field.label || field.description || field.type,
+    group: field.group === 'event'
+      ? '当前事件'
+      : field.group === 'environment'
+        ? '环境变量'
+        : field.group === 'script'
+          ? '脚本输出'
+          : '前序行为输出',
+  }));
 
-function RecoveryActionEditor({ action, fields, resources, onConfigChange }: ActionEditorProps) {
-  const { t } = useTranslation('admin');
+  const selectReference = (path: string) => {
+    const token = `{{${path}}}`;
+    const selection = selectionRef.current;
+    const next = `${template.slice(0, selection.start)}${token}${template.slice(selection.end)}`;
+    const cursor = selection.start + token.length;
+    onChange({ ...config, argumentsTemplate: next });
+    setPickerOpen(false);
+    selectionRef.current = { start: cursor, end: cursor };
+    globalThis.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
         <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">{t('hooks.actions.skill')}</span>
+          <span className="text-xs font-medium text-foreground">Skill</span>
           <HookSelect
-            value={asString(action.config.skillName)}
+            value={skillName}
             options={resources.skills.map((skill) => ({
               value: skill.name,
               label: skill.displayName || skill.name,
               description: skill.description || `/${skill.name}`,
             }))}
-            onChange={(skillName) => onConfigChange({ skillName })}
-            placeholder={resources.skills.length ? t('hooks.actions.selectSkill') : t('hooks.actions.noSkills')}
-            ariaLabel={t('hooks.actions.selectSkill')}
+            onChange={(value) => onChange({ ...config, skillName: value })}
+            placeholder={resources.skills.length ? '选择 Skill' : '暂无可用 Skill'}
+            ariaLabel="选择 Skill"
           />
         </label>
         <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">{t('hooks.actions.maxTurns')}</span>
+          <span className="text-xs font-medium text-foreground">最大回合数</span>
           <HookSelect
-            value={String(action.config.maxTurns || 1)}
+            value={String(maxTurns)}
             options={[1, 2, 3, 5].map((value) => ({ value: String(value), label: String(value) }))}
-            onChange={(value) => onConfigChange({ maxTurns: Number(value) })}
-            placeholder="1"
-            ariaLabel={t('hooks.actions.maxTurns')}
+            onChange={(value) => onChange({ ...config, maxTurns: Number(value) })}
+            placeholder="3"
+            ariaLabel="Skill 最大回合数"
           />
         </label>
       </div>
-      <TemplateEditor
-        value={asString(action.config.argumentsTemplate)}
-        onChange={(argumentsTemplate) => onConfigChange({ argumentsTemplate })}
-        fields={fields}
-        label={t('hooks.actions.skillArguments')}
-        placeholder={t('hooks.actions.skillArgumentsPlaceholder')}
-      />
+      <div className="block space-y-1.5">
+        <span className="text-xs font-medium text-foreground">Skill 参数</span>
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            rows={3}
+            value={template}
+            onChange={(event) => {
+              const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
+              selectionRef.current = {
+                start: cursor,
+                end: event.currentTarget.selectionEnd ?? cursor,
+              };
+              onChange({ ...config, argumentsTemplate: event.currentTarget.value });
+            }}
+            onClick={(event) => {
+              selectionRef.current = {
+                start: event.currentTarget.selectionStart,
+                end: event.currentTarget.selectionEnd,
+              };
+            }}
+            onKeyDown={(event) => {
+              const cursor = event.currentTarget.selectionStart;
+              if (event.key === '/') {
+                event.preventDefault();
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+                setPickerOpen(true);
+              } else {
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+              }
+            }}
+            placeholder="输入 Skill 参数；输入 / 选择变量"
+            className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+          />
+          <HookSelect
+            value=""
+            options={referenceOptions}
+            onChange={selectReference}
+            placeholder="搜索变量"
+            ariaLabel="选择 Skill 参数变量"
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            hideTrigger
+            className="absolute inset-x-0 top-full z-40"
+            menuClassName="min-w-[360px]"
+          />
+        </div>
+      </div>
       <div className="rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        <code>/{asString(action.config.skillName) || 'skill'} {asString(action.config.argumentsTemplate)}</code>
+        实际恢复问题：<code>/{skillName || 'skill'} {template}</code>
       </div>
     </div>
   );
 }
 
-function DecisionActionEditor({ action, eventName, onConfigChange }: ActionEditorProps) {
-  const { t } = useTranslation('admin');
-  const outcomes = eventName === 'PermissionRequest'
-    ? ['allow', 'deny', 'ask']
-    : eventName === 'Stop'
-      ? ['continue', 'block']
-      : ['continue', 'block'];
-  return (
-    <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium text-foreground">{t('hooks.actions.decision')}</span>
-        <HookSelect
-          value={asString(action.config.outcome)}
-          options={outcomes.map((outcome) => ({ value: outcome, label: t(`hooks.outcomes.${outcome}`) }))}
-          onChange={(outcome) => onConfigChange({ outcome })}
-          placeholder={t('hooks.actions.selectDecision')}
-          ariaLabel={t('hooks.actions.selectDecision')}
-        />
-      </label>
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium text-foreground">{t('hooks.actions.reason')}</span>
-        <Input
-          value={asString(action.config.reason)}
-          onChange={(event) => onConfigChange({ reason: event.target.value })}
-          placeholder={t('hooks.actions.reasonPlaceholder')}
-          className="h-10 rounded-xl"
-        />
-      </label>
-    </div>
-  );
-}
-
-function MutationActionEditor({
-  action,
-  fields,
+function PostActionsEditor({
+  hook,
   resources,
-  matcherValue,
-  onConfigChange,
-}: ActionEditorProps) {
-  const { t } = useTranslation('admin');
-  const isInput = action.type === 'update_input';
-  const targets = isInput
-    ? getToolTargetFields(resources, matcherValue)
-    : [
-        { path: 'tool_response', label: t('hooks.actions.wholeToolOutput'), description: '', type: 'object' as const },
-        { path: 'tool_response.content', label: t('hooks.actions.toolTextContent'), description: 'content', type: 'string' as const },
-        { path: 'tool_response.structuredContent', label: t('hooks.actions.toolStructuredContent'), description: 'structuredContent', type: 'object' as const },
-      ];
-  const replacement = asRecord(action.config.replacement);
-  const replacementChoice = replacement.source === 'reference' ? asString(replacement.path) : '__literal__';
-  const selectedTarget = targets.find((target) => target.path === action.config.targetPath);
-  const sourceOptions: HookSelectOption[] = [
-    { value: '__literal__', label: t('hooks.fixedValue'), group: t('hooks.fieldGroups.value') },
-    ...fields.map((field) => ({
-      value: field.path,
-      label: getFieldLabel(t, field),
-      description: field.path,
-      group: getFieldGroup(t, field),
-    })),
-  ];
+  references,
+  onChange,
+}: {
+  hook: HookConfigDraft | HookConfig;
+  resources: HookResources;
+  references: FieldChoice[];
+  onChange: (actions: HookPostAction[]) => void;
+}) {
+  const canInvokeSkill = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const addAction = (type: HookPostAction['type']) => {
+    const action: HookPostAction = {
+      id: globalThis.crypto.randomUUID(),
+      type,
+      position: hook.postActions.length,
+      config: type === 'call_mcp_tool'
+        ? { toolName: '', inputs: {} }
+        : { skillName: '', argumentsTemplate: '', maxTurns: 3 },
+    };
+    onChange([...hook.postActions, action]);
+  };
+
+  const updateAction = (index: number, config: Record<string, unknown>) => {
+    const next = [...hook.postActions];
+    next[index] = { ...next[index], config };
+    onChange(next);
+  };
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium text-foreground">{t('hooks.actions.fieldToChange')}</span>
-        <HookSelect
-          value={asString(action.config.targetPath)}
-          options={targets.map((target) => ({
-            value: target.path,
-            label: target.label,
-            description: target.description || target.path,
-          }))}
-          onChange={(targetPath) => onConfigChange({ targetPath })}
-          placeholder={targets.length ? t('hooks.actions.selectFieldToChange') : t('hooks.actions.selectToolFirst')}
-          ariaLabel={t('hooks.actions.selectFieldToChange')}
-        />
-      </label>
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium text-foreground">{t('hooks.actions.changeTo')}</span>
-        <HookSelect
-          value={replacementChoice}
-          options={sourceOptions}
-          onChange={(source) => onConfigChange({
-            replacement: source === '__literal__'
-              ? { source: 'literal', value: '' }
-              : { source: 'reference', path: source },
-          })}
-          placeholder={t('hooks.actions.selectNewValue')}
-          ariaLabel={t('hooks.actions.selectNewValue')}
-        />
-      </label>
-      {replacementChoice === '__literal__' ? (
-        <label className="space-y-1.5 lg:col-start-2">
-          <span className="text-xs font-medium text-foreground">{t('hooks.actions.newValue')}</span>
-          <ValueInput
-            property={{ type: selectedTarget?.type }}
-            value={replacement.value}
-            onChange={(value) => onConfigChange({ replacement: { source: 'literal', value } })}
-          />
-        </label>
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')}>
+          <Wrench className="h-4 w-4" />
+          调用 MCP 工具
+        </Button>
+        <Tooltip content={canInvokeSkill ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
+          <span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addAction('invoke_skill')}
+              disabled={!canInvokeSkill}
+            >
+              <Sparkles className="h-4 w-4" />
+              调用 Skill
+            </Button>
+          </span>
+        </Tooltip>
+      </div>
+      {!hook.postActions.length ? (
+        <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
+          没有配置后置行为。Hook 仍可只执行高级脚本，或只返回字段给 Claude。
+        </div>
       ) : null}
+      {hook.postActions.map((action, index) => {
+        const availableReferences = references.filter((field) => {
+          if (field.group !== 'action') return true;
+          const referencedId = field.path.split('.')[1];
+          return hook.postActions.findIndex((item) => item.id === referencedId) < index;
+        });
+        return (
+          <div key={action.id} className="overflow-hidden rounded-xl border border-border bg-background">
+            <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-2.5">
+              {action.type === 'call_mcp_tool' ? <Wrench className="h-4 w-4 text-primary" /> : <Sparkles className="h-4 w-4 text-primary" />}
+              <span className="text-xs font-semibold text-foreground">
+                {index + 1}. {action.type === 'call_mcp_tool' ? '调用 MCP 工具' : '调用 Skill（恢复回合）'}
+              </span>
+              <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="ml-auto h-8 w-8"
+                onClick={() => onChange(hook.postActions.filter((_, actionIndex) => actionIndex !== index).map((item, nextIndex) => ({ ...item, position: nextIndex })))}
+                aria-label="删除后置行为"
+              >
+                <Trash2 className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            </div>
+            <div className="p-4">
+              {action.type === 'call_mcp_tool' ? (
+                <MpcActionEditor
+                  action={action}
+                  resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : (
+                <SkillActionEditor
+                  action={action}
+                  resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function ActionEditor(props: ActionEditorProps) {
-  switch (props.action.type) {
-    case 'record_data': return <RecordActionEditor {...props} />;
-    case 'call_tool': return <CallToolActionEditor {...props} />;
-    case 'append_context': return <AppendContextActionEditor {...props} />;
-    case 'invoke_skill_recovery': return <RecoveryActionEditor {...props} />;
-    case 'decision': return <DecisionActionEditor {...props} />;
-    case 'update_input':
-    case 'update_output': return <MutationActionEditor {...props} />;
-    default: return null;
-  }
+function responseProperty(path: string): JsonSchemaProperty | undefined {
+  if (path === 'decision') return { type: 'string', enum: ['block'] };
+  if (path.endsWith('permissionDecision')) return { type: 'string', enum: ['allow', 'deny', 'ask', 'defer'] };
+  if (path.endsWith('.action')) return { type: 'string', enum: ['accept', 'decline', 'cancel'] };
+  return undefined;
 }
 
-const ACTION_ICONS: Record<HookActionType, ComponentType<{ className?: string }>> = {
-  record_data: Database,
-  call_tool: Wrench,
-  append_context: Sparkles,
-  invoke_skill_recovery: RotateCcw,
-  decision: ShieldCheck,
-  update_input: Filter,
-  update_output: Braces,
-};
+function ReturnValueEditor({
+  binding,
+  type,
+  property,
+  references,
+  onChange,
+}: {
+  binding: HookValueBinding;
+  type: FieldType;
+  property?: JsonSchemaProperty;
+  references: FieldChoice[];
+  onChange: (binding: HookValueBinding) => void;
+}) {
+  const { t } = useTranslation('admin');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [rawValue, setRawValue] = useState('');
+  const [invalid, setInvalid] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const selectionRef = useRef<{ start: number; end: number } | null>(null);
+  const options: HookSelectOption[] = references.map((field) => ({
+    value: field.path,
+    label: fieldLabel(t, field),
+    description: field.path,
+    group: fieldGroup(t, field),
+  }));
 
-function initialActionConfig(type: HookActionType): Record<string, unknown> {
-  switch (type) {
-    case 'record_data': return { fields: [] };
-    case 'call_tool': return { toolName: '', inputs: {} };
-    case 'append_context': return { template: '' };
-    case 'invoke_skill_recovery': return { skillName: '', argumentsTemplate: '', maxTurns: 1 };
-    case 'decision': return { outcome: '', reason: '' };
-    case 'update_input':
-    case 'update_output': return { targetPath: '', replacement: { source: 'literal', value: '' } };
-    default: return {};
+  useEffect(() => {
+    if (binding.source === 'template') {
+      setRawValue(binding.template);
+    } else if (binding.source === 'reference') {
+      setRawValue(`{{${binding.path}}}`);
+    } else if (type === 'object' || type === 'array') {
+      try {
+        setRawValue(JSON.stringify(binding.value));
+      } catch {
+        setRawValue(type === 'array' ? '[]' : '{}');
+      }
+    } else {
+      setRawValue(String(binding.value ?? ''));
+    }
+    setInvalid(false);
+  }, [binding, type]);
+
+  const applyRawValue = (value: string) => {
+    setRawValue(value);
+    const exactReference = value.trim().match(/^\{\{\s*([^{}]+?)\s*\}\}$/);
+    if (exactReference) {
+      setInvalid(false);
+      onChange({ source: 'reference', path: exactReference[1] });
+      return;
+    }
+    if (type === 'string') {
+      const enumValues = property?.enum?.map(String);
+      const valid = !enumValues?.length || enumValues.includes(value);
+      setInvalid(!valid);
+      if (valid) {
+        onChange(value.includes('{{')
+          ? { source: 'template', template: value }
+          : { source: 'literal', value });
+      }
+      return;
+    }
+    if (type === 'boolean') {
+      const valid = value === 'true' || value === 'false';
+      setInvalid(!valid);
+      if (valid) onChange({ source: 'literal', value: value === 'true' });
+      return;
+    }
+    if (type === 'number') {
+      const parsed = Number(value);
+      const valid = value.trim() !== '' && Number.isFinite(parsed);
+      setInvalid(!valid);
+      if (valid) onChange({ source: 'literal', value: parsed });
+      return;
+    }
+    try {
+      const parsed = JSON.parse(value);
+      const valid = type === 'array'
+        ? Array.isArray(parsed)
+        : parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+      setInvalid(!valid);
+      if (valid) onChange({ source: 'literal', value: parsed });
+    } catch {
+      setInvalid(true);
+    }
+  };
+
+  const selectReference = (path: string) => {
+    const token = `{{${path}}}`;
+    const selection = selectionRef.current || { start: rawValue.length, end: rawValue.length };
+    const next = type === 'string'
+      ? `${rawValue.slice(0, selection.start)}${token}${rawValue.slice(selection.end)}`
+      : token;
+    const cursor = type === 'string' ? selection.start + token.length : token.length;
+    setRawValue(next);
+    setInvalid(false);
+    onChange(type === 'string'
+      ? { source: 'template', template: next }
+      : { source: 'reference', path });
+    setPickerOpen(false);
+    selectionRef.current = { start: cursor, end: cursor };
+    globalThis.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
+  const placeholder = property?.enum?.length
+    ? `可填写：${property.enum.join(' / ')}，或输入 / 选择变量`
+    : type === 'boolean'
+      ? '填写 true 或 false，或输入 / 选择变量'
+      : type === 'object'
+        ? '填写 JSON 对象，或输入 / 选择变量'
+        : type === 'array'
+          ? '填写 JSON 数组，或输入 / 选择变量'
+          : type === 'number'
+            ? '填写数字，或输入 / 选择变量'
+            : '填写内容，输入 / 选择变量';
+
+  return (
+    <div className="relative min-w-0">
+      <input
+        ref={inputRef}
+        value={rawValue}
+        onChange={(event) => applyRawValue(event.target.value)}
+        onKeyUp={(event) => {
+          if (event.key !== '/') return;
+          const cursor = event.currentTarget.selectionStart ?? rawValue.length;
+          selectionRef.current = { start: Math.max(0, cursor - 1), end: cursor };
+          setPickerOpen(true);
+        }}
+        placeholder={placeholder}
+        aria-invalid={invalid}
+        title={invalid ? '当前值格式不正确' : undefined}
+        className={cn(
+          'h-10 w-full rounded-xl border bg-background px-3 text-sm outline-none transition focus-visible:ring-4 focus-visible:ring-primary/10',
+          invalid ? 'border-destructive' : 'border-input',
+        )}
+      />
+      <HookSelect
+        value=""
+        options={options}
+        onChange={selectReference}
+        placeholder="/ 变量"
+        ariaLabel="选择返回值变量"
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        hideTrigger
+        className="absolute inset-x-0 top-full z-40"
+        menuClassName="!top-0 mt-1 w-full"
+      />
+    </div>
+  );
+}
+
+function ClaudeResponseEditor({
+  hook,
+  references,
+  onChange,
+}: {
+  hook: HookConfigDraft | HookConfig;
+  references: FieldChoice[];
+  onChange: (bindings: Record<string, HookValueBinding>) => void;
+}) {
+  const outputs = getClaudeOutputFields(hook.eventName);
+  const bindings = hook.claudeResponse.bindings;
+
+  if (!outputs.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-5 text-muted-foreground">
+        {hook.eventName === 'StopFailure'
+          ? '回答异常结束事件会忽略 Hook 返回值；可使用 MCP 工具、Skill 恢复回合或高级脚本处理。'
+          : '当前事件没有可配置的 Claude 返回字段。'}
+      </div>
+    );
   }
+
+  return (
+    <div className="space-y-3">
+      {outputs.map((output) => {
+        const binding = bindings[output.path];
+        const enabled = Boolean(binding);
+        return (
+          <div
+            key={output.path}
+            className={cn(
+              'grid grid-cols-[minmax(190px,0.8fr)_82px_minmax(260px,1.2fr)] items-center gap-3 rounded-xl border bg-background p-3 transition-colors',
+              enabled ? 'border-primary/35' : 'border-border',
+            )}
+          >
+            <div className="min-w-0">
+              <code className="block break-all text-xs font-semibold text-foreground">{output.path}</code>
+              <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">{output.description}</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              aria-label={`${enabled ? '关闭' : '开启'}返回字段 ${output.path}`}
+              onClick={() => {
+                if (!enabled) {
+                  onChange({
+                    ...bindings,
+                    [output.path]: {
+                      source: 'literal',
+                      value: literalDefault(output.type, responseProperty(output.path)),
+                    },
+                  });
+                  return;
+                }
+                const next = { ...bindings };
+                delete next[output.path];
+                onChange(next);
+              }}
+              className="flex items-center justify-center gap-2 rounded-lg py-1 text-[11px] text-muted-foreground outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+            >
+              <span>返回</span>
+              <span className={cn(
+                'relative h-5 w-9 rounded-full transition-colors',
+                enabled ? 'bg-primary' : 'bg-muted-foreground/25',
+              )}>
+                <span className={cn(
+                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
+                  enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
+                )} />
+              </span>
+            </button>
+            {binding ? (
+              <ReturnValueEditor
+                binding={binding}
+                type={output.type}
+                property={responseProperty(output.path)}
+                references={references}
+                onChange={(nextBinding) => onChange({ ...bindings, [output.path]: nextBinding })}
+              />
+            ) : (
+              <input
+                disabled
+                placeholder="开启返回后填写，输入 / 选择变量"
+                className="h-10 w-full rounded-xl border border-input bg-muted/30 px-3 text-sm text-muted-foreground outline-none"
+              />
+            )}
+          </div>
+        );
+      })}
+      <div className="rounded-xl bg-muted/30 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        `hookSpecificOutput.hookEventName` 由运行时按当前事件自动补充，不需要配置。
+      </div>
+    </div>
+  );
 }
 
 export default function HookConfigEditor({
@@ -674,117 +922,55 @@ export default function HookConfigEditor({
   onManageEvents,
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
-  const [scriptOpen, setScriptOpen] = useState(Boolean(hook.advancedScript));
-  const [expandedActions, setExpandedActions] = useState<Set<string>>(() => new Set(hook.actions.map((action) => action.id)));
   const isPersisted = 'id' in hook;
   const status = isPersisted ? hook.status : 'draft';
   const isRunning = isPersisted && hook.activationScope === 'all_users';
   const eventDefinition = EVENT_BY_NAME.get(hook.eventName);
-  const fields = useMemo(() => buildFieldChoices(hook, resources), [hook, resources]);
-  const gateFields = fields.filter((field) => field.gateAllowed !== false);
-  const scriptInputFields = fields.filter((field) => field.group !== 'script' && field.group !== 'action');
+  const inputs = useMemo(() => buildFieldChoices(hook, resources), [hook, resources]);
+  const references = useMemo(() => buildReferenceChoices(hook, resources), [hook, resources]);
+  const language = hook.extensionLogic?.language || 'javascript';
+  const matcherValue = hook.matcher.value || '';
+  const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
+  const matcherRegexError = useMemo(() => {
+    if (!eventDefinition?.matcherField || eventDefinition.matcherKind === 'fileNames') return false;
+    if (nativeMatcherMode !== 'regex' || !matcherValue) return false;
+    try {
+      new RegExp(matcherValue);
+      return false;
+    } catch {
+      return true;
+    }
+  }, [eventDefinition, matcherValue, nativeMatcherMode]);
 
-  const updateDraft = (patch: Partial<HookConfigDraft>) => {
-    onChange({ ...hook, ...patch });
-  };
-
-  const updateAction = (actionId: string, patch: Partial<HookAction>) => {
-    updateDraft({
-      actions: hook.actions.map((action) => action.id === actionId ? { ...action, ...patch } : action),
+  const updateDraft = (patch: Partial<HookConfigDraft>) => onChange({ ...hook, ...patch });
+  const buildTemplate = (
+    eventName: HookEventName,
+    nextLanguage: HookScriptLanguage,
+    outputs: HookScriptOutput[],
+  ) => {
+    const nextHook = { ...hook, eventName };
+    const nextInputs = buildFieldChoices(nextHook, resources);
+    return buildScriptTemplate({
+      eventName,
+      eventLabel: t(`hooks.events.${eventName}.label`),
+      eventDescription: t(`hooks.events.${eventName}.description`),
+      inputs: nextInputs.map((field) => ({ path: field.path, label: fieldLabel(t, field), type: field.type })),
+      outputs,
+      language: nextLanguage,
     });
   };
 
-  const updateActionConfig = (actionId: string, patch: Record<string, unknown>) => {
-    const action = hook.actions.find((item) => item.id === actionId);
-    if (!action) return;
-    updateAction(actionId, { config: { ...action.config, ...patch } });
-  };
-
-  const editorEvents = visibleEvents.includes(hook.eventName)
-    ? visibleEvents
-    : [hook.eventName, ...visibleEvents];
+  const editorEvents = visibleEvents.includes(hook.eventName) ? visibleEvents : [hook.eventName, ...visibleEvents];
   const eventOptions = editorEvents.map((eventName) => ({
     value: eventName,
     label: t(`hooks.events.${eventName}.label`),
     description: t(`hooks.events.${eventName}.description`),
   }));
-
-  const toolMatcherOptions: HookSelectOption[] = [
-    { value: '*', label: t('hooks.matcher.allTools'), group: t('hooks.matcher.scope') },
-    ...resources.builtinTools.map((tool) => ({
-      value: tool.name,
-      label: tool.name,
-      description: tool.description,
-      group: t('hooks.matcher.claudeTools'),
-    })),
-    ...resources.mcpTools.map((tool) => ({
-      value: tool.name,
-      label: `${tool.serverDisplayName} · ${tool.toolName}`,
-      description: tool.name,
-      group: t('hooks.matcher.mcpTools'),
-    })),
-  ];
-
-  const addCondition = () => {
-    const field = gateFields[0];
-    if (!field) return;
-    updateDraft({
-      gate: {
-        ...hook.gate,
-        conditions: [
-          ...hook.gate.conditions,
-          {
-            id: createHookItemId(),
-            field: field.path,
-            operator: defaultOperator(field.type),
-            ...(!['boolean', 'object', 'array'].includes(field.type) ? { value: '' } : {}),
-          },
-        ],
-      },
-    });
-  };
-
-  const updateCondition = (id: string, patch: Partial<HookCondition>) => {
-    updateDraft({
-      gate: {
-        ...hook.gate,
-        conditions: hook.gate.conditions.map((condition) => (
-          condition.id === id ? { ...condition, ...patch } : condition
-        )),
-      },
-    });
-  };
-
-  const addAction = (type: HookActionType) => {
-    const action: HookAction = {
-      id: createHookItemId(),
-      type,
-      config: initialActionConfig(type),
-    };
-    updateDraft({ actions: [...hook.actions, action] });
-    setExpandedActions((current) => new Set([...current, action.id]));
-  };
-
-  const moveAction = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= hook.actions.length) return;
-    const actions = [...hook.actions];
-    [actions[index], actions[target]] = [actions[target], actions[index]];
-    updateDraft({ actions });
-  };
-
-  const matcherMode = hook.matcher.mode || 'exact';
-  const matchedTool = findMatchedTool(resources, hook.matcher.value, matcherMode);
-  const matcherRegexError = useMemo(() => {
-    if (matcherMode !== 'regex' || !hook.matcher.value) return false;
-    try {
-      new RegExp(hook.matcher.value);
-      return false;
-    } catch {
-      return true;
-    }
-  }, [hook.matcher.value, matcherMode]);
-  const scriptOutputs = hook.advancedScript?.outputs || [];
+  const hasEffect = Boolean(hook.extensionLogic?.code.trim())
+    || hook.postActions.length > 0
+    || Object.keys(hook.claudeResponse.bindings).length > 0;
+  const canSave = Boolean(hook.name.trim()) && !matcherRegexError;
+  const canPublish = canSave && hasEffect;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/10">
@@ -794,9 +980,7 @@ export default function HookConfigEditor({
           <span className="hidden sm:inline">{t('hooks.backToList')}</span>
         </Button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-foreground">
-            {hook.name || t('hooks.newHook')}
-          </div>
+          <div className="truncate text-sm font-semibold text-foreground">{hook.name || t('hooks.newHook')}</div>
           <div className="text-[11px] text-muted-foreground">
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
@@ -813,18 +997,22 @@ export default function HookConfigEditor({
             {t('hooks.start')}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={busy || !hook.name.trim() || matcherRegexError}>
+        <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={busy || !canSave}>
           <Save className="h-4 w-4" />
           <span className="hidden sm:inline">{t('hooks.saveDraft')}</span>
         </Button>
-        <Button type="button" size="sm" onClick={onPublish} disabled={busy || !hook.name.trim() || matcherRegexError}>
+        <Button type="button" size="sm" onClick={onPublish} disabled={busy || !canPublish}>
           {t('hooks.publish')}
         </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-4 px-3 py-4 sm:px-5 sm:py-5">
-          <Section number={1} title={t('hooks.sections.basic')}>
+          <Section
+            number={1}
+            title="选择 Hook 事件"
+            description="事件决定 Claude Code 何时回调，以及后续配置能获得哪些参数。"
+          >
             <div className="grid gap-x-4 gap-y-4 lg:grid-cols-2 lg:items-start">
               <label className="block space-y-1.5">
                 <span className="flex h-7 items-center text-xs font-medium text-foreground">{t('hooks.fields.name')}</span>
@@ -840,17 +1028,8 @@ export default function HookConfigEditor({
                 <div className="flex h-7 items-center justify-between gap-3">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-medium text-foreground">{t('hooks.triggerEvent')}</span>
-                    <Tooltip
-                      content={t(`hooks.events.${hook.eventName}.description`)}
-                      position="top"
-                      delay={150}
-                      className="max-w-xs whitespace-normal px-3 py-2 text-left font-normal leading-5"
-                    >
-                      <button
-                        type="button"
-                        className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                        aria-label={t(`hooks.events.${hook.eventName}.description`)}
-                      >
+                    <Tooltip content={t(`hooks.events.${hook.eventName}.description`)}>
+                      <button type="button" className="text-muted-foreground" aria-label={t(`hooks.events.${hook.eventName}.description`)}>
                         <Info className="h-3.5 w-3.5" />
                       </button>
                     </Tooltip>
@@ -865,8 +1044,14 @@ export default function HookConfigEditor({
                   options={eventOptions}
                   onChange={(value) => {
                     const eventName = value as HookEventName;
-                    const actions = hook.actions.filter((action) => actionAvailability(eventName, undefined, action.type).available);
-                    updateDraft({ eventName, matcher: {}, gate: { mode: 'all', conditions: [] }, actions });
+                    updateDraft({
+                      eventName,
+                      matcher: {},
+                      postActions: eventName === 'Stop' || eventName === 'StopFailure'
+                        ? hook.postActions
+                        : hook.postActions.filter((action) => action.type !== 'invoke_skill').map((action, index) => ({ ...action, position: index })),
+                      claudeResponse: { bindings: {} },
+                    });
                   }}
                   placeholder={t('hooks.selectEvent')}
                   ariaLabel={t('hooks.selectEvent')}
@@ -875,403 +1060,218 @@ export default function HookConfigEditor({
               <label className="block space-y-1.5 lg:col-span-2">
                 <span className="text-xs font-medium text-foreground">{t('hooks.fields.description')}</span>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={hook.description}
                   onChange={(event) => updateDraft({ description: event.target.value })}
                   placeholder={t('hooks.fields.descriptionPlaceholder')}
-                  className="min-h-[82px] w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm text-foreground shadow-sm outline-none focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10"
+                  className="min-h-[70px] w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
                   maxLength={1000}
                 />
               </label>
             </div>
           </Section>
 
-          <Section number={2} title={t('hooks.sections.matcher')}>
-            {TOOL_EVENTS.has(hook.eventName) ? (
-              <div className="space-y-2">
-                <div className="grid max-w-3xl gap-2 sm:grid-cols-[160px_minmax(0,1fr)]">
-                  <HookSelect
-                    value={matcherMode}
-                    options={[
-                      { value: 'exact', label: t('hooks.matcher.exact') },
-                      { value: 'regex', label: t('hooks.matcher.regex') },
-                    ]}
-                    onChange={(value) => {
-                      const mode = value as 'exact' | 'regex';
-                      const actions = hook.actions.filter((action) => actionAvailability(
-                        hook.eventName,
-                        undefined,
-                        action.type,
-                        mode,
-                      ).available);
-                      updateDraft({ matcher: { mode }, gate: { mode: 'all', conditions: [] }, actions });
-                    }}
-                    placeholder={t('hooks.matcher.mode')}
-                    ariaLabel={t('hooks.matcher.mode')}
-                  />
-                  {matcherMode === 'exact' ? (
-                    <HookSelect
-                      value={hook.matcher.value || ''}
-                      options={toolMatcherOptions}
-                      onChange={(value) => {
-                        const actions = hook.actions.filter((action) => actionAvailability(
-                          hook.eventName,
-                          value,
-                          action.type,
-                          'exact',
-                        ).available);
-                        updateDraft({ matcher: { mode: 'exact', value }, gate: { mode: 'all', conditions: [] }, actions });
-                      }}
-                      placeholder={t('hooks.matcher.selectTool')}
-                      ariaLabel={t('hooks.matcher.selectTool')}
-                      menuClassName="sm:min-w-[520px]"
-                    />
-                  ) : (
-                    <Input
-                      value={hook.matcher.value || ''}
-                      onChange={(event) => updateDraft({ matcher: { mode: 'regex', value: event.target.value } })}
-                      placeholder={t('hooks.matcher.regexPlaceholder')}
-                      className={cn('h-10 rounded-xl font-mono', matcherRegexError && 'border-destructive')}
-                      aria-invalid={matcherRegexError}
-                    />
-                  )}
-                </div>
-                {matcherRegexError ? (
-                  <div className="flex items-center gap-2 text-xs text-destructive">
-                    <CircleAlert className="h-3.5 w-3.5" />
-                    {t('hooks.matcher.invalidRegex')}
-                  </div>
-                ) : null}
-                {matcherMode === 'exact' && !isConcreteToolMatcher(hook.matcher.value, matcherMode) ? (
-                  <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
-                    <CircleAlert className="h-3.5 w-3.5" />
-                    {t('hooks.matcher.specificToolHint')}
-                  </div>
-                ) : matchedTool ? (
-                  <div className="text-xs text-muted-foreground">{matchedTool.description}</div>
-                ) : null}
+          <Section
+            number={2}
+            title="定义 Matcher"
+            description="Matcher 由 Claude Code 原生执行；留空或 * 表示匹配该事件的每次回调。"
+            action={eventDefinition?.matcherField ? (
+              <Badge variant={nativeMatcherMode === 'regex' ? 'default' : 'outline'}>
+                {eventDefinition.matcherKind === 'fileNames'
+                  ? '文件名列表'
+                  : t(`hooks.matcher.detected.${nativeMatcherMode}`, { defaultValue: nativeMatcherMode })}
+              </Badge>
+            ) : <Badge variant="outline">该事件不支持 Matcher</Badge>}
+          >
+            <div className="max-w-3xl space-y-2">
+              <div className="text-xs text-muted-foreground">
+                {eventDefinition?.matcherField
+                  ? t(`hooks.matcherFields.${eventDefinition.matcherField}`, { defaultValue: eventDefinition.matcherField })
+                  : '当前事件回调'}
               </div>
-            ) : eventDefinition?.matcherField ? (
-              <div className="max-w-3xl space-y-1.5">
-                <label htmlFor="hook-matcher" className="text-xs font-medium text-foreground">
-                  {t(`hooks.matcherFields.${eventDefinition.matcherField}`, { defaultValue: eventDefinition.matcherField })}
-                </label>
-                <div className="grid gap-2 sm:grid-cols-[160px_minmax(0,1fr)]">
-                  <HookSelect
-                    value={matcherMode}
-                    options={[
-                      { value: 'exact', label: t('hooks.matcher.exact') },
-                      { value: 'regex', label: t('hooks.matcher.regex') },
-                    ]}
-                    onChange={(value) => updateDraft({ matcher: { mode: value as 'exact' | 'regex' } })}
-                    placeholder={t('hooks.matcher.mode')}
-                    ariaLabel={t('hooks.matcher.mode')}
-                  />
-                  <Input
-                    id="hook-matcher"
-                    value={hook.matcher.value || ''}
-                    onChange={(event) => updateDraft({ matcher: {
-                      mode: matcherMode,
-                      ...(event.target.value ? { value: event.target.value } : {}),
-                    } })}
-                    placeholder={matcherMode === 'regex' ? t('hooks.matcher.regexPlaceholder') : t('hooks.matcher.optional')}
-                    className={cn('h-10 rounded-xl', matcherMode === 'regex' && 'font-mono', matcherRegexError && 'border-destructive')}
-                    aria-invalid={matcherRegexError}
-                  />
+              <Input
+                value={matcherValue}
+                disabled={!eventDefinition?.matcherField}
+                onChange={(event) => {
+                  if (!eventDefinition?.matcherField) return;
+                  const value = event.target.value;
+                  const detected = inferNativeMatcherMode(hook.eventName, value);
+                  updateDraft({ matcher: value ? {
+                    mode: eventDefinition.matcherKind === 'fileNames' || detected !== 'regex' ? 'exact' : 'regex',
+                    value,
+                  } : {} });
+                }}
+                placeholder={!eventDefinition?.matcherField
+                  ? 'Claude Code 会在每次该事件发生时回调'
+                  : eventDefinition.matcherKind === 'fileNames'
+                    ? '例如 .envrc|.env'
+                    : '例如 Bash|Read 或 mcp__database__.*；留空匹配全部'}
+                className={cn('h-11 rounded-xl font-mono', matcherRegexError && 'border-destructive')}
+                aria-invalid={matcherRegexError}
+              />
+              {matcherRegexError ? (
+                <div className="flex items-center gap-2 text-xs text-destructive">
+                  <CircleAlert className="h-3.5 w-3.5" />
+                  {t('hooks.matcher.invalidRegex')}
                 </div>
-                {matcherRegexError ? <div className="text-xs text-destructive">{t('hooks.matcher.invalidRegex')}</div> : null}
-              </div>
-            ) : (
-              <div className="text-sm text-muted-foreground">{t('hooks.matcher.notNeeded')}</div>
-            )}
+              ) : null}
+            </div>
           </Section>
 
           <Section
             number={3}
-            title={t('hooks.sections.script')}
-            action={(
-              <Toggle
-                checked={Boolean(hook.advancedScript)}
-                label={t('hooks.script.enable')}
-                onChange={(enabled) => {
-                  if (enabled) {
-                    const code = buildScriptTemplate({
-                      eventName: hook.eventName,
-                      eventLabel: t(`hooks.events.${hook.eventName}.label`),
-                      eventDescription: t(`hooks.events.${hook.eventName}.description`),
-                      inputs: scriptInputFields.map((field) => ({
-                        path: field.path,
-                        label: getFieldLabel(t, field),
-                        type: field.type,
-                      })),
-                    });
-                    updateDraft({ advancedScript: { enabled: true, language: 'javascript', code, outputs: inferScriptOutputs(code) } });
-                    setScriptOpen(true);
-                  } else {
-                    updateDraft({ advancedScript: null, gate: {
-                      ...hook.gate,
-                      conditions: hook.gate.conditions.filter((condition) => !condition.field.startsWith('$script.output.')),
-                    } });
-                  }
-                }}
-              />
+            title="高级脚本（可选）"
+            description="脚本用于文件处理、环境读取、数据记录和自定义分析；返回值先保存在 CCUI 内部。"
+            action={hook.extensionLogic ? (
+              <Button type="button" variant="ghost" size="sm" onClick={() => updateDraft({ extensionLogic: null })}>
+                关闭脚本
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => updateDraft({ extensionLogic: {
+                  language: 'javascript',
+                  outputs: [],
+                  code: buildTemplate(hook.eventName, 'javascript', []),
+                } })}
+              >
+                <Code2 className="h-4 w-4" />
+                启用脚本
+              </Button>
             )}
           >
-            {hook.advancedScript ? (
-              <div className="space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setScriptOpen((current) => !current)}
-                  className="flex w-full items-center gap-2 rounded-xl bg-muted/30 px-3 py-2 text-left text-xs font-medium text-foreground"
-                >
-                  {scriptOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  <Code2 className="h-4 w-4 text-primary" />
-                  JavaScript
-                  <Badge variant="outline" className="ml-auto">{t('hooks.script.outputsCount', { count: scriptOutputs.length })}</Badge>
-                </button>
-                {scriptOpen ? (
-                  <div className="grid overflow-hidden rounded-xl border border-border lg:grid-cols-[minmax(0,1fr)_280px]">
-                    <textarea
-                      value={hook.advancedScript.code}
-                      onChange={(event) => {
-                        const code = event.target.value;
-                        updateDraft({ advancedScript: {
-                          enabled: true,
-                          language: 'javascript',
-                          code,
-                          outputs: inferScriptOutputs(code),
-                        } });
-                      }}
-                      spellCheck={false}
-                      className="min-h-[320px] resize-y border-0 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none"
-                    />
-                    <div className="max-h-[520px] space-y-4 overflow-y-auto border-t border-border bg-muted/10 p-3 lg:border-l lg:border-t-0">
-                      <div>
-                        <div className="text-xs font-semibold text-foreground">{t('hooks.script.availableInputs')}</div>
-                        <div className="mt-2 space-y-1.5">
-                          <div className="rounded bg-background px-2 py-1 text-[10px] text-muted-foreground">
-                            <div className="truncate text-foreground">{t('hooks.script.workspaceFiles')}</div>
-                            <code className="block truncate">workspace</code>
-                          </div>
-                          {scriptInputFields.map((field) => (
-                            <div key={field.path} className="rounded bg-background px-2 py-1 text-[10px] text-muted-foreground">
-                              <div className="truncate text-foreground">{getFieldLabel(t, field)}</div>
-                              <code className="block truncate">{field.path}</code>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs font-semibold text-foreground">{t('hooks.script.returnFields')}</div>
-                        <div className="mt-2 space-y-1.5">
-                          {scriptOutputs.length ? scriptOutputs.map((output) => (
-                            <div key={output.name} className="rounded-lg border border-border bg-background px-2.5 py-2">
-                              <code className="text-[11px] text-primary">$script.output.{output.name}</code>
-                              <div className="mt-0.5 text-[10px] text-muted-foreground">{output.type} · {output.description}</div>
-                            </div>
-                          )) : <div className="text-xs text-muted-foreground">{t('hooks.script.noOutputs')}</div>}
-                        </div>
+            {hook.extensionLogic ? (
+              <div className="space-y-4">
+                <ScriptOutputsEditor
+                  outputs={hook.extensionLogic.outputs}
+                  onChange={(outputs) => updateDraft({ extensionLogic: { ...hook.extensionLogic!, outputs } })}
+                />
+                <div className="grid overflow-hidden rounded-xl border border-border xl:grid-cols-[minmax(0,1fr)_300px]">
+                  <div className="min-w-0 bg-slate-950">
+                    <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-slate-300">
+                      {language === 'javascript' ? <FileCode2 className="h-4 w-4 text-yellow-300" /> : <TerminalSquare className="h-4 w-4 text-sky-300" />}
+                      <span>{language === 'javascript' ? 'hook.js' : 'hook.py'}</span>
+                      <div className="ml-auto flex items-center gap-1">
+                        {(['javascript', 'python'] as HookScriptLanguage[]).map((item) => (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => updateDraft({ extensionLogic: {
+                              language: item,
+                              outputs: hook.extensionLogic!.outputs,
+                              code: buildTemplate(hook.eventName, item, hook.extensionLogic!.outputs),
+                            } })}
+                            className={cn(
+                              'rounded px-2 py-1 text-[10px]',
+                              language === item ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white',
+                            )}
+                          >
+                            {item === 'javascript' ? 'JavaScript' : 'Python'}
+                          </button>
+                        ))}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-slate-300 hover:bg-white/10 hover:text-white"
+                          onClick={() => updateDraft({ extensionLogic: {
+                            ...hook.extensionLogic!,
+                            code: buildTemplate(hook.eventName, language, hook.extensionLogic!.outputs),
+                          } })}
+                        >
+                          <RefreshCcw className="h-3.5 w-3.5" />
+                          重新生成模板
+                        </Button>
                       </div>
                     </div>
+                    <textarea
+                      value={hook.extensionLogic.code}
+                      onChange={(event) => updateDraft({ extensionLogic: { ...hook.extensionLogic!, code: event.target.value } })}
+                      spellCheck={false}
+                      className="min-h-[500px] w-full resize-y border-0 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none"
+                    />
                   </div>
-                ) : null}
+                  <aside className="max-h-[600px] space-y-4 overflow-y-auto border-t border-border bg-muted/10 p-4 xl:border-l xl:border-t-0">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                      <Braces className="h-3.5 w-3.5 text-primary" />
+                      Claude 回调参数
+                    </div>
+                    <div className="space-y-1.5">
+                      {inputs.map((field) => (
+                        <div key={field.path} className="rounded-lg border border-border/70 bg-background px-2.5 py-2">
+                          <code className="block truncate text-[11px] text-foreground">{field.path}</code>
+                          <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{fieldLabel(t, field)} · {field.type}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+                </div>
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground">{t('hooks.script.optional')}</div>
+              <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-5 text-muted-foreground">
+                高级脚本不是必填。需要读取文件、读取运行环境、记录数据或执行自定义分析时再启用。
+              </div>
             )}
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {CCUI_SCRIPT_APIS.map((api) => (
+                <div key={api.javascript} className="rounded-xl border border-border bg-background p-3">
+                  <div className="flex items-start gap-2">
+                    {api.javascript.startsWith('ccui.workspace')
+                      ? <FileCode2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                      : <Database className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+                    <div className="min-w-0">
+                      <code className="block break-all text-[11px] font-semibold text-foreground">{scriptApiName(api, language)}</code>
+                      <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{api.description}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.')).map((variable) => (
+                <div key={variable.path} className="rounded-xl border border-border bg-background p-3">
+                  <div className="flex items-start gap-2">
+                    <Database className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <div className="min-w-0">
+                      <code className="block break-all text-[11px] font-semibold text-foreground">
+                        {language === 'python' ? pythonEnvironmentPath(variable.path) : variable.path}
+                      </code>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {t(`hooks.variables.${variable.path.replace('ccui.env.', '')}`, { defaultValue: variable.type })} · {variable.type}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </Section>
 
           <Section
             number={4}
-            title={t('hooks.sections.gate')}
-            action={(
-              <Button type="button" variant="outline" size="sm" onClick={addCondition} disabled={!gateFields.length}>
-                <Plus className="h-4 w-4" />
-                {t('hooks.gate.add')}
-              </Button>
-            )}
+            title="Hook 后置行为"
+            description="高级脚本完成后按顺序调用 MCP 工具；回答正常或异常结束时还可以启动新的模型回合调用 Skill。"
           >
-            {hook.gate.conditions.length ? (
-              <div className="space-y-3">
-                {hook.gate.conditions.length > 1 ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{t('hooks.gate.mode')}</span>
-                    <HookSelect
-                      value={hook.gate.mode}
-                      options={[
-                        { value: 'all', label: t('hooks.gate.all') },
-                        { value: 'any', label: t('hooks.gate.any') },
-                      ]}
-                      onChange={(mode) => updateDraft({ gate: { ...hook.gate, mode: mode as 'all' | 'any' } })}
-                      placeholder={t('hooks.gate.mode')}
-                      ariaLabel={t('hooks.gate.mode')}
-                      className="w-44"
-                    />
-                  </div>
-                ) : null}
-                {hook.gate.conditions.map((condition) => {
-                  const type = fieldTypeForPath(gateFields, condition.field);
-                  const field = gateFields.find((item) => item.path === condition.field);
-                  const needsValue = !['is_true', 'is_false', 'is_empty', 'is_not_empty'].includes(condition.operator);
-                  return (
-                    <div key={condition.id} className="grid gap-2 rounded-xl border border-border bg-muted/10 p-3 lg:grid-cols-[minmax(200px,1.2fr)_minmax(150px,0.8fr)_minmax(180px,1fr)_40px]">
-                      <HookSelect
-                        value={condition.field}
-                        options={gateFields.map((choice) => ({
-                          value: choice.path,
-                          label: getFieldLabel(t, choice),
-                          description: choice.path,
-                          group: getFieldGroup(t, choice),
-                        }))}
-                        onChange={(path) => {
-                          const nextType = fieldTypeForPath(gateFields, path);
-                          const operator = defaultOperator(nextType);
-                          updateCondition(condition.id, {
-                            field: path,
-                            operator,
-                            ...(['boolean', 'object', 'array'].includes(nextType) ? { value: undefined } : { value: '' }),
-                          });
-                        }}
-                        placeholder={t('hooks.gate.field')}
-                        ariaLabel={t('hooks.gate.field')}
-                      />
-                      <HookSelect
-                        value={condition.operator}
-                        options={operatorOptions(t, type)}
-                        onChange={(operator) => updateCondition(condition.id, {
-                          operator: operator as HookConditionOperator,
-                          ...(['is_true', 'is_false', 'is_empty', 'is_not_empty'].includes(operator) ? { value: undefined } : {}),
-                        })}
-                        placeholder={t('hooks.gate.operator')}
-                        ariaLabel={t('hooks.gate.operator')}
-                      />
-                      {needsValue ? (
-                        field?.options?.length ? (
-                          <HookSelect
-                            value={String(condition.value ?? '')}
-                            options={field.options}
-                            onChange={(value) => updateCondition(condition.id, { value })}
-                            placeholder={t('hooks.gate.value')}
-                            ariaLabel={t('hooks.gate.value')}
-                          />
-                        ) : (
-                          <Input
-                            value={condition.value == null ? '' : String(condition.value)}
-                            type={type === 'number' ? 'number' : 'text'}
-                            onChange={(event) => updateCondition(condition.id, {
-                              value: type === 'number' ? Number(event.target.value) : event.target.value,
-                            })}
-                            placeholder={t('hooks.gate.value')}
-                            className="h-10 rounded-xl"
-                          />
-                        )
-                      ) : <div className="hidden lg:block" />}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => updateDraft({ gate: { ...hook.gate, conditions: hook.gate.conditions.filter((item) => item.id !== condition.id) } })}
-                        aria-label={t('hooks.gate.remove')}
-                      >
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
-                {t('hooks.gate.always')}
-              </div>
-            )}
+            <PostActionsEditor
+              hook={hook}
+              resources={resources}
+              references={references}
+              onChange={(postActions) => updateDraft({ postActions })}
+            />
           </Section>
 
-          <Section number={5} title={t('hooks.sections.actions')}>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {ACTION_TYPES.map((type) => {
-                const Icon = ACTION_ICONS[type];
-                const availability = actionAvailability(hook.eventName, hook.matcher.value, type, matcherMode);
-                if (!availability.available && !availability.reasonKey) return null;
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    disabled={!availability.available}
-                    onClick={() => addAction(type)}
-                    className={cn(
-                      'rounded-xl border border-border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/[0.03]',
-                      !availability.available && 'cursor-not-allowed opacity-50',
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-4 w-4" /></span>
-                      <span className="text-xs font-semibold text-foreground">{t(`hooks.actions.types.${type}.label`)}</span>
-                      <Plus className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
-                    </div>
-                    <div className="mt-2 text-[11px] leading-4 text-muted-foreground">
-                      {availability.reasonKey ? t(availability.reasonKey) : t(`hooks.actions.types.${type}.description`)}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-5 space-y-3">
-              {hook.actions.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-                  {t('hooks.actions.empty')}
-                </div>
-              ) : hook.actions.map((action, index) => {
-                const Icon = ACTION_ICONS[action.type];
-                const expanded = expandedActions.has(action.id);
-                const actionFields = fields.filter((field) => {
-                  if (field.group !== 'action') return true;
-                  const outputIndex = Number(field.path.match(/^\$actions\.(\d+)\./)?.[1]);
-                  return Number.isInteger(outputIndex) && outputIndex < index;
-                });
-                return (
-                  <div key={action.id} className="overflow-visible rounded-xl border border-border bg-background">
-                    <div className="flex items-center gap-2 px-3 py-2.5">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedActions((current) => {
-                          const next = new Set(current);
-                          if (next.has(action.id)) next.delete(action.id); else next.add(action.id);
-                          return next;
-                        })}
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                      >
-                        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-3.5 w-3.5" /></span>
-                        <span className="truncate text-xs font-semibold text-foreground">{index + 1}. {t(`hooks.actions.types.${action.type}.label`)}</span>
-                      </button>
-                      <Button type="button" variant="ghost" size="icon" disabled={index === 0} onClick={() => moveAction(index, -1)} aria-label={t('hooks.actions.moveUp')}>
-                        <ArrowUp className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" disabled={index === hook.actions.length - 1} onClick={() => moveAction(index, 1)} aria-label={t('hooks.actions.moveDown')}>
-                        <ArrowDown className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" onClick={() => updateDraft({ actions: hook.actions.filter((item) => item.id !== action.id) })} aria-label={t('hooks.actions.remove')}>
-                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      </Button>
-                    </div>
-                    {expanded ? (
-                      <div className="border-t border-border bg-muted/[0.06] p-3 sm:p-4">
-                        <ActionEditor
-                          action={action}
-                          fields={actionFields}
-                          resources={resources}
-                          matcherValue={hook.matcher.value}
-                          eventName={hook.eventName}
-                          onConfigChange={(patch) => updateActionConfig(action.id, patch)}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
+          <Section
+            number={5}
+            title="返回给 Claude"
+            description="只有这里配置的字段才会组装为 HookJSONOutput；脚本和行为输出不会自动返回。"
+          >
+            <ClaudeResponseEditor
+              hook={hook}
+              references={references}
+              onChange={(bindings) => updateDraft({ claudeResponse: { bindings } })}
+            />
           </Section>
+
         </div>
       </div>
     </div>

@@ -56,6 +56,9 @@ import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-opera
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
+import { userDb } from './database/db.js';
+import { hookConfigService } from './services/hook-configs.js';
+import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -1024,7 +1027,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // bypassPermissions skips canUseTool for auto-approved calls, so MCP input
     // mutation must happen in PreToolUse to affect the actual server request.
-    sdkOptions.hooks = {
+    const builtinSdkHooks = {
       PreToolUse: [{
         matcher: 'mcp__.*',
         hooks: [async (input) => {
@@ -1069,6 +1072,78 @@ async function queryClaudeSDK(command, options = {}, ws) {
         }]
       }]
     };
+
+    const hookUserId = Number(runtimeOptions.userId ?? ws?.userId);
+    let configuredSdkHooks = {};
+    if (Number.isInteger(hookUserId) && hookUserId > 0) {
+      try {
+        const activeHooks = hookConfigService.listActiveHooksForUser(hookUserId);
+        if (activeHooks.length > 0) {
+          const needsMcpActions = activeHooks.some((hook) =>
+            hook.postActions?.some((action) => action.type === 'call_mcp_tool'),
+          );
+          const directMcpServers = needsMcpActions && runtimeContext.mode === 'docker'
+            ? await loadMcpConfig(runtimeContext.hostWorkspacePath || runtimeOptions.cwd, {
+                includeHostConfig: !runtimeContext.disableHostMcpConfig,
+                tenantId: runtimeOptions.tenantId,
+                workspaceId: runtimeOptions.workspaceId,
+                runtimeMode: 'local',
+              })
+            : mcpServers;
+          const hookUser = userDb.getUserById(hookUserId);
+          const hookRuntime = createHookRuntimeSession({
+            hooks: activeHooks,
+            userId: hookUserId,
+            username: hookUser?.username || null,
+            tenantId: runtimeOptions.tenantId || null,
+            workspaceId: runtimeOptions.workspaceId || null,
+            workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
+            sessionId: () => capturedSessionId || sessionId || null,
+            mcpServers: directMcpServers || {},
+            enqueueSkillRecovery: async ({ hook, action, event, modelContent, displayCommand }) => {
+              const recoveryMessageId = createRequestId();
+              const recoverySessionId = event?.session_id || capturedSessionId || sessionId || null;
+              if (recoverySessionId) {
+                try {
+                  await appendClaudeDisplayCommand({
+                    runtimeHomePath: runtimeOptions.runtimeHomePath,
+                    projectPath: runtimeOptions.projectPath || runtimeOptions.cwd,
+                    sessionId: recoverySessionId,
+                    uid: runtimeOptions.runtimeUid,
+                    gid: runtimeOptions.runtimeGid,
+                    messageId: recoveryMessageId,
+                    displayCommand,
+                    modelContent,
+                  });
+                } catch (error) {
+                  console.warn('[HookRuntime] Failed to persist Skill recovery display command:', error?.message || error);
+                }
+              }
+              inputQueue.push(buildClaudeUserMessage(modelContent, [], {
+                uuid: recoveryMessageId,
+                priority: 'next',
+                shouldQuery: true,
+              }));
+              ws.send(createNormalizedMessage({
+                kind: 'status',
+                text: 'hook_skill_recovery',
+                hookId: hook.id,
+                hookName: hook.name,
+                actionId: action.id,
+                skillName: action.config.skillName,
+                sessionId: recoverySessionId,
+                provider: 'claude',
+              }));
+            },
+          });
+          configuredSdkHooks = hookRuntime.hooks;
+          console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);
+        }
+      } catch (error) {
+        console.error('[HookRuntime] Failed to load configured Hooks:', error?.message || error);
+      }
+    }
+    sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, configuredSdkHooks);
 
     sdkOptions.canUseTool = async (toolName, input, context) => {
       if (isClaudeNativeSchedulingDisabled(sdkOptions.env) && CLAUDE_NATIVE_SCHEDULING_TOOLS.has(toolName)) {

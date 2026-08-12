@@ -7,6 +7,7 @@
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
     "mcpPresets": "MCP Server 预置",
+    "skillPresets": "Skill 预置",
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "运行时监控"
@@ -358,7 +359,8 @@
   },
   "hooks": {
     "title": "Hook 配置",
-    "description": "配置 Claude Code 事件的执行门槛和行为。",
+    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果。",
+    "noScript": "{{count}} 个后置行为",
     "create": "新建 Hook",
     "newHook": "新建 Hook",
     "moreEvents": "更多事件",
@@ -395,6 +397,17 @@
       "script": "高级脚本（可选）",
       "gate": "Hook 执行统一门槛",
       "actions": "基础行为"
+    },
+    "codeFlow": {
+      "eventTitle": "选择 Hook 事件",
+      "eventDescription": "事件决定 Claude Code 何时回调，以及扩展逻辑能获得哪些参数。",
+      "matcherTitle": "定义 Matcher",
+      "matcherDescription": "文本会直接编译为 Claude Code 原生 Matcher；留空或 * 表示匹配全部。",
+      "logicTitle": "编写扩展逻辑",
+      "logicDescription": "模板按当前事件生成。代码接收 Claude 回调参数和受控的 CCUI API，并返回当前事件支持的结果。",
+      "apiTitle": "使用 CCUI 功能 API",
+      "apiDescription": "这些对象由运行时按当前用户、租户和工作空间注入；脚本不能获得工作空间之外的文件路径。",
+      "runtimePending": "当前版本先保存真实运行时契约；脚本沙箱、文件 API、记录 API 和 Claude 回调执行器将在 Hook 运行时接入阶段实现。"
     },
     "fields": {
       "name": "名称",
@@ -444,12 +457,56 @@
       "oldCwd": "原工作目录",
       "newCwd": "新工作目录",
       "changeType": "变化类型",
-      "worktreePath": "Worktree 路径"
+      "worktreePath": "Worktree 路径",
+      "session_id": "会话 ID",
+      "transcript_path": "会话转录文件",
+      "cwd": "当前工作目录",
+      "permission_mode": "权限模式",
+      "agent_id": "Agent ID",
+      "agent_type": "Agent 类型",
+      "hook_event_name": "Hook 事件名称",
+      "stop_hook_active": "已处于 Stop Hook 循环",
+      "last_assistant_message": "模型最后一条消息",
+      "error_details": "错误详情",
+      "session_title": "会话标题",
+      "expansion_type": "展开类型",
+      "command_name": "命令名称",
+      "command_args": "命令参数",
+      "command_source": "命令来源",
+      "notification_type": "通知类型",
+      "tool_name": "工具名称",
+      "tool_input": "工具输入",
+      "tool_response": "工具输出",
+      "tool_use_id": "工具调用 ID",
+      "is_interrupt": "是否被中断",
+      "permission_suggestions": "权限建议",
+      "agent_transcript_path": "子 Agent 转录文件",
+      "teammate_name": "成员名称",
+      "team_name": "团队名称",
+      "task_id": "任务 ID",
+      "task_subject": "任务标题",
+      "task_description": "任务说明",
+      "custom_instructions": "压缩指令",
+      "compact_summary": "压缩摘要",
+      "mcp_server_name": "MCP Server 名称",
+      "elicitation_id": "MCP 询问 ID",
+      "requested_schema": "请求表单结构",
+      "file_path": "文件路径",
+      "memory_type": "指令类型",
+      "load_reason": "加载原因",
+      "globs": "路径匹配规则",
+      "trigger_file_path": "触发加载的文件",
+      "parent_file_path": "父级指令文件",
+      "old_cwd": "原工作目录",
+      "new_cwd": "新工作目录",
+      "event": "文件变化类型",
+      "worktree_path": "Worktree 路径"
     },
     "variables": {
       "userId": "当前用户 ID",
       "username": "当前用户名",
       "tenantId": "当前租户 ID",
+      "workspaceId": "当前工作空间 ID",
       "sessionId": "当前会话 ID",
       "projectId": "当前项目 ID"
     },
@@ -473,7 +530,18 @@
       "regexPlaceholder": "例如：^mcp__data_.*__query$",
       "invalidRegex": "正则表达式格式不正确",
       "optional": "留空表示全部匹配",
-      "notNeeded": "该触发位置不需要额外的匹配条件。"
+      "notNeeded": "该触发位置不需要额外的匹配条件。",
+      "nativePlaceholder": "例如 Bash|Read 或 mcp__database__.*；留空匹配全部",
+      "allEventCallbacks": "当前事件回调",
+      "unsupported": "该事件不支持 Matcher",
+      "unsupportedPlaceholder": "Claude Code 会在每次该事件发生时回调",
+      "fileNamesPlaceholder": "例如 .envrc|.env",
+      "detected": {
+        "all": "匹配全部",
+        "exact": "精确匹配",
+        "regex": "正则匹配",
+        "fileNames": "文件名列表"
+      }
     },
     "matcherFields": {
       "trigger": "触发方式",
@@ -485,7 +553,14 @@
       "agentType": "Agent 类型",
       "mcpServerName": "MCP Server 名称",
       "loadReason": "加载原因",
-      "fileName": "文件名称"
+      "fileName": "文件名称",
+      "command_name": "命令名称",
+      "notification_type": "通知类型",
+      "agent_type": "Agent 类型",
+      "mcp_server_name": "MCP Server 名称",
+      "load_reason": "加载原因",
+      "tool_name": "工具名称",
+      "file_path": "文件名称"
     },
     "script": {
       "enable": "启用高级脚本",
@@ -494,7 +569,11 @@
       "availableInputs": "脚本可用输入",
       "workspaceFiles": "当前用户工作空间文件（只读）",
       "returnFields": "返回字段",
-      "noOutputs": "使用 @output 声明返回字段。"
+      "noOutputs": "使用 @output 声明返回字段。",
+      "regenerate": "重新生成模板",
+      "callbackInputs": "Claude 回调参数",
+      "claudeOutputs": "可返回给 Claude Code",
+      "noClaudeOutputs": "该事件忽略返回值，仅执行记录、文件处理等副作用。"
     },
     "gate": {
       "add": "添加条件",
@@ -566,13 +645,34 @@
       "moveDown": "下移行为",
       "remove": "删除行为",
       "types": {
-        "record_data": { "label": "记录数据", "description": "选择需要保存的事件或处理结果。" },
-        "call_tool": { "label": "调用工具", "description": "直接调用已连接的 MCP 工具。" },
-        "append_context": { "label": "追加模型上下文", "description": "把文本和运行时变量添加到模型上下文。" },
-        "invoke_skill_recovery": { "label": "发起恢复回合", "description": "异常结束后启动新回合执行 Skill。" },
-        "decision": { "label": "流程决策", "description": "允许、阻止或要求当前流程继续。" },
-        "update_input": { "label": "修改输入", "description": "修改具体工具实际收到的输入字段。" },
-        "update_output": { "label": "修改输出", "description": "修改工具返回给模型的结果。" }
+        "record_data": {
+          "label": "记录数据",
+          "description": "选择需要保存的事件或处理结果。"
+        },
+        "call_tool": {
+          "label": "调用工具",
+          "description": "直接调用已连接的 MCP 工具。"
+        },
+        "append_context": {
+          "label": "追加模型上下文",
+          "description": "把文本和运行时变量添加到模型上下文。"
+        },
+        "invoke_skill_recovery": {
+          "label": "发起恢复回合",
+          "description": "异常结束后启动新回合执行 Skill。"
+        },
+        "decision": {
+          "label": "流程决策",
+          "description": "允许、阻止或要求当前流程继续。"
+        },
+        "update_input": {
+          "label": "修改输入",
+          "description": "修改具体工具实际收到的输入字段。"
+        },
+        "update_output": {
+          "label": "修改输出",
+          "description": "修改工具返回给模型的结果。"
+        }
       }
     },
     "eventGroups": {
@@ -585,34 +685,112 @@
       "workspace": "配置与工作区"
     },
     "events": {
-      "Setup": { "label": "初始化环境", "description": "Claude Code 初始化或维护环境时。" },
-      "SessionStart": { "label": "会话开始", "description": "新建、恢复或压缩后恢复会话时。" },
-      "Stop": { "label": "回答结束", "description": "模型准备结束本轮回答时。" },
-      "StopFailure": { "label": "回答异常结束", "description": "本轮因 API 或模型错误结束时。" },
-      "SessionEnd": { "label": "会话结束", "description": "会话退出、清空或注销时。" },
-      "UserPromptSubmit": { "label": "用户提交问题", "description": "问题正式交给模型前。" },
-      "UserPromptExpansion": { "label": "命令展开", "description": "Slash Command 或 MCP Prompt 展开时。" },
-      "Notification": { "label": "Claude Code 通知", "description": "Claude Code 产生通知时。" },
-      "PreToolUse": { "label": "工具执行前", "description": "Skill、MCP、Bash 等工具执行前。" },
-      "PostToolUse": { "label": "工具成功后", "description": "工具成功返回结果后。" },
-      "PostToolUseFailure": { "label": "工具失败后", "description": "工具抛错或返回失败后。" },
-      "PermissionRequest": { "label": "请求权限", "description": "工具需要用户确认权限时。" },
-      "PermissionDenied": { "label": "权限被拒绝", "description": "权限策略拒绝工具时。" },
-      "SubagentStart": { "label": "子 Agent 开始", "description": "子 Agent 启动时。" },
-      "SubagentStop": { "label": "子 Agent 结束", "description": "子 Agent 准备完成时。" },
-      "TeammateIdle": { "label": "团队成员空闲", "description": "Agent Team 成员准备空闲时。" },
-      "TaskCreated": { "label": "任务创建", "description": "Claude 创建任务时。" },
-      "TaskCompleted": { "label": "任务完成", "description": "Claude 准备完成任务时。" },
+      "Setup": {
+        "label": "初始化环境",
+        "description": "Claude Code 初始化或维护环境时。"
+      },
+      "SessionStart": {
+        "label": "会话开始",
+        "description": "新建、恢复或压缩后恢复会话时。"
+      },
+      "Stop": {
+        "label": "回答结束",
+        "description": "模型准备结束本轮回答时。"
+      },
+      "StopFailure": {
+        "label": "回答异常结束",
+        "description": "本轮因 API 或模型错误结束时。"
+      },
+      "SessionEnd": {
+        "label": "会话结束",
+        "description": "会话退出、清空或注销时。"
+      },
+      "UserPromptSubmit": {
+        "label": "用户提交问题",
+        "description": "问题正式交给模型前。"
+      },
+      "UserPromptExpansion": {
+        "label": "命令展开",
+        "description": "Slash Command 或 MCP Prompt 展开时。"
+      },
+      "Notification": {
+        "label": "Claude Code 通知",
+        "description": "Claude Code 产生通知时。"
+      },
+      "PreToolUse": {
+        "label": "工具执行前",
+        "description": "Skill、MCP、Bash 等工具执行前。"
+      },
+      "PostToolUse": {
+        "label": "工具成功后",
+        "description": "工具成功返回结果后。"
+      },
+      "PostToolUseFailure": {
+        "label": "工具失败后",
+        "description": "工具抛错或返回失败后。"
+      },
+      "PermissionRequest": {
+        "label": "请求权限",
+        "description": "工具需要用户确认权限时。"
+      },
+      "PermissionDenied": {
+        "label": "权限被拒绝",
+        "description": "权限策略拒绝工具时。"
+      },
+      "SubagentStart": {
+        "label": "子 Agent 开始",
+        "description": "子 Agent 启动时。"
+      },
+      "SubagentStop": {
+        "label": "子 Agent 结束",
+        "description": "子 Agent 准备完成时。"
+      },
+      "TeammateIdle": {
+        "label": "团队成员空闲",
+        "description": "Agent Team 成员准备空闲时。"
+      },
+      "TaskCreated": {
+        "label": "任务创建",
+        "description": "Claude 创建任务时。"
+      },
+      "TaskCompleted": {
+        "label": "任务完成",
+        "description": "Claude 准备完成任务时。"
+      },
       "PreCompact": { "label": "压缩前", "description": "上下文压缩开始前。" },
       "PostCompact": { "label": "压缩后", "description": "上下文摘要生成后。" },
-      "Elicitation": { "label": "MCP 发起询问", "description": "MCP Server 请求用户提供信息时。" },
-      "ElicitationResult": { "label": "MCP 询问结果", "description": "用户回答发送回 MCP 前。" },
-      "ConfigChange": { "label": "配置变化", "description": "Claude、项目、用户或 Skill 配置变化时。" },
-      "InstructionsLoaded": { "label": "指令加载", "description": "CLAUDE.md 等指令文件加载时。" },
-      "CwdChanged": { "label": "工作目录变化", "description": "Claude 切换工作目录时。" },
-      "FileChanged": { "label": "监听文件变化", "description": "被监听文件新增、修改或删除时。" },
-      "WorktreeCreate": { "label": "Worktree 创建", "description": "创建隔离 Worktree 时。" },
-      "WorktreeRemove": { "label": "Worktree 删除", "description": "移除隔离 Worktree 时。" }
+      "Elicitation": {
+        "label": "MCP 发起询问",
+        "description": "MCP Server 请求用户提供信息时。"
+      },
+      "ElicitationResult": {
+        "label": "MCP 询问结果",
+        "description": "用户回答发送回 MCP 前。"
+      },
+      "ConfigChange": {
+        "label": "配置变化",
+        "description": "Claude、项目、用户或 Skill 配置变化时。"
+      },
+      "InstructionsLoaded": {
+        "label": "指令加载",
+        "description": "CLAUDE.md 等指令文件加载时。"
+      },
+      "CwdChanged": {
+        "label": "工作目录变化",
+        "description": "Claude 切换工作目录时。"
+      },
+      "FileChanged": {
+        "label": "监听文件变化",
+        "description": "被监听文件新增、修改或删除时。"
+      },
+      "WorktreeCreate": {
+        "label": "Worktree 创建",
+        "description": "创建隔离 Worktree 时。"
+      },
+      "WorktreeRemove": {
+        "label": "Worktree 删除",
+        "description": "移除隔离 Worktree 时。"
+      }
     },
     "errors": {
       "load": "加载 Hook 配置失败",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -20,6 +20,9 @@ type HookSelectProps = {
   disabled?: boolean;
   className?: string;
   menuClassName?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
 };
 
 export default function HookSelect({
@@ -31,8 +34,17 @@ export default function HookSelect({
   disabled = false,
   className,
   menuClassName,
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false,
 }: HookSelectProps) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(open) : next;
+    if (controlledOpen === undefined) setInternalOpen(resolved);
+    onOpenChange?.(resolved);
+  }, [controlledOpen, onOpenChange, open]);
   const [search, setSearch] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value);
@@ -61,7 +73,7 @@ export default function HookSelect({
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open]);
+  }, [open, setOpen]);
 
   useEffect(() => {
     if (!open) setSearch('');
@@ -76,24 +88,26 @@ export default function HookSelect({
 
   return (
     <div ref={rootRef} className={cn('relative', className)}>
-      <button
-        type="button"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        className={cn(
-          'flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-input bg-background px-3 text-left text-sm text-foreground shadow-sm outline-none transition',
-          'hover:border-primary/40 focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10',
-          disabled && 'cursor-not-allowed opacity-50',
-        )}
-      >
-        <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}>
-          {selected?.label || placeholder}
-        </span>
-        <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
-      </button>
+      {!hideTrigger ? (
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+          className={cn(
+            'flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-input bg-background px-3 text-left text-sm text-foreground shadow-sm outline-none transition',
+            'hover:border-primary/40 focus-visible:border-primary focus-visible:ring-4 focus-visible:ring-primary/10',
+            disabled && 'cursor-not-allowed opacity-50',
+          )}
+        >
+          <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}>
+            {selected?.label || placeholder}
+          </span>
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        </button>
+      ) : null}
 
       {open ? (
         <div className={cn(

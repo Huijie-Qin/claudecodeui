@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  EVENT_DEFINITIONS,
   buildFieldChoices,
+  buildReferenceChoices,
   buildScriptTemplate,
-  inferScriptOutputs,
-  isConcreteToolMatcher,
+  getClaudeOutputFields,
+  inferNativeMatcherMode,
 } from './catalog';
 import type { HookConfigDraft, HookResources } from './types';
 
@@ -14,45 +16,101 @@ const resources: HookResources = {
   builtinTools: [],
   mcpTools: [],
   skills: [],
-  environmentVariables: [],
+  environmentVariables: [{ path: 'ccui.env.userId', type: 'number' }],
 };
 
-test('script template documents read-only workspace access without predeclaring an output', () => {
+const draft: HookConfigDraft = {
+  name: 'SQL 分析',
+  description: '',
+  eventName: 'PreToolUse',
+  matcher: { mode: 'regex', value: '^mcp__database__.*$' },
+  extensionLogic: null,
+  postActions: [],
+  claudeResponse: { bindings: {} },
+};
+
+test('JavaScript template exposes event inputs and returns declared internal outputs', () => {
+  const inputs = buildFieldChoices(draft, resources);
   const template = buildScriptTemplate({
-    eventName: 'Stop',
-    eventLabel: '回答结束',
-    eventDescription: '模型准备结束回答时',
-    inputs: [],
+    eventName: 'PreToolUse',
+    eventLabel: '工具执行前',
+    eventDescription: '工具执行之前触发',
+    inputs: inputs.map((field) => ({
+      path: field.path,
+      label: field.path,
+      type: field.type,
+    })),
+    outputs: [{ name: 'riskLevel', type: 'string', description: '分析得到的风险等级' }],
+    language: 'javascript',
   });
 
-  assert.match(template, /workspace\.readText\('src\/index\.ts'\)/);
-  assert.match(template, /@output-example sqlLineCount:number/);
-  assert.deepEqual(inferScriptOutputs(template), []);
+  assert.match(template, /export async function run\(event, ccui\)/);
+  assert.match(template, /event\.tool_input/);
+  assert.match(template, /event\.session_id/);
+  assert.match(template, /ccui\.workspace\.writeText/);
+  assert.match(template, /output:/);
+  assert.match(template, /riskLevel/);
+  assert.match(template, /不会自动发送给 Claude/);
+  assert.doesNotMatch(template, /hookSpecificOutput/);
+  assert.ok(!inputs.some((field) => field.path === 'ccui.env.userId'));
 });
 
-test('@output declarations become fields available to execution gates and basic actions', () => {
-  const code = `/**\n * @output sqlLineCount:number SQL 有效行数\n */`;
-  const outputs = inferScriptOutputs(code);
-  const draft: HookConfigDraft = {
-    name: 'SQL 分析',
-    description: '',
-    eventName: 'Stop',
-    matcher: {},
-    gate: { mode: 'all', conditions: [] },
-    advancedScript: { enabled: true, language: 'javascript', code, outputs },
-    actions: [],
-  };
+test('Python template uses the same event, CCUI, and internal output contract', () => {
+  const template = buildScriptTemplate({
+    eventName: 'UserPromptSubmit',
+    eventLabel: '用户提交问题',
+    eventDescription: '问题发送给模型之前触发',
+    inputs: [{ path: 'event.prompt', label: '用户问题', type: 'string' }],
+    outputs: [{ name: 'summary', type: 'string', description: '处理摘要' }],
+    language: 'python',
+  });
 
-  assert.deepEqual(outputs, [{ name: 'sqlLineCount', type: 'number', description: 'SQL 有效行数' }]);
-  assert.ok(buildFieldChoices(draft, resources).some((field) => (
-    field.path === '$script.output.sqlLineCount'
-    && field.type === 'number'
-    && field.group === 'script'
-  )));
+  assert.match(template, /async def run\(event, ccui\):/);
+  assert.match(template, /event\.prompt/);
+  assert.match(template, /ccui\.records\.write/);
+  assert.match(template, /"output"/);
+  assert.match(template, /summary/);
+  assert.match(template, /ccui\.workspace\.read_text/);
 });
 
-test('only an exact concrete tool matcher exposes schema-dependent input editing', () => {
-  assert.equal(isConcreteToolMatcher('Bash', 'exact'), true);
-  assert.equal(isConcreteToolMatcher('Bash|Write', 'regex'), false);
-  assert.equal(isConcreteToolMatcher('*', 'exact'), false);
+test('reference choices include environment, script, and action outputs', () => {
+  const choices = buildReferenceChoices({
+    ...draft,
+    extensionLogic: {
+      language: 'javascript',
+      code: 'return { output: { riskLevel: "high" } };',
+      outputs: [{ name: 'riskLevel', type: 'string', description: '风险等级' }],
+    },
+    postActions: [{ id: 'mcp-1', type: 'call_mcp_tool', position: 0, config: {} }],
+  }, resources);
+  const paths = choices.map((field) => field.path);
+  assert.ok(paths.includes('event.tool_name'));
+  assert.ok(paths.includes('ccui.env.userId'));
+  assert.ok(paths.includes('script.output.riskLevel'));
+  assert.ok(paths.includes('actions.mcp-1.output'));
+});
+
+test('native matcher mode is inferred from the text sent to Claude Code', () => {
+  assert.equal(inferNativeMatcherMode('PreToolUse', ''), 'all');
+  assert.equal(inferNativeMatcherMode('PreToolUse', 'mcp__database__execute_sql'), 'exact');
+  assert.equal(inferNativeMatcherMode('PreToolUse', '^mcp__database__.*$'), 'regex');
+  assert.equal(inferNativeMatcherMode('PreToolUse', 'Read|Write'), 'exact');
+  assert.equal(inferNativeMatcherMode('FileChanged', '.envrc|.env'), 'exact');
+});
+
+test('Claude output fields are constrained by the selected event', () => {
+  const preToolFields = getClaudeOutputFields('PreToolUse').map((field) => field.path);
+  const stopFields = getClaudeOutputFields('Stop').map((field) => field.path);
+  assert.ok(preToolFields.includes('hookSpecificOutput.updatedInput'));
+  assert.ok(!stopFields.includes('hookSpecificOutput.updatedInput'));
+  assert.ok(stopFields.includes('continue'));
+  assert.ok(stopFields.includes('decision'));
+  assert.deepEqual(getClaudeOutputFields('StopFailure'), []);
+});
+
+test('each SDK event template exposes every callback field once', () => {
+  for (const event of EVENT_DEFINITIONS) {
+    const keys = event.fields.map((field) => field.key);
+    assert.equal(new Set(keys).size, keys.length, `${event.name} contains duplicate callback fields`);
+  }
 });

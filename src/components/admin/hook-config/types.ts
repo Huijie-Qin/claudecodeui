@@ -37,41 +37,7 @@ export type HookMatcher = {
   value?: string;
 };
 
-export type HookActionType =
-  | 'record_data'
-  | 'call_tool'
-  | 'append_context'
-  | 'invoke_skill_recovery'
-  | 'decision'
-  | 'update_input'
-  | 'update_output';
-
-export type HookConditionOperator =
-  | 'equals'
-  | 'not_equals'
-  | 'contains'
-  | 'not_contains'
-  | 'starts_with'
-  | 'ends_with'
-  | 'matches_regex'
-  | 'greater_than'
-  | 'less_than'
-  | 'is_true'
-  | 'is_false'
-  | 'is_empty'
-  | 'is_not_empty';
-
-export type HookCondition = {
-  id: string;
-  field: string;
-  operator: HookConditionOperator;
-  value?: string | number | boolean;
-};
-
-export type HookGate = {
-  mode: 'all' | 'any';
-  conditions: HookCondition[];
-};
+export type HookScriptLanguage = 'javascript' | 'python';
 
 export type HookScriptOutput = {
   name: string;
@@ -79,18 +45,35 @@ export type HookScriptOutput = {
   description: string;
 };
 
-export type HookAdvancedScript = {
-  enabled: true;
-  language: 'javascript';
+export type HookExtensionLogic = {
+  language: HookScriptLanguage;
   code: string;
   outputs: HookScriptOutput[];
 };
 
-export type HookAction = {
+export type HookValueBinding =
+  | {
+    source: 'literal';
+    value: unknown;
+  }
+  | {
+    source: 'reference';
+    path: string;
+  }
+  | {
+    source: 'template';
+    template: string;
+  };
+
+export type HookPostAction = {
   id: string;
-  type: HookActionType;
-  position?: number;
+  type: 'call_mcp_tool' | 'invoke_skill';
+  position: number;
   config: Record<string, unknown>;
+};
+
+export type HookClaudeResponse = {
+  bindings: Record<string, HookValueBinding>;
 };
 
 export type HookConfigDraft = {
@@ -98,9 +81,9 @@ export type HookConfigDraft = {
   description: string;
   eventName: HookEventName;
   matcher: HookMatcher;
-  gate: HookGate;
-  advancedScript: HookAdvancedScript | null;
-  actions: HookAction[];
+  extensionLogic: HookExtensionLogic | null;
+  postActions: HookPostAction[];
+  claudeResponse: HookClaudeResponse;
 };
 
 export type HookConfig = HookConfigDraft & {
@@ -114,7 +97,6 @@ export type HookConfig = HookConfigDraft & {
   publishedAt: string | null;
   activationScope: 'manual' | 'all_users';
   boundUserCount: number;
-  actionCount?: number;
 };
 
 export type JsonSchemaProperty = {
@@ -173,7 +155,6 @@ export type FieldChoice = {
   description?: string;
   type: FieldType;
   options?: Array<{ value: string; label: string }>;
-  gateAllowed?: boolean;
   group: 'event' | 'environment' | 'script' | 'action';
 };
 
@@ -181,9 +162,16 @@ export type HookEventDefinition = {
   name: HookEventName;
   group: string;
   matcherField?: string;
+  matcherKind?: 'standard' | 'fileNames';
   fields: Array<{
     key: string;
     type: FieldType;
     options?: string[];
   }>;
+};
+
+export type HookOutputField = {
+  path: string;
+  type: FieldType;
+  description: string;
 };

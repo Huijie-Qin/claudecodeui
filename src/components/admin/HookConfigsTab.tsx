@@ -62,6 +62,19 @@ function statusVariant(status: HookConfig['status']) {
   return status === 'disabled' ? 'outline' as const : 'secondary' as const;
 }
 
+function normalizeHookConfig(hook: HookConfig): HookConfig {
+  return {
+    ...hook,
+    extensionLogic: hook.extensionLogic
+      ? { ...hook.extensionLogic, outputs: hook.extensionLogic.outputs || [] }
+      : null,
+    postActions: Array.isArray(hook.postActions) ? hook.postActions : [],
+    claudeResponse: hook.claudeResponse?.bindings
+      ? hook.claudeResponse
+      : { bindings: {} },
+  };
+}
+
 function MoreEventsDialog({
   open,
   selectedEvents,
@@ -179,7 +192,7 @@ export default function HookConfigsTab() {
       const nextVisibleEvents: HookEventName[] = settingsPayload.visibleEvents?.length
         ? settingsPayload.visibleEvents
         : ['Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse'];
-      setHooks(hooksPayload.hooks || []);
+      setHooks((hooksPayload.hooks || []).map(normalizeHookConfig));
       setVisibleEvents(nextVisibleEvents);
       setVisibleEventDraft(nextVisibleEvents);
       setResources(resourcesPayload);
@@ -205,11 +218,12 @@ export default function HookConfigsTab() {
   }, [hooks, search, t]);
 
   const replaceHook = (hook: HookConfig) => {
+    const normalizedHook = normalizeHookConfig(hook);
     setHooks((current) => {
-      const exists = current.some((item) => item.id === hook.id);
+      const exists = current.some((item) => item.id === normalizedHook.id);
       return exists
-        ? current.map((item) => item.id === hook.id ? hook : item)
-        : [hook, ...current];
+        ? current.map((item) => item.id === normalizedHook.id ? normalizedHook : item)
+        : [normalizedHook, ...current];
     });
   };
 
@@ -220,9 +234,10 @@ export default function HookConfigsTab() {
       : await api.admin.createHook(editor);
     if (!response.ok) throw new Error(await readError(response, t('hooks.errors.save')));
     const payload = await response.json() as { hook: HookConfig };
-    replaceHook(payload.hook);
-    setEditor(payload.hook);
-    return payload.hook;
+    const normalizedHook = normalizeHookConfig(payload.hook);
+    replaceHook(normalizedHook);
+    setEditor(normalizedHook);
+    return normalizedHook;
   };
 
   const save = async () => {
@@ -247,8 +262,9 @@ export default function HookConfigsTab() {
       const response = await api.admin.publishHook(saved.id);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.publish')));
       const payload = await response.json() as { hook: HookConfig };
-      replaceHook(payload.hook);
-      setEditor(payload.hook);
+      const normalizedHook = normalizeHookConfig(payload.hook);
+      replaceHook(normalizedHook);
+      setEditor(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
@@ -268,8 +284,9 @@ export default function HookConfigsTab() {
       const errorKey = enabled ? 'hooks.errors.start' : 'hooks.errors.stop';
       if (!response.ok) throw new Error(await readError(response, t(errorKey)));
       const payload = await response.json() as { hook: HookConfig };
-      replaceHook(payload.hook);
-      if (editor && 'id' in editor && editor.id === payload.hook.id) setEditor(payload.hook);
+      const normalizedHook = normalizeHookConfig(payload.hook);
+      replaceHook(normalizedHook);
+      if (editor && 'id' in editor && editor.id === normalizedHook.id) setEditor(normalizedHook);
       showToast(t(enabled ? 'hooks.toast.started' : 'hooks.toast.stopped'), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error
@@ -286,7 +303,7 @@ export default function HookConfigsTab() {
       const response = await api.admin.publishHook(hook.id);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.publish')));
       const payload = await response.json() as { hook: HookConfig };
-      replaceHook(payload.hook);
+      replaceHook(normalizeHookConfig(payload.hook));
       showToast(t('hooks.toast.published'), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
@@ -479,7 +496,11 @@ export default function HookConfigsTab() {
 
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
-                    <span>{t('hooks.actionCount', { count: hook.actionCount ?? hook.actions.length })}</span>
+                    <span>
+                      {hook.extensionLogic
+                        ? hook.extensionLogic.language === 'python' ? 'Python' : 'JavaScript'
+                        : t('hooks.noScript', { count: hook.postActions.length })}
+                    </span>
                     {hook.activationScope === 'manual' && hook.boundUserCount > 0
                       ? <span>{t('hooks.boundUserCount', { count: hook.boundUserCount })}</span>
                       : null}

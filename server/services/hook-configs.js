@@ -33,81 +33,91 @@ const HOOK_EVENTS = Object.freeze([
   'WorktreeRemove',
 ]);
 
-const DEFAULT_VISIBLE_EVENTS = Object.freeze([
-  'Stop',
-  'UserPromptSubmit',
-  'PreToolUse',
-  'PostToolUse',
-]);
+const DEFAULT_VISIBLE_EVENTS = Object.freeze(['Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse']);
 
 const EVENT_SET = new Set(HOOK_EVENTS);
-const ACTION_TYPES = new Set([
-  'record_data',
-  'call_tool',
-  'append_context',
-  'invoke_skill_recovery',
-  'decision',
-  'update_input',
-  'update_output',
-]);
-const CONDITION_OPERATORS = new Set([
-  'equals',
-  'not_equals',
-  'contains',
-  'not_contains',
-  'starts_with',
-  'ends_with',
-  'matches_regex',
-  'greater_than',
-  'less_than',
-  'is_true',
-  'is_false',
-  'is_empty',
-  'is_not_empty',
-]);
-const GATE_EXCLUDED_FIELDS = new Set([
-  '$context.sessionId',
-  '$context.transcriptPath',
-  '$context.cwd',
-  '$context.userId',
-  '$context.tenantId',
-  '$context.projectId',
-]);
-const APPEND_CONTEXT_EVENTS = new Set([
+const MATCHER_EVENTS = new Set([
   'Setup',
   'SessionStart',
-  'UserPromptSubmit',
+  'StopFailure',
+  'SessionEnd',
   'UserPromptExpansion',
   'Notification',
   'PreToolUse',
   'PostToolUse',
   'PostToolUseFailure',
+  'PermissionRequest',
+  'PermissionDenied',
   'SubagentStart',
+  'SubagentStop',
+  'PreCompact',
+  'PostCompact',
+  'Elicitation',
+  'ElicitationResult',
+  'ConfigChange',
+  'InstructionsLoaded',
+  'FileChanged',
+]);
+const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
+const MAX_SCRIPT_BYTES = 128 * 1024;
+const MAX_POST_ACTIONS = 20;
+const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'invoke_skill']);
+const SKILL_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
+const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
+const ENVIRONMENT_VARIABLE_PATHS = new Set([
+  'ccui.env.userId',
+  'ccui.env.username',
+  'ccui.env.tenantId',
+  'ccui.env.workspaceId',
+  'ccui.env.sessionId',
+]);
+const COMMON_CLAUDE_OUTPUTS = Object.freeze([
+  'continue',
+  'stopReason',
+  'suppressOutput',
+  'systemMessage',
 ]);
 const DECISION_EVENTS = new Set([
   'UserPromptSubmit',
   'UserPromptExpansion',
-  'PreToolUse',
-  'PermissionRequest',
-  'PermissionDenied',
-  'Stop',
-  'SubagentStop',
-  'TeammateIdle',
-  'TaskCreated',
-  'TaskCompleted',
-  'ConfigChange',
-]);
-const TOOL_MATCHER_EVENTS = new Set([
-  'PreToolUse',
   'PostToolUse',
   'PostToolUseFailure',
-  'PermissionRequest',
-  'PermissionDenied',
+  'Stop',
+  'SubagentStop',
+  'ConfigChange',
+  'PreCompact',
 ]);
-const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
-const MAX_ACTIONS = 20;
-const MAX_CONDITIONS = 20;
-const MAX_SCRIPT_BYTES = 128 * 1024;
+const EVENT_CLAUDE_OUTPUTS = Object.freeze({
+  Setup: ['hookSpecificOutput.additionalContext'],
+  SessionStart: [
+    'hookSpecificOutput.additionalContext',
+    'hookSpecificOutput.initialUserMessage',
+    'hookSpecificOutput.watchPaths',
+  ],
+  UserPromptSubmit: ['hookSpecificOutput.additionalContext', 'hookSpecificOutput.sessionTitle'],
+  UserPromptExpansion: ['hookSpecificOutput.additionalContext'],
+  Notification: ['hookSpecificOutput.additionalContext'],
+  PreToolUse: [
+    'hookSpecificOutput.permissionDecision',
+    'hookSpecificOutput.permissionDecisionReason',
+    'hookSpecificOutput.updatedInput',
+    'hookSpecificOutput.additionalContext',
+  ],
+  PostToolUse: ['hookSpecificOutput.additionalContext', 'hookSpecificOutput.updatedMCPToolOutput'],
+  PostToolUseFailure: ['hookSpecificOutput.additionalContext'],
+  PermissionRequest: ['hookSpecificOutput.decision'],
+  PermissionDenied: ['hookSpecificOutput.retry'],
+  SubagentStart: ['hookSpecificOutput.additionalContext'],
+  Elicitation: ['hookSpecificOutput.action', 'hookSpecificOutput.content'],
+  ElicitationResult: ['hookSpecificOutput.action', 'hookSpecificOutput.content'],
+  CwdChanged: ['hookSpecificOutput.watchPaths'],
+  FileChanged: ['hookSpecificOutput.watchPaths'],
+  WorktreeCreate: ['hookSpecificOutput.worktreePath'],
+});
+
+function allowedPostActions(eventName) {
+  return new Set(SKILL_ACTION_EVENTS.has(eventName) ? POST_ACTION_TYPES : ['call_mcp_tool']);
+}
 
 function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
@@ -150,13 +160,16 @@ function normalizeEventName(value) {
   return eventName;
 }
 
-function normalizeMatcher(value) {
+function normalizeMatcher(value, eventName) {
+  if (!MATCHER_EVENTS.has(eventName)) return {};
   const source = isPlainObject(value) ? value : {};
-  const mode = source.mode === 'regex' ? 'regex' : 'exact';
   const matcherValue = typeof source.value === 'string' ? source.value.trim() : '';
+  if (!matcherValue || matcherValue === '*') return {};
   if (matcherValue.length > 240) {
     throw createHttpError('matcher.value must be 240 characters or fewer');
   }
+  const exactPattern = eventName === 'StopFailure' ? /^[A-Za-z0-9_|]+$/ : /^[A-Za-z0-9_,| -]+$/;
+  const mode = eventName === 'FileChanged' || exactPattern.test(matcherValue) ? 'exact' : 'regex';
   if (mode === 'regex' && matcherValue) {
     try {
       new RegExp(matcherValue);
@@ -164,249 +177,259 @@ function normalizeMatcher(value) {
       throw createHttpError('matcher.value is not a valid regular expression');
     }
   }
-  return matcherValue ? { mode, value: matcherValue } : {};
+  return { mode, value: matcherValue };
 }
 
-function normalizeCondition(condition, index) {
-  if (!isPlainObject(condition)) {
-    throw createHttpError(`gate.conditions[${index}] must be an object`);
-  }
-  const field = requireString(condition.field, `gate.conditions[${index}].field`, { max: 180 });
-  if (GATE_EXCLUDED_FIELDS.has(field)) {
-    throw createHttpError(`${field} cannot be used as an execution gate`);
-  }
-  const operator = String(condition.operator || '');
-  if (!CONDITION_OPERATORS.has(operator)) {
-    throw createHttpError(`gate.conditions[${index}].operator is not supported`);
-  }
-  const normalized = {
-    id: typeof condition.id === 'string' && condition.id.trim()
-      ? condition.id.trim().slice(0, 80)
-      : crypto.randomUUID(),
-    field,
-    operator,
-  };
-  if (!['is_true', 'is_false', 'is_empty', 'is_not_empty'].includes(operator)) {
-    const value = condition.value;
-    if (!['string', 'number', 'boolean'].includes(typeof value)) {
-      throw createHttpError(`gate.conditions[${index}].value is required`);
-    }
-    normalized.value = value;
-    if (operator === 'matches_regex') {
-      try {
-        new RegExp(String(value));
-      } catch {
-        throw createHttpError(`gate.conditions[${index}].value is not a valid regular expression`);
-      }
-    }
-  }
-  return normalized;
-}
-
-function normalizeGate(value) {
-  const source = isPlainObject(value) ? value : {};
-  const mode = source.mode === 'any' ? 'any' : 'all';
-  const conditions = Array.isArray(source.conditions) ? source.conditions : [];
-  if (conditions.length > MAX_CONDITIONS) {
-    throw createHttpError(`A Hook can contain at most ${MAX_CONDITIONS} execution conditions`);
-  }
-  return {
-    mode,
-    conditions: conditions.map(normalizeCondition),
-  };
-}
-
-function normalizeScriptOutput(output, index) {
-  if (!isPlainObject(output)) {
-    throw createHttpError(`advancedScript.outputs[${index}] must be an object`);
-  }
-  const name = requireString(output.name, `advancedScript.outputs[${index}].name`, { max: 80 });
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
-    throw createHttpError(`advancedScript.outputs[${index}].name is invalid`);
-  }
-  const type = ['string', 'number', 'boolean', 'object', 'array'].includes(output.type)
-    ? output.type
-    : 'string';
-  return {
-    name,
-    type,
-    description: requireString(
-      typeof output.description === 'string' ? output.description : '',
-      `advancedScript.outputs[${index}].description`,
-      { max: 240, allowEmpty: true },
-    ),
-  };
-}
-
-function normalizeAdvancedScript(value) {
-  if (!isPlainObject(value) || value.enabled !== true) return null;
+function normalizeExtensionLogic(value) {
+  if (!isPlainObject(value)) return null;
   const code = typeof value.code === 'string' ? value.code : '';
   if (Buffer.byteLength(code, 'utf8') > MAX_SCRIPT_BYTES) {
-    throw createHttpError('advancedScript.code is too large');
+    throw createHttpError('extensionLogic.code is too large');
   }
-  const outputs = Array.isArray(value.outputs) ? value.outputs : [];
-  if (outputs.length > 50) {
-    throw createHttpError('advancedScript.outputs can contain at most 50 fields');
+  const rawOutputs = Array.isArray(value.outputs) ? value.outputs : [];
+  if (rawOutputs.length > 50) {
+    throw createHttpError('extensionLogic.outputs must contain 50 items or fewer');
   }
-  const seen = new Set();
+  const names = new Set();
+  const outputs = rawOutputs.map((output, index) => {
+    if (!isPlainObject(output)) {
+      throw createHttpError(`extensionLogic.outputs[${index}] must be an object`);
+    }
+    const name = requireString(output.name, `extensionLogic.outputs[${index}].name`, { max: 80 });
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+      throw createHttpError(`extensionLogic.outputs[${index}].name must be a valid identifier`);
+    }
+    if (names.has(name)) {
+      throw createHttpError(`extensionLogic output ${name} is duplicated`);
+    }
+    names.add(name);
+    const type = String(output.type || 'string');
+    if (!SCRIPT_OUTPUT_TYPES.has(type)) {
+      throw createHttpError(`extensionLogic.outputs[${index}].type is not supported`);
+    }
+    return {
+      name,
+      type,
+      description: requireString(
+        typeof output.description === 'string' ? output.description : '',
+        `extensionLogic.outputs[${index}].description`,
+        { max: 300, allowEmpty: true },
+      ),
+    };
+  });
   return {
-    enabled: true,
-    language: 'javascript',
+    language: value.language === 'python' ? 'python' : 'javascript',
     code,
-    outputs: outputs.map(normalizeScriptOutput).filter((output) => {
-      if (seen.has(output.name)) return false;
-      seen.add(output.name);
-      return true;
-    }),
+    outputs,
   };
 }
 
-function normalizeActionConfig(config, index) {
-  const normalized = isPlainObject(config) ? structuredClone(config) : {};
-  const serialized = JSON.stringify(normalized);
-  if (Buffer.byteLength(serialized, 'utf8') > 256 * 1024) {
-    throw createHttpError(`actions[${index}].config is too large`);
+function normalizeBinding(value, name) {
+  if (!isPlainObject(value)) throw createHttpError(`${name} must be an object`);
+  if (value.source === 'reference') {
+    return {
+      source: 'reference',
+      path: requireString(value.path, `${name}.path`, { max: 300 }),
+    };
   }
-  return normalized;
+  if (value.source === 'template') {
+    return {
+      source: 'template',
+      template: requireString(
+        typeof value.template === 'string' ? value.template : '',
+        `${name}.template`,
+        { max: 20000, allowEmpty: true },
+      ),
+    };
+  }
+  if (value.source !== 'literal') {
+    throw createHttpError(`${name}.source must be literal, reference, or template`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, 'value')) {
+    throw createHttpError(`${name}.value is required`);
+  }
+  return { source: 'literal', value: value.value };
 }
 
-function normalizeActions(value) {
-  const actions = Array.isArray(value) ? value : [];
-  if (actions.length > MAX_ACTIONS) {
-    throw createHttpError(`A Hook can contain at most ${MAX_ACTIONS} actions`);
+function normalizePostActions(value, eventName) {
+  const rawActions = value == null ? [] : value;
+  if (!Array.isArray(rawActions)) throw createHttpError('postActions must be an array');
+  if (rawActions.length > MAX_POST_ACTIONS) {
+    throw createHttpError(`postActions must contain ${MAX_POST_ACTIONS} items or fewer`);
   }
-  const seen = new Set();
-  return actions.map((action, index) => {
-    if (!isPlainObject(action)) {
-      throw createHttpError(`actions[${index}] must be an object`);
+  const ids = new Set();
+  return rawActions.map((action, index) => {
+    if (!isPlainObject(action)) throw createHttpError(`postActions[${index}] must be an object`);
+    const id = requireString(action.id, `postActions[${index}].id`, { max: 100 });
+    if (ids.has(id)) throw createHttpError(`post action ${id} is duplicated`);
+    ids.add(id);
+    const config = isPlainObject(action.config) ? action.config : {};
+    if (!allowedPostActions(eventName).has(action.type)) {
+      if (action.type === 'invoke_skill') {
+        throw createHttpError('invoke_skill is only supported for Stop and StopFailure');
+      }
+      throw createHttpError(`postActions[${index}].type is not supported`);
     }
-    const type = String(action.type || '');
-    if (!ACTION_TYPES.has(type)) {
-      throw createHttpError(`actions[${index}].type is not supported`);
+    if (action.type === 'call_mcp_tool') {
+      const rawInputs = isPlainObject(config.inputs) ? config.inputs : {};
+      const inputs = {};
+      for (const [key, binding] of Object.entries(rawInputs)) {
+        const inputName = requireString(key, `postActions[${index}].config.inputs key`, { max: 200 });
+        inputs[inputName] = normalizeBinding(binding, `postActions[${index}].config.inputs.${inputName}`);
+      }
+      return {
+        id,
+        type: 'call_mcp_tool',
+        position: index,
+        config: {
+          toolName: requireString(
+            typeof config.toolName === 'string' ? config.toolName : '',
+            `postActions[${index}].config.toolName`,
+            { max: 300, allowEmpty: true },
+          ),
+          inputs,
+        },
+      };
     }
-    let id = typeof action.id === 'string' && action.id.trim()
-      ? action.id.trim().slice(0, 100)
-      : crypto.randomUUID();
-    if (seen.has(id)) id = crypto.randomUUID();
-    seen.add(id);
-    return {
-      id,
-      type,
-      position: index,
-      config: normalizeActionConfig(action.config, index),
-    };
+    if (action.type === 'invoke_skill') {
+      const maxTurns = Number(config.maxTurns ?? 3);
+      if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 5) {
+        throw createHttpError(`postActions[${index}].config.maxTurns must be an integer from 1 to 5`);
+      }
+      return {
+        id,
+        type: 'invoke_skill',
+        position: index,
+        config: {
+          skillName: requireString(
+            typeof config.skillName === 'string' ? config.skillName : '',
+            `postActions[${index}].config.skillName`,
+            { max: 120, allowEmpty: true },
+          ),
+          argumentsTemplate: requireString(
+            typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '',
+            `postActions[${index}].config.argumentsTemplate`,
+            { max: 10000, allowEmpty: true },
+          ),
+          maxTurns,
+        },
+      };
+    }
+    throw createHttpError(`postActions[${index}].type is not supported`);
   });
 }
 
-function allowedActionTypes(eventName, matcher) {
-  const allowed = new Set(['record_data', 'call_tool']);
-  if (APPEND_CONTEXT_EVENTS.has(eventName)) allowed.add('append_context');
-  if (DECISION_EVENTS.has(eventName)) allowed.add('decision');
-  if (eventName === 'StopFailure') allowed.add('invoke_skill_recovery');
-  if (eventName === 'PreToolUse' && isConcreteToolMatcher(matcher)) allowed.add('update_input');
-  if (eventName === 'PostToolUse') allowed.add('update_output');
-  return allowed;
+function normalizeClaudeResponse(value) {
+  const source = isPlainObject(value) ? value : {};
+  const rawBindings = isPlainObject(source.bindings) ? source.bindings : {};
+  if (Object.keys(rawBindings).length > 50) {
+    throw createHttpError('claudeResponse.bindings must contain 50 items or fewer');
+  }
+  const bindings = {};
+  for (const [path, binding] of Object.entries(rawBindings)) {
+    const outputPath = requireString(path, 'claudeResponse.bindings key', { max: 200 });
+    bindings[outputPath] = normalizeBinding(binding, `claudeResponse.bindings.${outputPath}`);
+  }
+  return { bindings };
 }
 
-function isConcreteToolMatcher(matcher) {
-  if (!isPlainObject(matcher) || matcher.mode === 'regex') return false;
-  const value = matcher.value;
-  return typeof value === 'string' && Boolean(value) && value !== '*';
+function allowedClaudeOutputs(eventName) {
+  if (eventName === 'StopFailure') return new Set();
+  return new Set([
+    ...COMMON_CLAUDE_OUTPUTS,
+    ...(DECISION_EVENTS.has(eventName) ? ['decision', 'reason'] : []),
+    ...(EVENT_CLAUDE_OUTPUTS[eventName] || []),
+  ]);
 }
 
-function requireConfigString(config, key, actionIndex, { max = 20000 } = {}) {
-  const value = typeof config[key] === 'string' ? config[key].trim() : '';
-  if (!value) {
-    throw createHttpError(`actions[${actionIndex}].config.${key} is required before publishing`);
+function isAllowedReference(path, { scriptOutputs, actionIds }) {
+  if (path === 'event' || path.startsWith('event.')) return true;
+  if ([...ENVIRONMENT_VARIABLE_PATHS].some((environmentPath) => path === environmentPath || path.startsWith(`${environmentPath}.`))) {
+    return true;
   }
-  if (value.length > max) {
-    throw createHttpError(`actions[${actionIndex}].config.${key} is too long`);
+  if (path.startsWith('script.output.')) {
+    const name = path.slice('script.output.'.length).split('.')[0];
+    return scriptOutputs.has(name);
   }
-  return value;
+  if (path.startsWith('actions.')) {
+    const [, actionId, outputSegment] = path.split('.');
+    return outputSegment === 'output' && actionIds.has(actionId);
+  }
+  return false;
 }
 
-function validateActionForPublish(action, index, eventName, matcher) {
-  const allowed = allowedActionTypes(eventName, matcher);
-  if (!allowed.has(action.type)) {
-    throw createHttpError(`${action.type} is not available for ${eventName}`);
-  }
-  const config = action.config;
-  switch (action.type) {
-    case 'record_data':
-      if (!Array.isArray(config.fields) || config.fields.length === 0) {
-        throw createHttpError(`actions[${index}] must select at least one field to record`);
+function bindingReferences(binding) {
+  if (binding.source === 'reference') return [binding.path];
+  if (binding.source !== 'template') return [];
+  return [...binding.template.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map((match) => match[1]);
+}
+
+function validateHookReferences(hook) {
+  const scriptOutputs = new Set((hook.extensionLogic?.outputs || []).map((output) => output.name));
+  const allActionIds = new Set(hook.postActions.map((action) => action.id));
+  const precedingActionIds = new Set();
+  for (const action of hook.postActions) {
+    if (action.type === 'call_mcp_tool') {
+      for (const binding of Object.values(action.config.inputs)) {
+        for (const path of bindingReferences(binding)) {
+          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+            throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
+          }
+        }
       }
-      break;
-    case 'call_tool':
-      if (!requireConfigString(config, 'toolName', index).startsWith('mcp__')) {
-        throw createHttpError(`actions[${index}] can only call an MCP tool`);
+    } else {
+      const matches = action.config.argumentsTemplate.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g);
+      for (const match of matches) {
+        const path = match[1];
+        if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+          throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
+        }
       }
-      if (!isPlainObject(config.inputs)) {
-        throw createHttpError(`actions[${index}].config.inputs must be an object`);
-      }
-      break;
-    case 'append_context':
-      requireConfigString(config, 'template', index);
-      break;
-    case 'invoke_skill_recovery': {
-      requireConfigString(config, 'skillName', index, { max: 160 });
-      requireConfigString(config, 'argumentsTemplate', index);
-      const maxTurns = Number(config.maxTurns);
-      if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 5) {
-        throw createHttpError(`actions[${index}].config.maxTurns must be between 1 and 5`);
-      }
-      break;
     }
-    case 'decision':
-      requireConfigString(config, 'outcome', index, { max: 40 });
-      requireConfigString(config, 'reason', index);
-      break;
-    case 'update_input':
-    case 'update_output':
-      requireConfigString(config, 'targetPath', index, { max: 240 });
-      if (!isPlainObject(config.replacement)) {
-        throw createHttpError(`actions[${index}].config.replacement is required`);
+    precedingActionIds.add(action.id);
+  }
+  for (const binding of Object.values(hook.claudeResponse.bindings)) {
+    for (const path of bindingReferences(binding)) {
+      if (!isAllowedReference(path, { scriptOutputs, actionIds: allActionIds })) {
+        throw createHttpError(`Reference ${path} is not available to claudeResponse`);
       }
-      if (config.replacement.source === 'reference') {
-        requireConfigString(config.replacement, 'path', index, { max: 240 });
-      } else if (!Object.hasOwn(config.replacement, 'value')) {
-        throw createHttpError(`actions[${index}].config.replacement.value is required`);
-      }
-      break;
-    default:
-      break;
+    }
   }
 }
 
 function normalizeHookInput(input, { strict = false } = {}) {
   if (!isPlainObject(input)) throw createHttpError('Hook payload must be an object');
   const eventName = normalizeEventName(input.eventName);
-  const matcher = normalizeMatcher(input.matcher);
+  const matcher = normalizeMatcher(input.matcher, eventName);
   const normalized = {
     name: requireString(input.name, 'name', { max: 120 }),
-    description: requireString(
-      typeof input.description === 'string' ? input.description : '',
-      'description',
-      { max: 1000, allowEmpty: true },
-    ),
+    description: requireString(typeof input.description === 'string' ? input.description : '', 'description', {
+      max: 1000,
+      allowEmpty: true,
+    }),
     eventName,
     matcher,
-    gate: normalizeGate(input.gate),
-    advancedScript: normalizeAdvancedScript(input.advancedScript),
-    actions: normalizeActions(input.actions),
+    extensionLogic: normalizeExtensionLogic(input.extensionLogic),
+    postActions: normalizePostActions(input.postActions, eventName),
+    claudeResponse: normalizeClaudeResponse(input.claudeResponse),
   };
+  validateHookReferences(normalized);
   if (strict) {
-    if (normalized.actions.length === 0) {
-      throw createHttpError('Add at least one basic action before publishing');
+    const allowedOutputs = allowedClaudeOutputs(eventName);
+    for (const path of Object.keys(normalized.claudeResponse.bindings)) {
+      if (!allowedOutputs.has(path)) {
+        throw createHttpError(`Claude response field ${path} is not supported for ${eventName}`);
+      }
     }
-    normalized.actions.forEach((action, index) => {
-      validateActionForPublish(action, index, normalized.eventName, normalized.matcher);
-    });
+    const hasEffect = Boolean(normalized.extensionLogic?.code.trim())
+      || normalized.postActions.length > 0
+      || Object.keys(normalized.claudeResponse.bindings).length > 0;
+    if (!hasEffect) throw createHttpError('Configure a script, post action, or Claude response before publishing');
   }
   return normalized;
 }
 
-function mapHookRow(row, actions = []) {
+function mapHookRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -416,14 +439,9 @@ function mapHookRow(row, actions = []) {
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
-    gate: parseJson(row.gate_json, { mode: 'all', conditions: [] }),
-    advancedScript: parseJson(row.advanced_script_json, null),
-    actions: actions.map((action) => ({
-      id: action.id,
-      type: action.action_type,
-      position: Number(action.position),
-      config: parseJson(action.config_json, {}),
-    })),
+    extensionLogic: normalizeExtensionLogic(parseJson(row.extension_logic_json, null)),
+    postActions: normalizePostActions(parseJson(row.post_actions_json, []), row.event_name),
+    claudeResponse: normalizeClaudeResponse(parseJson(row.claude_response_json, { bindings: {} })),
     version: Number(row.version || 0),
     createdBy: row.created_by,
     updatedBy: row.updated_by,
@@ -438,9 +456,55 @@ function hasTable(database, tableName) {
   return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
 }
 
+function normalizeRecordLimit(value) {
+  const number = Number(value ?? 50);
+  return Number.isInteger(number) && number > 0 ? Math.min(number, 200) : 50;
+}
+
+function mapExecutionRow(row) {
+  return {
+    id: row.id,
+    hookId: row.hook_id,
+    hookVersion: Number(row.hook_version || 0),
+    userId: row.user_id,
+    tenantId: row.tenant_id,
+    workspaceId: row.workspace_id,
+    sessionId: row.session_id,
+    eventName: row.event_name,
+    toolUseId: row.tool_use_id,
+    status: row.status,
+    input: parseJson(row.input_json, {}),
+    scriptOutput: parseJson(row.script_output_json, null),
+    actions: parseJson(row.actions_json, {}),
+    response: parseJson(row.response_json, {}),
+    logs: parseJson(row.logs_json, []),
+    errorMessage: row.error_message,
+    durationMs: row.duration_ms,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function mapDataRecordRow(row) {
+  return {
+    id: row.id,
+    executionId: row.execution_id,
+    hookId: row.hook_id,
+    userId: row.user_id,
+    tenantId: row.tenant_id,
+    workspaceId: row.workspace_id,
+    sessionId: row.session_id,
+    type: row.record_type,
+    data: parseJson(row.data_json, null),
+    createdAt: row.created_at,
+  };
+}
+
 function listMcpToolCatalog(database) {
   if (!hasTable(database, 'mcp_server_presets')) return [];
-  const rows = database.prepare(`
+  const rows = database
+    .prepare(
+      `
     SELECT p.name, p.display_name, p.description, p.tools_json, t.code AS tenant_code
     FROM mcp_server_presets p
     JOIN tenants t ON t.id = p.tenant_id
@@ -448,7 +512,9 @@ function listMcpToolCatalog(database) {
       AND p.last_test_status = 'healthy'
       AND p.tool_count > 0
     ORDER BY p.display_name, p.name
-  `).all();
+  `,
+    )
+    .all();
   const byName = new Map();
   for (const row of rows) {
     const tools = parseJson(row.tools_json, []);
@@ -473,13 +539,17 @@ function listMcpToolCatalog(database) {
 
 function listSkillCatalog(database) {
   if (!hasTable(database, 'tenant_skill_presets')) return [];
-  const rows = database.prepare(`
+  const rows = database
+    .prepare(
+      `
     SELECT p.name, p.display_name, p.description, t.code AS tenant_code
     FROM tenant_skill_presets p
     JOIN tenants t ON t.id = p.tenant_id
     WHERE p.status = 'published'
     ORDER BY p.display_name, p.name
-  `).all();
+  `,
+    )
+    .all();
   const byName = new Map();
   for (const row of rows) {
     const current = byName.get(row.name) || {
@@ -494,6 +564,27 @@ function listSkillCatalog(database) {
   return [...byName.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+function validatePublishResources(hook, database) {
+  const mcpTools = new Map(listMcpToolCatalog(database).map((tool) => [tool.name, tool]));
+  const skills = new Set(listSkillCatalog(database).map((skill) => skill.name));
+  for (const action of hook.postActions) {
+    if (action.type === 'call_mcp_tool') {
+      if (!action.config.toolName.startsWith('mcp__')) {
+        throw createHttpError(`Post action ${action.id} must select an MCP tool`);
+      }
+      const tool = mcpTools.get(action.config.toolName);
+      if (!tool) throw createHttpError(`MCP tool ${action.config.toolName} is not available`);
+      for (const requiredName of tool.inputSchema?.required || []) {
+        if (!Object.prototype.hasOwnProperty.call(action.config.inputs, requiredName)) {
+          throw createHttpError(`MCP tool ${action.config.toolName} requires input ${requiredName}`);
+        }
+      }
+    } else if (!action.config.skillName || !skills.has(action.config.skillName)) {
+      throw createHttpError(`Skill ${action.config.skillName || '(empty)'} is not available`);
+    }
+  }
+}
+
 const BUILTIN_TOOLS = Object.freeze([
   {
     name: 'Bash',
@@ -501,10 +592,22 @@ const BUILTIN_TOOLS = Object.freeze([
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Command that will be executed' },
-        description: { type: 'string', description: 'Command description shown to the user' },
-        timeout: { type: 'number', description: 'Maximum execution time in milliseconds' },
-        run_in_background: { type: 'boolean', description: 'Run the command in the background' },
+        command: {
+          type: 'string',
+          description: 'Command that will be executed',
+        },
+        description: {
+          type: 'string',
+          description: 'Command description shown to the user',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Maximum execution time in milliseconds',
+        },
+        run_in_background: {
+          type: 'boolean',
+          description: 'Run the command in the background',
+        },
       },
     },
   },
@@ -528,7 +631,10 @@ const BUILTIN_TOOLS = Object.freeze([
         file_path: { type: 'string', description: 'Target file path' },
         old_string: { type: 'string', description: 'Text to find' },
         new_string: { type: 'string', description: 'Replacement text' },
-        replace_all: { type: 'boolean', description: 'Replace every matching occurrence' },
+        replace_all: {
+          type: 'boolean',
+          description: 'Replace every matching occurrence',
+        },
       },
     },
   },
@@ -550,53 +656,39 @@ export function createHookConfigService({ database = db, configStore = appConfig
   const getHook = (hookId) => {
     const row = getRow(hookId);
     if (!row) return null;
-    const actions = database.prepare(`
-      SELECT * FROM hook_actions WHERE hook_id = ? ORDER BY position ASC
-    `).all(hookId);
-    const bindingCount = database.prepare(`
+    const bindingCount = database
+      .prepare(
+        `
       SELECT COUNT(*) AS count FROM user_hook_bindings WHERE hook_id = ?
-    `).get(hookId);
-    return mapHookRow({ ...row, bound_user_count: bindingCount?.count || 0 }, actions);
+    `,
+      )
+      .get(hookId);
+    return mapHookRow({ ...row, bound_user_count: bindingCount?.count || 0 });
   };
   const requireHook = (hookId) => {
     const hook = getHook(hookId);
     if (!hook) throw createHttpError('Hook not found', 404);
     return hook;
   };
-  const replaceActions = database.transaction((hookId, actions) => {
-    database.prepare('DELETE FROM hook_actions WHERE hook_id = ?').run(hookId);
-    const insert = database.prepare(`
-      INSERT INTO hook_actions (id, hook_id, position, action_type, config_json)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    for (const action of actions) {
-      insert.run(action.id, hookId, action.position, action.type, JSON.stringify(action.config));
-    }
-  });
-
   return {
     listHooks: () => {
-      const rows = database.prepare(`
+      const rows = database
+        .prepare(
+          `
         SELECT h.*,
-          (SELECT COUNT(*) FROM hook_actions a WHERE a.hook_id = h.id) AS action_count,
           (SELECT COUNT(*) FROM user_hook_bindings b WHERE b.hook_id = h.id) AS bound_user_count
         FROM hooks h
         ORDER BY h.updated_at DESC, h.created_at DESC
-      `).all();
-      const loadActions = database.prepare(`
-        SELECT * FROM hook_actions WHERE hook_id = ? ORDER BY position ASC
-      `);
-      return rows.map((row) => {
-        const actions = loadActions.all(row.id);
-        return {
-          ...mapHookRow(row, actions),
-          actionCount: Number(row.action_count || 0),
-        };
-      });
+      `,
+        )
+        .all();
+      return rows.map(mapHookRow);
     },
 
     listActiveHooksForUser: (userId) => {
-      const rows = database.prepare(`
+      const rows = database
+        .prepare(
+          `
         SELECT h.*,
           (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count
         FROM hooks h
@@ -611,77 +703,113 @@ export function createHookConfigService({ database = db, configStore = appConfig
             )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC
-      `).all(userId);
-      const loadActions = database.prepare(`
-        SELECT * FROM hook_actions WHERE hook_id = ? ORDER BY position ASC
-      `);
-      return rows.map((row) => mapHookRow(row, loadActions.all(row.id)));
+      `,
+        )
+        .all(userId);
+      return rows.map(mapHookRow);
     },
 
     getHook,
 
+    listExecutions: (hookId, { limit } = {}) => {
+      requireHook(hookId);
+      if (!hasTable(database, 'hook_executions')) return [];
+      return database
+        .prepare(`
+          SELECT * FROM hook_executions
+          WHERE hook_id = ?
+          ORDER BY started_at DESC, rowid DESC
+          LIMIT ?
+        `)
+        .all(hookId, normalizeRecordLimit(limit))
+        .map(mapExecutionRow);
+    },
+
+    listDataRecords: (hookId, { limit } = {}) => {
+      requireHook(hookId);
+      if (!hasTable(database, 'hook_data_records')) return [];
+      return database
+        .prepare(`
+          SELECT * FROM hook_data_records
+          WHERE hook_id = ?
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT ?
+        `)
+        .all(hookId, normalizeRecordLimit(limit))
+        .map(mapDataRecordRow);
+    },
+
     createHook: ({ input, userId }) => {
       const normalized = normalizeHookInput(input);
       const hookId = crypto.randomUUID();
-      const create = database.transaction(() => {
-        database.prepare(`
-          INSERT INTO hooks (
-            id, name, description, status, event_name, matcher_json, gate_json,
-            advanced_script_json, created_by, updated_by
-          ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
-        `).run(
+      database
+        .prepare(
+          `
+        INSERT INTO hooks (
+          id, name, description, status, event_name, matcher_json,
+          extension_logic_json, post_actions_json, claude_response_json,
+          created_by, updated_by
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+      `,
+        )
+        .run(
           hookId,
           normalized.name,
           normalized.description,
           normalized.eventName,
           JSON.stringify(normalized.matcher),
-          JSON.stringify(normalized.gate),
-          normalized.advancedScript ? JSON.stringify(normalized.advancedScript) : null,
+          JSON.stringify(normalized.extensionLogic),
+          JSON.stringify(normalized.postActions),
+          JSON.stringify(normalized.claudeResponse),
           userId,
           userId,
         );
-        replaceActions(hookId, normalized.actions);
-      });
-      create();
       return getHook(hookId);
     },
 
     updateHook: ({ hookId, input, userId }) => {
       requireHook(hookId);
       const normalized = normalizeHookInput(input);
-      const update = database.transaction(() => {
-        database.prepare(`
-          UPDATE hooks
-          SET name = ?, description = ?, status = 'draft', event_name = ?,
-              matcher_json = ?, gate_json = ?, advanced_script_json = ?,
-              updated_by = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(
+      database
+        .prepare(
+          `
+        UPDATE hooks
+        SET name = ?, description = ?, status = 'draft', event_name = ?,
+            matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
+            claude_response_json = ?,
+            updated_by = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+        )
+        .run(
           normalized.name,
           normalized.description,
           normalized.eventName,
           JSON.stringify(normalized.matcher),
-          JSON.stringify(normalized.gate),
-          normalized.advancedScript ? JSON.stringify(normalized.advancedScript) : null,
+          JSON.stringify(normalized.extensionLogic),
+          JSON.stringify(normalized.postActions),
+          JSON.stringify(normalized.claudeResponse),
           userId,
           hookId,
         );
-        replaceActions(hookId, normalized.actions);
-      });
-      update();
       return getHook(hookId);
     },
 
     publishHook: ({ hookId, userId }) => {
       const hook = requireHook(hookId);
-      normalizeHookInput(hook, { strict: true });
-      database.prepare(`
+      const normalized = normalizeHookInput(hook, { strict: true });
+      validatePublishResources(normalized, database);
+      database
+        .prepare(
+          `
         UPDATE hooks
         SET status = 'published', version = version + 1,
             published_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
-      `).run(userId, hookId);
+      `,
+        )
+        .run(userId, hookId);
       return getHook(hookId);
     },
 
@@ -690,11 +818,15 @@ export function createHookConfigService({ database = db, configStore = appConfig
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before starting it');
       }
-      database.prepare(`
+      database
+        .prepare(
+          `
         UPDATE hooks
         SET activation_scope = 'all_users', updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
-      `).run(userId, hookId);
+      `,
+        )
+        .run(userId, hookId);
       return getHook(hookId);
     },
 
@@ -703,11 +835,15 @@ export function createHookConfigService({ database = db, configStore = appConfig
       if (hook.status !== 'published') {
         throw createHttpError('Only a published Hook can be stopped');
       }
-      database.prepare(`
+      database
+        .prepare(
+          `
         UPDATE hooks
         SET activation_scope = 'manual', updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
-      `).run(userId, hookId);
+      `,
+        )
+        .run(userId, hookId);
       return getHook(hookId);
     },
 
@@ -729,9 +865,9 @@ export function createHookConfigService({ database = db, configStore = appConfig
 
     updateSettings: (input) => {
       const visibleEvents = Array.isArray(input?.visibleEvents)
-        ? input.visibleEvents.filter((eventName, index, values) => (
-          EVENT_SET.has(eventName) && values.indexOf(eventName) === index
-        ))
+        ? input.visibleEvents.filter(
+            (eventName, index, values) => EVENT_SET.has(eventName) && values.indexOf(eventName) === index,
+          )
         : [];
       if (visibleEvents.length === 0) {
         throw createHttpError('Select at least one visible Hook event');
@@ -746,11 +882,11 @@ export function createHookConfigService({ database = db, configStore = appConfig
       mcpTools: listMcpToolCatalog(database),
       skills: listSkillCatalog(database),
       environmentVariables: [
-        { path: '$context.userId', type: 'number' },
-        { path: '$context.username', type: 'string' },
-        { path: '$context.tenantId', type: 'number' },
-        { path: '$context.sessionId', type: 'string' },
-        { path: '$context.projectId', type: 'number' },
+        { path: 'ccui.env.userId', type: 'number' },
+        { path: 'ccui.env.username', type: 'string' },
+        { path: 'ccui.env.tenantId', type: 'number' },
+        { path: 'ccui.env.workspaceId', type: 'number' },
+        { path: 'ccui.env.sessionId', type: 'string' },
       ],
     }),
   };
@@ -761,5 +897,8 @@ export const hookConfigService = createHookConfigService();
 export {
   DEFAULT_VISIBLE_EVENTS,
   HOOK_EVENTS,
+  POST_ACTION_TYPES,
+  allowedClaudeOutputs,
+  allowedPostActions,
   normalizeHookInput,
 };

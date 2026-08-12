@@ -1,116 +1,623 @@
 import type {
   FieldChoice,
   FieldType,
-  HookActionType,
   HookConfigDraft,
   HookEventDefinition,
   HookEventName,
+  HookOutputField,
   HookResources,
+  HookScriptLanguage,
+  HookScriptOutput,
   HookToolResource,
 } from './types';
 
+const COMMON_EVENT_FIELDS: HookEventDefinition['fields'] = [
+  { key: 'session_id', type: 'string' },
+  { key: 'transcript_path', type: 'string' },
+  { key: 'cwd', type: 'string' },
+  { key: 'permission_mode', type: 'string' },
+  { key: 'agent_id', type: 'string' },
+  { key: 'agent_type', type: 'string' },
+  { key: 'hook_event_name', type: 'string' },
+];
+
+function defineEvent(
+  event: Omit<HookEventDefinition, 'fields'> & {
+    fields?: HookEventDefinition['fields'];
+  },
+): HookEventDefinition {
+  return {
+    ...event,
+    fields: [...COMMON_EVENT_FIELDS, ...(event.fields || [])],
+  };
+}
+
+// Keep this catalog aligned with HookInput in the installed @anthropic-ai/claude-agent-sdk.
 export const EVENT_DEFINITIONS: HookEventDefinition[] = [
-  { name: 'Setup', group: 'session', matcherField: 'trigger', fields: [{ key: 'trigger', type: 'string', options: ['init', 'maintenance'] }] },
-  { name: 'SessionStart', group: 'session', matcherField: 'source', fields: [{ key: 'source', type: 'string', options: ['startup', 'resume', 'clear', 'compact'] }, { key: 'model', type: 'string' }, { key: 'agentType', type: 'string' }] },
-  { name: 'Stop', group: 'session', fields: [{ key: 'stopHookActive', type: 'boolean' }, { key: 'lastAssistantMessage', type: 'string' }] },
-  { name: 'StopFailure', group: 'session', matcherField: 'error', fields: [{ key: 'error', type: 'string', options: ['rate_limit', 'authentication_failed', 'server_error', 'unknown'] }, { key: 'errorDetails', type: 'string' }, { key: 'lastAssistantMessage', type: 'string' }] },
-  { name: 'SessionEnd', group: 'session', matcherField: 'reason', fields: [{ key: 'reason', type: 'string' }] },
-  { name: 'UserPromptSubmit', group: 'prompt', fields: [{ key: 'prompt', type: 'string' }, { key: 'sessionTitle', type: 'string' }] },
-  { name: 'UserPromptExpansion', group: 'prompt', matcherField: 'commandName', fields: [{ key: 'expansionType', type: 'string', options: ['slash_command', 'mcp_prompt'] }, { key: 'commandName', type: 'string' }, { key: 'commandArgs', type: 'string' }, { key: 'prompt', type: 'string' }] },
-  { name: 'Notification', group: 'prompt', matcherField: 'notificationType', fields: [{ key: 'title', type: 'string' }, { key: 'message', type: 'string' }, { key: 'notificationType', type: 'string' }] },
-  { name: 'PreToolUse', group: 'tool', matcherField: 'toolName', fields: [{ key: 'toolName', type: 'string' }, { key: 'toolInput', type: 'object' }, { key: 'toolUseId', type: 'string' }] },
-  { name: 'PostToolUse', group: 'tool', matcherField: 'toolName', fields: [{ key: 'toolName', type: 'string' }, { key: 'toolInput', type: 'object' }, { key: 'toolResponse', type: 'object' }, { key: 'toolUseId', type: 'string' }] },
-  { name: 'PostToolUseFailure', group: 'tool', matcherField: 'toolName', fields: [{ key: 'toolName', type: 'string' }, { key: 'toolInput', type: 'object' }, { key: 'error', type: 'string' }, { key: 'isInterrupt', type: 'boolean' }] },
-  { name: 'PermissionRequest', group: 'tool', matcherField: 'toolName', fields: [{ key: 'toolName', type: 'string' }, { key: 'toolInput', type: 'object' }, { key: 'permissionSuggestions', type: 'array' }] },
-  { name: 'PermissionDenied', group: 'tool', matcherField: 'toolName', fields: [{ key: 'toolName', type: 'string' }, { key: 'toolInput', type: 'object' }, { key: 'reason', type: 'string' }] },
-  { name: 'SubagentStart', group: 'agent', matcherField: 'agentType', fields: [{ key: 'agentId', type: 'string' }, { key: 'agentType', type: 'string' }] },
-  { name: 'SubagentStop', group: 'agent', matcherField: 'agentType', fields: [{ key: 'agentId', type: 'string' }, { key: 'agentType', type: 'string' }, { key: 'lastAssistantMessage', type: 'string' }] },
-  { name: 'TeammateIdle', group: 'agent', fields: [{ key: 'teammateName', type: 'string' }, { key: 'teamName', type: 'string' }] },
-  { name: 'TaskCreated', group: 'agent', fields: [{ key: 'taskId', type: 'string' }, { key: 'taskSubject', type: 'string' }, { key: 'taskDescription', type: 'string' }] },
-  { name: 'TaskCompleted', group: 'agent', fields: [{ key: 'taskId', type: 'string' }, { key: 'taskSubject', type: 'string' }, { key: 'taskDescription', type: 'string' }] },
-  { name: 'PreCompact', group: 'context', matcherField: 'trigger', fields: [{ key: 'trigger', type: 'string', options: ['manual', 'auto'] }, { key: 'customInstructions', type: 'string' }] },
-  { name: 'PostCompact', group: 'context', matcherField: 'trigger', fields: [{ key: 'trigger', type: 'string', options: ['manual', 'auto'] }, { key: 'compactSummary', type: 'string' }] },
-  { name: 'Elicitation', group: 'mcp', matcherField: 'mcpServerName', fields: [{ key: 'mcpServerName', type: 'string' }, { key: 'message', type: 'string' }, { key: 'mode', type: 'string', options: ['form', 'url'] }, { key: 'requestedSchema', type: 'object' }, { key: 'url', type: 'string' }] },
-  { name: 'ElicitationResult', group: 'mcp', matcherField: 'mcpServerName', fields: [{ key: 'mcpServerName', type: 'string' }, { key: 'action', type: 'string', options: ['accept', 'decline', 'cancel'] }, { key: 'content', type: 'object' }, { key: 'mode', type: 'string', options: ['form', 'url'] }] },
-  { name: 'ConfigChange', group: 'workspace', matcherField: 'source', fields: [{ key: 'source', type: 'string' }, { key: 'filePath', type: 'string' }] },
-  { name: 'InstructionsLoaded', group: 'workspace', matcherField: 'loadReason', fields: [{ key: 'filePath', type: 'string' }, { key: 'memoryType', type: 'string' }, { key: 'loadReason', type: 'string' }] },
-  { name: 'CwdChanged', group: 'workspace', fields: [{ key: 'oldCwd', type: 'string' }, { key: 'newCwd', type: 'string' }] },
-  { name: 'FileChanged', group: 'workspace', matcherField: 'fileName', fields: [{ key: 'filePath', type: 'string' }, { key: 'changeType', type: 'string', options: ['change', 'add', 'unlink'] }] },
-  { name: 'WorktreeCreate', group: 'workspace', fields: [{ key: 'name', type: 'string' }] },
-  { name: 'WorktreeRemove', group: 'workspace', fields: [{ key: 'worktreePath', type: 'string' }] },
+  defineEvent({
+    name: 'Setup',
+    group: 'session',
+    matcherField: 'trigger',
+    fields: [{ key: 'trigger', type: 'string', options: ['init', 'maintenance'] }],
+  }),
+  defineEvent({
+    name: 'SessionStart',
+    group: 'session',
+    matcherField: 'source',
+    fields: [
+      {
+        key: 'source',
+        type: 'string',
+        options: ['startup', 'resume', 'clear', 'compact'],
+      },
+      { key: 'model', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'Stop',
+    group: 'session',
+    fields: [
+      { key: 'stop_hook_active', type: 'boolean' },
+      { key: 'last_assistant_message', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'StopFailure',
+    group: 'session',
+    matcherField: 'error',
+    fields: [
+      {
+        key: 'error',
+        type: 'string',
+        options: [
+          'authentication_failed',
+          'billing_error',
+          'rate_limit',
+          'invalid_request',
+          'server_error',
+          'unknown',
+          'max_output_tokens',
+        ],
+      },
+      { key: 'error_details', type: 'string' },
+      { key: 'last_assistant_message', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'SessionEnd',
+    group: 'session',
+    matcherField: 'reason',
+    fields: [
+      {
+        key: 'reason',
+        type: 'string',
+        options: ['clear', 'resume', 'logout', 'prompt_input_exit', 'other', 'bypass_permissions_disabled'],
+      },
+    ],
+  }),
+  defineEvent({
+    name: 'UserPromptSubmit',
+    group: 'prompt',
+    fields: [
+      { key: 'prompt', type: 'string' },
+      { key: 'session_title', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'UserPromptExpansion',
+    group: 'prompt',
+    matcherField: 'command_name',
+    fields: [
+      {
+        key: 'expansion_type',
+        type: 'string',
+        options: ['slash_command', 'mcp_prompt'],
+      },
+      { key: 'command_name', type: 'string' },
+      { key: 'command_args', type: 'string' },
+      { key: 'command_source', type: 'string' },
+      { key: 'prompt', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'Notification',
+    group: 'prompt',
+    matcherField: 'notification_type',
+    fields: [
+      { key: 'title', type: 'string' },
+      { key: 'message', type: 'string' },
+      { key: 'notification_type', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'PreToolUse',
+    group: 'tool',
+    matcherField: 'tool_name',
+    fields: [
+      { key: 'tool_name', type: 'string' },
+      { key: 'tool_input', type: 'object' },
+      { key: 'tool_use_id', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'PostToolUse',
+    group: 'tool',
+    matcherField: 'tool_name',
+    fields: [
+      { key: 'tool_name', type: 'string' },
+      { key: 'tool_input', type: 'object' },
+      { key: 'tool_response', type: 'object' },
+      { key: 'tool_use_id', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'PostToolUseFailure',
+    group: 'tool',
+    matcherField: 'tool_name',
+    fields: [
+      { key: 'tool_name', type: 'string' },
+      { key: 'tool_input', type: 'object' },
+      { key: 'tool_use_id', type: 'string' },
+      { key: 'error', type: 'string' },
+      { key: 'is_interrupt', type: 'boolean' },
+    ],
+  }),
+  defineEvent({
+    name: 'PermissionRequest',
+    group: 'tool',
+    matcherField: 'tool_name',
+    fields: [
+      { key: 'tool_name', type: 'string' },
+      { key: 'tool_input', type: 'object' },
+      { key: 'permission_suggestions', type: 'array' },
+    ],
+  }),
+  defineEvent({
+    name: 'PermissionDenied',
+    group: 'tool',
+    matcherField: 'tool_name',
+    fields: [
+      { key: 'tool_name', type: 'string' },
+      { key: 'tool_input', type: 'object' },
+      { key: 'tool_use_id', type: 'string' },
+      { key: 'reason', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'SubagentStart',
+    group: 'agent',
+    matcherField: 'agent_type',
+  }),
+  defineEvent({
+    name: 'SubagentStop',
+    group: 'agent',
+    matcherField: 'agent_type',
+    fields: [
+      { key: 'stop_hook_active', type: 'boolean' },
+      { key: 'agent_transcript_path', type: 'string' },
+      { key: 'last_assistant_message', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'TeammateIdle',
+    group: 'agent',
+    fields: [
+      { key: 'teammate_name', type: 'string' },
+      { key: 'team_name', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'TaskCreated',
+    group: 'agent',
+    fields: [
+      { key: 'task_id', type: 'string' },
+      { key: 'task_subject', type: 'string' },
+      { key: 'task_description', type: 'string' },
+      { key: 'teammate_name', type: 'string' },
+      { key: 'team_name', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'TaskCompleted',
+    group: 'agent',
+    fields: [
+      { key: 'task_id', type: 'string' },
+      { key: 'task_subject', type: 'string' },
+      { key: 'task_description', type: 'string' },
+      { key: 'teammate_name', type: 'string' },
+      { key: 'team_name', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'PreCompact',
+    group: 'context',
+    matcherField: 'trigger',
+    fields: [
+      { key: 'trigger', type: 'string', options: ['manual', 'auto'] },
+      { key: 'custom_instructions', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'PostCompact',
+    group: 'context',
+    matcherField: 'trigger',
+    fields: [
+      { key: 'trigger', type: 'string', options: ['manual', 'auto'] },
+      { key: 'compact_summary', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'Elicitation',
+    group: 'mcp',
+    matcherField: 'mcp_server_name',
+    fields: [
+      { key: 'mcp_server_name', type: 'string' },
+      { key: 'message', type: 'string' },
+      { key: 'mode', type: 'string', options: ['form', 'url'] },
+      { key: 'url', type: 'string' },
+      { key: 'elicitation_id', type: 'string' },
+      { key: 'requested_schema', type: 'object' },
+    ],
+  }),
+  defineEvent({
+    name: 'ElicitationResult',
+    group: 'mcp',
+    matcherField: 'mcp_server_name',
+    fields: [
+      { key: 'mcp_server_name', type: 'string' },
+      { key: 'elicitation_id', type: 'string' },
+      { key: 'mode', type: 'string', options: ['form', 'url'] },
+      {
+        key: 'action',
+        type: 'string',
+        options: ['accept', 'decline', 'cancel'],
+      },
+      { key: 'content', type: 'object' },
+    ],
+  }),
+  defineEvent({
+    name: 'ConfigChange',
+    group: 'workspace',
+    matcherField: 'source',
+    fields: [
+      {
+        key: 'source',
+        type: 'string',
+        options: ['user_settings', 'project_settings', 'local_settings', 'policy_settings', 'skills'],
+      },
+      { key: 'file_path', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'InstructionsLoaded',
+    group: 'workspace',
+    matcherField: 'load_reason',
+    fields: [
+      { key: 'file_path', type: 'string' },
+      {
+        key: 'memory_type',
+        type: 'string',
+        options: ['User', 'Project', 'Local', 'Managed'],
+      },
+      {
+        key: 'load_reason',
+        type: 'string',
+        options: ['session_start', 'nested_traversal', 'path_glob_match', 'include', 'compact'],
+      },
+      { key: 'globs', type: 'array' },
+      { key: 'trigger_file_path', type: 'string' },
+      { key: 'parent_file_path', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'CwdChanged',
+    group: 'workspace',
+    fields: [
+      { key: 'old_cwd', type: 'string' },
+      { key: 'new_cwd', type: 'string' },
+    ],
+  }),
+  defineEvent({
+    name: 'FileChanged',
+    group: 'workspace',
+    matcherField: 'file_path',
+    matcherKind: 'fileNames',
+    fields: [
+      { key: 'file_path', type: 'string' },
+      { key: 'event', type: 'string', options: ['change', 'add', 'unlink'] },
+    ],
+  }),
+  defineEvent({
+    name: 'WorktreeCreate',
+    group: 'workspace',
+    fields: [{ key: 'name', type: 'string' }],
+  }),
+  defineEvent({
+    name: 'WorktreeRemove',
+    group: 'workspace',
+    fields: [{ key: 'worktree_path', type: 'string' }],
+  }),
 ];
 
 export const EVENT_BY_NAME = new Map(EVENT_DEFINITIONS.map((event) => [event.name, event]));
 
-export const EVENT_GROUPS = ['session', 'prompt', 'tool', 'agent', 'context', 'mcp', 'workspace'];
-
-export const TOOL_EVENTS = new Set<HookEventName>([
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-  'PermissionRequest',
-  'PermissionDenied',
-]);
-
-const APPEND_CONTEXT_EVENTS = new Set<HookEventName>([
-  'Setup',
-  'SessionStart',
-  'UserPromptSubmit',
-  'UserPromptExpansion',
-  'Notification',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-  'SubagentStart',
-]);
+const COMMON_CLAUDE_OUTPUTS: HookOutputField[] = [
+  {
+    path: 'continue',
+    type: 'boolean',
+    description: 'false 时立即停止 Claude 后续处理',
+  },
+  {
+    path: 'stopReason',
+    type: 'string',
+    description: 'continue 为 false 时展示给用户的停止原因',
+  },
+  {
+    path: 'suppressOutput',
+    type: 'boolean',
+    description: '隐藏 Hook 标准输出，不写入会话转录',
+  },
+  {
+    path: 'systemMessage',
+    type: 'string',
+    description: '向当前用户展示系统提示',
+  },
+];
 
 const DECISION_EVENTS = new Set<HookEventName>([
   'UserPromptSubmit',
   'UserPromptExpansion',
-  'PreToolUse',
-  'PermissionRequest',
-  'PermissionDenied',
+  'PostToolUse',
+  'PostToolUseFailure',
   'Stop',
   'SubagentStop',
-  'TeammateIdle',
-  'TaskCreated',
-  'TaskCompleted',
   'ConfigChange',
+  'PreCompact',
 ]);
 
-export const ACTION_TYPES: HookActionType[] = [
-  'record_data',
-  'call_tool',
-  'append_context',
-  'invoke_skill_recovery',
-  'decision',
-  'update_input',
-  'update_output',
-];
+const EVENT_CLAUDE_OUTPUTS: Partial<Record<HookEventName, HookOutputField[]>> = {
+  Setup: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '追加到 Claude 上下文',
+    },
+  ],
+  SessionStart: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '追加到 Claude 上下文',
+    },
+    {
+      path: 'hookSpecificOutput.initialUserMessage',
+      type: 'string',
+      description: '设置会话开始时的首条用户消息',
+    },
+    {
+      path: 'hookSpecificOutput.watchPaths',
+      type: 'array',
+      description: '添加文件监听路径',
+    },
+  ],
+  UserPromptSubmit: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '在问题旁追加 Claude 可见上下文',
+    },
+    {
+      path: 'hookSpecificOutput.sessionTitle',
+      type: 'string',
+      description: '更新 Claude 会话标题',
+    },
+  ],
+  UserPromptExpansion: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '在展开后的命令旁追加上下文',
+    },
+  ],
+  Notification: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '追加 Claude 可见上下文',
+    },
+  ],
+  PreToolUse: [
+    {
+      path: 'hookSpecificOutput.permissionDecision',
+      type: 'string',
+      description: 'allow、deny、ask 或 defer',
+    },
+    {
+      path: 'hookSpecificOutput.permissionDecisionReason',
+      type: 'string',
+      description: '权限决定原因',
+    },
+    {
+      path: 'hookSpecificOutput.updatedInput',
+      type: 'object',
+      description: '替换即将执行的完整工具输入',
+    },
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '追加到 Claude 后续推理上下文',
+    },
+  ],
+  PostToolUse: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '在工具结果旁追加上下文',
+    },
+    {
+      path: 'hookSpecificOutput.updatedMCPToolOutput',
+      type: 'object',
+      description: '替换 MCP 工具输出',
+    },
+  ],
+  PostToolUseFailure: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '在失败结果旁追加上下文',
+    },
+  ],
+  PermissionRequest: [
+    {
+      path: 'hookSpecificOutput.decision',
+      type: 'object',
+      description: '允许或拒绝权限请求，并可携带 updatedInput',
+    },
+  ],
+  PermissionDenied: [
+    {
+      path: 'hookSpecificOutput.retry',
+      type: 'boolean',
+      description: '允许模型重试已被拒绝的工具调用',
+    },
+  ],
+  SubagentStart: [
+    {
+      path: 'hookSpecificOutput.additionalContext',
+      type: 'string',
+      description: '追加到子 Agent 的初始上下文',
+    },
+  ],
+  Elicitation: [
+    {
+      path: 'hookSpecificOutput.action',
+      type: 'string',
+      description: 'accept、decline 或 cancel',
+    },
+    {
+      path: 'hookSpecificOutput.content',
+      type: 'object',
+      description: '接受 MCP 询问时返回的表单内容',
+    },
+  ],
+  ElicitationResult: [
+    {
+      path: 'hookSpecificOutput.action',
+      type: 'string',
+      description: '覆盖用户原始操作',
+    },
+    {
+      path: 'hookSpecificOutput.content',
+      type: 'object',
+      description: '覆盖发送给 MCP Server 的内容',
+    },
+  ],
+  CwdChanged: [
+    {
+      path: 'hookSpecificOutput.watchPaths',
+      type: 'array',
+      description: '切换目录后添加文件监听路径',
+    },
+  ],
+  FileChanged: [
+    {
+      path: 'hookSpecificOutput.watchPaths',
+      type: 'array',
+      description: '更新后续文件监听路径',
+    },
+  ],
+  WorktreeCreate: [
+    {
+      path: 'hookSpecificOutput.worktreePath',
+      type: 'string',
+      description: '返回已创建的 worktree 绝对路径',
+    },
+  ],
+};
 
-export function isConcreteToolMatcher(value?: string, mode: 'exact' | 'regex' = 'exact') {
-  return mode === 'exact' && Boolean(value && value !== '*');
+const OUTPUT_IGNORED_EVENTS = new Set<HookEventName>(['StopFailure']);
+
+export function getClaudeOutputFields(eventName: HookEventName): HookOutputField[] {
+  if (OUTPUT_IGNORED_EVENTS.has(eventName)) return [];
+  const decisionOutputs: HookOutputField[] = DECISION_EVENTS.has(eventName)
+    ? [
+        {
+          path: 'decision',
+          type: 'string',
+          description: '设置为 block 以阻止当前操作或让 Agent 继续',
+        },
+        {
+          path: 'reason',
+          type: 'string',
+          description: 'decision 为 block 时的原因',
+        },
+      ]
+    : [];
+  const specific = EVENT_CLAUDE_OUTPUTS[eventName] || [];
+  return [...COMMON_CLAUDE_OUTPUTS, ...decisionOutputs, ...specific];
 }
 
-export function actionAvailability(
-  eventName: HookEventName,
-  matcherValue: string | undefined,
-  type: HookActionType,
-  matcherMode: 'exact' | 'regex' = 'exact',
-) {
-  if (type === 'record_data' || type === 'call_tool') return { available: true };
-  if (type === 'append_context') return { available: APPEND_CONTEXT_EVENTS.has(eventName) };
-  if (type === 'invoke_skill_recovery') return { available: eventName === 'StopFailure' };
-  if (type === 'decision') return { available: DECISION_EVENTS.has(eventName) };
-  if (type === 'update_input') {
-    if (eventName !== 'PreToolUse') return { available: false };
-    return isConcreteToolMatcher(matcherValue, matcherMode)
-      ? { available: true }
-      : { available: false, reasonKey: 'hooks.actions.selectToolFirst' };
-  }
-  if (type === 'update_output') return { available: eventName === 'PostToolUse' };
-  return { available: false };
+export const CCUI_SCRIPT_APIS = [
+  {
+    javascript: 'ccui.workspace.readText(path)',
+    python: 'ccui.workspace.read_text(path)',
+    description: '读取工作空间内的 UTF-8 文本文件',
+  },
+  {
+    javascript: 'ccui.workspace.writeText(path, content)',
+    python: 'ccui.workspace.write_text(path, content)',
+    description: '写入工作空间内的文本文件',
+  },
+  {
+    javascript: 'ccui.workspace.readJson(path)',
+    python: 'ccui.workspace.read_json(path)',
+    description: '读取并解析工作空间内的 JSON 文件',
+  },
+  {
+    javascript: 'ccui.workspace.writeJson(path, value)',
+    python: 'ccui.workspace.write_json(path, value)',
+    description: '序列化并写入工作空间内的 JSON 文件',
+  },
+  {
+    javascript: 'ccui.workspace.list(path)',
+    python: 'ccui.workspace.list(path)',
+    description: '列出工作空间相对目录中的文件',
+  },
+  {
+    javascript: 'ccui.workspace.exists(path)',
+    python: 'ccui.workspace.exists(path)',
+    description: '判断工作空间相对路径是否存在',
+  },
+  {
+    javascript: 'ccui.env',
+    python: 'ccui.env',
+    description: '只读的当前用户、租户、工作空间和会话环境',
+  },
+  {
+    javascript: 'ccui.records.write(type, data)',
+    python: 'ccui.records.write(type, data)',
+    description: '写入一条结构化 Hook 数据记录',
+  },
+  {
+    javascript: 'ccui.log.info(message, data)',
+    python: 'ccui.log.info(message, data)',
+    description: '写入当前 Hook 执行日志',
+  },
+] as const;
+
+export function scriptApiName(api: (typeof CCUI_SCRIPT_APIS)[number], language: HookScriptLanguage) {
+  return language === 'python' ? api.python : api.javascript;
 }
+
+export function inferNativeMatcherMode(eventName: HookEventName, value?: string): 'all' | 'exact' | 'regex' {
+  const matcher = value?.trim() || '';
+  if (!matcher || matcher === '*') return 'all';
+  if (eventName === 'FileChanged') return 'exact';
+  const exactPattern = eventName === 'StopFailure' ? /^[A-Za-z0-9_|]+$/ : /^[A-Za-z0-9_,| -]+$/;
+  return exactPattern.test(matcher) ? 'exact' : 'regex';
+}
+
+export const EVENT_GROUPS = ['session', 'prompt', 'tool', 'agent', 'context', 'mcp', 'workspace'];
 
 export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
   return {
@@ -118,9 +625,9 @@ export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
     description: '',
     eventName,
     matcher: {},
-    gate: { mode: 'all', conditions: [] },
-    advancedScript: null,
-    actions: [],
+    extensionLogic: null,
+    postActions: [],
+    claudeResponse: { bindings: {} },
   };
 }
 
@@ -141,17 +648,13 @@ export function findMatchedTool(
   return [...resources.builtinTools, ...resources.mcpTools].find((tool) => tool.name === matcherValue);
 }
 
-export function buildFieldChoices(
-  draft: HookConfigDraft,
-  resources: HookResources,
-): FieldChoice[] {
+export function buildFieldChoices(draft: HookConfigDraft, resources: HookResources): FieldChoice[] {
   const event = EVENT_BY_NAME.get(draft.eventName);
   const fields: FieldChoice[] = (event?.fields || []).map((field) => ({
-    path: `$event.${field.key}`,
+    path: `event.${field.key}`,
     labelKey: `hooks.fields.${field.key}`,
     type: field.type,
     options: field.options?.map((value) => ({ value, label: value })),
-    gateAllowed: !['toolUseId', 'agentId', 'taskId', 'filePath', 'worktreePath'].includes(field.key),
     group: 'event',
   }));
 
@@ -159,64 +662,47 @@ export function buildFieldChoices(
   const properties = matchedTool?.inputSchema?.properties || {};
   for (const [key, property] of Object.entries(properties)) {
     fields.push({
-      path: `$event.toolInput.${key}`,
+      path: `event.tool_input.${key}`,
       label: property.description || key,
       description: key,
       type: normalizePropertyType(property.type),
-      options: property.enum?.map((value) => ({ value: String(value), label: String(value) })),
-      gateAllowed: true,
+      options: property.enum?.map((value) => ({
+        value: String(value),
+        label: String(value),
+      })),
       group: 'event',
     });
   }
-
-  for (const variable of resources.environmentVariables) {
-    fields.push({
-      path: variable.path,
-      labelKey: `hooks.variables.${variable.path.replace('$context.', '')}`,
-      type: normalizePropertyType(variable.type),
-      gateAllowed: false,
-      group: 'environment',
-    });
-  }
-
-  for (const output of draft.advancedScript?.outputs || []) {
-    fields.push({
-      path: `$script.output.${output.name}`,
-      label: output.description || output.name,
-      description: output.name,
-      type: output.type,
-      gateAllowed: true,
-      group: 'script',
-    });
-  }
-
-  draft.actions.forEach((action, index) => {
-    fields.push({
-      path: `$actions.${index}.output`,
-      label: `#${index + 1}`,
-      type: 'object',
-      gateAllowed: false,
-      group: 'action',
-    });
-  });
   return fields;
 }
 
-export function inferScriptOutputs(code: string) {
-  const outputs: Array<{ name: string; type: FieldType; description: string }> = [];
-  const matcher = /@output\s+([A-Za-z_$][A-Za-z0-9_$]*):(string|number|boolean|object|array)\s*([^\r\n]*)/g;
-  let match = matcher.exec(code);
-  while (match) {
-    if (!outputs.some((output) => output.name === match?.[1])) {
-      outputs.push({
-        name: match[1],
-        type: match[2] as FieldType,
-        description: match[3].trim(),
-      });
-    }
-    match = matcher.exec(code);
+export function buildReferenceChoices(draft: HookConfigDraft, resources: HookResources): FieldChoice[] {
+  const fields = buildFieldChoices(draft, resources);
+  for (const variable of resources.environmentVariables.filter((item) => item.path.startsWith('ccui.env.'))) {
+    fields.push({
+      path: variable.path,
+      labelKey: `hooks.variables.${variable.path.replace('ccui.env.', '')}`,
+      type: normalizePropertyType(variable.type),
+      group: 'environment',
+    });
   }
-  return outputs;
+  for (const output of draft.extensionLogic?.outputs || []) {
+    fields.push({
+      path: `script.output.${output.name}`,
+      label: output.description || output.name,
+      type: output.type,
+      group: 'script',
+    });
+  }
+  for (const action of draft.postActions) {
+    fields.push({
+      path: `actions.${action.id}.output`,
+      label: action.type === 'call_mcp_tool' ? 'MCP 工具调用结果' : 'Skill 调用结果',
+      type: 'object',
+      group: 'action',
+    });
+  }
+  return fields;
 }
 
 type ScriptTemplateInput = {
@@ -225,37 +711,19 @@ type ScriptTemplateInput = {
   type: FieldType;
 };
 
-const SCRIPT_RESERVED_WORDS = new Set([
-  'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
-  'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
-  'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
-  'new', 'null', 'return', 'static', 'super', 'switch', 'this', 'throw',
-  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
-]);
-
 function scriptCommentText(value: string) {
-  return value.replace(/[\r\n]+/g, ' ').replace(/\*\//g, '* /').trim();
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\*\//g, '* /')
+    .trim();
 }
 
-function scriptParameterName(path: string, usedNames: Set<string>) {
-  const parts = path.replace(/^\$/, '').split('.');
-  const rawName = parts[0] === 'event' && parts[1] === 'toolInput' && parts.length > 2
-    ? `toolInput_${parts.slice(2).join('_')}`
-    : parts.at(-1) || 'value';
-  const words = rawName.split(/[^A-Za-z0-9$]+/).filter(Boolean);
-  const candidate = words
-    .map((word, index) => index === 0 ? word : `${word[0]?.toUpperCase() || ''}${word.slice(1)}`)
-    .join('')
-    .replace(/^[^A-Za-z_$]/, '_') || 'value';
-  const baseName = SCRIPT_RESERVED_WORDS.has(candidate) ? `_${candidate}` : candidate;
-  let name = baseName;
-  let suffix = 2;
-  while (usedNames.has(name)) {
-    name = `${baseName}${suffix}`;
-    suffix += 1;
-  }
-  usedNames.add(name);
-  return name;
+function javascriptOutputLines(outputs: HookScriptOutput[]) {
+  return outputs.map((output) => `    // ${output.name}: undefined, // ${scriptCommentText(output.description || output.type)}`);
+}
+
+function pythonOutputLines(outputs: HookScriptOutput[]) {
+  return outputs.map((output) => `        # "${output.name}": None,  # ${scriptCommentText(output.description || output.type)}`);
 }
 
 export function buildScriptTemplate({
@@ -263,66 +731,77 @@ export function buildScriptTemplate({
   eventLabel,
   eventDescription,
   inputs,
+  outputs = [],
+  language = 'javascript',
 }: {
   eventName: HookEventName;
   eventLabel: string;
   eventDescription: string;
   inputs: ScriptTemplateInput[];
+  outputs?: HookScriptOutput[];
+  language?: HookScriptLanguage;
 }) {
-  const usedNames = new Set<string>();
-  const parameters = inputs.map((input) => ({
-    ...input,
-    label: scriptCommentText(input.label),
-    path: scriptCommentText(input.path),
-    name: scriptParameterName(input.path, usedNames),
-  }));
-  const parameterLines = [
-    '  workspace, // WorkspaceFiles：当前用户工作空间的只读文件 API',
-    ...parameters.map((input) => `  ${input.name}, // ${input.type}：${input.label}；来源 ${input.path}`),
+  const safeLabel = scriptCommentText(eventLabel);
+  const safeDescription = scriptCommentText(eventDescription);
+  const inputLines = inputs.map((input) => `${input.path} (${input.type}) - ${scriptCommentText(input.label)}`);
+  const outputLines = outputs.map((output) => `script.output.${output.name} (${output.type}) - ${output.description || output.name}`);
+
+  if (language === 'python') {
+    const comments = [
+      `# 扩展逻辑：${safeLabel}（${eventName}）`,
+      `# 触发说明：${safeDescription}`,
+      '#',
+      '# Claude SDK 回调参数：',
+      ...inputLines.map((line) => `# - ${line}`),
+      '#',
+      '# 脚本返回值只供后续行为和“返回给 Claude”配置引用，不会自动发送给 Claude。',
+      ...(outputLines.length ? ['# 已声明输出：', ...outputLines.map((line) => `# - ${line}`)] : []),
+      '#',
+      '# CCUI API：ccui.workspace / ccui.env / ccui.records / ccui.log',
+      '# 所有文件路径必须是工作空间相对路径。',
+    ].join('\n');
+    return `${comments}
+async def run(event, ccui):
+    # ===== 在这里编写扩展逻辑 =====
+    # text = await ccui.workspace.read_text("README.md")
+    # await ccui.workspace.write_text("hook-output.txt", text)
+    # await ccui.records.write("analysis", {"length": len(text)})
+
+    return {
+        "output": {
+${pythonOutputLines(outputs).join('\n')}
+        }
+    }
+`;
+  }
+
+  const comments = [
+    '/**',
+    ` * 扩展逻辑：${safeLabel}（${eventName}）`,
+    ` * 触发说明：${safeDescription}`,
+    ' *',
+    ' * Claude SDK 回调参数：',
+    ...inputLines.map((line) => ` * - ${line}`),
+    ' *',
+    ' * 脚本返回值只供后续行为和“返回给 Claude”配置引用，不会自动发送给 Claude。',
+    ...(outputLines.length ? [' * 已声明输出：', ...outputLines.map((line) => ` * - ${line}`)] : []),
+    ' *',
+    ' * CCUI API：ccui.workspace / ccui.env / ccui.records / ccui.log',
+    ' * 所有文件路径必须是工作空间相对路径。',
+    ' */',
   ].join('\n');
-  return `/**
- * 高级脚本：${scriptCommentText(eventLabel)}（${eventName}）
- * 触发说明：${scriptCommentText(eventDescription)}
- *
- * 输入参数已经展开，可在“业务逻辑区”直接使用变量名，不需要再读取 ctx.event 或 ctx.context。
- *
- * workspace 只能访问当前用户工作空间内的文件，并且只接受相对工作空间根目录的路径：
- * await workspace.readText('src/index.ts');
- * await workspace.readJson('package.json');
- * await workspace.list('src');
- * await workspace.exists('README.md');
- *
- * output 是可选的 CCUI 自定义计算结果，不是 Claude Code SDK 的原生 Hook 返回值。
- * 不需要自定义结果时保持 output 为空；需要时使用 @output 字段名:类型 中文说明 声明字段。
- * 声明后的字段会以 $script.output.<字段名> 提供给执行门槛和后续基础行为。
- *
- * 示例：将下面的 @output-example 改成 @output 后，sqlLineCount 就会出现在基础行为的变量选择器中：
- * @output-example sqlLineCount:number SQL 有效行数
- * 对应返回值：return { output: { sqlLineCount } };
- */
-export async function run({
-${parameterLines}
-}) {
-  // ===== 在这里编写业务逻辑 =====
-
-
-  // ===== 业务逻辑结束 =====
+  return `${comments}
+export async function run(event, ccui) {
+  // ===== 在这里编写扩展逻辑 =====
+  // const text = await ccui.workspace.readText('README.md');
+  // await ccui.workspace.writeText('hook-output.txt', text);
+  // await ccui.records.write('analysis', { length: text.length });
 
   return {
-    output: {},
+    output: {
+${javascriptOutputLines(outputs).join('\n')}
+    },
   };
 }
 `;
-}
-
-export function getToolTargetFields(resources: HookResources, matcherValue?: string) {
-  const tool = findMatchedTool(resources, matcherValue);
-  const properties = tool?.inputSchema?.properties || {};
-  return Object.entries(properties).map(([key, property]) => ({
-    path: `tool_input.${key}`,
-    label: property.description || key,
-    description: key,
-    type: normalizePropertyType(property.type),
-    options: property.enum?.map((value) => ({ value: String(value), label: String(value) })),
-  }));
 }

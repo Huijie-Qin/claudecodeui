@@ -493,6 +493,26 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/hooks/:hookId/executions', (req, res) => {
+    try {
+      return res.json({
+        executions: hookConfigs.listExecutions(req.params.hookId, { limit: req.query.limit }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook executions');
+    }
+  });
+
+  router.get('/hooks/:hookId/data-records', (req, res) => {
+    try {
+      return res.json({
+        records: hookConfigs.listDataRecords(req.params.hookId, { limit: req.query.limit }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook data records');
+    }
+  });
+
   router.post('/hooks/:hookId/stop', (req, res) => {
     try {
       const hook = hookConfigs.stopHook({ hookId: req.params.hookId, userId: req.user.id });
