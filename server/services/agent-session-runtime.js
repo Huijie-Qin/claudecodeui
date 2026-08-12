@@ -63,6 +63,10 @@ const DEFAULT_DOCKER_CONTAINER_PATH = [
 ].join(':');
 const DOCKER_SHARED_PYTHON_PATH = `${DOCKER_SHARED_PYTHON_USER_BASE}/bin:${DEFAULT_DOCKER_CONTAINER_PATH}`;
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
+const CODEHUB_EMAIL_ENV_NAMES = [
+  'codehub_email',
+  'CODEHUB_EMAIL',
+];
 const DOCKER_RUNTIME_MANAGED_ENV_NAMES = new Set([
   'HOME',
   'PATH',
@@ -120,6 +124,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   W3_NAME_ENV_NAME,
   TENANT_ID_ENV_NAME,
   WORKSPACE_ID_ENV_NAME,
+  ...CODEHUB_EMAIL_ENV_NAMES,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -864,6 +869,12 @@ function readUserContainerEnv(users, userId, baseEnv = process.env) {
   const output = {
     [W3_NAME_ENV_NAME]: username,
   };
+  const gitEmail = typeof users?.getGitConfig === 'function'
+    ? String(users.getGitConfig(userId)?.git_email || '').trim()
+    : '';
+  for (const name of CODEHUB_EMAIL_ENV_NAMES) {
+    output[name] = gitEmail;
+  }
 
   if (typeof users?.getGitTokenForUser === 'function') {
     const gitToken = readEnvValue({ [PRIVATE_TOKEN_ENV_NAME]: users.getGitTokenForUser(userId) }, PRIVATE_TOKEN_ENV_NAME);
@@ -880,7 +891,12 @@ function readUserContainerEnv(users, userId, baseEnv = process.env) {
     output[USER_KEY_ENV_NAME] = env[USER_KEY_ENV_NAME];
   }
   for (const [name, value] of Object.entries(env)) {
-    if (name === USER_KEY_ENV_NAME || name === W3_NAME_ENV_NAME || name === PRIVATE_TOKEN_ENV_NAME) {
+    if (
+      name === USER_KEY_ENV_NAME
+      || name === W3_NAME_ENV_NAME
+      || name === PRIVATE_TOKEN_ENV_NAME
+      || CODEHUB_EMAIL_ENV_NAMES.includes(name)
+    ) {
       continue;
     }
     if (value === '' && hasNonEmptyBaseEnvValue(normalizedBaseEnv, name)) {
