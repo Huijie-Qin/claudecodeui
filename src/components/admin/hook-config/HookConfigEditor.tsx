@@ -33,6 +33,7 @@ import {
   inferNativeMatcherMode,
   scriptApiName,
 } from './catalog';
+import { createHookItemId } from './editorUtils';
 import HookSelect, { type HookSelectOption } from './HookSelect';
 import type {
   FieldChoice,
@@ -557,7 +558,7 @@ function PostActionsEditor({
   const canInvokeSkill = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
   const addAction = (type: HookPostAction['type']) => {
     const action: HookPostAction = {
-      id: globalThis.crypto.randomUUID(),
+      id: createHookItemId(),
       type,
       position: hook.postActions.length,
       config: type === 'call_mcp_tool'
@@ -842,7 +843,7 @@ function ClaudeResponseEditor({
           <div
             key={output.path}
             className={cn(
-              'grid grid-cols-[minmax(190px,0.8fr)_82px_minmax(260px,1.2fr)] items-center gap-3 rounded-xl border bg-background p-3 transition-colors',
+              'grid grid-cols-[minmax(120px,0.8fr)_68px_minmax(160px,1.2fr)] items-center gap-3 rounded-xl border bg-background p-3 transition-colors',
               enabled ? 'border-primary/35' : 'border-border',
             )}
           >
@@ -870,16 +871,16 @@ function ClaudeResponseEditor({
                 delete next[output.path];
                 onChange(next);
               }}
-              className="flex items-center justify-center gap-2 rounded-lg py-1 text-[11px] text-muted-foreground outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+              className="flex items-center gap-1.5 justify-self-center rounded-lg py-1 text-[11px] text-muted-foreground outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
             >
               <span>返回</span>
               <span className={cn(
-                'relative h-5 w-9 rounded-full transition-colors',
+                'inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors',
                 enabled ? 'bg-primary' : 'bg-muted-foreground/25',
               )}>
                 <span className={cn(
-                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
-                  enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
+                  'h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
+                  enabled ? 'translate-x-4' : 'translate-x-0',
                 )} />
               </span>
             </button>
