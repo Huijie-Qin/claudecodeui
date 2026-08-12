@@ -428,9 +428,9 @@ function SkillActionEditor({
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
+  const skillId = typeof config.skillId === 'string' ? config.skillId : '';
   const skillName = typeof config.skillName === 'string' ? config.skillName : '';
   const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
-  const maxTurns = Number(config.maxTurns || 3);
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef({ start: template.length, end: template.length });
@@ -463,32 +463,35 @@ function SkillActionEditor({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
+      <div className="grid gap-3">
         <label className="space-y-1.5">
           <span className="text-xs font-medium text-foreground">Skill</span>
           <HookSelect
-            value={skillName}
+            value={skillId}
             options={resources.skills.map((skill) => ({
-              value: skill.name,
+              value: skill.skillId,
               label: skill.displayName || skill.name,
-              description: skill.description || `/${skill.name}`,
+              description: skill.description || `/${skill.name} · v${skill.version}`,
             }))}
-            onChange={(value) => onChange({ ...config, skillName: value })}
+            onChange={(value) => {
+              const skill = resources.skills.find((item) => item.skillId === value);
+              onChange({
+                ...config,
+                skillId: skill?.skillId || '',
+                skillName: skill?.name || '',
+              });
+            }}
             placeholder={resources.skills.length ? '选择 Skill' : '暂无可用 Skill'}
             ariaLabel="选择 Skill"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">最大回合数</span>
-          <HookSelect
-            value={String(maxTurns)}
-            options={[1, 2, 3, 5].map((value) => ({ value: String(value), label: String(value) }))}
-            onChange={(value) => onChange({ ...config, maxTurns: Number(value) })}
-            placeholder="3"
-            ariaLabel="Skill 最大回合数"
-          />
-        </label>
       </div>
+      {resources.skillSource?.error ? (
+        <p className="text-xs leading-5 text-destructive">{resources.skillSource.error}</p>
+      ) : null}
+      <p className="text-xs leading-5 text-muted-foreground">
+        用户需将同名 Skill 导入自己的工作空间，Hook 执行时会从当前用户工作空间加载。
+      </p>
       <div className="block space-y-1.5">
         <span className="text-xs font-medium text-foreground">Skill 参数</span>
         <div className="relative">
@@ -563,7 +566,7 @@ function PostActionsEditor({
       position: hook.postActions.length,
       config: type === 'call_mcp_tool'
         ? { toolName: '', inputs: {} }
-        : { skillName: '', argumentsTemplate: '', maxTurns: 3 },
+        : { skillId: '', skillName: '', argumentsTemplate: '' },
     };
     onChange([...hook.postActions, action]);
   };

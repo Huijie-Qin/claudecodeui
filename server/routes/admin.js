@@ -14,6 +14,7 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
+import { createHookSkillMarketService } from '../services/hook-skill-market.js';
 import {
   FEATURE_FLAGS,
   featureFlagsService,
@@ -406,6 +407,7 @@ export function createAdminRouter(
   hookConfigs = hookConfigService,
   featureFlags = featureFlagsService,
   showExperimentalFeatures = shouldShowExperimentalFeatures,
+  hookSkillMarket = createHookSkillMarketService({ multitenancy, skillPresets }),
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -488,11 +490,32 @@ export function createAdminRouter(
     }
   });
 
-  router.get('/hooks/resources', (req, res) => {
+  router.get('/hooks/resources', async (req, res) => {
+    let resources;
     try {
-      return res.json(hookConfigs.getResources());
+      resources = hookConfigs.getResources();
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook resources');
+    }
+    try {
+      const market = await hookSkillMarket.listConfigurationSkills({
+        accountId: resolveAdminAccountId(req, users),
+      });
+      return res.json({
+        ...resources,
+        skills: market.skills,
+        skillSource: market.source,
+      });
+    } catch (error) {
+      return res.json({
+        ...resources,
+        skills: [],
+        skillSource: {
+          ...(typeof hookSkillMarket.getSource === 'function' ? hookSkillMarket.getSource() : {}),
+          available: false,
+          error: error instanceof Error ? error.message : 'Failed to load Hook Skill Market',
+        },
+      });
     }
   });
 
@@ -519,9 +542,22 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/hooks/:hookId/publish', (req, res) => {
+  router.post('/hooks/:hookId/publish', async (req, res) => {
     try {
-      const hook = hookConfigs.publishHook({ hookId: req.params.hookId, userId: req.user.id });
+      const draft = hookConfigs.getHook(req.params.hookId);
+      if (!draft) return res.status(404).json({ error: 'Hook not found' });
+      const hasSkillAction = draft.postActions.some((action) => action.type === 'invoke_skill');
+      const validatedSkills = hasSkillAction
+        ? await hookSkillMarket.validateHookSkills({
+          hook: draft,
+          accountId: resolveAdminAccountId(req, users),
+        })
+        : [];
+      const hook = hookConfigs.publishHook({
+        hookId: req.params.hookId,
+        userId: req.user.id,
+        validatedSkills,
+      });
       return res.json({ hook });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to publish Hook');

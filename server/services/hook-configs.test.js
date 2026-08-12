@@ -280,9 +280,9 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
             type: 'invoke_skill',
             position: 1,
             config: {
+              skillId: 'skill-1',
               skillName: 'notify-user',
               argumentsTemplate: '用户 {{ccui.env.userId}}，短信结果 {{actions.send-sms.output}}',
-              maxTurns: 3,
             },
           },
         ],
@@ -293,7 +293,11 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
     assert.equal(created.postActions.length, 2);
     assert.equal(created.postActions[0].position, 0);
     assert.equal(created.postActions[1].position, 1);
-    const published = service.publishHook({ hookId: created.id, userId: 1 });
+    const published = service.publishHook({
+      hookId: created.id,
+      userId: 1,
+      validatedSkills: [{ skillId: 'skill-1', name: 'notify-user' }],
+    });
     assert.equal(published.status, 'published');
   } finally {
     database.close();
@@ -311,7 +315,7 @@ test('post action and Claude response validation follows the selected event', ()
           id: 'recover',
           type: 'invoke_skill',
           position: 0,
-          config: { skillName: 'notify-user', argumentsTemplate: '', maxTurns: 3 },
+          config: { skillId: 'skill-1', skillName: 'notify-user', argumentsTemplate: '' },
         }],
       }),
     });
@@ -325,7 +329,7 @@ test('post action and Claude response validation follows the selected event', ()
           id: 'recover',
           type: 'invoke_skill',
           position: 0,
-          config: { skillName: 'notify-user', argumentsTemplate: '', maxTurns: 3 },
+          config: { skillName: 'notify-user', argumentsTemplate: '' },
         }],
       }),
     }), /only supported for Stop and StopFailure/);

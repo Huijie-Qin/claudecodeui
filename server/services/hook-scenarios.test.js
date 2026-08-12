@@ -711,7 +711,10 @@ function publishGlobalMatrixHook(service, eventName, suffix, overrides) {
     input: fullMatrixHookInput(eventName, suffix, overrides),
     userId: 1,
   });
-  const published = service.publishHook({ hookId: created.id, userId: 1 });
+  const validatedSkills = created.postActions
+    .filter((action) => action.type === 'invoke_skill')
+    .map((action) => ({ skillId: action.config.skillId, name: action.config.skillName }));
+  const published = service.publishHook({ hookId: created.id, userId: 1, validatedSkills });
   const started = service.startHook({ hookId: created.id, userId: 1 });
   assert.equal(published.status, 'published', `${eventName}/${suffix} must publish`);
   assert.equal(started.activationScope, 'all_users', `${eventName}/${suffix} must start globally`);
@@ -910,9 +913,9 @@ test('every Hook event publishes and executes every behavior allowed by its capa
               type: 'invoke_skill',
               position: 0,
               config: {
+                skillId: 'matrix-skill',
                 skillName: 'matrix-recovery',
                 argumentsTemplate: `event={{event.hook_event_name}}${errorTemplate} user={{ccui.env.userId}}`,
-                maxTurns: 2,
               },
             }],
           });
@@ -926,7 +929,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           assert.deepEqual(output, {});
           assert.deepEqual(JSON.parse(execution.actions_json), {
             'invoke-skill': {
-              output: { scheduled: true, skillName: 'matrix-recovery', maxTurns: 2 },
+              output: { scheduled: true, skillName: 'matrix-recovery' },
             },
           });
           const expectedArguments = eventName === 'StopFailure'

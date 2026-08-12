@@ -292,15 +292,16 @@ function normalizePostActions(value, eventName) {
       };
     }
     if (action.type === 'invoke_skill') {
-      const maxTurns = Number(config.maxTurns ?? 3);
-      if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 5) {
-        throw createHttpError(`postActions[${index}].config.maxTurns must be an integer from 1 to 5`);
-      }
       return {
         id,
         type: 'invoke_skill',
         position: index,
         config: {
+          skillId: requireString(
+            typeof config.skillId === 'string' ? config.skillId : '',
+            `postActions[${index}].config.skillId`,
+            { max: 200, allowEmpty: true },
+          ),
           skillName: requireString(
             typeof config.skillName === 'string' ? config.skillName : '',
             `postActions[${index}].config.skillName`,
@@ -311,7 +312,6 @@ function normalizePostActions(value, eventName) {
             `postActions[${index}].config.argumentsTemplate`,
             { max: 10000, allowEmpty: true },
           ),
-          maxTurns,
         },
       };
     }
@@ -537,36 +537,9 @@ function listMcpToolCatalog(database) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function listSkillCatalog(database) {
-  if (!hasTable(database, 'tenant_skill_presets')) return [];
-  const rows = database
-    .prepare(
-      `
-    SELECT p.name, p.display_name, p.description, t.code AS tenant_code
-    FROM tenant_skill_presets p
-    JOIN tenants t ON t.id = p.tenant_id
-    WHERE p.status = 'published'
-    ORDER BY p.display_name, p.name
-  `,
-    )
-    .all();
-  const byName = new Map();
-  for (const row of rows) {
-    const current = byName.get(row.name) || {
-      name: row.name,
-      displayName: row.display_name,
-      description: row.description || '',
-      tenantCodes: [],
-    };
-    if (!current.tenantCodes.includes(row.tenant_code)) current.tenantCodes.push(row.tenant_code);
-    byName.set(row.name, current);
-  }
-  return [...byName.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
-}
-
-function validatePublishResources(hook, database) {
+function validatePublishResources(hook, database, validatedSkills) {
   const mcpTools = new Map(listMcpToolCatalog(database).map((tool) => [tool.name, tool]));
-  const skills = new Set(listSkillCatalog(database).map((skill) => skill.name));
+  const skills = new Map((validatedSkills || []).map((skill) => [String(skill.skillId || ''), skill]));
   for (const action of hook.postActions) {
     if (action.type === 'call_mcp_tool') {
       if (!action.config.toolName.startsWith('mcp__')) {
@@ -579,8 +552,11 @@ function validatePublishResources(hook, database) {
           throw createHttpError(`MCP tool ${action.config.toolName} requires input ${requiredName}`);
         }
       }
-    } else if (!action.config.skillName || !skills.has(action.config.skillName)) {
-      throw createHttpError(`Skill ${action.config.skillName || '(empty)'} is not available`);
+    } else {
+      const skill = skills.get(action.config.skillId);
+      if (!action.config.skillId || !action.config.skillName || skill?.name !== action.config.skillName) {
+        throw createHttpError(`Skill ${action.config.skillName || '(empty)'} was not validated against the Hook public tenant Skill Market`);
+      }
     }
   }
 }
@@ -795,10 +771,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
       return getHook(hookId);
     },
 
-    publishHook: ({ hookId, userId }) => {
+    publishHook: ({ hookId, userId, validatedSkills = [] }) => {
       const hook = requireHook(hookId);
       const normalized = normalizeHookInput(hook, { strict: true });
-      validatePublishResources(normalized, database);
+      validatePublishResources(normalized, database, validatedSkills);
       database
         .prepare(
           `
@@ -880,7 +856,7 @@ export function createHookConfigService({ database = db, configStore = appConfig
       events: [...HOOK_EVENTS],
       builtinTools: BUILTIN_TOOLS,
       mcpTools: listMcpToolCatalog(database),
-      skills: listSkillCatalog(database),
+      skills: [],
       environmentVariables: [
         { path: 'ccui.env.userId', type: 'number' },
         { path: 'ccui.env.username', type: 'string' },

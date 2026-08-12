@@ -8,6 +8,7 @@ import {
 
 const PREFIX = '[Hook全量测试]';
 const TEST_SKILL_NAME = 'hook-matrix-recovery';
+const TEST_SKILL_ID = 'hook-matrix-test-skill';
 
 const SCRIPT_OUTPUTS = Object.freeze([
   { name: 'eventName', type: 'string', description: '本次触发的 Hook 事件名称' },
@@ -199,7 +200,10 @@ function main() {
   let published = 0;
   const createAndPublish = (input) => {
     const created = service.createHook({ input, userId: admin.id });
-    const result = service.publishHook({ hookId: created.id, userId: admin.id });
+    const validatedSkills = created.postActions
+      .filter((action) => action.type === 'invoke_skill')
+      .map((action) => ({ skillId: action.config.skillId, name: action.config.skillName }));
+    const result = service.publishHook({ hookId: created.id, userId: admin.id, validatedSkills });
     if (result.activationScope !== 'manual') throw new Error(`Generated Hook ${result.name} unexpectedly started`);
     published += 1;
   };
@@ -253,9 +257,9 @@ function main() {
             type: 'invoke_skill',
             position: 0,
             config: {
+              skillId: TEST_SKILL_ID,
               skillName: TEST_SKILL_NAME,
               argumentsTemplate: `事件：{{event.hook_event_name}}${errorText}，用户：{{ccui.env.userId}}`,
-              maxTurns: 2,
             },
           }],
         }));

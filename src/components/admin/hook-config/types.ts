@@ -126,10 +126,18 @@ export type HookMcpToolResource = HookToolResource & {
 };
 
 export type HookSkillResource = {
+  skillId: string;
   name: string;
   displayName: string;
   description: string;
-  tenantCodes: string[];
+  version: number;
+};
+
+export type HookSkillSource = {
+  configured: boolean;
+  available: boolean;
+  tenantId?: number;
+  error?: string;
 };
 
 export type HookEnvironmentVariable = {
@@ -143,6 +151,7 @@ export type HookResources = {
   builtinTools: HookToolResource[];
   mcpTools: HookMcpToolResource[];
   skills: HookSkillResource[];
+  skillSource?: HookSkillSource;
   environmentVariables: HookEnvironmentVariable[];
 };
 

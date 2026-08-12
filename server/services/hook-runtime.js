@@ -246,7 +246,7 @@ function buildEnvironment(context, event) {
   };
 }
 
-async function loadSkillContent(workspaceRoot, skillName, argumentsText, maxTurns) {
+async function loadSkillContent(workspaceRoot, skillName, argumentsText) {
   const normalizedName = String(skillName || '').trim();
   if (!normalizedName || normalizedName === '.' || normalizedName === '..' || /[\\/\0]/.test(normalizedName)) {
     throw new Error('Skill name is invalid');
@@ -272,7 +272,7 @@ async function loadSkillContent(workspaceRoot, skillName, argumentsText, maxTurn
     content = content.replace(new RegExp(`\\$${index + 1}\\b`, 'g'), token);
   });
   if (args && !hasPlaceholder) content = `${content.trim()}\n\n## User request\n\n${args}\n`;
-  return `${content.trim()}\n\n## Hook recovery constraint\n\nComplete this recovery in at most ${maxTurns} agent turn${maxTurns === 1 ? '' : 's'}.\n`;
+  return `${content.trim()}\n`;
 }
 
 async function executePostActions({ hook, references, context, event, signal, recoveryKeys }) {
@@ -308,7 +308,6 @@ async function executePostActions({ hook, references, context, event, signal, re
         context.workspaceRoot,
         action.config.skillName,
         argumentsText,
-        action.config.maxTurns,
       );
       await context.enqueueSkillRecovery({
         hook,
@@ -319,7 +318,7 @@ async function executePostActions({ hook, references, context, event, signal, re
       });
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
-        output: { scheduled: true, skillName: action.config.skillName, maxTurns: action.config.maxTurns },
+        output: { scheduled: true, skillName: action.config.skillName },
       };
     }
   }

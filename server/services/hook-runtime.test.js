@@ -182,7 +182,6 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
         config: {
           skillName: 'notify-user',
           argumentsTemplate: 'user={{ccui.env.userId}} error={{event.error_details}}',
-          maxTurns: 2,
         },
       }],
       claudeResponse: { bindings: {} },
@@ -206,7 +205,7 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
     assert.equal(scheduled.length, 1);
     assert.equal(scheduled[0].displayCommand, '/notify-user user=1 error=rate limited');
     assert.match(scheduled[0].modelContent, /Send this notification: user=1 error=rate limited/);
-    assert.match(scheduled[0].modelContent, /at most 2 agent turns/);
+    assert.doesNotMatch(scheduled[0].modelContent, /agent turns?/i);
     const executions = database.prepare('SELECT status, actions_json FROM hook_executions ORDER BY rowid').all();
     assert.equal(executions.length, 2);
     assert.equal(JSON.parse(executions[1].actions_json).recover.output.reason, 'already_scheduled');
@@ -240,7 +239,6 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
         config: {
           skillName: 'summarize-answer',
           argumentsTemplate: '{{ccui.env.userId}}',
-          maxTurns: 2,
         },
       }],
       claudeResponse: {
