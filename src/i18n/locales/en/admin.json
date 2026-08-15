@@ -350,6 +350,9 @@
       "descriptionPlaceholder": "Search internal knowledge bases and project docs.",
       "httpUrl": "HTTP URL",
       "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "timeout": "Timeout (milliseconds)",
+      "timeoutPlaceholder": "Use Claude default",
+      "timeoutHelp": "Optional native MCP timeout. Leave empty to keep Claude's default behavior.",
       "staticHeaders": "Static headers JSON or key/value lines",
       "headersHelper": "Headers helper command",
       "headersHelperHelp": "Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.",
@@ -395,7 +398,8 @@
     },
     "validationErrors": {
       "headersFormat": "Headers must be JSON or one key/value pair per line",
-      "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax"
+      "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax",
+      "timeoutFormat": "Timeout must be a positive integer in milliseconds"
     },
     "tools": {
       "title": "Discovered tools",

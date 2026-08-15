@@ -179,6 +179,22 @@ function normalizeToolsJson(value) {
   return serializeJson(value, 'tools');
 }
 
+function normalizeMcpToolNames(toolNames) {
+  if (!Array.isArray(toolNames)) {
+    throw new Error('allowedToolNames must be an array');
+  }
+
+  const seen = new Set();
+  const normalized = [];
+  for (const toolName of toolNames) {
+    const value = requireNonEmptyString(toolName, 'allowedToolName');
+    if (seen.has(value)) continue;
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
 function normalizeToolSettingsJson(value) {
   if (value == null) return '{}';
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -1787,6 +1803,100 @@ export function createMultitenancyDb(database = db) {
             AND w.status != 'deleted'
           ORDER BY i.workspace_id ASC
         `).all(normalizedTenantId, normalizedPresetId).map(hydrateMcpInstallRow);
+      },
+    },
+
+    mcpToolPreferences: {
+      getForUser: ({ tenantId, workspaceId, userId, presetId }) => {
+        const row = database.prepare(`
+          SELECT *
+          FROM user_workspace_mcp_tool_preferences
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            AND user_id = ?
+            AND preset_id = ?
+        `).get(
+          requirePositiveInteger(Number(tenantId), 'tenantId'),
+          requirePositiveInteger(Number(workspaceId), 'workspaceId'),
+          requirePositiveInteger(Number(userId), 'userId'),
+          requirePositiveInteger(Number(presetId), 'presetId'),
+        );
+        if (!row) return null;
+        return {
+          ...row,
+          allowedToolNames: parseJson(row.allowed_tools_json, []),
+        };
+      },
+
+      listForUser: ({ tenantId, workspaceId, userId }) => database.prepare(`
+        SELECT
+          preference.*,
+          preset.name AS server_name,
+          preset.tools_json AS preset_tools_json,
+          install.tools_json AS installed_tools_json,
+          install.last_probe_status
+        FROM user_workspace_mcp_tool_preferences preference
+        JOIN mcp_server_presets preset ON preset.id = preference.preset_id
+        JOIN workspace_mcp_preset_installs install
+          ON install.workspace_id = preference.workspace_id
+          AND install.preset_id = preference.preset_id
+          AND install.status = 'installed'
+        WHERE preference.tenant_id = ?
+          AND preference.workspace_id = ?
+          AND preference.user_id = ?
+        ORDER BY preset.name COLLATE NOCASE ASC
+      `).all(
+        requirePositiveInteger(Number(tenantId), 'tenantId'),
+        requirePositiveInteger(Number(workspaceId), 'workspaceId'),
+        requirePositiveInteger(Number(userId), 'userId'),
+      ).map((row) => ({
+        ...row,
+        allowedToolNames: parseJson(row.allowed_tools_json, []),
+        presetTools: parseJson(row.preset_tools_json, []),
+        installedTools: parseJson(row.installed_tools_json, []),
+      })),
+
+      setForUser: ({ tenantId, workspaceId, userId, presetId, allowedToolNames }) => {
+        const normalizedTenantId = requirePositiveInteger(Number(tenantId), 'tenantId');
+        const normalizedWorkspaceId = requirePositiveInteger(Number(workspaceId), 'workspaceId');
+        const normalizedUserId = requirePositiveInteger(Number(userId), 'userId');
+        const normalizedPresetId = requirePositiveInteger(Number(presetId), 'presetId');
+        const normalizedAllowedToolNames = normalizeMcpToolNames(allowedToolNames);
+
+        database.prepare(`
+          INSERT INTO user_workspace_mcp_tool_preferences (
+            tenant_id,
+            workspace_id,
+            user_id,
+            preset_id,
+            allowed_tools_json
+          )
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(workspace_id, user_id, preset_id)
+          DO UPDATE SET
+            tenant_id = excluded.tenant_id,
+            allowed_tools_json = excluded.allowed_tools_json,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(
+          normalizedTenantId,
+          normalizedWorkspaceId,
+          normalizedUserId,
+          normalizedPresetId,
+          JSON.stringify(normalizedAllowedToolNames),
+        );
+
+        const row = database.prepare(`
+          SELECT *
+          FROM user_workspace_mcp_tool_preferences
+          WHERE tenant_id = ?
+            AND workspace_id = ?
+            AND user_id = ?
+            AND preset_id = ?
+        `).get(normalizedTenantId, normalizedWorkspaceId, normalizedUserId, normalizedPresetId);
+        return {
+          ...row,
+          allowedToolNames: parseJson(row.allowed_tools_json, []),
+        };
       },
     },
 

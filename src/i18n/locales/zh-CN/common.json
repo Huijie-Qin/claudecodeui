@@ -344,6 +344,14 @@
     "removeSuccess": "{{name}} 已从当前 workspace 移除。",
     "appliesOnNextTurn": "下一次 Agent turn 生效",
     "toolCount": "{{count}} 个工具",
+    "settings": {
+      "description": "勾选允许当前用户使用的 MCP Tool；右侧可继续配置所选 Tool 的参数。",
+      "selectAll": "全选",
+      "enabled": "允许",
+      "footer": "工具权限和自定义参数会一起保存，并在下一次 Agent turn 生效。参数覆盖仍写入 {{file}}。",
+      "saveSuccess": "MCP Tool 设置已保存，将在下一次 Agent turn 生效。",
+      "saveFailed": "保存 MCP Tool 设置失败。"
+    },
     "cardAriaLabel": "{{name}} MCP Server，双击查看详情。",
     "summary": {
       "available": "可用",

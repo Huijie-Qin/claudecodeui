@@ -51,6 +51,7 @@ test('normalizes admin preset input while workspace serialization redacts connec
       Authorization: 'Bearer internal-secret',
     },
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
+    timeout: 180000,
     helperEnv: {
       ROOT_SECRET: 'internal-root-key',
     },
@@ -71,6 +72,7 @@ test('normalizes admin preset input while workspace serialization redacts connec
       helperEnv: {
         ROOT_SECRET: 'internal-root-key',
       },
+      timeout: 180000,
     },
   });
 
@@ -93,6 +95,24 @@ test('normalizes admin preset input while workspace serialization redacts connec
   assert.equal(Object.hasOwn(workspacePreset, 'config'), false);
   assert.equal(Object.hasOwn(workspacePreset, 'url'), false);
   assert.equal(Object.hasOwn(workspacePreset, 'headers'), false);
+});
+
+test('keeps native MCP timeout optional and validates configured values', () => {
+  const withoutTimeout = normalizePresetInput({
+    name: 'native_default',
+    displayName: 'Native Default',
+    type: 'http',
+    url: 'https://mcp.internal/default',
+  });
+  assert.equal(Object.hasOwn(withoutTimeout.config, 'timeout'), false);
+
+  assert.throws(() => normalizePresetInput({
+    name: 'invalid_timeout',
+    displayName: 'Invalid Timeout',
+    type: 'http',
+    url: 'https://mcp.internal/invalid',
+    timeout: 0,
+  }), /positive integer in milliseconds/);
 });
 
 test('workspace mcp server config redacts helper environment secrets', () => {
@@ -210,6 +230,7 @@ test('admin preset updates sync every active installation and preserve unrelated
       description: 'Updated search',
       type: 'http',
       url: 'https://mcp.internal/v2',
+      timeout: 180000,
       headers: { Authorization: 'Bearer shared' },
       helperEnv: { ROOT_SECRET: 'must-not-reach-workspaces' },
     },
@@ -231,6 +252,7 @@ test('admin preset updates sync every active installation and preserve unrelated
   assert.deepEqual(firstConfig.mcpServers.knowledge_v2, {
     type: 'http',
     url: 'https://mcp.internal/v2',
+    timeout: 180000,
     headers: { Authorization: 'Bearer shared' },
   });
   assert.deepEqual(firstConfig.mcpServers.custom, {

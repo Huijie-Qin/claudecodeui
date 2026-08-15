@@ -66,6 +66,64 @@ test('multitenancy initialization copies legacy prod_tenant_id into prod_code', 
   assert.deepEqual(tenant, { code: 'legacy', prod_code: 'prod-legacy' });
 });
 
+test('MCP tool preferences are isolated by workspace and user', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'mcp-owner');
+  const viewerId = seedUser(database, 'mcp-viewer');
+  const tenant = mt.tenants.createTenant({ code: 'mcp-team', name: 'MCP Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: viewerId, role: 'member', permission: 'view', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'mcp-repo',
+    displayName: 'MCP Repo',
+    path: '/tmp/mcp-repo',
+  });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge',
+    description: '',
+    config: { type: 'http', url: 'https://mcp.example.test' },
+    status: 'published',
+    createdByUserId: ownerId,
+  });
+  mt.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    installedByUserId: ownerId,
+    probeStatus: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+  });
+
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    presetId: preset.id,
+    allowedToolNames: ['search_docs'],
+  });
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: viewerId,
+    presetId: preset.id,
+    allowedToolNames: [],
+  });
+
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId })[0].allowedToolNames,
+    ['search_docs'],
+  );
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: viewerId })[0].allowedToolNames,
+    [],
+  );
+});
+
 test('tenant membership controls visible tenants', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

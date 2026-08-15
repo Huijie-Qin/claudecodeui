@@ -767,6 +767,11 @@ export const api = {
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}`), {
         method: 'DELETE',
       }),
+    updateToolPreference: (workspaceId, presetId, allowedToolNames) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/tool-preference`), {
+        method: 'PUT',
+        body: JSON.stringify({ allowedToolNames }),
+      }),
   },
 
   agentGraphs: {

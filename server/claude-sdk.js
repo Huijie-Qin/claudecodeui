@@ -57,6 +57,7 @@ import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skill
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { userDb } from './database/db.js';
+import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
 import { hookConfigService } from './services/hook-configs.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
 import { createNormalizedMessage } from './shared/utils.js';
@@ -922,8 +923,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
       command: displayCommand,
     });
 
+    const mcpToolAccess = resolveUserWorkspaceMcpToolAccess({
+      tenantId: runtimeOptions.tenantId,
+      workspaceId: runtimeOptions.workspaceId,
+      userId: runtimeOptions.userId ?? ws?.userId,
+    });
+
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
+    sdkOptions.disallowedTools = uniqueTools([
+      ...sdkOptions.disallowedTools,
+      ...mcpToolAccess.disallowedTools,
+    ]);
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
@@ -1033,6 +1044,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
         hooks: [async (input) => {
           if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
             return {};
+          }
+
+          if (!mcpToolAccess.isAllowed(input.tool_name)) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: `${input.tool_name} is not enabled in MCP Tool settings`,
+              },
+            };
           }
 
           const config = await readRuntimeMcpToolOverridesConfig();
@@ -1157,6 +1178,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
         return {
           behavior: 'deny',
           message: `${toolName} is disabled by configuration`,
+        };
+      }
+
+      if (!mcpToolAccess.isAllowed(toolName)) {
+        return {
+          behavior: 'deny',
+          message: `${toolName} is not enabled in MCP Tool settings`,
         };
       }
 

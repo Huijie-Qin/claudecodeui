@@ -51,6 +51,7 @@ test('loadMcpConfig merges workspace .mcp.json into SDK mcpServers', async () =>
       admin_installed: {
         type: 'http',
         url: 'https://admin.example.com/mcp',
+        timeout: 180000,
         headers: {
           Authorization: 'Bearer admin-managed',
         },
@@ -66,6 +67,7 @@ test('loadMcpConfig merges workspace .mcp.json into SDK mcpServers', async () =>
   assert.deepEqual(config.admin_installed, {
     type: 'http',
     url: 'https://admin.example.com/mcp',
+    timeout: 180000,
     headers: {
       Authorization: 'Bearer admin-managed',
     },

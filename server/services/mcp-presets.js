@@ -92,6 +92,15 @@ function normalizeHeadersHelper(headersHelper) {
   return headersHelper.trim() || undefined;
 }
 
+function normalizeTimeout(timeout) {
+  if (timeout == null || timeout === '') return undefined;
+  const timeoutMs = Number(timeout);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw createHttpError('timeout must be a positive integer in milliseconds', 400);
+  }
+  return timeoutMs;
+}
+
 function normalizeHelperEnv(helperEnv) {
   if (helperEnv == null || helperEnv === '') return undefined;
   if (typeof helperEnv !== 'object' || Array.isArray(helperEnv)) {
@@ -320,6 +329,7 @@ export function normalizePresetInput(input = {}) {
       headers: normalizeHeaders(config.headers),
       headersHelper: normalizeHeadersHelper(config.headersHelper),
       helperEnv: normalizeHelperEnv(config.helperEnv),
+      timeout: normalizeTimeout(config.timeout),
     }),
   };
 }

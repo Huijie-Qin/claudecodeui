@@ -306,6 +306,9 @@
       "descriptionPlaceholder": "搜索内部知识库和项目文档。",
       "httpUrl": "HTTP URL",
       "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "timeout": "超时时间（毫秒）",
+      "timeoutPlaceholder": "使用 Claude 默认值",
+      "timeoutHelp": "可选的原生 MCP timeout；留空时保持 Claude 默认行为。",
       "staticHeaders": "静态 Header JSON 或键值行",
       "headersHelper": "Header helper 命令",
       "headersHelperHelp": "可选的 Claude Code headersHelper。可通过文件名使用已上传的私有脚本，例如 python3 auth.py。",
@@ -349,7 +352,8 @@
     },
     "validationErrors": {
       "headersFormat": "Header 必须是 JSON，或每行一个键值对",
-      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
+      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法",
+      "timeoutFormat": "超时时间必须是正整数毫秒值"
     },
     "tools": {
       "title": "已发现工具",
