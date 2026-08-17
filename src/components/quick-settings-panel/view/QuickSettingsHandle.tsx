@@ -1,5 +1,6 @@
 import type {
   MouseEvent as ReactMouseEvent,
+  Ref,
   TouchEvent as ReactTouchEvent,
 } from 'react';
 import {
@@ -8,9 +9,11 @@ import {
   GripVertical,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
 import type { QuickSettingsHandleStyle } from '../types';
 
 type QuickSettingsHandleProps = {
+  buttonRef?: Ref<HTMLButtonElement>;
   isOpen: boolean;
   isDragging: boolean;
   style: QuickSettingsHandleStyle;
@@ -20,6 +23,7 @@ type QuickSettingsHandleProps = {
 };
 
 export default function QuickSettingsHandle({
+  buttonRef,
   isOpen,
   isDragging,
   style,
@@ -48,6 +52,7 @@ export default function QuickSettingsHandle({
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       onMouseDown={onMouseDown}

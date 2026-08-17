@@ -30,6 +30,7 @@ type MessageComponentProps = {
   prevMessage: ChatMessage | null;
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  onOpenSubagent?: (toolId: string) => void;
   onShowSettings?: () => void;
   onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
   autoExpandTools?: boolean;
@@ -118,7 +119,7 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
   return sections.join('\n\n');
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -309,6 +310,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   toolId={message.toolId}
                   mode="input"
                   onFileOpen={onFileOpen}
+                  onOpenSubagent={onOpenSubagent}
                   createDiff={createDiff}
                   selectedProject={selectedProject}
                   autoExpandTools={autoExpandTools}
@@ -403,6 +405,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         toolId={message.toolId}
                         mode="result"
                         onFileOpen={onFileOpen}
+                        onOpenSubagent={onOpenSubagent}
                         createDiff={createDiff}
                         selectedProject={selectedProject}
                         autoExpandTools={autoExpandTools}

@@ -385,6 +385,57 @@
       "startAfterInvalid": "Start after must be a valid date/time"
     }
   },
+  "subagent": {
+    "agents": "Agents",
+    "openPanel": "Open agent activity",
+    "resizePanel": "Resize agent activity panel"
+  },
+  "subagentPanel": {
+    "title": "Subagent activity",
+    "agentCount": "{{count}} agents",
+    "agentCount_one": "{{count}} agent",
+    "agentCount_other": "{{count}} agents",
+    "close": "Close subagent panel",
+    "open": "Open in side panel",
+    "selectAgent": "Select subagent",
+    "noAgents": "No subagents",
+    "status": {
+      "running": "Running",
+      "waiting": "Waiting",
+      "completed": "Completed",
+      "error": "Failed"
+    },
+    "duration": {
+      "seconds": "{{count}}s",
+      "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "toolCount": "{{count}} tools",
+    "toolCount_one": "{{count}} tool",
+    "toolCount_other": "{{count}} tools",
+    "empty": {
+      "title": "No subagent activity",
+      "description": "Subagent calls will appear here as they run."
+    },
+    "prompt": {
+      "title": "Task prompt"
+    },
+    "timeline": {
+      "ariaLabel": "Subagent execution timeline",
+      "title": "Activity",
+      "waiting": "Waiting for the first tool call…",
+      "noActivity": "No tool activity was recorded."
+    },
+    "activity": {
+      "ariaLabel": "{{toolName}} tool activity",
+      "parameters": "Parameters",
+      "result": "Result"
+    },
+    "finalResult": "Final result",
+    "usage": "Usage",
+    "newUpdates": "{{count}} new updates · Back to latest",
+    "newUpdates_one": "{{count}} new update · Back to latest",
+    "newUpdates_other": "{{count}} new updates · Back to latest"
+  },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
   }
