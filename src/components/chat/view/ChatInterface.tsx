@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Bot } from 'lucide-react';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
@@ -14,6 +15,9 @@ import { useChatComposerState } from '../hooks/useChatComposerState';
 import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
+import { buildSubagentTraces } from '../subagent/buildSubagentTraces';
+import { SubagentPanel } from '../subagent/SubagentPanel';
+import { useSubagentPanelLayout } from '../subagent/useSubagentPanelLayout';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -67,7 +71,10 @@ function ChatInterface({
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
   const lastRealtimeActivityAtRef = useRef(Date.now());
   const lastSessionStatusProbeAtRef = useRef(0);
+  const subagentReturnFocusRef = useRef<HTMLElement | null>(null);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
+  const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
+  const [selectedSubagentTraceId, setSelectedSubagentTraceId] = useState<string | null>(null);
 
   const {
     provider,
@@ -146,6 +153,82 @@ function ChatInterface({
     pendingViewSessionRef,
     sessionStore,
   });
+
+  const subagentTraces = useMemo(
+    () => buildSubagentTraces(chatMessages),
+    [chatMessages],
+  );
+  const isSubagentPanelOpen = selectedSubagentTraceId !== null;
+  const {
+    containerRef: subagentLayoutRef,
+    panelWidth: subagentPanelWidth,
+    panelMinWidth: subagentPanelMinWidth,
+    panelMaxWidth: subagentPanelMaxWidth,
+    isDocked: isSubagentPanelDocked,
+    isResizing: isSubagentPanelResizing,
+    handleResizeStart: handleSubagentPanelResizeStart,
+    handleResizeKeyDown: handleSubagentPanelResizeKeyDown,
+  } = useSubagentPanelLayout(isSubagentPanelOpen);
+
+  const closeSubagentPanel = useCallback(() => {
+    setSelectedSubagentTraceId(null);
+    const returnFocusTarget = subagentReturnFocusRef.current;
+    subagentReturnFocusRef.current = null;
+    window.requestAnimationFrame(() => returnFocusTarget?.focus());
+  }, []);
+
+  const handleOpenSubagent = useCallback((toolId: string) => {
+    const trace = subagentTraces.find((candidate) => (
+      candidate.id === toolId || candidate.sourceToolIds.includes(toolId)
+    ));
+    if (trace) {
+      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      setIsQuickSettingsOpen(false);
+      setSelectedSubagentTraceId(trace.id);
+    }
+  }, [subagentTraces]);
+
+  const handleOpenLatestSubagent = useCallback(() => {
+    const runningTrace = [...subagentTraces]
+      .reverse()
+      .find((trace) => trace.status === 'running' || trace.status === 'waiting');
+    const trace = runningTrace || subagentTraces[subagentTraces.length - 1];
+    if (trace) {
+      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      setIsQuickSettingsOpen(false);
+      setSelectedSubagentTraceId(trace.id);
+    }
+  }, [subagentTraces]);
+
+  const handleQuickSettingsOpenChange = useCallback((nextOpen: boolean) => {
+    setIsQuickSettingsOpen(nextOpen);
+    if (nextOpen && isSubagentPanelOpen && !isSubagentPanelDocked) {
+      subagentReturnFocusRef.current = null;
+      setSelectedSubagentTraceId(null);
+    }
+  }, [isSubagentPanelDocked, isSubagentPanelOpen]);
+
+  useEffect(() => {
+    if (
+      selectedSubagentTraceId &&
+      !subagentTraces.some((trace) => (
+        trace.id === selectedSubagentTraceId ||
+        trace.sourceToolIds.includes(selectedSubagentTraceId)
+      ))
+    ) {
+      setSelectedSubagentTraceId(null);
+    }
+  }, [selectedSubagentTraceId, subagentTraces]);
+
+  useEffect(() => {
+    setSelectedSubagentTraceId(null);
+    setIsQuickSettingsOpen(false);
+    subagentReturnFocusRef.current = null;
+  }, [selectedSession?.id]);
 
   const {
     input,
@@ -381,12 +464,34 @@ function ChatInterface({
   }, [isLoading, probeCurrentSessionStatus]);
 
   useEffect(() => {
-    if (!isLoading || !canAbortSession) {
+    const canCloseSubagentDrawer = isSubagentPanelOpen && !isSubagentPanelDocked;
+    if (
+      !isQuickSettingsOpen &&
+      !canCloseSubagentDrawer &&
+      (!isLoading || !canAbortSession)
+    ) {
       return;
     }
 
     const handleGlobalEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) {
+      if (
+        event.key !== 'Escape' ||
+        event.repeat ||
+        event.defaultPrevented ||
+        event.isComposing
+      ) {
+        return;
+      }
+
+      if (isQuickSettingsOpen) {
+        event.preventDefault();
+        setIsQuickSettingsOpen(false);
+        return;
+      }
+
+      if (canCloseSubagentDrawer) {
+        event.preventDefault();
+        closeSubagentPanel();
         return;
       }
 
@@ -398,7 +503,15 @@ function ChatInterface({
     return () => {
       document.removeEventListener('keydown', handleGlobalEscape, { capture: true });
     };
-  }, [canAbortSession, handleAbortSession, isLoading]);
+  }, [
+    canAbortSession,
+    closeSubagentPanel,
+    handleAbortSession,
+    isLoading,
+    isQuickSettingsOpen,
+    isSubagentPanelDocked,
+    isSubagentPanelOpen,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -461,8 +574,34 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        <ChatMessagesPane
+      <div
+        ref={subagentLayoutRef}
+        className="relative flex h-full min-h-0 overflow-hidden"
+      >
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {subagentTraces.length > 0 && (
+            <button
+              type="button"
+              onClick={handleOpenLatestSubagent}
+              aria-controls="subagent-activity-panel"
+              aria-expanded={isSubagentPanelOpen}
+              aria-hidden={isSubagentPanelOpen}
+              tabIndex={isSubagentPanelOpen ? -1 : undefined}
+              className={`absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-2.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground ${isSubagentPanelOpen ? 'pointer-events-none invisible' : 'visible'}`}
+              title={t('subagent.openPanel', { defaultValue: 'Open agent activity' })}
+            >
+              <Bot className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{t('subagent.agents', { defaultValue: 'Agents' })}</span>
+              <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-foreground">
+                {subagentTraces.length}
+              </span>
+              {subagentTraces.some((trace) => trace.status === 'running' || trace.status === 'waiting') && (
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-500" aria-hidden="true" />
+              )}
+            </button>
+          )}
+
+          <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
           onTouchMove={handleScroll}
@@ -500,9 +639,10 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}
+          onOpenSubagent={handleOpenSubagent}
         />
 
-        <ChatComposer
+          <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
@@ -576,6 +716,53 @@ function ChatInterface({
           onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}
           scheduledTasksDisabledReason={scheduledTasksDisabledReason}
         />
+        </div>
+
+        {isSubagentPanelOpen && isSubagentPanelDocked && (
+          <div className="flex h-full min-w-0 flex-shrink-0">
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label={t('subagent.resizePanel', { defaultValue: 'Resize agent activity panel' })}
+              aria-orientation="vertical"
+              aria-controls="subagent-activity-panel"
+              aria-valuemin={subagentPanelMinWidth}
+              aria-valuemax={subagentPanelMaxWidth}
+              aria-valuenow={Math.round(subagentPanelWidth)}
+              onPointerDown={handleSubagentPanelResizeStart}
+              onKeyDown={handleSubagentPanelResizeKeyDown}
+              className="group relative w-1 flex-shrink-0 cursor-col-resize bg-border/70 transition-colors hover:bg-purple-500 focus-visible:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40"
+            >
+              <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-purple-500 opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
+            <div
+              className="h-full min-w-0 overflow-hidden border-l border-border bg-background"
+              style={{ width: `${subagentPanelWidth}px` }}
+            >
+              <SubagentPanel
+                traces={subagentTraces}
+                selectedTraceId={selectedSubagentTraceId}
+                onSelectTrace={setSelectedSubagentTraceId}
+                onClose={closeSubagentPanel}
+                mode="docked"
+              />
+            </div>
+          </div>
+        )}
+
+        {isSubagentPanelOpen && !isSubagentPanelDocked && (
+          <SubagentPanel
+            traces={subagentTraces}
+            selectedTraceId={selectedSubagentTraceId}
+            onSelectTrace={setSelectedSubagentTraceId}
+            onClose={closeSubagentPanel}
+            mode="drawer"
+          />
+        )}
+
+        {isSubagentPanelResizing && (
+          <div className="fixed inset-0 z-[10000] cursor-col-resize" aria-hidden="true" />
+        )}
       </div>
 
       {selectedProject && showScheduledTasks ? (
@@ -593,7 +780,10 @@ function ChatInterface({
         />
       ) : null}
 
-      <QuickSettingsPanel />
+      <QuickSettingsPanel
+        open={isQuickSettingsOpen}
+        onOpenChange={handleQuickSettingsOpenChange}
+      />
     </PermissionContext.Provider>
   );
 }

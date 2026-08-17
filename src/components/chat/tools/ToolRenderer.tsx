@@ -23,6 +23,7 @@ interface ToolRendererProps {
   toolId?: string;
   mode: 'input' | 'result';
   onFileOpen?: (filePath: string, diffInfo?: any) => void;
+  onOpenSubagent?: (toolId: string) => void;
   createDiff?: (oldStr: string, newStr: string) => DiffLine[];
   selectedProject?: Project | null;
   autoExpandTools?: boolean;
@@ -73,6 +74,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   toolId,
   mode,
   onFileOpen,
+  onOpenSubagent,
   createDiff,
   selectedProject,
   autoExpandTools = false,
@@ -121,11 +123,13 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     if (mode === 'result') return null;
     return (
       <SubagentContainer
+        toolId={toolId}
         toolInput={toolInput}
         toolResult={toolResult}
         completionTime={completionTime}
         subagentState={subagentState}
         taskNotification={taskNotification}
+        onOpenSubagent={onOpenSubagent}
       />
     );
   }

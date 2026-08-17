@@ -1,16 +1,29 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useQuickSettingsDrag } from '../hooks/useQuickSettingsDrag';
 import type { PreferenceToggleKey, QuickSettingsPreferences } from '../types';
+
 import QuickSettingsContent from './QuickSettingsContent';
 import QuickSettingsHandle from './QuickSettingsHandle';
 import QuickSettingsPanelHeader from './QuickSettingsPanelHeader';
 
-export default function QuickSettingsPanelView() {
-  const [isOpen, setIsOpen] = useState(false);
+type QuickSettingsPanelViewProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+};
+
+export default function QuickSettingsPanelView({
+  open,
+  onOpenChange,
+}: QuickSettingsPanelViewProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = open ?? internalOpen;
+  const handleButtonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const { isMobile } = useDeviceSettings({ trackPWA: false });
   const { isDarkMode } = useTheme();
   const { preferences, setPreference } = useUiPreferences();
@@ -44,6 +57,13 @@ export default function QuickSettingsPanelView() {
     [setPreference],
   );
 
+  const setOpen = useCallback((nextOpen: boolean) => {
+    if (open === undefined) {
+      setInternalOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  }, [onOpenChange, open]);
+
   const handleToggleFromHandle = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
       // A drag releases a click event as well; this guard prevents accidental toggles.
@@ -52,14 +72,23 @@ export default function QuickSettingsPanelView() {
         return;
       }
 
-      setIsOpen((previous) => !previous);
+      setOpen(!isOpen);
     },
-    [consumeSuppressedClick],
+    [consumeSuppressedClick, isOpen, setOpen],
   );
+
+  useEffect(() => {
+    if (isOpen) return;
+    const activeElement = document.activeElement;
+    if (activeElement && panelRef.current?.contains(activeElement)) {
+      handleButtonRef.current?.focus();
+    }
+  }, [isOpen]);
 
   return (
     <>
       <QuickSettingsHandle
+        buttonRef={handleButtonRef}
         isOpen={isOpen}
         isDragging={isDragging}
         style={handleStyle}
@@ -69,7 +98,9 @@ export default function QuickSettingsPanelView() {
       />
 
       <div
-        className={`fixed right-0 top-0 z-40 h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
+        ref={panelRef}
+        aria-hidden={!isOpen}
+        className={`fixed right-0 top-0 z-40 h-full w-64 transform border-l border-border bg-background shadow-xl transition-transform duration-150 ease-out ${isOpen ? 'visible translate-x-0' : 'pointer-events-none invisible translate-x-full'} ${isMobile ? 'h-screen' : ''}`}
       >
         <div className="flex h-full flex-col">
           <QuickSettingsPanelHeader />
@@ -84,7 +115,7 @@ export default function QuickSettingsPanelView() {
       {isOpen && (
         <div
           className="fixed inset-0 z-30 bg-background/80 backdrop-blur-sm transition-opacity duration-150 ease-out"
-          onClick={() => setIsOpen(false)}
+          onClick={() => setOpen(false)}
         />
       )}
     </>
