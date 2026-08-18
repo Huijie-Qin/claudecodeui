@@ -420,7 +420,7 @@
   },
   "hooks": {
     "title": "Hook configuration",
-    "description": "Configure Claude Code Hook events, Matchers, extension logic, post-actions, and responses.",
+    "description": "Configure Claude Code Hook events, Matchers, extension logic, post-actions, and responses, then bind by user, tenant, or all users.",
     "noScript": "{{count}} post-actions",
     "create": "New Hook",
     "newHook": "New Hook",
@@ -428,11 +428,11 @@
     "backToList": "Back to list",
     "saveDraft": "Save draft",
     "publish": "Publish",
-    "start": "Start",
-    "stop": "Stop",
-    "started": "Enabled for all users",
-    "partiallyStarted": "Enabled by some users",
-    "stopped": "Not started",
+    "start": "Bind users",
+    "stop": "Clear bindings",
+    "started": "Users bound",
+    "partiallyStarted": "Users bound",
+    "stopped": "No users bound",
     "delete": "Delete",
     "edit": "Edit",
     "save": "Save",
@@ -445,7 +445,60 @@
     "noDescription": "No description",
     "actionCount": "{{count}} actions",
     "boundUserCount": "{{count}} users bound",
+    "bindings": {
+      "title": "Bind enabled users",
+      "manage": "Bind users",
+      "boundCountShort": "{{count}} bound",
+      "boundTenantCountShort": "{{count}} tenants (dynamic)",
+      "allUsersShort": "All users (dynamic)",
+      "unbound": "No users bound",
+      "scopes": {
+        "users": "Specific users",
+        "tenants": "By tenant",
+        "all_users": "All users"
+      },
+      "scopeHints": {
+        "users": "Runs only for users selected individually; new users are not added automatically.",
+        "tenants": "Runs for every active member of the selected tenants; future tenant members are included automatically.",
+        "all_users": "Runs for every active system user; future users are included automatically."
+      },
+      "search": "Search username",
+      "searchTenant": "Search tenant name or code",
+      "loading": "Loading binding scope",
+      "noUsers": "No users available",
+      "noTenants": "No tenants available",
+      "noMatches": "No matching users",
+      "admin": "Admin",
+      "inactive": "Inactive",
+      "tenantUsers": "{{count}} members",
+      "allUsersTitle": "Enable the dynamic all-user scope",
+      "allUsersDescription": "Currently covers {{count}} active users; newly activated users will receive this Hook automatically.",
+      "selectionSummary": {
+        "users": "{{count}} users selected",
+        "tenants": "{{count}} tenants selected",
+        "all_users": "Currently covers {{count}} active users"
+      },
+      "clear": "Clear selection",
+      "save": "Save bindings",
+      "savedScopes": {
+        "users": "Specific-user bindings saved",
+        "tenants": "Dynamic tenant bindings saved",
+        "all_users": "Dynamic all-user binding enabled"
+      },
+      "loadError": "Failed to load Hook user bindings",
+      "saveError": "Failed to save Hook user bindings"
+    },
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
+    "builtinSkills": {
+      "title": "Built-in Hook Skill management",
+      "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
+      "upload": "Upload Skill file",
+      "uploading": "Uploading",
+      "packaged": "Packaged",
+      "uploaded": "Admin upload",
+      "empty": "No built-in Hook Skills",
+      "formatHint": "No extension, size, frontmatter-field, or body validation is applied. The name comes from frontmatter.name when present, or from the file name. Administrators are responsible for correctness."
+    },
     "triggerEvent": "Trigger event",
     "selectEvent": "Select trigger event",
     "insertVariable": "Variable",
@@ -868,15 +921,17 @@
       "start": "Failed to start Hook",
       "stop": "Failed to stop Hook",
       "delete": "Failed to delete Hook",
-      "saveSettings": "Failed to save Hook event settings"
+      "saveSettings": "Failed to save Hook event settings",
+      "uploadSkill": "Failed to upload built-in Hook Skill"
     },
     "toast": {
       "saved": "Hook draft saved",
-      "published": "Hook published",
-      "started": "Hook is now global for current and future users",
-      "stopped": "Hook is no longer global; user bindings were preserved",
+      "published": "Hook published; select the enabled users",
+      "started": "Hook user bindings saved",
+      "stopped": "Hook user bindings cleared",
       "deleted": "Hook deleted",
-      "eventsSaved": "Visible trigger events saved"
+      "eventsSaved": "Visible trigger events saved",
+      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded"
     }
   },
   "runtimes": {

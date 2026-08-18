@@ -14,7 +14,7 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
-import { createHookSkillMarketService } from '../services/hook-skill-market.js';
+import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
 import {
   FEATURE_FLAGS,
   featureFlagsService,
@@ -148,6 +148,12 @@ const helperScriptUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 64 * 1024,
+    files: 1,
+  },
+});
+const hookSkillUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
     files: 1,
   },
 });
@@ -407,7 +413,7 @@ export function createAdminRouter(
   hookConfigs = hookConfigService,
   featureFlags = featureFlagsService,
   showExperimentalFeatures = shouldShowExperimentalFeatures,
-  hookSkillMarket = createHookSkillMarketService({ multitenancy, skillPresets }),
+  hookSkillCatalog = createHookSkillCatalogService(),
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -498,25 +504,53 @@ export function createAdminRouter(
       return sendRouteError(res, error, 'Failed to load Hook resources');
     }
     try {
-      const market = await hookSkillMarket.listConfigurationSkills({
-        accountId: resolveAdminAccountId(req, users),
-      });
+      const catalog = await hookSkillCatalog.listConfigurationSkills();
       return res.json({
         ...resources,
-        skills: market.skills,
-        skillSource: market.source,
+        skills: catalog.skills,
+        skillSource: catalog.source,
       });
     } catch (error) {
       return res.json({
         ...resources,
         skills: [],
         skillSource: {
-          ...(typeof hookSkillMarket.getSource === 'function' ? hookSkillMarket.getSource() : {}),
+          ...(typeof hookSkillCatalog.getSource === 'function' ? hookSkillCatalog.getSource() : {}),
           available: false,
-          error: error instanceof Error ? error.message : 'Failed to load Hook Skill Market',
+          error: error instanceof Error ? error.message : 'Failed to load built-in Hook Skills',
         },
       });
     }
+  });
+
+  router.post('/hooks/skills', (req, res) => {
+    hookSkillUpload.single('file')(req, res, async (uploadError) => {
+      try {
+        if (uploadError) {
+          const error = new Error(uploadError.message);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (!req.file?.buffer) {
+          const error = new Error('Skill file is required');
+          error.statusCode = 400;
+          throw error;
+        }
+        const skill = await hookSkillCatalog.uploadBuiltinSkill({
+          fileName: req.file.originalname,
+          fileBuffer: req.file.buffer,
+          userId: req.user.id,
+        });
+        const catalog = await hookSkillCatalog.listConfigurationSkills();
+        return res.status(201).json({
+          skill,
+          skills: catalog.skills,
+          skillSource: catalog.source,
+        });
+      } catch (error) {
+        return sendRouteError(res, error, 'Failed to upload built-in Hook Skill');
+      }
+    });
   });
 
   router.get('/hooks/:hookId', (req, res) => {
@@ -548,10 +582,7 @@ export function createAdminRouter(
       if (!draft) return res.status(404).json({ error: 'Hook not found' });
       const hasSkillAction = draft.postActions.some((action) => action.type === 'invoke_skill');
       const validatedSkills = hasSkillAction
-        ? await hookSkillMarket.validateHookSkills({
-          hook: draft,
-          accountId: resolveAdminAccountId(req, users),
-        })
+        ? await hookSkillCatalog.validateHookSkills({ hook: draft })
         : [];
       const hook = hookConfigs.publishHook({
         hookId: req.params.hookId,
@@ -564,12 +595,25 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/hooks/:hookId/start', (req, res) => {
+  router.get('/hooks/:hookId/bindings', (req, res) => {
     try {
-      const hook = hookConfigs.startHook({ hookId: req.params.hookId, userId: req.user.id });
-      return res.json({ hook });
+      return res.json(hookConfigs.listHookBindings(req.params.hookId));
     } catch (error) {
-      return sendRouteError(res, error, 'Failed to start Hook');
+      return sendRouteError(res, error, 'Failed to load Hook user bindings');
+    }
+  });
+
+  router.put('/hooks/:hookId/bindings', (req, res) => {
+    try {
+      return res.json(hookConfigs.replaceHookBindings({
+        hookId: req.params.hookId,
+        scope: req.body?.scope,
+        userIds: req.body?.userIds,
+        tenantIds: req.body?.tenantIds,
+        boundBy: req.user.id,
+      }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook user bindings');
     }
   });
 
@@ -590,15 +634,6 @@ export function createAdminRouter(
       });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook data records');
-    }
-  });
-
-  router.post('/hooks/:hookId/stop', (req, res) => {
-    try {
-      const hook = hookConfigs.stopHook({ hookId: req.params.hookId, userId: req.user.id });
-      return res.json({ hook });
-    } catch (error) {
-      return sendRouteError(res, error, 'Failed to stop Hook');
     }
   });
 

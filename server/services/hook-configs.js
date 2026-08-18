@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { appConfigDb, db } from '../database/db.js';
+import { isBuiltinHookSkillId } from './hook-builtin-skills.js';
 
 const HOOK_EVENTS = Object.freeze([
   'Setup',
@@ -61,7 +62,7 @@ const MATCHER_EVENTS = new Set([
 const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_POST_ACTIONS = 20;
-const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'invoke_skill']);
+const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill']);
 const SKILL_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
 const ENVIRONMENT_VARIABLE_PATHS = new Set([
@@ -116,7 +117,9 @@ const EVENT_CLAUDE_OUTPUTS = Object.freeze({
 });
 
 function allowedPostActions(eventName) {
-  return new Set(SKILL_ACTION_EVENTS.has(eventName) ? POST_ACTION_TYPES : ['call_mcp_tool']);
+  return new Set(SKILL_ACTION_EVENTS.has(eventName)
+    ? POST_ACTION_TYPES
+    : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill'));
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -287,25 +290,56 @@ function normalizePostActions(value, eventName) {
             `postActions[${index}].config.toolName`,
             { max: 300, allowEmpty: true },
           ),
+          condition: config.condition == null
+            ? null
+            : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           inputs,
         },
       };
     }
+    if (action.type === 'write_record') {
+      const rawFields = isPlainObject(config.fields) ? config.fields : {};
+      const fields = {};
+      for (const [key, binding] of Object.entries(rawFields)) {
+        const fieldName = requireString(key, `postActions[${index}].config.fields key`, { max: 200 });
+        fields[fieldName] = normalizeBinding(binding, `postActions[${index}].config.fields.${fieldName}`);
+      }
+      return {
+        id,
+        type: 'write_record',
+        position: index,
+        config: {
+          recordType: requireString(
+            typeof config.recordType === 'string' ? config.recordType : '',
+            `postActions[${index}].config.recordType`,
+            { max: 120, allowEmpty: true },
+          ),
+          condition: config.condition == null
+            ? null
+            : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
+          fields,
+        },
+      };
+    }
     if (action.type === 'invoke_skill') {
+      const skillId = requireString(
+        typeof config.skillId === 'string' ? config.skillId : '',
+        `postActions[${index}].config.skillId`,
+        { max: Number.POSITIVE_INFINITY, allowEmpty: true },
+      );
+      if (skillId && !isBuiltinHookSkillId(skillId)) {
+        throw createHttpError(`postActions[${index}].config.skillId must reference a built-in Hook Skill`);
+      }
       return {
         id,
         type: 'invoke_skill',
         position: index,
         config: {
-          skillId: requireString(
-            typeof config.skillId === 'string' ? config.skillId : '',
-            `postActions[${index}].config.skillId`,
-            { max: 200, allowEmpty: true },
-          ),
+          skillId,
           skillName: requireString(
             typeof config.skillName === 'string' ? config.skillName : '',
             `postActions[${index}].config.skillName`,
-            { max: 120, allowEmpty: true },
+            { max: Number.POSITIVE_INFINITY, allowEmpty: true },
           ),
           argumentsTemplate: requireString(
             typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '',
@@ -369,8 +403,11 @@ function validateHookReferences(hook) {
   const allActionIds = new Set(hook.postActions.map((action) => action.id));
   const precedingActionIds = new Set();
   for (const action of hook.postActions) {
-    if (action.type === 'call_mcp_tool') {
-      for (const binding of Object.values(action.config.inputs)) {
+    if (action.type === 'call_mcp_tool' || action.type === 'write_record') {
+      const bindings = action.type === 'call_mcp_tool'
+        ? [action.config.condition, ...Object.values(action.config.inputs)].filter(Boolean)
+        : [action.config.condition, ...Object.values(action.config.fields)].filter(Boolean);
+      for (const binding of bindings) {
         for (const path of bindingReferences(binding)) {
           if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
             throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
@@ -449,6 +486,7 @@ function mapHookRow(row) {
     updatedAt: row.updated_at,
     publishedAt: row.published_at || null,
     boundUserCount: Number(row.bound_user_count || 0),
+    boundTenantCount: Number(row.bound_tenant_count || 0),
   };
 }
 
@@ -552,10 +590,18 @@ function validatePublishResources(hook, database, validatedSkills) {
           throw createHttpError(`MCP tool ${action.config.toolName} requires input ${requiredName}`);
         }
       }
+    } else if (action.type === 'write_record') {
+      if (!action.config.recordType) {
+        throw createHttpError(`Post action ${action.id} must set a record type`);
+      }
     } else {
       const skill = skills.get(action.config.skillId);
-      if (!action.config.skillId || !action.config.skillName || skill?.name !== action.config.skillName) {
-        throw createHttpError(`Skill ${action.config.skillName || '(empty)'} was not validated against the Hook public tenant Skill Market`);
+      if (
+        !isBuiltinHookSkillId(action.config.skillId)
+        || !action.config.skillName
+        || skill?.name !== action.config.skillName
+      ) {
+        throw createHttpError(`Skill ${action.config.skillName || '(empty)'} was not validated as a built-in Hook Skill`);
       }
     }
   }
@@ -639,7 +685,14 @@ export function createHookConfigService({ database = db, configStore = appConfig
     `,
       )
       .get(hookId);
-    return mapHookRow({ ...row, bound_user_count: bindingCount?.count || 0 });
+    const tenantBindingCount = database
+      .prepare('SELECT COUNT(*) AS count FROM hook_tenant_bindings WHERE hook_id = ?')
+      .get(hookId);
+    return mapHookRow({
+      ...row,
+      bound_user_count: bindingCount?.count || 0,
+      bound_tenant_count: tenantBindingCount?.count || 0,
+    });
   };
   const requireHook = (hookId) => {
     const hook = getHook(hookId);
@@ -652,7 +705,8 @@ export function createHookConfigService({ database = db, configStore = appConfig
         .prepare(
           `
         SELECT h.*,
-          (SELECT COUNT(*) FROM user_hook_bindings b WHERE b.hook_id = h.id) AS bound_user_count
+          (SELECT COUNT(*) FROM user_hook_bindings b WHERE b.hook_id = h.id) AS bound_user_count,
+          (SELECT COUNT(*) FROM hook_tenant_bindings tb WHERE tb.hook_id = h.id) AS bound_tenant_count
         FROM hooks h
         ORDER BY h.updated_at DESC, h.created_at DESC
       `,
@@ -666,7 +720,8 @@ export function createHookConfigService({ database = db, configStore = appConfig
         .prepare(
           `
         SELECT h.*,
-          (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count
+          (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
+          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count
         FROM hooks h
         WHERE h.status = 'published'
           AND (
@@ -677,15 +732,174 @@ export function createHookConfigService({ database = db, configStore = appConfig
               WHERE binding.hook_id = h.id
                 AND binding.user_id = ?
             )
+            OR EXISTS (
+              SELECT 1
+              FROM hook_tenant_bindings tenant_binding
+              INNER JOIN tenant_users membership
+                ON membership.tenant_id = tenant_binding.tenant_id
+               AND membership.user_id = ?
+               AND membership.status = 'active'
+              INNER JOIN tenants tenant
+                ON tenant.id = tenant_binding.tenant_id
+               AND tenant.status = 'active'
+              WHERE tenant_binding.hook_id = h.id
+            )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC
       `,
         )
-        .all(userId);
+        .all(userId, userId);
       return rows.map(mapHookRow);
     },
 
     getHook,
+
+    listHookBindings: (hookId) => {
+      const hook = requireHook(hookId);
+      const users = database
+        .prepare(
+          `
+        SELECT
+          users.id,
+          users.username,
+          users.is_active,
+          users.is_system_admin,
+          CASE WHEN binding.user_id IS NULL THEN 0 ELSE 1 END AS is_bound
+        FROM users
+        LEFT JOIN user_hook_bindings binding
+          ON binding.user_id = users.id
+         AND binding.hook_id = ?
+        ORDER BY users.username COLLATE NOCASE ASC, users.id ASC
+      `,
+        )
+        .all(hookId)
+        .map((row) => ({
+          id: row.id,
+          username: row.username,
+          isActive: row.is_active === 1,
+          isSystemAdmin: row.is_system_admin === 1,
+          bound: row.is_bound === 1,
+        }));
+      const tenants = database
+        .prepare(
+          `
+        SELECT
+          tenants.id,
+          tenants.code,
+          tenants.name,
+          tenants.status,
+          CASE WHEN binding.tenant_id IS NULL THEN 0 ELSE 1 END AS is_bound,
+          (
+            SELECT COUNT(*)
+            FROM tenant_users membership
+            INNER JOIN users ON users.id = membership.user_id AND users.is_active = 1
+            WHERE membership.tenant_id = tenants.id
+              AND membership.status = 'active'
+          ) AS active_user_count
+        FROM tenants
+        LEFT JOIN hook_tenant_bindings binding
+          ON binding.tenant_id = tenants.id
+         AND binding.hook_id = ?
+        ORDER BY tenants.name COLLATE NOCASE ASC, tenants.id ASC
+      `,
+        )
+        .all(hookId)
+        .map((row) => ({
+          id: row.id,
+          code: row.code,
+          name: row.name,
+          active: row.status === 'active',
+          activeUserCount: Number(row.active_user_count || 0),
+          bound: row.is_bound === 1,
+        }));
+      return {
+        scope: hook.activationScope === 'all_users'
+          ? 'all_users'
+          : hook.boundTenantCount > 0
+            ? 'tenants'
+            : 'users',
+        users,
+        tenants,
+      };
+    },
+
+    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], boundBy }) => {
+      const hook = requireHook(hookId);
+      if (hook.status !== 'published') {
+        throw createHttpError('Publish the Hook before binding users');
+      }
+      if (!['users', 'tenants', 'all_users'].includes(scope)) {
+        throw createHttpError('scope must be users, tenants, or all_users');
+      }
+      if (!Array.isArray(userIds)) throw createHttpError('userIds must be an array');
+      if (!Array.isArray(tenantIds)) throw createHttpError('tenantIds must be an array');
+      const normalizedUserIds = [...new Set(userIds.map((value) => Number(value)))];
+      const normalizedTenantIds = [...new Set(tenantIds.map((value) => Number(value)))];
+      if (normalizedUserIds.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+        throw createHttpError('userIds must contain positive integer user IDs');
+      }
+      if (normalizedTenantIds.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+        throw createHttpError('tenantIds must contain positive integer tenant IDs');
+      }
+      if (scope === 'users' && normalizedUserIds.length > 0) {
+        const placeholders = normalizedUserIds.map(() => '?').join(', ');
+        const activeUsers = database
+          .prepare(`SELECT id FROM users WHERE is_active = 1 AND id IN (${placeholders})`)
+          .all(...normalizedUserIds);
+        if (activeUsers.length !== normalizedUserIds.length) {
+          throw createHttpError('One or more selected users do not exist or are inactive');
+        }
+      }
+      if (scope === 'tenants') {
+        if (normalizedTenantIds.length === 0) {
+          throw createHttpError('Select at least one active tenant');
+        }
+        const placeholders = normalizedTenantIds.map(() => '?').join(', ');
+        const activeTenants = database
+          .prepare(`SELECT id FROM tenants WHERE status = 'active' AND id IN (${placeholders})`)
+          .all(...normalizedTenantIds);
+        if (activeTenants.length !== normalizedTenantIds.length) {
+          throw createHttpError('One or more selected tenants do not exist or are inactive');
+        }
+      }
+
+      const replace = database.transaction(() => {
+        database.prepare('DELETE FROM user_hook_bindings WHERE hook_id = ?').run(hookId);
+        database.prepare('DELETE FROM hook_tenant_bindings WHERE hook_id = ?').run(hookId);
+        const insert = database.prepare(
+          `
+          INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+          VALUES (?, ?, ?)
+        `,
+        );
+        if (scope === 'users') {
+          for (const userId of normalizedUserIds) insert.run(userId, hookId, boundBy);
+        }
+        if (scope === 'tenants') {
+          const insertTenant = database.prepare(
+            `
+            INSERT INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+            VALUES (?, ?, ?)
+          `,
+          );
+          for (const tenantId of normalizedTenantIds) insertTenant.run(hookId, tenantId, boundBy);
+        }
+        database
+          .prepare(
+            `
+          UPDATE hooks
+          SET activation_scope = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          WHERE id = ?
+        `,
+          )
+          .run(scope === 'all_users' ? 'all_users' : 'manual', boundBy, hookId);
+      });
+      replace();
+      return {
+        scope,
+        hook: getHook(hookId),
+      };
+    },
 
     listExecutions: (hookId, { limit } = {}) => {
       requireHook(hookId);
@@ -782,40 +996,6 @@ export function createHookConfigService({ database = db, configStore = appConfig
         SET status = 'published', version = version + 1,
             published_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP, updated_by = ?
-        WHERE id = ?
-      `,
-        )
-        .run(userId, hookId);
-      return getHook(hookId);
-    },
-
-    startHook: ({ hookId, userId }) => {
-      const hook = requireHook(hookId);
-      if (hook.status !== 'published') {
-        throw createHttpError('Publish the Hook before starting it');
-      }
-      database
-        .prepare(
-          `
-        UPDATE hooks
-        SET activation_scope = 'all_users', updated_at = CURRENT_TIMESTAMP, updated_by = ?
-        WHERE id = ?
-      `,
-        )
-        .run(userId, hookId);
-      return getHook(hookId);
-    },
-
-    stopHook: ({ hookId, userId }) => {
-      const hook = requireHook(hookId);
-      if (hook.status !== 'published') {
-        throw createHttpError('Only a published Hook can be stopped');
-      }
-      database
-        .prepare(
-          `
-        UPDATE hooks
-        SET activation_scope = 'manual', updated_at = CURRENT_TIMESTAMP, updated_by = ?
         WHERE id = ?
       `,
         )

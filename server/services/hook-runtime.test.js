@@ -115,6 +115,177 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
   }
 });
 
+test('write_record post action persists mapped Hook data without a script API call', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Record completion',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'record-stop',
+        type: 'write_record',
+        config: {
+          recordType: 'conversation_completion',
+          condition: null,
+          fields: {
+            sessionId: { source: 'reference', path: 'event.session_id' },
+            status: { source: 'literal', value: 'success' },
+            userId: { source: 'reference', path: 'ccui.env.userId' },
+          },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      username: 'alice',
+      workspaceRoot,
+      database,
+    });
+
+    const output = await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-record-1',
+      last_assistant_message: 'done',
+    });
+
+    assert.deepEqual(output, {});
+    const record = database.prepare('SELECT * FROM hook_data_records').get();
+    assert.equal(record.record_type, 'conversation_completion');
+    assert.deepEqual(JSON.parse(record.data_json), {
+      sessionId: 'session-record-1',
+      status: 'success',
+      userId: 1,
+    });
+    const execution = database.prepare('SELECT actions_json FROM hook_executions').get();
+    const actionOutput = JSON.parse(execution.actions_json)['record-stop'].output;
+    assert.equal(actionOutput.recorded, true);
+    assert.equal(actionOutput.type, 'conversation_completion');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('write_record condition can skip persistence before resolving record fields', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Conditional record',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: {
+        language: 'javascript',
+        code: 'unused in injected executor',
+        outputs: [{ name: 'detected', type: 'boolean' }],
+      },
+      postActions: [{
+        id: 'record-if-detected',
+        type: 'write_record',
+        config: {
+          recordType: 'conditional_record',
+          condition: { source: 'reference', path: 'script.output.detected' },
+          fields: {
+            missingWhenSkipped: { source: 'reference', path: 'script.output.notDeclared' },
+          },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      scriptExecutor: async () => ({ output: { detected: false } }),
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-record-skip',
+    });
+
+    assert.equal(database.prepare('SELECT COUNT(*) AS total FROM hook_data_records').get().total, 0);
+    const execution = database.prepare('SELECT status, actions_json FROM hook_executions').get();
+    assert.equal(execution.status, 'succeeded');
+    assert.deepEqual(JSON.parse(execution.actions_json)['record-if-detected'].output, {
+      recorded: false,
+      reason: 'condition_false',
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('call_mcp_tool condition skips the tool before resolving inputs', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Conditional SQL syntax check',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: {
+        language: 'javascript',
+        code: 'unused in injected executor',
+        outputs: [{ name: 'detected', type: 'boolean' }],
+      },
+      postActions: [{
+        id: 'check-sql-if-detected',
+        type: 'call_mcp_tool',
+        config: {
+          toolName: 'mcp__sql-syntax-checker__check_sql_syntax',
+          condition: { source: 'reference', path: 'script.output.detected' },
+          inputs: {
+            sql: { source: 'reference', path: 'script.output.notNeededWhenSkipped' },
+          },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    let callCount = 0;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      scriptExecutor: async () => ({ output: { detected: false } }),
+      mcpCaller: async () => {
+        callCount += 1;
+        return { valid: true };
+      },
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-mcp-skip',
+    });
+
+    assert.equal(callCount, 0);
+    const execution = database.prepare('SELECT status, actions_json FROM hook_executions').get();
+    assert.equal(execution.status, 'succeeded');
+    assert.deepEqual(JSON.parse(execution.actions_json)['check-sql-if-detected'].output, {
+      called: false,
+      reason: 'condition_false',
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook failures are audited and fail open to Claude', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
@@ -162,13 +333,6 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
   try {
-    const skillDirectory = path.join(workspaceRoot, '.claude', 'skills', 'notify-user');
-    await fs.mkdir(skillDirectory, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDirectory, 'SKILL.md'),
-      '---\nname: notify-user\n---\nSend this notification: $ARGUMENTS\n',
-      'utf8',
-    );
     const hook = {
       id: 'hook-1',
       name: 'Recover failure',
@@ -180,7 +344,8 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
         id: 'recover',
         type: 'invoke_skill',
         config: {
-          skillName: 'notify-user',
+          skillId: 'builtin:hook-notification',
+          skillName: 'hook-notification',
           argumentsTemplate: 'user={{ccui.env.userId}} error={{event.error_details}}',
         },
       }],
@@ -203,8 +368,8 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
     assert.deepEqual(await runtime.executeHook(hook, event), {});
     assert.deepEqual(await runtime.executeHook(hook, event), {});
     assert.equal(scheduled.length, 1);
-    assert.equal(scheduled[0].displayCommand, '/notify-user user=1 error=rate limited');
-    assert.match(scheduled[0].modelContent, /Send this notification: user=1 error=rate limited/);
+    assert.equal(scheduled[0].displayCommand, '/hook-notification user=1 error=rate limited');
+    assert.match(scheduled[0].modelContent, /Payload: user=1 error=rate limited/);
     assert.doesNotMatch(scheduled[0].modelContent, /agent turns?/i);
     const executions = database.prepare('SELECT status, actions_json FROM hook_executions ORDER BY rowid').all();
     assert.equal(executions.length, 2);
@@ -219,13 +384,6 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
   try {
-    const skillDirectory = path.join(workspaceRoot, '.claude', 'skills', 'summarize-answer');
-    await fs.mkdir(skillDirectory, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDirectory, 'SKILL.md'),
-      '---\nname: summarize-answer\n---\nSummarize the completed answer for user $ARGUMENTS\n',
-      'utf8',
-    );
     const hook = {
       id: 'hook-1',
       name: 'Continue after normal answer',
@@ -237,7 +395,8 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
         id: 'continue-with-skill',
         type: 'invoke_skill',
         config: {
-          skillName: 'summarize-answer',
+          skillId: 'builtin:hook-notification',
+          skillName: 'hook-notification',
           argumentsTemplate: '{{ccui.env.userId}}',
         },
       }],
@@ -261,8 +420,57 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
     });
     assert.deepEqual(output, { systemMessage: 'normal answer completed' });
     assert.equal(scheduled.length, 1);
-    assert.equal(scheduled[0].displayCommand, '/summarize-answer 1');
-    assert.match(scheduled[0].modelContent, /Summarize the completed answer for user 1/);
+    assert.equal(scheduled[0].displayCommand, '/hook-notification 1');
+    assert.match(scheduled[0].modelContent, /Payload: 1/);
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('built-in Hook Skill loads without a workspace copy and schedules a verifiable notification turn', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Notify on completion',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'notify',
+        type: 'invoke_skill',
+        config: {
+          skillId: 'builtin:hook-notification',
+          skillName: 'hook-notification',
+          argumentsTemplate: 'status=success session={{event.session_id}}',
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const scheduled = [];
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      enqueueSkillRecovery: async (request) => scheduled.push(request),
+    });
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'completed-session',
+      stop_hook_active: false,
+      last_assistant_message: 'done',
+    });
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].displayCommand, '/hook-notification status=success session=completed-session');
+    assert.match(scheduled[0].modelContent, /HOOK_NOTIFICATION_SKILL_EXECUTED/);
+    assert.match(scheduled[0].modelContent, /Payload: status=success session=completed-session/);
+    await assert.rejects(
+      fs.access(path.join(workspaceRoot, '.claude', 'skills', 'hook-notification', 'SKILL.md')),
+    );
   } finally {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });

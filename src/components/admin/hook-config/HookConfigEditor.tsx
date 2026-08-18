@@ -2,20 +2,20 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
   Braces,
+  ChevronDown,
   CircleAlert,
   Code2,
   Database,
   FileCode2,
   Info,
   Plus,
-  Power,
-  PowerOff,
   RefreshCcw,
   Save,
   Settings2,
   Sparkles,
   TerminalSquare,
   Trash2,
+  UsersRound,
   Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -58,8 +58,7 @@ type HookConfigEditorProps = {
   onBack: () => void;
   onSave: () => void;
   onPublish: () => void;
-  onStart: () => void;
-  onStop: () => void;
+  onManageBindings: () => void;
   onManageEvents: () => void;
 };
 
@@ -288,7 +287,7 @@ function ScriptOutputsEditor({
       </div>
       {!outputs.length ? (
         <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
-          没有声明输出。脚本仍可使用文件、记录和日志 API。
+          没有声明输出。脚本仍可执行文件处理、环境读取和日志输出。
         </div>
       ) : null}
       {outputs.map((output, index) => (
@@ -356,30 +355,56 @@ function MpcActionEditor({
   const inputs = asRecord(config.inputs);
   const properties = tool?.inputSchema?.properties || {};
   const required = new Set(tool?.inputSchema?.required || []);
+  const condition = asRecord(config.condition);
+  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
+  const booleanReferences = references.filter((field) => field.type === 'boolean');
 
   return (
     <div className="space-y-4">
-      <label className="block max-w-2xl space-y-1.5">
-        <span className="text-xs font-medium text-foreground">MCP 工具</span>
-        <HookSelect
-          value={toolName}
-          options={resources.mcpTools.map((item) => ({
-            value: item.name,
-            label: `${item.serverDisplayName} · ${item.toolName}`,
-            description: item.description || item.name,
-          }))}
-          onChange={(nextToolName) => {
-            const nextTool = resources.mcpTools.find((item) => item.name === nextToolName);
-            const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => {
-              const type = propertyType(property);
-              return [key, { source: 'literal', value: literalDefault(type, property) }];
-            }));
-            onChange({ toolName: nextToolName, inputs: nextInputs });
-          }}
-          placeholder={resources.mcpTools.length ? '选择 MCP 工具' : '暂无可调用的 MCP 工具'}
-          ariaLabel="选择 MCP 工具"
-        />
-      </label>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">MCP 工具</span>
+          <HookSelect
+            value={toolName}
+            options={resources.mcpTools.map((item) => ({
+              value: item.name,
+              label: `${item.serverDisplayName} · ${item.toolName}`,
+              description: item.description || item.name,
+            }))}
+            onChange={(nextToolName) => {
+              const nextTool = resources.mcpTools.find((item) => item.name === nextToolName);
+              const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => {
+                const type = propertyType(property);
+                return [key, { source: 'literal', value: literalDefault(type, property) }];
+              }));
+              onChange({ ...config, toolName: nextToolName, inputs: nextInputs });
+            }}
+            placeholder={resources.mcpTools.length ? '选择 MCP 工具' : '暂无可调用的 MCP 工具'}
+            ariaLabel="选择 MCP 工具"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
+          <HookSelect
+            value={conditionPath}
+            options={[
+              { value: '__always__', label: '始终调用' },
+              ...booleanReferences.map((field) => ({
+                value: field.path,
+                label: field.label || field.path,
+                description: field.path,
+                group: field.group === 'script' ? '脚本输出' : '当前事件',
+              })),
+            ]}
+            onChange={(value) => onChange({
+              ...config,
+              condition: value === '__always__' ? null : { source: 'reference', path: value },
+            })}
+            placeholder="始终调用"
+            ariaLabel="选择 MCP 执行条件"
+          />
+        </label>
+      </div>
 
       {tool && Object.keys(properties).length ? (
         <div className="space-y-2">
@@ -465,7 +490,7 @@ function SkillActionEditor({
     <div className="space-y-4">
       <div className="grid gap-3">
         <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">Skill</span>
+          <span className="text-xs font-medium text-foreground">内置 Hook Skill</span>
           <HookSelect
             value={skillId}
             options={resources.skills.map((skill) => ({
@@ -481,8 +506,8 @@ function SkillActionEditor({
                 skillName: skill?.name || '',
               });
             }}
-            placeholder={resources.skills.length ? '选择 Skill' : '暂无可用 Skill'}
-            ariaLabel="选择 Skill"
+            placeholder={resources.skills.length ? '选择内置 Hook Skill' : '暂无内置 Hook Skill'}
+            ariaLabel="选择内置 Hook Skill"
           />
         </label>
       </div>
@@ -490,7 +515,7 @@ function SkillActionEditor({
         <p className="text-xs leading-5 text-destructive">{resources.skillSource.error}</p>
       ) : null}
       <p className="text-xs leading-5 text-muted-foreground">
-        用户需将同名 Skill 导入自己的工作空间，Hook 执行时会从当前用户工作空间加载。
+        这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；运行时从服务端持久化目录加载，不依赖公共租户或用户工作空间。
       </p>
       <div className="block space-y-1.5">
         <span className="text-xs font-medium text-foreground">Skill 参数</span>
@@ -547,6 +572,134 @@ function SkillActionEditor({
   );
 }
 
+function RecordActionEditor({
+  action,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const recordType = typeof config.recordType === 'string' ? config.recordType : '';
+  const fields = asRecord(config.fields);
+  const fieldEntries = Object.entries(fields);
+  const condition = asRecord(config.condition);
+  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
+  const booleanReferences = references.filter((field) => field.type === 'boolean');
+
+  const updateFields = (nextFields: Record<string, unknown>) => {
+    onChange({ ...config, fields: nextFields });
+  };
+
+  const addField = () => {
+    let index = fieldEntries.length + 1;
+    while (Object.prototype.hasOwnProperty.call(fields, `field${index}`)) index += 1;
+    updateFields({ ...fields, [`field${index}`]: { source: 'literal', value: '' } });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">记录类型</span>
+          <Input
+            value={recordType}
+            onChange={(event) => onChange({ ...config, recordType: event.target.value })}
+            placeholder="例如 sql_response_metrics"
+            className="h-10 rounded-xl font-mono text-xs"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
+          <HookSelect
+            value={conditionPath}
+            options={[
+              { value: '__always__', label: '始终记录' },
+              ...booleanReferences.map((field) => ({
+                value: field.path,
+                label: field.label || field.path,
+                description: field.path,
+                group: field.group === 'script' ? '脚本输出' : '当前事件',
+              })),
+            ]}
+            onChange={(value) => onChange({
+              ...config,
+              condition: value === '__always__' ? null : { source: 'reference', path: value },
+            })}
+            placeholder="始终记录"
+            ariaLabel="选择记录执行条件"
+          />
+        </label>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-foreground">记录字段</div>
+            <div className="mt-0.5 text-[10px] text-muted-foreground">将事件、环境、脚本输出或前序行为结果映射为数据库记录。</div>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={addField}>
+            <Plus className="h-3.5 w-3.5" />
+            添加字段
+          </Button>
+        </div>
+        {!fieldEntries.length ? (
+          <div className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+            暂无字段；执行时会写入一个空对象记录。
+          </div>
+        ) : null}
+        {fieldEntries.map(([fieldName, rawBinding], index) => {
+          const bindingRecord = asRecord(rawBinding);
+          const binding: HookValueBinding = bindingRecord.source === 'reference'
+            ? { source: 'reference', path: String(bindingRecord.path || '') }
+            : { source: 'literal', value: bindingRecord.value ?? '' };
+          const referenceType = binding.source === 'reference'
+            ? references.find((field) => field.path === binding.path)?.type
+            : undefined;
+          return (
+            <div key={`${fieldName}-${index}`} className="space-y-2 rounded-xl border border-border bg-muted/10 p-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={fieldName}
+                  onChange={(event) => {
+                    const nextName = event.target.value;
+                    const nextEntries = fieldEntries.map(([key, value], entryIndex) => (
+                      entryIndex === index ? [nextName, value] : [key, value]
+                    ));
+                    updateFields(Object.fromEntries(nextEntries));
+                  }}
+                  placeholder="字段名"
+                  className="h-9 flex-1 rounded-lg font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => updateFields(Object.fromEntries(fieldEntries.filter((_, entryIndex) => entryIndex !== index)))}
+                  aria-label="删除记录字段"
+                >
+                  <Trash2 className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </div>
+              <BindingEditor
+                binding={binding}
+                type={referenceType || 'string'}
+                references={references}
+                onChange={(nextBinding) => updateFields({ ...fields, [fieldName]: nextBinding })}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“数据记录”即可查看最近记录。
+      </div>
+    </div>
+  );
+}
+
 function PostActionsEditor({
   hook,
   resources,
@@ -565,8 +718,10 @@ function PostActionsEditor({
       type,
       position: hook.postActions.length,
       config: type === 'call_mcp_tool'
-        ? { toolName: '', inputs: {} }
-        : { skillId: '', skillName: '', argumentsTemplate: '' },
+        ? { toolName: '', condition: null, inputs: {} }
+        : type === 'write_record'
+          ? { recordType: '', condition: null, fields: {} }
+          : { skillId: '', skillName: '', argumentsTemplate: '' },
     };
     onChange([...hook.postActions, action]);
   };
@@ -583,6 +738,10 @@ function PostActionsEditor({
         <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')}>
           <Wrench className="h-4 w-4" />
           调用 MCP 工具
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('write_record')}>
+          <Database className="h-4 w-4" />
+          记录数据
         </Button>
         <Tooltip content={canInvokeSkill ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
           <span>
@@ -601,7 +760,7 @@ function PostActionsEditor({
       </div>
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。Hook 仍可只执行高级脚本，或只返回字段给 Claude。
+          没有配置后置行为。可添加数据记录、MCP 工具或 Skill，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -611,11 +770,19 @@ function PostActionsEditor({
           return hook.postActions.findIndex((item) => item.id === referencedId) < index;
         });
         return (
-          <div key={action.id} className="overflow-hidden rounded-xl border border-border bg-background">
-            <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-2.5">
-              {action.type === 'call_mcp_tool' ? <Wrench className="h-4 w-4 text-primary" /> : <Sparkles className="h-4 w-4 text-primary" />}
+          <div key={action.id} className="overflow-visible rounded-xl border border-border bg-background">
+            <div className="flex items-center gap-2 rounded-t-xl border-b border-border bg-muted/20 px-3 py-2.5">
+              {action.type === 'call_mcp_tool'
+                ? <Wrench className="h-4 w-4 text-primary" />
+                : action.type === 'write_record'
+                  ? <Database className="h-4 w-4 text-primary" />
+                  : <Sparkles className="h-4 w-4 text-primary" />}
               <span className="text-xs font-semibold text-foreground">
-                {index + 1}. {action.type === 'call_mcp_tool' ? '调用 MCP 工具' : '调用 Skill（恢复回合）'}
+                {index + 1}. {action.type === 'call_mcp_tool'
+                  ? '调用 MCP 工具'
+                  : action.type === 'write_record'
+                    ? '记录数据'
+                    : '调用 Skill（恢复回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
               <Button
@@ -634,6 +801,12 @@ function PostActionsEditor({
                 <MpcActionEditor
                   action={action}
                   resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : action.type === 'write_record' ? (
+                <RecordActionEditor
+                  action={action}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -921,18 +1094,19 @@ export default function HookConfigEditor({
   onBack,
   onSave,
   onPublish,
-  onStart,
-  onStop,
+  onManageBindings,
   onManageEvents,
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
+  const [scriptReferencesOpen, setScriptReferencesOpen] = useState(false);
   const isPersisted = 'id' in hook;
   const status = isPersisted ? hook.status : 'draft';
-  const isRunning = isPersisted && hook.activationScope === 'all_users';
   const eventDefinition = EVENT_BY_NAME.get(hook.eventName);
   const inputs = useMemo(() => buildFieldChoices(hook, resources), [hook, resources]);
   const references = useMemo(() => buildReferenceChoices(hook, resources), [hook, resources]);
   const language = hook.extensionLogic?.language || 'javascript';
+  const scriptApis = CCUI_SCRIPT_APIS.filter((api) => !api.javascript.startsWith('ccui.records.'));
+  const scriptEnvironmentVariables = resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.'));
   const matcherValue = hook.matcher.value || '';
   const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
   const matcherRegexError = useMemo(() => {
@@ -989,16 +1163,16 @@ export default function HookConfigEditor({
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
         </div>
-        {isPersisted && status === 'published' && isRunning ? (
-          <Button type="button" variant="outline" size="sm" onClick={onStop} disabled={busy}>
-            <PowerOff className="h-4 w-4" />
-            {t('hooks.stop')}
-          </Button>
-        ) : null}
-        {isPersisted && status === 'published' && !isRunning ? (
-          <Button type="button" variant="outline" size="sm" onClick={onStart} disabled={busy}>
-            <Power className="h-4 w-4" />
-            {t('hooks.start')}
+        {isPersisted && status === 'published' ? (
+          <Button type="button" variant="outline" size="sm" onClick={onManageBindings} disabled={busy}>
+            <UsersRound className="h-4 w-4" />
+            {hook.activationScope === 'all_users'
+              ? t('hooks.bindings.allUsersShort')
+              : hook.boundTenantCount > 0
+                ? t('hooks.bindings.boundTenantCountShort', { count: hook.boundTenantCount })
+                : hook.boundUserCount > 0
+                  ? t('hooks.bindings.boundCountShort', { count: hook.boundUserCount })
+                  : t('hooks.bindings.manage')}
           </Button>
         ) : null}
         <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={busy || !canSave}>
@@ -1125,7 +1299,7 @@ export default function HookConfigEditor({
           <Section
             number={3}
             title="高级脚本（可选）"
-            description="脚本用于文件处理、环境读取、数据记录和自定义分析；返回值先保存在 CCUI 内部。"
+            description="脚本用于文件处理、环境读取和自定义计算；结构化记录请使用后置行为中的“记录数据”。"
             action={hook.extensionLogic ? (
               <Button type="button" variant="ghost" size="sm" onClick={() => updateDraft({ extensionLogic: null })}>
                 关闭脚本
@@ -1215,46 +1389,50 @@ export default function HookConfigEditor({
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-5 text-muted-foreground">
-                高级脚本不是必填。需要读取文件、读取运行环境、记录数据或执行自定义分析时再启用。
+                高级脚本不是必填。需要读取文件、读取运行环境或执行自定义计算时再启用。
               </div>
             )}
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {CCUI_SCRIPT_APIS.map((api) => (
-                <div key={api.javascript} className="rounded-xl border border-border bg-background p-3">
-                  <div className="flex items-start gap-2">
-                    {api.javascript.startsWith('ccui.workspace')
-                      ? <FileCode2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                      : <Database className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
-                    <div className="min-w-0">
+            <div className="mt-4 overflow-hidden rounded-xl border border-border bg-muted/10">
+              <button
+                type="button"
+                aria-expanded={scriptReferencesOpen}
+                onClick={() => setScriptReferencesOpen((current) => !current)}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-medium text-foreground hover:bg-muted/30"
+              >
+                <Braces className="h-3.5 w-3.5 text-primary" />
+                <span>脚本可用 API 与固定变量</span>
+                <Badge variant="outline" className="ml-1">{scriptApis.length + scriptEnvironmentVariables.length}</Badge>
+                <span className="ml-auto text-[10px] text-muted-foreground">按需展开</span>
+                <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', scriptReferencesOpen && 'rotate-180')} />
+              </button>
+              {scriptReferencesOpen ? (
+                <div className="grid gap-2 border-t border-border p-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {scriptApis.map((api) => (
+                    <div key={api.javascript} className="rounded-lg border border-border/70 bg-background px-2.5 py-2">
                       <code className="block break-all text-[11px] font-semibold text-foreground">{scriptApiName(api, language)}</code>
-                      <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{api.description}</p>
+                      <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">{api.description}</p>
                     </div>
-                  </div>
-                </div>
-              ))}
-              {resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.')).map((variable) => (
-                <div key={variable.path} className="rounded-xl border border-border bg-background p-3">
-                  <div className="flex items-start gap-2">
-                    <Database className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <div className="min-w-0">
+                  ))}
+                  {scriptEnvironmentVariables.map((variable) => (
+                    <div key={variable.path} className="rounded-lg border border-border/70 bg-background px-2.5 py-2">
                       <code className="block break-all text-[11px] font-semibold text-foreground">
                         {language === 'python' ? pythonEnvironmentPath(variable.path) : variable.path}
                       </code>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
                         {t(`hooks.variables.${variable.path.replace('ccui.env.', '')}`, { defaultValue: variable.type })} · {variable.type}
                       </p>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              ) : null}
             </div>
           </Section>
 
           <Section
             number={4}
             title="Hook 后置行为"
-            description="高级脚本完成后按顺序调用 MCP 工具；回答正常或异常结束时还可以启动新的模型回合调用 Skill。"
+            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以启动新的模型回合调用 Skill。"
           >
             <PostActionsEditor
               hook={hook}

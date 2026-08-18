@@ -40,6 +40,21 @@ CREATE TABLE IF NOT EXISTS user_hook_bindings (
 CREATE INDEX IF NOT EXISTS idx_user_hook_bindings_hook
   ON user_hook_bindings(hook_id, user_id);
 
+CREATE TABLE IF NOT EXISTS hook_tenant_bindings (
+  hook_id TEXT NOT NULL,
+  tenant_id INTEGER NOT NULL,
+  bound_by INTEGER,
+  bound_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (hook_id, tenant_id),
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (bound_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_tenant_bindings_tenant
+  ON hook_tenant_bindings(tenant_id, hook_id);
+
 CREATE TABLE IF NOT EXISTS hook_executions (
   id TEXT PRIMARY KEY,
   hook_id TEXT NOT NULL,

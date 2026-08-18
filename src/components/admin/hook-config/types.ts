@@ -67,7 +67,7 @@ export type HookValueBinding =
 
 export type HookPostAction = {
   id: string;
-  type: 'call_mcp_tool' | 'invoke_skill';
+  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill';
   position: number;
   config: Record<string, unknown>;
 };
@@ -97,6 +97,7 @@ export type HookConfig = HookConfigDraft & {
   publishedAt: string | null;
   activationScope: 'manual' | 'all_users';
   boundUserCount: number;
+  boundTenantCount: number;
 };
 
 export type JsonSchemaProperty = {
@@ -131,12 +132,12 @@ export type HookSkillResource = {
   displayName: string;
   description: string;
   version: number;
+  source: 'packaged' | 'uploaded';
 };
 
 export type HookSkillSource = {
-  configured: boolean;
+  type: 'builtin';
   available: boolean;
-  tenantId?: number;
   error?: string;
 };
 

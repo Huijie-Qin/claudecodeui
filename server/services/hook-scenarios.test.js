@@ -213,7 +213,12 @@ function createFixture() {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
   database.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY,
+      username TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT 1,
+      is_system_admin BOOLEAN NOT NULL DEFAULT 0
+    );
     CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ${HOOK_CONFIG_SCHEMA_SQL}
     ${MULTITENANCY_SCHEMA_SQL}
@@ -420,9 +425,9 @@ test('all 28 Claude Agent SDK Hook events execute from published CCUI configurat
     for (const eventName of HOOK_EVENTS) {
       const created = service.createHook({ input: createHookInput(eventName), userId: 1 });
       const published = service.publishHook({ hookId: created.id, userId: 1 });
-      const started = service.startHook({ hookId: created.id, userId: 1 });
+      const binding = service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
       assert.equal(published.status, 'published', `${eventName} should publish`);
-      assert.equal(started.activationScope, 'all_users', `${eventName} should start globally`);
+      assert.equal(binding.hook.boundUserCount, 1, `${eventName} should bind the target user`);
     }
 
     const effectiveHooks = service.listActiveHooksForUser(2);
@@ -501,7 +506,7 @@ test('the real Agent SDK control channel registers and dispatches all 28 configu
     for (const eventName of HOOK_EVENTS) {
       const created = service.createHook({ input: createHookInput(eventName), userId: 1 });
       service.publishHook({ hookId: created.id, userId: 1 });
-      service.startHook({ hookId: created.id, userId: 1 });
+      service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
     }
     const effectiveHooks = service.listActiveHooksForUser(2);
     const runtime = createHookRuntimeSession({
@@ -684,13 +689,6 @@ function seedFullMatrixResources(database) {
       },
     },
   }]));
-  database.prepare(`
-    INSERT INTO tenant_skill_presets (
-      tenant_id, name, display_name, description, skill_id, remote_id,
-      status, created_by_user_id, updated_by_user_id
-    ) VALUES (11, 'matrix-recovery', 'Matrix Recovery', '', 'matrix-skill',
-      'matrix-remote', 'published', 1, 1)
-  `).run();
 }
 
 function fullMatrixHookInput(eventName, suffix, overrides = {}) {
@@ -706,7 +704,7 @@ function fullMatrixHookInput(eventName, suffix, overrides = {}) {
   };
 }
 
-function publishGlobalMatrixHook(service, eventName, suffix, overrides) {
+function publishBoundMatrixHook(service, eventName, suffix, overrides) {
   const created = service.createHook({
     input: fullMatrixHookInput(eventName, suffix, overrides),
     userId: 1,
@@ -715,9 +713,9 @@ function publishGlobalMatrixHook(service, eventName, suffix, overrides) {
     .filter((action) => action.type === 'invoke_skill')
     .map((action) => ({ skillId: action.config.skillId, name: action.config.skillName }));
   const published = service.publishHook({ hookId: created.id, userId: 1, validatedSkills });
-  const started = service.startHook({ hookId: created.id, userId: 1 });
+  const binding = service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
   assert.equal(published.status, 'published', `${eventName}/${suffix} must publish`);
-  assert.equal(started.activationScope, 'all_users', `${eventName}/${suffix} must start globally`);
+  assert.equal(binding.hook.boundUserCount, 1, `${eventName}/${suffix} must bind the target user`);
   const effective = service.listActiveHooksForUser(2).find((hook) => hook.id === created.id);
   assert.ok(effective, `${eventName}/${suffix} must be effective for another user`);
   return effective;
@@ -791,6 +789,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     javascript: 0,
     python: 0,
     callMcpTool: 0,
+    writeRecord: 0,
     invokeSkill: 0,
     claudeOutputs: 0,
   };
@@ -822,7 +821,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           : language === 'python'
             ? { systemMessage: { source: 'reference', path: 'script.output.eventName' } }
             : { systemMessage: { source: 'template', template: 'script={{script.output.eventName}}' } };
-        const hook = publishGlobalMatrixHook(service, eventName, `script-${language}`, {
+        const hook = publishBoundMatrixHook(service, eventName, `script-${language}`, {
           extensionLogic: { language, code, outputs: FULL_MATRIX_SCRIPT_OUTPUTS },
           claudeResponse: { bindings },
         });
@@ -872,7 +871,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
                   template: 'mcp={{actions.call-mcp.output}}',
                 },
               };
-          const hook = publishGlobalMatrixHook(service, eventName, 'action-call-mcp', {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-call-mcp', {
             postActions: [{
               id: 'call-mcp',
               type: 'call_mcp_tool',
@@ -907,14 +906,14 @@ test('every Hook event publishes and executes every behavior allowed by its capa
 
         if (actionType === 'invoke_skill') {
           const errorTemplate = eventName === 'StopFailure' ? ' error={{event.error}}' : '';
-          const hook = publishGlobalMatrixHook(service, eventName, 'action-invoke-skill', {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-invoke-skill', {
             postActions: [{
               id: 'invoke-skill',
               type: 'invoke_skill',
               position: 0,
               config: {
-                skillId: 'matrix-skill',
-                skillName: 'matrix-recovery',
+                skillId: 'builtin:hook-notification',
+                skillName: 'hook-notification',
                 argumentsTemplate: `event={{event.hook_event_name}}${errorTemplate} user={{ccui.env.userId}}`,
               },
             }],
@@ -929,7 +928,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           assert.deepEqual(output, {});
           assert.deepEqual(JSON.parse(execution.actions_json), {
             'invoke-skill': {
-              output: { scheduled: true, skillName: 'matrix-recovery' },
+              output: { scheduled: true, skillName: 'hook-notification' },
             },
           });
           const expectedArguments = eventName === 'StopFailure'
@@ -937,6 +936,46 @@ test('every Hook event publishes and executes every behavior allowed by its capa
             : 'event=Stop user=2';
           assert.ok(recoveries.at(-1).modelContent.includes(expectedArguments));
           coverage.invokeSkill += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
+
+        if (actionType === 'write_record') {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-write-record', {
+            postActions: [{
+              id: 'write-record',
+              type: 'write_record',
+              position: 0,
+              config: {
+                recordType: 'matrix_post_action',
+                condition: null,
+                fields: {
+                  eventName: { source: 'reference', path: 'event.hook_event_name' },
+                  userId: { source: 'reference', path: 'ccui.env.userId' },
+                  literal: { source: 'literal', value: true },
+                },
+              },
+            }],
+          });
+          const { execution } = await executePublishedMatrixHook({
+            database,
+            hook,
+            workspaceRoot,
+            mcpServers,
+            enqueueSkillRecovery,
+          });
+          const record = database.prepare(`
+            SELECT record_type, data_json FROM hook_data_records
+            WHERE hook_id = ? ORDER BY rowid DESC LIMIT 1
+          `).get(hook.id);
+          assert.equal(record.record_type, 'matrix_post_action');
+          assert.deepEqual(JSON.parse(record.data_json), {
+            eventName,
+            userId: 2,
+            literal: true,
+          });
+          assert.equal(JSON.parse(execution.actions_json)['write-record'].output.recorded, true);
+          coverage.writeRecord += 1;
           executedHookIds.add(hook.id);
           continue;
         }
@@ -950,7 +989,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           `No full-matrix literal exists for ${eventName}/${outputPath}`,
         );
         const value = CLAUDE_OUTPUT_LITERALS[outputPath];
-        const hook = publishGlobalMatrixHook(service, eventName, `response-${outputPath}`, {
+        const hook = publishBoundMatrixHook(service, eventName, `response-${outputPath}`, {
           claudeResponse: {
             bindings: { [outputPath]: { source: 'literal', value } },
           },
@@ -976,21 +1015,22 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       javascript: HOOK_EVENTS.length,
       python: HOOK_EVENTS.length,
       callMcpTool: HOOK_EVENTS.length,
+      writeRecord: HOOK_EVENTS.length,
       invokeSkill: 2,
       claudeOutputs: expectedClaudeOutputs,
     });
     assert.equal(recoveries.length, 2);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 3) + 2 + expectedClaudeOutputs);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 2 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,
         SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) AS published,
-        SUM(CASE WHEN activation_scope = 'all_users' THEN 1 ELSE 0 END) AS globally_active
+        SUM(CASE WHEN activation_scope = 'manual' THEN 1 ELSE 0 END) AS manual_scope
       FROM hooks
     `).get();
     assert.equal(publishedCounts.total, executedHookIds.size);
     assert.equal(publishedCounts.published, executedHookIds.size);
-    assert.equal(publishedCounts.globally_active, executedHookIds.size);
+    assert.equal(publishedCounts.manual_scope, executedHookIds.size);
     const executions = database.prepare(`
       SELECT status, COUNT(*) AS count FROM hook_executions GROUP BY status
     `).all();

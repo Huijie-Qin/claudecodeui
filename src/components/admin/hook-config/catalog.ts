@@ -697,7 +697,11 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
   for (const action of draft.postActions) {
     fields.push({
       path: `actions.${action.id}.output`,
-      label: action.type === 'call_mcp_tool' ? 'MCP 工具调用结果' : 'Skill 调用结果',
+      label: action.type === 'call_mcp_tool'
+        ? 'MCP 工具调用结果'
+        : action.type === 'write_record'
+          ? '数据记录结果'
+          : 'Skill 调用结果',
       type: 'object',
       group: 'action',
     });

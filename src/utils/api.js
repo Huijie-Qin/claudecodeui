@@ -421,18 +421,19 @@ export const api = {
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/publish`, {
         method: 'POST',
       }),
-    startHook: (hookId) =>
-      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/start`, {
-        method: 'POST',
-      }),
-    stopHook: (hookId) =>
-      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/stop`, {
-        method: 'POST',
+    hookBindings: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`),
+    updateHookBindings: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
       }),
     deleteHook: (hookId) =>
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
         method: 'DELETE',
       }),
+    hookDataRecords: (hookId, limit = 50) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/data-records?limit=${encodeURIComponent(String(limit))}`),
     hookSettings: () => authenticatedFetch('/api/admin/hooks/settings'),
     updateHookSettings: (payload) =>
       authenticatedFetch('/api/admin/hooks/settings', {
@@ -440,6 +441,11 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     hookResources: () => authenticatedFetch('/api/admin/hooks/resources'),
+    uploadHookSkill: (formData) =>
+      authenticatedFetch('/api/admin/hooks/skills', {
+        method: 'POST',
+        body: formData,
+      }),
     analytics: (days = 30, tenantIds = []) => {
       const params = new URLSearchParams({ days: String(days) });
       if (Array.isArray(tenantIds) && tenantIds.length > 0) {

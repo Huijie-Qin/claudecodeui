@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 
-import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
+import { getModuleDir } from '../utils/runtime-paths.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
@@ -22,8 +22,7 @@ const HOOK_SCRIPT_API_METHODS = Object.freeze([
 const PYTHON_EXECUTABLE = process.env.CCUI_HOOK_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 const WORKER_URL = new URL('./hook-script-worker.js', import.meta.url);
 const MODULE_DIR = getModuleDir(import.meta.url);
-const APP_ROOT = findAppRoot(MODULE_DIR);
-const PYTHON_RUNNER_PATH = path.join(APP_ROOT, 'server', 'services', 'hook-python-runner.py');
+const PYTHON_RUNNER_PATH = path.join(MODULE_DIR, 'hook-python-runner.py');
 
 function jsonClone(value) {
   if (value === undefined) return null;

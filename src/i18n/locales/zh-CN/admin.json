@@ -374,7 +374,7 @@
   },
   "hooks": {
     "title": "Hook 配置",
-    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果。",
+    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果；发布后可按用户、租户或全部用户绑定。",
     "noScript": "{{count}} 个后置行为",
     "create": "新建 Hook",
     "newHook": "新建 Hook",
@@ -382,11 +382,11 @@
     "backToList": "返回列表",
     "saveDraft": "保存草稿",
     "publish": "发布",
-    "start": "启动",
-    "stop": "停止",
-    "started": "全局已启用",
-    "partiallyStarted": "部分用户已启用",
-    "stopped": "未启动",
+    "start": "绑定用户",
+    "stop": "清空绑定",
+    "started": "已绑定用户",
+    "partiallyStarted": "已绑定用户",
+    "stopped": "未绑定用户",
     "delete": "删除",
     "edit": "编辑",
     "save": "保存",
@@ -399,7 +399,60 @@
     "noDescription": "暂无功能说明",
     "actionCount": "{{count}} 个行为",
     "boundUserCount": "已绑定 {{count}} 个用户",
+    "bindings": {
+      "title": "绑定生效用户",
+      "manage": "绑定用户",
+      "boundCountShort": "已绑定 {{count}} 人",
+      "boundTenantCountShort": "{{count}} 个租户（动态）",
+      "allUsersShort": "全部用户（动态）",
+      "unbound": "未绑定用户",
+      "scopes": {
+        "users": "指定用户",
+        "tenants": "按租户",
+        "all_users": "全部用户"
+      },
+      "scopeHints": {
+        "users": "只对逐个选中的用户生效；新用户不会自动加入。",
+        "tenants": "对所选租户的全部有效成员生效；以后加入租户的新用户会自动生效。",
+        "all_users": "对系统中的全部有效用户生效；以后创建的新用户也会自动生效。"
+      },
+      "search": "搜索用户名",
+      "searchTenant": "搜索租户名称或编码",
+      "loading": "正在加载绑定范围",
+      "noUsers": "暂无可绑定用户",
+      "noTenants": "暂无可绑定租户",
+      "noMatches": "没有匹配的用户",
+      "admin": "管理员",
+      "inactive": "已停用",
+      "tenantUsers": "{{count}} 名成员",
+      "allUsersTitle": "启用全部用户动态范围",
+      "allUsersDescription": "当前包含 {{count}} 名有效用户；以后新增并激活的用户会自动获得此 Hook。",
+      "selectionSummary": {
+        "users": "已选择 {{count}} 人",
+        "tenants": "已选择 {{count}} 个租户",
+        "all_users": "当前覆盖 {{count}} 名有效用户"
+      },
+      "clear": "清空选择",
+      "save": "保存绑定",
+      "savedScopes": {
+        "users": "已保存指定用户绑定",
+        "tenants": "已保存租户动态绑定",
+        "all_users": "已启用全部用户动态绑定"
+      },
+      "loadError": "加载 Hook 用户绑定失败",
+      "saveError": "保存 Hook 用户绑定失败"
+    },
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
+    "builtinSkills": {
+      "title": "内置 Hook Skill 管理",
+      "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
+      "upload": "上传 Skill 文件",
+      "uploading": "正在上传",
+      "packaged": "镜像内置",
+      "uploaded": "管理员上传",
+      "empty": "暂无内置 Hook Skill",
+      "formatHint": "不校验扩展名、大小、frontmatter 字段或正文内容。名称优先读取 frontmatter.name，否则使用文件名；请管理员自行保证文件可用。"
+    },
     "triggerEvent": "触发位置",
     "selectEvent": "选择触发位置",
     "insertVariable": "变量",
@@ -816,15 +869,17 @@
       "start": "启动 Hook 失败",
       "stop": "停止 Hook 失败",
       "delete": "删除 Hook 失败",
-      "saveSettings": "保存 Hook 事件设置失败"
+      "saveSettings": "保存 Hook 事件设置失败",
+      "uploadSkill": "上传内置 Hook Skill 失败"
     },
     "toast": {
       "saved": "Hook 草稿已保存",
-      "published": "Hook 已发布",
-      "started": "Hook 已设为全局，对当前和后续新用户生效",
-      "stopped": "Hook 已取消全局生效，用户自主绑定已保留",
+      "published": "Hook 已发布，请选择生效用户",
+      "started": "Hook 用户绑定已保存",
+      "stopped": "Hook 用户绑定已清空",
       "deleted": "Hook 已删除",
-      "eventsSaved": "可见触发位置已保存"
+      "eventsSaved": "可见触发位置已保存",
+      "skillUploaded": "内置 Hook Skill“{{name}}”已上传"
     }
   },
   "runtimes": {
