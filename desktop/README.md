@@ -15,8 +15,8 @@ DESKTOP_AUTH_ORIGINS=https://auth.example.com
 ```
 
 - Production URLs use HTTPS by default. Allowlist entries must be exact origins, separated by commas.
-- An unsigned internal build may set `DESKTOP_ALLOW_INSECURE_HTTP=true` to permit HTTP for `DESKTOP_HOME_URL`, `DESKTOP_ALLOWED_ORIGINS`, and `DESKTOP_AUTH_ORIGINS`. This opt-in exposes authentication and application traffic to interception and must not be used on untrusted networks.
-- `DESKTOP_UPDATE_BASE_URL` always requires HTTPS. `DESKTOP_REQUIRE_SIGNING=true` rejects builds that enable insecure HTTP.
+- An unsigned internal build may set `DESKTOP_ALLOW_INSECURE_HTTP=true` to permit HTTP for `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`, `DESKTOP_ALLOWED_ORIGINS`, and `DESKTOP_AUTH_ORIGINS`. This opt-in exposes authentication, application traffic, update metadata, and installers to interception and must not be used on untrusted networks.
+- `DESKTOP_REQUIRE_SIGNING=true` rejects builds that enable insecure HTTP.
 - `DESKTOP_HOME_URL` may include an initial path. Its origin is always included in the navigation allowlist.
 - `DESKTOP_AUTH_ORIGINS` may be explicitly empty when the deployment has no cross-origin OAuth provider.
 - Application origins and OAuth origins must be disjoint; overlapping entries fail the build.

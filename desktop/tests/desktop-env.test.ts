@@ -39,16 +39,17 @@ describe('desktop build configuration', () => {
     expect(config.allowInsecureHttp).toBe(false);
   });
 
-  it('allows explicit HTTP application origins while keeping updates on HTTPS', () => {
+  it('allows explicit HTTP application and update origins', () => {
     const config = createDesktopBuildConfig({
       DESKTOP_ALLOW_INSECURE_HTTP: 'true',
       DESKTOP_HOME_URL: 'http://10.0.0.8:3001/app',
-      DESKTOP_UPDATE_BASE_URL: 'https://downloads.example.com/api/desktop-updates',
+      DESKTOP_UPDATE_BASE_URL: 'http://10.0.0.8:3001/api/desktop-updates/',
       DESKTOP_ALLOWED_ORIGINS: 'http://10.0.0.8:3001,http://assets.internal',
       DESKTOP_AUTH_ORIGINS: 'http://login.internal',
     }, { production: true });
 
     expect(config.homeUrl).toBe('http://10.0.0.8:3001/app');
+    expect(config.updateBaseUrl).toBe('http://10.0.0.8:3001/api/desktop-updates');
     expect(config.allowedOrigins).toEqual([
       'http://10.0.0.8:3001',
       'http://assets.internal',
@@ -58,7 +59,6 @@ describe('desktop build configuration', () => {
 
     expect(() => createDesktopBuildConfig({
       ...productionConfig,
-      DESKTOP_ALLOW_INSECURE_HTTP: 'true',
       DESKTOP_UPDATE_BASE_URL: 'http://downloads.example.com/api/desktop-updates',
     }, { production: true })).toThrow(/DESKTOP_UPDATE_BASE_URL must use HTTPS/u);
 

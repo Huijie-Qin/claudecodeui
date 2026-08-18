@@ -85,16 +85,13 @@ function parseUrl(value: string, key: DesktopEnvKey, policy: UrlPolicy): URL {
     && !policy.production
     && parsed.protocol === 'http:'
     && LOOPBACK_HOSTS.has(parsed.hostname);
-  const explicitlyAllowedHttp = !policy.updateSource
-    && policy.allowInsecureHttp
+  const explicitlyAllowedHttp = policy.allowInsecureHttp
     && parsed.protocol === 'http:';
   if (!secure && !developmentLoopback && !explicitlyAllowedHttp) {
     const developmentHint = policy.updateSource || policy.production
       ? ''
       : ' (or loopback HTTP in development)';
-    const insecureHint = policy.updateSource
-      ? ''
-      : ' unless DESKTOP_ALLOW_INSECURE_HTTP=true';
+    const insecureHint = ' unless DESKTOP_ALLOW_INSECURE_HTTP=true';
     throw new Error(`${key} must use HTTPS${developmentHint}${insecureHint}.`);
   }
 
@@ -166,7 +163,7 @@ export function createDesktopBuildConfig(
 
   const updateUrl = parseUrl(updateValue, 'DESKTOP_UPDATE_BASE_URL', {
     production: options.production,
-    allowInsecureHttp: false,
+    allowInsecureHttp,
     updateSource: true,
   });
   if (updateUrl.search || updateUrl.hash) {
