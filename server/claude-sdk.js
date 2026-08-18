@@ -943,6 +943,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       workspaceId: runtimeOptions.workspaceId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
+      runtimeOwner: runtimeContext.mode === 'docker'
+        ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+        : null,
     });
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 

@@ -56,6 +56,7 @@ function applyMcpConfigToSdkOptions(sdkOptions, mcpServers) {
  * @param {number} options.workspaceId - Workspace id used to resolve Admin-managed installs
  * @param {string} options.runtimeMode - local or docker
  * @param {string} options.runtimeHomePath - Docker runtime home mounted at /home/cloudcli
+ * @param {{uid: number, gid: number}|null} options.runtimeOwner - Docker runtime file owner
  * @returns {Object|null} MCP servers object or null if none found
  */
 async function loadMcpConfig(cwd, {
@@ -65,6 +66,7 @@ async function loadMcpConfig(cwd, {
   workspaceId = null,
   runtimeMode = 'local',
   runtimeHomePath = null,
+  runtimeOwner = null,
 } = {}) {
   try {
     let mcpServers = {};
@@ -97,6 +99,7 @@ async function loadMcpConfig(cwd, {
         workspaceId,
         runtimeMode,
         runtimeHomePath,
+        runtimeOwner,
       });
     }
     return mcpServers;
