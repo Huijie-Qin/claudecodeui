@@ -1050,7 +1050,7 @@ export default function HookConfigsTab() {
             ) : null}
           </Card>
         ) : (
-          <div className="columns-1 gap-3 lg:columns-2">
+          <div className="grid auto-rows-fr gap-3 lg:grid-cols-2">
             {filteredHooks.map((hook) => {
               const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
               const bindingActive = hook.activationScope === 'all_users'
@@ -1064,7 +1064,7 @@ export default function HookConfigsTab() {
                     ? t('hooks.bindings.boundCountShort', { count: hook.boundUserCount })
                     : t('hooks.bindings.unbound');
               return (
-              <Card key={hook.id} className="mb-3 break-inside-avoid overflow-hidden shadow-none transition-colors hover:border-primary/30">
+              <Card key={hook.id} className="flex h-full flex-col overflow-hidden shadow-none transition-colors hover:border-primary/30">
                 <div className="p-4">
                   <div className="flex items-start gap-3">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -1118,7 +1118,7 @@ export default function HookConfigsTab() {
                     <span className="ml-auto flex items-center gap-1"><Clock3 className="h-3 w-3" />{formatDate(hook.updatedAt, i18n.language)}</span>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-1 border-t border-border bg-muted/10 px-3 py-2">
+                <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-border bg-muted/10 px-3 py-2">
                   <Button type="button" variant="ghost" size="sm" onClick={() => setEditor(hook)}>
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
