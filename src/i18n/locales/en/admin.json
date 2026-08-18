@@ -424,6 +424,12 @@
     "noScript": "{{count}} post-actions",
     "create": "New Hook",
     "newHook": "New Hook",
+    "examples": {
+      "create": "Create examples",
+      "created": "Created {{count}} Hook example drafts. Select an MCP Tool and Skills before publishing.",
+      "alreadyExists": "All three Hook examples already exist; existing configurations were preserved.",
+      "error": "Failed to create Hook examples"
+    },
     "moreEvents": "More events",
     "backToList": "Back to list",
     "saveDraft": "Save draft",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  BookOpen,
   Building2,
   Check,
   Clock3,
@@ -600,6 +601,40 @@ export default function HookConfigsTab() {
     });
   };
 
+  const createExamples = async () => {
+    setBusy(true);
+    try {
+      const response = await api.admin.createHookExamples();
+      if (!response.ok) throw new Error(await readError(response, t('hooks.examples.error')));
+      const payload = await response.json() as {
+        hooks?: HookConfig[];
+        createdCount?: number;
+        skippedCount?: number;
+        visibleEvents?: HookEventName[];
+      };
+      const examples = (payload.hooks || []).map(normalizeHookConfig);
+      setHooks((current) => {
+        const byId = new Map(current.map((hook) => [hook.id, hook]));
+        for (const example of examples) byId.set(example.id, example);
+        return [...byId.values()];
+      });
+      if (payload.visibleEvents?.length) {
+        setVisibleEvents(payload.visibleEvents);
+        setVisibleEventDraft(payload.visibleEvents);
+      }
+      showToast(
+        payload.createdCount
+          ? t('hooks.examples.created', { count: payload.createdCount })
+          : t('hooks.examples.alreadyExists'),
+        'success',
+      );
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.examples.error'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openHookBindings = async (hook: HookConfig) => {
     setBindingsHook(hook);
     setBindingScope('users');
@@ -904,6 +939,16 @@ export default function HookConfigsTab() {
             <p className="mt-1 text-xs text-muted-foreground">{t('hooks.description')}</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void createExamples()}
+            >
+              <BookOpen className="h-4 w-4" />
+              {t('hooks.examples.create')}
+            </Button>
             <Button
               type="button"
               size="sm"

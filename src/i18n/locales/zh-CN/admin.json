@@ -378,6 +378,12 @@
     "noScript": "{{count}} 个后置行为",
     "create": "新建 Hook",
     "newHook": "新建 Hook",
+    "examples": {
+      "create": "创建场景示例",
+      "created": "已创建 {{count}} 个 Hook 示例草稿，请补选 MCP Tool 和 Skill 后发布",
+      "alreadyExists": "三个 Hook 场景示例均已存在，未覆盖现有配置",
+      "error": "创建 Hook 场景示例失败"
+    },
     "moreEvents": "更多事件",
     "backToList": "返回列表",
     "saveDraft": "保存草稿",

@@ -221,3 +221,29 @@ test('Hook bindings support user, tenant, and all-user dynamic scopes', async ()
   assert.equal(updated.payload.scope, 'all_users');
 
 });
+
+test('Hook example endpoint creates drafts without preselecting MCP Tools or Skills', async () => {
+  const created = [];
+  const hookConfigs = {
+    listHooks: () => [...created],
+    createHook: ({ input, userId }) => {
+      const hook = { ...input, id: `example-${created.length + 1}`, status: 'draft', createdBy: userId };
+      created.push(hook);
+      return hook;
+    },
+    getSettings: () => ({ visibleEvents: ['Stop'] }),
+    updateSettings: ({ visibleEvents }) => ({ visibleEvents }),
+  };
+  const router = createRouter({ hookConfigs, hookSkillMarket: {} });
+
+  const { response, payload } = await requestJson(router, '/hooks/examples', { method: 'POST' });
+
+  assert.equal(response.status, 201);
+  assert.equal(payload.createdCount, 3);
+  assert.equal(payload.hooks.every((hook) => hook.status === 'draft'), true);
+  const sqlExample = payload.hooks.find((hook) => hook.name.includes('SQL'));
+  const skillExamples = payload.hooks.filter((hook) => hook.postActions[0]?.type === 'invoke_skill');
+  assert.equal(sqlExample.postActions[0].config.toolName, '');
+  assert.equal(skillExamples.every((hook) => hook.postActions[0].config.skillId === ''), true);
+  assert.deepEqual(payload.visibleEvents, ['Stop', 'StopFailure']);
+});

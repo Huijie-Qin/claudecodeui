@@ -174,6 +174,12 @@ hookSpecificOutput.additionalContext
 
 `StopFailure` 的 Hook 返回值会被 Claude Code 忽略，因此页面不提供返回字段，只允许脚本、MCP 工具和 Skill 恢复行为。
 
+### 2.7 场景示例
+
+管理员可在 Hook 列表点击“创建场景示例”，幂等生成 SQL 指标记录、正常结束通知、HTTP 200 错误恢复三个草稿。示例预置事件、脚本、条件、记录字段和参数模板，但不绑定具体 MCP Tool 或 Skill；管理员补选自己的资源后再发布和绑定用户。已有同名示例不会被覆盖。
+
+服务接口为 `POST /api/admin/hooks/examples`。脚本入口 `scripts/configure-requested-hooks.mjs` 通过同一接口创建示例；已构建环境也支持 `--direct-database`。
+
 ## 3. 数据模型
 
 ### 3.1 hooks

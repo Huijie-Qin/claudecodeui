@@ -138,6 +138,16 @@ Hook 需要同时覆盖精细授权和自动扩展场景，因此启用范围不
 - `hook-test-future-global` 在全量范围保存后才创建，无显式绑定也能命中通知 Hook。
 - 不属于 Default 的 `hook-test-bob` 不会误命中 SQL Hook。
 
+### 开箱即用的场景示例
+
+“Admin → Hooks”提供“创建场景示例”入口，一次生成 3 个可编辑草稿：
+
+1. `示例 · SQL 响应指标记录`：预置 SQL 识别脚本、统计输出、“调用 MCP 工具”和“记录数据”行为；MCP Tool 与入参映射保持为空。
+2. `示例 · 对话正常结束通知`：预置 `Stop` 事件和通知参数模板；Skill 保持为空。
+3. `示例 · HTTP 200 错误恢复`：预置 `StopFailure` 事件和完整错误上下文参数模板；Skill 保持为空，由管理员上传实现 HTTP 200 判断与恢复逻辑的 Skill 后选择。
+
+示例始终以草稿创建，MCP Tool 或 Skill 未补齐时发布校验会阻止误发布。创建操作按名称幂等：再次点击只返回已有示例，不覆盖管理员修改。除页面入口外，也可调用 `POST /api/admin/hooks/examples`，或执行 `npm run seed:hook-examples`；在已构建的服务容器内可执行 `npm run seed:hook-examples:db` 直接写入当前数据库。
+
 ### SQL 检查 MCP 接入
 
 本地验收环境已在“Admin → MCP Server 预置”创建并发布：
@@ -187,7 +197,7 @@ Hook 需要同时覆盖精细授权和自动扩展场景，因此启用范围不
 自动回归：
 
 - 生产前后端构建成功。
-- 本次提交范围内 Hook/MCP 后端测试：39/39 通过；前端 Hook catalog 测试：6/6 通过。
+- 本次提交范围内 Hook/MCP 后端测试：42/42 通过；前端 Hook catalog 测试：6/6 通过。
 - 覆盖真实 Claude Agent SDK 控制通道、28 类 Hook 事件、JavaScript/Python 脚本、Skill 恢复去重、MCP 行为和审计数据。
 
 SQL MCP 运行验证：
@@ -200,6 +210,7 @@ SQL MCP 运行验证：
 
 - `server/services/hook-builtin-skills.js`
 - `server/services/hook-skill-catalog.js`
+- `server/services/hook-examples.js`
 - `server/services/hook-runtime.js`
 - `server/services/hook-script-executor.js`
 - `server/skills/hook-notification/SKILL.md`

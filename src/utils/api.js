@@ -412,6 +412,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+    createHookExamples: () =>
+      authenticatedFetch('/api/admin/hooks/examples', {
+        method: 'POST',
+      }),
     updateHook: (hookId, payload) =>
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
         method: 'PUT',

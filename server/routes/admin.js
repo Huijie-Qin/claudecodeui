@@ -14,6 +14,7 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
+import { createRequestedHookExamples } from '../services/hook-examples.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
 import {
   FEATURE_FLAGS,
@@ -477,6 +478,15 @@ export function createAdminRouter(
       return res.status(201).json({ hook });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to create Hook');
+    }
+  });
+
+  router.post('/hooks/examples', (req, res) => {
+    try {
+      const result = createRequestedHookExamples({ hookConfigs, userId: req.user.id });
+      return res.status(result.createdCount > 0 ? 201 : 200).json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook examples');
     }
   });
 
