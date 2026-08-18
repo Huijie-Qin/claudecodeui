@@ -4,20 +4,23 @@ This package is a small Electron shell for the hosted CloudCLI application. It d
 
 ## Configuration
 
-Production builds require exactly four non-secret values. Supply them as CI environment variables or copy `.env.desktop.example` to the ignored `.env.desktop` file:
+Production builds require four non-secret URL values and accept one optional security override. Supply them as CI environment variables or copy `.env.desktop.example` to the ignored `.env.desktop` file:
 
 ```dotenv
+DESKTOP_ALLOW_INSECURE_HTTP=false
 DESKTOP_HOME_URL=https://cloudcli.example.com/
 DESKTOP_UPDATE_BASE_URL=https://cloudcli.example.com/api/desktop-updates
 DESKTOP_ALLOWED_ORIGINS=https://cloudcli.example.com
 DESKTOP_AUTH_ORIGINS=https://auth.example.com
 ```
 
-- Production URLs must use HTTPS. Allowlist entries must be exact origins, separated by commas.
+- Production URLs use HTTPS by default. Allowlist entries must be exact origins, separated by commas.
+- An unsigned internal build may set `DESKTOP_ALLOW_INSECURE_HTTP=true` to permit HTTP for `DESKTOP_HOME_URL`, `DESKTOP_ALLOWED_ORIGINS`, and `DESKTOP_AUTH_ORIGINS`. This opt-in exposes authentication and application traffic to interception and must not be used on untrusted networks.
+- `DESKTOP_UPDATE_BASE_URL` always requires HTTPS. `DESKTOP_REQUIRE_SIGNING=true` rejects builds that enable insecure HTTP.
 - `DESKTOP_HOME_URL` may include an initial path. Its origin is always included in the navigation allowlist.
 - `DESKTOP_AUTH_ORIGINS` may be explicitly empty when the deployment has no cross-origin OAuth provider.
 - Application origins and OAuth origins must be disjoint; overlapping entries fail the build.
-- Only these names are parsed from `.env.desktop`. The root `.env` is never read by the desktop build.
+- Only these five names are parsed from `.env.desktop`. The root `.env` is never read by the desktop build.
 - Missing production values, credentials embedded in a URL, origin paths, and insecure URLs fail the build.
 
 Development defaults to `http://127.0.0.1:5173/`, so run the normal web development server and the Electron shell in separate terminals:
@@ -27,7 +30,7 @@ npm run dev
 npm run desktop:dev
 ```
 
-The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL; loopback HTTP is accepted only in development mode. Packaged applications ignore `ELECTRON_RENDERER_URL` and always use the bundled, restricted offline page on load failure.
+The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL; loopback HTTP is accepted automatically in development mode, while other HTTP origins require the explicit insecure override. Packaged applications ignore `ELECTRON_RENDERER_URL` and always use the bundled, restricted offline page on load failure.
 
 ## Commands
 
@@ -44,7 +47,7 @@ npm run desktop:package:win
 ## Runtime security model
 
 - The main window uses a persistent `persist:cloudcli` Chromium session, sandboxing, context isolation, and no Node integration or `<webview>` support.
-- Main-frame navigation is limited to configured application origins. Configured OAuth origins use a restricted child window. Other HTTPS and `mailto:` URLs go to the system browser; HTTP, `file:`, `data:`, `javascript:`, and unknown schemes are rejected.
+- Main-frame navigation is limited to configured application origins. Configured OAuth origins use a restricted child window. Other HTTPS and `mailto:` URLs go to the system browser; unconfigured HTTP, `file:`, `data:`, `javascript:`, and unknown schemes are rejected.
 - Certificate errors fail closed. Web permissions default to denied, with notifications and clipboard access available only to the exact application origins.
 - The preload exposes only the typed notification bridge. The main process rechecks the main-frame origin and validates/rate-limits every notification.
 - Closing the main window hides it in the tray. Explicit Quit ends notifications but does not cancel cloud tasks.

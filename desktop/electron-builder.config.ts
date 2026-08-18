@@ -1,8 +1,12 @@
 import type { Configuration } from 'electron-builder';
-import { loadDesktopBuildConfig } from './config/desktop-env';
+import {
+  assertDesktopSigningPolicy,
+  loadDesktopBuildConfig,
+} from './config/desktop-env';
 
 const desktopConfig = loadDesktopBuildConfig({ production: true });
 const requireSigning = process.env.DESKTOP_REQUIRE_SIGNING === 'true';
+assertDesktopSigningPolicy(desktopConfig, { requireSigning });
 const buildingWindows = process.argv.some((argument) => ['--win', '--windows', '-w'].includes(argument));
 const buildingMac = process.argv.some((argument) => ['--mac', '--macos', '-m'].includes(argument));
 const updatePlatform = buildingWindows ? 'win' : buildingMac ? 'mac'
