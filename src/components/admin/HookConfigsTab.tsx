@@ -1050,7 +1050,7 @@ export default function HookConfigsTab() {
             ) : null}
           </Card>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="columns-1 gap-3 lg:columns-2">
             {filteredHooks.map((hook) => {
               const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
               const bindingActive = hook.activationScope === 'all_users'
@@ -1064,7 +1064,7 @@ export default function HookConfigsTab() {
                     ? t('hooks.bindings.boundCountShort', { count: hook.boundUserCount })
                     : t('hooks.bindings.unbound');
               return (
-              <Card key={hook.id} className="overflow-hidden shadow-none transition-colors hover:border-primary/30">
+              <Card key={hook.id} className="mb-3 break-inside-avoid overflow-hidden shadow-none transition-colors hover:border-primary/30">
                 <div className="p-4">
                   <div className="flex items-start gap-3">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
