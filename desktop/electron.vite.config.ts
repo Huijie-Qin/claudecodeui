@@ -32,6 +32,14 @@ export default defineConfig(({ mode }) => {
     renderer: {
       root: resolve(__dirname, 'src/renderer'),
       define: definitions,
+      css: {
+        // The bundled offline page uses plain CSS. Keep its PostCSS pipeline
+        // local so a desktop-only install does not discover the web app's
+        // root Tailwind configuration and dependencies.
+        postcss: {
+          plugins: [],
+        },
+      },
       build: {
         assetsInlineLimit: 0,
       },
