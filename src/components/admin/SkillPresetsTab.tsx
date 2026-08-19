@@ -217,7 +217,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
   };
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">
@@ -253,8 +253,8 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
         </div>
       ) : null}
 
-      <div className="grid min-h-[520px] gap-4 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
-        <div className="overflow-hidden rounded-md border border-border">
+      <div className="grid min-h-[520px] min-w-0 max-w-full gap-4 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
+        <div className="min-w-0 overflow-hidden rounded-md border border-border">
           <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold uppercase text-muted-foreground">
             {t('skillPresets.presets', { defaultValue: 'Presets' })}
           </div>
@@ -271,7 +271,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                   className="border-b border-border bg-background px-3 py-3 last:border-b-0"
                 >
                   <div className="flex min-w-0 items-center justify-between gap-3">
-                    <span className="truncate text-sm font-medium text-foreground">{preset.displayName}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{preset.displayName}</span>
                     <Button
                       type="button"
                       variant="ghost"
@@ -294,9 +294,9 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
           </div>
         </div>
 
-        <div className="rounded-md border border-border bg-background p-4">
-          <div className="grid gap-3">
-            <div className="space-y-2">
+        <div className="min-w-0 overflow-hidden rounded-md border border-border bg-background p-4">
+          <div className="grid min-w-0 gap-3">
+            <div className="min-w-0 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-xs font-medium text-foreground">
@@ -367,7 +367,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
               </div>
 
               {marketSkills.length > 0 ? (
-                <div className="max-h-[420px] overflow-auto rounded-md border border-border">
+                <div className="max-h-[420px] min-w-0 max-w-full overflow-y-auto overflow-x-hidden rounded-md border border-border">
                   {marketSkills.map((skill) => {
                     const skillRef = getSkillRef(skill);
                     const selected = selectedMarketRefs.has(skillRef);
@@ -387,12 +387,12 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                             toggleMarketSkill(skill);
                           }
                         }}
-                        className={`w-full border-b border-border px-3 py-2 text-left text-sm last:border-b-0 ${
+                        className={`min-w-0 max-w-full overflow-hidden border-b border-border px-3 py-2 text-left text-sm last:border-b-0 ${
                           selected ? 'bg-primary/10' : alreadyPreset ? 'bg-muted/20' : 'hover:bg-muted/40'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="flex min-w-0 items-center gap-2">
+                        <div className="flex min-w-0 items-center justify-between gap-3">
+                          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                             <input
                               type="checkbox"
                               checked={selected || alreadyPreset}
@@ -400,7 +400,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                               readOnly
                               className="h-4 w-4 shrink-0 rounded border-input"
                             />
-                            <span className="truncate font-medium text-foreground">{getSkillDisplayName(skill)}</span>
+                            <span className="min-w-0 truncate font-medium text-foreground">{getSkillDisplayName(skill)}</span>
                           </span>
                           <span className="flex shrink-0 items-center gap-2">
                             {alreadyPreset ? (
@@ -427,7 +427,10 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                             )}
                           </span>
                         </div>
-                        <div className="mt-1 truncate text-xs text-muted-foreground">
+                        <div
+                          className="mt-1 max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground"
+                          title={skill.description || skill.skillId || skill.id}
+                        >
                           {skill.description || skill.skillId || skill.id}
                         </div>
                       </div>
@@ -442,26 +445,29 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="whitespace-nowrap">
+                    {t('skillPresets.pagination.pageSizePrefix', { defaultValue: 'Show' })}
+                  </span>
                   <select
                     value={marketPageInfo.pageSize}
                     onChange={(event) => handleMarketPageSizeChange(Number(event.target.value))}
                     disabled={isSearching || !tenantId}
-                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                    className="h-8 min-w-[4.5rem] rounded-md border border-border bg-background px-2 pr-7 text-center text-xs tabular-nums text-foreground"
                     aria-label={t('skillPresets.pagination.pageSizeLabel', { defaultValue: 'Skills per page' })}
                   >
                     {MARKET_PAGE_SIZE_OPTIONS.map((pageSize) => (
                       <option key={pageSize} value={pageSize}>
-                        {t('skillPresets.pagination.pageSize', {
-                          defaultValue: '{{count}} per page',
-                          count: pageSize,
-                        })}
+                        {pageSize}
                       </option>
                     ))}
                   </select>
+                  <span className="whitespace-nowrap">
+                    {t('skillPresets.pagination.pageSizeSuffix', { defaultValue: 'per page' })}
+                  </span>
                   {marketPageInfo.total !== undefined ? (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">
                       {t('skillPresets.pagination.total', {
                         defaultValue: '{{count}} total',
                         count: marketPageInfo.total,
@@ -510,13 +516,14 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
               <span className="text-xs text-muted-foreground">
                 {t('skillPresets.fields.sourceRef', { defaultValue: 'Selected Skill Market skills' })}
               </span>
-              <div className="min-h-10 rounded-md border border-input bg-muted/20 px-3 py-2 text-sm text-foreground">
+              <div className="min-h-10 min-w-0 max-w-full overflow-hidden rounded-md border border-input bg-muted/20 px-3 py-2 text-sm text-foreground">
                 {values.selectedSkills.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {values.selectedSkills.map((skill) => (
                       <span
                         key={getSkillRef(skill)}
-                        className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                        className="max-w-full truncate rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                        title={getSkillDisplayName(skill)}
                       >
                         {getSkillDisplayName(skill)}
                       </span>
