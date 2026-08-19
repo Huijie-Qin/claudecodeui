@@ -117,6 +117,17 @@
     "selectedCount": "已选 {{count}} 条",
     "configuredRules": "已配置规则",
     "effectiveConfig": "当前生效 SQL Check",
+    "enforcement": {
+      "title": "强制校验",
+      "description": "开启后将为当前用户绑定 SQL Check Hook，模型返回 SQL 时自动执行校验。",
+      "unavailable": "SQL Check Hook 尚未发布，暂不可开启。",
+      "loading": "正在读取强制校验状态...",
+      "saving": "正在保存",
+      "enabled": "已开启",
+      "disabled": "未开启",
+      "enabledSaved": "已开启 SQL 强制校验。",
+      "disabledSaved": "已关闭 SQL 强制校验。"
+    },
     "summary": {
       "tenant": "租户规则",
       "custom": "自定义规则"
@@ -129,6 +140,7 @@
       "loadRules": "加载 SQL Check 规则失败。",
       "loadConfig": "加载 SQL Check 配置失败。",
       "saveConfig": "保存 SQL Check 配置失败。",
+      "saveEnforcement": "保存 SQL 强制校验状态失败。",
       "workspaceUnavailable": "当前 workspace 不支持 SQL Check。"
     }
   },
@@ -562,7 +574,6 @@
     }
   }
 }
-
 
 
 

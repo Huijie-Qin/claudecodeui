@@ -117,6 +117,17 @@
     "selectedCount": "{{count}} selected",
     "configuredRules": "Configured rules",
     "effectiveConfig": "Effective SQL Check",
+    "enforcement": {
+      "title": "Enforce SQL checks",
+      "description": "When enabled, the current user is bound to the SQL Check Hook and SQL responses are checked automatically.",
+      "unavailable": "A published SQL Check Hook is required before enforcement can be enabled.",
+      "loading": "Loading enforcement status...",
+      "saving": "Saving",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enabledSaved": "SQL check enforcement enabled.",
+      "disabledSaved": "SQL check enforcement disabled."
+    },
     "summary": {
       "tenant": "Tenant rules",
       "custom": "Custom rules"
@@ -129,6 +140,7 @@
       "loadRules": "Failed to load SQL Check rules.",
       "loadConfig": "Failed to load SQL Check configuration.",
       "saveConfig": "Failed to save SQL Check configuration.",
+      "saveEnforcement": "Failed to save SQL check enforcement.",
       "workspaceUnavailable": "Current workspace does not support SQL Check."
     }
   },
@@ -562,4 +574,3 @@
     }
   }
 }
-

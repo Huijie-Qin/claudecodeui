@@ -33,10 +33,47 @@ const SQL_METRICS_SCRIPT = [
   '}',
 ].join('\n');
 
+const SQL_DETECTION_SCRIPT = [
+  'export async function run(event) {',
+  "  const message = String(event.last_assistant_message || '');",
+  '  const fencedSql = /```sql\\s*\\n?[\\s\\S]*?```/i.test(message);',
+  '  const inlineSql = /(?:^|\\n)\\s*(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE)\\b/i.test(message);',
+  '  return { output: { detected: fencedSql || inlineSql } };',
+  '}',
+].join('\n');
+
 export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   {
-    name: '示例 · SQL 响应指标记录',
-    description: '检测模型输出中的 SQL，记录行数等指标；请先选择 SQL 检查 MCP Tool 并映射工具入参，再发布。',
+    id: 'sql-check-enforcement',
+    name: '示例 · SQL Check 强制校验',
+    description: '检测模型输出中的 SQL 并调用 MCP Tool 做语法校验；请先选择 SQL 检查 MCP Tool 并映射工具入参，再发布。',
+    eventName: 'Stop',
+    matcher: {},
+    extensionLogic: {
+      language: 'javascript',
+      code: SQL_DETECTION_SCRIPT,
+      outputs: [
+        { name: 'detected', type: 'boolean', description: '是否检测到 SQL' },
+      ],
+    },
+    postActions: [
+      {
+        id: 'check-sql-syntax',
+        type: 'call_mcp_tool',
+        position: 0,
+        config: {
+          toolName: '',
+          condition: { source: 'reference', path: 'script.output.detected' },
+          inputs: {},
+        },
+      },
+    ],
+    claudeResponse: { bindings: {} },
+  },
+  {
+    id: 'sql-line-record',
+    name: '示例 · SQL 行数记录',
+    description: '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 数据记录；不调用 SQL 检查 MCP。',
     eventName: 'Stop',
     matcher: {},
     extensionLogic: {
@@ -56,19 +93,9 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
     },
     postActions: [
       {
-        id: 'check-sql-syntax',
-        type: 'call_mcp_tool',
-        position: 0,
-        config: {
-          toolName: '',
-          condition: { source: 'reference', path: 'script.output.detected' },
-          inputs: {},
-        },
-      },
-      {
         id: 'record-sql-response-metrics',
         type: 'write_record',
-        position: 1,
+        position: 0,
         config: {
           recordType: 'sql_response_metrics',
           condition: { source: 'reference', path: 'script.output.detected' },
@@ -88,6 +115,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
     claudeResponse: { bindings: {} },
   },
   {
+    id: 'normal-end-notification',
     name: '示例 · 对话正常结束通知',
     description: '正常结束后调用通知 Skill；请先上传或选择内置 Hook Skill，再发布。',
     eventName: 'Stop',
@@ -106,6 +134,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
     claudeResponse: { bindings: {} },
   },
   {
+    id: 'http-200-error-recovery',
     name: '示例 · HTTP 200 错误恢复',
     description: '失败结束后调用恢复 Skill；Skill 应在错误详情包含 HTTP 200 时恢复原会话并重试。请先选择 Skill，再发布。',
     eventName: 'StopFailure',
@@ -126,15 +155,45 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
 ]);
 
 function cloneExample(example) {
-  return JSON.parse(JSON.stringify(example));
+  const { id: _id, ...hookInput } = example;
+  return JSON.parse(JSON.stringify(hookInput));
 }
 
-export function createRequestedHookExamples({ hookConfigs, userId }) {
+export function listRequestedHookExamples({ hookConfigs }) {
+  const existingNames = new Set(hookConfigs.listHooks().map((hook) => hook.name));
+  return REQUESTED_HOOK_EXAMPLES.map((example) => ({
+    id: example.id,
+    name: example.name,
+    description: example.description,
+    eventName: example.eventName,
+    exists: existingNames.has(example.name),
+  }));
+}
+
+export function createRequestedHookExamples({ hookConfigs, userId, exampleIds }) {
+  const requestedIds = Array.isArray(exampleIds)
+    ? [...new Set(exampleIds.filter((id) => typeof id === 'string'))]
+    : [];
+  if (requestedIds.length === 0) {
+    const error = new Error('Select at least one Hook example');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const examplesById = new Map(REQUESTED_HOOK_EXAMPLES.map((example) => [example.id, example]));
+  const unknownIds = requestedIds.filter((id) => !examplesById.has(id));
+  if (unknownIds.length > 0) {
+    const error = new Error(`Unknown Hook example: ${unknownIds.join(', ')}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const selectedExamples = requestedIds.map((id) => examplesById.get(id));
   const existingByName = new Map(hookConfigs.listHooks().map((hook) => [hook.name, hook]));
   const created = [];
   const skipped = [];
 
-  for (const example of REQUESTED_HOOK_EXAMPLES) {
+  for (const example of selectedExamples) {
     const existing = existingByName.get(example.name);
     if (existing) {
       skipped.push(existing);
@@ -146,7 +205,10 @@ export function createRequestedHookExamples({ hookConfigs, userId }) {
   }
 
   const settings = hookConfigs.getSettings();
-  const visibleEvents = [...new Set([...(settings.visibleEvents || []), 'Stop', 'StopFailure'])];
+  const visibleEvents = [...new Set([
+    ...(settings.visibleEvents || []),
+    ...selectedExamples.map((example) => example.eventName),
+  ])];
   hookConfigs.updateSettings({ visibleEvents });
 
   return {

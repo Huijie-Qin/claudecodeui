@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { appConfigDb, db } from '../database/db.js';
+
 import { isBuiltinHookSkillId } from './hook-builtin-skills.js';
 
 const HOOK_EVENTS = Object.freeze([
@@ -60,6 +61,7 @@ const MATCHER_EVENTS = new Set([
   'FileChanged',
 ]);
 const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
+const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_POST_ACTIONS = 20;
 const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill']);
@@ -474,6 +476,7 @@ function mapHookRow(row) {
     description: row.description || '',
     status: row.status,
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
+    bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
     extensionLogic: normalizeExtensionLogic(parseJson(row.extension_logic_json, null)),
@@ -699,6 +702,50 @@ export function createHookConfigService({ database = db, configStore = appConfig
     if (!hook) throw createHttpError('Hook not found', 404);
     return hook;
   };
+  const getSqlCheckHookRow = ({ publishedOnly = false } = {}) => database.prepare(`
+    SELECT *
+    FROM hooks
+    WHERE binding_controller = 'sql_check'
+      ${publishedOnly ? "AND status = 'published'" : ''}
+    ORDER BY
+      CASE status WHEN 'published' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      created_at DESC
+    LIMIT 1
+  `).get();
+  const getSqlCheckEnforcement = ({ userId }) => {
+    const normalizedUserId = Number(userId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    const hook = getSqlCheckHookRow();
+    if (!hook) {
+      return {
+        available: false,
+        enabled: false,
+        hookId: null,
+        hookName: null,
+        hookStatus: null,
+        reason: 'not_configured',
+      };
+    }
+    const available = hook.status === 'published';
+    const binding = available
+      ? database.prepare(`
+        SELECT 1 AS enabled
+        FROM user_hook_bindings
+        WHERE user_id = ? AND hook_id = ?
+      `).get(normalizedUserId, hook.id)
+      : null;
+    return {
+      available,
+      enabled: Boolean(binding),
+      hookId: hook.id,
+      hookName: hook.name,
+      hookStatus: hook.status,
+      reason: available ? null : 'not_published',
+    };
+  };
   return {
     listHooks: () => {
       const rows = database
@@ -756,6 +803,9 @@ export function createHookConfigService({ database = db, configStore = appConfig
 
     listHookBindings: (hookId) => {
       const hook = requireHook(hookId);
+      if (hook.bindingController === 'sql_check') {
+        throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
+      }
       const users = database
         .prepare(
           `
@@ -825,6 +875,9 @@ export function createHookConfigService({ database = db, configStore = appConfig
 
     replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], boundBy }) => {
       const hook = requireHook(hookId);
+      if (hook.bindingController === 'sql_check') {
+        throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
+      }
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before binding users');
       }
@@ -901,6 +954,47 @@ export function createHookConfigService({ database = db, configStore = appConfig
       };
     },
 
+    getSqlCheckEnforcement,
+
+    setSqlCheckEnforcement: ({ userId, enabled }) => {
+      const normalizedUserId = Number(userId);
+      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+        throw createHttpError('userId must be a positive integer');
+      }
+      if (typeof enabled !== 'boolean') {
+        throw createHttpError('enabled must be a boolean');
+      }
+      const hook = getSqlCheckHookRow({ publishedOnly: true });
+      if (!hook) {
+        throw createHttpError('A published SQL Check Hook is required before enabling enforcement', 409);
+      }
+      const update = database.transaction(() => {
+        database.prepare(`
+          UPDATE hooks
+          SET activation_scope = 'manual'
+          WHERE id = ?
+        `).run(hook.id);
+        database.prepare('DELETE FROM hook_tenant_bindings WHERE hook_id = ?').run(hook.id);
+        if (enabled) {
+          database.prepare(`
+            INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, hook_id)
+            DO UPDATE SET
+              bound_by = excluded.bound_by,
+              updated_at = CURRENT_TIMESTAMP
+          `).run(normalizedUserId, hook.id, normalizedUserId);
+        } else {
+          database.prepare(`
+            DELETE FROM user_hook_bindings
+            WHERE user_id = ? AND hook_id = ?
+          `).run(normalizedUserId, hook.id);
+        }
+      });
+      update();
+      return getSqlCheckEnforcement({ userId: normalizedUserId });
+    },
+
     listExecutions: (hookId, { limit } = {}) => {
       requireHook(hookId);
       if (!hasTable(database, 'hook_executions')) return [];
@@ -938,8 +1032,8 @@ export function createHookConfigService({ database = db, configStore = appConfig
         INSERT INTO hooks (
           id, name, description, status, event_name, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json,
-          created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
+          binding_controller, created_by, updated_by
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -951,6 +1045,7 @@ export function createHookConfigService({ database = db, configStore = appConfig
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
+          normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
         );
@@ -1054,6 +1149,7 @@ export {
   DEFAULT_VISIBLE_EVENTS,
   HOOK_EVENTS,
   POST_ACTION_TYPES,
+  SQL_CHECK_HOOK_NAME,
   allowedClaudeOutputs,
   allowedPostActions,
   normalizeHookInput,

@@ -1,3 +1,9 @@
+import crypto from 'node:crypto';
+
+const LEGACY_SQL_CHECK_HOOK_NAME = 'SQL 响应指标记录';
+const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
+const SQL_LINE_RECORD_HOOK_NAME = 'SQL 行数记录';
+
 export const HOOK_CONFIG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS hooks (
   id TEXT PRIMARY KEY,
@@ -11,6 +17,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}',
   version INTEGER NOT NULL DEFAULT 0,
   activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users')),
+  binding_controller TEXT NOT NULL DEFAULT 'admin' CHECK (binding_controller IN ('admin', 'sql_check')),
   created_by INTEGER NOT NULL,
   updated_by INTEGER NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -159,12 +166,36 @@ export function migrateHookActivationModel(database) {
   const bindingColumns = database.prepare('PRAGMA table_info(user_hook_bindings)').all();
   const hasGlobalEnabled = hookColumns.some((column) => column.name === 'global_enabled');
   const hasActivationScope = hookColumns.some((column) => column.name === 'activation_scope');
+  const hasBindingController = hookColumns.some((column) => column.name === 'binding_controller');
+  const hasHookName = hookColumns.some((column) => column.name === 'name');
   const hasBindingSource = bindingColumns.some((column) => column.name === 'binding_source');
+  const hookColumnNames = new Set(hookColumns.map((column) => column.name));
+  const canSeparateSqlCheck = [
+    'id',
+    'name',
+    'description',
+    'status',
+    'event_name',
+    'matcher_json',
+    'extension_logic_json',
+    'post_actions_json',
+    'claude_response_json',
+    'version',
+    'created_by',
+    'updated_by',
+    'published_at',
+  ].every((column) => hookColumnNames.has(column));
+  let separatedSqlCheckHooks = 0;
 
   const migrate = database.transaction(() => {
     if (!hasActivationScope) {
       database.exec(
         "ALTER TABLE hooks ADD COLUMN activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users'))",
+      );
+    }
+    if (!hasBindingController) {
+      database.exec(
+        "ALTER TABLE hooks ADD COLUMN binding_controller TEXT NOT NULL DEFAULT 'admin' CHECK (binding_controller IN ('admin', 'sql_check'))",
       );
     }
     if (hasGlobalEnabled) {
@@ -185,8 +216,122 @@ export function migrateHookActivationModel(database) {
       database.prepare("DELETE FROM user_hook_bindings WHERE binding_source = 'admin_global'").run();
       database.exec('ALTER TABLE user_hook_bindings DROP COLUMN binding_source');
     }
+    if (hasHookName) {
+      database.prepare(`
+        UPDATE hooks
+        SET binding_controller = 'sql_check', activation_scope = 'manual'
+        WHERE name IN (?, ?)
+      `).run(LEGACY_SQL_CHECK_HOOK_NAME, SQL_CHECK_HOOK_NAME);
+    }
+    if (canSeparateSqlCheck) {
+      const legacyHooks = database.prepare(`
+        SELECT *
+        FROM hooks
+        WHERE name = ? AND binding_controller = 'sql_check'
+      `).all(LEGACY_SQL_CHECK_HOOK_NAME);
+      for (const legacyHook of legacyHooks) {
+        let postActions = [];
+        try {
+          const parsed = JSON.parse(legacyHook.post_actions_json || '[]');
+          postActions = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          postActions = [];
+        }
+        const recordActions = postActions
+          .filter((action) => action?.type === 'write_record')
+          .map((action, position) => ({ ...action, position }));
+        const checkActions = postActions
+          .filter((action) => action?.type !== 'write_record')
+          .map((action, position) => ({ ...action, position }));
+
+        let recordHook = database.prepare('SELECT id FROM hooks WHERE name = ? LIMIT 1').get(SQL_LINE_RECORD_HOOK_NAME);
+        if (!recordHook && recordActions.length > 0) {
+          const recordHookId = crypto.randomUUID();
+          database.prepare(`
+            INSERT INTO hooks (
+              id, name, description, status, event_name, matcher_json,
+              extension_logic_json, post_actions_json, claude_response_json,
+              version, activation_scope, binding_controller,
+              created_by, updated_by, published_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', 'admin', ?, ?, ?)
+          `).run(
+            recordHookId,
+            SQL_LINE_RECORD_HOOK_NAME,
+            '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 数据记录。',
+            legacyHook.status,
+            legacyHook.event_name,
+            legacyHook.matcher_json,
+            legacyHook.extension_logic_json,
+            JSON.stringify(recordActions),
+            legacyHook.claude_response_json,
+            legacyHook.version,
+            legacyHook.created_by,
+            legacyHook.updated_by,
+            legacyHook.published_at,
+          );
+          recordHook = { id: recordHookId };
+        }
+        if (recordHook && recordActions.length > 0) {
+          database.prepare(`
+            INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
+            SELECT user_id, ?, bound_by
+            FROM user_hook_bindings
+            WHERE hook_id = ?
+          `).run(recordHook.id, legacyHook.id);
+        }
+        database.prepare(`
+          UPDATE hooks
+          SET name = ?,
+              description = ?,
+              post_actions_json = ?
+          WHERE id = ?
+        `).run(
+          SQL_CHECK_HOOK_NAME,
+          '检测模型输出中的 SQL，并调用 SQL Check MCP Tool 执行强制语法校验。',
+          JSON.stringify(checkActions),
+          legacyHook.id,
+        );
+        separatedSqlCheckHooks += 1;
+      }
+    }
+    database.prepare(`
+      UPDATE hooks
+      SET activation_scope = 'manual'
+      WHERE binding_controller = 'sql_check'
+    `).run();
   });
   migrate();
+
+  const hasTenantBindings = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_tenant_bindings'")
+    .get());
+  if (hasTenantBindings) {
+    database.prepare(`
+      DELETE FROM hook_tenant_bindings
+      WHERE hook_id IN (
+        SELECT id FROM hooks WHERE binding_controller = 'sql_check'
+      )
+    `).run();
+  }
+
+  const hasDataRecords = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_data_records'")
+    .get());
+  if (hasDataRecords && hasHookName) {
+    database.prepare(`
+      UPDATE hook_data_records
+      SET hook_id = (
+        SELECT id FROM hooks WHERE name = ? ORDER BY updated_at DESC LIMIT 1
+      )
+      WHERE record_type = 'sql_response_metrics'
+        AND hook_id IN (
+          SELECT id FROM hooks WHERE name = ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM hooks WHERE name = ?
+        )
+    `).run(SQL_LINE_RECORD_HOOK_NAME, SQL_CHECK_HOOK_NAME, SQL_LINE_RECORD_HOOK_NAME);
+  }
 
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_hooks_activation_scope
@@ -197,6 +342,8 @@ export function migrateHookActivationModel(database) {
   return {
     migratedGlobalEnabled: hasGlobalEnabled,
     addedActivationScope: !hasActivationScope,
+    addedBindingController: !hasBindingController,
     removedBindingSource: hasBindingSource,
+    separatedSqlCheckHooks,
   };
 }

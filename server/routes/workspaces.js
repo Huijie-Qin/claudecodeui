@@ -2,6 +2,7 @@ import express from 'express';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { tenantContext } from '../middleware/tenant-context.js';
+import { hookConfigService } from '../services/hook-configs.js';
 import { workspaceAccess } from '../services/workspace-access.js';
 
 function sendRouteError(res, error) {
@@ -13,6 +14,7 @@ export function createWorkspacesRouter({
   multitenancy = multitenancyDb,
   access = workspaceAccess,
   tenantMiddleware = tenantContext,
+  hookConfigs = hookConfigService,
 } = {}) {
   const router = express.Router();
   router.use(tenantMiddleware);
@@ -82,6 +84,7 @@ export function createWorkspacesRouter({
         workspaceId: workspace.id,
         accessRole,
         canManage: true,
+        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id }),
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
           workspaceId: workspace.id,
@@ -117,11 +120,38 @@ export function createWorkspacesRouter({
         workspaceId: workspace.id,
         accessRole,
         canManage: true,
+        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id }),
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
           workspaceId: workspace.id,
           userId: req.user.id,
         }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
+  router.put('/:workspaceId/sql-check/enforcement', (req, res) => {
+    try {
+      if (typeof hookConfigs?.setSqlCheckEnforcement !== 'function') {
+        return res.status(501).json({ error: 'SQL Check enforcement is not available' });
+      }
+
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      const enforcement = hookConfigs.setSqlCheckEnforcement({
+        userId: req.user.id,
+        enabled: req.body?.enabled,
+      });
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        enforcement,
       });
     } catch (error) {
       return sendRouteError(res, error);

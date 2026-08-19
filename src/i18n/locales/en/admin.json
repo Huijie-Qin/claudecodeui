@@ -426,8 +426,15 @@
     "newHook": "New Hook",
     "examples": {
       "create": "Create examples",
+      "dialogTitle": "Select examples",
+      "dialogDescription": "Choose only the examples to create now. Existing configurations will not be overwritten.",
+      "loading": "Loading examples...",
+      "loadError": "Failed to load Hook examples",
+      "exists": "Already exists",
+      "selectedCount": "{{count}} selected",
+      "createSelected": "Create selected",
       "created": "Created {{count}} Hook example drafts. Select an MCP Tool and Skills before publishing.",
-      "alreadyExists": "All three Hook examples already exist; existing configurations were preserved.",
+      "alreadyExists": "The selected Hook examples already exist; existing configurations were preserved.",
       "error": "Failed to create Hook examples"
     },
     "moreEvents": "More events",
@@ -458,6 +465,8 @@
       "boundTenantCountShort": "{{count}} tenants (dynamic)",
       "allUsersShort": "All users (dynamic)",
       "unbound": "No users bound",
+      "sqlCheckManaged": "Enabled by users in SQL Check",
+      "sqlCheckManagedCount": "{{count}} users enabled enforcement",
       "scopes": {
         "users": "Specific users",
         "tenants": "By tenant",

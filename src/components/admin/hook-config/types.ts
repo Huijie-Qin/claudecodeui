@@ -96,6 +96,7 @@ export type HookConfig = HookConfigDraft & {
   updatedAt: string;
   publishedAt: string | null;
   activationScope: 'manual' | 'all_users';
+  bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
   boundTenantCount: number;
 };

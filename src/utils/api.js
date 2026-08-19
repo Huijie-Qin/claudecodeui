@@ -412,9 +412,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    createHookExamples: () =>
+    hookExamples: () => authenticatedFetch('/api/admin/hooks/examples'),
+    createHookExamples: (exampleIds) =>
       authenticatedFetch('/api/admin/hooks/examples', {
         method: 'POST',
+        body: JSON.stringify({ exampleIds }),
       }),
     updateHook: (hookId, payload) =>
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
@@ -647,6 +649,11 @@ export const api = {
       authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check`), {
         method: 'PUT',
         body: JSON.stringify(payload),
+      }),
+    updateEnforcement: (workspaceId, enabled) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check/enforcement`), {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
       }),
   },
 

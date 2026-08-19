@@ -222,7 +222,7 @@ test('Hook bindings support user, tenant, and all-user dynamic scopes', async ()
 
 });
 
-test('Hook example endpoint creates drafts without preselecting MCP Tools or Skills', async () => {
+test('Hook example endpoints list choices and create only the selected drafts', async () => {
   const created = [];
   const hookConfigs = {
     listHooks: () => [...created],
@@ -236,14 +236,27 @@ test('Hook example endpoint creates drafts without preselecting MCP Tools or Ski
   };
   const router = createRouter({ hookConfigs, hookSkillMarket: {} });
 
-  const { response, payload } = await requestJson(router, '/hooks/examples', { method: 'POST' });
+  const catalog = await requestJson(router, '/hooks/examples');
+  assert.equal(catalog.response.status, 200);
+  assert.equal(catalog.payload.examples.length, 4);
+  assert.equal(catalog.payload.examples.every((example) => example.exists === false), true);
+
+  const selectedIds = catalog.payload.examples.slice(0, 2).map((example) => example.id);
+  const { response, payload } = await requestJson(router, '/hooks/examples', {
+    method: 'POST',
+    body: { exampleIds: selectedIds },
+  });
 
   assert.equal(response.status, 201);
-  assert.equal(payload.createdCount, 3);
+  assert.equal(payload.createdCount, 2);
   assert.equal(payload.hooks.every((hook) => hook.status === 'draft'), true);
-  const sqlExample = payload.hooks.find((hook) => hook.name.includes('SQL'));
+  const sqlCheckExample = payload.hooks.find((hook) => hook.name.includes('SQL Check'));
+  const sqlRecordExample = payload.hooks.find((hook) => hook.name.includes('SQL 行数'));
   const skillExamples = payload.hooks.filter((hook) => hook.postActions[0]?.type === 'invoke_skill');
-  assert.equal(sqlExample.postActions[0].config.toolName, '');
+  assert.equal(sqlCheckExample.postActions[0].config.toolName, '');
+  assert.equal(sqlCheckExample.postActions.some((action) => action.type === 'write_record'), false);
+  assert.equal(sqlRecordExample.postActions[0].type, 'write_record');
+  assert.equal(sqlRecordExample.postActions.some((action) => action.type === 'call_mcp_tool'), false);
   assert.equal(skillExamples.every((hook) => hook.postActions[0].config.skillId === ''), true);
-  assert.deepEqual(payload.visibleEvents, ['Stop', 'StopFailure']);
+  assert.deepEqual(payload.visibleEvents, ['Stop']);
 });

@@ -71,6 +71,14 @@ type HookBindingTenant = {
 
 type HookBindingScope = 'users' | 'tenants' | 'all_users';
 
+type HookExampleCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  eventName: HookEventName;
+  exists: boolean;
+};
+
 async function readError(response: Response, fallback: string) {
   try {
     const data = await response.json() as { error?: string };
@@ -102,6 +110,7 @@ function normalizeHookConfig(hook: HookConfig): HookConfig {
     ...hook,
     boundUserCount: Number(hook.boundUserCount || 0),
     boundTenantCount: Number(hook.boundTenantCount || 0),
+    bindingController: hook.bindingController === 'sql_check' ? 'sql_check' : 'admin',
     extensionLogic: hook.extensionLogic
       ? { ...hook.extensionLogic, outputs: hook.extensionLogic.outputs || [] }
       : null,
@@ -110,6 +119,106 @@ function normalizeHookConfig(hook: HookConfig): HookConfig {
       ? hook.claudeResponse
       : { bindings: {} },
   };
+}
+
+function HookExamplesDialog({
+  open,
+  examples,
+  selectedIds,
+  loading,
+  saving,
+  error,
+  onClose,
+  onToggle,
+  onCreate,
+}: {
+  open: boolean;
+  examples: HookExampleCatalogItem[];
+  selectedIds: string[];
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  onClose: () => void;
+  onToggle: (exampleId: string) => void;
+  onCreate: () => void;
+}) {
+  const { t } = useTranslation('admin');
+  const selected = new Set(selectedIds);
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !saving) onClose(); }}>
+      <DialogContent className="max-h-[86vh] max-w-2xl overflow-hidden">
+        <DialogTitle className="sr-only">{t('hooks.examples.dialogTitle')}</DialogTitle>
+        <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <BookOpen className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold text-foreground">{t('hooks.examples.dialogTitle')}</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">{t('hooks.examples.dialogDescription')}</p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} disabled={saving} aria-label={t('hooks.close')}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="max-h-[calc(86vh-138px)] overflow-y-auto p-4 sm:p-5">
+          {loading ? (
+            <div className="flex min-h-44 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              {t('hooks.examples.loading')}
+            </div>
+          ) : error ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>
+          ) : (
+            <div className="space-y-2">
+              {examples.map((example) => {
+                const checked = selected.has(example.id);
+                return (
+                  <button
+                    key={example.id}
+                    type="button"
+                    disabled={example.exists || saving}
+                    onClick={() => onToggle(example.id)}
+                    className={cn(
+                      'flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors',
+                      checked ? 'border-primary/50 bg-primary/5' : 'border-border hover:bg-muted/30',
+                      example.exists && 'cursor-not-allowed bg-muted/20 opacity-65',
+                    )}
+                  >
+                    <span className={cn(
+                      'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]',
+                      checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                    )}>{checked ? '✓' : ''}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{example.name}</span>
+                        <Badge variant="outline">{t(`hooks.events.${example.eventName}.label`)}</Badge>
+                        {example.exists ? <Badge variant="secondary">{t('hooks.examples.exists')}</Badge> : null}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">{example.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-border bg-muted/10 px-5 py-3">
+          <span className="mr-auto text-xs text-muted-foreground">
+            {t('hooks.examples.selectedCount', { count: selectedIds.length })}
+          </span>
+          <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
+            {t('hooks.cancel')}
+          </Button>
+          <Button type="button" size="sm" onClick={onCreate} disabled={loading || saving || selectedIds.length === 0}>
+            {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            {t('hooks.examples.createSelected')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function MoreEventsDialog({
@@ -520,6 +629,11 @@ export default function HookConfigsTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const [exampleCatalog, setExampleCatalog] = useState<HookExampleCatalogItem[]>([]);
+  const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
+  const [examplesLoading, setExamplesLoading] = useState(false);
+  const [examplesError, setExamplesError] = useState<string | null>(null);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [recordsHook, setRecordsHook] = useState<HookConfig | null>(null);
   const [dataRecords, setDataRecords] = useState<HookDataRecord[]>([]);
@@ -601,10 +715,28 @@ export default function HookConfigsTab() {
     });
   };
 
+  const openExamples = async () => {
+    setExamplesOpen(true);
+    setExamplesLoading(true);
+    setExamplesError(null);
+    setSelectedExampleIds([]);
+    try {
+      const response = await api.admin.hookExamples();
+      if (!response.ok) throw new Error(await readError(response, t('hooks.examples.loadError')));
+      const payload = await response.json() as { examples?: HookExampleCatalogItem[] };
+      setExampleCatalog(payload.examples || []);
+    } catch (caughtError) {
+      setExamplesError(caughtError instanceof Error ? caughtError.message : t('hooks.examples.loadError'));
+    } finally {
+      setExamplesLoading(false);
+    }
+  };
+
   const createExamples = async () => {
+    if (selectedExampleIds.length === 0) return;
     setBusy(true);
     try {
-      const response = await api.admin.createHookExamples();
+      const response = await api.admin.createHookExamples(selectedExampleIds);
       if (!response.ok) throw new Error(await readError(response, t('hooks.examples.error')));
       const payload = await response.json() as {
         hooks?: HookConfig[];
@@ -622,6 +754,8 @@ export default function HookConfigsTab() {
         setVisibleEvents(payload.visibleEvents);
         setVisibleEventDraft(payload.visibleEvents);
       }
+      setExamplesOpen(false);
+      setSelectedExampleIds([]);
       showToast(
         payload.createdCount
           ? t('hooks.examples.created', { count: payload.createdCount })
@@ -729,7 +863,7 @@ export default function HookConfigsTab() {
       replaceHook(normalizedHook);
       setEditor(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
-      await openHookBindings(normalizedHook);
+      if (normalizedHook.bindingController !== 'sql_check') await openHookBindings(normalizedHook);
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
     } finally {
@@ -746,7 +880,7 @@ export default function HookConfigsTab() {
       const normalizedHook = normalizeHookConfig(payload.hook);
       replaceHook(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
-      await openHookBindings(normalizedHook);
+      if (normalizedHook.bindingController !== 'sql_check') await openHookBindings(normalizedHook);
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
     } finally {
@@ -887,6 +1021,26 @@ export default function HookConfigsTab() {
     />
   );
 
+  const examplesDialog = (
+    <HookExamplesDialog
+      open={examplesOpen}
+      examples={exampleCatalog}
+      selectedIds={selectedExampleIds}
+      loading={examplesLoading}
+      saving={busy}
+      error={examplesError}
+      onClose={() => {
+        setExamplesOpen(false);
+        setSelectedExampleIds([]);
+        setExamplesError(null);
+      }}
+      onToggle={(exampleId) => setSelectedExampleIds((current) => (
+        current.includes(exampleId) ? current.filter((id) => id !== exampleId) : [...current, exampleId]
+      ))}
+      onCreate={() => void createExamples()}
+    />
+  );
+
   if (editor) {
     return (
       <div className="relative h-full min-h-0">
@@ -944,7 +1098,7 @@ export default function HookConfigsTab() {
               variant="outline"
               size="sm"
               disabled={busy}
-              onClick={() => void createExamples()}
+              onClick={() => void openExamples()}
             >
               <BookOpen className="h-4 w-4" />
               {t('hooks.examples.create')}
@@ -1053,10 +1207,13 @@ export default function HookConfigsTab() {
           <div className="grid auto-rows-fr gap-3 lg:grid-cols-2">
             {filteredHooks.map((hook) => {
               const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
+              const isSqlCheckManaged = hook.bindingController === 'sql_check';
               const bindingActive = hook.activationScope === 'all_users'
                 || hook.boundTenantCount > 0
                 || hook.boundUserCount > 0;
-              const bindingLabel = hook.activationScope === 'all_users'
+              const bindingLabel = isSqlCheckManaged
+                ? t('hooks.bindings.sqlCheckManagedCount', { count: hook.boundUserCount })
+                : hook.activationScope === 'all_users'
                 ? t('hooks.bindings.allUsersShort')
                 : hook.boundTenantCount > 0
                   ? t('hooks.bindings.boundTenantCountShort', { count: hook.boundTenantCount })
@@ -1075,7 +1232,7 @@ export default function HookConfigsTab() {
                         <h3 className="truncate text-sm font-semibold text-foreground">{hook.name}</h3>
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
                         {hook.status === 'published' ? (
-                          <Badge variant={bindingActive ? 'default' : 'outline'}>
+                          <Badge variant={bindingActive && !isSqlCheckManaged ? 'default' : 'outline'}>
                             {bindingLabel}
                           </Badge>
                         ) : null}
@@ -1127,7 +1284,12 @@ export default function HookConfigsTab() {
                     <Database className="h-3.5 w-3.5" />
                     数据记录
                   </Button>
-                  {hook.status === 'published' ? (
+                  {hook.status === 'published' && isSqlCheckManaged ? (
+                    <span className="inline-flex h-8 items-center gap-1.5 px-3 text-xs text-muted-foreground">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      {t('hooks.bindings.sqlCheckManaged')}
+                    </span>
+                  ) : hook.status === 'published' ? (
                     <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void openHookBindings(hook)}>
                       <UsersRound className="h-3.5 w-3.5" />
                       {t('hooks.bindings.manage')}
@@ -1163,6 +1325,7 @@ export default function HookConfigsTab() {
       />
 
       {userBindingsDialog}
+      {examplesDialog}
 
     </div>
   );
