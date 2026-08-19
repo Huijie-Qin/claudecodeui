@@ -30,6 +30,20 @@ npm run dev
 npm run desktop:dev
 ```
 
+`DESKTOP_HOME_URL` can also be supplied when the app starts. The command-line
+option takes precedence over the environment variable, which takes precedence
+over the URL embedded at build time:
+
+```sh
+DESKTOP_HOME_URL=https://cloudcli.example.com/ npm run desktop:dev
+/Applications/CloudCLI.app/Contents/MacOS/CloudCLI --desktop-home-url=https://cloudcli.example.com/
+```
+
+The selected home origin is added to the runtime allowlist after the same URL
+security checks used by the build. The desktop application's dedicated browser
+session uses direct connections by default, so `DESKTOP_HOME_URL` and resources
+loaded in that session do not use the system proxy.
+
 The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL; loopback HTTP is accepted automatically in development mode, while other HTTP origins require the explicit insecure override. Packaged applications ignore `ELECTRON_RENDERER_URL` and always use the bundled, restricted offline page on load failure.
 
 ## Commands
