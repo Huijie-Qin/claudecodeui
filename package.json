@@ -30,6 +30,8 @@
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
     "client": "vite",
     "mock:sql-check": "node scripts/sql-check-rules-mock.js",
+    "mock:skill-market": "node scripts/skill-market-test-server.mjs",
+    "test:skill-market-mock": "node --test scripts/skill-market-test-server.test.mjs",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",

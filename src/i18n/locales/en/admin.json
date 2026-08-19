@@ -38,6 +38,17 @@
     "admin": "Admin",
     "never": "Never"
   },
+  "skillPresets": {
+    "pagination": {
+      "page": "Page {{page}}",
+      "pageWithTotal": "Page {{page}} / {{totalPages}}",
+      "pageSize": "{{count}} per page",
+      "pageSizeLabel": "Skills per page",
+      "total": "{{count}} total",
+      "previous": "Previous page",
+      "next": "Next page"
+    }
+  },
   "fields": {
     "username": "Username",
     "user": "User",
