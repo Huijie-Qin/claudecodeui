@@ -30,6 +30,8 @@
       "page": "Page {{page}}",
       "pageWithTotal": "Page {{page}} / {{totalPages}}",
       "pageSize": "{{count}} per page",
+      "pageSizePrefix": "Show",
+      "pageSizeSuffix": "per page",
       "pageSizeLabel": "Skills per page",
       "total": "{{count}} total",
       "previous": "Previous page",

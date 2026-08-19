@@ -29,6 +29,8 @@
       "page": "第 {{page}} 页",
       "pageWithTotal": "第 {{page}} / {{totalPages}} 页",
       "pageSize": "每页 {{count}} 条",
+      "pageSizePrefix": "每页",
+      "pageSizeSuffix": "条",
       "pageSizeLabel": "每页 Skill 数量",
       "total": "共 {{count}} 条",
       "previous": "上一页",
