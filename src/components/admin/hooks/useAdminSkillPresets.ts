@@ -47,6 +47,20 @@ export type SkillPresetFormValues = {
   status: AdminSkillPresetStatus;
 };
 
+export type MarketSkillPageInfo = {
+  page: number;
+  pageSize: number;
+  hasNextPage: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
+const DEFAULT_MARKET_PAGE_INFO: MarketSkillPageInfo = {
+  page: 1,
+  pageSize: 50,
+  hasNextPage: false,
+};
+
 type ErrorPayload = {
   error?: string;
   message?: string;
@@ -79,6 +93,7 @@ function buildSkillPayload(values: SkillPresetFormValues, selectedSkill?: Market
 export function useAdminSkillPresets(tenantId?: number) {
   const [presets, setPresets] = useState<AdminSkillPreset[]>([]);
   const [marketSkills, setMarketSkills] = useState<MarketSkillSummary[]>([]);
+  const [marketPageInfo, setMarketPageInfo] = useState<MarketSkillPageInfo>(DEFAULT_MARKET_PAGE_INFO);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -116,6 +131,7 @@ export function useAdminSkillPresets(tenantId?: number) {
   ) => {
     if (!tenantId) {
       setMarketSkills([]);
+      setMarketPageInfo(DEFAULT_MARKET_PAGE_INFO);
       return [];
     }
     setIsSearching(true);
@@ -126,9 +142,23 @@ export function useAdminSkillPresets(tenantId?: number) {
         setError(await readError(response, 'Failed to search Skill Market'));
         return [];
       }
-      const payload = await response.json() as { skills?: MarketSkillSummary[] };
+      const payload = await response.json() as {
+        skills?: MarketSkillSummary[];
+        pageInfo?: Partial<MarketSkillPageInfo>;
+      };
       const skills = payload.skills || [];
+      const responsePage = Number(payload.pageInfo?.page);
+      const responsePageSize = Number(payload.pageInfo?.pageSize);
+      const responseTotal = Number(payload.pageInfo?.total);
+      const responseTotalPages = Number(payload.pageInfo?.totalPages);
       setMarketSkills(skills);
+      setMarketPageInfo({
+        page: Number.isInteger(responsePage) && responsePage > 0 ? responsePage : page,
+        pageSize: Number.isInteger(responsePageSize) && responsePageSize > 0 ? responsePageSize : pageSize,
+        hasNextPage: Boolean(payload.pageInfo?.hasNextPage ?? skills.length >= pageSize),
+        ...(Number.isInteger(responseTotal) && responseTotal >= 0 ? { total: responseTotal } : {}),
+        ...(Number.isInteger(responseTotalPages) && responseTotalPages > 0 ? { totalPages: responseTotalPages } : {}),
+      });
       return skills;
     } finally {
       setIsSearching(false);
@@ -137,6 +167,7 @@ export function useAdminSkillPresets(tenantId?: number) {
 
   useEffect(() => {
     setMarketSkills([]);
+    setMarketPageInfo(DEFAULT_MARKET_PAGE_INFO);
     if (tenantId) {
       void searchMarket('', { pageSize: 50 });
     }
@@ -339,6 +370,7 @@ export function useAdminSkillPresets(tenantId?: number) {
   return {
     presets,
     marketSkills,
+    marketPageInfo,
     error,
     isLoading,
     isSearching,

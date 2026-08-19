@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   PackagePlus,
   RefreshCw,
@@ -38,6 +40,8 @@ const EMPTY_VALUES: SkillPresetFormValues = {
   status: 'draft',
 };
 
+const MARKET_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+
 function getSkillDisplayName(skill: MarketSkillSummary) {
   return skill.displayName || skill.name || skill.skillId || skill.id || '';
 }
@@ -61,11 +65,13 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
   const defaultTenantId = currentTenantId || tenants[0]?.id || 0;
   const [tenantId, setTenantId] = useState(defaultTenantId);
   const [query, setQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
   const [values, setValues] = useState<SkillPresetFormValues>({ ...EMPTY_VALUES, tenantId: defaultTenantId });
   const [saveResult, setSaveResult] = useState<{ created: number } | null>(null);
   const {
     presets,
     marketSkills,
+    marketPageInfo,
     error,
     isLoading,
     isSearching,
@@ -107,6 +113,8 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
 
   const handleTenantChange = (nextTenantId: number) => {
     setTenantId(nextTenantId);
+    setQuery('');
+    setActiveQuery('');
     setSaveResult(null);
     setValues({ ...EMPTY_VALUES, tenantId: nextTenantId });
   };
@@ -192,6 +200,20 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
     const preset = findPresetForSkill(skill, presetBySkillRef);
     if (!preset) return;
     await handleDeletePreset(preset);
+  };
+
+  const handleMarketSearch = () => {
+    const nextQuery = query.trim();
+    setActiveQuery(nextQuery);
+    void searchMarket(nextQuery, { page: 1, pageSize: marketPageInfo.pageSize });
+  };
+
+  const handleMarketPageChange = (page: number) => {
+    void searchMarket(activeQuery, { page, pageSize: marketPageInfo.pageSize });
+  };
+
+  const handleMarketPageSizeChange = (pageSize: number) => {
+    void searchMarket(activeQuery, { page: 1, pageSize });
   };
 
   return (
@@ -295,7 +317,8 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                   size="sm"
                   onClick={() => {
                     setQuery('');
-                    void searchMarket('', { pageSize: 50 });
+                    setActiveQuery('');
+                    void searchMarket('', { page: 1, pageSize: marketPageInfo.pageSize });
                   }}
                   disabled={isSearching || !tenantId}
                 >
@@ -310,11 +333,17 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                   <Input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        handleMarketSearch();
+                      }
+                    }}
                     placeholder={t('skillPresets.searchPlaceholder', { defaultValue: 'Filter tenant Skill Market skills' })}
                     className="pl-9"
                   />
                 </div>
-                <Button type="button" variant="outline" onClick={() => void searchMarket(query, { pageSize: 50 })} disabled={isSearching || !tenantId}>
+                <Button type="button" variant="outline" onClick={handleMarketSearch} disabled={isSearching || !tenantId}>
                   {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                   {t('skillPresets.search', { defaultValue: 'Search' })}
                 </Button>
@@ -412,6 +441,69 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                     : t('skillPresets.noMarketSkills', { defaultValue: 'No Skill Market skills found for this tenant.' })}
                 </div>
               )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                <div className="flex items-center gap-2">
+                  <select
+                    value={marketPageInfo.pageSize}
+                    onChange={(event) => handleMarketPageSizeChange(Number(event.target.value))}
+                    disabled={isSearching || !tenantId}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                    aria-label={t('skillPresets.pagination.pageSizeLabel', { defaultValue: 'Skills per page' })}
+                  >
+                    {MARKET_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                      <option key={pageSize} value={pageSize}>
+                        {t('skillPresets.pagination.pageSize', {
+                          defaultValue: '{{count}} per page',
+                          count: pageSize,
+                        })}
+                      </option>
+                    ))}
+                  </select>
+                  {marketPageInfo.total !== undefined ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t('skillPresets.pagination.total', {
+                        defaultValue: '{{count}} total',
+                        count: marketPageInfo.total,
+                      })}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isSearching || marketPageInfo.page <= 1 || !tenantId}
+                    onClick={() => handleMarketPageChange(Math.max(1, marketPageInfo.page - 1))}
+                    aria-label={t('skillPresets.pagination.previous', { defaultValue: 'Previous page' })}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="min-w-16 text-center text-xs text-muted-foreground">
+                    {marketPageInfo.totalPages
+                      ? t('skillPresets.pagination.pageWithTotal', {
+                        defaultValue: '{{page}} / {{totalPages}}',
+                        page: marketPageInfo.page,
+                        totalPages: marketPageInfo.totalPages,
+                      })
+                      : t('skillPresets.pagination.page', {
+                        defaultValue: 'Page {{page}}',
+                        page: marketPageInfo.page,
+                      })}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isSearching || !marketPageInfo.hasNextPage || !tenantId}
+                    onClick={() => handleMarketPageChange(marketPageInfo.page + 1)}
+                    aria-label={t('skillPresets.pagination.next', { defaultValue: 'Next page' })}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div className="space-y-1">
