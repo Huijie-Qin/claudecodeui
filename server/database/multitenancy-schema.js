@@ -130,6 +130,24 @@ CREATE TABLE IF NOT EXISTS workspace_mcp_preset_installs (
 CREATE INDEX IF NOT EXISTS idx_workspace_mcp_preset_installs_preset
   ON workspace_mcp_preset_installs(preset_id, status);
 
+CREATE TABLE IF NOT EXISTS user_workspace_mcp_tool_preferences (
+  tenant_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  preset_id INTEGER NOT NULL,
+  allowed_tools_json TEXT NOT NULL DEFAULT '[]',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, user_id, preset_id),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_workspace_mcp_tool_preferences_owner
+  ON user_workspace_mcp_tool_preferences(tenant_id, workspace_id, user_id);
+
 CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (
   workspace_id INTEGER NOT NULL,
   skill_name TEXT NOT NULL,

@@ -18,9 +18,25 @@ export default defineConfig(({ mode }) => {
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
   const sqlCheckBaseUrl = env.SQL_CHECK_BASE_URL || ''
+  const stripProductionCspInDevelopment = {
+    name: 'strip-production-csp-in-development',
+    apply: 'serve',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html) {
+        // The React refresh preamble injected by Vite is inline. Production is
+        // served with the strict CSP below, while development drops this one meta
+        // tag so HMR can initialize normally.
+        return html.replace(
+          /\s*<meta\s+data-cloudcli-production-csp[\s\S]*?\/>/u,
+          ''
+        )
+      }
+    }
+  }
 
   return {
-    plugins: [react()],
+    plugins: [stripProductionCspInDevelopment, react()],
     define: {
       'import.meta.env.SQL_CHECK_BASE_URL': JSON.stringify(sqlCheckBaseUrl)
     },

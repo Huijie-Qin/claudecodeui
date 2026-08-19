@@ -12,6 +12,7 @@ import type {
   ProjectsUpdatedMessage,
 } from '../types/app';
 import { resolveSupportedWorkspaceTab } from '../components/main-content/utils/mainContentAccess';
+import { readAgentGraphFeatureEnabled } from '../features/agent-graph/agentGraphFeature';
 
 import { isProjectUpdateScopedToTenant } from './projectTenantUpdates';
 import { projectsHaveChanges } from './projectChangeDetection';
@@ -84,7 +85,7 @@ const isUpdateAdditive = (
 };
 
 const isValidTab = (tab: string): tab is AppTab => {
-  return resolveSupportedWorkspaceTab(tab) === tab;
+  return resolveSupportedWorkspaceTab(tab, readAgentGraphFeatureEnabled()) === tab;
 };
 
 const readPersistedTab = (): AppTab => {

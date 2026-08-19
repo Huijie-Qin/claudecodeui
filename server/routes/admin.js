@@ -13,6 +13,14 @@ import { runtimeMonitorService } from '../services/runtime-monitor.js';
 import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../services/admin-analytics.js';
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
+import { hookConfigService } from '../services/hook-configs.js';
+import { createRequestedHookExamples, listRequestedHookExamples } from '../services/hook-examples.js';
+import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
+import {
+  FEATURE_FLAGS,
+  featureFlagsService,
+  shouldShowExperimentalFeatures,
+} from '../services/feature-flags.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +43,23 @@ function sendRouteError(res, error, fallbackMessage) {
   const isConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || error?.code === 'SQLITE_CONSTRAINT';
   const statusCode = error?.statusCode || (isConstraint ? 409 : 400);
   return res.status(statusCode).json({ error: message || fallbackMessage });
+}
+
+function broadcastFeatureFlags(req, features) {
+  const message = JSON.stringify({
+    type: 'feature-flags-updated',
+    features,
+    timestamp: new Date().toISOString(),
+  });
+  req.app?.locals?.chatClients?.forEach((client) => {
+    if (client.readyState === 1) {
+      try {
+        client.send(message);
+      } catch (error) {
+        console.warn('Failed to broadcast feature flag update:', error?.message || error);
+      }
+    }
+  });
 }
 
 function createInvitationToken() {
@@ -124,6 +149,12 @@ const helperScriptUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 64 * 1024,
+    files: 1,
+  },
+});
+const hookSkillUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
     files: 1,
   },
 });
@@ -380,9 +411,33 @@ export function createAdminRouter(
   platformAnalytics = platformAnalyticsService,
   aiSubmissions = aiMrSubmissionsDb,
   skillPresets = skillPresetService,
+  hookConfigs = hookConfigService,
+  featureFlags = featureFlagsService,
+  showExperimentalFeatures = shouldShowExperimentalFeatures,
+  hookSkillCatalog = createHookSkillCatalogService(),
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
+
+  router.get('/feature-flags', (req, res) => {
+    res.json({
+      features: featureFlags.getAll(),
+      showExperimentalFeatures: showExperimentalFeatures(),
+    });
+  });
+
+  router.put('/feature-flags/agent-graph', (req, res) => {
+    if (!showExperimentalFeatures()) {
+      return res.status(404).json({ error: 'Experimental feature settings are disabled' });
+    }
+    try {
+      const features = featureFlags.setEnabled(FEATURE_FLAGS.AGENT_GRAPH, req.body?.enabled);
+      broadcastFeatureFlags(req, features);
+      res.json({ features });
+    } catch (error) {
+      sendRouteError(res, error, 'Failed to update Agent Graph feature flag');
+    }
+  });
 
   const upsertTenantUserAccess = async ({ tenantId, userId, body }) => {
     const membership = multitenancy.memberships.upsertMembership({
@@ -407,6 +462,209 @@ export function createAdminRouter(
 
   router.get('/tenants', (req, res) => {
     res.json({ tenants: multitenancy.tenants.listTenants() });
+  });
+
+  router.get('/hooks', (req, res) => {
+    try {
+      return res.json({ hooks: hookConfigs.listHooks() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Hooks');
+    }
+  });
+
+  router.post('/hooks', (req, res) => {
+    try {
+      const hook = hookConfigs.createHook({ input: req.body, userId: req.user.id });
+      return res.status(201).json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook');
+    }
+  });
+
+  router.get('/hooks/examples', (req, res) => {
+    try {
+      return res.json({ examples: listRequestedHookExamples({ hookConfigs }) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Hook examples');
+    }
+  });
+
+  router.post('/hooks/examples', (req, res) => {
+    try {
+      const result = createRequestedHookExamples({
+        hookConfigs,
+        userId: req.user.id,
+        exampleIds: req.body?.exampleIds,
+      });
+      return res.status(result.createdCount > 0 ? 201 : 200).json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook examples');
+    }
+  });
+
+  router.get('/hooks/settings', (req, res) => {
+    try {
+      return res.json(hookConfigs.getSettings());
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook settings');
+    }
+  });
+
+  router.put('/hooks/settings', (req, res) => {
+    try {
+      return res.json(hookConfigs.updateSettings(req.body));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook settings');
+    }
+  });
+
+  router.get('/hooks/resources', async (req, res) => {
+    let resources;
+    try {
+      resources = hookConfigs.getResources();
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook resources');
+    }
+    try {
+      const catalog = await hookSkillCatalog.listConfigurationSkills();
+      return res.json({
+        ...resources,
+        skills: catalog.skills,
+        skillSource: catalog.source,
+      });
+    } catch (error) {
+      return res.json({
+        ...resources,
+        skills: [],
+        skillSource: {
+          ...(typeof hookSkillCatalog.getSource === 'function' ? hookSkillCatalog.getSource() : {}),
+          available: false,
+          error: error instanceof Error ? error.message : 'Failed to load built-in Hook Skills',
+        },
+      });
+    }
+  });
+
+  router.post('/hooks/skills', (req, res) => {
+    hookSkillUpload.single('file')(req, res, async (uploadError) => {
+      try {
+        if (uploadError) {
+          const error = new Error(uploadError.message);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (!req.file?.buffer) {
+          const error = new Error('Skill file is required');
+          error.statusCode = 400;
+          throw error;
+        }
+        const skill = await hookSkillCatalog.uploadBuiltinSkill({
+          fileName: req.file.originalname,
+          fileBuffer: req.file.buffer,
+          userId: req.user.id,
+        });
+        const catalog = await hookSkillCatalog.listConfigurationSkills();
+        return res.status(201).json({
+          skill,
+          skills: catalog.skills,
+          skillSource: catalog.source,
+        });
+      } catch (error) {
+        return sendRouteError(res, error, 'Failed to upload built-in Hook Skill');
+      }
+    });
+  });
+
+  router.get('/hooks/:hookId', (req, res) => {
+    try {
+      const hook = hookConfigs.getHook(req.params.hookId);
+      if (!hook) return res.status(404).json({ error: 'Hook not found' });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook');
+    }
+  });
+
+  router.put('/hooks/:hookId', (req, res) => {
+    try {
+      const hook = hookConfigs.updateHook({
+        hookId: req.params.hookId,
+        input: req.body,
+        userId: req.user.id,
+      });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook');
+    }
+  });
+
+  router.post('/hooks/:hookId/publish', async (req, res) => {
+    try {
+      const draft = hookConfigs.getHook(req.params.hookId);
+      if (!draft) return res.status(404).json({ error: 'Hook not found' });
+      const hasSkillAction = draft.postActions.some((action) => action.type === 'invoke_skill');
+      const validatedSkills = hasSkillAction
+        ? await hookSkillCatalog.validateHookSkills({ hook: draft })
+        : [];
+      const hook = hookConfigs.publishHook({
+        hookId: req.params.hookId,
+        userId: req.user.id,
+        validatedSkills,
+      });
+      return res.json({ hook });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish Hook');
+    }
+  });
+
+  router.get('/hooks/:hookId/bindings', (req, res) => {
+    try {
+      return res.json(hookConfigs.listHookBindings(req.params.hookId));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook user bindings');
+    }
+  });
+
+  router.put('/hooks/:hookId/bindings', (req, res) => {
+    try {
+      return res.json(hookConfigs.replaceHookBindings({
+        hookId: req.params.hookId,
+        scope: req.body?.scope,
+        userIds: req.body?.userIds,
+        tenantIds: req.body?.tenantIds,
+        boundBy: req.user.id,
+      }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook user bindings');
+    }
+  });
+
+  router.get('/hooks/:hookId/executions', (req, res) => {
+    try {
+      return res.json({
+        executions: hookConfigs.listExecutions(req.params.hookId, { limit: req.query.limit }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook executions');
+    }
+  });
+
+  router.get('/hooks/:hookId/data-records', (req, res) => {
+    try {
+      return res.json({
+        records: hookConfigs.listDataRecords(req.params.hookId, { limit: req.query.limit }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook data records');
+    }
+  });
+
+  router.delete('/hooks/:hookId', (req, res) => {
+    try {
+      return res.json({ deleted: hookConfigs.deleteHook(req.params.hookId) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Hook');
+    }
   });
 
   router.post('/tenants', (req, res) => {

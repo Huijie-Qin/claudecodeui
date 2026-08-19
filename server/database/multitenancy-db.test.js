@@ -66,6 +66,64 @@ test('multitenancy initialization copies legacy prod_tenant_id into prod_code', 
   assert.deepEqual(tenant, { code: 'legacy', prod_code: 'prod-legacy' });
 });
 
+test('MCP tool preferences are isolated by workspace and user', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'mcp-owner');
+  const viewerId = seedUser(database, 'mcp-viewer');
+  const tenant = mt.tenants.createTenant({ code: 'mcp-team', name: 'MCP Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: viewerId, role: 'member', permission: 'view', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'mcp-repo',
+    displayName: 'MCP Repo',
+    path: '/tmp/mcp-repo',
+  });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge',
+    description: '',
+    config: { type: 'http', url: 'https://mcp.example.test' },
+    status: 'published',
+    createdByUserId: ownerId,
+  });
+  mt.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    installedByUserId: ownerId,
+    probeStatus: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+  });
+
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    presetId: preset.id,
+    allowedToolNames: ['search_docs'],
+  });
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: viewerId,
+    presetId: preset.id,
+    allowedToolNames: [],
+  });
+
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId })[0].allowedToolNames,
+    ['search_docs'],
+  );
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: viewerId })[0].allowedToolNames,
+    [],
+  );
+});
+
 test('tenant membership controls visible tenants', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);
@@ -830,6 +888,55 @@ test('agent session runtime binds provider session id for resume', () => {
     }).runtime_id,
     'runtime-1',
   );
+});
+
+test('agent session runtime image updates preserve runtime identity and skip deleted rows', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'alice');
+  const tenant = mt.tenants.createTenant({ code: 'team', name: 'Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: userId,
+    slug: 'repo',
+    displayName: 'Repo',
+    path: '/tmp/cloudcli/team/alice/repo',
+  });
+
+  mt.runtimes.createRuntime({
+    runtimeId: 'runtime-1',
+    tenantId: tenant.id,
+    userId,
+    workspaceId: workspace.id,
+    provider: 'claude',
+    containerName: 'cloudcli-claude-t1-u1-w1-r1',
+    image: 'cloudcli/test:old',
+    workspaceHostPath: workspace.path,
+    runtimeHomePath: '/tmp/cloudcli/runtimes/runtime-1/home',
+  });
+  mt.runtimes.bindProviderSession({
+    runtimeId: 'runtime-1',
+    providerSessionId: 'claude-session-1',
+  });
+
+  const updated = mt.runtimes.updateImage({
+    runtimeId: 'runtime-1',
+    image: 'cloudcli/test:new',
+  });
+
+  assert.equal(updated.image, 'cloudcli/test:new');
+  assert.equal(updated.runtime_id, 'runtime-1');
+  assert.equal(updated.provider_session_id, 'claude-session-1');
+  assert.equal(updated.status, 'active');
+  assert.equal(updated.container_name, 'cloudcli-claude-t1-u1-w1-r1');
+  assert.equal(updated.runtime_home_path, '/tmp/cloudcli/runtimes/runtime-1/home');
+  assert.equal(mt.runtimes.updateImage({ runtimeId: 'missing', image: 'cloudcli/test:new' }), null);
+
+  mt.runtimes.updateStatus({ runtimeId: 'runtime-1', status: 'deleted' });
+  assert.equal(mt.runtimes.updateImage({ runtimeId: 'runtime-1', image: 'cloudcli/test:later' }), null);
+  const deleted = database.prepare('SELECT image, status FROM agent_session_runtime WHERE runtime_id = ?').get('runtime-1');
+  assert.deepEqual(deleted, { image: 'cloudcli/test:new', status: 'deleted' });
 });
 
 test('agent session messages persist normalized history idempotently', () => {

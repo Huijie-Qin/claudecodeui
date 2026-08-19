@@ -1,0 +1,4 @@
+interface:
+  display_name: "音乐用户画像分析"
+  short_description: "按标签圈选音乐用户并分析画像分布、基线与 Lift"
+  default_prompt: "Use $analyze-music-audiences to define a music-user cohort and analyze its profile tags."

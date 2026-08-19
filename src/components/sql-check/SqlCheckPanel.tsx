@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Input } from '../../shared/view/ui';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+
 import { normalizeSqlCheckRules, type SqlCheckRule } from './sqlCheckRules';
 
 type WorkspaceSqlCheckConfig = {
@@ -18,7 +19,17 @@ type WorkspaceSqlCheckConfig = {
   userRuleIds?: string[];
   effectiveRuleIds?: string[];
   source?: 'tenant' | 'user';
+  enforcement?: SqlCheckEnforcement;
   error?: string;
+};
+
+type SqlCheckEnforcement = {
+  available: boolean;
+  enabled: boolean;
+  hookId?: string | null;
+  hookName?: string | null;
+  hookStatus?: 'draft' | 'published' | 'disabled' | null;
+  reason?: 'not_configured' | 'not_published' | null;
 };
 
 type SqlCheckPanelProps = {
@@ -60,6 +71,7 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
   const [isLoadingRules, setIsLoadingRules] = useState(false);
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingEnforcement, setIsSavingEnforcement] = useState(false);
 
   useEffect(() => {
     tRef.current = t;
@@ -157,6 +169,11 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
   const customRules = config?.hasUserPreference || draftCustomEnabled ? draftRuleIds : [];
   const effectiveRules = displayedRuleIds;
   const isLoading = isLoadingRules || isLoadingConfig;
+  const enforcement = config?.enforcement || {
+    available: false,
+    enabled: false,
+    reason: 'not_configured' as const,
+  };
 
   const getRuleLabel = (ruleId: string) => {
     const rule = rulesById.get(ruleId);
@@ -205,6 +222,31 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     }
   };
 
+  const handleEnforcementToggle = async () => {
+    if (!workspaceId || !enforcement.available || isLoadingConfig || isSavingEnforcement) return;
+    const nextEnabled = !enforcement.enabled;
+    setIsSavingEnforcement(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await api.sqlCheck.updateEnforcement(workspaceId, nextEnabled);
+      const payload = await response.json().catch(() => ({} as { enforcement?: SqlCheckEnforcement })) as {
+        enforcement?: SqlCheckEnforcement;
+      };
+      if (!response.ok || !payload.enforcement) {
+        setError(payloadError(payload, t('sqlCheck.errors.saveEnforcement')));
+        return;
+      }
+      setConfig((current) => current ? { ...current, enforcement: payload.enforcement } : current);
+      setSuccess(t(nextEnabled ? 'sqlCheck.enforcement.enabledSaved' : 'sqlCheck.enforcement.disabledSaved'));
+    } catch (caughtError) {
+      console.error('[SqlCheckPanel] Failed to update SQL Check enforcement:', caughtError);
+      setError(t('sqlCheck.errors.saveEnforcement'));
+    } finally {
+      setIsSavingEnforcement(false);
+    }
+  };
+
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="border-b border-border px-6 py-4">
@@ -236,6 +278,48 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
             {error}
           </div>
         ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 px-6 py-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <ShieldCheck className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground">{t('sqlCheck.enforcement.title')}</div>
+            <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+              {isLoadingConfig
+                ? t('sqlCheck.enforcement.loading')
+                : enforcement.available
+                  ? t('sqlCheck.enforcement.description')
+                  : t('sqlCheck.enforcement.unavailable')}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {isSavingEnforcement
+              ? t('sqlCheck.enforcement.saving')
+              : t(enforcement.enabled ? 'sqlCheck.enforcement.enabled' : 'sqlCheck.enforcement.disabled')}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enforcement.enabled}
+            aria-label={t('sqlCheck.enforcement.title')}
+            disabled={!workspaceId || !enforcement.available || isLoadingConfig || isSavingEnforcement}
+            onClick={() => void handleEnforcementToggle()}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+              enforcement.enabled ? 'bg-primary' : 'bg-input'
+            }`}
+          >
+            <span
+              className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-sm transition-transform ${
+                enforcement.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border">

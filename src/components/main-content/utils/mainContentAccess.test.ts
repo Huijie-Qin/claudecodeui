@@ -4,7 +4,7 @@ import test from 'node:test';
 import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from './mainContentAccess';
 
 test('getWorkspaceDisabledTabs disables chat for view-only workspaces while keeping inspection tabs available', () => {
-  assert.deepEqual(Array.from(getWorkspaceDisabledTabs('view')).sort(), ['chat']);
+  assert.deepEqual(Array.from(getWorkspaceDisabledTabs('view')).sort(), ['chat', 'codehub']);
   assert.equal(getWorkspaceDisabledTabs('edit').size, 0);
   assert.equal(getWorkspaceDisabledTabs('owner').size, 0);
 });
@@ -40,4 +40,11 @@ test('view-only workspaces can inspect SQL Check configuration', () => {
 
   assert.equal(disabledTabs.has('sql-check'), false);
   assert.equal(resolveAllowedWorkspaceTab('sql-check', disabledTabs), 'sql-check');
+});
+
+test('Agent Graph is normalized away unless the experimental flag is enabled', () => {
+  const editableTabs = getWorkspaceDisabledTabs('edit');
+
+  assert.equal(resolveAllowedWorkspaceTab('agent-graph', editableTabs), 'chat');
+  assert.equal(resolveAllowedWorkspaceTab('agent-graph', editableTabs, true), 'agent-graph');
 });

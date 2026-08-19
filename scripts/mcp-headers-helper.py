@@ -18,6 +18,7 @@ def require_environment_variable(name: str) -> str:
 headers = {
     "X-W3-Name": require_environment_variable("W3_NAME"),
     "X-User-Key": require_environment_variable("USER_KEY"),
+    "tenantid": require_environment_variable("TENANT_ID"),
 }
 
 # headersHelper requires stdout to contain only one JSON object whose values

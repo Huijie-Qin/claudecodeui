@@ -1,6 +1,6 @@
 import type { AppTab, WorkspaceAccessRole } from '../../../types/app';
 
-const SUPPORTED_WORKSPACE_TABS = new Set(['chat', 'files', 'codehub', 'mcp-tools', 'sql-check']);
+const BASE_SUPPORTED_WORKSPACE_TABS = new Set(['chat', 'files', 'codehub', 'mcp-tools', 'sql-check']);
 const VIEW_ONLY_DISABLED_TABS: AppTab[] = ['chat', 'codehub'];
 
 export function getWorkspaceDisabledTabs(accessRole?: WorkspaceAccessRole): ReadonlySet<AppTab> {
@@ -11,11 +11,18 @@ export function getWorkspaceDisabledTabs(accessRole?: WorkspaceAccessRole): Read
   return new Set(VIEW_ONLY_DISABLED_TABS);
 }
 
-export function resolveSupportedWorkspaceTab(activeTab: string): AppTab {
-  return SUPPORTED_WORKSPACE_TABS.has(activeTab) ? activeTab as AppTab : 'chat';
+export function resolveSupportedWorkspaceTab(activeTab: string, agentGraphEnabled = false): AppTab {
+  if (activeTab === 'agent-graph') {
+    return agentGraphEnabled ? 'agent-graph' : 'chat';
+  }
+  return BASE_SUPPORTED_WORKSPACE_TABS.has(activeTab) ? activeTab as AppTab : 'chat';
 }
 
-export function resolveAllowedWorkspaceTab(activeTab: AppTab | string, disabledTabs: ReadonlySet<AppTab>): AppTab {
-  const supportedTab = resolveSupportedWorkspaceTab(activeTab);
+export function resolveAllowedWorkspaceTab(
+  activeTab: AppTab | string,
+  disabledTabs: ReadonlySet<AppTab>,
+  agentGraphEnabled = false,
+): AppTab {
+  const supportedTab = resolveSupportedWorkspaceTab(activeTab, agentGraphEnabled);
   return disabledTabs.has(supportedTab) ? 'files' : supportedTab;
 }

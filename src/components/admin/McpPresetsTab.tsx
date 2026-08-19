@@ -41,6 +41,7 @@ const EMPTY_VALUES: McpPresetFormValues = {
   displayName: '',
   description: '',
   url: '',
+  timeoutMsText: '',
   headersText: '',
   headersHelper: '',
   helperEnvText: '',
@@ -99,6 +100,9 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
   const displayedValidationStatus = selectedTestResult?.status || selectedPreset?.lastTestStatus || 'notTested';
   const displayedValidationToolCount = selectedTestResult?.toolCount ?? selectedPreset?.toolCount ?? 0;
   const displayedValidationTime = selectedTestResult?.testedAt || selectedPreset?.lastTestedAt || null;
+  const timeoutMs = Number(values.timeoutMsText);
+  const isTimeoutValid = values.timeoutMsText.trim() === ''
+    || (Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
   const copyTargetTenants = useMemo(
     () => tenants.filter((tenant) => tenant.id !== tenantId),
     [tenants, tenantId],
@@ -112,6 +116,7 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
       displayName: preset.displayName,
       description: preset.description || '',
       url: preset.config?.url || '',
+      timeoutMsText: preset.config?.timeout == null ? '' : String(preset.config.timeout),
       headersText: headersToText(preset.config?.headers),
       headersHelper: preset.config?.headersHelper || '',
       helperEnvText: headersToText(preset.config?.helperEnv),
@@ -319,6 +324,23 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               <Input value={values.url} onChange={(event) => updateValue('url', event.target.value)} placeholder={t('mcp.fields.httpUrlPlaceholder')} />
             </label>
             <label className="space-y-1 sm:col-span-2">
+              <span className="text-xs text-muted-foreground">{t('mcp.fields.timeout')}</span>
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                aria-invalid={!isTimeoutValid}
+                value={values.timeoutMsText}
+                onChange={(event) => updateValue('timeoutMsText', event.target.value)}
+                placeholder={t('mcp.fields.timeoutPlaceholder')}
+              />
+              <span className="block text-xs text-muted-foreground">
+                {isTimeoutValid
+                  ? t('mcp.fields.timeoutHelp')
+                  : t('mcp.validationErrors.timeoutFormat')}
+              </span>
+            </label>
+            <label className="space-y-1 sm:col-span-2">
               <span className="text-xs text-muted-foreground">{t('mcp.fields.staticHeaders')}</span>
               <textarea
                 value={values.headersText}
@@ -442,14 +464,14 @@ export default function McpPresetsTab({ tenants, currentTenantId }: McpPresetsTa
               </span>
             </label>
             <div className="flex items-end gap-2">
-              <Button onClick={handleSave} disabled={isSaving || isTestingSelectedPreset || !tenantId}>
+              <Button onClick={handleSave} disabled={isSaving || isTestingSelectedPreset || !tenantId || !isTimeoutValid}>
                 {t('mcp.buttons.saveDraft')}
               </Button>
               {selectedPreset ? (
                 <Button
                   variant="outline"
                   onClick={() => void testPreset(selectedPreset.id, { ...values, tenantId })}
-                  disabled={isSaving || isTestingSelectedPreset}
+                  disabled={isSaving || isTestingSelectedPreset || !isTimeoutValid}
                 >
                   {isTestingSelectedPreset ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

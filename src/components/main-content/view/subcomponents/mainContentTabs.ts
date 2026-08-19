@@ -4,8 +4,10 @@ import {
   ListChecks,
   MessageSquare,
   Wrench,
+  Network,
   type LucideIcon,
 } from 'lucide-react';
+
 import type { AppTab } from '../../../../types/app';
 
 export type BuiltInMainContentTab = {
@@ -23,6 +25,13 @@ const BASE_TABS: BuiltInMainContentTab[] = [
   { kind: 'builtin', id: 'sql-check', labelKey: 'tabs.sqlCheck', icon: ListChecks },
 ];
 
-export function buildMainContentTabs(): BuiltInMainContentTab[] {
-  return BASE_TABS;
+const AGENT_GRAPH_TAB: BuiltInMainContentTab = {
+  kind: 'builtin',
+  id: 'agent-graph',
+  labelKey: 'tabs.agentGraph',
+  icon: Network,
+};
+
+export function buildMainContentTabs(agentGraphEnabled = false): BuiltInMainContentTab[] {
+  return agentGraphEnabled ? [...BASE_TABS, AGENT_GRAPH_TAB] : BASE_TABS;
 }

@@ -17,6 +17,7 @@ export default function MainContentHeader({
   isMobile,
   onMenuClick,
   onSkillMarketClick,
+  agentGraphEnabled,
 }: MainContentHeaderProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -64,6 +65,7 @@ export default function MainContentHeader({
               activeTab={activeTab}
               setActiveTab={setActiveTab}
               disabledTabs={disabledTabs}
+              agentGraphEnabled={agentGraphEnabled}
             />
           </div>
           {canScrollRight && (

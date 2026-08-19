@@ -24,6 +24,7 @@ function createHttpError(message, statusCode = 400) {
 }
 
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const TENANT_ID_ENV_NAME = 'TENANT_ID';
 
 function requirePositiveInteger(value, name) {
   const number = Number(value);
@@ -57,6 +58,25 @@ function isWorkspaceVisiblePreset(row) {
     && Number(row.tool_count || 0) > 0;
 }
 
+function getToolNames(tools) {
+  return Array.from(new Set((Array.isArray(tools) ? tools : [])
+    .map((tool) => (typeof tool?.name === 'string' ? tool.name.trim() : ''))
+    .filter(Boolean)));
+}
+
+function withUserToolPreference(preset, preference) {
+  const availableToolNames = getToolNames(preset?.tools);
+  const configuredAllowedToolNames = Array.isArray(preference?.allowedToolNames)
+    ? preference.allowedToolNames
+    : null;
+  const allowedSet = new Set(configuredAllowedToolNames || availableToolNames);
+  return {
+    ...preset,
+    toolSelectionConfigured: configuredAllowedToolNames !== null,
+    allowedToolNames: availableToolNames.filter((toolName) => allowedSet.has(toolName)),
+  };
+}
+
 function buildStatusEntry(preset, now = new Date()) {
   return {
     name: preset.name,
@@ -79,10 +99,11 @@ async function getUserStore(users) {
   return userDb;
 }
 
-async function buildProbeHostEnv(users, userId) {
+async function buildProbeHostEnv(users, userId, tenantId) {
   if (!userId) {
     return {};
   }
+  const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
 
   let userStore;
   let user;
@@ -101,6 +122,7 @@ async function buildProbeHostEnv(users, userId) {
 
   const env = {
     [W3_NAME_ENV_NAME]: username,
+    [TENANT_ID_ENV_NAME]: String(normalizedTenantId),
   };
   let userEnv = {};
   try {
@@ -234,7 +256,7 @@ async function probeInstalledWorkspacePresets({
         multitenancy,
       });
       const runtimeProbeConfig = normalizeMcpServerConfigForProbeRuntime(probeConfig, { env });
-      const probeEnv = await buildProbeHostEnv(users, installRow?.installed_by_user_id);
+      const probeEnv = await buildProbeHostEnv(users, installRow?.installed_by_user_id, tenantId);
       const probeResult = await withTemporaryProcessEnv(
         probeEnv,
         () => probe(runtimeProbeConfig),
@@ -289,6 +311,7 @@ export function createWorkspaceMcpToolsService({
   const listWorkspaceMcpPresetCatalog = async ({
     tenantId,
     workspaceId,
+    userId = null,
     workspacePath,
     accessRole = 'view',
     now = () => new Date(),
@@ -303,6 +326,16 @@ export function createWorkspaceMcpToolsService({
       workspaceId: normalizedWorkspaceId,
     });
     const installsByPresetId = new Map(installs.map((install) => [Number(install.preset_id), install]));
+    const preferences = userId && typeof multitenancy.mcpToolPreferences?.listForUser === 'function'
+      ? multitenancy.mcpToolPreferences.listForUser({
+          tenantId: normalizedTenantId,
+          workspaceId: normalizedWorkspaceId,
+          userId: requirePositiveInteger(userId, 'userId'),
+        })
+      : [];
+    const preferencesByPresetId = new Map(
+      preferences.map((preference) => [Number(preference.preset_id), preference]),
+    );
     const probesByPresetId = await probeInstalledWorkspacePresets({
       multitenancy,
       tenantId: normalizedTenantId,
@@ -317,11 +350,11 @@ export function createWorkspaceMcpToolsService({
       now,
     });
     const workspacePresets = presets.map((preset) => (
-      toWorkspacePreset(
+      withUserToolPreference(toWorkspacePreset(
         preset,
         installsByPresetId.get(Number(preset.id)),
         probesByPresetId.get(Number(preset.id)),
-      )
+      ), preferencesByPresetId.get(Number(preset.id)))
     ));
 
     return {
@@ -383,6 +416,7 @@ export function createWorkspaceMcpToolsService({
     const catalog = await listWorkspaceMcpPresetCatalog({
       tenantId: normalizedTenantId,
       workspaceId: normalizedWorkspaceId,
+      userId: normalizedUserId,
       workspacePath,
       accessRole: 'edit',
     });
@@ -456,11 +490,67 @@ export function createWorkspaceMcpToolsService({
     installWorkspaceMcpPreset,
     installPreinstalledWorkspaceMcpPresets,
 
+    updateWorkspaceMcpToolPreference: ({
+      tenantId,
+      workspaceId,
+      presetId,
+      userId,
+      allowedToolNames,
+    }) => {
+      const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
+      const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+      const normalizedPresetId = requirePositiveInteger(presetId, 'presetId');
+      const normalizedUserId = requirePositiveInteger(userId, 'userId');
+      const preset = getPublishedPreset(multitenancy, {
+        tenantId: normalizedTenantId,
+        presetId: normalizedPresetId,
+      });
+      const install = multitenancy.mcpInstalls.listInstallsForWorkspace({
+        workspaceId: normalizedWorkspaceId,
+      }).find((entry) => Number(entry.preset_id) === normalizedPresetId);
+      if (!install) {
+        throw createHttpError('MCP server is not installed in this workspace', 404);
+      }
+      if (!Array.isArray(allowedToolNames)) {
+        throw createHttpError('allowedToolNames must be an array', 400);
+      }
+
+      const availableToolNames = getToolNames(
+        install.last_probe_status === 'healthy' && Array.isArray(install.tools)
+          ? install.tools
+          : preset.tools,
+      );
+      const availableSet = new Set(availableToolNames);
+      const normalizedAllowedToolNames = Array.from(new Set(allowedToolNames.map((toolName) => (
+        typeof toolName === 'string' ? toolName.trim() : ''
+      )).filter(Boolean)));
+      const unknownToolNames = normalizedAllowedToolNames.filter((toolName) => !availableSet.has(toolName));
+      if (unknownToolNames.length > 0) {
+        throw createHttpError(`Unknown MCP tools: ${unknownToolNames.join(', ')}`, 400);
+      }
+
+      const saved = multitenancy.mcpToolPreferences.setForUser({
+        tenantId: normalizedTenantId,
+        workspaceId: normalizedWorkspaceId,
+        userId: normalizedUserId,
+        presetId: normalizedPresetId,
+        allowedToolNames: normalizedAllowedToolNames,
+      });
+      return {
+        presetId: normalizedPresetId,
+        serverName: preset.name,
+        toolSelectionConfigured: true,
+        allowedToolNames: saved.allowedToolNames,
+        appliesOn: 'next_agent_turn',
+      };
+    },
+
     removeWorkspaceMcpPreset: async ({
       tenantId,
       workspaceId,
       workspacePath,
       presetId,
+      userId = null,
     }) => {
       const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
       const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
@@ -496,6 +586,7 @@ export function createWorkspaceMcpToolsService({
       const catalog = await listWorkspaceMcpPresetCatalog({
         tenantId: normalizedTenantId,
         workspaceId: normalizedWorkspaceId,
+        userId,
         workspacePath,
         accessRole: 'edit',
       });

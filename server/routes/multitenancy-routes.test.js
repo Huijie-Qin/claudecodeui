@@ -586,6 +586,14 @@ test('workspace share route lets owners replace ACL entries', async () => {
 
 test('workspace sql check route resolves tenant config and stores user overrides', async () => {
   const seen = { access: [] };
+  const enforcement = {
+    available: true,
+    enabled: false,
+    hookId: 'sql-hook',
+    hookName: 'SQL Check 强制校验',
+    hookStatus: 'published',
+    reason: null,
+  };
   const config = {
     tenantId: 2,
     workspaceId: 10,
@@ -623,6 +631,14 @@ test('workspace sql check route resolves tenant config and stores user overrides
         },
       },
     },
+    hookConfigs: {
+      getSqlCheckEnforcement: ({ userId }) => ({ ...enforcement, userId }),
+      setSqlCheckEnforcement: ({ userId, enabled }) => {
+        seen.enforcement = { userId, enabled };
+        enforcement.enabled = enabled;
+        return { ...enforcement };
+      },
+    },
   });
 
   const loaded = await requestJson(router, '/10/sql-check');
@@ -630,9 +646,14 @@ test('workspace sql check route resolves tenant config and stores user overrides
     method: 'PUT',
     body: { customEnabled: true, ruleIds: ['limit_rows'] },
   });
+  const enforcementSaved = await requestJson(router, '/10/sql-check/enforcement', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
 
   assert.equal(loaded.response.status, 200);
   assert.deepEqual(loaded.payload.effectiveRuleIds, ['require_where']);
+  assert.equal(loaded.payload.enforcement.enabled, false);
   assert.equal(saved.response.status, 200);
   assert.deepEqual(seen.saved, {
     tenantId: 2,
@@ -643,4 +664,7 @@ test('workspace sql check route resolves tenant config and stores user overrides
   });
   assert.equal(seen.access.every((args) => args.requireEdit !== true), true);
   assert.deepEqual(saved.payload.effectiveRuleIds, ['limit_rows']);
+  assert.equal(enforcementSaved.response.status, 200);
+  assert.deepEqual(seen.enforcement, { userId: 1, enabled: true });
+  assert.equal(enforcementSaved.payload.enforcement.enabled, true);
 });

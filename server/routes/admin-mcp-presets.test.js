@@ -167,6 +167,7 @@ test('admin mcp preset routes create and publish presets through the service', a
       displayName: 'Knowledge MCP v2',
       type: 'http',
       url: 'https://mcp.internal/knowledge-v2',
+      timeout: 180000,
     },
     user: { id: 9, is_system_admin: 1 },
   });
@@ -204,6 +205,7 @@ test('admin mcp preset routes create and publish presets through the service', a
   assert.equal(updated.response.status, 200);
   assert.equal(seen.update.userId, 9);
   assert.equal(seen.update.input.url, 'https://mcp.internal/knowledge-v2');
+  assert.equal(seen.update.input.timeout, 180000);
   assert.equal(updated.payload.preset.name, 'knowledge_v2');
   assert.deepEqual(updated.payload.sync, {
     total: 3,

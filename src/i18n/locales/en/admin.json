@@ -4,12 +4,25 @@
   "tabs": {
     "analytics": "Analytics",
     "aiCode": "AI Code",
+    "experimental": "Experimental",
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
     "mcpPresets": "MCP Server Presets",
+    "skillPresets": "Skill Presets",
+    "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "Runtime Monitor"
+  },
+  "experimental": {
+    "warningTitle": "Experimental feature controls",
+    "warningDescription": "These global settings affect every CCUI user. When Agent Graph is disabled, its UI entry points and server endpoints are unavailable.",
+    "agentGraph": {
+      "label": "Enable Agent Graph Studio",
+      "description": "Show Agent Graph workspace navigation and enable its graph management APIs for all users."
+    },
+    "updateSuccess": "Agent Graph setting updated",
+    "updateError": "Failed to update Agent Graph setting"
   },
   "common": {
     "select": "Select",
@@ -337,6 +350,9 @@
       "descriptionPlaceholder": "Search internal knowledge bases and project docs.",
       "httpUrl": "HTTP URL",
       "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "timeout": "Timeout (milliseconds)",
+      "timeoutPlaceholder": "Use Claude default",
+      "timeoutHelp": "Optional native MCP timeout. Leave empty to keep Claude's default behavior.",
       "staticHeaders": "Static headers JSON or key/value lines",
       "headersHelper": "Headers helper command",
       "headersHelperHelp": "Optional Claude Code headersHelper. Use an uploaded private script by filename, for example python3 auth.py.",
@@ -382,7 +398,8 @@
     },
     "validationErrors": {
       "headersFormat": "Headers must be JSON or one key/value pair per line",
-      "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax"
+      "helperEnvSyntax": "Helper environment variable names must use shell-safe syntax",
+      "timeoutFormat": "Timeout must be a positive integer in milliseconds"
     },
     "tools": {
       "title": "Discovered tools",
@@ -399,6 +416,537 @@
       "deleteHelper": "Failed to delete helper script",
       "disable": "Failed to disable MCP preset",
       "delete": "Failed to delete MCP preset"
+    }
+  },
+  "hooks": {
+    "title": "Hook configuration",
+    "description": "Configure Claude Code Hook events, Matchers, extension logic, post-actions, and responses, then bind by user, tenant, or all users.",
+    "noScript": "{{count}} post-actions",
+    "create": "New Hook",
+    "newHook": "New Hook",
+    "examples": {
+      "create": "Create examples",
+      "dialogTitle": "Select examples",
+      "dialogDescription": "Choose only the examples to create now. Existing configurations will not be overwritten.",
+      "loading": "Loading examples...",
+      "loadError": "Failed to load Hook examples",
+      "exists": "Already exists",
+      "selectedCount": "{{count}} selected",
+      "createSelected": "Create selected",
+      "created": "Created {{count}} Hook example drafts. Select an MCP Tool and Skills before publishing.",
+      "alreadyExists": "The selected Hook examples already exist; existing configurations were preserved.",
+      "error": "Failed to create Hook examples"
+    },
+    "moreEvents": "More events",
+    "backToList": "Back to list",
+    "saveDraft": "Save draft",
+    "publish": "Publish",
+    "start": "Bind users",
+    "stop": "Clear bindings",
+    "started": "Users bound",
+    "partiallyStarted": "Users bound",
+    "stopped": "No users bound",
+    "delete": "Delete",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "search": "Search Hooks",
+    "loading": "Loading Hook configurations...",
+    "empty": "No Hook configurations",
+    "noMatches": "No matching Hooks",
+    "noDescription": "No description",
+    "actionCount": "{{count}} actions",
+    "boundUserCount": "{{count}} users bound",
+    "bindings": {
+      "title": "Bind enabled users",
+      "manage": "Bind users",
+      "boundCountShort": "{{count}} bound",
+      "boundTenantCountShort": "{{count}} tenants (dynamic)",
+      "allUsersShort": "All users (dynamic)",
+      "unbound": "No users bound",
+      "sqlCheckManaged": "Enabled by users in SQL Check",
+      "sqlCheckManagedCount": "{{count}} users enabled enforcement",
+      "scopes": {
+        "users": "Specific users",
+        "tenants": "By tenant",
+        "all_users": "All users"
+      },
+      "scopeHints": {
+        "users": "Runs only for users selected individually; new users are not added automatically.",
+        "tenants": "Runs for every active member of the selected tenants; future tenant members are included automatically.",
+        "all_users": "Runs for every active system user; future users are included automatically."
+      },
+      "search": "Search username",
+      "searchTenant": "Search tenant name or code",
+      "loading": "Loading binding scope",
+      "noUsers": "No users available",
+      "noTenants": "No tenants available",
+      "noMatches": "No matching users",
+      "admin": "Admin",
+      "inactive": "Inactive",
+      "tenantUsers": "{{count}} members",
+      "allUsersTitle": "Enable the dynamic all-user scope",
+      "allUsersDescription": "Currently covers {{count}} active users; newly activated users will receive this Hook automatically.",
+      "selectionSummary": {
+        "users": "{{count}} users selected",
+        "tenants": "{{count}} tenants selected",
+        "all_users": "Currently covers {{count}} active users"
+      },
+      "clear": "Clear selection",
+      "save": "Save bindings",
+      "savedScopes": {
+        "users": "Specific-user bindings saved",
+        "tenants": "Dynamic tenant bindings saved",
+        "all_users": "Dynamic all-user binding enabled"
+      },
+      "loadError": "Failed to load Hook user bindings",
+      "saveError": "Failed to save Hook user bindings"
+    },
+    "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
+    "builtinSkills": {
+      "title": "Built-in Hook Skill management",
+      "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
+      "upload": "Upload Skill file",
+      "uploading": "Uploading",
+      "packaged": "Packaged",
+      "uploaded": "Admin upload",
+      "empty": "No built-in Hook Skills",
+      "formatHint": "No extension, size, frontmatter-field, or body validation is applied. The name comes from frontmatter.name when present, or from the file name. Administrators are responsible for correctness."
+    },
+    "triggerEvent": "Trigger event",
+    "selectEvent": "Select trigger event",
+    "insertVariable": "Variable",
+    "slashHint": "Type / to select a runtime variable.",
+    "selectValue": "Select value",
+    "fixedValue": "Fixed value",
+    "sections": {
+      "basic": "Basic information and trigger",
+      "matcher": "Matcher",
+      "script": "Advanced script (optional)",
+      "gate": "Hook execution gate",
+      "actions": "Basic actions"
+    },
+    "codeFlow": {
+      "eventTitle": "Select Hook event",
+      "eventDescription": "The event determines when Claude Code calls back and which parameters the extension receives.",
+      "matcherTitle": "Define Matcher",
+      "matcherDescription": "This text is compiled directly to the native Claude Code Matcher; empty or * matches all.",
+      "logicTitle": "Write extension logic",
+      "logicDescription": "The template follows the selected event. Code receives Claude callback parameters and controlled CCUI APIs, then returns event-supported results.",
+      "apiTitle": "Use CCUI APIs",
+      "apiDescription": "Runtime injects these objects for the current user, tenant, and workspace; scripts cannot access paths outside that workspace.",
+      "runtimePending": "This version stores the real runtime contract first. The script sandbox, file APIs, record API, and Claude callback executor will be implemented with the Hook runtime integration."
+    },
+    "fields": {
+      "name": "Name",
+      "namePlaceholder": "For example: Notify user when a response fails",
+      "description": "Description",
+      "descriptionPlaceholder": "Describe the problem this Hook solves.",
+      "trigger": "Trigger",
+      "source": "Source",
+      "model": "Model",
+      "agentType": "Agent type",
+      "stopHookActive": "Stop Hook loop active",
+      "lastAssistantMessage": "Last assistant message",
+      "error": "Error type",
+      "errorDetails": "Error details",
+      "reason": "Reason",
+      "prompt": "User prompt",
+      "sessionTitle": "Session title",
+      "expansionType": "Expansion type",
+      "commandName": "Command name",
+      "commandArgs": "Command arguments",
+      "title": "Title",
+      "message": "Message",
+      "notificationType": "Notification type",
+      "toolName": "Tool name",
+      "toolInput": "Tool input",
+      "toolResponse": "Tool output",
+      "toolUseId": "Tool call ID",
+      "isInterrupt": "Interrupted",
+      "permissionSuggestions": "Permission suggestions",
+      "agentId": "Agent ID",
+      "teammateName": "Teammate name",
+      "teamName": "Team name",
+      "taskId": "Task ID",
+      "taskSubject": "Task subject",
+      "taskDescription": "Task description",
+      "customInstructions": "Compact instructions",
+      "compactSummary": "Compact summary",
+      "mcpServerName": "MCP Server",
+      "mode": "Mode",
+      "requestedSchema": "Requested schema",
+      "url": "URL",
+      "action": "Action",
+      "content": "Content",
+      "filePath": "File path",
+      "memoryType": "Instruction type",
+      "loadReason": "Load reason",
+      "oldCwd": "Previous working directory",
+      "newCwd": "New working directory",
+      "changeType": "Change type",
+      "worktreePath": "Worktree path",
+      "session_id": "Session ID",
+      "transcript_path": "Transcript file",
+      "cwd": "Current working directory",
+      "permission_mode": "Permission mode",
+      "agent_id": "Agent ID",
+      "agent_type": "Agent type",
+      "hook_event_name": "Hook event name",
+      "stop_hook_active": "Stop Hook loop active",
+      "last_assistant_message": "Last assistant message",
+      "error_details": "Error details",
+      "session_title": "Session title",
+      "expansion_type": "Expansion type",
+      "command_name": "Command name",
+      "command_args": "Command arguments",
+      "command_source": "Command source",
+      "notification_type": "Notification type",
+      "tool_name": "Tool name",
+      "tool_input": "Tool input",
+      "tool_response": "Tool output",
+      "tool_use_id": "Tool call ID",
+      "is_interrupt": "Interrupted",
+      "permission_suggestions": "Permission suggestions",
+      "agent_transcript_path": "Subagent transcript file",
+      "teammate_name": "Teammate name",
+      "team_name": "Team name",
+      "task_id": "Task ID",
+      "task_subject": "Task subject",
+      "task_description": "Task description",
+      "custom_instructions": "Compact instructions",
+      "compact_summary": "Compact summary",
+      "mcp_server_name": "MCP Server name",
+      "elicitation_id": "MCP elicitation ID",
+      "requested_schema": "Requested schema",
+      "file_path": "File path",
+      "memory_type": "Instruction type",
+      "load_reason": "Load reason",
+      "globs": "Path match rules",
+      "trigger_file_path": "Triggering file",
+      "parent_file_path": "Parent instruction file",
+      "old_cwd": "Previous working directory",
+      "new_cwd": "New working directory",
+      "event": "File change type",
+      "worktree_path": "Worktree path"
+    },
+    "variables": {
+      "userId": "Current user ID",
+      "username": "Current username",
+      "tenantId": "Current tenant ID",
+      "workspaceId": "Current workspace ID",
+      "sessionId": "Current session ID",
+      "projectId": "Current project ID"
+    },
+    "fieldGroups": {
+      "event": "Event data",
+      "environment": "Runtime environment",
+      "script": "Advanced script output",
+      "action": "Previous action output",
+      "value": "Value"
+    },
+    "matcher": {
+      "mode": "Match mode",
+      "exact": "Exact match",
+      "regex": "Regular expression",
+      "selectTool": "Select tool",
+      "allTools": "All tools",
+      "scope": "Scope",
+      "claudeTools": "Claude Code tools",
+      "mcpTools": "MCP tools",
+      "specificToolHint": "Select a specific tool to configure editable input fields.",
+      "regexPlaceholder": "For example: ^mcp__data_.*__query$",
+      "invalidRegex": "Enter a valid regular expression",
+      "optional": "Leave empty to match all",
+      "notNeeded": "This trigger event does not need an additional matcher.",
+      "nativePlaceholder": "For example Bash|Read or mcp__database__.*; leave empty to match all",
+      "allEventCallbacks": "Current event callback",
+      "unsupported": "This event does not support Matcher",
+      "unsupportedPlaceholder": "Claude Code calls back on every occurrence of this event",
+      "fileNamesPlaceholder": "For example .envrc|.env",
+      "detected": {
+        "all": "Match all",
+        "exact": "Exact match",
+        "regex": "Regular expression",
+        "fileNames": "File name list"
+      }
+    },
+    "matcherFields": {
+      "trigger": "Trigger",
+      "source": "Source",
+      "error": "Error type",
+      "reason": "End reason",
+      "commandName": "Command name",
+      "notificationType": "Notification type",
+      "agentType": "Agent type",
+      "mcpServerName": "MCP Server name",
+      "loadReason": "Load reason",
+      "fileName": "File name",
+      "command_name": "Command name",
+      "notification_type": "Notification type",
+      "agent_type": "Agent type",
+      "mcp_server_name": "MCP Server name",
+      "load_reason": "Load reason",
+      "tool_name": "Tool name",
+      "file_path": "File name"
+    },
+    "script": {
+      "enable": "Enable advanced script",
+      "optional": "Enable this only when basic actions cannot express the requirement.",
+      "outputsCount": "{{count}} output fields",
+      "availableInputs": "Available inputs",
+      "workspaceFiles": "Current user's workspace files (read-only)",
+      "returnFields": "Return fields",
+      "noOutputs": "Declare return fields with @output.",
+      "regenerate": "Regenerate template",
+      "callbackInputs": "Claude callback parameters",
+      "claudeOutputs": "Returnable to Claude Code",
+      "noClaudeOutputs": "This event ignores return values; use records, workspace files, or other side effects only."
+    },
+    "gate": {
+      "add": "Add condition",
+      "mode": "Condition mode",
+      "all": "Match all",
+      "any": "Match any",
+      "field": "Select data",
+      "operator": "Select operator",
+      "value": "Comparison value",
+      "remove": "Remove condition",
+      "always": "No gate is configured. Basic actions run whenever this trigger matches."
+    },
+    "operators": {
+      "equals": "Equals",
+      "not_equals": "Does not equal",
+      "contains": "Contains",
+      "not_contains": "Does not contain",
+      "starts_with": "Starts with",
+      "ends_with": "Ends with",
+      "matches_regex": "Matches regex",
+      "greater_than": "Greater than",
+      "less_than": "Less than",
+      "is_true": "Is true",
+      "is_false": "Is false",
+      "is_empty": "Is empty",
+      "is_not_empty": "Is not empty"
+    },
+    "boolean": {
+      "true": "True",
+      "false": "False"
+    },
+    "outcomes": {
+      "continue": "Continue",
+      "block": "Block",
+      "allow": "Allow",
+      "deny": "Deny",
+      "ask": "Ask user"
+    },
+    "actions": {
+      "selectToolFirst": "Select a specific tool in the matcher first",
+      "empty": "Choose an action above and configure it here.",
+      "tool": "MCP tool",
+      "selectMcpTool": "Select MCP tool",
+      "noMcpTools": "No published and healthy MCP tools",
+      "toolInputs": "Tool inputs",
+      "valueSource": "Value source",
+      "toolNoInputs": "This tool has no input parameters.",
+      "contextTemplate": "Context content",
+      "contextPlaceholder": "Enter context for the model. Type / to insert variables.",
+      "skill": "Skill",
+      "selectSkill": "Select Skill",
+      "noSkills": "No published Skills",
+      "maxTurns": "Max turns",
+      "skillArguments": "Skill arguments",
+      "skillArgumentsPlaceholder": "For example: Notify the user that execution failed, user /",
+      "decision": "Decision",
+      "selectDecision": "Select decision",
+      "reason": "Reason",
+      "reasonPlaceholder": "Enter the reason returned to the model or user",
+      "wholeToolOutput": "Complete tool output",
+      "toolTextContent": "Tool text content",
+      "toolStructuredContent": "Tool structured content",
+      "fieldToChange": "Field to change",
+      "selectFieldToChange": "Select field to change",
+      "changeTo": "Change to",
+      "selectNewValue": "Select new value source",
+      "newValue": "New value",
+      "moveUp": "Move action up",
+      "moveDown": "Move action down",
+      "remove": "Remove action",
+      "types": {
+        "record_data": {
+          "label": "Record data",
+          "description": "Choose event data or processing results to store."
+        },
+        "call_tool": {
+          "label": "Call tool",
+          "description": "Call a connected MCP tool directly."
+        },
+        "append_context": {
+          "label": "Append model context",
+          "description": "Add text and runtime variables to model context."
+        },
+        "invoke_skill_recovery": {
+          "label": "Start recovery turn",
+          "description": "Start a new model turn with a Skill after failure."
+        },
+        "decision": {
+          "label": "Flow decision",
+          "description": "Allow, block, or continue the current flow."
+        },
+        "update_input": {
+          "label": "Modify input",
+          "description": "Modify fields received by a specific tool."
+        },
+        "update_output": {
+          "label": "Modify output",
+          "description": "Modify the tool result returned to the model."
+        }
+      }
+    },
+    "eventGroups": {
+      "session": "Session and responses",
+      "prompt": "User input and notifications",
+      "tool": "Tools and permissions",
+      "agent": "Agents and tasks",
+      "context": "Context compaction",
+      "mcp": "MCP interaction",
+      "workspace": "Configuration and workspace"
+    },
+    "events": {
+      "Setup": {
+        "label": "Environment setup",
+        "description": "When Claude Code initializes or maintains its environment."
+      },
+      "SessionStart": {
+        "label": "Session start",
+        "description": "When a session starts, resumes, or resumes after compaction."
+      },
+      "Stop": {
+        "label": "Response complete",
+        "description": "When the model is ready to end the current response."
+      },
+      "StopFailure": {
+        "label": "Response failed",
+        "description": "When the turn ends because of an API or model error."
+      },
+      "SessionEnd": {
+        "label": "Session end",
+        "description": "When the session exits, clears, or logs out."
+      },
+      "UserPromptSubmit": {
+        "label": "User submits prompt",
+        "description": "Before the prompt is sent to the model."
+      },
+      "UserPromptExpansion": {
+        "label": "Command expansion",
+        "description": "When a slash command or MCP prompt expands."
+      },
+      "Notification": {
+        "label": "Claude Code notification",
+        "description": "When Claude Code emits a notification."
+      },
+      "PreToolUse": {
+        "label": "Before tool execution",
+        "description": "Before a Skill, MCP, Bash, or other tool runs."
+      },
+      "PostToolUse": {
+        "label": "After tool success",
+        "description": "After a tool returns successfully."
+      },
+      "PostToolUseFailure": {
+        "label": "After tool failure",
+        "description": "After a tool throws or returns a failure."
+      },
+      "PermissionRequest": {
+        "label": "Permission request",
+        "description": "When a tool requires user permission."
+      },
+      "PermissionDenied": {
+        "label": "Permission denied",
+        "description": "When permission policy denies a tool."
+      },
+      "SubagentStart": {
+        "label": "Subagent start",
+        "description": "When a subagent starts."
+      },
+      "SubagentStop": {
+        "label": "Subagent stop",
+        "description": "When a subagent is ready to finish."
+      },
+      "TeammateIdle": {
+        "label": "Teammate idle",
+        "description": "When an Agent Team member becomes idle."
+      },
+      "TaskCreated": {
+        "label": "Task created",
+        "description": "When Claude creates a task."
+      },
+      "TaskCompleted": {
+        "label": "Task completed",
+        "description": "When Claude is ready to complete a task."
+      },
+      "PreCompact": {
+        "label": "Before compaction",
+        "description": "Before context compaction begins."
+      },
+      "PostCompact": {
+        "label": "After compaction",
+        "description": "After a compact summary is generated."
+      },
+      "Elicitation": {
+        "label": "MCP asks user",
+        "description": "When an MCP Server requests user information."
+      },
+      "ElicitationResult": {
+        "label": "MCP answer result",
+        "description": "Before the user's answer is sent back to MCP."
+      },
+      "ConfigChange": {
+        "label": "Configuration change",
+        "description": "When Claude, project, user, or Skill configuration changes."
+      },
+      "InstructionsLoaded": {
+        "label": "Instructions loaded",
+        "description": "When CLAUDE.md or another instruction file loads."
+      },
+      "CwdChanged": {
+        "label": "Working directory changed",
+        "description": "When Claude changes its working directory."
+      },
+      "FileChanged": {
+        "label": "Watched file changed",
+        "description": "When a watched file is added, changed, or removed."
+      },
+      "WorktreeCreate": {
+        "label": "Worktree created",
+        "description": "When an isolated Worktree is created."
+      },
+      "WorktreeRemove": {
+        "label": "Worktree removed",
+        "description": "When an isolated Worktree is removed."
+      }
+    },
+    "errors": {
+      "load": "Failed to load Hook configurations",
+      "loadSettings": "Failed to load Hook event settings",
+      "loadResources": "Failed to load Hook resources",
+      "save": "Failed to save Hook",
+      "publish": "Failed to publish Hook",
+      "start": "Failed to start Hook",
+      "stop": "Failed to stop Hook",
+      "delete": "Failed to delete Hook",
+      "saveSettings": "Failed to save Hook event settings",
+      "uploadSkill": "Failed to upload built-in Hook Skill"
+    },
+    "toast": {
+      "saved": "Hook draft saved",
+      "published": "Hook published; select the enabled users",
+      "started": "Hook user bindings saved",
+      "stopped": "Hook user bindings cleared",
+      "deleted": "Hook deleted",
+      "eventsSaved": "Visible trigger events saved",
+      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded"
     }
   },
   "runtimes": {

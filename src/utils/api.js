@@ -395,8 +395,63 @@ export const api = {
       }),
   },
 
+  featureFlags: () => authenticatedFetch('/api/settings/feature-flags'),
+
   admin: {
+    featureFlags: () => authenticatedFetch('/api/admin/feature-flags'),
+    updateAgentGraphFeature: (enabled) =>
+      authenticatedFetch('/api/admin/feature-flags/agent-graph', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    hooks: () => authenticatedFetch('/api/admin/hooks'),
+    hook: (hookId) => authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`),
+    createHook: (payload) =>
+      authenticatedFetch('/api/admin/hooks', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    hookExamples: () => authenticatedFetch('/api/admin/hooks/examples'),
+    createHookExamples: (exampleIds) =>
+      authenticatedFetch('/api/admin/hooks/examples', {
+        method: 'POST',
+        body: JSON.stringify({ exampleIds }),
+      }),
+    updateHook: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    publishHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/publish`, {
+        method: 'POST',
+      }),
+    hookBindings: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`),
+    updateHookBindings: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    deleteHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'DELETE',
+      }),
+    hookDataRecords: (hookId, limit = 50) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/data-records?limit=${encodeURIComponent(String(limit))}`),
+    hookSettings: () => authenticatedFetch('/api/admin/hooks/settings'),
+    updateHookSettings: (payload) =>
+      authenticatedFetch('/api/admin/hooks/settings', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    hookResources: () => authenticatedFetch('/api/admin/hooks/resources'),
+    uploadHookSkill: (formData) =>
+      authenticatedFetch('/api/admin/hooks/skills', {
+        method: 'POST',
+        body: formData,
+      }),
     analytics: (days = 30, tenantIds = []) => {
       const params = new URLSearchParams({ days: String(days) });
       if (Array.isArray(tenantIds) && tenantIds.length > 0) {
@@ -595,6 +650,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(payload),
       }),
+    updateEnforcement: (workspaceId, enabled) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check/enforcement`), {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
   },
 
   workspaceShare: {
@@ -723,6 +783,54 @@ export const api = {
     remove: (workspaceId, presetId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}`), {
         method: 'DELETE',
+      }),
+    updateToolPreference: (workspaceId, presetId, allowedToolNames) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/tool-preference`), {
+        method: 'PUT',
+        body: JSON.stringify({ allowedToolNames }),
+      }),
+  },
+
+  agentGraphs: {
+    list: (workspaceId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs`)),
+    create: (workspaceId, graph) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs`), {
+        method: 'POST',
+        body: JSON.stringify(graph),
+      }),
+    update: (workspaceId, graphId, graph) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}`), {
+        method: 'PUT',
+        body: JSON.stringify(graph),
+      }),
+    remove: (workspaceId, graphId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}`), {
+        method: 'DELETE',
+      }),
+    startTopSkillJob: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/top-skill-jobs`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    getTopSkillJob: (workspaceId, jobId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/top-skill-jobs/${encodeURIComponent(jobId)}`)),
+    startRun: (workspaceId, graphId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    listRuns: (workspaceId, graphId, limit = 20) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs?limit=${encodeURIComponent(String(limit))}`)),
+    getRun: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}`)),
+    listRunArtifacts: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts`)),
+    readRunArtifact: (workspaceId, graphId, runId, artifactId, offset = 0, limit = 16000) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`)),
+    cancelRun: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/cancel`), {
+        method: 'POST',
       }),
   },
 

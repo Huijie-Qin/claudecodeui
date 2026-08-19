@@ -22,6 +22,7 @@ import enSidebar from './locales/en/sidebar.json';
 import enChat from './locales/en/chat.json';
 import enCodeEditor from './locales/en/codeEditor.json';
 import enCodeHub from './locales/en/codehub.json';
+import enAgentGraph from './locales/en/agentGraph.json';
 // eslint-disable-next-line import-x/order
 import enTasks from './locales/en/tasks.json';
 
@@ -41,6 +42,7 @@ import zhSidebar from './locales/zh-CN/sidebar.json';
 import zhChat from './locales/zh-CN/chat.json';
 import zhCodeEditor from './locales/zh-CN/codeEditor.json';
 import zhCodeHub from './locales/zh-CN/codehub.json';
+import zhAgentGraph from './locales/zh-CN/agentGraph.json';
 // eslint-disable-next-line import-x/order
 import zhTasks from './locales/zh-CN/tasks.json';
 
@@ -123,6 +125,7 @@ i18n
         codeEditor: enCodeEditor,
         codehub: enCodeHub,
         tasks: enTasks,
+        agentGraph: enAgentGraph,
       },
       ko: {
         common: koCommon,
@@ -142,6 +145,7 @@ i18n
         codeEditor: zhCodeEditor,
         codehub: zhCodeHub,
         tasks: zhTasks,
+        agentGraph: zhAgentGraph,
       },
       ja: {
         common: jaCommon,
@@ -200,7 +204,7 @@ i18n
     debug: import.meta.env.DEV,
 
     // Namespaces - load only what's needed
-    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'codehub', 'tasks', 'admin'],
+    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'codehub', 'tasks', 'admin', 'agentGraph'],
     defaultNS: 'common',
 
     // Key separator for nested keys (default: '.')

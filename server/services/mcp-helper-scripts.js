@@ -28,6 +28,26 @@ function createHttpError(message, statusCode = 400) {
   return error;
 }
 
+function normalizeHelperOwner(owner) {
+  if (owner == null) return null;
+  if (
+    !Number.isInteger(owner.uid)
+    || owner.uid < 0
+    || !Number.isInteger(owner.gid)
+    || owner.gid < 0
+  ) {
+    throw createHttpError('MCP helper owner uid and gid must be non-negative integers', 500);
+  }
+  return { uid: owner.uid, gid: owner.gid };
+}
+
+async function applyHelperOwnership(fsImpl, targetPaths, owner) {
+  if (!owner || typeof fsImpl.chown !== 'function') return;
+  for (const targetPath of targetPaths) {
+    await fsImpl.chown(targetPath, owner.uid, owner.gid).catch(() => {});
+  }
+}
+
 function requirePositiveInteger(value, name) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) {
@@ -124,6 +144,7 @@ async function ensureDockerHelperDirectoryAccessible(runtimeHomePath, directory,
   for (const helperDirectory of [cloudcliDirectory, helperRoot, directory]) {
     await fsImpl.chmod(helperDirectory, DOCKER_HELPER_MODES.directory).catch(() => {});
   }
+  return [cloudcliDirectory, helperRoot, directory];
 }
 
 function withoutHelperEnv(config) {
@@ -239,6 +260,7 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
   workspaceId,
   runtimeMode = 'local',
   runtimeHomePath = null,
+  runtimeOwner = null,
   helperRoot = process.env.CLOUDCLI_MCP_HELPER_ROOT || DEFAULT_MCP_HELPER_HOST_ROOT,
   multitenancy = multitenancyDb,
   fsImpl = fs,
@@ -289,26 +311,34 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
       ? helperContainerDirectory(serverName)
       : hostDirectory;
     const modes = isDockerRuntime ? DOCKER_HELPER_MODES : PRIVATE_HELPER_MODES;
+    const owner = isDockerRuntime ? normalizeHelperOwner(runtimeOwner) : null;
 
-    if (isDockerRuntime) {
-      await ensureDockerHelperDirectoryAccessible(runtimeHomePath, hostDirectory, fsImpl);
-    }
+    const dockerHelperDirectories = isDockerRuntime
+      ? await ensureDockerHelperDirectoryAccessible(runtimeHomePath, hostDirectory, fsImpl)
+      : [];
 
-    if (script) {
-      await writeHelperScript({
+    const scriptPath = script
+      ? await writeHelperScript({
         directory: hostDirectory,
         fileName: script.file_name,
         content: script.content,
         modes,
         fsImpl,
-      });
-    }
+      })
+      : null;
     const envPath = await writeHelperEnvFile({
       directory: hostDirectory,
       helperEnv,
       modes,
       fsImpl,
     });
+    if (isDockerRuntime) {
+      await applyHelperOwnership(fsImpl, [
+        scriptPath,
+        envPath,
+        ...dockerHelperDirectories.reverse(),
+      ].filter(Boolean), owner);
+    }
     nextServers[serverName] = withHelperWorkingDirectory(
       effectiveConfig,
       commandDirectory,

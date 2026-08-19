@@ -6,6 +6,7 @@ import {
   normalizeMcpPresetName,
   parseHelperEnvText,
   parseHeadersText,
+  parseTimeoutMsText,
 } from './adminMcpPresetUtils';
 
 test('normalizeMcpPresetName creates MCP-safe preset names', () => {
@@ -34,6 +35,12 @@ test('parseHelperEnvText accepts JSON objects and key-value lines', () => {
   });
 });
 
+test('parseTimeoutMsText keeps the native MCP timeout optional', () => {
+  assert.equal(parseTimeoutMsText(''), undefined);
+  assert.equal(parseTimeoutMsText('180000'), 180000);
+  assert.throws(() => parseTimeoutMsText('0'), /positive integer in milliseconds/);
+});
+
 test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup fields', () => {
   assert.deepEqual(buildMcpPresetPayload({
     tenantId: 7,
@@ -41,6 +48,7 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
     displayName: 'Knowledge MCP',
     description: 'Search docs',
     url: 'https://mcp.internal/knowledge',
+    timeoutMsText: '180000',
     headersText: 'Authorization: Bearer token',
     headersHelper: '/opt/bin/get-mcp-auth-headers.sh',
     helperEnvText: 'ROOT_SECRET=root-key',
@@ -55,6 +63,7 @@ test('buildMcpPresetPayload creates Admin-managed HTTP config without user setup
     preinstallScope: 'all_workspaces',
     type: 'http',
     url: 'https://mcp.internal/knowledge',
+    timeout: 180000,
     headers: {
       Authorization: 'Bearer token',
     },

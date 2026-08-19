@@ -49,6 +49,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
     reload,
     installPreset,
     removePreset,
+    updateToolPreference,
   } = useWorkspaceMcpTools(selectedProject.workspaceId);
   const canManage = !isReadOnly && data?.canManage !== false;
 
@@ -225,6 +226,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
         <McpToolSettingsDialog
           canManage={canManage}
           onClose={() => setSettingsPresetId(null)}
+          onSaveToolPreference={(allowedToolNames) => updateToolPreference(settingsPreset.id, allowedToolNames)}
           preset={settingsPreset}
           selectedProject={selectedProject}
         />
@@ -302,7 +304,7 @@ function PresetCard({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={!canManage || !preset.installed}
+            disabled={!preset.installed}
             onClick={(event) => {
               event.stopPropagation();
               onOpenSettings(preset);

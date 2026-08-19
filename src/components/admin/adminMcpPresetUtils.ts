@@ -6,6 +6,7 @@ export type McpPresetFormValues = {
   displayName: string;
   description: string;
   url: string;
+  timeoutMsText: string;
   headersText: string;
   headersHelper: string;
   helperEnvText: string;
@@ -16,6 +17,7 @@ export type McpPresetFormValues = {
 type McpPresetValidationMessages = {
   headersFormat?: string;
   helperEnvSyntax?: string;
+  timeoutFormat?: string;
 };
 
 export function normalizeMcpPresetName(value: string): string {
@@ -69,9 +71,20 @@ export function parseHelperEnvText(value: string, messages: McpPresetValidationM
   return parsed;
 }
 
+export function parseTimeoutMsText(value: string, messages: McpPresetValidationMessages = {}): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const timeout = Number(trimmed);
+  if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+    throw new Error(messages.timeoutFormat || 'Timeout must be a positive integer in milliseconds');
+  }
+  return timeout;
+}
+
 export function buildMcpPresetPayload(values: McpPresetFormValues, messages: McpPresetValidationMessages = {}) {
   const headersHelper = values.headersHelper.trim();
   const helperEnv = parseHelperEnvText(values.helperEnvText || '', messages);
+  const timeout = parseTimeoutMsText(values.timeoutMsText || '', messages);
   return {
     tenantId: values.tenantId,
     name: normalizeMcpPresetName(values.name),
@@ -81,6 +94,7 @@ export function buildMcpPresetPayload(values: McpPresetFormValues, messages: Mcp
     preinstallScope: values.preinstall ? 'all_workspaces' : 'none',
     type: 'http' as const,
     url: values.url.trim(),
+    ...(timeout !== undefined ? { timeout } : {}),
     headers: parseHeadersText(values.headersText, messages),
     headersHelper: headersHelper || undefined,
     ...(Object.keys(helperEnv).length > 0 ? { helperEnv } : {}),
