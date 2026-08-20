@@ -185,8 +185,8 @@ function prepareWindowsX64Prebuilds(runtimeDirectory) {
   assertWindowsX64Runtime(runtimeDirectory);
 }
 
-function shouldUseWindowsX64Prebuilds(platform, arch, hostPlatform = process.platform) {
-  return platform === 'win32' && arch === 'x64' && hostPlatform !== 'win32';
+function shouldUseWindowsX64Prebuilds(platform, arch) {
+  return platform === 'win32' && arch === 'x64';
 }
 
 function collectRuntimeReleaseFiles(directory, moduleName) {
@@ -326,7 +326,6 @@ async function rebuildRuntimeDirectory({
   platform,
   arch,
   electronVersion,
-  hostPlatform = process.platform,
   nativeRebuild,
 }) {
   assertNativeModules(runtimeDirectory);
@@ -334,7 +333,7 @@ async function rebuildRuntimeDirectory({
   if (targetArch === 'universal') {
     return;
   }
-  if (shouldUseWindowsX64Prebuilds(platform, targetArch, hostPlatform)) {
+  if (shouldUseWindowsX64Prebuilds(platform, targetArch)) {
     prepareWindowsX64Prebuilds(runtimeDirectory);
     return;
   }

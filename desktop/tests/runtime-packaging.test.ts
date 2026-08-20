@@ -57,13 +57,11 @@ const nativePackaging = require('../scripts/rebuild-runtime-native.cjs') as {
     platform: NodeJS.Platform;
     arch: string | number;
     electronVersion: string;
-    hostPlatform?: NodeJS.Platform;
     nativeRebuild?: (options: Record<string, unknown>) => Promise<void>;
   }) => Promise<void>;
   shouldUseWindowsX64Prebuilds: (
     platform: NodeJS.Platform,
     arch: string,
-    hostPlatform?: NodeJS.Platform,
   ) => boolean;
 };
 
@@ -459,7 +457,7 @@ describe('desktop runtime packaging', () => {
       .toBe(false);
   });
 
-  it('uses official Windows x64 prebuilds when packaging from a non-Windows host', async () => {
+  it('uses official Windows x64 prebuilds without invoking a host compiler', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-cross-test-'));
     temporaryDirectories.push(workspace);
     const windowsFiles = writeWindowsX64PrebuildFixture(workspace);
@@ -477,7 +475,6 @@ describe('desktop runtime packaging', () => {
       platform: 'win32',
       arch: 'x64',
       electronVersion: '43.0.0',
-      hostPlatform: 'darwin',
       nativeRebuild: async () => {
         nativeRebuildCalled = true;
       },
@@ -550,11 +547,10 @@ describe('desktop runtime packaging', () => {
       .toThrow(/missing official Windows x64 node-pty OpenConsole\.exe/u);
   });
 
-  it('keeps native rebuilds for Windows hosts and non-Windows targets', async () => {
-    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'darwin')).toBe(true);
-    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'linux')).toBe(true);
-    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'win32')).toBe(false);
-    expect(nativePackaging.shouldUseWindowsX64Prebuilds('darwin', 'x64', 'darwin')).toBe(false);
+  it('uses Windows prebuilds on a Windows host and keeps rebuilds for other targets', async () => {
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64')).toBe(true);
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'arm64')).toBe(false);
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('darwin', 'x64')).toBe(false);
 
     const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-host-test-'));
     temporaryDirectories.push(workspace);
@@ -565,7 +561,6 @@ describe('desktop runtime packaging', () => {
       platform: 'win32',
       arch: 'x64',
       electronVersion: '43.0.0',
-      hostPlatform: 'win32',
       nativeRebuild: async (options) => {
         rebuildOptions = options;
         const bcryptRelease = join(
@@ -592,13 +587,15 @@ describe('desktop runtime packaging', () => {
         );
       },
     });
-    expect(rebuildOptions).toMatchObject({
-      platform: 'win32',
-      arch: 'x64',
-      electronVersion: '43.0.0',
-      force: true,
-      mode: 'sequential',
-    });
+    expect(rebuildOptions).toBeNull();
+    expect(readFileSync(join(
+      workspace,
+      'node_modules',
+      'bcrypt',
+      'build',
+      'Release',
+      'bcrypt_lib.node',
+    ))).toEqual(windowsFiles.bcrypt);
   });
 });
 

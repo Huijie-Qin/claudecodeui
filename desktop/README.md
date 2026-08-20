@@ -58,6 +58,9 @@ Windows build can place the official `node-v24.18.1-win-x64.zip` in that directo
 before running `npm run desktop:package:win`; the archive is still checked against
 the pinned official SHA-256 and a mismatched cache entry fails closed. Successful
 online downloads populate the same ignored cache automatically for later builds.
+Windows x64 native dependencies use their official package prebuilds and validate
+the PE architecture before packaging, so a Windows build does not require Visual
+Studio, node-gyp, or the MSVC Spectre-mitigated libraries.
 
 ## Runtime security model
 
