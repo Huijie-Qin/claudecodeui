@@ -37,6 +37,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [focusedDirectoryPath, setFocusedDirectoryPath] = useState<string | null>(null);
   const [internalDropTarget, setInternalDropTarget] = useState<string | null>(null);
   const [batchMoveOpen, setBatchMoveOpen] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
@@ -85,7 +86,14 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
 
   useEffect(() => {
     setSelectedPaths((previous) => new Set(Array.from(previous).filter((path) => allItemsByPath.has(path))));
+    setFocusedDirectoryPath((previous) => (
+      previous && allItemsByPath.get(previous)?.type === 'directory' ? previous : null
+    ));
   }, [allItemsByPath]);
+
+  useEffect(() => {
+    setFocusedDirectoryPath(null);
+  }, [selectedProject?.name, selectedProject?.workspaceId]);
 
   const refreshWorkspaceFiles = useCallback(() => {
     refreshFiles();
@@ -139,6 +147,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   const handleItemClick = useCallback(
     (item: FileTreeNode) => {
       if (item.type === 'directory') {
+        setFocusedDirectoryPath(item.path);
         toggleDirectory(item.path);
         return;
       }
@@ -306,10 +315,11 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         onViewModeChange={changeViewMode}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
-        onNewFile={isReadOnly ? undefined : () => operations.handleStartCreate('', 'file')}
-        onNewFolder={isReadOnly ? undefined : () => operations.handleStartCreate('', 'directory')}
-        onUpload={isReadOnly ? undefined : () => upload.openFilePicker('')}
-        onUploadFolder={isReadOnly ? undefined : () => upload.openFolderPicker('')}
+        onNewFile={isReadOnly ? undefined : () => operations.handleStartCreate(focusedDirectoryPath ?? '', 'file')}
+        onNewFolder={isReadOnly ? undefined : () => operations.handleStartCreate(focusedDirectoryPath ?? '', 'directory')}
+        onUpload={isReadOnly ? undefined : () => upload.openFilePicker(focusedDirectoryPath ?? '')}
+        onUploadFolder={isReadOnly ? undefined : () => upload.openFolderPicker(focusedDirectoryPath ?? '')}
+        onSelectRoot={() => setFocusedDirectoryPath(null)}
         onRefresh={refreshWorkspaceFiles}
         onCollapseAll={collapseAll}
         loading={loading}
@@ -353,6 +363,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       {viewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
 
       <ScrollArea className="flex-1 px-2 py-1">
+        <div className="min-h-full" onClick={() => setFocusedDirectoryPath(null)}>
         {/* New item input */}
         {operations.isCreating && operations.newItemParent === '' && (
           <FileTreeCreateInput
@@ -378,6 +389,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           dropTarget={upload.dropTarget}
           selectedPaths={selectedPaths}
           internalDropTarget={internalDropTarget}
+          focusedDirectoryPath={focusedDirectoryPath}
           onSelectionChange={isReadOnly ? undefined : handleSelectionChange}
           onInternalDragStart={isReadOnly ? undefined : handleInternalDragStart}
           onInternalDragOver={isReadOnly ? undefined : handleInternalDragOver}
@@ -416,6 +428,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           handleCancelCreate={operations.handleCancelCreate}
           newItemInputRef={newItemInputRef}
         />
+        </div>
       </ScrollArea>
 
       {selectedImage && (

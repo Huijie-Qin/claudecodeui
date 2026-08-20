@@ -16,6 +16,7 @@ type FileTreeHeaderProps = {
   onNewFolder?: () => void;
   onUpload?: () => void;
   onUploadFolder?: () => void;
+  onSelectRoot?: () => void;
   onRefresh?: () => void;
   onCollapseAll?: () => void;
   // Loading state
@@ -38,6 +39,7 @@ export default function FileTreeHeader({
   onNewFolder,
   onUpload,
   onUploadFolder,
+  onSelectRoot,
   onRefresh,
   onCollapseAll,
   loading,
@@ -89,7 +91,14 @@ export default function FileTreeHeader({
       {/* Title and Toolbar */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">{t('fileTree.files')}</h3>
+          <button
+            type="button"
+            onClick={onSelectRoot}
+            className="rounded-sm text-left text-sm font-medium text-foreground outline-none transition hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/30"
+            title={t('fileTree.useProjectRoot', 'Use project root directory')}
+          >
+            {t('fileTree.files')}
+          </button>
           <div className={cn(
             'mt-0.5 text-xs',
             quota?.exceeded ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground',

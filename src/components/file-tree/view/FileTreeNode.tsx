@@ -17,6 +17,7 @@ type FileTreeNodeProps = {
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
@@ -90,6 +91,7 @@ export default function FileTreeNode({
   dropTarget,
   selectedPaths = new Set(),
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -131,6 +133,7 @@ export default function FileTreeNode({
   const isRenaming = renamingItem?.path === item.path;
   const isDropTarget = isDirectory && dropTarget === item.path;
   const isSelected = selectedPaths.has(item.path);
+  const isFocusedDirectory = isDirectory && focusedDirectoryPath === item.path;
   const isInternalDropTarget = isDirectory && internalDropTarget === item.path;
   const shouldRenderCreateInput = Boolean(isDirectory && isCreating && newItemParent === item.path);
   const shouldRenderChildren = Boolean(isDirectory && (shouldRenderCreateInput || (isOpen && hasChildren)));
@@ -154,6 +157,7 @@ export default function FileTreeNode({
     (isDirectory && !isOpen) || !isDirectory ? 'border-l-2 border-transparent' : '',
     isDropTarget && 'bg-blue-500/15 ring-1 ring-inset ring-blue-500/50',
     isSelected && 'bg-primary/15 ring-1 ring-inset ring-primary/40',
+    isFocusedDirectory && 'bg-primary/10 ring-1 ring-inset ring-primary/30',
     isInternalDropTarget && 'bg-green-500/15 ring-1 ring-inset ring-green-500/60',
   );
 
@@ -213,6 +217,7 @@ export default function FileTreeNode({
       onDragLeave={(event) => onInternalDragLeave?.(item, event)}
       onDrop={(event) => onInternalDrop?.(item, event)}
       onClick={(event) => {
+        event.stopPropagation();
         if (event.ctrlKey || event.metaKey || event.shiftKey) {
           event.preventDefault();
           onSelectionChange?.(item, true);
@@ -319,6 +324,7 @@ export default function FileTreeNode({
               dropTarget={dropTarget}
               selectedPaths={selectedPaths}
               internalDropTarget={internalDropTarget}
+              focusedDirectoryPath={focusedDirectoryPath}
               onSelectionChange={onSelectionChange}
               onInternalDragStart={onInternalDragStart}
               onInternalDragOver={onInternalDragOver}

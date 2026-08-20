@@ -8,7 +8,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkspaceSkillEntry } from './utils/skillFormatting';
 import {
@@ -68,7 +68,9 @@ export default function SkillFileTree({
   const directoryPaths = useMemo(() => getSkillDirectoryPaths(nodes), [nodes]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(directoryPaths));
   const [draft, setDraft] = useState<InlineDraft | null>(null);
+  const [pathTooltipVisible, setPathTooltipVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const pathTooltipId = useId();
   const initializedTreeKeyRef = useRef(treeKey);
   const knownDirectoryPathsRef = useRef(new Set(directoryPaths));
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -187,7 +189,30 @@ export default function SkillFileTree({
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0">
           <div className="text-xs font-medium uppercase text-muted-foreground">文件</div>
-          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{targetPath}</div>
+          <div
+            className="relative mt-0.5 min-w-0"
+            onMouseEnter={() => setPathTooltipVisible(true)}
+            onMouseLeave={() => setPathTooltipVisible(false)}
+          >
+            <div
+              aria-describedby={pathTooltipVisible ? pathTooltipId : undefined}
+              className="truncate font-mono text-[11px] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+              onBlur={() => setPathTooltipVisible(false)}
+              onFocus={() => setPathTooltipVisible(true)}
+              tabIndex={0}
+            >
+              {targetPath}
+            </div>
+            {pathTooltipVisible ? (
+              <div
+                id={pathTooltipId}
+                role="tooltip"
+                className="pointer-events-none absolute left-0 top-full z-50 mt-1 w-max max-w-[min(32rem,calc(100vw-2rem))] break-all rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-[11px] leading-4 text-popover-foreground shadow-lg"
+              >
+                {targetPath}
+              </div>
+            ) : null}
+          </div>
         </div>
         {editable ? (
           <div className="flex items-center">

@@ -27,6 +27,7 @@ import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
 import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
 import SkillFileTree from './SkillFileTree';
+import SkillPublishAction from './SkillPublishAction';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
 import { getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
 
@@ -338,8 +339,9 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     }
   };
 
-  const saveFile = async () => {
-    if (!workspaceId || !detailTarget || !file || !dirty) return;
+  const persistFile = async (reloadDetail: boolean): Promise<boolean> => {
+    if (!dirty) return true;
+    if (!workspaceId || !detailTarget || !file) return false;
     setActionLoading(true);
     setMessage(null);
     try {
@@ -356,14 +358,23 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
       setEditContent(nextFile.content ?? '');
       setEditing(false);
       notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-file-update');
-      await Promise.all([mine.reload(), loadDetail(detailTarget, nextFile.path)]);
+      if (reloadDetail) {
+        await Promise.all([mine.reload(), loadDetail(detailTarget, nextFile.path)]);
+      } else {
+        await mine.reload();
+      }
       setMessage({ kind: 'success', text: '文件已保存。' });
+      return true;
     } catch (error) {
       setMessage({ kind: 'error', text: toErrorMessage(error, '文件保存失败。') });
+      return false;
     } finally {
       setActionLoading(false);
     }
   };
+
+  const saveFile = () => persistFile(true);
+  const saveFileBeforePublish = () => persistFile(false);
 
   const createEntry = async (entryPath: string, type: 'file' | 'directory'): Promise<boolean> => {
     if (!workspaceId || !detailTarget || detail?.origin !== 'local') return false;
@@ -588,6 +599,21 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             if (action === 'remove') requestSkillRemoval('market-skill');
             else void runMarketAction(action);
           }}
+          publishAction={detailTarget.source === 'mine' ? (
+            <SkillPublishAction
+              workspaceId={workspaceId}
+              skillName={detailTarget.name}
+              disabled={!canManage || actionLoading}
+              beforePublish={saveFileBeforePublish}
+              onError={(text) => setMessage({ kind: 'error', text })}
+              onPublished={async (mode) => {
+                notifyWorkspaceChanged(detailTarget.name, mode === 'upload' ? 'workspace-skill-publish' : 'workspace-skill-publish-update');
+                await refreshAll();
+                await loadDetail(detailTarget, selectedFilePath);
+                setMessage({ kind: 'success', text: mode === 'upload' ? '技能已发布到技能市场。' : '技能更新已发布。' });
+              }}
+            />
+          ) : null}
           onPreviewModeChange={setPreviewMode}
           onRenameEntry={renameEntry}
           onSave={saveFile}
@@ -801,6 +827,7 @@ function SkillDetailView({
   selectedEntryPath,
   selectedFilePath,
   source,
+  publishAction,
 }: {
   actionLoading: boolean;
   canManage: boolean;
@@ -821,13 +848,14 @@ function SkillDetailView({
   onMarketAction: (action: 'import' | 'update' | 'remove') => void;
   onPreviewModeChange: (preview: boolean) => void;
   onRenameEntry: (path: string, nextPath: string) => Promise<boolean>;
-  onSave: () => void;
+  onSave: () => Promise<boolean>;
   onSelectEntry: (path: string) => void;
   onSelectFile: (path: string) => void;
   previewMode: boolean;
   selectedEntryPath: string | null;
   selectedFilePath: string | null;
   source: DetailSource;
+  publishAction?: ReactNode;
 }) {
   if (detailLoading) return <CenteredState icon={<Loader2 className="h-5 w-5 animate-spin" />} title="正在加载技能详情…" />;
   if (!detail) return <CenteredState icon={<AlertCircle className="h-5 w-5" />} title="技能详情不可用" action="返回" onAction={onBack} />;
@@ -851,6 +879,7 @@ function SkillDetailView({
         <div className="flex flex-wrap items-center gap-2">
           {source === 'market' && !marketInstalled ? <ActionButton icon={Plus} label="导入" primary onClick={() => onMarketAction('import')} disabled={!canManage || detail.conflict || actionLoading} /> : null}
           {marketInstalled && updateAvailable ? <ActionButton icon={RefreshCw} label="更新" primary onClick={() => onMarketAction('update')} disabled={!canManage || actionLoading} /> : null}
+          {source === 'mine' ? publishAction : null}
           {marketInstalled ? <ActionButton icon={Trash2} label="移除" onClick={() => onMarketAction('remove')} disabled={!canManage || actionLoading} danger /> : null}
           {isLocalOrigin ? <ActionButton icon={Trash2} label="移除" onClick={onDeleteLocalSkill} disabled={!canManage || actionLoading} danger /> : null}
         </div>

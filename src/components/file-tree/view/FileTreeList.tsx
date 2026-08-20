@@ -11,6 +11,7 @@ type FileTreeListProps = {
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
@@ -55,6 +56,7 @@ export default function FileTreeList({
   dropTarget,
   selectedPaths,
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -102,6 +104,7 @@ export default function FileTreeList({
           dropTarget={dropTarget}
           selectedPaths={selectedPaths}
           internalDropTarget={internalDropTarget}
+          focusedDirectoryPath={focusedDirectoryPath}
           onSelectionChange={onSelectionChange}
           onInternalDragStart={onInternalDragStart}
           onInternalDragOver={onInternalDragOver}
