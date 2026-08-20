@@ -12,6 +12,7 @@ export interface PackagingPaths {
 
 export const CLAUDE_TARGETS: readonly ClaudeTarget[];
 export const NODE_VERSION: string;
+export const NODE_DIST_BASE_URL: string;
 export const NODE_TARGETS: readonly Array<{
   key: string;
   archiveName: string;
@@ -36,6 +37,7 @@ export function verifyBufferIntegrity(buffer: Buffer, integrity: string, label?:
 export function claudeExecutableRelativePath(targetKey: string): string;
 export function nodeExecutableRelativePath(targetKey: string): string;
 export function nodeToolchainBinRelativePath(targetKey: string): string;
+export function nodeDistributionUrl(archiveName: string, baseUrl?: string): string;
 export function defaultClaudeTargetKeys(platform?: string, architecture?: string): string[];
 export function parseClaudeTargetKeys(value: string): string[];
 export function assembleRuntimeFiles(paths: PackagingPaths): void;

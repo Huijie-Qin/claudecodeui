@@ -33,3 +33,44 @@ test('applyEnvFileContents can preserve existing values when override is disable
 
   assert.equal(env.ANTHROPIC_MODEL, 'global-model');
 });
+
+test('desktop environment paths load the user config after the packaged app config', async () => {
+  const { resolveEnvFilePaths } = await import('./env-loader.js');
+
+  assert.deepEqual(resolveEnvFilePaths({
+    appRoot: '/Applications/CloudCLI.app/Contents/Resources/runtime',
+    userHome: '/Users/tester',
+    desktopMode: true,
+  }), [
+    '/Applications/CloudCLI.app/Contents/Resources/runtime/.env',
+    '/Users/tester/.cloudcli/.env',
+  ]);
+  assert.deepEqual(resolveEnvFilePaths({
+    appRoot: '/srv/cloudcli',
+    userHome: '/Users/tester',
+    desktopMode: false,
+  }), ['/srv/cloudcli/.env']);
+});
+
+test('desktop user environment values override packaged defaults before safety enforcement', async () => {
+  const { applyEnvFileContents, resolveEnvFilePaths } = await import('./env-loader.js');
+  const env = {};
+  const contentsByPath = new Map([
+    ['/app/.env', 'ANTHROPIC_MODEL=packaged-model\nHOST=0.0.0.0'],
+    ['/home/.cloudcli/.env', 'ANTHROPIC_MODEL=user-model\nCLAUDE_EXECUTION_MODE=docker'],
+  ]);
+
+  for (const envPath of resolveEnvFilePaths({
+    appRoot: '/app',
+    userHome: '/home',
+    desktopMode: true,
+  })) {
+    applyEnvFileContents(contentsByPath.get(envPath), env);
+  }
+
+  assert.deepEqual(env, {
+    ANTHROPIC_MODEL: 'user-model',
+    HOST: '0.0.0.0',
+    CLAUDE_EXECUTION_MODE: 'docker',
+  });
+});

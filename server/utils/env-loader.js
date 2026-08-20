@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export function applyEnvFileContents(contents, targetEnv = process.env, options = {}) {
   const { override = true } = options;
 
@@ -19,4 +21,22 @@ export function applyEnvFileContents(contents, targetEnv = process.env, options 
 
     targetEnv[key] = valueParts.join('=').trim();
   });
+}
+
+export function resolveEnvFilePaths({ appRoot, userHome, desktopMode = false } = {}) {
+  if (typeof appRoot !== 'string' || appRoot.trim() === '') {
+    throw new TypeError('appRoot is required to resolve environment files');
+  }
+
+  const paths = [path.join(appRoot, '.env')];
+  if (desktopMode) {
+    if (typeof userHome !== 'string' || userHome.trim() === '') {
+      throw new TypeError('userHome is required in desktop mode');
+    }
+    const userEnvPath = path.join(userHome, '.cloudcli', '.env');
+    if (!paths.includes(userEnvPath)) {
+      paths.push(userEnvPath);
+    }
+  }
+  return paths;
 }

@@ -18,6 +18,14 @@ DESKTOP_UPDATE_BASE_URL=https://cloudcli.example.com/api/desktop-updates
 - Only `DESKTOP_UPDATE_BASE_URL` is parsed from `.env.desktop`; root server secrets are never embedded in the Electron code.
 - The application origin is selected dynamically after the bundled loopback backend reports ready, so no remote home URL or origin allowlist is configured at build time.
 
+Installed Desktop runtime settings belong in `~/.cloudcli/.env` (on Windows,
+`%USERPROFILE%\.cloudcli\.env`). The project-root `.env` is intentionally not
+embedded in an installer because it may contain credentials. User settings override
+packaged defaults, while Desktop always forces `HOST=127.0.0.1`,
+`CLAUDE_EXECUTION_MODE=local`, its private database/runtime paths, bundled toolchain
+paths, and normal JWT authentication. `desktop/.env.desktop` remains build-only and
+configures the updater URL; it is not a backend runtime environment file.
+
 Desktop development builds the root frontend/backend, prepares `desktop/.runtime`, rebuilds the native dependencies for the installed Electron version, and starts Electron:
 
 ```sh
@@ -36,7 +44,12 @@ npm run desktop:package:mac
 npm run desktop:package:win
 ```
 
-`package:mac` produces a Universal DMG and ZIP. `package:win` produces an x64 NSIS installer. A production package is expected to be signed; CI sets `DESKTOP_REQUIRE_SIGNING=true`, which makes an absent signing identity a hard failure.
+`package:mac` produces a Universal DMG and ZIP. Local macOS builds without a
+Developer ID are ad-hoc signed so they remain runnable after Universal merging and
+fuse changes; they are not trusted or notarized for distribution. `package:win`
+produces an x64 NSIS installer. A production package is expected to be signed; CI
+sets `DESKTOP_REQUIRE_SIGNING=true`, which makes an absent signing identity a hard
+failure.
 
 Every build performs the root web/server build with `VITE_IS_PLATFORM=false` before compiling Electron. Runtime preparation uses the root lock file, installs required production dependencies with lifecycle scripts disabled via `--ignore-scripts` and optional platform packages omitted via `--omit=optional`, and then bundles the exact selected Claude platform packages locked alongside `@anthropic-ai/claude-agent-sdk`. Both the package archive integrity and the executable checksum from the SDK manifest are verified. It also downloads the official Node.js 24.18.1 distributions (including their npm CLI) for the selected targets and verifies their archives against pinned hashes from Node.js's published `SHASUMS256.txt`; this version is checked against Electron's embedded Node version during preparation. Target-local `npm` and `npx` launchers use that standalone Node runtime, while keeping npm inside the desktop-only package avoids increasing normal Web installations. `better-sqlite3`, `bcrypt`, and `node-pty` are rebuilt for Electron in the packaged app once per target architecture.
 

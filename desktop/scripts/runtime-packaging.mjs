@@ -34,6 +34,7 @@ export const CLAUDE_TARGETS = Object.freeze([
 ]);
 
 export const NODE_VERSION = '24.18.1';
+export const NODE_DIST_BASE_URL = 'https://nodejs.org/dist';
 export const NODE_TARGETS = Object.freeze([
   Object.freeze({
     key: 'darwin-arm64',
@@ -173,6 +174,31 @@ export function nodeToolchainBinRelativePath(targetKey) {
     throw new Error(`Unsupported bundled Node target: ${targetKey}.`);
   }
   return join('node', targetKey, 'bin');
+}
+
+export function nodeDistributionUrl(
+  archiveName,
+  baseUrl = process.env.CLOUDCLI_NODE_DIST_BASE_URL || NODE_DIST_BASE_URL,
+) {
+  if (basename(archiveName) !== archiveName) {
+    throw new Error(`Invalid bundled Node archive name: ${archiveName}.`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(`${baseUrl.replace(/\/+$/u, '')}/`);
+  } catch (error) {
+    throw new Error('CLOUDCLI_NODE_DIST_BASE_URL must be a valid HTTPS URL.', { cause: error });
+  }
+  if (
+    parsed.protocol !== 'https:'
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error('CLOUDCLI_NODE_DIST_BASE_URL must be an HTTPS URL without credentials, query, or fragment.');
+  }
+  return new URL(`v${NODE_VERSION}/${archiveName}`, parsed).href;
 }
 
 export function defaultClaudeTargetKeys(platform = process.platform, architecture = process.arch) {
@@ -371,7 +397,7 @@ export function bundleNodeExecutables({ runtimeDirectory, targetKeys = defaultCl
   try {
     for (const target of selectedNodeTargets(targetKeys)) {
       const archivePath = join(temporaryDirectory, target.archiveName);
-      const downloadUrl = `https://nodejs.org/dist/v${NODE_VERSION}/${target.archiveName}`;
+      const downloadUrl = nodeDistributionUrl(target.archiveName);
       runCommand('curl', [
         '--fail',
         '--location',
@@ -440,7 +466,7 @@ export function bundleNodeExecutables({ runtimeDirectory, targetKeys = defaultCl
 
   const manifest = {
     version: NODE_VERSION,
-    checksumSource: `https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`,
+    checksumSource: `${NODE_DIST_BASE_URL}/v${NODE_VERSION}/SHASUMS256.txt`,
     targets: bundledTargets,
   };
   writeFileSync(join(runtimeDirectory, 'node', 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

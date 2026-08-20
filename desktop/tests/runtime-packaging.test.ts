@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLAUDE_TARGETS,
   NODE_TARGETS,
+  NODE_DIST_BASE_URL,
   NODE_VERSION,
   RUNTIME_DIRECTORIES,
   RUNTIME_FILES,
@@ -24,6 +25,7 @@ import {
   createNodeToolchainShims,
   defaultClaudeTargetKeys,
   nodeExecutableRelativePath,
+  nodeDistributionUrl,
   nodeToolchainBinRelativePath,
   patchRuntimeNodePty,
   refreshBundledNodeToolchain,
@@ -36,6 +38,7 @@ const require = createRequire(import.meta.url);
 const nativePackaging = require('../scripts/rebuild-runtime-native.cjs') as {
   NATIVE_MODULES: string[];
   archName: (arch: string | number) => string;
+  assertPeX64: (filePath: string, options?: { kind?: 'dll' | 'exe'; label?: string }) => void;
   packagedRuntimeDirectory: (context: {
     appOutDir: string;
     electronPlatformName: string;
@@ -46,6 +49,20 @@ const nativePackaging = require('../scripts/rebuild-runtime-native.cjs') as {
     platform?: NodeJS.Platform,
     arch?: string,
   ) => void;
+  prepareWindowsX64Prebuilds: (runtimeDirectory: string) => void;
+  rebuildRuntimeDirectory: (options: {
+    runtimeDirectory: string;
+    platform: NodeJS.Platform;
+    arch: string | number;
+    electronVersion: string;
+    hostPlatform?: NodeJS.Platform;
+    nativeRebuild?: (options: Record<string, unknown>) => Promise<void>;
+  }) => Promise<void>;
+  shouldUseWindowsX64Prebuilds: (
+    platform: NodeJS.Platform,
+    arch: string,
+    hostPlatform?: NodeJS.Platform,
+  ) => boolean;
 };
 
 const temporaryDirectories: string[] = [];
@@ -68,6 +85,60 @@ function lockedPackages(version = '0.2.116') {
     };
   }
   return { packages };
+}
+
+function createPeX64(kind: 'dll' | 'exe' = 'dll', marker = ''): Buffer {
+  const contents = Buffer.alloc(512);
+  const peOffset = 0x80;
+  contents.writeUInt16LE(0x5a4d, 0);
+  contents.writeUInt32LE(peOffset, 0x3c);
+  contents.writeUInt32LE(0x00004550, peOffset);
+  contents.writeUInt16LE(0x8664, peOffset + 4);
+  contents.writeUInt16LE(1, peOffset + 6);
+  contents.writeUInt16LE(0x00f0, peOffset + 20);
+  contents.writeUInt16LE(kind === 'dll' ? 0x2022 : 0x0022, peOffset + 22);
+  contents.writeUInt16LE(0x020b, peOffset + 24);
+  contents.write(marker, peOffset + 0x140, 'utf8');
+  return contents;
+}
+
+function writeWindowsX64PrebuildFixture(runtimeDirectory: string): Record<string, Buffer> {
+  const files = {
+    betterSqlite: createPeX64('dll', 'better-sqlite3'),
+    bcrypt: createPeX64('dll', 'bcrypt'),
+    conpty: createPeX64('dll', 'conpty'),
+    consoleList: createPeX64('dll', 'console-list'),
+    conptyDll: createPeX64('dll', 'conpty-dll'),
+    openConsole: createPeX64('exe', 'open-console'),
+  };
+  for (const moduleName of nativePackaging.NATIVE_MODULES) {
+    const moduleDirectory = join(runtimeDirectory, 'node_modules', moduleName);
+    mkdirSync(moduleDirectory, { recursive: true });
+    writeFileSync(join(moduleDirectory, 'package.json'), '{}');
+  }
+  const sources: Array<[string, Buffer]> = [
+    [join('better-sqlite3', 'prebuilds', 'win32-x64.node'), files.betterSqlite],
+    [join('bcrypt', 'prebuilds', 'win32-x64', 'bcrypt.node'), files.bcrypt],
+    [join('node-pty', 'prebuilds', 'win32-x64', 'conpty.node'), files.conpty],
+    [
+      join('node-pty', 'prebuilds', 'win32-x64', 'conpty_console_list.node'),
+      files.consoleList,
+    ],
+    [
+      join('node-pty', 'prebuilds', 'win32-x64', 'conpty', 'conpty.dll'),
+      files.conptyDll,
+    ],
+    [
+      join('node-pty', 'prebuilds', 'win32-x64', 'conpty', 'OpenConsole.exe'),
+      files.openConsole,
+    ],
+  ];
+  for (const [relativePath, contents] of sources) {
+    const destination = join(runtimeDirectory, 'node_modules', relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, contents);
+  }
+  return files;
 }
 
 describe('desktop runtime packaging', () => {
@@ -100,6 +171,7 @@ describe('desktop runtime packaging', () => {
   });
 
   it('pins official standalone Node archives for the same desktop targets', () => {
+    expect(NODE_DIST_BASE_URL).toBe('https://nodejs.org/dist');
     expect(NODE_VERSION).toBe('24.18.1');
     expect(NODE_TARGETS.map((target) => target.key)).toEqual([
       'darwin-arm64',
@@ -116,6 +188,20 @@ describe('desktop runtime packaging', () => {
       .toBe(join('node', 'win32-x64', 'node.exe'));
     expect(nodeToolchainBinRelativePath('darwin-x64'))
       .toBe(join('node', 'darwin-x64', 'bin'));
+    expect(nodeDistributionUrl('node-v24.18.1-win-x64.zip'))
+      .toBe('https://nodejs.org/dist/v24.18.1/node-v24.18.1-win-x64.zip');
+    expect(nodeDistributionUrl(
+      'node-v24.18.1-win-x64.zip',
+      'https://npmmirror.com/mirrors/node/',
+    )).toBe(
+      'https://npmmirror.com/mirrors/node/v24.18.1/node-v24.18.1-win-x64.zip',
+    );
+    expect(() => nodeDistributionUrl('node.zip', 'http://node.example.test'))
+      .toThrow(/HTTPS URL/u);
+    expect(() => nodeDistributionUrl('node.zip', 'https://user@example.test/node'))
+      .toThrow(/without credentials/u);
+    expect(() => nodeDistributionUrl('../node.zip'))
+      .toThrow(/Invalid bundled Node archive name/u);
   });
 
   it('creates target-local npm and npx shims for Unix and Windows', () => {
@@ -307,26 +393,18 @@ describe('desktop runtime packaging', () => {
   it('preserves the Windows ConPTY bindings and helper binaries', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-prune-test-'));
     temporaryDirectories.push(workspace);
+    const windowsFiles = writeWindowsX64PrebuildFixture(workspace);
     for (const moduleName of nativePackaging.NATIVE_MODULES) {
       const releaseDirectory = join(workspace, 'node_modules', moduleName, 'build', 'Release');
       mkdirSync(releaseDirectory, { recursive: true });
-      writeFileSync(join(workspace, 'node_modules', moduleName, 'package.json'), '{}');
       if (moduleName === 'bcrypt') {
-        writeFileSync(join(releaseDirectory, 'bcrypt_lib.node'), 'bcrypt');
+        writeFileSync(join(releaseDirectory, 'bcrypt_lib.node'), windowsFiles.bcrypt);
       } else if (moduleName === 'node-pty') {
-        writeFileSync(join(releaseDirectory, 'conpty.node'), 'conpty');
-        writeFileSync(join(releaseDirectory, 'conpty_console_list.node'), 'console-list');
-        const prebuiltConpty = join(
-          workspace,
-          'node_modules',
-          moduleName,
-          'prebuilds',
-          'win32-x64',
-          'conpty',
+        writeFileSync(join(releaseDirectory, 'conpty.node'), windowsFiles.conpty);
+        writeFileSync(
+          join(releaseDirectory, 'conpty_console_list.node'),
+          windowsFiles.consoleList,
         );
-        mkdirSync(prebuiltConpty, { recursive: true });
-        writeFileSync(join(prebuiltConpty, 'conpty.dll'), 'dll');
-        writeFileSync(join(prebuiltConpty, 'OpenConsole.exe'), 'console');
       }
       writeFileSync(join(workspace, 'node_modules', moduleName, 'build', 'Makefile'), 'build-only');
     }
@@ -334,14 +412,157 @@ describe('desktop runtime packaging', () => {
     nativePackaging.pruneNativeBuildArtifacts(workspace, 'win32', 'x64');
 
     const releaseDirectory = join(workspace, 'node_modules', 'node-pty', 'build', 'Release');
-    expect(readFileSync(join(releaseDirectory, 'conpty.node'), 'utf8')).toBe('conpty');
-    expect(readFileSync(join(releaseDirectory, 'conpty_console_list.node'), 'utf8'))
-      .toBe('console-list');
-    expect(readFileSync(join(releaseDirectory, 'conpty', 'conpty.dll'), 'utf8')).toBe('dll');
-    expect(readFileSync(join(releaseDirectory, 'conpty', 'OpenConsole.exe'), 'utf8'))
-      .toBe('console');
+    expect(readFileSync(join(releaseDirectory, 'conpty.node'))).toEqual(windowsFiles.conpty);
+    expect(readFileSync(join(releaseDirectory, 'conpty_console_list.node')))
+      .toEqual(windowsFiles.consoleList);
+    expect(readFileSync(join(releaseDirectory, 'conpty', 'conpty.dll')))
+      .toEqual(windowsFiles.conptyDll);
+    expect(readFileSync(join(releaseDirectory, 'conpty', 'OpenConsole.exe')))
+      .toEqual(windowsFiles.openConsole);
     expect(existsSync(join(workspace, 'node_modules', 'node-pty', 'build', 'Makefile')))
       .toBe(false);
+  });
+
+  it('uses official Windows x64 prebuilds when packaging from a non-Windows host', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-cross-test-'));
+    temporaryDirectories.push(workspace);
+    const windowsFiles = writeWindowsX64PrebuildFixture(workspace);
+    for (const moduleName of nativePackaging.NATIVE_MODULES) {
+      const moduleDirectory = join(workspace, 'node_modules', moduleName);
+      mkdirSync(join(moduleDirectory, 'build', 'Release'), { recursive: true });
+      mkdirSync(join(moduleDirectory, 'bin', 'darwin-arm64-148'), { recursive: true });
+      mkdirSync(join(moduleDirectory, 'node-addon-api'), { recursive: true });
+      writeFileSync(join(moduleDirectory, 'build', 'Release', 'host.node'), 'Mach-O host binary');
+    }
+    let nativeRebuildCalled = false;
+
+    await nativePackaging.rebuildRuntimeDirectory({
+      runtimeDirectory: workspace,
+      platform: 'win32',
+      arch: 'x64',
+      electronVersion: '43.0.0',
+      hostPlatform: 'darwin',
+      nativeRebuild: async () => {
+        nativeRebuildCalled = true;
+      },
+    });
+
+    expect(nativeRebuildCalled).toBe(false);
+    expect(readFileSync(join(
+      workspace,
+      'node_modules',
+      'better-sqlite3',
+      'prebuilds',
+      'win32-x64.node',
+    ))).toEqual(windowsFiles.betterSqlite);
+    expect(readFileSync(join(
+      workspace,
+      'node_modules',
+      'bcrypt',
+      'build',
+      'Release',
+      'bcrypt_lib.node',
+    ))).toEqual(windowsFiles.bcrypt);
+    const ptyRelease = join(workspace, 'node_modules', 'node-pty', 'build', 'Release');
+    expect(readFileSync(join(ptyRelease, 'conpty.node'))).toEqual(windowsFiles.conpty);
+    expect(readFileSync(join(ptyRelease, 'conpty_console_list.node')))
+      .toEqual(windowsFiles.consoleList);
+    expect(readFileSync(join(ptyRelease, 'conpty', 'conpty.dll')))
+      .toEqual(windowsFiles.conptyDll);
+    expect(readFileSync(join(ptyRelease, 'conpty', 'OpenConsole.exe')))
+      .toEqual(windowsFiles.openConsole);
+    expect(existsSync(join(ptyRelease, 'host.node'))).toBe(false);
+    for (const moduleName of nativePackaging.NATIVE_MODULES) {
+      const moduleDirectory = join(workspace, 'node_modules', moduleName);
+      expect(existsSync(join(moduleDirectory, 'bin'))).toBe(false);
+      expect(existsSync(join(moduleDirectory, 'node-addon-api'))).toBe(false);
+    }
+  });
+
+  it('strictly validates all Windows x64 PE bindings and ConPTY helpers before cleanup', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-pe-test-'));
+    temporaryDirectories.push(workspace);
+    writeWindowsX64PrebuildFixture(workspace);
+    const staleBuild = join(workspace, 'node_modules', 'node-pty', 'build', 'stale-marker');
+    mkdirSync(dirname(staleBuild), { recursive: true });
+    writeFileSync(staleBuild, 'keep until validation succeeds');
+    const conptyDll = join(
+      workspace,
+      'node_modules',
+      'node-pty',
+      'prebuilds',
+      'win32-x64',
+      'conpty',
+      'conpty.dll',
+    );
+    const wrongArchitecture = createPeX64('dll');
+    wrongArchitecture.writeUInt16LE(0x014c, 0x80 + 4);
+    writeFileSync(conptyDll, wrongArchitecture);
+
+    expect(() => nativePackaging.prepareWindowsX64Prebuilds(workspace))
+      .toThrow(/conpty\.dll.*not an AMD64 PE image/u);
+    expect(readFileSync(staleBuild, 'utf8')).toBe('keep until validation succeeds');
+
+    writeFileSync(conptyDll, createPeX64('dll'));
+    const openConsole = join(dirname(conptyDll), 'OpenConsole.exe');
+    writeFileSync(openConsole, createPeX64('dll'));
+    expect(() => nativePackaging.prepareWindowsX64Prebuilds(workspace))
+      .toThrow(/OpenConsole\.exe.*wrong PE image type/u);
+
+    rmSync(openConsole);
+    expect(() => nativePackaging.prepareWindowsX64Prebuilds(workspace))
+      .toThrow(/missing official Windows x64 node-pty OpenConsole\.exe/u);
+  });
+
+  it('keeps native rebuilds for Windows hosts and non-Windows targets', async () => {
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'darwin')).toBe(true);
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'linux')).toBe(true);
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('win32', 'x64', 'win32')).toBe(false);
+    expect(nativePackaging.shouldUseWindowsX64Prebuilds('darwin', 'x64', 'darwin')).toBe(false);
+
+    const workspace = mkdtempSync(join(tmpdir(), 'cloudcli-native-win-host-test-'));
+    temporaryDirectories.push(workspace);
+    const windowsFiles = writeWindowsX64PrebuildFixture(workspace);
+    let rebuildOptions: Record<string, unknown> | null = null;
+    await nativePackaging.rebuildRuntimeDirectory({
+      runtimeDirectory: workspace,
+      platform: 'win32',
+      arch: 'x64',
+      electronVersion: '43.0.0',
+      hostPlatform: 'win32',
+      nativeRebuild: async (options) => {
+        rebuildOptions = options;
+        const bcryptRelease = join(
+          workspace,
+          'node_modules',
+          'bcrypt',
+          'build',
+          'Release',
+        );
+        const ptyRelease = join(
+          workspace,
+          'node_modules',
+          'node-pty',
+          'build',
+          'Release',
+        );
+        mkdirSync(bcryptRelease, { recursive: true });
+        mkdirSync(ptyRelease, { recursive: true });
+        writeFileSync(join(bcryptRelease, 'bcrypt_lib.node'), windowsFiles.bcrypt);
+        writeFileSync(join(ptyRelease, 'conpty.node'), windowsFiles.conpty);
+        writeFileSync(
+          join(ptyRelease, 'conpty_console_list.node'),
+          windowsFiles.consoleList,
+        );
+      },
+    });
+    expect(rebuildOptions).toMatchObject({
+      platform: 'win32',
+      arch: 'x64',
+      electronVersion: '43.0.0',
+      force: true,
+      mode: 'sequential',
+    });
   });
 });
 

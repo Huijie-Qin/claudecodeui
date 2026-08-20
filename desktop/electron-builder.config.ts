@@ -70,6 +70,10 @@ const config: Configuration = {
   },
   artifactName: '${productName}-Desktop-${version}-${os}-${arch}.${ext}',
   mac: {
+    // A local package without a Developer ID must still be ad-hoc signed after
+    // Universal merging and fuse changes, otherwise macOS kills Electron when a
+    // lazily faulted code page no longer matches the upstream embedded signature.
+    identity: requireSigning ? undefined : '-',
     target: [
       { target: 'dmg', arch: ['universal'] },
       { target: 'zip', arch: ['universal'] },

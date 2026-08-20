@@ -4,10 +4,11 @@ import os from 'os';
 import path from 'path';
 
 import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
-import { applyEnvFileContents } from './utils/env-loader.js';
+import { applyEnvFileContents, resolveEnvFilePaths } from './utils/env-loader.js';
 import {
   applyAuthoritativeDesktopRuntimeEnvironment,
   captureDesktopParentEnvironment,
+  isDesktopMode,
 } from './services/desktop-runtime.js';
 
 const __dirname = getModuleDir(import.meta.url);
@@ -22,12 +23,27 @@ const DEFAULT_DATABASE_PATH = path.join(userHomeFromParent, '.cloudcli', 'auth.d
 const DEFAULT_RUNTIME_ROOT = path.join(userHomeFromParent, '.cloudcli', 'runtimes');
 const DEFAULT_CLAUDE_CONFIG_PATH = path.join(userHomeFromParent, '.claude');
 
-try {
-  const envPath = path.join(APP_ROOT, '.env');
-  const envFile = fs.readFileSync(envPath, 'utf8');
-  applyEnvFileContents(envFile);
-} catch (e) {
-  console.log('No .env file found or error reading it:', e.message);
+const envPaths = resolveEnvFilePaths({
+  appRoot: APP_ROOT,
+  userHome: userHomeFromParent,
+  desktopMode: isDesktopMode(desktopParentEnvironment),
+});
+const loadedEnvPaths = [];
+for (const envPath of envPaths) {
+  try {
+    const envFile = fs.readFileSync(envPath, 'utf8');
+    applyEnvFileContents(envFile);
+    loadedEnvPaths.push(envPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.warn(`Unable to read environment file ${envPath}:`, error.message);
+    }
+  }
+}
+if (loadedEnvPaths.length > 0) {
+  console.log(`Loaded environment configuration from: ${loadedEnvPaths.join(', ')}`);
+} else {
+  console.log(`No environment configuration found. Checked: ${envPaths.join(', ')}`);
 }
 
 // The utility-process environment remains authoritative after loading .env. Desktop
