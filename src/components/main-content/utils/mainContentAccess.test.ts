@@ -16,13 +16,14 @@ test('resolveAllowedWorkspaceTab falls back to files when active tab is disabled
   assert.equal(resolveAllowedWorkspaceTab('files', disabledTabs), 'files');
   assert.equal(resolveAllowedWorkspaceTab('mcp-tools', disabledTabs), 'mcp-tools');
   assert.equal(resolveAllowedWorkspaceTab('sql-check', disabledTabs), 'sql-check');
+  assert.equal(resolveAllowedWorkspaceTab('skills', disabledTabs), 'skills');
 });
 
 test('resolveAllowedWorkspaceTab normalizes removed workspace tabs to chat', () => {
   const editableTabs = getWorkspaceDisabledTabs('edit');
   const viewOnlyTabs = getWorkspaceDisabledTabs('view');
 
-  for (const oldTab of ['skills', 'tools', 'shell', 'git', 'tasks', 'preview', 'plugin:preview']) {
+  for (const oldTab of ['tools', 'shell', 'git', 'tasks', 'preview', 'plugin:preview']) {
     assert.equal(resolveAllowedWorkspaceTab(oldTab, editableTabs), 'chat');
     assert.equal(resolveAllowedWorkspaceTab(oldTab, viewOnlyTabs), 'files');
   }

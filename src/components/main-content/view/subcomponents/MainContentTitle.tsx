@@ -17,6 +17,10 @@ function getTabTitle(activeTab: AppTab, t: (key: string) => string) {
     return t('tabs.mcpTools');
   }
 
+  if (activeTab === 'skills') {
+    return t('tabs.skills');
+  }
+
   if (activeTab === 'sql-check') {
     return t('tabs.sqlCheck');
   }

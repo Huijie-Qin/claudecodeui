@@ -18,6 +18,21 @@ export type WorkspaceSkill = {
   runtimePath?: string;
   manifestPath?: string;
   parseError?: string;
+  origin?: 'market' | 'local';
+  targetPath?: string;
+  localVersion?: number;
+  marketVersion?: number;
+  updateAvailable?: boolean;
+  remoteDeleted?: boolean;
+  createUserId?: string;
+  files?: WorkspaceSkillEntry[];
+};
+
+export type WorkspaceSkillEntry = {
+  path: string;
+  type: 'directory' | 'file' | 'symlink';
+  size?: number;
+  mimeType?: string;
 };
 
 const KIND_ORDER: Record<WorkspaceSkillKind, number> = {

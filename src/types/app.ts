@@ -6,6 +6,7 @@ export type AppTab =
   | 'chat'
   | 'files'
   | 'codehub'
+  | 'skills'
   | 'mcp-tools'
   | 'sql-check'
   | 'agent-graph';

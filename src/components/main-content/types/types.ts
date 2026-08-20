@@ -65,7 +65,6 @@ export type MainContentHeaderProps = {
   disabledTabs?: ReadonlySet<AppTab>;
   isMobile: boolean;
   onMenuClick: () => void;
-  onSkillMarketClick: () => void;
   agentGraphEnabled: boolean;
 };
 

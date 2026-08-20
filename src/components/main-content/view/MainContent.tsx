@@ -3,7 +3,7 @@ import React, { Suspense, useEffect, useMemo } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import CodeHubPanel from '../../codehub/CodeHubPanel';
 import FileTree from '../../file-tree/view/FileTree';
-import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
+import SkillsWorkspacePanel from '../../skills-market/SkillsWorkspacePanel';
 import McpToolsPanel from '../../tools-market/McpToolsPanel';
 import SqlCheckPanel from '../../sql-check/SqlCheckPanel';
 import type { MainContentProps } from '../types/types';
@@ -48,7 +48,6 @@ function MainContent({
   onShowSettings,
   externalMessageUpdate,
 }: MainContentProps) {
-  const [showSkillMarket, setShowSkillMarket] = React.useState(false);
   const agentGraphEnabled = useAgentGraphFeatureEnabled();
   const { preferences } = useUiPreferences();
   const { hideToolMessages, autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
@@ -143,7 +142,6 @@ function MainContent({
         disabledTabs={disabledTabs}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
-        onSkillMarketClick={() => setShowSkillMarket(true)}
         agentGraphEnabled={agentGraphEnabled}
       />
 
@@ -205,6 +203,12 @@ function MainContent({
             </div>
           )}
 
+          {activeTab === 'skills' && (
+            <div className="h-full overflow-hidden">
+              <SkillsWorkspacePanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
+            </div>
+          )}
+
           {activeTab === 'sql-check' && (
             <div className="h-full overflow-hidden">
               <SqlCheckPanel selectedProject={selectedProject} />
@@ -239,14 +243,6 @@ function MainContent({
         />
       </div>
 
-      {showSkillMarket && (
-        <SkillMarketDialog
-          open={showSkillMarket}
-          selectedProject={selectedProject}
-          isReadOnly={isViewOnlyWorkspace}
-          onClose={() => setShowSkillMarket(false)}
-        />
-      )}
     </div>
   );
 }

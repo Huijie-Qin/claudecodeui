@@ -669,6 +669,41 @@ export const api = {
 
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
+    detail: (workspaceId, name) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}`)),
+    file: (workspaceId, name, filePath) =>
+      authenticatedFetch(withTenantParam(
+        `/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/files?filePath=${encodeURIComponent(filePath)}`,
+      )),
+    saveFile: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/files`), {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    createEntry: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    renameEntry: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    deleteEntry: (workspaceId, name, path) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'DELETE',
+        body: JSON.stringify({ path }),
+      }),
+    createLocal: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/local`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    deleteLocal: (workspaceId, name) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/local`), {
+        method: 'DELETE',
+      }),
     previewGithub: (workspaceId, url) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/preview`), {
         method: 'POST',
