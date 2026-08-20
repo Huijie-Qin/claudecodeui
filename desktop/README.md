@@ -61,6 +61,10 @@ online downloads populate the same ignored cache automatically for later builds.
 Windows x64 native dependencies use their official package prebuilds and validate
 the PE architecture before packaging, so a Windows build does not require Visual
 Studio, node-gyp, or the MSVC Spectre-mitigated libraries.
+Local Windows builds explicitly skip Authenticode signing while retaining executable
+icons and version metadata. Release CI sets `DESKTOP_REQUIRE_SIGNING=true`, which
+enables signature verification for updates and requires the configured signing
+certificate instead of auto-discovering a developer-machine certificate.
 
 ## Runtime security model
 

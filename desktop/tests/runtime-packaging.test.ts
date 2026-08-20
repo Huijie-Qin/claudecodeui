@@ -617,6 +617,8 @@ describe('desktop build wiring', () => {
     expect(builderConfig).toContain(
       "x64ArchFiles: 'Contents/Resources/runtime/{claude/**,node/**,node_modules/**/prebuilds/**}'",
     );
+    expect(builderConfig).toContain('signExecutable: requireSigning');
+    expect(builderConfig).toContain('verifyUpdateCodeSignature: requireSigning');
   });
 
   it('builds the root application before target-specific runtime preparation', () => {

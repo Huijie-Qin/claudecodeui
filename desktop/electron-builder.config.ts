@@ -97,7 +97,12 @@ const config: Configuration = {
       { target: 'nsis', arch: ['x64'] },
     ],
     icon: 'build/icon.ico',
-    verifyUpdateCodeSignature: true,
+    // Keep PE resource editing for icons/version metadata, but do not let a
+    // developer-machine certificate discovered by electron-builder silently
+    // turn an unsigned local build into a potentially blocking sign operation.
+    // Release CI opts back in together with forceCodeSigning above.
+    signExecutable: requireSigning,
+    verifyUpdateCodeSignature: requireSigning,
   },
   nsis: {
     oneClick: false,
