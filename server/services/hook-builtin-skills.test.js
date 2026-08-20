@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  deleteManagedBuiltinHookSkill,
   listBuiltinHookSkills,
   loadBuiltinHookSkill,
   saveManagedBuiltinHookSkill,
@@ -12,19 +13,19 @@ import {
 
 async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-skills-'));
-  const skillsRoot = path.join(root, 'packaged');
+  const skillsRoot = path.join(root, 'legacy-packaged');
   const managedSkillsRoot = path.join(root, 'managed');
-  const packagedDirectory = path.join(skillsRoot, 'hook-notification');
-  await fs.mkdir(packagedDirectory, { recursive: true });
+  const legacyDirectory = path.join(skillsRoot, 'hook-notification');
+  await fs.mkdir(legacyDirectory, { recursive: true });
   await fs.writeFile(
-    path.join(packagedDirectory, 'SKILL.md'),
-    '---\nname: hook-notification\ndescription: Packaged notification\n---\n\nNotify the user.\n',
+    path.join(legacyDirectory, 'SKILL.md'),
+    '---\nname: hook-notification\ndescription: Legacy packaged notification\n---\n\nNotify the user.\n',
     'utf8',
   );
   return { root, skillsRoot, managedSkillsRoot };
 }
 
-test('uploaded Hook Skills persist, list with packaged Skills, and load by built-in id', async () => {
+test('admin-uploaded Hook Skills are the only catalog source and load by built-in id', async () => {
   const fixture = await createFixture();
   try {
     const uploaded = await saveManagedBuiltinHookSkill({
@@ -40,7 +41,6 @@ test('uploaded Hook Skills persist, list with packaged Skills, and load by built
     const listed = await listBuiltinHookSkills(fixture);
     assert.deepEqual(listed.map((skill) => [skill.skillId, skill.source]), [
       ['builtin:audit-response', 'uploaded'],
-      ['builtin:hook-notification', 'packaged'],
     ]);
 
     const loaded = await loadBuiltinHookSkill({
@@ -55,7 +55,7 @@ test('uploaded Hook Skills persist, list with packaged Skills, and load by built
   }
 });
 
-test('admin uploads accept unrestricted Skill contents, names, and packaged overrides', async () => {
+test('admin uploads accept unrestricted Skill contents, names, and updates', async () => {
   const fixture = await createFixture();
   try {
     const unrestricted = await saveManagedBuiltinHookSkill({
@@ -75,7 +75,7 @@ test('admin uploads accept unrestricted Skill contents, names, and packaged over
     assert.equal(empty.content, '');
 
     await saveManagedBuiltinHookSkill({
-      fileName: 'override.data',
+      fileName: 'notification.data',
       fileBuffer: Buffer.from('---\nname: hook-notification\n---\nAdmin override.\n'),
       managedSkillsRoot: fixture.managedSkillsRoot,
     });
@@ -90,6 +90,50 @@ test('admin uploads accept unrestricted Skill contents, names, and packaged over
       ...fixture,
     });
     assert.equal(loaded.content, 'Body\n');
+  } finally {
+    await fs.rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('admin can delete every Hook Skill and deleted Skills have no packaged fallback', async () => {
+  const fixture = await createFixture();
+  try {
+    await saveManagedBuiltinHookSkill({
+      fileName: 'temporary.md',
+      fileBuffer: Buffer.from('---\nname: temporary-notifier\n---\nTemporary.\n'),
+      managedSkillsRoot: fixture.managedSkillsRoot,
+    });
+    await saveManagedBuiltinHookSkill({
+      fileName: 'override.md',
+      fileBuffer: Buffer.from('---\nname: hook-notification\n---\nOverride.\n'),
+      managedSkillsRoot: fixture.managedSkillsRoot,
+    });
+
+    const deletedTemporary = await deleteManagedBuiltinHookSkill({
+      skillId: 'builtin:temporary-notifier',
+      managedSkillsRoot: fixture.managedSkillsRoot,
+    });
+    assert.equal(deletedTemporary.source, 'uploaded');
+    assert.equal((await listBuiltinHookSkills(fixture)).some((skill) => (
+      skill.skillId === 'builtin:temporary-notifier'
+    )), false);
+
+    await deleteManagedBuiltinHookSkill({
+      skillId: 'builtin:hook-notification',
+      managedSkillsRoot: fixture.managedSkillsRoot,
+    });
+    const packagedFallback = (await listBuiltinHookSkills(fixture)).find((skill) => (
+      skill.skillId === 'builtin:hook-notification'
+    ));
+    assert.equal(packagedFallback, undefined);
+
+    await assert.rejects(
+      deleteManagedBuiltinHookSkill({
+        skillId: 'builtin:hook-notification',
+        managedSkillsRoot: fixture.managedSkillsRoot,
+      }),
+      /Uploaded Hook Skill not found/,
+    );
   } finally {
     await fs.rm(fixture.root, { recursive: true, force: true });
   }

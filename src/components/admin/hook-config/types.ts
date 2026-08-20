@@ -133,7 +133,6 @@ export type HookSkillResource = {
   displayName: string;
   description: string;
   version: number;
-  source: 'packaged' | 'uploaded';
 };
 
 export type HookSkillSource = {

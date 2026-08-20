@@ -256,7 +256,7 @@ function normalizeBinding(value, name) {
   return { source: 'literal', value: value.value };
 }
 
-function normalizePostActions(value, eventName) {
+function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true } = {}) {
   const rawActions = value == null ? [] : value;
   if (!Array.isArray(rawActions)) throw createHttpError('postActions must be an array');
   if (rawActions.length > MAX_POST_ACTIONS) {
@@ -329,7 +329,7 @@ function normalizePostActions(value, eventName) {
         `postActions[${index}].config.skillId`,
         { max: Number.POSITIVE_INFINITY, allowEmpty: true },
       );
-      if (skillId && !isBuiltinHookSkillId(skillId)) {
+      if (validateBuiltinSkillIds && skillId && !isBuiltinHookSkillId(skillId)) {
         throw createHttpError(`postActions[${index}].config.skillId must reference a built-in Hook Skill`);
       }
       return {
@@ -480,7 +480,12 @@ function mapHookRow(row) {
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
     extensionLogic: normalizeExtensionLogic(parseJson(row.extension_logic_json, null)),
-    postActions: normalizePostActions(parseJson(row.post_actions_json, []), row.event_name),
+    // Historical records must remain readable so administrators can repair an
+    // unavailable Skill from the Hook card. Create, update, publish, and runtime
+    // paths retain their strict built-in Skill validation.
+    postActions: normalizePostActions(parseJson(row.post_actions_json, []), row.event_name, {
+      validateBuiltinSkillIds: false,
+    }),
     claudeResponse: normalizeClaudeResponse(parseJson(row.claude_response_json, { bindings: {} })),
     version: Number(row.version || 0),
     createdBy: row.created_by,

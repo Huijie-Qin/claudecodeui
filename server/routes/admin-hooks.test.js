@@ -111,7 +111,6 @@ test('Hook Skill upload accepts an arbitrary admin file and returns the refreshe
     displayName: 'uploaded-notifier',
     description: 'Uploaded notifier',
     version: 1,
-    source: 'uploaded',
   };
   const router = createRouter({
     hookConfigs: {},
@@ -142,6 +141,41 @@ test('Hook Skill upload accepts an arbitrary admin file and returns the refreshe
   assert.equal(seen.input.userId, 9);
   assert.deepEqual(payload.skill, uploadedSkill);
   assert.deepEqual(payload.skills, [uploadedSkill]);
+});
+
+test('Hook Skill delete removes an admin upload and returns the refreshed catalog', async () => {
+  const seen = {};
+  const uploadedSkill = {
+    skillId: 'builtin:uploaded-notifier',
+    name: 'uploaded-notifier',
+    displayName: 'uploaded-notifier',
+    description: 'Uploaded notifier',
+    version: 1,
+  };
+  const router = createRouter({
+    hookConfigs: {},
+    hookSkillMarket: {
+      deleteBuiltinSkill: async (input) => {
+        seen.input = input;
+        return uploadedSkill;
+      },
+      listConfigurationSkills: async () => ({
+        skills: [],
+        source: { type: 'builtin', available: true },
+      }),
+    },
+  });
+
+  const { response, payload } = await requestJson(
+    router,
+    '/hooks/skills/builtin%3Auploaded-notifier',
+    { method: 'DELETE' },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen.input, { skillId: 'builtin:uploaded-notifier', userId: 9 });
+  assert.deepEqual(payload.skill, uploadedSkill);
+  assert.deepEqual(payload.skills, []);
 });
 
 test('publishing a Hook passes built-in validated Skills to the configuration service', async () => {

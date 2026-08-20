@@ -452,6 +452,10 @@ export const api = {
         method: 'POST',
         body: formData,
       }),
+    deleteHookSkill: (skillId) =>
+      authenticatedFetch(`/api/admin/hooks/skills/${encodeURIComponent(String(skillId))}`, {
+        method: 'DELETE',
+      }),
     analytics: (days = 30, tenantIds = []) => {
       const params = new URLSearchParams({ days: String(days) });
       if (Array.isArray(tenantIds) && tenantIds.length > 0) {

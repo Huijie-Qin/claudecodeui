@@ -569,6 +569,48 @@ test('post action and Claude response validation follows the selected event', ()
   }
 });
 
+test('legacy non-built-in Skill references remain readable but cannot be republished', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        postActions: [{
+          id: 'notify',
+          type: 'invoke_skill',
+          position: 0,
+          config: {
+            skillId: 'builtin:hook-notification',
+            skillName: 'hook-notification',
+            argumentsTemplate: '',
+          },
+        }],
+      }),
+    });
+    database.prepare('UPDATE hooks SET post_actions_json = ? WHERE id = ?').run(JSON.stringify([{
+      id: 'notify',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: 'legacy-market-skill',
+        skillName: 'legacy-notifier',
+        argumentsTemplate: '',
+      },
+    }]), created.id);
+
+    const listed = service.listHooks().find((hook) => hook.id === created.id);
+    assert.equal(listed.postActions[0].config.skillId, 'legacy-market-skill');
+    assert.throws(() => service.publishHook({
+      hookId: created.id,
+      userId: 1,
+      validatedSkills: [],
+    }), /must reference a built-in Hook Skill/);
+  } finally {
+    database.close();
+  }
+});
+
 test('visible event settings are validated and persisted', () => {
   const { database, service } = createFixture();
   try {

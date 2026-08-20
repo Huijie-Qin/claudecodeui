@@ -575,6 +575,23 @@ export function createAdminRouter(
     });
   });
 
+  router.delete('/hooks/skills/:skillId', async (req, res) => {
+    try {
+      const skill = await hookSkillCatalog.deleteBuiltinSkill({
+        skillId: req.params.skillId,
+        userId: req.user.id,
+      });
+      const catalog = await hookSkillCatalog.listConfigurationSkills();
+      return res.json({
+        skill,
+        skills: catalog.skills,
+        skillSource: catalog.source,
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete uploaded Hook Skill');
+    }
+  });
+
   router.get('/hooks/:hookId', (req, res) => {
     try {
       const hook = hookConfigs.getHook(req.params.hookId);

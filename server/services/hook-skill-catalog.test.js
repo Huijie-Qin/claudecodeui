@@ -38,7 +38,6 @@ test('Hook configuration lists only registered built-in Skills', async () => {
       displayName: builtinSkill.displayName,
       description: builtinSkill.description,
       version: builtinSkill.version,
-      source: 'packaged',
     }],
     source: { type: 'builtin', available: true },
   });
@@ -63,7 +62,6 @@ test('Hook publish accepts a registered built-in Skill', async () => {
     displayName: builtinSkill.displayName,
     description: builtinSkill.description,
     version: builtinSkill.version,
-    source: 'packaged',
   }]);
 });
 
@@ -74,7 +72,6 @@ test('Hook catalog uploads and returns an admin-managed built-in Skill', async (
     displayName: 'uploaded-notifier',
     description: 'Uploaded notification Skill',
     version: 1,
-    source: 'uploaded',
   };
   const calls = [];
   const service = createHookSkillCatalogService({
@@ -91,6 +88,26 @@ test('Hook catalog uploads and returns an admin-managed built-in Skill', async (
     uploaded,
   );
   assert.deepEqual(calls, [{ fileName: 'SKILL.md', fileBuffer }]);
+});
+
+test('Hook catalog deletes only through the managed Skill store', async () => {
+  const uploaded = {
+    skillId: 'builtin:uploaded-notifier',
+    name: 'uploaded-notifier',
+    displayName: 'uploaded-notifier',
+    description: 'Uploaded notification Skill',
+    version: 1,
+  };
+  const calls = [];
+  const service = createHookSkillCatalogService({
+    deleteManagedSkill: async (input) => {
+      calls.push(input);
+      return uploaded;
+    },
+  });
+
+  assert.deepEqual(await service.deleteBuiltinSkill({ skillId: uploaded.skillId }), uploaded);
+  assert.deepEqual(calls, [{ skillId: uploaded.skillId }]);
 });
 
 test('Hook publish rejects public-market and forged built-in Skill references', async () => {

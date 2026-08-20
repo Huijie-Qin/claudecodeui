@@ -522,9 +522,12 @@
       "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
       "upload": "Upload Skill file",
       "uploading": "Uploading",
-      "packaged": "Packaged",
-      "uploaded": "Admin upload",
       "empty": "No built-in Hook Skills",
+      "allList": "All built-in Skills",
+      "delete": "Delete",
+      "confirmDelete": "Delete built-in Skill \"{{name}}\"? Hooks that reference it will keep their configuration and show an unavailable warning.",
+      "unavailableTitle": "Built-in Hook Skill unavailable",
+      "unavailableDescription": "Not found: {{skills}}. Edit the Hook and select an available built-in Skill.",
       "formatHint": "No extension, size, frontmatter-field, or body validation is applied. The name comes from frontmatter.name when present, or from the file name. Administrators are responsible for correctness."
     },
     "triggerEvent": "Trigger event",
@@ -950,7 +953,8 @@
       "stop": "Failed to stop Hook",
       "delete": "Failed to delete Hook",
       "saveSettings": "Failed to save Hook event settings",
-      "uploadSkill": "Failed to upload built-in Hook Skill"
+      "uploadSkill": "Failed to upload built-in Hook Skill",
+      "deleteSkill": "Failed to delete built-in Hook Skill"
     },
     "toast": {
       "saved": "Hook draft saved",
@@ -959,7 +963,8 @@
       "stopped": "Hook user bindings cleared",
       "deleted": "Hook deleted",
       "eventsSaved": "Visible trigger events saved",
-      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded"
+      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded",
+      "skillDeleted": "Built-in Hook Skill \"{{name}}\" deleted"
     }
   },
   "runtimes": {

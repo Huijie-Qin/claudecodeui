@@ -3,8 +3,10 @@ import {
   BookOpen,
   Building2,
   Check,
+  CircleAlert,
   Clock3,
   Database,
+  FileText,
   Globe2,
   Pencil,
   Plus,
@@ -26,6 +28,7 @@ import { api } from '../../utils/api';
 
 import HookConfigEditor from './hook-config/HookConfigEditor';
 import { EVENT_DEFINITIONS, EVENT_GROUPS, createEmptyHook } from './hook-config/catalog';
+import { findUnavailableHookSkills } from './hook-config/skillAvailability';
 import type {
   HookConfig,
   HookConfigDraft,
@@ -629,6 +632,7 @@ export default function HookConfigsTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [skillDeleteBusyId, setSkillDeleteBusyId] = useState<string | null>(null);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [exampleCatalog, setExampleCatalog] = useState<HookExampleCatalogItem[]>([]);
   const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
@@ -971,6 +975,29 @@ export default function HookConfigsTab() {
     }
   };
 
+  const deleteBuiltinSkill = async (skill: HookResources['skills'][number]) => {
+    if (!window.confirm(t('hooks.builtinSkills.confirmDelete', { name: skill.displayName || skill.name }))) return;
+    setSkillDeleteBusyId(skill.skillId);
+    try {
+      const response = await api.admin.deleteHookSkill(skill.skillId);
+      if (!response.ok) throw new Error(await readError(response, t('hooks.errors.deleteSkill')));
+      const payload = await response.json() as {
+        skills?: HookResources['skills'];
+        skillSource?: HookResources['skillSource'];
+      };
+      setResources((current) => ({
+        ...current,
+        skills: payload.skills || current.skills.filter((item) => item.skillId !== skill.skillId),
+        skillSource: payload.skillSource || current.skillSource,
+      }));
+      showToast(t('hooks.toast.skillDeleted', { name: skill.displayName || skill.name }), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.deleteSkill'), 'error');
+    } finally {
+      setSkillDeleteBusyId(null);
+    }
+  };
+
   const moreEventsDialog = (
     <MoreEventsDialog
       open={eventsOpen}
@@ -1144,24 +1171,61 @@ export default function HookConfigsTab() {
               </span>
             </label>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {resources.skills.length ? resources.skills.map((skill) => (
-              <span
-                key={skill.skillId}
-                className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs"
-                title={skill.description}
-              >
-                <code className="text-foreground">{skill.skillId}</code>
-                <Badge variant={skill.source === 'uploaded' ? 'default' : 'outline'}>
-                  {t(skill.source === 'uploaded'
-                    ? 'hooks.builtinSkills.uploaded'
-                    : 'hooks.builtinSkills.packaged')}
-                </Badge>
+          <div className="mt-3 overflow-hidden rounded-lg border border-border">
+            <div className="flex items-center justify-between gap-3 bg-muted/20 px-3 py-2">
+              <span className="text-xs font-medium text-foreground">
+                {t('hooks.builtinSkills.allList', { count: resources.skills.length })}
               </span>
-            )) : (
-              <span className="text-xs text-muted-foreground">{t('hooks.builtinSkills.empty')}</span>
+              <Badge variant="outline">{resources.skills.length}</Badge>
+            </div>
+            {resources.skills.length ? (
+              <div className="divide-y divide-border">
+                {resources.skills.map((skill) => (
+                  <div key={skill.skillId} className="flex min-w-0 items-center gap-3 px-3 py-2.5">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <FileText className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-xs font-medium text-foreground">
+                          {skill.displayName || skill.name}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">v{skill.version}</span>
+                      </div>
+                      <code className="block truncate text-[11px] text-muted-foreground" title={skill.skillId}>
+                        {skill.skillId}
+                      </code>
+                      {skill.description ? (
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={skill.description}>
+                          {skill.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-destructive hover:text-destructive"
+                      disabled={skillDeleteBusyId === skill.skillId}
+                      onClick={() => void deleteBuiltinSkill(skill)}
+                    >
+                      {skillDeleteBusyId === skill.skillId
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : <Trash2 className="h-3.5 w-3.5" />}
+                      {t('hooks.builtinSkills.delete')}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                {t('hooks.builtinSkills.empty')}
+              </p>
             )}
           </div>
+          {resources.skillSource?.error ? (
+            <p className="mt-2 text-xs text-destructive">{resources.skillSource.error}</p>
+          ) : null}
           <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
             {t('hooks.builtinSkills.formatHint')}
           </p>
@@ -1207,6 +1271,9 @@ export default function HookConfigsTab() {
           <div className="grid auto-rows-fr gap-3 lg:grid-cols-2">
             {filteredHooks.map((hook) => {
               const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
+              const unavailableSkills = resources.skillSource?.available === false
+                ? []
+                : findUnavailableHookSkills(hook, resources.skills);
               const isSqlCheckManaged = hook.bindingController === 'sql_check';
               const bindingActive = hook.activationScope === 'all_users'
                 || hook.boundTenantCount > 0
@@ -1263,6 +1330,20 @@ export default function HookConfigsTab() {
                     </div>
                   ) : null}
 
+                  {unavailableSkills.length > 0 ? (
+                    <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+                      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium">{t('hooks.builtinSkills.unavailableTitle')}</p>
+                        <p className="mt-0.5 break-words leading-4">
+                          {t('hooks.builtinSkills.unavailableDescription', {
+                            skills: unavailableSkills.map((issue) => issue.label).join('、'),
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
                     <span>
@@ -1295,7 +1376,7 @@ export default function HookConfigsTab() {
                       {t('hooks.bindings.manage')}
                     </Button>
                   ) : (
-                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void publishFromList(hook)}>
+                    <Button type="button" variant="ghost" size="sm" disabled={busy || unavailableSkills.length > 0} onClick={() => void publishFromList(hook)}>
                       {t('hooks.publish')}
                     </Button>
                   )}

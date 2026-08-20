@@ -1,4 +1,5 @@
 import {
+  deleteManagedBuiltinHookSkill,
   isBuiltinHookSkillId,
   listBuiltinHookSkills,
   saveManagedBuiltinHookSkill,
@@ -20,11 +21,11 @@ function normalizeBuiltinSkill(skill) {
     displayName: String(skill?.displayName || name).trim() || name,
     description: typeof skill?.description === 'string' ? skill.description : '',
     version: Number.isFinite(Number(skill?.version)) ? Number(skill.version) : 0,
-    source: skill?.source === 'uploaded' ? 'uploaded' : 'packaged',
   };
 }
 
 export function createHookSkillCatalogService({
+  deleteManagedSkill = deleteManagedBuiltinHookSkill,
   listBuiltinSkills = listBuiltinHookSkills,
   saveBuiltinSkill = saveManagedBuiltinHookSkill,
 } = {}) {
@@ -45,6 +46,10 @@ export function createHookSkillCatalogService({
 
     uploadBuiltinSkill: async ({ fileName, fileBuffer }) => (
       normalizeBuiltinSkill(await saveBuiltinSkill({ fileName, fileBuffer }))
+    ),
+
+    deleteBuiltinSkill: async ({ skillId }) => (
+      normalizeBuiltinSkill(await deleteManagedSkill({ skillId }))
     ),
 
     validateHookSkills: async ({ hook }) => {

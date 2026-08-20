@@ -476,9 +476,12 @@
       "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
       "upload": "上传 Skill 文件",
       "uploading": "正在上传",
-      "packaged": "镜像内置",
-      "uploaded": "管理员上传",
       "empty": "暂无内置 Hook Skill",
+      "allList": "全部内置 Skill",
+      "delete": "删除",
+      "confirmDelete": "删除内置 Skill“{{name}}”？引用它的 Hook 会保留配置并显示不可用提示。",
+      "unavailableTitle": "内置 Hook Skill 不可用",
+      "unavailableDescription": "未找到：{{skills}}。请编辑 Hook 并重新选择内置 Skill。",
       "formatHint": "不校验扩展名、大小、frontmatter 字段或正文内容。名称优先读取 frontmatter.name，否则使用文件名；请管理员自行保证文件可用。"
     },
     "triggerEvent": "触发位置",
@@ -898,7 +901,8 @@
       "stop": "停止 Hook 失败",
       "delete": "删除 Hook 失败",
       "saveSettings": "保存 Hook 事件设置失败",
-      "uploadSkill": "上传内置 Hook Skill 失败"
+      "uploadSkill": "上传内置 Hook Skill 失败",
+      "deleteSkill": "删除内置 Hook Skill 失败"
     },
     "toast": {
       "saved": "Hook 草稿已保存",
@@ -907,7 +911,8 @@
       "stopped": "Hook 用户绑定已清空",
       "deleted": "Hook 已删除",
       "eventsSaved": "可见触发位置已保存",
-      "skillUploaded": "内置 Hook Skill“{{name}}”已上传"
+      "skillUploaded": "内置 Hook Skill“{{name}}”已上传",
+      "skillDeleted": "内置 Hook Skill“{{name}}”已删除"
     }
   },
   "runtimes": {
