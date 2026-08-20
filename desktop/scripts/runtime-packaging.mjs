@@ -201,6 +201,22 @@ export function nodeDistributionUrl(
   return new URL(`v${NODE_VERSION}/${archiveName}`, parsed).href;
 }
 
+export function nodeDistributionCachePath(desktopDirectory, archiveName) {
+  if (typeof desktopDirectory !== 'string' || desktopDirectory.trim() === '') {
+    throw new TypeError('desktopDirectory is required to resolve the Node distribution cache.');
+  }
+  if (basename(archiveName) !== archiveName) {
+    throw new Error(`Invalid bundled Node archive name: ${archiveName}.`);
+  }
+  return join(
+    desktopDirectory,
+    '.cache',
+    'node',
+    `v${NODE_VERSION}`,
+    archiveName,
+  );
+}
+
 export function defaultClaudeTargetKeys(platform = process.platform, architecture = process.arch) {
   const key = `${platform}-${architecture}`;
   if (!CLAUDE_TARGETS.some((target) => target.key === key)) {
@@ -412,25 +428,43 @@ export function bundleClaudeExecutables({
   return manifest;
 }
 
-export function bundleNodeExecutables({ runtimeDirectory, targetKeys = defaultClaudeTargetKeys() }) {
+export function bundleNodeExecutables({
+  desktopDirectory,
+  runtimeDirectory,
+  targetKeys = defaultClaudeTargetKeys(),
+}) {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'cloudcli-node-distribution-'));
   const bundledTargets = [];
   try {
     for (const target of selectedNodeTargets(targetKeys)) {
       const archivePath = join(temporaryDirectory, target.archiveName);
       const downloadUrl = nodeDistributionUrl(target.archiveName);
-      runCommand('curl', [
-        '--fail',
-        '--location',
-        '--retry',
-        '3',
-        '--output',
-        archivePath,
-        downloadUrl,
-      ], { stdio: 'inherit' });
+      const cachePath = nodeDistributionCachePath(desktopDirectory, target.archiveName);
+      const cacheHit = existsSync(cachePath);
+      if (cacheHit) {
+        cpSync(cachePath, archivePath);
+        console.log(`Using cached Node.js distribution: ${cachePath}`);
+      } else {
+        runCommand('curl', [
+          '--fail',
+          '--location',
+          '--retry',
+          '3',
+          '--output',
+          archivePath,
+          downloadUrl,
+        ], { stdio: 'inherit' });
+      }
       const archiveChecksum = sha256File(archivePath);
       if (archiveChecksum !== target.archiveSha256) {
-        throw new Error(`${target.archiveName} failed the official Node.js SHA-256 verification.`);
+        throw new Error(
+          `${target.archiveName} failed the official Node.js SHA-256 verification${cacheHit ? ` at ${cachePath}` : ''}.`,
+        );
+      }
+      if (!cacheHit) {
+        mkdirSync(dirname(cachePath), { recursive: true });
+        cpSync(archivePath, cachePath);
+        console.log(`Cached Node.js distribution at: ${cachePath}`);
       }
 
       const extractDirectory = join(temporaryDirectory, `extract-${target.key}`);

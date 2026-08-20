@@ -38,6 +38,7 @@ export function claudeExecutableRelativePath(targetKey: string): string;
 export function nodeExecutableRelativePath(targetKey: string): string;
 export function nodeToolchainBinRelativePath(targetKey: string): string;
 export function nodeDistributionUrl(archiveName: string, baseUrl?: string): string;
+export function nodeDistributionCachePath(desktopDirectory: string, archiveName: string): string;
 export function defaultClaudeTargetKeys(platform?: string, architecture?: string): string[];
 export function parseClaudeTargetKeys(value: string): string[];
 export function resolveCommandInvocation(

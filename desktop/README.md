@@ -53,6 +53,12 @@ failure.
 
 Every build performs the root web/server build with `VITE_IS_PLATFORM=false` before compiling Electron. Runtime preparation uses the root lock file, installs required production dependencies with lifecycle scripts disabled via `--ignore-scripts` and optional platform packages omitted via `--omit=optional`, and then bundles the exact selected Claude platform packages locked alongside `@anthropic-ai/claude-agent-sdk`. Both the package archive integrity and the executable checksum from the SDK manifest are verified. It also downloads the official Node.js 24.18.1 distributions (including their npm CLI) for the selected targets and verifies their archives against pinned hashes from Node.js's published `SHASUMS256.txt`; this version is checked against Electron's embedded Node version during preparation. Target-local `npm` and `npx` launchers use that standalone Node runtime, while keeping npm inside the desktop-only package avoids increasing normal Web installations. `better-sqlite3`, `bcrypt`, and `node-pty` are rebuilt for Electron in the packaged app once per target architecture.
 
+Node distributions are cached under `desktop/.cache/node/v24.18.1/`. An offline
+Windows build can place the official `node-v24.18.1-win-x64.zip` in that directory
+before running `npm run desktop:package:win`; the archive is still checked against
+the pinned official SHA-256 and a mismatched cache entry fails closed. Successful
+online downloads populate the same ignored cache automatically for later builds.
+
 ## Runtime security model
 
 - The main window uses a persistent `persist:cloudcli` Chromium session, sandboxing, context isolation, and no Node integration or `<webview>` support.

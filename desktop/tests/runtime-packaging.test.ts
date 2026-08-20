@@ -26,6 +26,7 @@ import {
   defaultClaudeTargetKeys,
   nodeExecutableRelativePath,
   nodeDistributionUrl,
+  nodeDistributionCachePath,
   nodeToolchainBinRelativePath,
   patchRuntimeNodePty,
   refreshBundledNodeToolchain,
@@ -213,6 +214,16 @@ describe('desktop runtime packaging', () => {
       .toBe(join('node', 'darwin-x64', 'bin'));
     expect(nodeDistributionUrl('node-v24.18.1-win-x64.zip'))
       .toBe('https://nodejs.org/dist/v24.18.1/node-v24.18.1-win-x64.zip');
+    expect(nodeDistributionCachePath(
+      'C:\\workspace\\cloudcli\\desktop',
+      'node-v24.18.1-win-x64.zip',
+    )).toBe(join(
+      'C:\\workspace\\cloudcli\\desktop',
+      '.cache',
+      'node',
+      'v24.18.1',
+      'node-v24.18.1-win-x64.zip',
+    ));
     expect(nodeDistributionUrl(
       'node-v24.18.1-win-x64.zip',
       'https://npmmirror.com/mirrors/node/',
@@ -224,6 +235,8 @@ describe('desktop runtime packaging', () => {
     expect(() => nodeDistributionUrl('node.zip', 'https://user@example.test/node'))
       .toThrow(/without credentials/u);
     expect(() => nodeDistributionUrl('../node.zip'))
+      .toThrow(/Invalid bundled Node archive name/u);
+    expect(() => nodeDistributionCachePath('/desktop', '../node.zip'))
       .toThrow(/Invalid bundled Node archive name/u);
   });
 
