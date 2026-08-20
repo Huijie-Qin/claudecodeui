@@ -35,6 +35,13 @@ export type WorkspaceSkillEntry = {
   mimeType?: string;
 };
 
+export type SkillDetailVersionFields = {
+  importedVersion?: number;
+  localVersion?: number;
+  marketVersion?: number;
+  version?: number;
+};
+
 const KIND_ORDER: Record<WorkspaceSkillKind, number> = {
   managed: 0,
   unmanaged: 1,
@@ -75,6 +82,20 @@ export function getSkillStatusLabelKey(skill: WorkspaceSkill): string {
 
 export function getSkillDisplayName(skill: WorkspaceSkill): string {
   return skill.displayName || skill.name;
+}
+
+export function getSkillDetailDisplayVersions(detail: SkillDetailVersionFields): {
+  localVersion?: number;
+  marketVersion?: number;
+} {
+  return {
+    marketVersion: typeof detail.marketVersion === 'number'
+      ? detail.marketVersion
+      : typeof detail.version === 'number' ? detail.version : undefined,
+    localVersion: typeof detail.localVersion === 'number'
+      ? detail.localVersion
+      : typeof detail.importedVersion === 'number' ? detail.importedVersion : undefined,
+  };
 }
 
 function getSkillSearchText(skill: WorkspaceSkill): string {

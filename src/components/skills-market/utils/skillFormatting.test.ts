@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   filterWorkspaceSkills,
+  getSkillDetailDisplayVersions,
   getSkillKindLabelKey,
   getSkillStatusLabelKey,
   sortWorkspaceSkills,
@@ -62,4 +63,27 @@ test('skill label helpers return translation keys for kind and status', () => {
   assert.equal(getSkillKindLabelKey(skills[1]), 'skillsMarket.kind.managed');
   assert.equal(getSkillStatusLabelKey(skills[1]), 'skillsMarket.status.enabled');
   assert.equal(getSkillStatusLabelKey(skills[2]), 'skillsMarket.status.invalid');
+});
+
+test('getSkillDetailDisplayVersions prefers normalized version fields', () => {
+  assert.deepEqual(getSkillDetailDisplayVersions({
+    version: 2,
+    marketVersion: 3,
+    importedVersion: 1,
+    localVersion: 2,
+  }), {
+    marketVersion: 3,
+    localVersion: 2,
+  });
+});
+
+test('getSkillDetailDisplayVersions falls back to compatible version fields', () => {
+  assert.deepEqual(getSkillDetailDisplayVersions({ version: 3, importedVersion: 2 }), {
+    marketVersion: 3,
+    localVersion: 2,
+  });
+  assert.deepEqual(getSkillDetailDisplayVersions({}), {
+    marketVersion: undefined,
+    localVersion: undefined,
+  });
 });

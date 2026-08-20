@@ -28,7 +28,7 @@ import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
 import SkillFileTree from './SkillFileTree';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
-import type { WorkspaceSkill, WorkspaceSkillEntry } from './utils/skillFormatting';
+import { getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
 
 type SkillsWorkspacePanelProps = {
   selectedProject: Project;
@@ -834,6 +834,7 @@ function SkillDetailView({
   const isLocalOrigin = source === 'mine' && detail.origin === 'local';
   const marketInstalled = source === 'market' ? detail.imported === true : detail.origin === 'market';
   const updateAvailable = detail.updateAvailable === true;
+  const displayVersions = getSkillDetailDisplayVersions(detail);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -880,10 +881,8 @@ function SkillDetailView({
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">{detail.description || '暂无描述'}</p>
                 <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                  {typeof detail.version === 'number' ? <span>市场版本 v{detail.version}</span> : null}
-                  {typeof detail.marketVersion === 'number' ? <span>市场版本 v{detail.marketVersion}</span> : null}
-                  {typeof detail.importedVersion === 'number' ? <span>本地版本 v{detail.importedVersion}</span> : null}
-                  {typeof detail.localVersion === 'number' ? <span>本地版本 v{detail.localVersion}</span> : null}
+                  {typeof displayVersions.marketVersion === 'number' ? <span>市场版本 v{displayVersions.marketVersion}</span> : null}
+                  {typeof displayVersions.localVersion === 'number' ? <span>本地版本 v{displayVersions.localVersion}</span> : null}
                   {detail.createUserId ? <span>创建者 {detail.createUserId}</span> : null}
                 </div>
               </div>
