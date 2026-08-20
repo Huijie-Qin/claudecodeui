@@ -16,6 +16,7 @@ import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.
 import { hookConfigService } from '../services/hook-configs.js';
 import { createRequestedHookExamples, listRequestedHookExamples } from '../services/hook-examples.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
+import { scheduledTaskLogStore } from '../services/scheduled-task-log-store.js';
 import {
   FEATURE_FLAGS,
   featureFlagsService,
@@ -415,6 +416,7 @@ export function createAdminRouter(
   featureFlags = featureFlagsService,
   showExperimentalFeatures = shouldShowExperimentalFeatures,
   hookSkillCatalog = createHookSkillCatalogService(),
+  scheduledTaskLogs = scheduledTaskLogStore,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -1425,6 +1427,18 @@ export function createAdminRouter(
         return res.status(503).json({ error: message });
       }
       return sendRouteError(res, error, 'Failed to stop runtime');
+    }
+  });
+
+  router.get('/scheduled-task-logs', (req, res) => {
+    try {
+      return res.json(scheduledTaskLogs.list(req.query));
+    } catch (error) {
+      if (error?.statusCode === 400) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error('[ScheduledTasks] Failed to list admin logs:', error);
+      return res.status(500).json({ error: 'Failed to list scheduled task logs' });
     }
   });
 

@@ -89,6 +89,32 @@ test('buildClaudeUserMessage keeps display metadata out of model content', async
   assert.equal(message.message.content.includes('/report-skill'), false);
 });
 
+test('buildClaudeUserMessage preserves native multiline skill invocations exactly', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const invocation = '/report-skill\n第一行\n第二行\n\n```json\n{"sentinel":"FINAL_LINE"}\n```';
+
+  const message = claudeSdk.buildClaudeUserMessage(invocation, []);
+
+  assert.equal(message.message.content, invocation);
+});
+
+test('resolveClaudeSupplementPayload validates without trimming native skill content', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const invocation = '/report-skill\n第一行\n第二行\n';
+
+  const payload = claudeSdk.resolveClaudeSupplementPayload({
+    sessionId: '  session-1  ',
+    content: invocation,
+  });
+
+  assert.deepEqual(payload, {
+    sessionId: 'session-1',
+    content: invocation,
+    displayContent: invocation,
+    valid: true,
+  });
+});
+
 test('createClaudePromptFactory creates native image content blocks', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

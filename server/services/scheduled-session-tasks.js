@@ -13,6 +13,10 @@ import {
   resolveScheduledTaskResumeSession,
   sanitizeScheduledTaskEvent,
 } from './scheduled-task-execution.js';
+import {
+  formatScheduledTaskError,
+  scheduledTaskLogger,
+} from './scheduled-task-logger.js';
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
@@ -185,6 +189,36 @@ function isResumableSessionId(sessionId) {
   );
 }
 
+function getTaskLogContext(task, details = {}) {
+  return {
+    taskId: task?.id,
+    tenantId: task?.tenant_id,
+    workspaceId: task?.workspace_id,
+    userId: task?.user_id,
+    provider: task?.provider,
+    scheduleType: task?.schedule_type || 'interval',
+    sessionMode: task?.session_mode || 'new',
+    scheduledFor: task?.next_run_at,
+    nextRunAt: task?.claimed_next_run_at,
+    ...details,
+  };
+}
+
+function createRunId(task, runStartedAt) {
+  const scheduledForMs = Date.parse(task?.next_run_at);
+  const runTimestamp = Number.isFinite(scheduledForMs)
+    ? scheduledForMs
+    : Date.parse(runStartedAt);
+  return `scheduled-task-${task.id}-${runTimestamp}`;
+}
+
+function getScheduleDelayMs(task, runStartedAt) {
+  const scheduledForMs = Date.parse(task?.next_run_at);
+  const startedAtMs = Date.parse(runStartedAt);
+  if (!Number.isFinite(scheduledForMs) || !Number.isFinite(startedAtMs)) return undefined;
+  return Math.max(0, startedAtMs - scheduledForMs);
+}
+
 class ScheduledTaskWriter {
   constructor({ task, clients }) {
     this.task = task;
@@ -272,7 +306,7 @@ class ScheduledTaskWriter {
   }
 }
 
-function hasBoundClaudeRuntime(task, sessionId) {
+function hasBoundClaudeRuntime(task, sessionId, logger) {
   if (task.provider !== 'claude' || !isResumableSessionId(sessionId)) {
     return true;
   }
@@ -290,12 +324,15 @@ function hasBoundClaudeRuntime(task, sessionId) {
       providerSessionId: sessionId,
     }));
   } catch (error) {
-    console.warn(`[ScheduledTasks] Failed to verify Claude runtime for task ${task.id}:`, error?.message || error);
+    logger.warn('task_resume_runtime_verification_failed', getTaskLogContext(task, {
+      sessionId,
+      error: formatScheduledTaskError(error),
+    }));
     return false;
   }
 }
 
-function createScheduledTaskOptions(task) {
+function createScheduledTaskOptions(task, logger) {
   const toolsSettings = parseOptionalJson(task.tools_settings_json) || {};
   const boundSessionId = typeof task.last_session_id === 'string' && task.last_session_id.trim()
     ? task.last_session_id.trim()
@@ -304,7 +341,7 @@ function createScheduledTaskOptions(task) {
     sessionMode: task.session_mode || 'new',
     sessionId: boundSessionId,
     isResumable: isResumableSessionId,
-    canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId),
+    canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId, logger),
   });
   const baseOptions = {
     tenantId: task.tenant_id,
@@ -339,12 +376,10 @@ function isInvalidClaudeResumeError(errorMessage) {
   return /--resume requires a valid session ID/i.test(String(errorMessage || ''));
 }
 
-async function runProviderTask(task, writer) {
-  const options = createScheduledTaskOptions(task);
+async function runProviderTask(task, writer, logger) {
+  const options = createScheduledTaskOptions(task, logger);
   const { displayPrompt, modelPrompt } = await resolveScheduledTaskPrompts({
-    provider: task.provider,
     prompt: task.prompt,
-    workspacePath: task.workspace_path,
   });
   writer.setPromptDisplay?.({ displayPrompt, modelPrompt });
 
@@ -357,9 +392,9 @@ async function runProviderTask(task, writer) {
   } else {
     await queryClaudeSDK(modelPrompt, options, writer);
     if (options.resume && isInvalidClaudeResumeError(writer.getLastError?.())) {
-      console.warn(
-        `[ScheduledTasks] Task ${task.id} could not resume Claude session ${options.sessionId}; retrying with a new session`,
-      );
+      logger.warn('task_resume_retrying_as_new_session', getTaskLogContext(task, {
+        sessionId: options.sessionId,
+      }));
       writer.clearLastError?.();
       await queryClaudeSDK(modelPrompt, {
         ...options,
@@ -370,9 +405,15 @@ async function runProviderTask(task, writer) {
   }
 }
 
-export function createScheduledSessionTaskService({ clients = null, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+export function createScheduledSessionTaskService({
+  clients = null,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+  logger = scheduledTaskLogger,
+  runProvider = runProviderTask,
+} = {}) {
   const activeRuns = new Set();
   let timer = null;
+  let tickSequence = 0;
 
   const service = {
     list({ tenantId, userId, workspaceId = null }) {
@@ -685,22 +726,36 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         LIMIT ?
       `).all(now, limit);
 
-      for (const row of rows) {
+      return rows.map((row) => {
+        const nextRunAt = computeNextRunAtAfterClaim(row);
         db.prepare(`
           UPDATE scheduled_session_tasks
           SET next_run_at = ?,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).run(computeNextRunAtAfterClaim(row), row.id);
-      }
-
-      return rows;
+        `).run(nextRunAt, row.id);
+        return {
+          ...row,
+          claimed_next_run_at: nextRunAt,
+        };
+      });
     },
 
-    async runTask(task) {
-      if (activeRuns.has(task.id)) return;
-      activeRuns.add(task.id);
+    async runTask(task, { tickId = null } = {}) {
       const runStartedAt = new Date().toISOString();
+      const runId = createRunId(task, runStartedAt);
+      const logContext = getTaskLogContext(task, {
+        tickId,
+        runId,
+        runStartedAt,
+        scheduleDelayMs: getScheduleDelayMs(task, runStartedAt),
+      });
+      if (activeRuns.has(task.id)) {
+        logger.warn('task_skipped_already_running', logContext);
+        return;
+      }
+      activeRuns.add(task.id);
+      logger.info('task_started', logContext);
       const runSessionSummary = buildScheduledTaskRunSessionSummary({
         taskName: task.name,
         sessionMode: task.session_mode,
@@ -712,11 +767,14 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
         run_session_summary: runSessionSummary,
       };
       const writer = new ScheduledTaskWriter({ task: currentRun, clients });
+      let stage = 'preflight';
       try {
         if (currentRun.workspace_status !== 'active') {
           throw new Error('Workspace is not active');
         }
-        await runProviderTask(currentRun, writer);
+        stage = 'provider_execution';
+        await runProvider(currentRun, writer, logger);
+        stage = 'result_persistence';
         service.markRunResult({
           taskId: currentRun.id,
           sessionId: writer.getSessionId(),
@@ -725,9 +783,32 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
           sessionSummary: runSessionSummary,
           runStartedAt,
         });
+        const providerError = writer.getLastError();
+        const resultContext = {
+          ...logContext,
+          durationMs: Date.now() - Date.parse(runStartedAt),
+          sessionId: writer.getSessionId(),
+          observedSessionId: writer.getObservedSessionId(),
+        };
+        if (providerError) {
+          logger.error('task_failed', {
+            ...resultContext,
+            failureStage: 'provider_result',
+            error: formatScheduledTaskError(providerError),
+          });
+        } else {
+          logger.info('task_succeeded', resultContext);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`[ScheduledTasks] Task ${task.id} failed:`, message);
+        logger.error('task_failed', {
+          ...logContext,
+          durationMs: Date.now() - Date.parse(runStartedAt),
+          failureStage: stage,
+          sessionId: writer.getSessionId(),
+          observedSessionId: writer.getObservedSessionId(),
+          error: formatScheduledTaskError(error),
+        });
         service.markRunResult({
           taskId: currentRun.id,
           sessionId: writer.getSessionId(),
@@ -750,34 +831,70 @@ export function createScheduledSessionTaskService({ clients = null, pollInterval
               scheduledTaskId: task.id,
             },
           }).catch((error) => {
-            console.error('[workspace-ownership] Failed after scheduled provider task:', error);
+            logger.error('task_workspace_ownership_restore_failed', {
+              ...logContext,
+              error: formatScheduledTaskError(error),
+            });
           });
         }
         activeRuns.delete(task.id);
       }
     },
 
-    async tick() {
-      const dueTasks = service.claimDueTasks();
-      await Promise.all(dueTasks.map((task) => service.runTask(task)));
+    async tick({ trigger = 'manual' } = {}) {
+      const tickStartedAt = new Date().toISOString();
+      const tickId = `scheduled-tick-${process.pid}-${Date.now()}-${++tickSequence}`;
+      logger.debug('tick_started', { tickId, trigger, tickStartedAt });
+      try {
+        const dueTasks = service.claimDueTasks();
+        if (dueTasks.length > 0) {
+          logger.info('due_tasks_claimed', {
+            tickId,
+            trigger,
+            claimedCount: dueTasks.length,
+            tasks: dueTasks.map((task) => getTaskLogContext(task)),
+          });
+        }
+        await Promise.all(dueTasks.map((task) => service.runTask(task, { tickId })));
+        const completedDetails = {
+          tickId,
+          trigger,
+          claimedCount: dueTasks.length,
+          durationMs: Date.now() - Date.parse(tickStartedAt),
+        };
+        if (dueTasks.length > 0) {
+          logger.info('tick_completed', completedDetails);
+        } else {
+          logger.debug('tick_completed', completedDetails);
+        }
+      } catch (error) {
+        logger.error('tick_failed', {
+          tickId,
+          trigger,
+          durationMs: Date.now() - Date.parse(tickStartedAt),
+          error: formatScheduledTaskError(error),
+        });
+        throw error;
+      }
     },
 
     start() {
       if (timer) return;
-      timer = setInterval(() => {
-        service.tick().catch((error) => {
-          console.error('[ScheduledTasks] Tick failed:', error);
-        });
-      }, pollIntervalMs);
-      service.tick().catch((error) => {
-        console.error('[ScheduledTasks] Initial tick failed:', error);
+      logger.info('scheduler_started', {
+        pollIntervalMs,
+        maxDueTasksPerTick: MAX_DUE_TASKS_PER_TICK,
       });
+      timer = setInterval(() => {
+        service.tick({ trigger: 'interval' }).catch(() => undefined);
+      }, pollIntervalMs);
+      service.tick({ trigger: 'initial' }).catch(() => undefined);
     },
 
     stop() {
       if (timer) {
         clearInterval(timer);
         timer = null;
+        logger.info('scheduler_stopped');
       }
     },
   };

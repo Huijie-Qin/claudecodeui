@@ -12,7 +12,8 @@
     "skillPresets": "Skill Presets",
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
-    "runtimes": "Runtime Monitor"
+    "runtimes": "Runtime Monitor",
+    "scheduledTaskLogs": "Scheduled Task Logs"
   },
   "experimental": {
     "warningTitle": "Experimental feature controls",
@@ -1006,6 +1007,35 @@
     "errors": {
       "load": "Failed to load runtimes",
       "stop": "Failed to stop runtime"
+    }
+  },
+  "scheduledTaskLogs": {
+    "title": "Scheduled task logs",
+    "description": "Review scheduler claims, executions, successes, and failures. Times use Asia/Shanghai.",
+    "retention": "Times use Asia/Shanghai; logs are kept for {{days}} days, up to {{maxRows}} rows.",
+    "autoRefresh": "Refresh every 10 seconds",
+    "refresh": "Refresh logs",
+    "expand": "Expand log details",
+    "collapse": "Collapse log details",
+    "empty": "No scheduled task logs match the filters",
+    "filters": {
+      "searchPlaceholder": "Search task, tenant, user, workspace, run ID, or error"
+    },
+    "table": {
+      "time": "Time (Shanghai)",
+      "task": "Task / workspace",
+      "scope": "Tenant / user",
+      "result": "Result"
+    },
+    "pagination": {
+      "pageSize": "Logs per page",
+      "total": "{{count}} total",
+      "page": "Page {{page}} / {{totalPages}}",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "errors": {
+      "load": "Failed to load scheduled task logs"
     }
   }
 }

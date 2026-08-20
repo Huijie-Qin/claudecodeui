@@ -11,7 +11,8 @@
     "skillPresets": "Skill 预置",
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
-    "runtimes": "运行时监控"
+    "runtimes": "运行时监控",
+    "scheduledTaskLogs": "定时任务日志"
   },
   "experimental": {
     "warningTitle": "实验功能控制",
@@ -954,6 +955,35 @@
     "errors": {
       "load": "加载运行时失败",
       "stop": "停止运行时失败"
+    }
+  },
+  "scheduledTaskLogs": {
+    "title": "定时任务日志",
+    "description": "查看调度领取、执行、成功和失败日志。时间统一按上海时区展示。",
+    "retention": "时间按上海时区展示；日志保留 {{days}} 天，最多 {{maxRows}} 条。",
+    "autoRefresh": "每 10 秒自动刷新",
+    "refresh": "刷新日志",
+    "expand": "展开日志详情",
+    "collapse": "收起日志详情",
+    "empty": "暂无符合条件的定时任务日志",
+    "filters": {
+      "searchPlaceholder": "搜索任务、租户、用户、工作区、Run ID 或错误"
+    },
+    "table": {
+      "time": "时间（上海）",
+      "task": "任务 / 工作区",
+      "scope": "租户 / 用户",
+      "result": "结果"
+    },
+    "pagination": {
+      "pageSize": "每页日志数",
+      "total": "共 {{count}} 条",
+      "page": "第 {{page}} / {{totalPages}} 页",
+      "previous": "上一页",
+      "next": "下一页"
+    },
+    "errors": {
+      "load": "加载定时任务日志失败"
     }
   }
 }

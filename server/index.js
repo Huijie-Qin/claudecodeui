@@ -84,6 +84,8 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
+import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
@@ -612,7 +614,13 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
-const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
+const scheduledTaskLogger = createScheduledTaskLogger({
+    onEntry: (entry) => scheduledTaskLogStore.append(entry)
+});
+const scheduledSessionTasks = createScheduledSessionTaskService({
+    clients: connectedClients,
+    logger: scheduledTaskLogger
+});
 app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));

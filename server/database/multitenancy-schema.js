@@ -407,4 +407,30 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_session_tasks_due
   ON scheduled_session_tasks(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_session_tasks_owner
   ON scheduled_session_tasks(tenant_id, workspace_id, user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS scheduled_task_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('debug', 'info', 'warn', 'error')),
+  event TEXT NOT NULL,
+  process_id INTEGER,
+  task_id INTEGER,
+  tenant_id INTEGER,
+  workspace_id INTEGER,
+  user_id INTEGER,
+  provider TEXT,
+  tick_id TEXT,
+  run_id TEXT,
+  details_json TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_timestamp
+  ON scheduled_task_logs(timestamp DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_level_event
+  ON scheduled_task_logs(level, event, id DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task
+  ON scheduled_task_logs(task_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_scope
+  ON scheduled_task_logs(tenant_id, workspace_id, user_id, id DESC);
 `;

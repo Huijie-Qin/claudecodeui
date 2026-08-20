@@ -1768,6 +1768,21 @@ function sendWriterMessage(writer, message) {
   writer.send(message);
 }
 
+function resolveClaudeSupplementPayload({ sessionId, content, displayContent = null } = {}) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const modelContent = typeof content === 'string' ? content : '';
+  const visibleContent = typeof displayContent === 'string' && displayContent.trim()
+    ? displayContent
+    : modelContent;
+
+  return {
+    sessionId: normalizedSessionId,
+    content: modelContent,
+    displayContent: visibleContent,
+    valid: Boolean(normalizedSessionId && modelContent.trim()),
+  };
+}
+
 function pushClaudeSupplement({
   sessionId,
   content,
@@ -1776,15 +1791,13 @@ function pushClaudeSupplement({
   mode = 'now',
   writer = null,
 } = {}) {
-  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-  const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedDisplayContent =
-    typeof displayContent === 'string' && displayContent.trim()
-      ? displayContent.trim()
-      : normalizedContent;
-  if (!normalizedSessionId || !normalizedContent) {
+  const supplement = resolveClaudeSupplementPayload({ sessionId, content, displayContent });
+  if (!supplement.valid) {
     return { success: false, error: 'sessionId and content are required' };
   }
+  const normalizedSessionId = supplement.sessionId;
+  const normalizedContent = supplement.content;
+  const normalizedDisplayContent = supplement.displayContent;
 
   const session = getSession(normalizedSessionId);
   if (!session?.inputQueue) {
@@ -1898,4 +1911,5 @@ export {
   pushClaudeSupplement,
   createClaudePromptFactory,
   buildClaudeUserMessage,
+  resolveClaudeSupplementPayload,
 };

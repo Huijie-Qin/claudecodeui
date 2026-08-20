@@ -561,6 +561,8 @@ export const api = {
       }),
     runtimes: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes${buildRuntimeQueryString(filters)}`),
+    scheduledTaskLogs: (filters = {}) =>
+      authenticatedFetch(`/api/admin/scheduled-task-logs${buildQueryString(filters)}`),
     runtimeSummary: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes/summary${buildRuntimeQueryString(filters)}`),
     stopRuntime: (runtimeId) =>

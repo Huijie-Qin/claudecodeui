@@ -8,6 +8,31 @@ interface SlashCommandArguments {
   rawArgs: string;
 }
 
+interface SkillSlashCommandLike {
+  namespace?: unknown;
+  metadata?: {
+    type?: unknown;
+  } | null;
+}
+
+export const getLeadingSlashCommandName = (input: string): string | null => {
+  const match = input.match(/^\s*(\/\S+)(?=\s|$)/);
+  return match?.[1] || null;
+};
+
+export const isSkillSlashCommand = (command: SkillSlashCommandLike | null | undefined): boolean => {
+  if (!command) {
+    return false;
+  }
+
+  const namespace = String(command.namespace || '');
+  return command.metadata?.type === 'skill' || namespace.includes('skill');
+};
+
+export const shouldExpandSlashCommand = (command: SkillSlashCommandLike | null | undefined): boolean => {
+  return Boolean(command && !isSkillSlashCommand(command));
+};
+
 export const extractSlashCommandArguments = ({
   commandName,
   input,

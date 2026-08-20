@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  ScrollText,
   Trash2,
   UserMinus,
   UserPlus,
@@ -50,6 +51,7 @@ import AnalyticsDashboardTab from './AnalyticsDashboardTab';
 import HookConfigsTab from './HookConfigsTab';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
+import ScheduledTaskLogsTab from './ScheduledTaskLogsTab';
 import SkillPresetsTab from './SkillPresetsTab';
 import SqlCheckConfigTab from './SqlCheckConfigTab';
 import ExperimentalFeaturesTab from './ExperimentalFeaturesTab';
@@ -92,7 +94,7 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'sqlCheck' | 'experimental';
+type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck' | 'experimental';
 
 type AdminTabConfig = {
   id: AdminTab;
@@ -110,6 +112,7 @@ const ADMIN_TABS: AdminTabConfig[] = [
   { id: 'hooks', labelKey: 'tabs.hooks', defaultLabel: 'Hooks', icon: Webhook },
   { id: 'sqlCheck', labelKey: 'tabs.sqlCheck', defaultLabel: 'SQL Check', icon: Database },
   { id: 'runtimes', labelKey: 'tabs.runtimes', defaultLabel: 'Runtime Monitor', icon: RefreshCw },
+  { id: 'scheduledTaskLogs', labelKey: 'tabs.scheduledTaskLogs', defaultLabel: 'Scheduled Task Logs', icon: ScrollText },
   { id: 'experimental', labelKey: 'tabs.experimental', defaultLabel: 'Experimental', icon: FlaskConical },
   { id: 'analytics', labelKey: 'tabs.analytics', defaultLabel: 'Analytics', icon: BarChart3 },
   { id: 'aiCode', labelKey: 'tabs.aiCode', defaultLabel: 'AI Code', icon: Code2 },
@@ -2072,6 +2075,12 @@ export default function AdminPanel() {
           {activeTab === 'runtimes' ? (
             <div className="h-full overflow-y-auto px-5 py-4">
               <RuntimeMonitorTab />
+            </div>
+          ) : null}
+
+          {activeTab === 'scheduledTaskLogs' ? (
+            <div className="h-full overflow-y-auto px-5 py-4">
+              <ScheduledTaskLogsTab />
             </div>
           ) : null}
 

@@ -9,6 +9,7 @@ import type { LLMProvider, Project } from '../../../../types/app';
 import { Button, Dialog, DialogContent, DialogTitle } from '../../../../shared/view/ui';
 import { type MentionableFile, useFileMentions } from '../../hooks/useFileMentions';
 import { type SlashCommand, useSlashCommands } from '../../hooks/useSlashCommands';
+import { isSkillSlashCommand } from '../../hooks/useSlashCommands.utils';
 
 import CommandMenu from './CommandMenu';
 
@@ -952,9 +953,8 @@ export default function ScheduledTasksDialog({
   );
 
   const isScheduledPromptCommand = useCallback((command: SlashCommand) => {
-    const namespace = String(command.namespace || '');
-    return command.metadata?.type === 'skill' || namespace.includes('skill');
-  }, []);
+    return provider === 'claude' && isSkillSlashCommand(command);
+  }, [provider]);
 
   const setTaskEditPrompt = useCallback<Dispatch<SetStateAction<string>>>((nextValue) => {
     setTaskEditForm((current) => {
