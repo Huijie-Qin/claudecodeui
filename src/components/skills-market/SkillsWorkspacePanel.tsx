@@ -5,10 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   FileCode2,
-  FilePlus2,
   FileText,
-  Folder,
-  FolderPlus,
   Loader2,
   Pencil,
   Plus,
@@ -28,6 +25,8 @@ import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandE
 import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
+import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
+import SkillFileTree from './SkillFileTree';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
 import type { WorkspaceSkill, WorkspaceSkillEntry } from './utils/skillFormatting';
 
@@ -81,6 +80,18 @@ type UploadPreview = {
   conflict?: { blocking?: boolean; type?: string };
 };
 
+type RemovalTarget = (RemovalDialogTarget & {
+  kind: 'entry';
+  entryPath: string;
+  skillName: string;
+}) | (RemovalDialogTarget & {
+  kind: 'local-skill';
+  skillName: string;
+}) | (RemovalDialogTarget & {
+  kind: 'market-skill';
+  skillName: string;
+});
+
 const MARKET_PAGE_SIZE = 20;
 
 export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: SkillsWorkspacePanelProps) {
@@ -115,6 +126,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [removalTarget, setRemovalTarget] = useState<RemovalTarget | null>(null);
   const mine = useWorkspaceSkills(workspaceId);
   const canManage = !isReadOnly && mine.data?.canManage !== false;
   const dirty = editing && file?.content !== editContent;
@@ -160,6 +172,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     setFile(null);
     setEditing(false);
     setMessage(null);
+    setRemovalTarget(null);
   }, [workspaceId]);
 
   useEffect(() => {
@@ -267,8 +280,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     void loadSkillFile(detailTarget, filePath);
   };
 
-  const leaveDetail = () => {
-    if (!guardUnsaved()) return;
+  const resetDetail = () => {
     setDetailTarget(null);
     setDetail(null);
     setSelectedFilePath(null);
@@ -276,6 +288,11 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     setFile(null);
     setEditing(false);
     setMessage(null);
+  };
+
+  const leaveDetail = () => {
+    if (!guardUnsaved()) return;
+    resetDetail();
   };
 
   const notifyWorkspaceChanged = (skillName: string, reason: string) => {
@@ -297,29 +314,22 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     await Promise.all([loadMarket(1, true), mine.reload()]);
   };
 
-  const runMarketAction = async (action: 'import' | 'update' | 'remove') => {
+  const runMarketAction = async (action: 'import' | 'update') => {
     if (!workspaceId || !detailTarget || actionLoading) return;
-    if (action === 'remove' && !window.confirm(`确定从当前工作区移除 ${detailTarget.name} 吗？`)) return;
     setActionLoading(true);
     setMessage(null);
     try {
       if (action === 'import') {
         await readPayload(await api.skillMarket.importSkill(workspaceId, detailTarget.name), '技能导入失败。');
-      } else if (action === 'update') {
-        await readPayload(await api.skillMarket.updateImport(workspaceId, detailTarget.name), '技能更新失败。');
       } else {
-        await readPayload(await api.skillMarket.remove(workspaceId, detailTarget.name), '技能移除失败。');
+        await readPayload(await api.skillMarket.updateImport(workspaceId, detailTarget.name), '技能更新失败。');
       }
       notifyWorkspaceChanged(detailTarget.name, `skill-market-${action}`);
       await refreshAll();
-      if (action === 'remove' && detailTarget.source === 'mine') {
-        leaveDetail();
-      } else {
-        await loadDetail(detailTarget, selectedFilePath);
-      }
+      await loadDetail(detailTarget, selectedFilePath);
       setMessage({
         kind: 'success',
-        text: action === 'import' ? '技能已导入。' : action === 'update' ? '技能已更新。' : '技能已移除。',
+        text: action === 'import' ? '技能已导入。' : '技能已更新。',
       });
     } catch (error) {
       setMessage({ kind: 'error', text: toErrorMessage(error, '技能操作失败。') });
@@ -355,11 +365,10 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     }
   };
 
-  const createEntry = async (type: 'file' | 'directory') => {
-    if (!workspaceId || !detailTarget || detail?.origin !== 'local') return;
-    const entryPath = window.prompt(type === 'file' ? '输入新文件路径' : '输入新文件夹路径');
-    if (!entryPath) return;
+  const createEntry = async (entryPath: string, type: 'file' | 'directory'): Promise<boolean> => {
+    if (!workspaceId || !detailTarget || detail?.origin !== 'local') return false;
     setActionLoading(true);
+    setMessage(null);
     try {
       await readPayload(
         await api.workspaceSkills.createEntry(workspaceId, detailTarget.name, { path: entryPath, type }),
@@ -367,64 +376,107 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
       );
       notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-entry-create');
       await loadDetail(detailTarget, type === 'file' ? entryPath : selectedFilePath);
+      if (type === 'directory') setSelectedEntryPath(entryPath);
       setMessage({ kind: 'success', text: type === 'file' ? '文件已创建。' : '文件夹已创建。' });
+      return true;
     } catch (error) {
       setMessage({ kind: 'error', text: toErrorMessage(error, '创建失败。') });
+      return false;
     } finally {
       setActionLoading(false);
     }
   };
 
-  const renameEntry = async () => {
-    if (!workspaceId || !detailTarget || !selectedEntryPath || selectedEntryPath === 'SKILL.md') return;
-    const nextPath = window.prompt('输入新的相对路径', selectedEntryPath);
-    if (!nextPath || nextPath === selectedEntryPath) return;
+  const renameEntry = async (entryPath: string, nextPath: string): Promise<boolean> => {
+    if (!workspaceId || !detailTarget || entryPath === 'SKILL.md' || nextPath === entryPath) return false;
     setActionLoading(true);
+    setMessage(null);
     try {
       await readPayload(
-        await api.workspaceSkills.renameEntry(workspaceId, detailTarget.name, { path: selectedEntryPath, nextPath }),
+        await api.workspaceSkills.renameEntry(workspaceId, detailTarget.name, { path: entryPath, nextPath }),
         '重命名失败。',
       );
       notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-entry-rename');
-      await loadDetail(detailTarget, nextPath);
+      const preferredFile = selectedFilePath && (selectedFilePath === entryPath || selectedFilePath.startsWith(`${entryPath}/`))
+        ? `${nextPath}${selectedFilePath.slice(entryPath.length)}`
+        : selectedFilePath;
+      await loadDetail(detailTarget, preferredFile);
+      setSelectedEntryPath(nextPath);
       setMessage({ kind: 'success', text: '已重命名。' });
+      return true;
     } catch (error) {
       setMessage({ kind: 'error', text: toErrorMessage(error, '重命名失败。') });
+      return false;
     } finally {
       setActionLoading(false);
     }
   };
 
-  const deleteEntry = async () => {
-    if (!workspaceId || !detailTarget || !selectedEntryPath || selectedEntryPath === 'SKILL.md') return;
-    if (!window.confirm(`确定删除 ${selectedEntryPath} 吗？`)) return;
-    setActionLoading(true);
-    try {
-      await readPayload(
-        await api.workspaceSkills.deleteEntry(workspaceId, detailTarget.name, selectedEntryPath),
-        '删除失败。',
-      );
-      notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-entry-delete');
-      await loadDetail(detailTarget);
-      setMessage({ kind: 'success', text: '已删除。' });
-    } catch (error) {
-      setMessage({ kind: 'error', text: toErrorMessage(error, '删除失败。') });
-    } finally {
-      setActionLoading(false);
-    }
+  const requestEntryRemoval = (entryPath: string) => {
+    if (!detailTarget || entryPath === 'SKILL.md') return;
+    const entry = detail?.files.find((candidate) => candidate.path === entryPath);
+    const isDirectory = entry?.type === 'directory' || detail?.files.some((candidate) => candidate.path.startsWith(`${entryPath}/`));
+    setRemovalTarget({
+      kind: 'entry',
+      entryPath,
+      skillName: detailTarget.name,
+      title: isDirectory ? '移除文件夹' : '移除文件',
+      description: isDirectory ? '这会移除该文件夹及其中的全部内容，此操作无法撤销。' : '这会从当前 Skill 中移除该文件，此操作无法撤销。',
+      path: `.claude/skills/${detailTarget.name}/${entryPath}`,
+    });
   };
 
-  const deleteLocalSkill = async () => {
-    if (!workspaceId || !detailTarget || detail?.origin !== 'local') return;
-    if (!window.confirm(`确定删除 .claude/skills/${detailTarget.name}/ 及其全部内容吗？`)) return;
+  const requestSkillRemoval = (kind: 'local-skill' | 'market-skill') => {
+    if (!detailTarget) return;
+    setRemovalTarget({
+      kind,
+      skillName: detailTarget.name,
+      title: '移除 Skill',
+      description: kind === 'market-skill'
+        ? '这会移除当前工作区中已导入的 Skill，远端技能市场中的内容不会被删除。'
+        : '这会移除该本地 Skill 及其中的全部内容，此操作无法撤销。',
+      path: `.claude/skills/${detailTarget.name}`,
+    });
+  };
+
+  const confirmRemoval = async () => {
+    if (!workspaceId || !detailTarget || !removalTarget || actionLoading) return;
+    const target = removalTarget;
     setActionLoading(true);
+    setMessage(null);
     try {
-      await readPayload(await api.workspaceSkills.deleteLocal(workspaceId, detailTarget.name), '技能删除失败。');
-      notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-delete');
-      await mine.reload();
-      leaveDetail();
+      if (target.kind === 'market-skill') {
+        await readPayload(await api.skillMarket.remove(workspaceId, target.skillName), '技能移除失败。');
+        notifyWorkspaceChanged(target.skillName, 'skill-market-remove');
+        await refreshAll();
+        if (detailTarget.source === 'mine') {
+          resetDetail();
+        } else {
+          await loadDetail(detailTarget, selectedFilePath);
+        }
+        setMessage({ kind: 'success', text: '技能已移除。' });
+      } else if (target.kind === 'local-skill') {
+        await readPayload(await api.workspaceSkills.deleteLocal(workspaceId, target.skillName), '技能移除失败。');
+        notifyWorkspaceChanged(target.skillName, 'workspace-skill-delete');
+        await mine.reload();
+        resetDetail();
+        setMessage({ kind: 'success', text: '技能已移除。' });
+      } else {
+        await readPayload(
+          await api.workspaceSkills.deleteEntry(workspaceId, target.skillName, target.entryPath),
+          '移除失败。',
+        );
+        notifyWorkspaceChanged(target.skillName, 'workspace-skill-entry-delete');
+        const preferredFile = selectedFilePath && (
+          selectedFilePath === target.entryPath
+          || selectedFilePath.startsWith(`${target.entryPath}/`)
+        ) ? null : selectedFilePath;
+        await loadDetail(detailTarget, preferredFile);
+        setMessage({ kind: 'success', text: '已移除。' });
+      }
+      setRemovalTarget(null);
     } catch (error) {
-      setMessage({ kind: 'error', text: toErrorMessage(error, '技能删除失败。') });
+      setMessage({ kind: 'error', text: toErrorMessage(error, '移除失败。') });
     } finally {
       setActionLoading(false);
     }
@@ -524,15 +576,18 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           fileLoading={fileLoading}
           onBack={leaveDetail}
           onCreateEntry={createEntry}
-          onDeleteEntry={deleteEntry}
-          onDeleteLocalSkill={deleteLocalSkill}
+          onDeleteEntry={requestEntryRemoval}
+          onDeleteLocalSkill={() => requestSkillRemoval('local-skill')}
           onEditContent={setEditContent}
           onEditingChange={(nextEditing) => {
             if (!nextEditing && dirty && !window.confirm('确定放弃未保存的修改吗？')) return;
             setEditing(nextEditing);
             if (!nextEditing) setEditContent(file?.content ?? '');
           }}
-          onMarketAction={runMarketAction}
+          onMarketAction={(action) => {
+            if (action === 'remove') requestSkillRemoval('market-skill');
+            else void runMarketAction(action);
+          }}
           onPreviewModeChange={setPreviewMode}
           onRenameEntry={renameEntry}
           onSave={saveFile}
@@ -547,7 +602,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         <div className="flex min-h-0 flex-1 flex-col">
           <SummaryStrip
             items={view === 'market'
-              ? [['全部', marketSummary.total], ['已安装', marketSummary.installed], ['待更新', marketSummary.updates]]
+              ? [['全部', marketSummary.total], ['已导入', marketSummary.installed], ['待更新', marketSummary.updates]]
               : [['全部', (mine.data?.skills ?? []).filter((skill) => skill.kind !== 'system' && skill.enabled !== false).length], ['市场安装', mine.data?.summary.market ?? 0], ['本地创建', mine.data?.summary.local ?? 0]]}
           />
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
@@ -637,6 +692,15 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           onImport={() => void importUpload()}
           onPreview={() => void previewUpload()}
           preview={uploadPreview}
+        />
+      ) : null}
+
+      {removalTarget ? (
+        <RemovalConfirmDialog
+          busy={actionLoading}
+          onCancel={() => setRemovalTarget(null)}
+          onConfirm={() => void confirmRemoval()}
+          target={removalTarget}
         />
       ) : null}
     </section>
@@ -749,14 +813,14 @@ function SkillDetailView({
   file: SkillFile | null;
   fileLoading: boolean;
   onBack: () => void;
-  onCreateEntry: (type: 'file' | 'directory') => void;
-  onDeleteEntry: () => void;
+  onCreateEntry: (path: string, type: 'file' | 'directory') => Promise<boolean>;
+  onDeleteEntry: (path: string) => void;
   onDeleteLocalSkill: () => void;
   onEditContent: (content: string) => void;
   onEditingChange: (editing: boolean) => void;
   onMarketAction: (action: 'import' | 'update' | 'remove') => void;
   onPreviewModeChange: (preview: boolean) => void;
-  onRenameEntry: () => void;
+  onRenameEntry: (path: string, nextPath: string) => Promise<boolean>;
   onSave: () => void;
   onSelectEntry: (path: string) => void;
   onSelectFile: (path: string) => void;
@@ -765,7 +829,6 @@ function SkillDetailView({
   selectedFilePath: string | null;
   source: DetailSource;
 }) {
-  const rows = useMemo(() => createDirectoryRows(detail?.files ?? []), [detail?.files]);
   if (detailLoading) return <CenteredState icon={<Loader2 className="h-5 w-5 animate-spin" />} title="正在加载技能详情…" />;
   if (!detail) return <CenteredState icon={<AlertCircle className="h-5 w-5" />} title="技能详情不可用" action="返回" onAction={onBack} />;
   const isLocalOrigin = source === 'mine' && detail.origin === 'local';
@@ -788,48 +851,24 @@ function SkillDetailView({
           {source === 'market' && !marketInstalled ? <ActionButton icon={Plus} label="导入" primary onClick={() => onMarketAction('import')} disabled={!canManage || detail.conflict || actionLoading} /> : null}
           {marketInstalled && updateAvailable ? <ActionButton icon={RefreshCw} label="更新" primary onClick={() => onMarketAction('update')} disabled={!canManage || actionLoading} /> : null}
           {marketInstalled ? <ActionButton icon={Trash2} label="移除" onClick={() => onMarketAction('remove')} disabled={!canManage || actionLoading} danger /> : null}
-          {isLocalOrigin ? <ActionButton icon={Trash2} label="删除技能" onClick={onDeleteLocalSkill} disabled={!canManage || actionLoading} danger /> : null}
+          {isLocalOrigin ? <ActionButton icon={Trash2} label="移除" onClick={onDeleteLocalSkill} disabled={!canManage || actionLoading} danger /> : null}
         </div>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-b border-border lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-            <div className="min-w-0">
-              <div className="text-xs font-medium uppercase text-muted-foreground">文件</div>
-              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail.targetPath || `.claude/skills/${detail.name}`}</div>
-            </div>
-            {detailEditable ? (
-              <div className="flex items-center">
-                <IconButton icon={FilePlus2} label="新建文件" onClick={() => onCreateEntry('file')} />
-                <IconButton icon={FolderPlus} label="新建文件夹" onClick={() => onCreateEntry('directory')} />
-                {selectedEntryPath && selectedEntryPath !== 'SKILL.md' ? (
-                  <>
-                    <IconButton icon={Pencil} label="重命名" onClick={onRenameEntry} />
-                    <IconButton icon={Trash2} label="删除" onClick={onDeleteEntry} danger />
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-2">
-            {rows.map((row) => (
-              <button
-                key={`${row.type}-${row.path}`}
-                type="button"
-                onClick={() => {
-                  onSelectEntry(row.path);
-                  if (row.type === 'file') onSelectFile(row.path);
-                }}
-                className={`flex h-8 w-full min-w-0 items-center gap-2 rounded-md pr-2 text-left text-sm transition ${selectedEntryPath === row.path ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-accent'}`}
-                style={{ paddingLeft: `${8 + row.depth * 14}px` }}
-              >
-                {row.type === 'directory' ? <Folder className="h-4 w-4 shrink-0" /> : <FileText className="h-4 w-4 shrink-0" />}
-                <span className="truncate">{row.label}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <SkillFileTree
+          busy={actionLoading}
+          editable={detailEditable}
+          entries={detail.files}
+          onCreateEntry={onCreateEntry}
+          onRenameEntry={onRenameEntry}
+          onRequestRemove={onDeleteEntry}
+          onSelectEntry={onSelectEntry}
+          onSelectFile={onSelectFile}
+          selectedEntryPath={selectedEntryPath}
+          targetPath={detail.targetPath || `.claude/skills/${detail.name}`}
+          treeKey={`${source}:${detail.name}`}
+        />
 
         <main className="flex min-h-0 flex-col">
           <div className="border-b border-border px-4 py-3">
@@ -1017,8 +1056,8 @@ function SkillBadges({ skill, source }: { skill: MarketSkill | WorkspaceSkill | 
   return (
     <>
       {source === 'mine' && origin ? <Badge tone={origin === 'market' ? 'slate' : 'blue'}>{origin === 'market' ? '市场安装' : '本地创建'}</Badge> : null}
-      {source === 'market' && imported ? <Badge tone="green">已安装</Badge> : null}
-      {source === 'market' && !imported && !conflict ? <Badge tone="slate">可安装</Badge> : null}
+      {source === 'market' && imported ? <Badge tone="green">已导入</Badge> : null}
+      {source === 'market' && !imported && !conflict ? <Badge tone="slate">可导入</Badge> : null}
       {updateAvailable ? <Badge tone="amber">待更新</Badge> : null}
       {remoteDeleted ? <Badge tone="red">市场已下架</Badge> : null}
       {conflict ? <Badge tone="red">冲突</Badge> : null}
@@ -1042,10 +1081,6 @@ function SmallToggle({ active, onClick, children }: { active: boolean; onClick: 
 
 function ActionButton({ icon: Icon, label, onClick, disabled = false, primary = false, danger = false }: { icon: typeof Plus; label: string; onClick: () => void; disabled?: boolean; primary?: boolean; danger?: boolean }) {
   return <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${primary ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90' : danger ? 'border-destructive/30 text-destructive hover:bg-destructive/10' : 'border-border bg-background hover:bg-accent'}`}><Icon className="h-4 w-4" />{label}</button>;
-}
-
-function IconButton({ icon: Icon, label, onClick, danger = false }: { icon: typeof Plus; label: string; onClick: () => void; danger?: boolean }) {
-  return <button type="button" onClick={onClick} className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-accent ${danger ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'}`} aria-label={label} title={label}><Icon className="h-4 w-4" /></button>;
 }
 
 function SummaryStrip({ items }: { items: Array<[string, number]> }) {
@@ -1076,24 +1111,6 @@ function normalizeDetail(detail: SkillDetail, source: DetailSource): SkillDetail
 function findDefaultFile(files: WorkspaceSkillEntry[], preferred?: string | null) {
   const fileEntries = files.filter((entry) => entry.type === 'file');
   return fileEntries.find((entry) => entry.path === preferred) ?? fileEntries.find((entry) => entry.path === 'SKILL.md') ?? fileEntries[0];
-}
-
-function createDirectoryRows(entries: WorkspaceSkillEntry[]) {
-  const rows = new Map<string, { path: string; label: string; depth: number; type: 'directory' | 'file' }>();
-  for (const entry of entries) {
-    const parts = entry.path.split('/').filter(Boolean);
-    parts.forEach((part, index) => {
-      const entryPath = parts.slice(0, index + 1).join('/');
-      const explicit = entries.find((candidate) => candidate.path === entryPath);
-      rows.set(entryPath, {
-        path: entryPath,
-        label: part,
-        depth: index,
-        type: explicit?.type === 'file' ? 'file' : index === parts.length - 1 && entry.type === 'file' ? 'file' : 'directory',
-      });
-    });
-  }
-  return Array.from(rows.values()).sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function matchesSkillQuery(skill: WorkspaceSkill, query: string) {
