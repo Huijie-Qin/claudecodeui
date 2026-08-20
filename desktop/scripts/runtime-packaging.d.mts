@@ -40,6 +40,15 @@ export function nodeToolchainBinRelativePath(targetKey: string): string;
 export function nodeDistributionUrl(archiveName: string, baseUrl?: string): string;
 export function defaultClaudeTargetKeys(platform?: string, architecture?: string): string[];
 export function parseClaudeTargetKeys(value: string): string[];
+export function resolveCommandInvocation(
+  command: string,
+  args: string[],
+  options?: {
+    platform?: NodeJS.Platform;
+    nodeExecutable?: string;
+    npmExecPath?: string;
+  },
+): { command: string; args: string[] };
 export function assembleRuntimeFiles(paths: PackagingPaths): void;
 export function createNodeToolchainShims(targetDirectory: string, targetKey: string): string;
 export function refreshBundledNodeToolchain(runtimeDirectory: string): unknown;

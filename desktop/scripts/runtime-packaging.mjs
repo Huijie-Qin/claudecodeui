@@ -228,12 +228,33 @@ function selectedNodeTargets(targetKeys) {
   return NODE_TARGETS.filter((target) => selected.has(target.key));
 }
 
-function executableCommand(command) {
-  return process.platform === 'win32' && command === 'npm' ? 'npm.cmd' : command;
+export function resolveCommandInvocation(command, args, options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32' || command !== 'npm') {
+    return { command, args };
+  }
+
+  // Windows cannot execute a .cmd shim with spawnSync unless shell mode is
+  // enabled. Shell mode would make quoting paths and package arguments fragile,
+  // so invoke the npm CLI with the same Node executable that is running this
+  // packaging script. npm always supplies npm_execpath to lifecycle scripts.
+  const npmExecPath = options.npmExecPath
+    ?? options.env?.npm_execpath
+    ?? process.env.npm_execpath;
+  if (typeof npmExecPath !== 'string' || npmExecPath.trim() === '') {
+    throw new Error(
+      'Unable to locate npm-cli.js on Windows. Run Desktop packaging through an npm script.',
+    );
+  }
+  return {
+    command: options.nodeExecutable ?? process.execPath,
+    args: [npmExecPath, ...args],
+  };
 }
 
 export function runCommand(command, args, options = {}) {
-  const result = spawnSync(executableCommand(command), args, {
+  const invocation = resolveCommandInvocation(command, args, options);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: options.cwd,
     encoding: options.encoding ?? 'utf8',
     env: options.env ?? process.env,

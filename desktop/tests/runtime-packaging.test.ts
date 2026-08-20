@@ -30,6 +30,7 @@ import {
   patchRuntimeNodePty,
   refreshBundledNodeToolchain,
   parseClaudeTargetKeys,
+  resolveCommandInvocation,
   resolveLockedClaudePackages,
   verifyBufferIntegrity,
 } from '../scripts/runtime-packaging.mjs';
@@ -142,6 +143,28 @@ function writeWindowsX64PrebuildFixture(runtimeDirectory: string): Record<string
 }
 
 describe('desktop runtime packaging', () => {
+  it('runs npm through npm-cli.js on Windows without spawning npm.cmd', () => {
+    expect(resolveCommandInvocation('npm', ['run', 'build'], {
+      platform: 'win32',
+      nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
+      npmExecPath: 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js',
+    })).toEqual({
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: [
+        'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js',
+        'run',
+        'build',
+      ],
+    });
+    expect(resolveCommandInvocation('git', ['status'], {
+      platform: 'win32',
+    })).toEqual({ command: 'git', args: ['status'] });
+    expect(() => resolveCommandInvocation('npm', ['run', 'build'], {
+      platform: 'win32',
+      npmExecPath: '',
+    })).toThrow(/npm-cli\.js/u);
+  });
+
   it('locks every supported Claude platform package to the SDK version', () => {
     const locked = resolveLockedClaudePackages(lockedPackages());
     expect(locked.sdkVersion).toBe('0.2.116');
