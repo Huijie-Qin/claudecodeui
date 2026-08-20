@@ -3,6 +3,7 @@ import {
   BookOpen,
   Building2,
   Check,
+  ChevronDown,
   CircleAlert,
   Clock3,
   Database,
@@ -629,10 +630,12 @@ export default function HookConfigsTab() {
   const [visibleEventDraft, setVisibleEventDraft] = useState<HookEventName[]>([]);
   const [editor, setEditor] = useState<HookConfigDraft | HookConfig | null>(null);
   const [search, setSearch] = useState('');
+  const [skillSearch, setSkillSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
   const [skillDeleteBusyId, setSkillDeleteBusyId] = useState<string | null>(null);
+  const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [exampleCatalog, setExampleCatalog] = useState<HookExampleCatalogItem[]>([]);
   const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
@@ -708,6 +711,17 @@ export default function HookConfigsTab() {
       || t(`hooks.events.${hook.eventName}.label`).toLowerCase().includes(query)
     ));
   }, [hooks, search, t]);
+
+  const filteredSkills = useMemo(() => {
+    const query = skillSearch.trim().toLowerCase();
+    if (!query) return resources.skills;
+    return resources.skills.filter((skill) => (
+      skill.name.toLowerCase().includes(query)
+      || skill.displayName.toLowerCase().includes(query)
+      || skill.skillId.toLowerCase().includes(query)
+      || skill.description.toLowerCase().includes(query)
+    ));
+  }, [resources.skills, skillSearch]);
 
   const replaceHook = (hook: HookConfig) => {
     const normalizedHook = normalizeHookConfig(hook);
@@ -1117,7 +1131,6 @@ export default function HookConfigsTab() {
               <Webhook className="h-5 w-5 text-primary" />
               {t('hooks.title')}
             </h2>
-            <p className="mt-1 text-xs text-muted-foreground">{t('hooks.description')}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1142,93 +1155,113 @@ export default function HookConfigsTab() {
         </div>
 
         <Card className="p-4 shadow-none">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold text-foreground">{t('hooks.builtinSkills.title')}</h3>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {t('hooks.builtinSkills.description')}
-              </p>
             </div>
-            <label>
-              <input
-                type="file"
-                className="sr-only"
-                disabled={skillUploadBusy}
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  event.target.value = '';
-                  void uploadBuiltinSkill(file);
-                }}
-              />
-              <span className={cn(
-                'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
-                skillUploadBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
-              )}>
-                {skillUploadBusy
-                  ? <RefreshCw className="h-4 w-4 animate-spin" />
-                  : <Upload className="h-4 w-4" />}
-                {t(skillUploadBusy ? 'hooks.builtinSkills.uploading' : 'hooks.builtinSkills.upload')}
-              </span>
-            </label>
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+              {resources.skills.length > 5 || skillSearch ? (
+                <div className="relative min-w-0 sm:w-56">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={skillSearch}
+                    onChange={(event) => setSkillSearch(event.target.value)}
+                    placeholder={t('hooks.builtinSkills.search')}
+                    className="h-9 pl-8"
+                  />
+                </div>
+              ) : null}
+              <label className="shrink-0">
+                <input
+                  type="file"
+                  className="sr-only"
+                  disabled={skillUploadBusy}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null;
+                    event.target.value = '';
+                    void uploadBuiltinSkill(file);
+                  }}
+                />
+                <span className={cn(
+                  'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
+                  skillUploadBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
+                )}>
+                  {skillUploadBusy
+                    ? <RefreshCw className="h-4 w-4 animate-spin" />
+                    : <Upload className="h-4 w-4" />}
+                  {t(skillUploadBusy ? 'hooks.builtinSkills.uploading' : 'hooks.builtinSkills.upload')}
+                </span>
+              </label>
+            </div>
           </div>
           <div className="mt-3 overflow-hidden rounded-lg border border-border">
-            <div className="flex items-center justify-between gap-3 bg-muted/20 px-3 py-2">
-              <span className="text-xs font-medium text-foreground">
-                {t('hooks.builtinSkills.allList', { count: resources.skills.length })}
-              </span>
-              <Badge variant="outline">{resources.skills.length}</Badge>
-            </div>
-            {resources.skills.length ? (
-              <div className="divide-y divide-border">
-                {resources.skills.map((skill) => (
-                  <div key={skill.skillId} className="flex min-w-0 items-center gap-3 px-3 py-2.5">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <FileText className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-xs font-medium text-foreground">
+            {filteredSkills.length ? (
+              <div className="max-h-[200px] divide-y divide-border overflow-y-auto">
+                {filteredSkills.map((skill) => {
+                  const expanded = expandedSkillIds.includes(skill.skillId);
+                  return (
+                    <div key={skill.skillId}>
+                      <div className="flex h-10 min-w-0 items-center gap-2 px-3">
+                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                           {skill.displayName || skill.name}
                         </span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">v{skill.version}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 gap-1 px-2 text-xs"
+                          aria-expanded={expanded}
+                          onClick={() => setExpandedSkillIds((current) => (
+                            expanded
+                              ? current.filter((skillId) => skillId !== skill.skillId)
+                              : [...current, skill.skillId]
+                          ))}
+                        >
+                          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')} />
+                          {t(expanded ? 'hooks.builtinSkills.collapse' : 'hooks.builtinSkills.details')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-xs text-destructive hover:text-destructive"
+                          disabled={skillDeleteBusyId === skill.skillId}
+                          onClick={() => void deleteBuiltinSkill(skill)}
+                        >
+                          {skillDeleteBusyId === skill.skillId
+                            ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            : <Trash2 className="h-3.5 w-3.5" />}
+                          {t('hooks.builtinSkills.delete')}
+                        </Button>
                       </div>
-                      <code className="block truncate text-[11px] text-muted-foreground" title={skill.skillId}>
-                        {skill.skillId}
-                      </code>
-                      {skill.description ? (
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={skill.description}>
-                          {skill.description}
-                        </p>
+                      {expanded ? (
+                        <dl className="grid gap-1 border-t border-border bg-muted/15 px-3 py-2 pl-9 text-[11px] sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-3">
+                          <dt className="text-muted-foreground">{t('hooks.builtinSkills.versionLabel')}</dt>
+                          <dd className="text-foreground">v{skill.version}</dd>
+                          <dt className="text-muted-foreground">{t('hooks.builtinSkills.idLabel')}</dt>
+                          <dd className="min-w-0"><code className="break-all text-foreground">{skill.skillId}</code></dd>
+                          {skill.description ? (
+                            <>
+                              <dt className="text-muted-foreground">{t('hooks.builtinSkills.descriptionLabel')}</dt>
+                              <dd className="min-w-0 break-words text-foreground">{skill.description}</dd>
+                            </>
+                          ) : null}
+                        </dl>
                       ) : null}
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-destructive hover:text-destructive"
-                      disabled={skillDeleteBusyId === skill.skillId}
-                      onClick={() => void deleteBuiltinSkill(skill)}
-                    >
-                      {skillDeleteBusyId === skill.skillId
-                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        : <Trash2 className="h-3.5 w-3.5" />}
-                      {t('hooks.builtinSkills.delete')}
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="px-3 py-3 text-xs text-muted-foreground">
-                {t('hooks.builtinSkills.empty')}
+                {t(resources.skills.length ? 'hooks.builtinSkills.noMatches' : 'hooks.builtinSkills.empty')}
               </p>
             )}
           </div>
           {resources.skillSource?.error ? (
             <p className="mt-2 text-xs text-destructive">{resources.skillSource.error}</p>
           ) : null}
-          <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
-            {t('hooks.builtinSkills.formatHint')}
-          </p>
         </Card>
 
         <div className="flex items-center gap-2">
