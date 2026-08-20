@@ -7,16 +7,19 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CloudCLI 暂时无法连接</title>
+    <title>CloudCLI 本地服务</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="offline-card" aria-live="polite">
       <img src="./icon.svg" width="64" height="64" alt="" />
-      <h1>暂时无法连接 CloudCLI</h1>
-      <p id="status">请检查网络连接或服务状态，然后重试。</p>
-      <button id="retry" type="button">重试</button>
-      <small>退出桌面客户端不会停止正在云端运行的任务。</small>
+      <h1>CloudCLI 本地服务未就绪</h1>
+      <p id="status">正在启动本地服务，请稍候…</p>
+      <div class="actions">
+        <button id="retry" type="button">重试</button>
+        <button id="open-logs" class="secondary" type="button">查看日志</button>
+      </div>
+      <small>退出时会等待本机正在运行的任务完成，最长等待 30 分钟。</small>
     </main>
     <script type="module" src="./index.ts"></script>
   </body>

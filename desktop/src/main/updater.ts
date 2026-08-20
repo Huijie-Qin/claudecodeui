@@ -4,13 +4,49 @@ import { UPDATE_BASE_URL } from '../shared/runtime-config';
 
 const INITIAL_UPDATE_DELAY = 30_000;
 const UPDATE_INTERVAL = 6 * 60 * 60 * 1_000;
+export const UPDATE_RESTART_CONFIRMATION_TIMEOUT_MS = 2_000;
+
+interface BeforeQuitConfirmation {
+  promise: Promise<boolean>;
+  cancel(): void;
+}
+
+function waitForBeforeQuit(timeoutMs: number): BeforeQuitConfirmation {
+  let settled = false;
+  let settlePromise: (confirmed: boolean) => void = () => undefined;
+  const promise = new Promise<boolean>((resolve) => {
+    settlePromise = resolve;
+  });
+  const finish = (confirmed: boolean): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    clearTimeout(timeout);
+    app.removeListener('before-quit', handleBeforeQuit);
+    settlePromise(confirmed);
+  };
+  const handleBeforeQuit = (): void => finish(true);
+  const timeout = setTimeout(() => finish(false), timeoutMs);
+  timeout.unref();
+  app.once('before-quit', handleBeforeQuit);
+
+  return {
+    promise,
+    cancel: () => finish(false),
+  };
+}
 
 export class DesktopUpdater {
   private manualCheck = false;
   private checking = false;
   private started = false;
 
-  constructor(private readonly getMainWindow: () => BrowserWindow | null) {}
+  constructor(
+    private readonly getMainWindow: () => BrowserWindow | null,
+    private readonly prepareForRestart: () => Promise<void> = async () => undefined,
+    private readonly recoverFromFailedRestart: () => Promise<void> = async () => undefined,
+  ) {}
 
   start(): void {
     if (this.started) {
@@ -93,10 +129,39 @@ export class DesktopUpdater {
   }
 
   quitAndInstall(): void {
-    // Electron emits before-quit when the updater actually starts quitting. Do not
-    // mark the shell as quitting before that point: a failed installer launch must
-    // leave the tray/window lifecycle usable.
+    // restartAndInstall registers the before-quit confirmation first and owns
+    // lifecycle recovery if this call throws or never begins application exit.
     autoUpdater.quitAndInstall(false, true);
+  }
+
+  async restartAndInstall(): Promise<boolean> {
+    try {
+      await this.prepareForRestart();
+    } catch (error) {
+      console.error('[desktop] Failed to prepare for update restart.', error);
+      await this.recoverAndReportFailedRestart();
+      return false;
+    }
+
+    // Subscribe before invoking electron-updater because before-quit may be
+    // emitted synchronously by a platform implementation.
+    const confirmation = waitForBeforeQuit(UPDATE_RESTART_CONFIRMATION_TIMEOUT_MS);
+    try {
+      this.quitAndInstall();
+    } catch (error) {
+      confirmation.cancel();
+      console.error('[desktop] Failed to launch the downloaded update.', error);
+      await this.recoverAndReportFailedRestart();
+      return false;
+    }
+
+    if (await confirmation.promise) {
+      return true;
+    }
+
+    console.error('[desktop] Downloaded update did not begin quitting in time.');
+    await this.recoverAndReportFailedRestart();
+    return false;
   }
 
   private async promptForRestart(): Promise<void> {
@@ -104,7 +169,7 @@ export class DesktopUpdater {
       type: 'info',
       title: 'CloudCLI 更新已就绪',
       message: '新版本已下载完成',
-      detail: '立即重启以完成安装，或稍后在退出 CloudCLI 时自动安装。云端任务不会停止。',
+      detail: '立即重启会先停止接收新请求，并等待本机正在运行的任务完成；最长等待 30 分钟。',
       buttons: ['立即重启', '稍后'],
       defaultId: 0,
       cancelId: 1,
@@ -122,8 +187,26 @@ export class DesktopUpdater {
       ? await dialog.showMessageBox(mainWindow, options)
       : await dialog.showMessageBox(options);
     if (result.response === 0) {
-      this.quitAndInstall();
+      await this.restartAndInstall();
     }
+  }
+
+  private async recoverAndReportFailedRestart(): Promise<void> {
+    let recovered = false;
+    try {
+      await this.recoverFromFailedRestart();
+      recovered = true;
+    } catch (error) {
+      console.error('[desktop] Failed to restore the local backend after update failure.', error);
+    }
+
+    await this.showMessage(
+      '更新重启失败',
+      recovered
+        ? '安装器未能启动，本地 CloudCLI 服务已恢复。请稍后重试更新。'
+        : '安装器未能启动，并且本地 CloudCLI 服务恢复失败。请查看日志后重试。',
+      'warning',
+    );
   }
 
   private async showMessage(

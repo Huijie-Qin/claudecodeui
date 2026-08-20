@@ -32,6 +32,7 @@ import {
 } from './projects.js';
 import {
     abortClaudeSDKSession,
+    closeAllClaudeSDKSessions,
     getActiveClaudeSDKSessions,
     getPendingApprovalsForSession,
     isClaudeSDKSessionActive,
@@ -73,12 +74,22 @@ import desktopUpdatesRoutes from './routes/desktop-updates.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
-import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
+import {applyCustomSessionNames, applyScheduledSessionTaskFlags, db, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
-import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
+import {authenticateToken, authenticateWebSocket, generateToken, validateApiKey} from './middleware/auth.js';
 import {noApiCache} from './middleware/no-api-cache.js';
+import {
+    createDesktopLoopbackMiddleware,
+    validateDesktopWebSocketRequest
+} from './middleware/desktop-loopback.js';
+import {
+    createShutdownAdmissionMiddleware,
+    createShutdownChatMessageGuard,
+    createShutdownWebSocketMessageGuard,
+    shouldEnforceShutdownAdmission
+} from './middleware/shutdown-admission.js';
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
 import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
@@ -99,8 +110,33 @@ import {
     isSessionLimitExceededError,
     sessionConcurrencyLimiter
 } from './services/session-concurrency-limit.js';
+import {createProviderCommandActivity} from './services/provider-command-activity.js';
+import {agentGraphExecutorService} from './services/agent-graph-executor.js';
+import {topSkillJobsService} from './services/top-skill-jobs.js';
+import {
+    getRemainingShutdownTime,
+    waitForActiveWorkToDrain,
+    waitForPromiseUntilDeadline
+} from './services/shutdown-drain.js';
+import {requestActiveWorkShutdown} from './services/shutdown-active-work.js';
+import {
+    getBlockingPtySessionCount,
+    getPtyShutdownPolicy,
+    terminatePtySessions
+} from './services/pty-shutdown.js';
 import {IS_PLATFORM} from './constants/config.js';
 import {getConnectableHost} from '../shared/networkHosts.js';
+import {
+    createDesktopBootstrapSession,
+    createDesktopBootstrapSessionErrorMessage,
+    createDesktopBootstrapSessionForUser,
+    createDesktopBootstrapSessionResultMessage,
+    createDesktopReadyMessage,
+    createDesktopStartupErrorMessage,
+    isDesktopMode,
+    parseDesktopBootstrapSessionRequest,
+    postParentProcessMessage
+} from './services/desktop-runtime.js';
 import {
     extractUrlsFromText,
     normalizeDetectedUrl,
@@ -114,6 +150,7 @@ const __dirname = getModuleDir(import.meta.url);
 // Resolving the app root once keeps every repo-level lookup below aligned across both layouts.
 const APP_ROOT = findAppRoot(__dirname);
 const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
+const IS_DESKTOP_MODE = isDesktopMode();
 
 console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
@@ -552,15 +589,46 @@ const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, 10) || 30 * 60 * 1000;
 const GRACEFUL_SHUTDOWN_POLL_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_POLL_MS, 10) || 1000;
+const FORCED_SHUTDOWN_CLEANUP_MS = parseInt(process.env.FORCED_SHUTDOWN_CLEANUP_MS, 10) || 45 * 1000;
 let isShuttingDown = false;
+const rejectWebSocketMessageDuringShutdown = createShutdownWebSocketMessageGuard({
+    isShuttingDown: () => shouldEnforceShutdownAdmission({
+        desktopMode: IS_DESKTOP_MODE,
+        shuttingDown: isShuttingDown
+    })
+});
+const rejectChatMessageDuringShutdown = createShutdownChatMessageGuard({
+    isShuttingDown: () => shouldEnforceShutdownAdmission({
+        desktopMode: IS_DESKTOP_MODE,
+        shuttingDown: isShuttingDown
+    })
+});
+const shutdownAdmissionMiddleware = createShutdownAdmissionMiddleware({
+    isShuttingDown: () => shouldEnforceShutdownAdmission({
+        desktopMode: IS_DESKTOP_MODE,
+        shuttingDown: isShuttingDown
+    })
+});
 
 // Single WebSocket server that handles both paths
 const wss = new WebSocketServer({
     server,
     verifyClient: (info) => {
+        // Preserve the existing shutdown contract for every server mode: once
+        // draining starts, no new WebSocket may upgrade. The finer-grained
+        // message admission rules below are Desktop-only because they govern
+        // already-established connections during Electron's drain window.
         if (isShuttingDown) {
             console.log('[WARN] Rejecting WebSocket connection while server is draining');
             return false;
+        }
+
+        if (IS_DESKTOP_MODE) {
+            const validation = validateDesktopWebSocketRequest(info.req);
+            if (!validation.ok) {
+                console.log(`[WARN] Rejecting non-loopback desktop WebSocket (${validation.reason})`);
+                return false;
+            }
         }
 
         console.log('WebSocket connection attempt to:', info.req.url);
@@ -615,7 +683,9 @@ app.locals.chatClients = connectedClients;
 const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
 app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
+app.use(createDesktopLoopbackMiddleware({ enabled: IS_DESKTOP_MODE }));
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
+app.use('/api', shutdownAdmissionMiddleware);
 app.use(express.json({
     limit: '50mb',
     type: (req) => {
@@ -763,6 +833,14 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 
 // System update endpoint
 app.post('/api/system/update', authenticateToken, async (req, res) => {
+    if (IS_DESKTOP_MODE) {
+        return res.status(409).json({
+            success: false,
+            code: 'DESKTOP_UPDATE_MANAGED_BY_ELECTRON',
+            error: 'Desktop updates are managed by the Electron application.'
+        });
+    }
+
     try {
         // Get the project root directory (parent of server directory)
         const projectRoot = APP_ROOT;
@@ -2352,6 +2430,9 @@ function handlePluginWsProxy(clientWs, pathname) {
         if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
     });
     clientWs.on('message', (data) => {
+        if (rejectWebSocketMessageDuringShutdown(clientWs)) {
+            return;
+        }
         if (upstream.readyState === WebSocket.OPEN) upstream.send(data);
     });
 
@@ -2372,6 +2453,13 @@ function handlePluginWsProxy(clientWs, pathname) {
 wss.on('connection', (ws, request) => {
     const url = request.url;
     console.log('[INFO] Client connected to:', url);
+
+    // verifyClient rejects connections that begin after draining starts. This
+    // second check closes the small race where shutdown begins after verifyClient
+    // accepted the upgrade but before the connection event is dispatched.
+    if (rejectWebSocketMessageDuringShutdown(ws)) {
+        return;
+    }
 
     // Parse URL to get pathname without query parameters
     const urlObj = new URL(url, 'http://localhost');
@@ -2525,7 +2613,8 @@ function resolveSessionLimitLogUser({ userId, username, request, writer }) {
 
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
     let lease;
-    let activeCommandId = null;
+    let activeCommandActivity = null;
+    const commandAbortController = provider === 'claude' ? new AbortController() : null;
     const startedAt = Date.now();
     if (logContext?.requestId) {
         data.options = {
@@ -2576,8 +2665,27 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
+    const activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
+    const activeCommand = {
+        provider,
+        sessionId: data.options?.sessionId || null,
+        registeredSessionId: null,
+        userId: data.options?.userId ?? writer.userId ?? null,
+        requestId: logContext?.requestId || null,
+        startedAt,
+        abortPending: commandAbortController
+            ? () => commandAbortController.abort()
+            : null
+    };
+    activeCommandActivity = createProviderCommandActivity({
+        registry: activeProviderCommands,
+        key: activeCommandId,
+        value: activeCommand
+    });
+
     // Claude keeps its SDK stream alive while idle for fast follow-up turns.
-    // Tie the concurrency lease to processing, not to that reusable stream.
+    // Tie both the concurrency lease and graceful-shutdown activity count to
+    // processing, not to the reusable stream's five-minute lifetime.
     const acquireConcurrencyLease = () => {
         if (lease) return;
         lease = sessionConcurrencyLimiter.acquire({
@@ -2588,23 +2696,30 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         lease?.release();
         lease = null;
     };
+    const markCommandProcessing = () => {
+        acquireConcurrencyLease();
+        activeCommandActivity.activate();
+    };
+    const markCommandIdle = () => {
+        activeCommandActivity.deactivate();
+        releaseConcurrencyLease();
+    };
     if (provider === 'claude') {
+        const onProviderSessionRegistered = data.options?.onProviderSessionRegistered;
         data.options = {
             ...(data.options || {}),
-            onConcurrencyResume: acquireConcurrencyLease,
-            onConcurrencyIdle: releaseConcurrencyLease,
+            abortController: commandAbortController,
+            onConcurrencyResume: markCommandProcessing,
+            onConcurrencyIdle: markCommandIdle,
+            onProviderSessionRegistered: (sessionId) => {
+                activeCommand.registeredSessionId = sessionId;
+                onProviderSessionRegistered?.(sessionId);
+            },
         };
     }
 
     try {
-        activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
-        activeProviderCommands.set(activeCommandId, {
-            provider,
-            sessionId: data.options?.sessionId || null,
-            userId: data.options?.userId ?? writer.userId ?? null,
-            requestId: logContext?.requestId || null,
-            startedAt
-        });
+        activeCommandActivity.activate();
         logChatSessionEvent('dispatch', logContext);
         await run();
         logChatSessionEvent('completed', logContext, {
@@ -2633,10 +2748,7 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
                 console.error('[workspace-ownership] Failed after provider command:', error);
             });
         }
-        if (activeCommandId) {
-            activeProviderCommands.delete(activeCommandId);
-        }
-        releaseConcurrencyLease();
+        markCommandIdle();
     }
 }
 
@@ -2656,6 +2768,13 @@ function handleChatConnection(ws, request) {
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+            // Desktop drain blocks only messages that start or append work.
+            // Permission replies, aborts, and read-only status queries remain
+            // available so already-running work can settle cleanly.
+            if (rejectChatMessageDuringShutdown(ws, data.type)) {
+                console.log(`[WARN] Rejecting ${data.type} while desktop server is draining`);
+                return;
+            }
 
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
@@ -2890,6 +3009,13 @@ function handleShellConnection(ws, request) {
     const announcedAuthUrls = new Set();
 
     ws.on('message', async (message) => {
+        // Existing PTYs may finish and emit output while draining, but no init,
+        // input, or resize message is accepted once shutdown begins.
+        if (rejectWebSocketMessageDuringShutdown(ws)) {
+            console.log('[WARN] Rejecting shell WebSocket message while server is draining');
+            return;
+        }
+
         try {
             const data = JSON.parse(message);
             console.log('📨 Shell message received:', data.type);
@@ -3112,7 +3238,12 @@ function handleShellConnection(ws, request) {
                         buffer: [],
                         timeoutId: null,
                         projectPath,
-                        sessionId
+                        sessionId,
+                        // One-shot plain-shell commands have a reliable terminal
+                        // condition (PTY exit). Interactive provider CLIs may sit
+                        // indefinitely at a prompt, so explicit app quit owns
+                        // their termination instead of treating them as work.
+                        shutdownPolicy: getPtyShutdownPolicy({ isPlainShell, initialCommand })
                     });
 
                     // Handle data output
@@ -3669,6 +3800,40 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
+function resolveServerPort(value) {
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        const error = new Error('SERVER_PORT must be an integer between 0 and 65535');
+        error.code = 'INVALID_SERVER_PORT';
+        throw error;
+    }
+    return port;
+}
+
+function listenForHttpServer(port, host) {
+    return new Promise((resolve, reject) => {
+        const handleError = (error) => {
+            server.off('listening', handleListening);
+            reject(error);
+        };
+        const handleListening = () => {
+            server.off('error', handleError);
+            const address = server.address();
+            if (!address || typeof address === 'string') {
+                const error = new Error('Server did not expose a TCP listening address');
+                error.code = 'INVALID_LISTEN_ADDRESS';
+                reject(error);
+                return;
+            }
+            resolve(address);
+        };
+
+        server.once('error', handleError);
+        server.once('listening', handleListening);
+        server.listen(port, host);
+    });
+}
+
 function getActiveWorkSummary() {
     const providerCommands = {
         claude: 0,
@@ -3689,46 +3854,16 @@ function getActiveWorkSummary() {
         cursor: getActiveCursorSessions().length,
         gemini: getActiveGeminiSessions().length
     };
+    const shell = getBlockingPtySessionCount(ptySessionsMap.values());
 
     return {
         providerCommands,
         providerSessions,
-        shell: ptySessionsMap.size
+        shell,
+        interactiveShell: ptySessionsMap.size - shell,
+        agentGraph: agentGraphExecutorService.getActiveRunCount(),
+        topSkillJobs: topSkillJobsService.getActiveJobCount()
     };
-}
-
-function getActiveWorkCount(summary = getActiveWorkSummary()) {
-    const activeProviderCommands = Object.values(summary.providerCommands || {})
-        .reduce((total, count) => total + count, 0);
-    const activeProviderSessions = Object.values(summary.providerSessions || {})
-        .reduce((total, count) => total + count, 0);
-    return Math.max(activeProviderCommands, activeProviderSessions) + (summary.shell || 0);
-}
-
-function waitForActiveWorkToDrain(timeoutMs) {
-    const startedAt = Date.now();
-
-    return new Promise((resolve) => {
-        const poll = () => {
-            const summary = getActiveWorkSummary();
-            const activeCount = getActiveWorkCount(summary);
-
-            if (activeCount === 0) {
-                resolve({drained: true, summary});
-                return;
-            }
-
-            if (Date.now() - startedAt >= timeoutMs) {
-                resolve({drained: false, summary});
-                return;
-            }
-
-            console.log('[Shutdown] Waiting for active work to finish:', summary);
-            setTimeout(poll, GRACEFUL_SHUTDOWN_POLL_MS).unref?.();
-        };
-
-        poll();
-    });
 }
 
 async function closeProjectsWatchers() {
@@ -3756,8 +3891,21 @@ function closeHttpServer() {
 
 function closeWebSockets() {
     for (const client of wss.clients) {
-        if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
-            client.close(1012, 'Server restarting');
+        if (client.readyState !== WebSocket.CLOSED) {
+            try {
+                if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+                    client.close(1012, 'Server restarting');
+                }
+            } catch {
+                // Continue terminating other clients if this socket is already failing.
+            }
+            try {
+                // HTTP server.close() may otherwise keep waiting for upgraded
+                // sockets whose peers never complete the WebSocket close handshake.
+                client.terminate();
+            } catch {
+                // The socket may already have completed its close transition.
+            }
         }
     }
 
@@ -3777,24 +3925,72 @@ async function gracefulShutdown(signal) {
     }
 
     isShuttingDown = true;
+    const shutdownDeadline = Date.now() + GRACEFUL_SHUTDOWN_TIMEOUT_MS;
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
     runtimeSweeper.stop();
+    scheduledSessionTasks.stop();
     codeHubMrPoller.stop();
-    closeHttpServer().catch((error) => {
-        console.error('[Shutdown] Failed to close HTTP server:', error);
-    });
+    const httpServerClose = closeHttpServer();
 
     try {
-        const result = await waitForActiveWorkToDrain(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+        const result = await waitForActiveWorkToDrain({
+            readSummary: getActiveWorkSummary,
+            timeoutMs: getRemainingShutdownTime(shutdownDeadline),
+            pollIntervalMs: GRACEFUL_SHUTDOWN_POLL_MS,
+            onWait: (summary) => console.log('[Shutdown] Waiting for active work to finish:', summary)
+        });
         if (result.drained) {
             console.log('[Shutdown] Active work drained');
         } else {
             console.warn('[Shutdown] Grace period expired with active work remaining:', result.summary);
         }
 
+        const forcedCleanupDeadline = Date.now() + FORCED_SHUTDOWN_CLEANUP_MS;
+        const forcedCleanup = requestActiveWorkShutdown({
+            closeAllClaudeSessions: closeAllClaudeSDKSessions,
+            listProviderCommands: () => [...activeProviderCommands.values()],
+            listCursorSessions: getActiveCursorSessions,
+            abortCursorSession,
+            listCodexSessions: getActiveCodexSessions,
+            abortCodexSession,
+            listGeminiSessions: getActiveGeminiSessions,
+            abortGeminiSession,
+            abortAgentGraphRuns: () => agentGraphExecutorService.abortAllActiveRuns(),
+            abortTopSkillJobs: () => topSkillJobsService.abortAllActiveJobs()
+        });
+        console.log('[Shutdown] Requested final active-work cleanup:', forcedCleanup.summary);
+        const forcedDrain = waitForActiveWorkToDrain({
+            readSummary: getActiveWorkSummary,
+            timeoutMs: getRemainingShutdownTime(forcedCleanupDeadline),
+            pollIntervalMs: GRACEFUL_SHUTDOWN_POLL_MS,
+            onWait: (summary) => console.log('[Shutdown] Waiting for forced cleanup:', summary)
+        });
+        const forcedCleanupResult = await waitForPromiseUntilDeadline(
+            Promise.all([forcedCleanup.completion, forcedDrain]),
+            {deadlineMs: forcedCleanupDeadline}
+        );
+        if (!forcedCleanupResult.completed) {
+            console.warn('[Shutdown] Forced active-work cleanup timed out');
+        }
+
         await closeProjectsWatchers();
+        const terminatedPtyCount = terminatePtySessions(ptySessionsMap);
+        if (terminatedPtyCount > 0) {
+            console.log(`[Shutdown] Terminated ${terminatedPtyCount} interactive or overdue shell session(s)`);
+        }
         await closeWebSockets();
+
+        // WebSocket upgrades are closed separately above. Once they are gone,
+        // the HTTP server close callback represents only ordinary in-flight
+        // requests and may use whatever remains of the shared grace period.
+        const httpCloseResult = await waitForPromiseUntilDeadline(httpServerClose, {
+            deadlineMs: shutdownDeadline
+        });
+        if (!httpCloseResult.completed) {
+            console.warn('[Shutdown] Grace period expired with active HTTP requests remaining');
+            server.closeAllConnections?.();
+        }
         await stopAllPlugins();
         process.exit(0);
     } catch (error) {
@@ -3808,6 +4004,44 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+
+        const desktopSession = IS_DESKTOP_MODE
+            ? await createDesktopBootstrapSession({
+                database: db,
+                users: userDb,
+                multitenancy: multitenancyDb,
+                generateToken
+            })
+            : null;
+        const desktopBootstrapUserId = desktopSession?.user?.id ?? null;
+
+        if (IS_DESKTOP_MODE) {
+            process.on('message', (message) => {
+                const request = parseDesktopBootstrapSessionRequest(message);
+                if (!request) {
+                    return;
+                }
+
+                void createDesktopBootstrapSessionForUser({
+                    database: db,
+                    users: userDb,
+                    multitenancy: multitenancyDb,
+                    generateToken,
+                    userId: desktopBootstrapUserId
+                }).then((session) => {
+                    postParentProcessMessage(createDesktopBootstrapSessionResultMessage({
+                        requestId: request.requestId,
+                        session
+                    }));
+                }).catch((error) => {
+                    postParentProcessMessage(createDesktopBootstrapSessionErrorMessage({
+                        requestId: request.requestId,
+                        error
+                    }));
+                });
+            });
+        }
+
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
@@ -3823,50 +4057,55 @@ async function startServer() {
         console.log(`${c.info('[INFO]')} Using Claude Agents SDK for Claude integration`);
         console.log('');
 
-        if (isProduction) {
-            console.log(`${c.info('[INFO]')} To run in production mode, go to http://${DISPLAY_HOST}:${SERVER_PORT}`);            
-        }
-
-        console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
-   
-        server.listen(SERVER_PORT, HOST, async () => {
-            const appInstallPath = APP_ROOT;
-
-            console.log('');
-            console.log(c.dim('═'.repeat(63)));
-            console.log(`  ${c.bright('CloudCLI Server - Ready')}`);
-            console.log(c.dim('═'.repeat(63)));
-            console.log('');
-            console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
-            console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
-            console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
-            console.log('');
-
-            // Start watching the projects folder for changes
-            await setupProjectsWatcher();
-
-            // Start server-side plugin processes for enabled plugins
-            startEnabledPluginServers().catch(err => {
-                console.error('[Plugins] Error during startup:', err.message);
-            });
-
-            if (typeof process.send === 'function') {
-                process.send('ready');
-            }
-        });
-
-        // Clean up plugin processes on shutdown
-        const shutdownPlugins = async () => {
-            runtimeSweeper.stop();
-            scheduledSessionTasks.stop();
-            codeHubMrPoller.stop();
-            await stopAllPlugins();
-            process.exit(0);
-        };
         process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
         process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+
+        const listeningAddress = await listenForHttpServer(resolveServerPort(SERVER_PORT), HOST);
+        const actualPort = listeningAddress.port;
+        const actualOrigin = `http://${DISPLAY_HOST}:${actualPort}`;
+        const appInstallPath = APP_ROOT;
+
+        if (isProduction) {
+            console.log(`${c.info('[INFO]')} To run in production mode, go to ${actualOrigin}`);
+        }
+        console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
+
+        console.log('');
+        console.log(c.dim('═'.repeat(63)));
+        console.log(`  ${c.bright('CloudCLI Server - Ready')}`);
+        console.log(c.dim('═'.repeat(63)));
+        console.log('');
+        console.log(`${c.info('[INFO]')} Server URL:  ${c.bright(actualOrigin)}`);
+        console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
+        console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
+        console.log('');
+
+        // Start watching the projects folder for changes before declaring readiness.
+        await setupProjectsWatcher();
+
+        // Start server-side plugin processes for enabled plugins.
+        startEnabledPluginServers().catch(err => {
+            console.error('[Plugins] Error during startup:', err.message);
+        });
+
+        if (IS_DESKTOP_MODE) {
+            postParentProcessMessage(createDesktopReadyMessage({
+                port: actualPort,
+                session: null
+            }));
+        } else if (typeof process.send === 'function') {
+            // Preserve the legacy child-process contract for non-desktop CLI users.
+            process.send('ready');
+        }
     } catch (error) {
         console.error('[ERROR] Failed to start server:', error);
+        if (IS_DESKTOP_MODE) {
+            postParentProcessMessage(createDesktopStartupErrorMessage(error));
+            // Give Electron's MessagePort one event-loop turn to deliver the failure
+            // before terminating the utility process.
+            setImmediate(() => process.exit(1));
+            return;
+        }
         process.exit(1);
     }
 }

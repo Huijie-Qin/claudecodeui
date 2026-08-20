@@ -1,36 +1,30 @@
 # CloudCLI Desktop
 
-This package is a small Electron shell for the hosted CloudCLI application. It does not package the CloudCLI server, SQLite, PTY support, agent CLIs, Docker, or any server-side environment variables. The web application and the desktop version are released independently.
+CloudCLI Desktop is a self-contained local distribution of the CloudCLI web application. The installer includes the built React UI, Node backend and its hook runner, production dependencies, SQLite and PTY native modules, an isolated official Node.js/npm plugin toolchain, and the official Claude CLI. It does not require a system Node.js/npm installation, a system Claude CLI, Docker, or a separately deployed CloudCLI server.
+
+The local backend listens only on loopback and always uses local Claude execution. Application data remains in `~/.cloudcli`, while Claude authentication and sessions remain in `~/.claude`. Claude is the only provider bundled and supported by the desktop release; the Codex, Cursor, and Gemini entries may still use CLIs already installed on the host.
+
+Loopback binding is not an outbound-network restriction. Automatic updates, Skill Market, GitHub/CodeHub, remote MCP servers, Web Push, and model traffic remain available when configured.
 
 ## Configuration
 
-Production builds require four non-secret URL values and accept one optional security override. Supply them as CI environment variables or copy `.env.desktop.example` to the ignored `.env.desktop` file:
+Production builds require only the non-secret HTTPS updater URL. Supply it as a CI environment variable or copy `.env.desktop.example` to the ignored `.env.desktop` file:
 
 ```dotenv
-DESKTOP_ALLOW_INSECURE_HTTP=false
-DESKTOP_HOME_URL=https://cloudcli.example.com/
 DESKTOP_UPDATE_BASE_URL=https://cloudcli.example.com/api/desktop-updates
-DESKTOP_ALLOWED_ORIGINS=https://cloudcli.example.com
-DESKTOP_AUTH_ORIGINS=https://auth.example.com
 ```
 
-- Production URLs use HTTPS by default. Allowlist entries must be exact origins, separated by commas.
-- An unsigned internal build may set `DESKTOP_ALLOW_INSECURE_HTTP=true` to permit HTTP for `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`, `DESKTOP_ALLOWED_ORIGINS`, and `DESKTOP_AUTH_ORIGINS`. This opt-in exposes authentication, application traffic, update metadata, and installers to interception and must not be used on untrusted networks.
-- `DESKTOP_REQUIRE_SIGNING=true` rejects builds that enable insecure HTTP.
-- `DESKTOP_HOME_URL` may include an initial path. Its origin is always included in the navigation allowlist.
-- `DESKTOP_AUTH_ORIGINS` may be explicitly empty when the deployment has no cross-origin OAuth provider.
-- Application origins and OAuth origins must be disjoint; overlapping entries fail the build.
-- Only these five names are parsed from `.env.desktop`. The root `.env` is never read by the desktop build.
-- Missing production values, credentials embedded in a URL, origin paths, and insecure URLs fail the build.
+- The updater URL must be absolute HTTPS without credentials, a query, or a fragment.
+- Only `DESKTOP_UPDATE_BASE_URL` is parsed from `.env.desktop`; root server secrets are never embedded in the Electron code.
+- The application origin is selected dynamically after the bundled loopback backend reports ready, so no remote home URL or origin allowlist is configured at build time.
 
-Development defaults to `http://127.0.0.1:5173/`, so run the normal web development server and the Electron shell in separate terminals:
+Desktop development builds the root frontend/backend, prepares `desktop/.runtime`, rebuilds the native dependencies for the installed Electron version, and starts Electron:
 
 ```sh
-npm run dev
 npm run desktop:dev
 ```
 
-The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL; loopback HTTP is accepted automatically in development mode, while other HTTP origins require the explicit insecure override. Packaged applications ignore `ELECTRON_RENDERER_URL` and always use the bundled, restricted offline page on load failure.
+The generated runtime is intentionally ignored by Git because it contains installed production dependencies and a large platform executable. Run `npm run desktop:prepare-runtime` to refresh it for the current host without compiling the Electron sources. macOS packages include only the two Darwin executables needed by the Universal app; Windows packages include only the Windows x64 executable.
 
 ## Commands
 
@@ -44,14 +38,16 @@ npm run desktop:package:win
 
 `package:mac` produces a Universal DMG and ZIP. `package:win` produces an x64 NSIS installer. A production package is expected to be signed; CI sets `DESKTOP_REQUIRE_SIGNING=true`, which makes an absent signing identity a hard failure.
 
+Every build performs the root web/server build with `VITE_IS_PLATFORM=false` before compiling Electron. Runtime preparation uses the root lock file, installs required production dependencies with lifecycle scripts disabled via `--ignore-scripts` and optional platform packages omitted via `--omit=optional`, and then bundles the exact selected Claude platform packages locked alongside `@anthropic-ai/claude-agent-sdk`. Both the package archive integrity and the executable checksum from the SDK manifest are verified. It also downloads the official Node.js 24.18.1 distributions (including their npm CLI) for the selected targets and verifies their archives against pinned hashes from Node.js's published `SHASUMS256.txt`; this version is checked against Electron's embedded Node version during preparation. Target-local `npm` and `npx` launchers use that standalone Node runtime, while keeping npm inside the desktop-only package avoids increasing normal Web installations. `better-sqlite3`, `bcrypt`, and `node-pty` are rebuilt for Electron in the packaged app once per target architecture.
+
 ## Runtime security model
 
 - The main window uses a persistent `persist:cloudcli` Chromium session, sandboxing, context isolation, and no Node integration or `<webview>` support.
-- Main-frame navigation is limited to configured application origins. Configured OAuth origins use a restricted child window. Other HTTPS and `mailto:` URLs go to the system browser; unconfigured HTTP, `file:`, `data:`, `javascript:`, and unknown schemes are rejected.
+- The local backend rejects non-loopback Host headers and requires its exact dynamic loopback origin for browser HTTP and WebSocket requests. This protects inbound access to the local service without blocking outbound HTTPS/WSS used by model APIs, updates, Git services, Skill Market, or remote MCP. External HTTPS and `mailto:` navigation opens in the system browser; unsafe schemes are rejected.
 - Certificate errors fail closed. Web permissions default to denied, with notifications and clipboard access available only to the exact application origins.
-- The preload exposes only the typed notification bridge. The main process rechecks the main-frame origin and validates/rate-limits every notification.
-- Closing the main window hides it in the tray. Explicit Quit ends notifications but does not cancel cloud tasks.
-- Electron fuses disable RunAsNode, `NODE_OPTIONS`, CLI inspect flags, and non-ASAR application loading, while enabling cookie encryption and embedded ASAR integrity checks.
+- The preload exposes a narrow typed bridge, including the private bootstrap session delivered directly by the local backend process. There is no public passwordless-login HTTP endpoint.
+- Closing the main window hides it in the tray and keeps the local backend and Claude tasks running. Explicit Quit drains active work before stopping the backend.
+- The Electron executable disables RunAsNode, `NODE_OPTIONS`, CLI inspect flags, and non-ASAR application loading, while enabling cookie encryption and embedded ASAR integrity checks. Plugin processes use the separately bundled standalone Node.js runtime, so the application fuse does not need to be weakened.
 - The packaged fallback page is served only through the private `cloudcli-offline://app/` protocol; `file://` receives no extra privileges.
 
 ## Update repository
@@ -86,9 +82,9 @@ The prefix accepts only a restricted absolute internal URI path. It must match t
 
 ## Release secrets and variables
 
-The `desktop-release.yml` workflow expects repository variables for the four desktop settings and deployment coordinates:
+The `desktop-release.yml` workflow expects the updater setting and deployment coordinates as repository variables:
 
-- `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`, `DESKTOP_ALLOWED_ORIGINS`, `DESKTOP_AUTH_ORIGINS`
+- `DESKTOP_UPDATE_BASE_URL`
 - `DESKTOP_DEPLOY_HOST`, `DESKTOP_DEPLOY_USER`, `DESKTOP_UPDATE_ROOT`
 
 It expects these secrets:
@@ -97,8 +93,8 @@ It expects these secrets:
 - Windows: `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`
 - Deployment: `DESKTOP_DEPLOY_SSH_KEY`, `DESKTOP_DEPLOY_KNOWN_HOSTS`
 
-The workflow signs and notarizes/staples the macOS application before producing the signed DMG/ZIP, and signs both the Windows application and NSIS installer. CI verifies fuses, signatures, the macOS app ticket, and local/remote SHA-256 hashes. Deployment is serialized, refuses an older version or different bytes under an existing versioned filename, uploads artifacts first, and publishes both updater YAML files last with rollback on failure. The update host needs Bash, `sha256sum`, and GNU `sort -V`.
+The workflow installs both root and desktop lock files, builds the complete runtime, signs and notarizes/staples the macOS application, and signs the Windows application and NSIS installer. CI verifies the bundled frontend/backend, Claude executables, native dependency packages, fuses, signatures, the macOS app ticket, and local/remote SHA-256 hashes. Deployment is serialized, refuses an older version or different bytes under an existing versioned filename, uploads artifacts first, and publishes both updater YAML files last with rollback on failure. The update host needs Bash, `sha256sum`, and GNU `sort -V`.
 
 ## Release acceptance
 
-Before enabling a version for all users, keep signed `N-1` installers and perform one installed `N-1 → N` update on both macOS and Windows. Verify signature/notarization, differential download, restart/install, persistent login state, tray behavior, notification activation, and that cloud tasks remain active across the desktop restart. A fully quit application does not promise background push delivery in V1.
+Before enabling a version for all users, keep signed `N-1` installers and perform one installed `N-1 → N` update on both macOS and Windows. Test on a machine without Node.js, Claude CLI, or Docker. Verify signature/notarization, bundled `claude --version`, first authentication, a new and resumed Claude session, tool use, persistent login/history, differential update, tray behavior, graceful local-task draining, and update restart.

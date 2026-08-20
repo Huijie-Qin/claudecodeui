@@ -150,3 +150,6 @@ tasks/
 # Electron desktop source icons (the generic build/ rule above would hide them)
 !desktop/build/
 !desktop/build/**
+
+# Generated self-contained Electron runtime (includes native modules and agent binaries)
+desktop/.runtime/

@@ -91,9 +91,6 @@ beforeAll(async () => {
     ipcMain: ipcMainMock,
     Notification: TestNotification,
   }));
-  vi.doMock('../src/shared/runtime-config', () => ({
-    ALLOWED_ORIGINS: new Set(['https://cloudcli.example.com']),
-  }));
   ({ DesktopNotificationController } = await import(
     '../src/main/notification-controller'
   ));
@@ -101,7 +98,6 @@ beforeAll(async () => {
 
 afterAll(() => {
   vi.doUnmock('electron');
-  vi.doUnmock('../src/shared/runtime-config');
 });
 
 beforeEach(() => {
@@ -120,6 +116,7 @@ beforeEach(() => {
   mainWindow.webContents.send.mockClear();
   controller = new DesktopNotificationController(
     () => mainWindow as unknown as BrowserWindow,
+    () => new Set(['https://cloudcli.example.com']),
   );
   controller.register();
 });

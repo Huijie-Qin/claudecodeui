@@ -60,6 +60,22 @@ button {
   cursor: pointer;
 }
 
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+button.secondary {
+  border: 1px solid #475569;
+  background: transparent;
+  color: #cbd5e1;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #1e293b;
+}
+
 button:hover:not(:disabled) {
   background: #1d4ed8;
 }

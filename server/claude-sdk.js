@@ -61,6 +61,7 @@ import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js
 import { hookConfigService } from './services/hook-configs.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
 import { createNormalizedMessage } from './shared/utils.js';
+import { closeClaudeSessionForShutdown } from './services/claude-session-shutdown.js';
 
 const activeSessions = new Map();
 const abortedSessions = new Set();
@@ -305,6 +306,7 @@ function mapCliOptionsToSDK(options = {}) {
     executionEnv,
     settingSources,
     spawnClaudeCodeProcess,
+    abortController,
   } = options;
 
   const sdkOptions = {};
@@ -325,6 +327,9 @@ function mapCliOptionsToSDK(options = {}) {
   }
   if (spawnClaudeCodeProcess) {
     sdkOptions.spawnClaudeCodeProcess = spawnClaudeCodeProcess;
+  }
+  if (abortController) {
+    sdkOptions.abortController = abortController;
   }
 
   // Map working directory
@@ -1311,6 +1316,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Track the query instance for abort capability
     if (capturedSessionId) {
       addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+      runtimeOptions.onProviderSessionRegistered?.(capturedSessionId);
       bindRuntimeToProviderSession(capturedSessionId);
       recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
@@ -1350,8 +1356,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        await persistInitialDisplayCommand(capturedSessionId);
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+        runtimeOptions.onProviderSessionRegistered?.(capturedSessionId);
+        await persistInitialDisplayCommand(capturedSessionId);
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
@@ -1697,6 +1704,34 @@ async function abortClaudeSDKSession(sessionId) {
 }
 
 /**
+ * Close every reusable SDK stream during process shutdown. Processing sessions
+ * are interrupted first; idle sessions are closed directly so their retained
+ * Claude child process cannot outlive the host.
+ */
+async function closeAllClaudeSDKSessions() {
+  const sessions = [...activeSessions.entries()];
+  await Promise.allSettled(sessions.map(async ([sessionId, session]) => {
+    const { abortError, closeError } = await closeClaudeSessionForShutdown({
+      sessionId,
+      session,
+      abortProcessing: abortClaudeSDKSession,
+    });
+    if (abortError) {
+      console.warn(`SDK abort failed for session ${sessionId}:`, abortError?.message || abortError);
+    }
+    if (closeError) {
+      console.warn(`SDK close failed for session ${sessionId}:`, closeError?.message || closeError);
+    }
+
+    if (activeSessions.has(sessionId)) {
+      await cleanupTempFiles(session.tempImagePaths, session.tempDir);
+      removeSession(sessionId);
+    }
+  }));
+  return sessions.length;
+}
+
+/**
  * Checks if an SDK session is currently active
  * @param {string} sessionId - Session identifier
  * @returns {boolean} True if session is active
@@ -1887,6 +1922,7 @@ function pushClaudeSupplement({
 export {
   queryClaudeSDK,
   abortClaudeSDKSession,
+  closeAllClaudeSDKSessions,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
   mapCliOptionsToSDK,

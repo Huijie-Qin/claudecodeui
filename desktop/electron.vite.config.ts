@@ -13,10 +13,7 @@ export default defineConfig(({ mode }) => {
     readFileSync(resolve(__dirname, 'package.json'), 'utf8'),
   ) as DesktopPackage;
   const definitions = {
-    __DESKTOP_HOME_URL__: JSON.stringify(desktopConfig.homeUrl),
     __DESKTOP_UPDATE_BASE_URL__: JSON.stringify(desktopConfig.updateBaseUrl),
-    __DESKTOP_ALLOWED_ORIGINS__: JSON.stringify(desktopConfig.allowedOrigins),
-    __DESKTOP_AUTH_ORIGINS__: JSON.stringify(desktopConfig.authOrigins),
     __DESKTOP_APP_VERSION__: JSON.stringify(desktopPackage.version),
   };
 
@@ -24,6 +21,14 @@ export default defineConfig(({ mode }) => {
     main: {
       define: definitions,
       plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          input: {
+            index: resolve(__dirname, 'src/main/index.ts'),
+            'backend-entry': resolve(__dirname, 'src/main/backend-entry.ts'),
+          },
+        },
+      },
     },
     preload: {
       define: definitions,

@@ -11,13 +11,10 @@ vi.mock('electron', () => ({
   shell: { openExternal: electronMocks.openExternal },
 }));
 
-vi.mock('../src/shared/runtime-config', () => ({
-  ALLOWED_ORIGINS: new Set(['https://cloudcli.example.com']),
-  AUTH_ORIGINS: new Set(['https://login.example.com']),
-  SESSION_PARTITION: 'persist:test',
-}));
-
-import { installApplicationSecurity } from '../src/main/security';
+import {
+  configureSessionPermissions,
+  installApplicationSecurity,
+} from '../src/main/security';
 
 describe('application-wide security hooks', () => {
   it('always fails closed when Chromium reports a certificate error', () => {
@@ -44,5 +41,46 @@ describe('application-wide security hooks', () => {
 
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(callback).toHaveBeenCalledWith(false);
+  });
+
+  it('updates renderer permissions only after the backend origin becomes ready', () => {
+    let permissionCheck: ((
+      webContents: unknown,
+      permission: string,
+      requestingOrigin: string,
+      details: { requestingUrl: string; isMainFrame: boolean },
+    ) => boolean) | undefined;
+    let allowedOrigins = new Set<string>();
+    const desktopSession = {
+      setPermissionCheckHandler: vi.fn((handler) => {
+        permissionCheck = handler;
+      }),
+      setPermissionRequestHandler: vi.fn(),
+      setDevicePermissionHandler: vi.fn(),
+      on: vi.fn(),
+    };
+
+    configureSessionPermissions(desktopSession as never, {
+      getAllowedOrigins: () => allowedOrigins,
+    });
+    const webContents = { getURL: () => 'http://127.0.0.1:43123/' };
+    const details = {
+      requestingUrl: 'http://127.0.0.1:43123/session/1',
+      isMainFrame: true,
+    };
+
+    expect(permissionCheck?.(
+      webContents,
+      'notifications',
+      'http://127.0.0.1:43123',
+      details,
+    )).toBe(false);
+    allowedOrigins = new Set(['http://127.0.0.1:43123']);
+    expect(permissionCheck?.(
+      webContents,
+      'notifications',
+      'http://127.0.0.1:43123',
+      details,
+    )).toBe(true);
   });
 });

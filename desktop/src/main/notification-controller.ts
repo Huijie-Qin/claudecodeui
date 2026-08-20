@@ -11,7 +11,6 @@ import {
   type ValidatedNotificationInput,
 } from '../shared/notifications';
 import { IPC_CHANNELS } from '../shared/ipc-channels';
-import { ALLOWED_ORIGINS } from '../shared/runtime-config';
 
 const NOTIFICATION_SHOW_TIMEOUT_MS = 5_000;
 const NOTIFICATION_REFERENCE_TTL_MS = 10 * 60_000;
@@ -26,7 +25,10 @@ export class DesktopNotificationController {
   private readonly limiter = new NotificationRateLimiter();
   private readonly activeNotifications = new Map<string, ActiveNotification>();
 
-  constructor(private readonly getMainWindow: () => BrowserWindow | null) {}
+  constructor(
+    private readonly getMainWindow: () => BrowserWindow | null,
+    private readonly getAllowedOrigins: () => ReadonlySet<string>,
+  ) {}
 
   register(): void {
     ipcMain.handle(
@@ -48,7 +50,11 @@ export class DesktopNotificationController {
     if (!senderFrame || senderFrame !== event.sender.mainFrame) {
       return false;
     }
-    return isTrustedNotificationSender(senderFrame.url, true, ALLOWED_ORIGINS);
+    return isTrustedNotificationSender(
+      senderFrame.url,
+      true,
+      this.getAllowedOrigins(),
+    );
   }
 
   private async showFromRenderer(

@@ -9,6 +9,37 @@ const bridge: CloudCliDesktopBridge = Object.freeze({
   isDesktop: true,
   platform: process.platform,
   appVersion: __DESKTOP_APP_VERSION__,
+  async getBootstrapSession(): Promise<CloudCliDesktopBootstrapSession | null> {
+    const session = await ipcRenderer.invoke(IPC_CHANNELS.getBootstrapSession) as unknown;
+    if (!session || typeof session !== 'object' || Array.isArray(session)) {
+      return null;
+    }
+    const candidate = session as Record<string, unknown>;
+    const user = candidate.user;
+    if (
+      typeof candidate.token !== 'string'
+      || !candidate.token
+      || !user
+      || typeof user !== 'object'
+      || Array.isArray(user)
+      || typeof (user as Record<string, unknown>).username !== 'string'
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      user: Object.freeze({ ...(user as CloudCliDesktopBootstrapUser) }),
+      token: candidate.token,
+    });
+  },
+  async getBackendStatus(): Promise<CloudCliDesktopBackendStatus> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getBackendStatus) as Promise<CloudCliDesktopBackendStatus>;
+  },
+  async retryBackend(): Promise<CloudCliDesktopBackendStatus> {
+    return ipcRenderer.invoke(IPC_CHANNELS.retryBackend) as Promise<CloudCliDesktopBackendStatus>;
+  },
+  async openBackendLogs(): Promise<void> {
+    await ipcRenderer.invoke(IPC_CHANNELS.openBackendLogs);
+  },
   async showNotification(input: CloudCliDesktopNotificationInput): Promise<boolean> {
     const result = await ipcRenderer.invoke(IPC_CHANNELS.showNotification, input);
     return result === true;

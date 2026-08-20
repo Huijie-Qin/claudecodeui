@@ -67,6 +67,18 @@ test('mapCliOptionsToSDK preserves plan mode without enabling permission bypass'
   assert.ok(options.allowedTools.includes('Task'));
 });
 
+test('mapCliOptionsToSDK forwards the command abort controller to the SDK', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const abortController = new AbortController();
+
+  const options = claudeSdk.mapCliOptionsToSDK({
+    abortController,
+    executionEnv: {},
+  });
+
+  assert.equal(options.abortController, abortController);
+});
+
 test('createClaudePromptFactory keeps text-only prompts as strings', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

@@ -1,12 +1,8 @@
 import type { Configuration } from 'electron-builder';
-import {
-  assertDesktopSigningPolicy,
-  loadDesktopBuildConfig,
-} from './config/desktop-env';
+import { loadDesktopBuildConfig } from './config/desktop-env';
 
 const desktopConfig = loadDesktopBuildConfig({ production: true });
 const requireSigning = process.env.DESKTOP_REQUIRE_SIGNING === 'true';
-assertDesktopSigningPolicy(desktopConfig, { requireSigning });
 const buildingWindows = process.argv.some((argument) => ['--win', '--windows', '-w'].includes(argument));
 const buildingMac = process.argv.some((argument) => ['--mac', '--macos', '-m'].includes(argument));
 const updatePlatform = buildingWindows ? 'win' : buildingMac ? 'mac'
@@ -40,8 +36,32 @@ const config: Configuration = {
       from: 'build/trayTemplate@2x.png',
       to: 'trayTemplate@2x.png',
     },
+    {
+      from: '.runtime',
+      to: 'runtime',
+      filter: [
+        '**/*',
+        '!node{,/**/*}',
+        '!node_modules{,/**/*}',
+      ],
+    },
+    // electron-builder deliberately filters a FileSet root named node_modules.
+    // Copy it as its own source so the self-contained backend dependencies are
+    // included under the runtime resource instead of being silently omitted.
+    {
+      from: '.runtime/node_modules',
+      to: 'runtime/node_modules',
+      filter: ['**/*'],
+    },
+    // npm is copied from the official Node distribution and has its own
+    // nested node_modules tree. Keep that tree intact as desktop tooling.
+    {
+      from: '.runtime/node',
+      to: 'runtime/node',
+      filter: ['**/*'],
+    },
   ],
-  afterPack: './scripts/apply-fuses.cjs',
+  afterPack: './scripts/after-pack.cjs',
   forceCodeSigning: requireSigning,
   publish: {
     provider: 'generic',
@@ -59,6 +79,11 @@ const config: Configuration = {
     hardenedRuntime: true,
     gatekeeperAssess: false,
     notarize: requireSigning,
+    // Both single-architecture staging apps intentionally contain identical
+    // binaries under architecture-qualified paths. Keep those files as-is;
+    // any per-architecture build/Release outputs remain outside this pattern
+    // so the universal merger combines their x64 and arm64 variants with lipo.
+    x64ArchFiles: 'Contents/Resources/runtime/{claude/**,node/**,node_modules/**/prebuilds/**}',
   },
   dmg: {
     sign: requireSigning,

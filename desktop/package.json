@@ -1,7 +1,7 @@
 {
   "name": "@cloudcli-ai/desktop",
   "version": "1.0.0",
-  "description": "Secure remote desktop client for CloudCLI",
+  "description": "Self-contained local desktop application for CloudCLI",
   "author": "CloudCLI UI Contributors",
   "license": "AGPL-3.0-or-later",
   "private": true,
@@ -11,19 +11,26 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "dev": "npm run build:runtime && electron-vite dev",
+    "build": "npm run build:runtime && npm run build:electron",
+    "build:electron": "npm run typecheck && electron-vite build",
+    "build:runtime": "node scripts/build-root.mjs && npm run prepare:runtime && npm run rebuild:runtime",
+    "build:runtime:mac": "node scripts/build-root.mjs && npm run prepare:runtime -- --targets=darwin-arm64,darwin-x64",
+    "build:runtime:win": "node scripts/build-root.mjs && npm run prepare:runtime -- --targets=win32-x64",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "rebuild:runtime": "node scripts/rebuild-runtime-native.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "verify:fuses": "node scripts/verify-fuses.cjs",
-    "package:mac": "npm run build && electron-builder --config electron-builder.config.ts --mac --universal --publish never",
-    "package:win": "npm run build && electron-builder --config electron-builder.config.ts --win --x64 --publish never"
+    "package:mac": "npm run build:runtime:mac && npm run build:electron && electron-builder --config electron-builder.config.ts --mac --universal --publish never",
+    "package:win": "npm run build:runtime:win && npm run build:electron && electron-builder --config electron-builder.config.ts --win --x64 --publish never"
   },
   "dependencies": {
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
+    "@electron/rebuild": "4.2.0",
     "@types/node": "22.19.7",
     "electron": "43.4.0",
     "electron-builder": "26.15.3",

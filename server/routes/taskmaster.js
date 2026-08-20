@@ -17,6 +17,7 @@ import { extractProjectDirectory } from '../projects.js';
 import { detectTaskMasterMCPServer } from '../utils/mcp-detector.js';
 import { broadcastTaskMasterProjectUpdate, broadcastTaskMasterTasksUpdate } from '../utils/taskmaster-websocket.js';
 import { applyWorkspaceOwnership } from '../services/workspace-ownership.js';
+import { createNpxSpawnSpec } from '../utils/runtime-command.js';
 
 const router = express.Router();
 
@@ -56,6 +57,14 @@ async function normalizeTaskMasterOwnershipAfterFailure(projectPath, reason) {
     } catch (error) {
         console.error('[workspace-ownership] Failed after TaskMaster command error:', error);
     }
+}
+
+function spawnNpx(args, options) {
+    const spec = createNpxSpawnSpec(args);
+    return spawn(spec.command, spec.args, {
+        ...options,
+        env: spec.environment,
+    });
 }
 
 /**
@@ -548,7 +557,7 @@ router.post('/init/:projectName', async (req, res) => {
         }
 
         // Run taskmaster init command
-        const initProcess = spawn('npx', ['task-master', 'init'], {
+        const initProcess = spawnNpx(['task-master', 'init'], {
             cwd: projectPath,
             stdio: ['pipe', 'pipe', 'pipe']
         });
@@ -655,7 +664,7 @@ router.post('/add-task/:projectName', async (req, res) => {
         }
 
         // Run task-master add-task command
-        const addTaskProcess = spawn('npx', args, {
+        const addTaskProcess = spawnNpx(args, {
             cwd: projectPath,
             stdio: ['pipe', 'pipe', 'pipe']
         });
@@ -739,7 +748,7 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
 
         // If only updating status, use set-status command
         if (status && Object.keys(req.body).length === 1) {
-            const setStatusProcess = spawn('npx', ['task-master-ai', 'set-status', `--id=${taskId}`, `--status=${status}`], {
+            const setStatusProcess = spawnNpx(['task-master-ai', 'set-status', `--id=${taskId}`, `--status=${status}`], {
                 cwd: projectPath,
                 stdio: ['pipe', 'pipe', 'pipe']
             });
@@ -795,7 +804,7 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
             
             const prompt = `Update task with the following changes: ${updates.join(', ')}`;
 
-            const updateProcess = spawn('npx', ['task-master-ai', 'update-task', `--id=${taskId}`, `--prompt=${prompt}`], {
+            const updateProcess = spawnNpx(['task-master-ai', 'update-task', `--id=${taskId}`, `--prompt=${prompt}`], {
                 cwd: projectPath,
                 stdio: ['pipe', 'pipe', 'pipe']
             });
@@ -898,7 +907,7 @@ router.post('/parse-prd/:projectName', async (req, res) => {
         args.push('--research'); // Use research for better PRD parsing
 
         // Run task-master parse-prd command
-        const parsePRDProcess = spawn('npx', args, {
+        const parsePRDProcess = spawnNpx(args, {
             cwd: projectPath,
             stdio: ['pipe', 'pipe', 'pipe']
         });

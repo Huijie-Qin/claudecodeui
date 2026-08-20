@@ -85,7 +85,9 @@ test('Graph Executor dynamically activates Agents through shared Context and com
   });
   assert.equal(queued.status, 'queued');
   assert.equal(queued.workspacePath, undefined);
+  assert.equal(executor.getActiveRunCount(), 1);
   await scheduled();
+  assert.equal(executor.getActiveRunCount(), 0);
 
   const completed = await executor.getRun({ workspacePath: '/tmp/workspace', graphId: 'graph-one', runId: queued.id });
   assert.equal(completed.status, 'completed');
@@ -133,6 +135,58 @@ test('Graph Executor persists failures without fabricating Agent results', async
   assert.deepEqual(failed.context.resultIds, []);
   assert.deepEqual(failed.resultStore, []);
   assert.equal(failed.agentStates[0].status, 'failed');
+});
+
+test('Graph Executor aborts every queued run during forced shutdown', async () => {
+  const store = createMemoryStore();
+  let scheduled;
+  const executor = createAgentGraphExecutorService({
+    store,
+    schedule: (callback) => { scheduled = callback; },
+  });
+  const queued = await executor.startRun({
+    workspacePath: '/tmp/workspace', tenantId: 1, userId: 2, workspaceId: 3,
+    graph: graph(), input: 'Analyze churn',
+  });
+
+  assert.equal(executor.abortAllActiveRuns(), 1);
+  assert.equal(executor.getActiveRunCount(), 1);
+  await scheduled();
+  assert.equal(executor.getActiveRunCount(), 0);
+  const cancelled = await executor.getRun({
+    workspacePath: '/tmp/workspace', graphId: 'graph-one', runId: queued.id,
+  });
+  assert.equal(cancelled.status, 'cancelled');
+});
+
+test('Graph Executor forwards forced shutdown aborts to a running Claude turn', async () => {
+  const store = createMemoryStore();
+  let scheduled;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const executor = createAgentGraphExecutorService({
+    store,
+    schedule: (callback) => { scheduled = callback; },
+    selectAgent: async ({ abortController }) => new Promise((resolve, reject) => {
+      markStarted();
+      abortController.signal.addEventListener('abort', () => reject(new Error('selector aborted')), { once: true });
+    }),
+  });
+  const queued = await executor.startRun({
+    workspacePath: '/tmp/workspace', tenantId: 1, userId: 2, workspaceId: 3,
+    graph: graph(), input: 'Analyze churn',
+  });
+
+  const running = scheduled();
+  await started;
+  assert.equal(executor.getActiveRunCount(), 1);
+  assert.equal(executor.abortAllActiveRuns(), 1);
+  await running;
+  assert.equal(executor.getActiveRunCount(), 0);
+  const cancelled = await executor.getRun({
+    workspacePath: '/tmp/workspace', graphId: 'graph-one', runId: queued.id,
+  });
+  assert.equal(cancelled.status, 'cancelled');
 });
 
 test('Graph Executor validates empty Graphs and activation safety limits', async () => {

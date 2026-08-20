@@ -330,7 +330,15 @@ function abortCursorSession(sessionId) {
   if (process) {
     console.log(`Aborting Cursor session: ${sessionId}`);
     process.kill('SIGTERM');
-    activeCursorProcesses.delete(sessionId);
+    setTimeout(() => {
+      if ([...activeCursorProcesses.values()].includes(process)) {
+        try {
+          process.kill('SIGKILL');
+        } catch {
+          // The process may have exited after the active-map check.
+        }
+      }
+    }, 2000);
     return true;
   }
   return false;

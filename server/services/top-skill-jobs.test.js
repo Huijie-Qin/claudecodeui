@@ -26,8 +26,10 @@ test('Top Skill jobs execute outside the request path and expose completed resul
   });
   assert.equal(queued.status, 'queued');
   assert.equal(seen.request, undefined);
+  assert.equal(jobs.getActiveJobCount(), 1);
 
   await scheduled();
+  assert.equal(jobs.getActiveJobCount(), 0);
   const completed = jobs.getTopSkillJob({ jobId: 'job-one', tenantId: 2, userId: 7, workspaceId: 10 });
   assert.equal(completed.status, 'succeeded');
   assert.equal(completed.result.topSkill, 'generated');
@@ -66,4 +68,66 @@ test('Top Skill jobs reject unsupported operations before scheduling', () => {
     () => jobs.startTopSkillJob({ operation: 'delete' }),
     (error) => error.statusCode === 400,
   );
+});
+
+test('Top Skill jobs abort queued Claude work during forced shutdown', async () => {
+  let scheduled;
+  let generatorCalled = false;
+  const jobs = createTopSkillJobsService({
+    createId: () => 'job-cancelled',
+    schedule: (callback) => { scheduled = callback; },
+    generator: async () => { generatorCalled = true; },
+  });
+  jobs.startTopSkillJob({
+    operation: 'generate',
+    workspacePath: '/tmp/workspace',
+    tenantId: 2,
+    userId: 7,
+    workspaceId: 10,
+    input: { name: 'Analyst' },
+  });
+
+  assert.equal(jobs.abortAllActiveJobs(), 1);
+  await scheduled();
+  assert.equal(generatorCalled, false);
+  assert.equal(jobs.getActiveJobCount(), 0);
+  const cancelled = jobs.getTopSkillJob({
+    jobId: 'job-cancelled', tenantId: 2, userId: 7, workspaceId: 10,
+  });
+  assert.equal(cancelled.status, 'failed');
+  assert.match(cancelled.error, /cancelled/);
+});
+
+test('Top Skill jobs forward forced shutdown aborts to running Claude work', async () => {
+  let scheduled;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const jobs = createTopSkillJobsService({
+    createId: () => 'job-running',
+    schedule: (callback) => { scheduled = callback; },
+    generator: async ({ abortController }) => new Promise((resolve, reject) => {
+      markStarted();
+      abortController.signal.addEventListener('abort', () => reject(new Error('runner aborted')), { once: true });
+    }),
+  });
+  jobs.startTopSkillJob({
+    operation: 'generate',
+    workspacePath: '/tmp/workspace',
+    tenantId: 2,
+    userId: 7,
+    workspaceId: 10,
+    input: { name: 'Analyst' },
+  });
+
+  const running = scheduled();
+  await started;
+  assert.equal(jobs.getActiveJobCount(), 1);
+  assert.equal(jobs.abortAllActiveJobs(), 1);
+  await running;
+  assert.equal(jobs.getActiveJobCount(), 0);
+  const cancelled = jobs.getTopSkillJob({
+    jobId: 'job-running', tenantId: 2, userId: 7, workspaceId: 10,
+  });
+  assert.equal(cancelled.status, 'failed');
+  assert.equal(cancelled.error, 'runner aborted');
 });

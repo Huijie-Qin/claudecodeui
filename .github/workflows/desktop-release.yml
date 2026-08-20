@@ -16,10 +16,7 @@ permissions:
   contents: read
 
 env:
-  DESKTOP_HOME_URL: ${{ vars.DESKTOP_HOME_URL }}
   DESKTOP_UPDATE_BASE_URL: ${{ vars.DESKTOP_UPDATE_BASE_URL }}
-  DESKTOP_ALLOWED_ORIGINS: ${{ vars.DESKTOP_ALLOWED_ORIGINS }}
-  DESKTOP_AUTH_ORIGINS: ${{ vars.DESKTOP_AUTH_ORIGINS }}
   DESKTOP_REQUIRE_SIGNING: 'true'
 
 jobs:
@@ -31,7 +28,9 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
       - name: Validate desktop tag version
         if: startsWith(github.ref, 'refs/tags/desktop-v')
         working-directory: desktop
@@ -40,8 +39,10 @@ jobs:
           EXPECTED_VERSION="${GITHUB_REF_NAME#desktop-v}"
           ACTUAL_VERSION="$(node -p "require('./package.json').version")"
           test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
-      - name: Install desktop dependencies
-        run: npm --prefix desktop ci
+      - name: Install application and desktop dependencies
+        run: |
+          npm ci
+          npm --prefix desktop ci
       - name: Configure Apple notarization key
         shell: bash
         run: |
@@ -65,8 +66,70 @@ jobs:
           set -euo pipefail
           APP_BUNDLE='desktop/dist/mac-universal/mac-universal/CloudCLI.app'
           test -d "$APP_BUNDLE"
+          RUNTIME="$APP_BUNDLE/Contents/Resources/runtime"
+          test -f "$RUNTIME/dist/index.html"
+          test -f "$RUNTIME/dist-server/server/index.js"
+          test -f "$RUNTIME/server/services/hook-python-runner.py"
+          test -f "$RUNTIME/node_modules/better-sqlite3/package.json"
+          test -f "$RUNTIME/node/darwin-arm64/npm/bin/npm-cli.js"
+          test -f "$RUNTIME/node/darwin-x64/npm/bin/npm-cli.js"
+          test -x "$RUNTIME/node/darwin-arm64/bin/npm"
+          test -x "$RUNTIME/node/darwin-arm64/bin/npx"
+          test -x "$RUNTIME/node/darwin-x64/bin/npm"
+          test -x "$RUNTIME/node/darwin-x64/bin/npx"
+          test -x "$RUNTIME/claude/darwin-arm64/claude"
+          test -x "$RUNTIME/claude/darwin-x64/claude"
+          test -x "$RUNTIME/node/darwin-arm64/node"
+          test -x "$RUNTIME/node/darwin-x64/node"
+          test ! -e "$RUNTIME/claude/win32-x64"
+          test ! -e "$RUNTIME/node/win32-x64"
+          file "$RUNTIME/claude/darwin-arm64/claude" | grep -q 'arm64'
+          file "$RUNTIME/claude/darwin-x64/claude" | grep -q 'x86_64'
+          test "$(lipo -archs "$RUNTIME/node/darwin-arm64/node")" = 'arm64'
+          test "$(lipo -archs "$RUNTIME/node/darwin-x64/node")" = 'x86_64'
+          PTY_RELEASE="$RUNTIME/node_modules/node-pty/build/Release"
+          test -f "$PTY_RELEASE/pty.node"
+          test -x "$PTY_RELEASE/spawn-helper"
+          lipo -archs "$PTY_RELEASE/pty.node" | grep -q 'arm64'
+          lipo -archs "$PTY_RELEASE/pty.node" | grep -q 'x86_64'
+          lipo -archs "$PTY_RELEASE/spawn-helper" | grep -q 'arm64'
+          lipo -archs "$PTY_RELEASE/spawn-helper" | grep -q 'x86_64'
+          grep -q 'CLOUDCLI_NODE_EXECUTABLE || process.execPath' \
+            "$RUNTIME/node_modules/node-pty/lib/windowsPtyAgent.js"
+          ELECTRON_RUN_AS_NODE=1 \
+            desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \
+            desktop/scripts/smoke-native-runtime.cjs "$RUNTIME"
+          case "$(uname -m)" in
+            arm64) NODE_ARCH='arm64' ;;
+            x86_64) NODE_ARCH='x64' ;;
+            *) echo 'Unsupported macOS runner architecture.' >&2; exit 1 ;;
+          esac
+          NODE_EXECUTABLE="$RUNTIME/node/darwin-$NODE_ARCH/node"
+          NPM_CLI="$RUNTIME/node/darwin-$NODE_ARCH/npm/bin/npm-cli.js"
+          TOOLCHAIN_BIN="$RUNTIME/node/darwin-$NODE_ARCH/bin"
+          "$NODE_EXECUTABLE" -p 'process.version'
+          "$NODE_EXECUTABLE" "$NPM_CLI" --version
+          env -i HOME="$RUNNER_TEMP" PATH="$TOOLCHAIN_BIN:$(dirname "$NODE_EXECUTABLE"):/usr/bin:/bin" \
+            npm --version
+          env -i HOME="$RUNNER_TEMP" PATH="$TOOLCHAIN_BIN:$(dirname "$NODE_EXECUTABLE"):/usr/bin:/bin" \
+            npx --version
+          TOOLCHAIN_SMOKE="$RUNNER_TEMP/cloudcli-plugin-toolchain-smoke"
+          mkdir -p "$TOOLCHAIN_SMOKE"
+          printf '%s\n' '{"scripts":{"smoke":"node smoke.js"}}' > "$TOOLCHAIN_SMOKE/package.json"
+          printf '%s\n' 'const path = require("node:path"); if (path.resolve(process.execPath) !== path.resolve(process.env.CLOUDCLI_EXPECTED_NODE)) process.exit(23);' > "$TOOLCHAIN_SMOKE/smoke.js"
+          env -i HOME="$RUNNER_TEMP" \
+            PATH="$TOOLCHAIN_BIN:$(dirname "$NODE_EXECUTABLE"):/usr/bin:/bin" \
+            CLOUDCLI_EXPECTED_NODE="$NODE_EXECUTABLE" \
+            npm --prefix "$TOOLCHAIN_SMOKE" run smoke --silent
+          if test "$(uname -m)" = 'arm64'; then
+            "$RUNTIME/claude/darwin-arm64/claude" --version
+          else
+            "$RUNTIME/claude/darwin-x64/claude" --version
+          fi
           npm --prefix desktop run verify:fuses -- "$APP_BUNDLE"
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          codesign --verify --strict --verbose=2 "$RUNTIME/node/darwin-arm64/node"
+          codesign --verify --strict --verbose=2 "$RUNTIME/node/darwin-x64/node"
           spctl --assess --type execute --verbose=2 "$APP_BUNDLE"
           xcrun stapler validate "$APP_BUNDLE"
           DMG_FILES=(desktop/dist/mac-universal/*.dmg)
@@ -93,7 +156,9 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
       - name: Validate desktop tag version
         if: startsWith(github.ref, 'refs/tags/desktop-v')
         working-directory: desktop
@@ -102,8 +167,10 @@ jobs:
           EXPECTED_VERSION="${GITHUB_REF_NAME#desktop-v}"
           ACTUAL_VERSION="$(node -p "require('./package.json').version")"
           test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
-      - name: Install desktop dependencies
-        run: npm --prefix desktop ci
+      - name: Install application and desktop dependencies
+        run: |
+          npm ci
+          npm --prefix desktop ci
       - name: Test and build Windows x64 release
         run: npm --prefix desktop run test && npm --prefix desktop run package:win
         env:
@@ -112,13 +179,96 @@ jobs:
       - name: Verify Windows fuses
         shell: bash
         run: npm --prefix desktop run verify:fuses -- 'desktop/dist/win-x64/win-unpacked/CloudCLI.exe'
+      - name: Verify bundled Windows runtime
+        shell: pwsh
+        run: |
+          $runtime = 'desktop/dist/win-x64/win-unpacked/resources/runtime'
+          $required = @(
+            "$runtime/dist/index.html",
+            "$runtime/dist-server/server/index.js",
+            "$runtime/server/services/hook-python-runner.py",
+            "$runtime/node_modules/better-sqlite3/package.json",
+            "$runtime/node_modules/node-pty/build/Release/conpty.node",
+            "$runtime/node_modules/node-pty/build/Release/conpty_console_list.node",
+            "$runtime/node_modules/node-pty/build/Release/conpty/conpty.dll",
+            "$runtime/node_modules/node-pty/build/Release/conpty/OpenConsole.exe",
+            "$runtime/node_modules/node-pty/lib/windowsPtyAgent.js",
+            "$runtime/node/win32-x64/npm/bin/npm-cli.js",
+            "$runtime/node/win32-x64/bin/npm",
+            "$runtime/node/win32-x64/bin/npm.cmd",
+            "$runtime/node/win32-x64/bin/npm.ps1",
+            "$runtime/node/win32-x64/bin/npx",
+            "$runtime/node/win32-x64/bin/npx.cmd",
+            "$runtime/node/win32-x64/bin/npx.ps1",
+            "$runtime/node/win32-x64/node.exe",
+            "$runtime/claude/win32-x64/claude.exe"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing packaged runtime file: $file"
+            }
+          }
+          if ((Test-Path -LiteralPath "$runtime/claude/darwin-arm64") -or (Test-Path -LiteralPath "$runtime/claude/darwin-x64")) {
+            throw 'Windows package contains unnecessary macOS Claude binaries.'
+          }
+          if ((Test-Path -LiteralPath "$runtime/node/darwin-arm64") -or (Test-Path -LiteralPath "$runtime/node/darwin-x64")) {
+            throw 'Windows package contains unnecessary macOS Node binaries.'
+          }
+          & "$runtime/claude/win32-x64/claude.exe" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Claude CLI failed with exit code $LASTEXITCODE"
+          }
+          $nodeExecutable = (Resolve-Path -LiteralPath "$runtime/node/win32-x64/node.exe").Path
+          & $nodeExecutable -p 'process.version'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Node runtime failed with exit code $LASTEXITCODE"
+          }
+          $npmCli = "$runtime/node/win32-x64/npm/bin/npm-cli.js"
+          & $nodeExecutable $npmCli --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled npm CLI failed with exit code $LASTEXITCODE"
+          }
+          $nodePtyAgent = Get-Content -Raw -LiteralPath "$runtime/node_modules/node-pty/lib/windowsPtyAgent.js"
+          if ($nodePtyAgent -notmatch 'CLOUDCLI_NODE_EXECUTABLE \|\| process\.execPath') {
+            throw 'Packaged node-pty does not use the bundled Node runtime for its console agent.'
+          }
+          $toolchainBin = "$runtime/node/win32-x64/bin"
+          $env:PATH = "$toolchainBin;$(Split-Path -Parent $nodeExecutable);$env:SystemRoot\System32;$env:SystemRoot"
+          & "$toolchainBin/npm.cmd" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled npm shim failed with exit code $LASTEXITCODE"
+          }
+          & "$toolchainBin/npx.cmd" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled npx shim failed with exit code $LASTEXITCODE"
+          }
+          $toolchainSmoke = Join-Path $env:RUNNER_TEMP 'cloudcli-plugin-toolchain-smoke'
+          New-Item -ItemType Directory -Force -Path $toolchainSmoke | Out-Null
+          Set-Content -LiteralPath (Join-Path $toolchainSmoke 'package.json') -NoNewline -Value '{"scripts":{"smoke":"node smoke.js"}}'
+          Set-Content -LiteralPath (Join-Path $toolchainSmoke 'smoke.js') -NoNewline -Value 'const path = require("node:path"); if (path.resolve(process.execPath).toLowerCase() !== path.resolve(process.env.CLOUDCLI_EXPECTED_NODE).toLowerCase()) process.exit(23);'
+          $env:CLOUDCLI_EXPECTED_NODE = $nodeExecutable
+          & "$toolchainBin/npm.cmd" --prefix $toolchainSmoke run smoke --silent
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled npm script PATH smoke failed with exit code $LASTEXITCODE"
+          }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $env:CLOUDCLI_NODE_EXECUTABLE = $nodeExecutable
+          & 'desktop/node_modules/electron/dist/electron.exe' 'desktop/scripts/smoke-native-runtime.cjs' $runtime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged Electron-ABI native module smoke failed with exit code $LASTEXITCODE"
+          }
+          Remove-Item Env:ELECTRON_RUN_AS_NODE
+          Remove-Item Env:CLOUDCLI_NODE_EXECUTABLE
       - name: Verify Windows Authenticode signatures
         shell: pwsh
         run: |
-          $targets = @('desktop/dist/win-x64/win-unpacked/CloudCLI.exe')
+          $targets = @(
+            'desktop/dist/win-x64/win-unpacked/CloudCLI.exe',
+            'desktop/dist/win-x64/win-unpacked/resources/runtime/node/win32-x64/node.exe'
+          )
           $targets += @(Get-ChildItem -Path 'desktop/dist/win-x64' -Filter '*-win-x64.exe' -File | ForEach-Object FullName)
-          if ($targets.Count -ne 2) {
-            throw "Expected the application executable and one NSIS installer, found $($targets.Count)."
+          if ($targets.Count -ne 3) {
+            throw "Expected the application, bundled Node runtime, and one NSIS installer, found $($targets.Count)."
           }
           foreach ($target in $targets) {
             $signature = Get-AuthenticodeSignature -FilePath $target

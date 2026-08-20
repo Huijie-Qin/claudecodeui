@@ -546,6 +546,7 @@ async function executeSkillCreator({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  abortController = null,
 }) {
   const effectiveRunQuery = runQuery || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const effectiveRuntimeManager = runtimeManager
@@ -579,6 +580,7 @@ async function executeSkillCreator({
     sdkOptions.allowedTools = [];
     sdkOptions.tools = [];
     sdkOptions.systemPrompt = 'Follow the supplied skill-creator instructions. Return only the requested SKILL.md content.';
+    if (abortController) sdkOptions.abortController = abortController;
 
     let responseText = '';
     for await (const message of effectiveRunQuery({ prompt: resolved.prompt, options: sdkOptions })) {
@@ -620,6 +622,7 @@ export async function generateTopSkill({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  abortController = null,
   expand,
 }) {
   const resolved = await resolveSkillCreatorPrompt({ workspacePath, input, expand });
@@ -634,6 +637,7 @@ export async function generateTopSkill({
     runQuery,
     runtimeManager,
     mapOptions,
+    abortController,
   });
 }
 
@@ -646,6 +650,7 @@ export async function optimizeTopSkill({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  abortController = null,
   expand,
 }) {
   const resolved = await resolveSkillCreatorOptimizationPrompt({ workspacePath, input, expand });
@@ -660,6 +665,7 @@ export async function optimizeTopSkill({
     runQuery,
     runtimeManager,
     mapOptions,
+    abortController,
   });
 }
 

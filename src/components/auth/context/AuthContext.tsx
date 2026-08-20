@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { IS_PLATFORM } from '../../../constants/config';
@@ -44,6 +52,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const desktopBootstrapStarted = useRef(false);
+  const desktopBridge = window.cloudcliDesktop;
 
   const setSession = useCallback((nextUser: AuthUser, nextToken: string) => {
     setUser(nextUser);
@@ -119,6 +129,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [checkOnboardingStatus, clearSession, t, token]);
 
   useEffect(() => {
+    if (desktopBridge?.isDesktop) {
+      if (desktopBootstrapStarted.current) {
+        return;
+      }
+      desktopBootstrapStarted.current = true;
+      setIsLoading(true);
+      setError(null);
+      setNeedsSetup(false);
+      // A desktop backend owns the session. Never reuse a token left by a
+      // previous backend process or an older remote-shell installation.
+      clearSession();
+      void desktopBridge.getBootstrapSession()
+        .then(async (session) => {
+          if (!session) {
+            throw new Error('The local backend did not provide a bootstrap session.');
+          }
+          setSession(session.user, session.token);
+          await checkOnboardingStatus();
+        })
+        .catch((caughtError: unknown) => {
+          console.error('[Auth] Desktop bootstrap failed:', caughtError);
+          setError(t('errors.authStatusCheckFailed'));
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+      return;
+    }
+
     if (IS_PLATFORM) {
       setUser({ username: 'platform-user' });
       setNeedsSetup(false);
@@ -129,7 +168,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
 
     void checkAuthStatus();
-  }, [checkAuthStatus, checkOnboardingStatus]);
+  }, [checkAuthStatus, checkOnboardingStatus, clearSession, desktopBridge, setSession, t]);
 
   useEffect(() => {
     const handleTokenRefreshed = (event: Event) => {
@@ -254,7 +293,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   const logout = useCallback(() => {
-    if (IS_PLATFORM) {
+    if (IS_PLATFORM || desktopBridge?.isDesktop) {
       return;
     }
 
@@ -266,7 +305,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         console.error('Logout endpoint error:', caughtError);
       });
     }
-  }, [clearSession, token]);
+  }, [clearSession, desktopBridge, token]);
 
   const contextValue = useMemo<AuthContextValue>(
     () => ({

@@ -3,6 +3,11 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 
+import {
+  createNpmSpawnSpec,
+  createPluginToolEnvironment,
+} from './runtime-command.js';
+
 const PLUGINS_DIR = path.join(os.homedir(), '.claude-code-ui', 'plugins');
 const PLUGINS_CONFIG_PATH = path.join(os.homedir(), '.claude-code-ui', 'plugins.json');
 
@@ -106,8 +111,17 @@ function runBuildIfNeeded(dir, packageJsonPath, onSuccess, onError) {
     return onSuccess(); // Unreadable package.json — skip build
   }
 
-  const buildProcess = spawn('npm', ['run', 'build'], {
+  let npmSpec;
+  try {
+    npmSpec = createNpmSpawnSpec(['run', 'build'], {
+      environment: createPluginToolEnvironment(process.env),
+    });
+  } catch (error) {
+    return onError(error);
+  }
+  const buildProcess = spawn(npmSpec.command, npmSpec.args, {
     cwd: dir,
+    env: npmSpec.environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -338,8 +352,20 @@ export function installPluginFromGit(url) {
       // --ignore-scripts prevents postinstall hooks from executing arbitrary code.
       const packageJsonPath = path.join(tempDir, 'package.json');
       if (fs.existsSync(packageJsonPath)) {
-        const npmProcess = spawn('npm', ['install', '--ignore-scripts'], {
+        let npmSpec;
+        try {
+          npmSpec = createNpmSpawnSpec(['install', '--ignore-scripts'], {
+            environment: createPluginToolEnvironment(process.env, {
+              includeNpmConfiguration: true,
+            }),
+          });
+        } catch (error) {
+          cleanupTemp();
+          return reject(error);
+        }
+        const npmProcess = spawn(npmSpec.command, npmSpec.args, {
           cwd: tempDir,
+          env: npmSpec.environment,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
 
@@ -405,8 +431,19 @@ export function updatePluginFromGit(name) {
       // Re-run npm install if package.json exists
       const packageJsonPath = path.join(pluginDir, 'package.json');
       if (fs.existsSync(packageJsonPath)) {
-        const npmProcess = spawn('npm', ['install', '--ignore-scripts'], {
+        let npmSpec;
+        try {
+          npmSpec = createNpmSpawnSpec(['install', '--ignore-scripts'], {
+            environment: createPluginToolEnvironment(process.env, {
+              includeNpmConfiguration: true,
+            }),
+          });
+        } catch (error) {
+          return reject(error);
+        }
+        const npmProcess = spawn(npmSpec.command, npmSpec.args, {
           cwd: pluginDir,
+          env: npmSpec.environment,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         npmProcess.on('close', (npmCode) => {

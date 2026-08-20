@@ -51,8 +51,12 @@ export function createTopSkillJobsService({
     job.startedAtMs = now();
     job.startedAt = new Date(job.startedAtMs).toISOString();
     try {
+      if (job.abortController.signal.aborted) throw new Error('Top Skill job was cancelled');
       const runner = job.operation === 'optimize' ? optimizer : generator;
-      job.result = await runner(job.request);
+      job.result = await runner({
+        ...job.request,
+        abortController: job.abortController,
+      });
       job.status = 'succeeded';
     } catch (error) {
       job.status = 'failed';
@@ -89,6 +93,7 @@ export function createTopSkillJobsService({
       result: null,
       error: null,
       request: { workspacePath, tenantId, userId, workspaceId, input },
+      abortController: new AbortController(),
     };
     jobs.set(job.id, job);
     schedule(() => run(job));
@@ -109,7 +114,30 @@ export function createTopSkillJobsService({
     return publicJob(job);
   }
 
-  return { startTopSkillJob, getTopSkillJob };
+  function getActiveJobCount() {
+    let count = 0;
+    for (const job of jobs.values()) {
+      if (ACTIVE_STATUSES.has(job.status)) count += 1;
+    }
+    return count;
+  }
+
+  function abortAllActiveJobs() {
+    let count = 0;
+    for (const job of jobs.values()) {
+      if (!ACTIVE_STATUSES.has(job.status)) continue;
+      job.abortController.abort();
+      count += 1;
+    }
+    return count;
+  }
+
+  return {
+    startTopSkillJob,
+    getTopSkillJob,
+    getActiveJobCount,
+    abortAllActiveJobs,
+  };
 }
 
 export const topSkillJobsService = createTopSkillJobsService();

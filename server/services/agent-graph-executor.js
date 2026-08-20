@@ -894,7 +894,7 @@ export function createAgentGraphExecutorService({
     };
     addTrace(run, 'run_created', { message: 'Execution Context created.', input: userInput });
     const abortController = new AbortController();
-    activeRuns.set(run.id, abortController);
+    activeRuns.set(run.id, { abortController, run });
     try {
       await artifactWorkspace.initializeExecutionWorkspace({
         workspacePath,
@@ -931,8 +931,8 @@ export function createAgentGraphExecutorService({
     const run = await store.getAgentGraphRun({ workspacePath, runId });
     if (run.graphId !== graphId) throw createHttpError('Agent Graph run not found', 404);
     if (!ACTIVE_STATUSES.has(run.status)) return toPublicRun(run);
-    const controller = activeRuns.get(run.id);
-    if (!controller) {
+    const activeRun = activeRuns.get(run.id);
+    if (!activeRun) {
       run.status = 'failed';
       run.context.status = 'failed';
       run.error = 'Agent Graph run was interrupted and cannot be cancelled.';
@@ -947,8 +947,28 @@ export function createAgentGraphExecutorService({
     run.context.status = 'cancelling';
     addTrace(run, 'run_cancelling', { message: 'Cancellation requested.' });
     await store.saveAgentGraphRun({ workspacePath, run });
-    controller.abort();
+    activeRun.abortController.abort();
     return toPublicRun(run);
+  }
+
+  function getActiveRunCount() {
+    let count = 0;
+    for (const { run } of activeRuns.values()) {
+      if (ACTIVE_STATUSES.has(run.status)) count += 1;
+    }
+    return count;
+  }
+
+  function abortAllActiveRuns() {
+    let count = 0;
+    for (const { abortController, run } of activeRuns.values()) {
+      if (!ACTIVE_STATUSES.has(run.status)) continue;
+      run.status = 'cancelling';
+      run.context.status = 'cancelling';
+      abortController.abort();
+      count += 1;
+    }
+    return count;
   }
 
   async function listRunArtifacts({ workspacePath, graphId, runId }) {
@@ -968,6 +988,8 @@ export function createAgentGraphExecutorService({
     getRun,
     listRuns,
     cancelRun,
+    abortAllActiveRuns,
+    getActiveRunCount,
     listRunArtifacts,
     readRunArtifact,
     getConfig: () => getAgentGraphExecutorConfig(),
