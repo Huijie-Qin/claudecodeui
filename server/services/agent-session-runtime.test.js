@@ -59,8 +59,8 @@ function createLayeredClaudeEnvResolver({ tenantEnvs = {}, personalEnv = {} } = 
           }
         };
         apply(input.baseEnv, 'baseEnv');
-        apply(input.adminUserEnv, 'adminUserEnv');
         if (input.tenantId != null) apply(tenantEnvs[input.tenantId], 'tenant');
+        apply(input.adminUserEnv, 'adminUserEnv');
         const personalCredentialNames = [
           'ANTHROPIC_BASE_URL',
           'ANTHROPIC_AUTH_TOKEN',
@@ -99,11 +99,15 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   );
 });
 
-test('local Claude runtime resolves base, admin, selected tenant, personal, then managed env', async () => {
+test('local Claude runtime resolves base, selected tenant, admin user, personal, then managed env', async () => {
   const resolver = createLayeredClaudeEnvResolver({
     tenantEnvs: {
       8: { LAYER_VALUE: 'wrong-tenant' },
-      9: { LAYER_VALUE: 'tenant', TENANT_ONLY: 'tenant-value' },
+      9: {
+        LAYER_VALUE: 'tenant',
+        ADMIN_TENANT_SHARED: 'tenant-value',
+        TENANT_ONLY: 'tenant-value',
+      },
     },
     personalEnv: { LAYER_VALUE: 'personal', PERSONAL_ONLY: 'personal-value' },
   });
@@ -119,6 +123,7 @@ test('local Claude runtime resolves base, admin, selected tenant, personal, then
       getUserById: (userId) => ({ id: userId, username: 'alice' }),
       getEnvForUser: () => ({
         LAYER_VALUE: 'admin',
+        ADMIN_TENANT_SHARED: 'admin-value',
         ADMIN_ONLY: 'admin-value',
         ADMIN_EMPTY_ONLY: '',
         LEGACY_EMPTY_OVERRIDE: '',
@@ -146,6 +151,7 @@ test('local Claude runtime resolves base, admin, selected tenant, personal, then
   assert.equal(runtime.executionEnv.LAYER_VALUE, 'personal');
   assert.equal(runtime.executionEnv.BASE_ONLY, 'base-value');
   assert.equal(runtime.executionEnv.ADMIN_ONLY, 'admin-value');
+  assert.equal(runtime.executionEnv.ADMIN_TENANT_SHARED, 'admin-value');
   assert.equal(runtime.executionEnv.ADMIN_EMPTY_ONLY, '');
   assert.equal(runtime.executionEnv.LEGACY_EMPTY_OVERRIDE, 'keep-base-value');
   assert.equal(runtime.executionEnv.TENANT_ONLY, 'tenant-value');
