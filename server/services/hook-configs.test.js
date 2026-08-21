@@ -7,6 +7,7 @@ import {
   HOOK_CONFIG_SCHEMA_SQL,
   migrateHookActivationModel,
   migrateHookConfigurationModel,
+  migrateHookExecutionDiagnostics,
 } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
@@ -16,7 +17,12 @@ function createFixture() {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
   database.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY,
+      username TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT 1,
+      is_system_admin BOOLEAN NOT NULL DEFAULT 0
+    );
     CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ${HOOK_CONFIG_SCHEMA_SQL}
     ${MULTITENANCY_SCHEMA_SQL}
@@ -95,76 +101,233 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     assert.equal(published.boundUserCount, 0);
     assert.ok(published.publishedAt);
 
-    const started = service.startHook({ hookId: created.id, userId: 1 });
-    assert.equal(started.status, 'published');
-    assert.equal(started.activationScope, 'all_users');
-    assert.equal(started.boundUserCount, 0);
+    assert.deepEqual(service.listHookBindings(created.id).users.map((user) => ({
+      id: user.id,
+      bound: user.bound,
+    })), [
+      { id: 1, bound: false },
+      { id: 2, bound: false },
+    ]);
+
+    const firstBinding = service.replaceHookBindings({ hookId: created.id, userIds: [1], boundBy: 1 });
+    assert.equal(firstBinding.hook.status, 'published');
+    assert.equal(firstBinding.hook.activationScope, 'manual');
+    assert.equal(firstBinding.hook.boundUserCount, 1);
     assert.deepEqual(
       service.listActiveHooksForUser(1).map((hook) => hook.id),
       [created.id],
     );
-    assert.deepEqual(
-      service.listActiveHooksForUser(2).map((hook) => hook.id),
-      [created.id],
-    );
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
-    assert.equal(service.getHook(created.id).boundUserCount, 0);
-    assert.deepEqual(
-      service.listActiveHooksForUser(3).map((hook) => hook.id),
-      [created.id],
-    );
-
-    const stopped = service.stopHook({ hookId: created.id, userId: 1 });
-    assert.equal(stopped.status, 'published');
-    assert.equal(stopped.activationScope, 'manual');
-    assert.equal(stopped.boundUserCount, 0);
-    assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.deepEqual(service.listActiveHooksForUser(2), []);
     assert.deepEqual(service.listActiveHooksForUser(3), []);
 
-    database
-      .prepare(
-        `
-      INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
-      VALUES (?, ?, ?)
-    `,
-      )
-      .run(3, created.id, 3);
-    assert.deepEqual(
-      service.listActiveHooksForUser(3).map((hook) => hook.id),
-      [created.id],
-    );
-    assert.deepEqual(service.listActiveHooksForUser(2), []);
-
-    const restarted = service.startHook({ hookId: created.id, userId: 1 });
-    assert.equal(restarted.boundUserCount, 1);
-    assert.deepEqual(
-      service.listActiveHooksForUser(1).map((hook) => hook.id),
-      [created.id],
-    );
+    const reassigned = service.replaceHookBindings({
+      hookId: created.id,
+      userIds: [2, 3, 3],
+      boundBy: 1,
+    });
+    assert.equal(reassigned.hook.boundUserCount, 2);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     assert.deepEqual(
       service.listActiveHooksForUser(2).map((hook) => hook.id),
+      [created.id],
+    );
+    assert.deepEqual(
+      service.listActiveHooksForUser(3).map((hook) => hook.id),
       [created.id],
     );
     database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
-    assert.equal(service.getHook(created.id).boundUserCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(4), []);
+
+    database.prepare("INSERT INTO tenants (id, code, name, status) VALUES (1, 'alpha', 'Alpha', 'active')").run();
+    database.prepare(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+      VALUES (1, 2, 'member', 'view', 'active')
+    `).run();
+    const tenantBinding = service.replaceHookBindings({
+      hookId: created.id,
+      scope: 'tenants',
+      tenantIds: [1],
+      boundBy: 1,
+    });
+    assert.equal(tenantBinding.hook.boundUserCount, 0);
+    assert.equal(tenantBinding.hook.boundTenantCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(4), []);
+
+    database.prepare(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+      VALUES (1, 4, 'member', 'view', 'active')
+    `).run();
     assert.deepEqual(
       service.listActiveHooksForUser(4).map((hook) => hook.id),
       [created.id],
+      'a user added to a bound tenant should become effective automatically',
     );
-    const stoppedAgain = service.stopHook({ hookId: created.id, userId: 1 });
-    assert.equal(stoppedAgain.boundUserCount, 1);
+
+    const globalBinding = service.replaceHookBindings({
+      hookId: created.id,
+      scope: 'all_users',
+      boundBy: 1,
+    });
+    assert.equal(globalBinding.hook.activationScope, 'all_users');
+    assert.equal(globalBinding.hook.boundTenantCount, 0);
+    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
+    database.prepare('INSERT INTO users (id, username) VALUES (5, ?)').run('future-global-member');
     assert.deepEqual(
-      service.listActiveHooksForUser(3).map((hook) => hook.id),
+      service.listActiveHooksForUser(5).map((hook) => hook.id),
       [created.id],
+      'a new active user should inherit an all-user Hook automatically',
     );
-    assert.deepEqual(service.listActiveHooksForUser(4), []);
+
+    const cleared = service.replaceHookBindings({
+      hookId: created.id,
+      scope: 'users',
+      userIds: [],
+      boundBy: 1,
+    });
+    assert.equal(cleared.hook.boundUserCount, 0);
+    assert.equal(cleared.hook.boundTenantCount, 0);
+    assert.equal(cleared.hook.activationScope, 'manual');
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.deepEqual(service.listActiveHooksForUser(3), []);
     const listed = service.listHooks()[0];
     assert.equal(listed.extensionLogic.language, 'python');
 
     assert.equal(service.deleteHook(created.id), true);
     assert.equal(service.getHook(created.id), null);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics expose outcomes, millisecond timestamps, and global filters', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 2, 1, 'session-1', 'PreToolUse', 'tool-1',
+        'succeeded', ?, '{}', ?, 25, 1000, 1025)
+    `).run(
+      'execution-1',
+      hook.id,
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } }),
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'blocked',
+        },
+      }),
+    );
+
+    const [execution] = service.listAllExecutions({ sessionId: 'session-1' });
+    assert.equal(execution.hookName, hook.name);
+    assert.equal(execution.username, 'admin');
+    assert.equal(execution.toolName, 'Bash');
+    assert.equal(execution.startedAtMs, 1000);
+    assert.equal(execution.completedAtMs, 1025);
+    assert.equal(execution.diagnostics.outcome, 'denied');
+    assert.equal(execution.diagnostics.permissionDecision, 'deny');
+    assert.equal(execution.input, null);
+    const detail = service.getExecution('execution-1');
+    assert.equal(detail.id, 'execution-1');
+    assert.equal(detail.input.tool_name, 'Bash');
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics paginate correlated event groups without splitting parallel Hooks', () => {
+  const { database, service } = createFixture();
+  try {
+    const firstHook = service.createHook({ input: publishableHook({ name: 'First Hook' }), userId: 1 });
+    const secondHook = service.createHook({ input: publishableHook({ name: 'Second Hook' }), userId: 1 });
+    const insert = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 1, 1, ?, 'PreToolUse', ?, 'succeeded', ?, '{}', ?, 10, ?, ?)
+    `);
+    const deniedResponse = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+      },
+    });
+    const bashInput = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } });
+    insert.run('parallel-1', firstHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1000, 1010);
+    insert.run('parallel-2', secondHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1005, 1015);
+    insert.run(
+      'latest-standalone',
+      firstHook.id,
+      'session-2',
+      'tool-2',
+      JSON.stringify({ tool_name: 'Read' }),
+      '{}',
+      2000,
+      2010,
+    );
+
+    const firstPage = service.listAllExecutionPage({ limit: 1, offset: 0 });
+    assert.equal(firstPage.total, 2);
+    assert.equal(firstPage.executionTotal, 3);
+    assert.equal(firstPage.limit, 1);
+    assert.equal(firstPage.offset, 0);
+    assert.deepEqual(firstPage.executions.map((execution) => execution.id), ['latest-standalone']);
+
+    const secondPage = service.listAllExecutionPage({ limit: 1, offset: 1 });
+    assert.equal(secondPage.total, 2);
+    assert.equal(secondPage.executionTotal, 3);
+    assert.deepEqual(
+      new Set(secondPage.executions.map((execution) => execution.id)),
+      new Set(['parallel-1', 'parallel-2']),
+    );
+
+    const filtered = service.listAllExecutionPage({
+      q: 'bash',
+      bindingController: 'admin',
+      outcome: 'denied',
+      limit: 10,
+    });
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.executionTotal, 2);
+    assert.equal(filtered.executions.every((execution) => execution.diagnostics.outcome === 'denied'), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics migration adds and backfills millisecond timestamps', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE hook_executions (
+        id TEXT PRIMARY KEY,
+        duration_ms INTEGER,
+        started_at DATETIME,
+        completed_at DATETIME
+      );
+      INSERT INTO hook_executions (id, duration_ms, started_at, completed_at)
+      VALUES ('execution-1', 50, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+    `);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: true,
+      addedCompletedAtMs: true,
+    });
+    const row = database.prepare('SELECT * FROM hook_executions').get();
+    assert.equal(row.completed_at_ms, row.started_at_ms + 50);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: false,
+      addedCompletedAtMs: false,
+    });
   } finally {
     database.close();
   }
@@ -191,10 +354,169 @@ test('publishing requires at least one configured effect', () => {
   }
 });
 
+test('legacy combined SQL Hook migrates into independent check and line-record Hooks', () => {
+  const database = new Database(':memory:');
+  try {
+    database.pragma('foreign_keys = ON');
+    database.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL
+      );
+      INSERT INTO users (id, username) VALUES (1, 'admin'), (2, 'member');
+      ${HOOK_CONFIG_SCHEMA_SQL}
+      ${MULTITENANCY_SCHEMA_SQL}
+    `);
+    const legacyActions = [
+      { id: 'check-sql', type: 'call_mcp_tool', position: 0, config: { toolName: 'mcp__sql__check' } },
+      { id: 'record-lines', type: 'write_record', position: 1, config: { recordType: 'sql_response_metrics' } },
+    ];
+    database.prepare(`
+      INSERT INTO hooks (
+        id, name, description, status, event_name, matcher_json,
+        extension_logic_json, post_actions_json, claude_response_json,
+        version, created_by, updated_by, published_at
+      ) VALUES ('legacy-sql', 'SQL 响应指标记录', 'combined', 'published', 'Stop', '{}',
+        '{"language":"javascript","code":"return {};","outputs":[]}', ?, '{"bindings":{}}',
+        6, 1, 1, CURRENT_TIMESTAMP)
+    `).run(JSON.stringify(legacyActions));
+    database.prepare(`
+      INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+      VALUES (2, 'legacy-sql', 2)
+    `).run();
+    database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, event_name, status
+      ) VALUES ('legacy-execution', 'legacy-sql', 6, 2, 'Stop', 'succeeded')
+    `).run();
+    database.prepare(`
+      INSERT INTO hook_data_records (
+        id, execution_id, hook_id, user_id, record_type, data_json
+      ) VALUES ('legacy-record', 'legacy-execution', 'legacy-sql', 2, 'sql_response_metrics', '{"sqlLineCount":3}')
+    `).run();
+
+    assert.deepEqual(migrateHookActivationModel(database), {
+      migratedGlobalEnabled: false,
+      addedActivationScope: false,
+      addedBindingController: false,
+      removedBindingSource: false,
+      separatedSqlCheckHooks: 1,
+    });
+
+    const hooks = database.prepare(`
+      SELECT id, name, binding_controller, post_actions_json
+      FROM hooks
+      ORDER BY name
+    `).all();
+    const checkHook = hooks.find((hook) => hook.name === 'SQL Check 强制校验');
+    const recordHook = hooks.find((hook) => hook.name === 'SQL 行数记录');
+    assert.equal(checkHook.id, 'legacy-sql');
+    assert.equal(checkHook.binding_controller, 'sql_check');
+    assert.deepEqual(JSON.parse(checkHook.post_actions_json).map((action) => action.type), ['call_mcp_tool']);
+    assert.equal(recordHook.binding_controller, 'admin');
+    assert.deepEqual(JSON.parse(recordHook.post_actions_json).map((action) => action.type), ['write_record']);
+    assert.deepEqual(
+      database.prepare('SELECT hook_id FROM user_hook_bindings WHERE user_id = 2 ORDER BY hook_id').all(),
+      [{ hook_id: recordHook.id }, { hook_id: 'legacy-sql' }].sort((left, right) => left.hook_id.localeCompare(right.hook_id)),
+    );
+    assert.equal(
+      database.prepare("SELECT hook_id FROM hook_data_records WHERE id = 'legacy-record'").get().hook_id,
+      recordHook.id,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('SQL Check Hook bindings are controlled by each user enforcement preference', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({ name: 'SQL Check 强制校验' }),
+    });
+    assert.equal(created.bindingController, 'sql_check');
+    const published = service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(published.status, 'published');
+    assert.deepEqual(service.getSqlCheckEnforcement({ userId: 2 }), {
+      available: true,
+      enabled: false,
+      hookId: created.id,
+      hookName: 'SQL Check 强制校验',
+      hookStatus: 'published',
+      reason: null,
+    });
+
+    assert.throws(
+      () => service.listHookBindings(created.id),
+      /managed by each user from the SQL Check page/,
+    );
+    assert.throws(
+      () => service.replaceHookBindings({
+        hookId: created.id,
+        scope: 'all_users',
+        boundBy: 1,
+      }),
+      /managed by each user from the SQL Check page/,
+    );
+    assert.throws(
+      () => service.deleteHook(created.id),
+      /cannot be deleted/,
+    );
+
+    const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
+    assert.equal(enabled.enabled, true);
+    assert.equal(service.getHook(created.id).boundUserCount, 1);
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+
+    const disabled = service.setSqlCheckEnforcement({ userId: 2, enabled: false });
+    assert.equal(disabled.enabled, false);
+    assert.equal(service.getHook(created.id).boundUserCount, 0);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+  } finally {
+    database.close();
+  }
+});
+
+test('write_record is a publishable post action and validates its field references', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        extensionLogic: null,
+        postActions: [{
+          id: 'record-stop',
+          type: 'write_record',
+          config: {
+            recordType: 'conversation_completion',
+            condition: null,
+            fields: {
+              sessionId: { source: 'reference', path: 'event.session_id' },
+              status: { source: 'literal', value: 'success' },
+            },
+          },
+        }],
+      }),
+    });
+    const published = service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(published.status, 'published');
+    assert.equal(published.postActions[0].type, 'write_record');
+    assert.equal(published.postActions[0].config.recordType, 'conversation_completion');
+    assert.deepEqual(published.postActions[0].config.fields.sessionId, {
+      source: 'reference',
+      path: 'event.session_id',
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test('execution audit and script data records can be queried for an Hook', () => {
   const { database, service } = createFixture();
   try {
     const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    assert.equal(hook.hasDataRecords, false);
     database.prepare(`
       INSERT INTO hook_executions (
         id, hook_id, hook_version, user_id, event_name, status,
@@ -223,6 +545,8 @@ test('execution audit and script data records can be queried for an Hook', () =>
     const [record] = service.listDataRecords(hook.id, { limit: 1 });
     assert.equal(record.type, 'sql_analysis');
     assert.deepEqual(record.data, { rows: 3 });
+    assert.equal(service.getHook(hook.id).hasDataRecords, true);
+    assert.equal(service.listHooks().find((item) => item.id === hook.id).hasDataRecords, true);
   } finally {
     database.close();
   }
@@ -249,13 +573,6 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
         },
       },
     }]));
-    database.prepare(`
-      INSERT INTO tenant_skill_presets (
-        tenant_id, name, display_name, skill_id, remote_id, status,
-        created_by_user_id, updated_by_user_id
-      ) VALUES (1, 'notify-user', '通知用户', 'skill-1', 'remote-1', 'published', 1, 1)
-    `).run();
-
     const created = service.createHook({
       userId: 1,
       input: publishableHook({
@@ -269,6 +586,7 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
             position: 0,
             config: {
               toolName: 'mcp__notify__send_sms',
+              condition: { source: 'literal', value: true },
               inputs: {
                 user_id: { source: 'reference', path: 'ccui.env.userId' },
                 content: { source: 'literal', value: '本轮执行失败' },
@@ -280,8 +598,8 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
             type: 'invoke_skill',
             position: 1,
             config: {
-              skillId: 'skill-1',
-              skillName: 'notify-user',
+              skillId: 'builtin:hook-notification',
+              skillName: 'hook-notification',
               argumentsTemplate: '用户 {{ccui.env.userId}}，短信结果 {{actions.send-sms.output}}',
             },
           },
@@ -293,10 +611,11 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
     assert.equal(created.postActions.length, 2);
     assert.equal(created.postActions[0].position, 0);
     assert.equal(created.postActions[1].position, 1);
+    assert.deepEqual(created.postActions[0].config.condition, { source: 'literal', value: true });
     const published = service.publishHook({
       hookId: created.id,
       userId: 1,
-      validatedSkills: [{ skillId: 'skill-1', name: 'notify-user' }],
+      validatedSkills: [{ skillId: 'builtin:hook-notification', name: 'hook-notification' }],
     });
     assert.equal(published.status, 'published');
   } finally {
@@ -315,11 +634,28 @@ test('post action and Claude response validation follows the selected event', ()
           id: 'recover',
           type: 'invoke_skill',
           position: 0,
-          config: { skillId: 'skill-1', skillName: 'notify-user', argumentsTemplate: '' },
+          config: {
+            skillId: 'builtin:hook-notification',
+            skillName: 'hook-notification',
+            argumentsTemplate: '',
+          },
         }],
       }),
     });
     assert.equal(stopSkill.postActions[0].type, 'invoke_skill');
+
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        postActions: [{
+          id: 'legacy-market-skill',
+          type: 'invoke_skill',
+          position: 0,
+          config: { skillId: 'skill-1', skillName: 'notify-user', argumentsTemplate: '' },
+        }],
+      }),
+    }), /must reference a built-in Hook Skill/);
 
     assert.throws(() => service.createHook({
       userId: 1,
@@ -366,6 +702,48 @@ test('post action and Claude response validation follows the selected event', ()
       () => service.publishHook({ hookId: missingTool.id, userId: 1 }),
       /is not available/,
     );
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy non-built-in Skill references remain readable but cannot be republished', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        postActions: [{
+          id: 'notify',
+          type: 'invoke_skill',
+          position: 0,
+          config: {
+            skillId: 'builtin:hook-notification',
+            skillName: 'hook-notification',
+            argumentsTemplate: '',
+          },
+        }],
+      }),
+    });
+    database.prepare('UPDATE hooks SET post_actions_json = ? WHERE id = ?').run(JSON.stringify([{
+      id: 'notify',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: 'legacy-market-skill',
+        skillName: 'legacy-notifier',
+        argumentsTemplate: '',
+      },
+    }]), created.id);
+
+    const listed = service.listHooks().find((hook) => hook.id === created.id);
+    assert.equal(listed.postActions[0].config.skillId, 'legacy-market-skill');
+    assert.throws(() => service.publishHook({
+      hookId: created.id,
+      userId: 1,
+      validatedSkills: [],
+    }), /must reference a built-in Hook Skill/);
   } finally {
     database.close();
   }
@@ -436,7 +814,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
   }
 });
 
-test('legacy global activation migrates to scope-only global execution without triggers', () => {
+test('legacy global activation migrates to a dynamic all-user scope without binding triggers', () => {
   const database = new Database(':memory:');
   try {
     database.exec(`
@@ -463,7 +841,9 @@ test('legacy global activation migrates to scope-only global execution without t
     assert.deepEqual(migrateHookActivationModel(database), {
       migratedGlobalEnabled: true,
       addedActivationScope: true,
+      addedBindingController: true,
       removedBindingSource: false,
+      separatedSqlCheckHooks: 0,
     });
     assert.equal(
       database
@@ -486,7 +866,9 @@ test('legacy global activation migrates to scope-only global execution without t
     assert.deepEqual(migrateHookActivationModel(database), {
       migratedGlobalEnabled: false,
       addedActivationScope: false,
+      addedBindingController: false,
       removedBindingSource: false,
+      separatedSqlCheckHooks: 0,
     });
   } finally {
     database.close();
@@ -520,7 +902,9 @@ test('binding-source migration keeps user bindings and removes global materializ
     assert.deepEqual(migrateHookActivationModel(database), {
       migratedGlobalEnabled: false,
       addedActivationScope: false,
+      addedBindingController: true,
       removedBindingSource: true,
+      separatedSqlCheckHooks: 0,
     });
     assert.deepEqual(database.prepare('SELECT user_id, hook_id FROM user_hook_bindings').all(), [
       { user_id: 2, hook_id: 'personal' },
@@ -531,6 +915,13 @@ test('binding-source migration keeps user bindings and removes global materializ
         .all()
         .some((column) => column.name === 'binding_source'),
       false,
+    );
+    assert.deepEqual(
+      database.prepare('SELECT id, activation_scope FROM hooks ORDER BY id').all(),
+      [
+        { id: 'global', activation_scope: 'all_users' },
+        { id: 'personal', activation_scope: 'manual' },
+      ],
     );
   } finally {
     database.close();

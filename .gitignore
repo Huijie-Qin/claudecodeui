@@ -146,3 +146,7 @@ tasks/
 
 # Git worktrees
 .worktrees/
+
+# Electron desktop source icons (the generic build/ rule above would hide them)
+!desktop/build/
+!desktop/build/**

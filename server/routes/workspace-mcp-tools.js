@@ -24,6 +24,7 @@ export function createWorkspaceMcpToolsRouter({
       const catalog = await mcpToolsService.listWorkspaceMcpPresetCatalog({
         tenantId: workspace.tenant_id,
         workspaceId: workspace.id,
+        userId: getRequestUserId(req),
         workspacePath: workspace.path,
         accessRole,
       });
@@ -70,6 +71,7 @@ export function createWorkspaceMcpToolsRouter({
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         presetId: Number(req.params.presetId),
+        userId: getRequestUserId(req),
       });
 
       return res.json({
@@ -78,6 +80,22 @@ export function createWorkspaceMcpToolsRouter({
         canManage: true,
         ...result,
       });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
+  router.put('/:workspaceId/mcp-tools/:presetId/tool-preference', async (req, res) => {
+    try {
+      const { workspace } = resolveWorkspace(req, access, { requireEdit: false });
+      const preference = mcpToolsService.updateWorkspaceMcpToolPreference({
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+        presetId: Number(req.params.presetId),
+        userId: getRequestUserId(req),
+        allowedToolNames: req.body?.allowedToolNames,
+      });
+      return res.json({ workspaceId: workspace.id, preference });
     } catch (error) {
       return handleWorkspaceError(res, error);
     }

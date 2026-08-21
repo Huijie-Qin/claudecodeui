@@ -7,8 +7,8 @@ import {
 } from '../server/services/hook-configs.js';
 
 const PREFIX = '[Hook全量测试]';
-const TEST_SKILL_NAME = 'hook-matrix-recovery';
-const TEST_SKILL_ID = 'hook-matrix-test-skill';
+const TEST_SKILL_NAME = 'hook-notification';
+const TEST_SKILL_ID = 'builtin:hook-notification';
 
 const SCRIPT_OUTPUTS = Object.freeze([
   { name: 'eventName', type: 'string', description: '本次触发的 Hook 事件名称' },

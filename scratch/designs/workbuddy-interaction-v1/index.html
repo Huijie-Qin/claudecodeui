@@ -1,0 +1,1495 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DataAgent × WorkBuddy · 交互原型</title>
+  <style>
+    :root {
+      --app-bg: #ffffff;
+      --sidebar-bg: #f5f5f3;
+      --sidebar-hover: #ececea;
+      --surface: #ffffff;
+      --surface-subtle: #fafaf9;
+      --surface-raised: #ffffff;
+      --text: #232321;
+      --text-2: #5f5e5a;
+      --text-3: #8b8983;
+      --line: #e5e4e0;
+      --line-strong: #d4d2cc;
+      --brand: #6757d8;
+      --brand-hover: #5848c6;
+      --brand-soft: #f1efff;
+      --brand-line: #d9d4ff;
+      --blue: #3478d4;
+      --blue-soft: #edf5ff;
+      --green: #23855b;
+      --green-soft: #ecf8f2;
+      --orange: #b86a1b;
+      --orange-soft: #fff5e8;
+      --red: #c44747;
+      --red-soft: #fff0ef;
+      --shadow-sm: 0 1px 2px rgba(26, 25, 23, .05);
+      --shadow-md: 0 14px 36px rgba(35, 33, 28, .12), 0 2px 8px rgba(35, 33, 28, .05);
+      --sidebar-width: 258px;
+      --context-width: 344px;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      min-width: 960px;
+      overflow: hidden;
+      background: var(--app-bg);
+      color: var(--text);
+      font: 13px/1.48 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    button, input, textarea, select { outline: none; }
+    :focus-visible { outline: 2px solid rgba(103, 87, 216, .55); outline-offset: 2px; }
+    a { color: inherit; text-decoration: none; }
+    h1, h2, h3, p { margin: 0; }
+    svg { display: block; }
+    ::selection { background: #ddd8ff; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #d4d2cc; border: 2px solid transparent; border-radius: 9px; background-clip: padding-box; }
+
+    .app-shell { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100vh; }
+    .sidebar {
+      position: relative;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      background: var(--sidebar-bg);
+    }
+    .window-drag { height: 28px; flex: 0 0 auto; -webkit-app-region: drag; }
+    .brand-row { display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 12px 0 14px; }
+    .brand-mark {
+      display: grid; place-items: center; width: 24px; height: 24px; flex: none;
+      border-radius: 7px; background: linear-gradient(145deg, #7b6bea, #5645c2); color: #fff;
+      font-size: 12px; font-weight: 800; letter-spacing: -.03em; box-shadow: inset 0 0 0 1px rgba(255,255,255,.2);
+    }
+    .brand-name { min-width: 0; font-weight: 700; letter-spacing: -.01em; }
+    .sidebar-nav { position: relative; padding: 8px 8px 4px; }
+    .nav-button {
+      display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px;
+      border: 0; border-radius: 8px; background: transparent; color: #45443f; text-align: left;
+    }
+    .nav-button:hover { background: var(--sidebar-hover); }
+    .nav-button.active { background: #e8e6e2; color: #1f1f1d; font-weight: 620; box-shadow: inset 0 0 0 1px rgba(0,0,0,.015); }
+    .nav-button.primary .nav-icon { color: var(--brand); }
+    .nav-icon { display: grid; place-items: center; width: 18px; height: 18px; color: #67655f; }
+    .nav-icon svg { width: 17px; height: 17px; }
+    .sidebar-divider { height: 1px; margin: 6px 12px; background: var(--line); }
+
+    .space-section { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 4px 8px 0; }
+    .section-label { display: flex; align-items: center; height: 30px; padding: 0 8px; color: var(--text-3); font-size: 11px; font-weight: 650; }
+    .section-count { margin-left: 5px; font-weight: 500; }
+    .section-action { margin-left: auto; display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); }
+    .section-action:hover { background: var(--sidebar-hover); color: var(--text); }
+    .project-list { min-height: 0; overflow-y: auto; padding-bottom: 8px; }
+    .project-group { margin-bottom: 4px; }
+    .project-row { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; text-align: left; }
+    .project-row:hover { background: var(--sidebar-hover); }
+    .project-chevron { width: 12px; color: var(--text-3); transition: transform .15s ease; }
+    .project-group.collapsed .project-chevron { transform: rotate(-90deg); }
+    .project-icon { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; background: #dedbd4; color: #5c5a55; font-size: 10px; font-weight: 750; }
+    .project-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 12px; }
+    .project-count { color: var(--text-3); font-size: 10px; }
+    .task-list { margin: 1px 0 4px 25px; border-left: 1px solid #dedcd7; padding-left: 7px; }
+    .project-group.collapsed .task-list { display: none; }
+    .task-row { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; padding: 5px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2); text-align: left; }
+    .task-row:hover { background: var(--sidebar-hover); color: var(--text); }
+    .task-row.active { background: #e8e6e2; color: var(--text); }
+    .status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #a8a69f; }
+    .status-dot.running { background: var(--brand); box-shadow: 0 0 0 3px rgba(103,87,216,.1); animation: pulse 1.5s infinite; }
+    .status-dot.completed { background: var(--green); }
+    .status-dot.failed, .status-dot.denied, .status-dot.blocked { background: var(--red); }
+    .status-dot.paused, .status-dot.cancelled, .status-dot.permission_required { background: var(--orange); }
+    .task-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+    .task-time { color: var(--text-3); font-size: 9.5px; }
+    @keyframes pulse { 50% { opacity: .45; } }
+
+    .sidebar-footer { position: relative; padding: 6px 8px 9px; border-top: 1px solid var(--line); }
+    .user-row { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px 2px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); text-align: left; }
+    .user-row:hover { background: var(--sidebar-hover); }
+    .user-avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #dcd8f6; color: #4f43a8; font-weight: 700; font-size: 10px; }
+    .user-meta { min-width: 0; flex: 1; }
+    .user-name { color: var(--text); font-size: 11.5px; font-weight: 600; }
+    .user-plan { color: var(--text-3); font-size: 9.5px; }
+    .more-menu {
+      position: absolute; left: 8px; top: calc(100% + 4px); bottom: auto; width: 242px; padding: 6px;
+      border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-md); z-index: 80;
+      animation: pop .14s ease-out;
+    }
+    .account-menu {
+      position: absolute; left: 10px; bottom: 55px; width: 224px; padding: 6px;
+      border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-md); z-index: 82;
+      animation: pop .14s ease-out;
+    }
+    .account-summary { padding: 9px; }
+    .account-summary strong { display: block; font-size: 11.5px; }
+    .account-summary span { display: block; margin-top: 2px; color: var(--text-3); font-size: 9.5px; }
+    .tenant-option { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 42px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px; background: #fff; text-align: left; }
+    .tenant-option + .tenant-option { margin-top: 7px; }
+    .tenant-option:hover { border-color: var(--line-strong); background: var(--surface-subtle); }
+    .tenant-option.active { border-color: var(--brand-line); background: var(--brand-soft); }
+    .tenant-mark { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px; background: #e5e2dc; color: #5d5a53; font-size: 10px; font-weight: 750; }
+    .tenant-option-copy { min-width: 0; flex: 1; }
+    .tenant-option-copy strong { display: block; font-size: 11px; }
+    .tenant-option-copy span { display: block; color: var(--text-3); font-size: 9.5px; }
+    .menu-label { padding: 7px 9px 4px; color: var(--text-3); font-size: 10px; font-weight: 650; }
+    .menu-item { display: flex; align-items: center; gap: 9px; width: 100%; height: 33px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; }
+    .menu-item:hover { background: var(--surface-subtle); }
+    .menu-item .sub { margin-left: auto; color: var(--text-3); font-size: 10px; }
+    .menu-separator { height: 1px; margin: 5px 3px; background: var(--line); }
+
+    .main-shell { position: relative; min-width: 0; height: 100vh; overflow: hidden; background: var(--surface); }
+    .page-view { height: 100%; min-width: 0; }
+    .page-header {
+      display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 20px;
+      border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(12px);
+    }
+    .header-title { min-width: 0; font-weight: 680; letter-spacing: -.01em; }
+    .header-subtitle { color: var(--text-3); font-size: 11px; }
+    .header-separator { width: 1px; height: 18px; background: var(--line); }
+    .header-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+    .icon-button { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-2); }
+    .icon-button:hover { border-color: var(--line); background: var(--surface-subtle); color: var(--text); }
+    .icon-button svg { width: 16px; height: 16px; }
+    .small-button, .secondary-button, .primary-button, .danger-button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px; padding: 0 11px;
+      border-radius: 8px; font-weight: 620; white-space: nowrap;
+    }
+    .small-button { min-height: 28px; padding: 0 9px; border: 1px solid var(--line); background: #fff; font-size: 11.5px; }
+    .small-button:hover, .secondary-button:hover { border-color: var(--line-strong); background: var(--surface-subtle); }
+    .secondary-button { border: 1px solid var(--line); background: #fff; }
+    .primary-button { border: 1px solid var(--brand); background: var(--brand); color: #fff; box-shadow: var(--shadow-sm); }
+    .primary-button:hover { border-color: var(--brand-hover); background: var(--brand-hover); }
+    .danger-button { border: 1px solid #e1b5b2; background: #fff; color: var(--red); }
+    .danger-button:hover { background: var(--red-soft); }
+    .button-icon svg { width: 14px; height: 14px; }
+    .context-trigger { display: none; }
+
+    /* New task */
+    .new-page { display: flex; flex-direction: column; height: 100%; background: linear-gradient(180deg, #fbfaf8 0, #fff 180px); }
+    .new-content { min-height: 0; flex: 1; overflow-y: auto; padding: 48px 34px 60px; }
+    .new-inner { width: min(820px, 100%); margin: 0 auto; }
+    .new-greeting { margin-bottom: 24px; text-align: center; }
+    .new-greeting-mark { display: grid; place-items: center; width: 36px; height: 36px; margin: 0 auto 13px; border-radius: 11px; background: var(--brand-soft); color: var(--brand); }
+    .new-greeting h1 { font-size: 25px; line-height: 1.25; letter-spacing: -.035em; font-weight: 690; }
+    .new-greeting p { margin-top: 7px; color: var(--text-3); }
+    .composer-card { position: relative; border: 1px solid var(--line-strong); border-radius: 16px; background: #fff; box-shadow: 0 8px 28px rgba(39,36,28,.07); overflow: visible; transition: border-color .15s, box-shadow .15s; }
+    .composer-card:focus-within { border-color: #aea6ef; box-shadow: 0 8px 30px rgba(63,52,146,.10), 0 0 0 3px rgba(103,87,216,.07); }
+    .composer-input { width: 100%; min-height: 126px; resize: none; padding: 18px 19px 8px; border: 0; background: transparent; line-height: 1.65; font-size: 14px; }
+    .composer-input::placeholder { color: #aaa8a3; }
+    .capability-strip { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 14px 7px; min-height: 31px; }
+    .cap-chip { display: inline-flex; align-items: center; gap: 5px; height: 25px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); color: var(--text-2); font-size: 11px; }
+    .cap-chip.selected { border-color: var(--brand-line); background: var(--brand-soft); color: #5042b0; }
+    .cap-chip .remove { color: #827ba8; font-size: 14px; line-height: 1; }
+    .composer-footer { position: relative; display: flex; align-items: center; gap: 6px; padding: 9px 11px 11px; }
+    .round-action { display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); }
+    .round-action:hover { background: var(--surface-subtle); color: var(--text); }
+    .round-action svg { width: 16px; height: 16px; }
+    .skill-command-control { position: relative; flex: none; }
+    .skill-command-button { position: relative; }
+    .command-count {
+      position: absolute; top: -5px; right: -5px; display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px;
+      border: 2px solid #fff; border-radius: 999px; background: var(--brand); color: #fff; font-size: 8.5px; font-weight: 760; line-height: 1;
+    }
+    .skill-command-menu {
+      position: absolute; z-index: 96; left: 0; bottom: calc(100% + 9px); width: 360px; max-height: 300px; overflow: hidden;
+      border: 1px solid var(--line); border-radius: 11px; background: #fff; box-shadow: var(--shadow-md); animation: pop .14s ease-out;
+    }
+    .skill-command-head { display: flex; align-items: center; gap: 8px; padding: 11px 12px 9px; border-bottom: 1px solid var(--line); }
+    .skill-command-head strong { font-size: 11px; }
+    .skill-command-head span { margin-left: auto; color: var(--text-3); font-size: 9.5px; }
+    .skill-command-list { max-height: 226px; overflow-y: auto; padding: 6px; }
+    .skill-command-item { display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 8px 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; }
+    .skill-command-item:hover { background: var(--brand-soft); }
+    .skill-command-symbol { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 7px; background: var(--surface-subtle); color: var(--brand); }
+    .skill-command-copy { min-width: 0; flex: 1; }
+    .skill-command-copy strong { display: block; font: 10.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .skill-command-copy span { display: block; margin-top: 3px; overflow: hidden; color: var(--text-3); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .skill-command-footer { padding: 7px; border-top: 1px solid var(--line); background: var(--surface-subtle); }
+    .skill-command-footer button { width: 100%; }
+    .send-button { display: grid; place-items: center; width: 33px; height: 33px; margin-left: auto; border: 0; border-radius: 9px; background: var(--brand); color: #fff; }
+    .send-button:hover { background: var(--brand-hover); }
+    .send-button svg { width: 16px; height: 16px; }
+    .workspace-picker-wrap { position: relative; }
+    .workspace-picker {
+      display: inline-flex; align-items: center; gap: 7px; height: 32px; max-width: 260px; padding: 0 9px;
+      border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text-2); text-align: left;
+    }
+    .workspace-picker:hover, .workspace-picker.open { border-color: #bbb6df; background: #fdfcff; }
+    .workspace-picker .workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 620; }
+    .workspace-picker .workspace-prefix { color: var(--text-3); font-size: 10px; }
+    .workspace-picker svg { width: 14px; height: 14px; flex: none; }
+    .workspace-menu {
+      position: absolute; z-index: 95; top: calc(100% + 6px); left: 0; width: 276px; padding: 6px;
+      border: 1px solid var(--line); border-radius: 11px; background: #fff; box-shadow: var(--shadow-md); animation: pop .14s ease-out;
+    }
+    .workspace-picker-wrap.header .workspace-menu { right: 0; left: auto; }
+    .workspace-picker-wrap.composer .workspace-menu { top: auto; bottom: calc(100% + 6px); }
+    .workspace-option { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 43px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+    .workspace-option:hover { background: var(--surface-subtle); }
+    .workspace-option.active { background: var(--brand-soft); }
+    .workspace-option .project-icon { width: 24px; height: 24px; }
+    .workspace-option-copy { min-width: 0; flex: 1; }
+    .workspace-option-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .workspace-option-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 9.5px; }
+    .config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+    .config-field { position: relative; }
+    .config-field label { display: block; margin: 0 0 5px 2px; color: var(--text-3); font-size: 10.5px; font-weight: 620; }
+    .select-like { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .select-like:hover { border-color: var(--line-strong); }
+    select.select-like { appearance: none; background-image: linear-gradient(45deg, transparent 50%, #8b8983 50%), linear-gradient(135deg, #8b8983 50%, transparent 50%); background-position: calc(100% - 15px) 17px, calc(100% - 11px) 17px; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+    .field-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+    /* Task */
+    .task-page { display: flex; flex-direction: column; height: 100%; }
+    .task-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(520px, 1fr) var(--context-width); }
+    .conversation { min-width: 0; display: flex; flex-direction: column; height: 100%; background: #fff; }
+    .messages { min-height: 0; flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+    .messages-inner { width: min(760px, calc(100% - 44px)); margin: 0 auto; padding: 26px 0 38px; }
+    .message { margin-bottom: 21px; }
+    .message-user { display: flex; justify-content: flex-end; }
+    .user-bubble { max-width: 78%; padding: 10px 13px; border-radius: 13px 13px 4px 13px; background: #f0efec; line-height: 1.58; }
+    .assistant-message { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 10px; }
+    .assistant-avatar { display: grid; place-items: center; width: 24px; height: 24px; margin-top: 1px; border-radius: 7px; background: var(--brand-soft); color: var(--brand); font-size: 10px; font-weight: 800; }
+    .assistant-content { min-width: 0; padding-top: 2px; }
+    .assistant-content p { margin-bottom: 8px; line-height: 1.68; }
+    .assistant-content p:last-child { margin-bottom: 0; }
+    .thinking-block, .tool-block, .subagent-block { margin: 9px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); overflow: hidden; }
+    .block-header { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 7px 10px; border: 0; background: transparent; text-align: left; }
+    .block-header:hover { background: #f5f4f1; }
+    .block-icon { color: var(--text-3); }
+    .block-icon svg { width: 15px; height: 15px; }
+    .block-title { font-weight: 620; font-size: 11.5px; }
+    .block-meta { margin-left: auto; color: var(--text-3); font-size: 10px; }
+    .block-chevron { color: var(--text-3); transition: transform .15s; }
+    .expanded .block-chevron { transform: rotate(180deg); }
+    .block-body { display: none; padding: 0 11px 10px 33px; color: var(--text-2); font-size: 11.5px; white-space: pre-wrap; }
+    .expanded .block-body { display: block; }
+    .tool-status { display: inline-flex; align-items: center; gap: 4px; color: var(--green); }
+    .tool-status.running { color: var(--brand); }
+    .tool-code { margin-top: 7px; padding: 9px 10px; overflow: auto; border: 1px solid #e2e1dd; border-radius: 7px; background: #fff; color: #474640; font: 10.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .permission-card { margin: 10px 0; overflow: hidden; border: 1px solid #e8d5b4; border-radius: 11px; background: #fffdfa; }
+    .permission-top { display: flex; align-items: flex-start; gap: 10px; padding: 12px; }
+    .permission-icon { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 8px; background: var(--orange-soft); color: var(--orange); }
+    .permission-icon svg { width: 15px; height: 15px; }
+    .permission-title { margin: 1px 0 3px; font-weight: 670; }
+    .permission-desc { color: var(--text-2); font-size: 11px; }
+    .permission-command { margin: 0 12px 11px; padding: 9px 10px; border-radius: 7px; background: #f5f3ef; color: #4c4a45; font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .permission-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 9px 11px; border-top: 1px solid #eee3d2; background: #fffaf3; }
+    .permission-decision { padding: 8px 12px 10px; border-top: 1px solid #eee3d2; color: var(--text-2); font-size: 11px; }
+    .result-card { margin-top: 10px; padding: 14px; border: 1px solid #cfe5da; border-radius: 11px; background: #fbfffd; }
+    .result-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #206c4c; font-weight: 680; }
+    .result-title svg { width: 15px; height: 15px; }
+    .result-card ul { margin: 7px 0 0; padding-left: 19px; color: var(--text-2); }
+    .result-card li { margin: 4px 0; }
+    .status-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
+    .status-banner.failed, .status-banner.denied, .status-banner.blocked { border-color: #efcfcc; background: var(--red-soft); }
+    .status-banner.cancelled { border-color: #e3ded0; background: #faf8f3; }
+    .status-banner .banner-text { min-width: 0; flex: 1; }
+    .status-banner strong { display: block; font-size: 11.5px; }
+    .status-banner span { color: var(--text-2); font-size: 10.5px; }
+    .typing { display: inline-flex; gap: 3px; padding: 5px 0; }
+    .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); animation: typing 1.1s infinite; }
+    .typing i:nth-child(2) { animation-delay: .14s; }
+    .typing i:nth-child(3) { animation-delay: .28s; }
+    @keyframes typing { 0%, 60%, 100% { transform: translateY(0); opacity: .4; } 30% { transform: translateY(-3px); opacity: 1; } }
+
+    .task-composer-wrap { flex: 0 0 auto; padding: 10px 20px 16px; background: linear-gradient(180deg, rgba(255,255,255,0), #fff 20%); }
+    .task-composer { width: min(760px, 100%); margin: 0 auto; overflow: visible; border: 1px solid var(--line-strong); border-radius: 13px; background: #fff; box-shadow: 0 4px 16px rgba(34,32,27,.06); }
+    .task-input { width: 100%; min-height: 54px; max-height: 140px; padding: 12px 14px 4px; resize: none; border: 0; background: transparent; line-height: 1.5; }
+    .task-composer-footer { position: relative; display: flex; align-items: center; gap: 5px; padding: 5px 7px 7px; }
+    .stop-button { display: inline-flex; align-items: center; gap: 6px; height: 30px; margin-left: auto; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .stop-square { width: 8px; height: 8px; border-radius: 2px; background: var(--red); }
+
+    .context-panel { min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface-subtle); }
+    .context-head { display: flex; align-items: center; height: 45px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #fff; }
+    .context-title { font-weight: 650; font-size: 11.5px; }
+    .drawer-close { display: none; margin-left: auto; }
+    .context-tabs { display: flex; gap: 2px; padding: 8px 8px 0; overflow-x: auto; }
+    .context-tab { min-width: 0; height: 29px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-3); font-size: 10.5px; white-space: nowrap; }
+    .context-tab:hover { background: #efeeeb; color: var(--text); }
+    .context-tab.active { background: #e9e7e2; color: var(--text); font-weight: 630; }
+    .context-body { min-height: 0; flex: 1; overflow-y: auto; padding: 12px; }
+    .context-section { margin-bottom: 17px; }
+    .context-label { margin-bottom: 8px; color: var(--text-3); font-size: 10px; font-weight: 680; letter-spacing: .02em; }
+    .timeline-item { position: relative; display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; padding-bottom: 13px; }
+    .timeline-item:not(:last-child)::before { content: ""; position: absolute; left: 7px; top: 16px; bottom: 0; width: 1px; background: var(--line); }
+    .timeline-mark { position: relative; z-index: 1; display: grid; place-items: center; width: 15px; height: 15px; border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--text-3); }
+    .timeline-mark.done { border-color: #a6d3bd; background: var(--green-soft); color: var(--green); }
+    .timeline-mark.live { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand); animation: pulse 1.5s infinite; }
+    .timeline-copy strong { display: block; font-size: 10.5px; font-weight: 650; }
+    .timeline-copy span { display: block; margin-top: 2px; color: var(--text-3); font-size: 9.5px; }
+    .context-card { margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .context-card-head { display: flex; align-items: center; gap: 8px; }
+    .context-card-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: var(--surface-subtle); color: var(--text-2); }
+    .context-card-icon svg { width: 13px; height: 13px; }
+    .context-card-title { min-width: 0; flex: 1; font-size: 10.5px; font-weight: 630; }
+    .context-card-meta { color: var(--text-3); font-size: 9.5px; }
+    .progress { height: 3px; margin-top: 9px; overflow: hidden; border-radius: 3px; background: #eceae6; }
+    .progress > i { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+    .file-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 5px 6px; border-radius: 7px; }
+    .file-row:hover { background: #efeeeb; }
+    .file-row svg { width: 14px; height: 14px; color: var(--text-3); }
+    .file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .file-change { font-size: 9.5px; font-weight: 670; }
+    .file-change.add { color: var(--green); }
+    .file-change.del { color: var(--red); }
+    .diff-box { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: 9.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff-line { display: block; padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+    .diff-line.add { background: #edf9f2; color: #246744; }
+    .diff-line.del { background: #fff0ef; color: #8e3e3e; }
+    .artifact-link { display: flex; align-items: center; gap: 9px; width: 100%; margin-bottom: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; text-align: left; }
+    .artifact-link:hover { border-color: var(--line-strong); }
+
+    /* Capabilities */
+    .standard-page { height: 100%; display: flex; flex-direction: column; background: #fff; }
+    .standard-content { min-height: 0; flex: 1; overflow-y: auto; padding: 25px 28px 50px; }
+    .content-inner { width: min(1100px, 100%); margin: 0 auto; }
+    .page-intro { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
+    .page-intro h1 { font-size: 21px; line-height: 1.3; letter-spacing: -.025em; }
+    .page-intro p { margin-top: 5px; color: var(--text-3); }
+    .page-intro .intro-actions { margin-left: auto; display: flex; gap: 7px; }
+    .tab-bar { display: flex; gap: 4px; margin-bottom: 18px; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+    .tab-button { position: relative; height: 38px; padding: 0 13px; border: 0; background: transparent; color: var(--text-3); font-weight: 620; }
+    .tab-button:hover { color: var(--text); }
+    .tab-button.active { color: var(--text); }
+    .tab-button.active::after { content: ""; position: absolute; right: 10px; bottom: -2px; left: 10px; height: 2px; border-radius: 2px; background: var(--brand); }
+    .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 15px; }
+    .search-box { position: relative; width: min(310px, 100%); }
+    .search-box svg { position: absolute; left: 10px; top: 9px; width: 14px; height: 14px; color: var(--text-3); pointer-events: none; }
+    .search-input { width: 100%; height: 34px; padding: 0 10px 0 32px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .search-input:focus { border-color: #aaa2e7; box-shadow: 0 0 0 3px rgba(103,87,216,.07); }
+    .filter-select { height: 34px; padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .toolbar-count { margin-left: auto; color: var(--text-3); font-size: 11px; }
+    .card-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+    .capability-card { position: relative; min-height: 192px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #fff; transition: transform .14s, border-color .14s, box-shadow .14s; }
+    .capability-card:hover { transform: translateY(-1px); border-color: #cbc8c1; box-shadow: 0 7px 18px rgba(30,29,26,.06); }
+    .card-top { display: flex; align-items: flex-start; gap: 10px; }
+    .capability-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--brand-soft); color: var(--brand); }
+    .capability-icon.blue { background: var(--blue-soft); color: var(--blue); }
+    .capability-icon.green { background: var(--green-soft); color: var(--green); }
+    .capability-icon.orange { background: var(--orange-soft); color: var(--orange); }
+    .capability-icon svg { width: 18px; height: 18px; }
+    .card-heading { min-width: 0; flex: 1; }
+    .card-heading h3 { margin: 1px 0 3px; font-size: 13px; }
+    .card-heading p { color: var(--text-3); font-size: 10.5px; }
+    .card-description { min-height: 37px; margin: 12px 0 11px; color: var(--text-2); font-size: 11px; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 5px; }
+    .tag { display: inline-flex; align-items: center; min-height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); color: var(--text-2); font-size: 9.5px; }
+    .card-footer { display: flex; align-items: center; gap: 7px; margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line); }
+    .card-meta { color: var(--text-3); font-size: 10px; }
+    .card-footer .small-button:first-of-type { margin-left: auto; }
+    .switch { position: relative; width: 30px; height: 17px; flex: none; padding: 0; border: 0; border-radius: 20px; background: #cbc9c4; transition: .18s; }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.16); transition: left .18s; }
+    .switch.on { background: var(--brand); }
+    .switch.on::after { left: 15px; }
+    .connection-badge, .state-badge { display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 7px; border-radius: 6px; font-size: 9.5px; font-weight: 650; }
+    .connection-badge.connected, .state-badge.completed, .state-badge.enabled { background: var(--green-soft); color: var(--green); }
+    .connection-badge.disconnected, .state-badge.failed { background: var(--red-soft); color: var(--red); }
+    .connection-badge.testing, .state-badge.running { background: var(--brand-soft); color: var(--brand); }
+    .state-badge.paused, .state-badge.draft, .state-badge.permission_required, .state-badge.cancelled { background: var(--orange-soft); color: var(--orange); }
+    .empty-state { padding: 65px 20px; border: 1px dashed var(--line-strong); border-radius: 12px; color: var(--text-3); text-align: center; }
+    .empty-state svg { width: 28px; height: 28px; margin: 0 auto 10px; }
+
+    /* Automation */
+    .automation-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .automation-list { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+    .automation-row { display: grid; grid-template-columns: minmax(210px,1.35fr) 140px 120px 124px; gap: 12px; align-items: center; min-height: 72px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+    .automation-row:last-child { border-bottom: 0; }
+    .automation-row:hover { background: #fdfdfc; }
+    .automation-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .automation-icon { display: grid; place-items: center; width: 31px; height: 31px; flex: none; border-radius: 9px; background: var(--surface-subtle); color: var(--text-2); }
+    .automation-icon svg { width: 15px; height: 15px; }
+    .automation-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+    .automation-name span, .automation-cell .cell-sub { display: block; margin-top: 2px; color: var(--text-3); font-size: 9.5px; }
+    .automation-cell { min-width: 0; font-size: 10.5px; }
+    .automation-actions { display: flex; justify-content: flex-end; gap: 4px; }
+    .summary-panel { height: fit-content; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-subtle); }
+    .summary-panel h3 { margin-bottom: 12px; font-size: 12px; }
+    .summary-stat { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .summary-stat:last-of-type { border-bottom: 0; }
+    .summary-stat span { color: var(--text-2); font-size: 10.5px; }
+    .summary-stat strong { font-size: 13px; }
+    .recent-run { margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .recent-run-title { margin-bottom: 8px; color: var(--text-3); font-size: 10px; font-weight: 680; }
+    .recent-run-item { display: flex; align-items: center; gap: 7px; padding: 7px 4px; border-radius: 6px; }
+    .recent-run-item:hover { background: #efeeeb; }
+    .recent-run-item span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+
+    /* Files */
+    .files-content { min-height: 0; flex: 1; overflow: hidden; padding: 20px 24px 26px; }
+    .files-layout {
+      display: grid; grid-template-columns: 280px minmax(0, 1fr); width: min(1180px, 100%); height: 100%; margin: 0 auto;
+      overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+    }
+    .file-browser { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #fbfaf8; }
+    .file-browser-head { padding: 13px 12px 11px; border-bottom: 1px solid var(--line); }
+    .file-browser-title { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; font-size: 11px; font-weight: 680; }
+    .file-browser-title span { margin-left: auto; color: var(--text-3); font-size: 9.5px; font-weight: 500; }
+    .file-tree { min-height: 0; flex: 1; overflow: auto; padding: 7px; }
+    .workspace-file-row {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 6px 8px;
+      border: 0; border-radius: 7px; background: transparent; color: var(--text-2); text-align: left;
+    }
+    .workspace-file-row:hover { background: #f0efec; color: var(--text); }
+    .workspace-file-row.active { background: #e9e7e2; color: var(--text); }
+    .workspace-file-row svg { width: 14px; height: 14px; flex: none; color: var(--text-3); }
+    .workspace-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+    .file-editor { min-width: 0; display: flex; flex-direction: column; background: #fff; }
+    .file-editor-head { display: flex; align-items: center; gap: 9px; height: 50px; padding: 0 15px; border-bottom: 1px solid var(--line); }
+    .file-editor-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 630; }
+    .file-meta { color: var(--text-3); font-size: 9.5px; white-space: nowrap; }
+    .code-preview { min-height: 0; flex: 1; overflow: auto; margin: 0; padding: 18px 20px; background: #fff; color: #373630; font: 11px/1.75 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre; tab-size: 2; }
+    .file-empty { display: grid; place-items: center; min-height: 0; flex: 1; padding: 24px; color: var(--text-3); text-align: center; }
+
+    /* Modal / toast */
+    .modal-layer { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(31,30,27,.36); backdrop-filter: blur(2px); }
+    .modal { width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; border: 1px solid rgba(0,0,0,.08); border-radius: 14px; background: #fff; box-shadow: var(--shadow-md); animation: pop .16s ease-out; }
+    @keyframes pop { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
+    .modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 17px 18px 13px; border-bottom: 1px solid var(--line); }
+    .modal-title { font-size: 14px; font-weight: 690; }
+    .modal-subtitle { margin-top: 3px; color: var(--text-3); font-size: 10.5px; }
+    .modal-close { margin-left: auto; }
+    .modal-body { padding: 17px 18px; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--surface-subtle); }
+    .form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+    .form-field.full { grid-column: 1 / -1; }
+    .form-field label { display: block; margin-bottom: 5px; color: var(--text-2); font-size: 10.5px; font-weight: 620; }
+    .form-input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    textarea.form-input { height: 68px; padding-top: 8px; resize: vertical; }
+    .form-input:focus { border-color: #aaa2e7; box-shadow: 0 0 0 3px rgba(103,87,216,.07); }
+    .detail-list { display: grid; gap: 9px; }
+    .detail-row { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 12px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+    .detail-row:last-child { border-bottom: 0; }
+    .detail-key { color: var(--text-3); }
+    .tool-list-item { display: flex; align-items: flex-start; gap: 9px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .tool-list-item:last-child { border-bottom: 0; }
+    .tool-list-item strong { display: block; font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .tool-list-item span { display: block; margin-top: 3px; color: var(--text-3); font-size: 10px; }
+    .toast-stack { position: fixed; right: 18px; bottom: 18px; z-index: 160; display: grid; gap: 8px; pointer-events: none; }
+    .toast { display: flex; align-items: center; gap: 9px; min-width: 250px; max-width: 360px; padding: 10px 12px; border: 1px solid #d9d7d1; border-radius: 10px; background: #fff; box-shadow: var(--shadow-md); animation: toastIn .18s ease-out; }
+    .toast.success { border-color: #b9dccb; }
+    .toast.error { border-color: #e8c1be; }
+    .toast svg { width: 15px; height: 15px; }
+    .toast.success svg { color: var(--green); }
+    .toast.error svg { color: var(--red); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } }
+    .scrim { display: none; }
+    .login-screen { display: grid; place-items: center; width: 100%; height: 100vh; background: radial-gradient(circle at 50% 30%, #f0edff 0, #faf9f7 34%, #f5f5f3 100%); }
+    .login-panel { width: 360px; padding: 30px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: var(--shadow-md); text-align: center; }
+    .login-panel .brand-mark { width: 38px; height: 38px; margin: 0 auto 14px; border-radius: 11px; font-size: 16px; }
+    .login-panel h1 { margin-bottom: 7px; font-size: 20px; letter-spacing: -.025em; }
+    .login-panel p { margin-bottom: 20px; color: var(--text-3); }
+    .login-panel .primary-button { width: 100%; min-height: 38px; }
+
+    @media (max-width: 1260px) {
+      .task-layout { grid-template-columns: minmax(0,1fr); }
+      .context-trigger { display: grid; }
+      .context-panel { position: fixed; z-index: 70; top: 0; right: 0; bottom: 0; width: 360px; max-width: 42vw; transform: translateX(102%); box-shadow: -12px 0 34px rgba(30,29,26,.13); transition: transform .2s ease; }
+      .context-panel.open { transform: translateX(0); }
+      .context-panel.open + .scrim, .scrim.open { display: block; position: fixed; z-index: 65; inset: 0; background: rgba(35,34,31,.18); }
+      .drawer-close { display: grid; }
+      .card-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .automation-layout { grid-template-columns: 1fr; }
+      .summary-panel { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+      .summary-panel h3, .recent-run { grid-column: 1 / -1; }
+      .summary-stat { padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    }
+    @media (max-width: 1080px) {
+      :root { --sidebar-width: 232px; }
+      .standard-content { padding-right: 20px; padding-left: 20px; }
+      .files-content { padding-right: 18px; padding-left: 18px; }
+      .files-layout { grid-template-columns: 240px minmax(0, 1fr); }
+      .automation-layout { grid-template-columns: 1fr; }
+      .summary-panel { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+      .summary-panel h3, .recent-run { grid-column: 1 / -1; }
+      .summary-stat { padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const STORAGE_KEY = 'dataagent-workbuddy-prototype-v2';
+      const TERMINAL = ['completed', 'failed', 'denied', 'blocked', 'cancelled'];
+      const RUNNING = ['preparing', 'reasoning', 'tool_running', 'subagent_running', 'streaming'];
+      const STATUS_LABEL = {
+        draft: '草稿', preparing: '准备中', reasoning: '思考中', permission_required: '等待确认',
+        tool_running: '执行工具', subagent_running: '子代理协作', streaming: '生成答复', completed: '已完成',
+        denied: '已拒绝', blocked: '已阻止', failed: '失败', cancelled: '已停止', enabled: '已启用', paused: '已暂停', running: '运行中'
+      };
+
+      const projects = [
+        { id: 'p1', name: 'claudecodeui', path: '~/Projects/claudecodeui', letter: 'C' },
+        { id: 'p2', name: 'gateway-service', path: '~/Projects/gateway-service', letter: 'G' },
+        { id: 'p3', name: 'data-console', path: '~/Projects/data-console', letter: 'D' }
+      ];
+      const tenants = [
+        { id: 'tenant-acme', name: 'Acme 团队', role: '管理员', letter: 'A' },
+        { id: 'tenant-labs', name: 'DataAgent Labs', role: '成员', letter: 'L' },
+        { id: 'tenant-personal', name: '个人空间', role: '所有者', letter: 'P' }
+      ];
+      const workspaceFiles = {
+        p1: [
+          { path: 'src/components/Sidebar.jsx', kind: 'JSX', modified: '刚刚', content: [
+            "import React from 'react';",
+            "import { NavLink } from 'react-router-dom';",
+            '',
+            'export function Sidebar({ projects, tasks }) {',
+            '  return (',
+            "    <aside className=\"sidebar\">",
+            '      <nav>{/* project navigation */}</nav>',
+            '    </aside>',
+            '  );',
+            '}'
+          ].join('\n') },
+          { path: 'src/components/MainContent.jsx', kind: 'JSX', modified: '12 分钟前', content: [
+            "import React from 'react';",
+            "import { Routes, Route } from 'react-router-dom';",
+            '',
+            'export default function MainContent() {',
+            '  return <Routes>{/* workspace routes */}</Routes>;',
+            '}'
+          ].join('\n') },
+          { path: 'src/hooks/useProjects.js', kind: 'JavaScript', modified: '今天 10:18', content: [
+            "import { useEffect, useState } from 'react';",
+            '',
+            'export function useProjects() {',
+            '  const [projects, setProjects] = useState([]);',
+            '  useEffect(() => {',
+            "    fetch('/api/projects').then(r => r.json()).then(setProjects);",
+            '  }, []);',
+            '  return projects;',
+            '}'
+          ].join('\n') },
+          { path: 'server/routes/projects.js', kind: 'JavaScript', modified: '昨天', content: [
+            "router.get('/projects', async (_req, res) => {",
+            '  const projects = await projectStore.list();',
+            '  res.json(projects);',
+            '});'
+          ].join('\n') },
+          { path: 'README.md', kind: 'Markdown', modified: '周一', content: [
+            '# DataAgent',
+            '',
+            '在本地工作区中管理 AI 编码会话、文件与自动化任务。'
+          ].join('\n') }
+        ],
+        p2: [
+          { path: 'server/routes/auth.ts', kind: 'TypeScript', modified: '昨天', content: [
+            "router.post('/auth/session', validateTenant, createSession);",
+            "router.delete('/auth/session', revokeSession);"
+          ].join('\n') },
+          { path: 'server/middleware/tenant.ts', kind: 'TypeScript', modified: '昨天', content: [
+            'export function validateTenant(req, res, next) {',
+            '  if (!req.tenantId) return res.sendStatus(403);',
+            '  next();',
+            '}'
+          ].join('\n') },
+          { path: 'openapi/gateway.yaml', kind: 'YAML', modified: '周一', content: [
+            'openapi: 3.1.0',
+            'info:',
+            '  title: Gateway Service',
+            '  version: 1.0.0'
+          ].join('\n') },
+          { path: 'package.json', kind: 'JSON', modified: '周一', content: [
+            '{',
+            '  "name": "gateway-service",',
+            '  "private": true',
+            '}'
+          ].join('\n') }
+        ],
+        p3: [
+          { path: 'queries/retention.sql', kind: 'SQL', modified: '周三', content: [
+            'SELECT tenant_id, DATE_TRUNC(\'week\', created_at) AS week,',
+            '       COUNT(DISTINCT user_id) AS retained_users',
+            'FROM user_events',
+            'WHERE created_at >= :start_at',
+            '  AND tenant_id = :tenant_id',
+            'GROUP BY tenant_id, week',
+            'ORDER BY week DESC',
+            'LIMIT 500;'
+          ].join('\n') },
+          { path: 'src/pages/Retention.tsx', kind: 'TypeScript', modified: '周三', content: [
+            'export function Retention() {',
+            '  return <section>Retention dashboard</section>;',
+            '}'
+          ].join('\n') },
+          { path: 'src/lib/database.ts', kind: 'TypeScript', modified: '上周', content: [
+            'export async function query(sql, params) {',
+            '  return pool.query(sql, params);',
+            '}'
+          ].join('\n') }
+        ]
+      };
+
+      const defaultState = {
+        version: 2,
+        selectedProject: 'p1',
+        provider: 'claude:sonnet-4.5',
+        permissionMode: 'standard',
+        rememberedPermissions: false,
+        collapsedProjects: [],
+        currentTenant: 'tenant-acme',
+        workspaceCapabilities: {
+          p1: { experts: [], skills: ['s1', 's2', 's4'], connectors: ['c1', 'c2', 'c4', 'c6'] },
+          p2: { experts: ['e3'], skills: ['s3'], connectors: ['c1', 'c2'] },
+          p3: { experts: ['e4'], skills: ['s4'], connectors: ['c1', 'c3'] }
+        },
+        skills: [
+          { id: 's1', name: '代码评审', code: 'code-review', category: '代码开发', description: '对代码改动进行结构化评审，给出风险、影响和可执行建议。', enabled: true, installed: true, version: 'v4', uses: 128 },
+          { id: 's2', name: 'Bug 根因诊断', code: 'bug-diagnose', category: '调试诊断', description: '根据日志、堆栈与复现路径定位根因，并形成修复假设。', enabled: true, installed: true, version: 'v3', uses: 94 },
+          { id: 's3', name: '技术文档生成', code: 'doc-writer', category: '文档写作', description: '基于项目代码和变更生成 README、接口说明与变更记录。', enabled: false, installed: true, version: 'v3', uses: 67 },
+          { id: 's4', name: 'SQL 安全检查', code: 'sql-guard', category: '数据工具', description: '检查 SQL 风险、全表扫描与缺失 LIMIT 等问题。', enabled: true, installed: true, version: 'v4', uses: 81 },
+          { id: 's5', name: '重构助手', code: 'refactor-helper', category: '代码开发', description: '识别代码坏味道，生成可以逐步验证的重构方案。', enabled: false, installed: true, version: 'v2', uses: 42 },
+          { id: 's6', name: '发布检查', code: 'release-check', category: '部署运维', description: '汇总代码、测试和配置变化，生成发布前检查项。', enabled: false, installed: false, version: 'v1', uses: 21 }
+        ],
+        connectors: [
+          { id: 'c1', name: 'Filesystem', description: '读取、搜索和编辑工作区文件', status: 'connected', tools: ['read_file', 'write_file', 'search_files'], lastTest: '刚刚 · 18 ms' },
+          { id: 'c2', name: 'GitHub', description: '读取仓库、Issue、PR 与检查状态', status: 'connected', tools: ['search_repositories', 'get_pull_request', 'list_issues'], lastTest: '5 分钟前 · 126 ms' },
+          { id: 'c3', name: 'PostgreSQL', description: '执行只读查询并检查 SQL', status: 'disconnected', tools: ['query', 'explain', 'list_tables'], lastTest: '尚未测试' },
+          { id: 'c4', name: 'Browser', description: '打开页面并验证本地 UI 状态', status: 'connected', tools: ['navigate', 'snapshot', 'click'], lastTest: '12 分钟前 · 84 ms' },
+          { id: 'c5', name: 'Slack', description: '查找团队上下文与发布通知', status: 'disconnected', tools: ['search', 'read_thread', 'send_message'], lastTest: '尚未测试' },
+          { id: 'c6', name: 'MCP Presets', description: '管理项目级 MCP 服务器预设', status: 'connected', tools: ['apply_preset', 'list_servers'], lastTest: '今天 · 31 ms' }
+        ],
+        experts: [
+          { id: 'e1', name: '代码评审专家', description: '组合代码检索、变更分析和安全检查，输出结构化评审结论。', agents: 3, runs: 48, tags: ['代码评审', 'Git', '文件分析'], icon: 'review', color: 'purple', installed: false },
+          { id: 'e2', name: 'Bug 诊断专家', description: '并行分析日志、调用链和相关改动，收敛到可验证的根因。', agents: 4, runs: 36, tags: ['日志分析', '子代理', '根因定位'], icon: 'bug', color: 'orange', installed: false },
+          { id: 'e3', name: '文档整理专家', description: '扫描模块结构与公开接口，生成文档草稿并执行一致性检查。', agents: 2, runs: 27, tags: ['README', '接口说明', '变更记录'], icon: 'file', color: 'blue', installed: false },
+          { id: 'e4', name: 'SQL 检查专家', description: '结合 SQL Check 与数据库连接器，识别危险语句和性能风险。', agents: 3, runs: 31, tags: ['SQL Check', '安全约束', 'Explain'], icon: 'database', color: 'green', installed: false }
+        ],
+        tasks: [
+          {
+            id: 't-review', projectId: 'p1', title: '评审登录模块的最近改动', status: 'completed', updatedAt: '10:42', provider: 'Claude', model: 'Sonnet 4.5', permissionMode: 'standard', expert: '代码评审专家',
+            prompt: '评审登录模块的最近改动，重点关注权限边界和错误处理。',
+            messages: [
+              { type: 'user', text: '评审登录模块的最近改动，重点关注权限边界和错误处理。' },
+              { type: 'thinking', title: '分析评审范围', body: '先读取当前分支变更，再定位认证、会话与权限检查相关文件。', expanded: false },
+              { type: 'tool', name: 'Search · 登录与权限相关文件', meta: '12 个结果', detail: 'src/components/LoginForm.tsx\nsrc/hooks/useAuth.ts\nserver/routes/auth.js\nserver/middleware/tenant.js', status: 'done', expanded: false },
+              { type: 'tool', name: 'Git · 查看当前分支差异', meta: '+86 −24', detail: 'git diff -- src/components/LoginForm.tsx server/routes/auth.js', status: 'done', expanded: false },
+              { type: 'result', title: '评审完成', text: '发现 2 个需要优先处理的问题，当前改动可以在修复后合并。', bullets: ['高风险：租户切换后旧会话仍可能被复用，需要在 tenantId 变化时清空 session。', '中风险：登录失败统一吞掉了服务端错误码，建议保留可观测的错误分类。', '测试缺口：补充跨租户会话失效与连续失败重试用例。'] }
+            ],
+            timeline: [
+              { label: '读取任务上下文', detail: 'claudecodeui', done: true },
+              { label: '分析 8 个变更文件', detail: '文件检索', done: true },
+              { label: '安全检查子代理', detail: '完成 · 2 个问题', done: true },
+              { label: '生成评审结论', detail: '完成', done: true }
+            ],
+            agents: [
+              { name: '变更分析', status: 'completed', progress: 100, detail: '8 个文件' },
+              { name: '安全审查', status: 'completed', progress: 100, detail: '2 个问题' },
+              { name: '测试覆盖', status: 'completed', progress: 100, detail: '3 个建议' }
+            ],
+            files: [
+              { name: 'src/hooks/useAuth.ts', add: 18, del: 4 },
+              { name: 'server/routes/auth.js', add: 31, del: 12 },
+              { name: 'src/components/LoginForm.tsx', add: 22, del: 8 }
+            ],
+            artifacts: [
+              { name: '代码评审报告', type: 'Markdown', icon: 'file' },
+              { name: '修复检查清单', type: 'Markdown', icon: 'check' }
+            ]
+          },
+          {
+            id: 't-bug', projectId: 'p1', title: '诊断桌面端启动白屏', status: 'permission_required', updatedAt: '10:31', provider: 'Codex', model: 'GPT-5.3-Codex', permissionMode: 'standard', expert: 'Bug 诊断专家',
+            prompt: '桌面端启动后偶发白屏，帮我定位原因。',
+            messages: [
+              { type: 'user', text: '桌面端启动后偶发白屏，帮我定位原因。' },
+              { type: 'thinking', title: '正在收敛问题范围', body: '日志显示渲染进程在等待 5173 端口。下一步需要读取桌面运行日志并确认端口占用。', expanded: true },
+              { type: 'tool', name: '读取桌面运行日志', meta: '完成 · 42 行', detail: 'desktop/.runtime/main.log\n[renderer] waiting for http://localhost:5173\n[main] window created', status: 'done', expanded: false },
+              { type: 'permission', id: 'perm-bug', title: '允许检查本地端口和进程？', description: '需要执行只读命令确认 5173 与 3001 的监听进程。', command: 'lsof -nP -iTCP:5173 -sTCP:LISTEN && lsof -nP -iTCP:3001 -sTCP:LISTEN', decision: null }
+            ],
+            timeline: [
+              { label: '读取错误上下文', detail: '完成', done: true },
+              { label: '分析桌面运行日志', detail: '完成', done: true },
+              { label: '检查端口占用', detail: '等待权限', live: true },
+              { label: '验证根因', detail: '尚未开始' }
+            ],
+            agents: [
+              { name: '日志分析', status: 'completed', progress: 100, detail: '42 行日志' },
+              { name: '进程检查', status: 'waiting', progress: 36, detail: '等待权限' },
+              { name: 'UI 验证', status: 'waiting', progress: 0, detail: '尚未开始' }
+            ],
+            files: [{ name: 'desktop/main.js', add: 0, del: 0 }, { name: 'desktop/.runtime/main.log', add: 0, del: 0 }],
+            artifacts: []
+          },
+          {
+            id: 't-docs', projectId: 'p2', title: '生成网关鉴权接口文档', status: 'failed', updatedAt: '昨天', provider: 'Gemini', model: 'Gemini 2.5 Pro', permissionMode: 'read', expert: '文档整理专家',
+            prompt: '为 gateway-service 的鉴权接口生成 Markdown 文档。', error: '读取 schema/auth.yaml 时文件不存在。',
+            messages: [
+              { type: 'user', text: '为 gateway-service 的鉴权接口生成 Markdown 文档。' },
+              { type: 'thinking', title: '整理接口来源', body: '将从路由定义和 OpenAPI schema 中提取接口。', expanded: false },
+              { type: 'tool', name: '读取 OpenAPI Schema', meta: '失败', detail: 'ENOENT: schema/auth.yaml not found', status: 'failed', expanded: true }
+            ],
+            timeline: [{ label: '扫描路由', detail: '完成', done: true }, { label: '读取 Schema', detail: '文件不存在', error: true }, { label: '生成文档', detail: '未开始' }],
+            agents: [{ name: '路由扫描', status: 'completed', progress: 100, detail: '14 个接口' }, { name: '文档生成', status: 'failed', progress: 28, detail: '缺少 Schema' }],
+            files: [{ name: 'server/routes/auth.ts', add: 0, del: 0 }], artifacts: []
+          },
+          {
+            id: 't-sql', projectId: 'p3', title: '检查用户留存查询 SQL', status: 'completed', updatedAt: '周三', provider: 'Claude', model: 'Sonnet 4.5', permissionMode: 'standard', expert: 'SQL 检查专家',
+            prompt: '检查这段用户留存查询 SQL 的安全性与性能。',
+            messages: [
+              { type: 'user', text: '检查这段用户留存查询 SQL 的安全性与性能。' },
+              { type: 'tool', name: 'SQL Check · 静态分析', meta: '完成 · 3 条建议', detail: '检测到全表扫描、日期条件无法命中索引、结果集缺少 LIMIT。', status: 'done', expanded: false },
+              { type: 'result', title: 'SQL 检查完成', text: '查询无写入风险，但在大数据量下会出现明显性能问题。', bullets: ['将 DATE(created_at) 改为时间范围条件以命中索引。', '补充 tenant_id 过滤，避免跨租户扫描。', '调试阶段增加 LIMIT 500。'] }
+            ],
+            timeline: [{ label: '解析 SQL', detail: '完成', done: true }, { label: '安全约束检查', detail: '完成', done: true }, { label: '性能分析', detail: '完成', done: true }],
+            agents: [{ name: 'SQL 静态分析', status: 'completed', progress: 100, detail: '3 条建议' }],
+            files: [{ name: 'queries/retention.sql', add: 7, del: 3 }], artifacts: [{ name: 'SQL 检查报告', type: 'SQL Check', icon: 'database' }]
+          }
+        ],
+        automations: [
+          { id: 'a1', name: '每日代码变更评审', projectId: 'p1', prompt: '评审过去 24 小时的代码变更，标记高风险项。', schedule: '每天 09:30', cron: '30 9 * * *', status: 'enabled', model: 'Claude · Sonnet 4.5', lastRun: '今天 09:30', lastResult: 'completed', lastTaskId: 't-review' },
+          { id: 'a2', name: '每周接口文档更新', projectId: 'p2', prompt: '扫描接口改动并更新鉴权接口文档。', schedule: '每周一 10:00', cron: '0 10 * * 1', status: 'paused', model: 'Gemini · 2.5 Pro', lastRun: '周一 10:00', lastResult: 'failed', lastTaskId: 't-docs' },
+          { id: 'a3', name: 'SQL 安全巡检', projectId: 'p3', prompt: '检查本周新增 SQL 的安全与性能风险。', schedule: '每周五 18:00', cron: '0 18 * * 5', status: 'completed', model: 'Claude · Sonnet 4.5', lastRun: '上周五 18:00', lastResult: 'completed', lastTaskId: 't-sql' },
+          { id: 'a4', name: '夜间依赖审计', projectId: 'p1', prompt: '检查依赖与配置变更，输出需要处理的风险。', schedule: '每天 02:00', cron: '0 2 * * *', status: 'failed', model: 'Codex · GPT-5.3-Codex', lastRun: '今天 02:00', lastResult: 'failed', lastTaskId: null },
+          { id: 'a5', name: '发布前检查', projectId: 'p2', prompt: '汇总测试、配置和代码变化，生成发布清单。', schedule: '暂未设置', cron: '0 18 * * 4', status: 'draft', model: 'Claude · Sonnet 4.5', lastRun: '尚未运行', lastResult: null, lastTaskId: null }
+        ]
+      };
+
+      const ui = {
+        modal: null,
+        moreOpen: false,
+        accountMenuOpen: false,
+        workspaceMenu: null,
+        testingConnectorId: null,
+        loggedOut: false,
+        contextTab: 'activity',
+        contextOpen: false,
+        capabilitySearch: '',
+        capabilityCategory: '全部',
+        selectedCapabilities: ['code-review', 'GitHub'],
+        newPrompt: '',
+        taskDrafts: {},
+        commandMenuScope: null,
+        timers: {},
+        activeAutomationFilter: 'all',
+        fileQuery: '',
+        selectedFiles: { p1: 'src/components/Sidebar.jsx', p2: 'server/routes/auth.ts', p3: 'queries/retention.sql' }
+      };
+
+      let state = loadState();
+
+      function clone(value) { return JSON.parse(JSON.stringify(value)); }
+      function loadState() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          const parsed = raw ? JSON.parse(raw) : null;
+          if (parsed && parsed.version === 2 && Array.isArray(parsed.tasks)) {
+            if (!parsed.currentTenant) parsed.currentTenant = defaultState.currentTenant;
+            if (!parsed.workspaceCapabilities) parsed.workspaceCapabilities = clone(defaultState.workspaceCapabilities);
+            projects.forEach(project => {
+              if (!parsed.workspaceCapabilities[project.id]) parsed.workspaceCapabilities[project.id] = clone(defaultState.workspaceCapabilities[project.id]);
+            });
+            return parsed;
+          }
+        } catch (_) {}
+        return clone(defaultState);
+      }
+      function saveState() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+      }
+      function commit(renderAll = true) {
+        saveState();
+        if (renderAll) render();
+        else renderSidebar();
+      }
+      function escapeHtml(value = '') {
+        return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+      }
+      function projectById(id) { return projects.find(p => p.id === id) || projects[0]; }
+      function tenantById(id) { return tenants.find(tenant => tenant.id === id) || tenants[0]; }
+      function workspaceCaps(projectId = state.selectedProject) {
+        if (!state.workspaceCapabilities) state.workspaceCapabilities = clone(defaultState.workspaceCapabilities);
+        if (!state.workspaceCapabilities[projectId]) state.workspaceCapabilities[projectId] = clone(defaultState.workspaceCapabilities[projectId] || { experts: [], skills: [], connectors: [] });
+        return state.workspaceCapabilities[projectId];
+      }
+      function isExpertInstalled(expert, projectId = state.selectedProject) { return workspaceCaps(projectId).experts.includes(expert.id); }
+      function isSkillEnabled(skill, projectId = state.selectedProject) { return skill.installed && workspaceCaps(projectId).skills.includes(skill.id); }
+      function isConnectorConnected(connector, projectId = state.selectedProject) { return workspaceCaps(projectId).connectors.includes(connector.id); }
+      function taskById(id) { return state.tasks.find(t => t.id === id); }
+      function nowTime() { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date()); }
+      function uid(prefix) { return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+      function isTaskRunning(status) { return RUNNING.includes(status); }
+      function statusDotClass(status) {
+        if (RUNNING.includes(status)) return 'running';
+        return status;
+      }
+
+      const paths = {
+        plus: '<path d="M12 5v14M5 12h14"/>',
+        spark: '<path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2L12 3Z"/><path d="m5 14 .8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14Zm14-1 .7 1.8 1.8.7-1.8.7L19 18l-.7-1.8-1.8-.7 1.8-.7L19 13Z"/>',
+        automation: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 2v4m8-4v4M4 9h16m-8 3v3l2 1"/>',
+        more: '<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
+        chevron: '<path d="m8 10 4 4 4-4"/>',
+        folder: '<path d="M3 6.8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8.4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.8Z"/>',
+        settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+        code: '<path d="m8 9-4 3 4 3m8-6 4 3-4 3m-2-9-4 12"/>',
+        database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+        checklist: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 9 1.5 1.5L12 8m2 1h3m-9 6 1.5 1.5L12 14m2 1h3"/>',
+        file: '<path d="M6 2.8h8l4 4V21H6a2 2 0 0 1-2-2V4.8a2 2 0 0 1 2-2Z"/><path d="M14 3v5h4"/>',
+        search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>',
+        paperclip: '<path d="m20 11-8.5 8.5a5 5 0 0 1-7-7L14 3a3.5 3.5 0 0 1 5 5l-9.5 9.5a2 2 0 0 1-3-3L15 6"/>',
+        send: '<path d="m4 12 16-8-6.5 16-2.2-6.8L4 12Z"/><path d="M11.3 13.2 20 4"/>',
+        clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        shield: '<path d="M12 3 4.5 6v5.5c0 4.5 3.1 7.5 7.5 9.5 4.4-2 7.5-5 7.5-9.5V6L12 3Z"/><path d="m9 12 2 2 4-4"/>',
+        brain: '<path d="M9.5 4.2A3.5 3.5 0 0 0 6 7.7v.2A3.5 3.5 0 0 0 4 11a3.5 3.5 0 0 0 2 3.1v.2a3.5 3.5 0 0 0 3.5 3.5c1 0 1.8-.4 2.5-1V5.2a3.4 3.4 0 0 0-2.5-1Zm5 0A3.5 3.5 0 0 1 18 7.7v.2a3.5 3.5 0 0 1 2 3.1 3.5 3.5 0 0 1-2 3.1v.2a3.5 3.5 0 0 1-3.5 3.5c-1 0-1.8-.4-2.5-1V5.2a3.4 3.4 0 0 1 2.5-1Z"/>',
+        message: '<path d="M20 15a4 4 0 0 1-4 4H9l-5 3v-4.7A4 4 0 0 1 3 15V8a4 4 0 0 1 4-4h9a4 4 0 0 1 4 4v7Z"/>',
+        terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 0h5"/>',
+        check: '<path d="m5 12 4 4L19 6"/>',
+        x: '<path d="m6 6 12 12M18 6 6 18"/>',
+        refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8A7 7 0 0 1 18.7 9M5.3 15A7 7 0 0 0 17.9 16"/>',
+        stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+        users: '<path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m7-9a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 9v-2a4 4 0 0 0-3-3.9m-2-11a4 4 0 0 1 0 7.8"/>',
+        review: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4M8 10.5l1.7 1.7L13 9"/>',
+        bug: '<path d="m8 2 1.5 2h5L16 2m-4 5v12m-7-7H2m20 0h-3M6 7 3 5m15 2 3-2M6 17l-3 2m15-2 3 2"/><rect x="6" y="4" width="12" height="16" rx="6"/>',
+        plug: '<path d="M8 12h8m-6-8v5m4-5v5m3 0v3a5 5 0 0 1-10 0V9h10Zm-5 8v4"/>',
+        play: '<path d="m8 5 11 7-11 7V5Z"/>',
+        edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"/>',
+        external: '<path d="M14 4h6v6m0-6-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
+        info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/>',
+        branch: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10m2-4c5 0 8-2 8-4"/>',
+        menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+        reset: '<path d="M4 4v6h6M20 20v-6h-6"/><path d="M6.5 17.5A8 8 0 0 0 19 14M5 10a8 8 0 0 1 12.5-3.5"/>',
+        command: '<path d="M9 6H6a3 3 0 1 0 3 3V6Zm6 0h3a3 3 0 1 1-3 3V6ZM9 18H6a3 3 0 1 1 3-3v3Zm6 0h3a3 3 0 1 0-3-3v3ZM9 6h6v12H9V6Z"/>'
+      };
+      function icon(name, size = 16) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.info}</svg>`;
+      }
+
+      function currentRoute() {
+        const hash = location.hash || '#/new';
+        const parts = hash.replace(/^#\//, '').split('/');
+        if (parts[0] === 'task') return { page: 'task', id: parts[1] };
+        if (parts[0] === 'capabilities') return { page: 'capabilities', tab: parts[1] || 'experts' };
+        if (parts[0] === 'automation') return { page: 'automation' };
+        if (parts[0] === 'files') return { page: 'files' };
+        return { page: 'new' };
+      }
+      function navigate(hash) {
+        ui.moreOpen = false;
+        ui.accountMenuOpen = false;
+        ui.workspaceMenu = null;
+        ui.commandMenuScope = null;
+        ui.contextOpen = false;
+        if (location.hash === hash) render();
+        else location.hash = hash;
+      }
+
+      function render() {
+        if (ui.loggedOut) {
+          document.getElementById('app').innerHTML = loginTemplate();
+          return;
+        }
+        const route = currentRoute();
+        document.getElementById('app').innerHTML = `<div class="app-shell">${sidebarTemplate(route)}<main class="main-shell" id="main-view">${pageTemplate(route)}</main></div>`;
+        bindPostRender(route);
+      }
+
+      function renderSidebar() {
+        const route = currentRoute();
+        const current = document.querySelector('.sidebar');
+        if (!current) return render();
+        current.outerHTML = sidebarTemplate(route);
+      }
+
+      function sidebarTemplate(route) {
+        return `
+          <aside class="sidebar" aria-label="主导航">
+            <div class="window-drag"></div>
+            <div class="brand-row"><div class="brand-mark">D</div><div class="brand-name">DataAgent</div></div>
+            <nav class="sidebar-nav">
+              ${navButton('new', '新建任务', 'plus', route.page === 'new')}
+              ${navButton('capabilities', '专家 · 技能 · 连接器', 'spark', route.page === 'capabilities')}
+              ${navButton('automation', '自动化', 'automation', route.page === 'automation')}
+              ${navButton('files', '文件', 'file', route.page === 'files')}
+              <button class="nav-button ${ui.moreOpen ? 'active' : ''}" data-action="toggle-more"><span class="nav-icon">${icon('more')}</span><span>更多</span></button>
+              ${ui.moreOpen ? moreMenuTemplate() : ''}
+            </nav>
+            <div class="sidebar-divider"></div>
+            <section class="space-section">
+              <div class="section-label">空间 <span class="section-count">${projects.length}</span><button class="section-action" data-action="project-info" aria-label="项目说明">${icon('info', 13)}</button></div>
+              <div class="project-list">
+                ${projects.map(project => projectGroupTemplate(project, route)).join('')}
+              </div>
+            </section>
+            <footer class="sidebar-footer">
+              ${ui.accountMenuOpen ? accountMenuTemplate() : ''}
+              <button class="nav-button" data-action="open-settings"><span class="nav-icon">${icon('settings')}</span><span>设置</span></button>
+              <button class="user-row" data-action="toggle-account-menu"><div class="user-avatar">SO</div><div class="user-meta"><div class="user-name">song</div><div class="user-plan">${escapeHtml(tenantById(state.currentTenant).name)} · 已连接</div></div>${icon('chevron',12)}</button>
+            </footer>
+          </aside>`;
+      }
+      function navButton(page, label, iconName, active) {
+        const hash = page === 'capabilities' ? '#/capabilities/experts' : page === 'automation' ? '#/automation' : page === 'files' ? '#/files' : '#/new';
+        return `<button class="nav-button ${page === 'new' ? 'primary' : ''} ${active ? 'active' : ''}" data-nav="${hash}"><span class="nav-icon">${icon(iconName)}</span><span>${label}</span></button>`;
+      }
+      function projectGroupTemplate(project, route) {
+        const tasks = state.tasks.filter(t => t.projectId === project.id).slice().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+        const collapsed = state.collapsedProjects.includes(project.id);
+        return `<div class="project-group ${collapsed ? 'collapsed' : ''}">
+          <button class="project-row" data-action="toggle-project" data-id="${project.id}" title="${escapeHtml(project.path)}">
+            <span class="project-chevron">${icon('chevron', 12)}</span><span class="project-icon">${project.letter}</span><span class="project-name">${escapeHtml(project.name)}</span><span class="project-count">${tasks.length}</span>
+          </button>
+          <div class="task-list">
+            ${tasks.length ? tasks.map(task => `<button class="task-row ${route.page === 'task' && route.id === task.id ? 'active' : ''}" data-nav="#/task/${task.id}" title="${escapeHtml(task.title)}"><span class="status-dot ${statusDotClass(task.status)}"></span><span class="task-title">${escapeHtml(task.title)}</span><span class="task-time">${escapeHtml(task.updatedAt)}</span></button>`).join('') : `<div class="task-row"><span class="task-title" style="color:var(--text-3)">暂无任务</span></div>`}
+          </div>
+        </div>`;
+      }
+      function moreMenuTemplate() {
+        return `<div class="more-menu" role="menu">
+          <div class="menu-label">项目工具</div>
+          ${menuItem('codehub', 'CodeHub', 'branch', 'Git')}
+          ${menuItem('sql', 'SQL Check', 'database', '检查')}
+          <div class="menu-separator"></div>
+          <div class="menu-label">管理</div>
+          ${menuItem('admin', '管理后台', 'shield')}
+        </div>`;
+      }
+      function menuItem(id, label, iconName, sub = '') { return `<button class="menu-item" data-action="more-entry" data-id="${id}">${icon(iconName,14)}<span>${label}</span>${sub ? `<span class="sub">${sub}</span>` : ''}</button>`; }
+      function accountMenuTemplate() {
+        const tenant = tenantById(state.currentTenant);
+        return `<div class="account-menu" role="menu"><div class="account-summary"><strong>song</strong><span>${escapeHtml(tenant.name)} · ${escapeHtml(tenant.role)}</span></div><div class="menu-separator"></div><button class="menu-item" data-action="open-settings">${icon('settings',14)}<span>账号与租户设置</span></button><button class="menu-item" data-action="logout">${icon('external',14)}<span>退出登录</span></button></div>`;
+      }
+      function loginTemplate() {
+        return `<main class="login-screen"><section class="login-panel"><div class="brand-mark">D</div><h1>已退出 DataAgent</h1><p>本地演示数据仍保留在当前浏览器中。</p><button class="primary-button" data-action="login-demo">使用演示账号登录</button></section></main>`;
+      }
+      function workspacePickerTemplate(scope, projectId = state.selectedProject) {
+        const project = projectById(projectId);
+        const open = ui.workspaceMenu === scope;
+        return `<div class="workspace-picker-wrap ${scope === 'new' ? 'composer' : 'header'}"><button class="workspace-picker ${open ? 'open' : ''}" data-action="toggle-workspace-menu" data-scope="${scope}" aria-expanded="${open}">${icon('folder')}<span class="workspace-prefix">工作区</span><span class="workspace-name">${escapeHtml(project.name)}</span>${icon('chevron',11)}</button>${open ? `<div class="workspace-menu" role="menu"><div class="menu-label">选择工作区</div>${projects.map(item => `<button class="workspace-option ${item.id === project.id ? 'active' : ''}" data-action="select-workspace" data-id="${item.id}"><span class="project-icon">${item.letter}</span><span class="workspace-option-copy"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.path)}</span></span>${item.id === project.id ? icon('check',13) : ''}</button>`).join('')}</div>` : ''}</div>`;
+      }
+      function workspaceSkillCommands(projectId) {
+        const enabledIds = new Set(workspaceCaps(projectId).skills || []);
+        return state.skills.filter(skill => enabledIds.has(skill.id));
+      }
+      function skillCommandControlTemplate(scope, projectId, inputId, disabled = false, taskId = '') {
+        const skills = workspaceSkillCommands(projectId);
+        const open = ui.commandMenuScope === scope;
+        return `<div class="skill-command-control"><button class="round-action skill-command-button" data-action="toggle-skill-command-menu" data-scope="${escapeHtml(scope)}" aria-label="技能命令，${skills.length} 个可用" aria-expanded="${open}" ${disabled ? 'disabled' : ''}>${icon('message')}${skills.length ? `<span class="command-count">${skills.length}</span>` : ''}</button>${open ? skillCommandMenuTemplate(skills, projectId, inputId, taskId) : ''}</div>`;
+      }
+      function skillCommandMenuTemplate(skills, projectId, inputId, taskId = '') {
+        return `<div class="skill-command-menu" role="listbox" aria-label="选择技能命令"><div class="skill-command-head"><strong>当前工作区技能</strong><span>${escapeHtml(projectById(projectId).name)} · ${skills.length} 个</span></div><div class="skill-command-list">${skills.length ? skills.map(skill => `<button class="skill-command-item" role="option" data-action="insert-skill-command" data-code="${escapeHtml(skill.code)}" data-input="${escapeHtml(inputId)}" data-task="${escapeHtml(taskId)}"><span class="skill-command-symbol">${icon('spark',13)}</span><span class="skill-command-copy"><strong>/${escapeHtml(skill.code)}</strong><span>${escapeHtml(skill.name)} · ${escapeHtml(skill.description)}</span></span></button>`).join('') : `<div class="file-empty" style="min-height:120px">当前工作区没有已启用技能</div>`}</div><div class="skill-command-footer"><button class="small-button" data-nav="#/capabilities/skills">管理工作区技能</button></div></div>`;
+      }
+
+      function pageTemplate(route) {
+        if (route.page === 'task') return taskPageTemplate(route.id);
+        if (route.page === 'capabilities') return capabilitiesPageTemplate(route.tab);
+        if (route.page === 'automation') return automationPageTemplate();
+        if (route.page === 'files') return filesPageTemplate();
+        return newTaskPageTemplate();
+      }
+
+      function newTaskPageTemplate() {
+        return `<section class="page-view new-page">
+          <header class="page-header"><div class="header-title">新建任务</div><div class="header-subtitle">在当前工作区开始一个 AI 会话</div></header>
+          <div class="new-content"><div class="new-inner">
+            <div class="new-greeting"><div class="new-greeting-mark">${icon('spark',19)}</div><h1>今天想完成什么？</h1><p>描述目标，DataAgent 会在所选工作区中规划并执行。</p></div>
+            <div class="composer-card">
+              <textarea class="composer-input" id="new-prompt" aria-label="任务描述" placeholder="例如：评审当前分支的登录模块改动，并给出可执行的修复建议…">${escapeHtml(ui.newPrompt)}</textarea>
+              <div class="capability-strip" id="selected-capabilities">
+                ${ui.selectedCapabilities.map(c => `<button class="cap-chip selected" data-action="remove-capability" data-name="${escapeHtml(c)}">${capabilityKindIcon(c)}<span>${escapeHtml(c)}</span><span class="remove">×</span></button>`).join('')}
+                <button class="cap-chip" data-action="choose-capability">${icon('plus',12)} 添加能力</button>
+              </div>
+              <div class="composer-footer">
+                ${skillCommandControlTemplate('new', state.selectedProject, 'new-prompt')}
+                ${workspacePickerTemplate('new')}
+                <button class="round-action" data-action="new-automation" aria-label="创建定时任务">${icon('clock')}</button>
+                <button class="send-button" data-action="create-task" aria-label="开始任务">${icon('send')}</button>
+              </div>
+            </div>
+          </div></div>
+        </section>`;
+      }
+      function capabilityKindIcon(name) {
+        if (/专家/.test(name)) return icon('users', 11);
+        if (/GitHub|Filesystem|PostgreSQL|Browser|Slack|MCP/.test(name)) return icon('plug', 11);
+        return icon('spark', 11);
+      }
+      function taskPageTemplate(id) {
+        const task = taskById(id);
+        if (!task) return notFoundTemplate();
+        const project = projectById(task.projectId);
+        return `<section class="page-view task-page">
+          <header class="page-header">
+            <div><div class="header-title">${escapeHtml(task.title)}</div><div class="header-subtitle">${escapeHtml(project.name)} · ${escapeHtml(task.provider)} / ${escapeHtml(task.model)}</div></div>
+            <span class="state-badge ${task.status}">${taskStatusIcon(task.status)}${STATUS_LABEL[task.status] || task.status}</span>
+            <div class="header-actions">
+              <button class="icon-button" data-action="task-more" aria-label="任务菜单">${icon('more')}</button>
+              <button class="icon-button context-trigger" data-action="toggle-context" aria-label="打开任务上下文">${icon('menu')}</button>
+            </div>
+          </header>
+          <div class="task-layout">
+            <section class="conversation">
+              <div class="messages" id="messages"><div class="messages-inner">
+                ${taskBannerTemplate(task)}
+                ${task.messages.map((m, i) => messageTemplate(m, task, i)).join('')}
+                ${isTaskRunning(task.status) ? streamingIndicatorTemplate(task.status) : ''}
+              </div></div>
+              ${taskComposerTemplate(task)}
+            </section>
+            ${contextPanelTemplate(task)}
+            <div class="scrim ${ui.contextOpen ? 'open' : ''}" data-action="close-context"></div>
+          </div>
+        </section>`;
+      }
+      function taskStatusIcon(status) {
+        if (status === 'completed') return icon('check', 11);
+        if (status === 'failed' || status === 'denied' || status === 'blocked') return icon('x', 11);
+        if (status === 'paused' || status === 'cancelled' || status === 'permission_required') return icon('clock', 11);
+        return icon('spark', 11);
+      }
+      function taskBannerTemplate(task) {
+        if (!['failed','denied','blocked','cancelled'].includes(task.status)) return '';
+        const copy = {
+          failed: ['任务执行失败', task.error || '工具调用发生错误，你可以补充信息后重试。'],
+          denied: ['操作已拒绝', '任务停在需要权限的步骤。你可以继续任务并选择其他执行方式。'],
+          blocked: ['任务已阻止', '当前权限或项目状态无法继续执行。'],
+          cancelled: ['任务已停止', '已保留当前上下文，可以随时继续。']
+        }[task.status];
+        return `<div class="status-banner ${task.status}">${taskStatusIcon(task.status)}<div class="banner-text"><strong>${copy[0]}</strong><span>${escapeHtml(copy[1])}</span></div><button class="small-button" data-action="retry-task" data-id="${task.id}">${task.status === 'failed' ? '重试' : '继续任务'}</button></div>`;
+      }
+      function messageTemplate(message, task, index) {
+        if (message.type === 'user') return `<div class="message message-user"><div class="user-bubble">${escapeHtml(message.text).replace(/\n/g,'<br>')}</div></div>`;
+        if (message.type === 'thinking') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><div class="thinking-block ${message.expanded ? 'expanded' : ''}"><button class="block-header" data-action="toggle-block" data-index="${index}"><span class="block-icon">${icon('brain')}</span><span class="block-title">${escapeHtml(message.title)}</span><span class="block-meta">思考过程</span><span class="block-chevron">${icon('chevron',12)}</span></button><div class="block-body">${escapeHtml(message.body)}</div></div></div></div>`;
+        if (message.type === 'tool') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><div class="tool-block ${message.expanded ? 'expanded' : ''}"><button class="block-header" data-action="toggle-block" data-index="${index}"><span class="block-icon">${icon('terminal')}</span><span class="block-title">${escapeHtml(message.name)}</span><span class="block-meta"><span class="tool-status ${message.status === 'running' ? 'running' : ''}">${message.status === 'running' ? '<i class="status-dot running"></i>执行中' : message.status === 'failed' ? '执行失败' : icon('check',10) + escapeHtml(message.meta)}</span></span><span class="block-chevron">${icon('chevron',12)}</span></button><div class="block-body"><div class="tool-code">${escapeHtml(message.detail)}</div></div></div></div></div>`;
+        if (message.type === 'permission') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><div class="permission-card"><div class="permission-top"><div class="permission-icon">${icon('shield')}</div><div><div class="permission-title">${escapeHtml(message.title)}</div><div class="permission-desc">${escapeHtml(message.description)}</div></div></div><div class="permission-command">${escapeHtml(message.command)}</div>${message.decision ? `<div class="permission-decision">${message.decision === 'deny' ? '你已拒绝此操作' : message.decision === 'remember' ? '已允许，并记住同类操作' : message.decision === 'cancelled' ? '任务已停止，此权限请求不再生效' : '已允许本次操作'}</div>` : `<div class="permission-actions"><button class="small-button" data-action="permission" data-choice="deny" data-task="${task.id}">拒绝</button><button class="secondary-button" data-action="permission" data-choice="once" data-task="${task.id}">允许一次</button><button class="primary-button" data-action="permission" data-choice="remember" data-task="${task.id}">允许并记住</button></div>`}</div></div></div>`;
+        if (message.type === 'subagent') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><div class="subagent-block expanded"><div class="block-header"><span class="block-icon">${icon('users')}</span><span class="block-title">${escapeHtml(message.name)}</span><span class="block-meta">${escapeHtml(message.meta || '子代理')}</span></div><div class="block-body" style="display:block">${escapeHtml(message.detail)}</div></div></div></div>`;
+        if (message.type === 'result') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><p>${escapeHtml(message.text)}</p><div class="result-card"><div class="result-title">${icon('check')} ${escapeHtml(message.title)}</div>${message.bullets ? `<ul>${message.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}</ul>` : ''}</div></div></div>`;
+        if (message.type === 'assistant') return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><p>${escapeHtml(message.text)}</p></div></div>`;
+        return '';
+      }
+      function streamingIndicatorTemplate(status) {
+        const copy = { preparing: '正在准备任务上下文', reasoning: '正在分析并制定步骤', tool_running: '正在执行工具', subagent_running: '子代理正在协作', streaming: '正在生成最终答复' }[status] || '正在处理';
+        return `<div class="message assistant-message"><div class="assistant-avatar">D</div><div class="assistant-content"><div style="color:var(--text-3);font-size:11px">${copy}</div><div class="typing" aria-label="正在生成"><i></i><i></i><i></i></div></div></div>`;
+      }
+      function taskComposerTemplate(task) {
+        const running = isTaskRunning(task.status) || task.status === 'permission_required';
+        return `<div class="task-composer-wrap"><div class="task-composer"><textarea class="task-input" id="task-input" placeholder="${task.status === 'permission_required' ? '请先处理上方的权限请求…' : '补充信息或继续提出要求…'}" ${task.status === 'permission_required' ? 'disabled' : ''}>${escapeHtml(ui.taskDrafts[task.id] || '')}</textarea><div class="task-composer-footer">${skillCommandControlTemplate(`task-${task.id}`, task.projectId, 'task-input', task.status === 'permission_required', task.id)}${running ? `<button class="stop-button" data-action="stop-task" data-id="${task.id}"><span class="stop-square"></span>停止</button>` : `<button class="send-button" data-action="send-followup" data-id="${task.id}" aria-label="发送补充信息">${icon('send')}</button>`}</div></div></div>`;
+      }
+
+      function contextPanelTemplate(task) {
+        const tabs = [['activity','活动'],['agents','子代理'],['files','文件'],['changes','代码变更'],['artifacts','产物']];
+        return `<aside class="context-panel ${ui.contextOpen ? 'open' : ''}" aria-label="任务上下文"><div class="context-head"><span class="context-title">任务上下文</span><button class="icon-button drawer-close" data-action="close-context" aria-label="关闭">${icon('x')}</button></div><div class="context-tabs">${tabs.map(([id,label]) => `<button class="context-tab ${ui.contextTab === id ? 'active' : ''}" data-action="context-tab" data-tab="${id}">${label}</button>`).join('')}</div><div class="context-body">${contextTabContent(task, ui.contextTab)}</div></aside>`;
+      }
+      function contextTabContent(task, tab) {
+        if (tab === 'activity') return `<div class="context-section"><div class="context-label">执行时间线</div>${(task.timeline || []).map(item => `<div class="timeline-item"><span class="timeline-mark ${item.done ? 'done' : item.live ? 'live' : ''}">${item.done ? icon('check',9) : item.error ? icon('x',9) : ''}</span><div class="timeline-copy"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.detail)}</span></div></div>`).join('')}</div><div class="context-section"><div class="context-label">运行配置</div><div class="context-card"><div class="detail-list"><div class="detail-row"><span class="detail-key">模型</span><span>${escapeHtml(task.provider)} · ${escapeHtml(task.model)}</span></div><div class="detail-row"><span class="detail-key">权限</span><span>${permissionLabel(task.permissionMode)}</span></div><div class="detail-row"><span class="detail-key">专家</span><span>${escapeHtml(task.expert || '未选择')}</span></div></div></div></div>`;
+        if (tab === 'agents') return `<div class="context-section"><div class="context-label">协作执行 · Agent Graph Run</div>${(task.agents || []).length ? task.agents.map(agent => `<div class="context-card"><div class="context-card-head"><span class="context-card-icon">${icon('users')}</span><span class="context-card-title">${escapeHtml(agent.name)}</span><span class="context-card-meta">${agentStatus(agent.status)}</span></div><div class="progress"><i style="width:${agent.progress || 0}%"></i></div><div class="context-card-meta" style="margin-top:5px">${escapeHtml(agent.detail || '')}</div></div>`).join('') : emptyState('users','这个任务没有启用子代理')}</div>`;
+        if (tab === 'files') return `<div class="context-section"><div class="context-label">关联文件</div>${(task.files || []).length ? task.files.map(f => `<button class="file-row" data-action="open-artifact" data-name="${escapeHtml(f.name)}">${icon('file')}<span class="file-name">${escapeHtml(f.name)}</span>${f.add ? `<span class="file-change add">+${f.add}</span>` : ''}${f.del ? `<span class="file-change del">−${f.del}</span>` : ''}</button>`).join('') : emptyState('file','尚未读取或修改文件')}</div><button class="secondary-button" style="width:100%" data-action="open-files" data-project="${task.projectId}" data-path="${escapeHtml(task.files?.[0]?.name || '')}">在文件中打开</button>`;
+        if (tab === 'changes') {
+          const file = (task.files || []).find(f => f.add || f.del);
+          return file ? `<div class="context-section"><div class="context-label">${escapeHtml(file.name)}</div><div class="diff-box"><div class="diff-line">12&nbsp;&nbsp; export function loadState() {</div><div class="diff-line del">−&nbsp;&nbsp; return cache.value;</div><div class="diff-line add">+&nbsp;&nbsp; return cache.get(projectId);</div><div class="diff-line add">+&nbsp;&nbsp; // isolate per workspace</div><div class="diff-line">15&nbsp;&nbsp; }</div></div></div><button class="secondary-button" style="width:100%" data-action="more-entry" data-id="codehub">在 CodeHub 中查看</button>` : emptyState('code','这个任务还没有代码变更');
+        }
+        return `<div class="context-section"><div class="context-label">任务产物</div>${(task.artifacts || []).length ? task.artifacts.map(a => `<button class="artifact-link" data-action="open-artifact" data-name="${escapeHtml(a.name)}"><span class="context-card-icon">${icon(a.icon || 'file')}</span><span style="min-width:0;flex:1;text-align:left"><strong style="display:block;font-size:10.5px">${escapeHtml(a.name)}</strong><span style="color:var(--text-3);font-size:9.5px">${escapeHtml(a.type)}</span></span>${icon('external',12)}</button>`).join('') : emptyState('file','任务完成后，报告和变更会显示在这里')}</div>`;
+      }
+      function emptyState(iconName, copy) { return `<div class="empty-state">${icon(iconName)}<div>${copy}</div></div>`; }
+      function permissionLabel(mode) { return mode === 'read' ? '自动批准只读操作' : mode === 'plan' ? '计划模式' : '标准 · 每次确认'; }
+      function agentStatus(status) { return ({ completed: '已完成', running: '执行中', waiting: '等待中', failed: '失败' })[status] || status; }
+
+      function capabilitiesPageTemplate(tab) {
+        const safeTab = ['experts','skills','connectors'].includes(tab) ? tab : 'experts';
+        return `<section class="page-view standard-page"><header class="page-header"><div class="header-title">专家 · 技能 · 连接器</div><div class="header-subtitle">按工作区管理 DataAgent 能力</div><div class="header-actions">${workspacePickerTemplate('capabilities')}<button class="icon-button" data-action="capability-help" aria-label="能力映射说明">${icon('info')}</button></div></header><div class="standard-content"><div class="content-inner"><div class="page-intro"><div><h1>${safeTab === 'experts' ? '安装并管理专家' : safeTab === 'skills' ? '工作区技能市场' : '管理工作区连接器'}</h1><p>${safeTab === 'experts' ? `专家安装到 ${projectById(state.selectedProject).name} 后，才可在新建任务中选择。` : safeTab === 'skills' ? `浏览技能市场，并管理 ${projectById(state.selectedProject).name} 中启用的技能。` : `管理 ${projectById(state.selectedProject).name} 使用的 MCP Servers、Tools 与预设。`}</p></div><div class="intro-actions">${safeTab === 'connectors' ? '<button class="secondary-button" data-action="connector-presets">MCP 预设</button>' : ''}</div></div><div class="tab-bar">${[['experts','专家'],['skills','技能'],['connectors','连接器']].map(([id,label]) => `<button class="tab-button ${safeTab === id ? 'active' : ''}" data-nav="#/capabilities/${id}">${label}</button>`).join('')}</div>${capabilityTabContent(safeTab)}</div></div></section>`;
+      }
+      function capabilityTabContent(tab) {
+        if (tab === 'experts') return `<div class="toolbar"><div class="search-box">${icon('search')}<input class="search-input" id="capability-search" placeholder="搜索专家" value="${escapeHtml(ui.capabilitySearch)}" /></div><span class="toolbar-count">已安装 ${state.experts.filter(expert => isExpertInstalled(expert)).length} / ${state.experts.length}</span></div><div class="card-grid">${filteredExperts().map(expertCard).join('') || emptyState('search','没有匹配的专家')}</div>`;
+        if (tab === 'skills') return `<div class="toolbar"><div class="search-box">${icon('search')}<input class="search-input" id="capability-search" placeholder="搜索技能" value="${escapeHtml(ui.capabilitySearch)}" /></div><select class="filter-select" id="capability-category">${['全部','代码开发','调试诊断','文档写作','数据工具','部署运维'].map(c => `<option ${c === ui.capabilityCategory ? 'selected' : ''}>${c}</option>`).join('')}</select><span class="toolbar-count">已启用 ${state.skills.filter(skill => isSkillEnabled(skill)).length} / ${state.skills.length}</span></div><div class="card-grid">${filteredSkills().map(skillCard).join('') || emptyState('search','没有匹配的技能')}</div>`;
+        return `<div class="toolbar"><div class="search-box">${icon('search')}<input class="search-input" id="capability-search" placeholder="搜索连接器" value="${escapeHtml(ui.capabilitySearch)}" /></div><select class="filter-select" id="capability-category"><option ${ui.capabilityCategory === '全部' ? 'selected' : ''}>全部</option><option ${ui.capabilityCategory === '已连接' ? 'selected' : ''}>已连接</option><option ${ui.capabilityCategory === '未连接' ? 'selected' : ''}>未连接</option></select><span class="toolbar-count">已连接 ${state.connectors.filter(connector => isConnectorConnected(connector)).length} / ${state.connectors.length}</span></div><div class="card-grid">${filteredConnectors().map(connectorCard).join('') || emptyState('search','没有匹配的连接器')}</div>`;
+      }
+      function filteredExperts() { const q = ui.capabilitySearch.trim().toLowerCase(); return state.experts.filter(e => !q || (e.name + e.description + e.tags.join(' ')).toLowerCase().includes(q)); }
+      function filteredSkills() { const q = ui.capabilitySearch.trim().toLowerCase(); return state.skills.filter(s => (!q || (s.name+s.code+s.description).toLowerCase().includes(q)) && (ui.capabilityCategory === '全部' || s.category === ui.capabilityCategory)); }
+      function filteredConnectors() { const q = ui.capabilitySearch.trim().toLowerCase(); return state.connectors.filter(c => { const connected = isConnectorConnected(c); return (!q || (c.name+c.description+c.tools.join(' ')).toLowerCase().includes(q)) && (ui.capabilityCategory === '全部' || (ui.capabilityCategory === '已连接' && connected) || (ui.capabilityCategory === '未连接' && !connected)); }); }
+      function expertCard(expert) { const installed = isExpertInstalled(expert); return `<article class="capability-card"><div class="card-top"><div class="capability-icon ${expert.color === 'purple' ? '' : expert.color}">${icon(expert.icon)}</div><div class="card-heading"><h3>${escapeHtml(expert.name)}</h3><p>Agent Graph · ${expert.agents} 个执行节点</p></div>${installed ? `<span class="connection-badge connected">${icon('check',10)}已安装</span>` : ''}</div><div class="card-description">${escapeHtml(expert.description)}</div><div class="tag-row">${expert.tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div><div class="card-footer"><span class="card-meta">已运行 ${expert.runs} 次</span><button class="small-button" data-action="expert-detail" data-id="${expert.id}">查看配置</button><button class="${installed ? 'small-button' : 'primary-button'}" style="min-height:28px;padding:0 9px;font-size:11px" data-action="install-expert" data-id="${expert.id}" ${installed ? 'disabled' : ''}>${installed ? '已安装' : '安装'}</button></div></article>`; }
+      function skillCard(skill) { const enabled = isSkillEnabled(skill); return `<article class="capability-card"><div class="card-top"><div class="capability-icon blue">${icon('spark')}</div><div class="card-heading"><h3>${escapeHtml(skill.name)}</h3><p>${escapeHtml(skill.code)} · ${escapeHtml(skill.version)}</p></div><button class="switch ${enabled ? 'on' : ''}" data-action="toggle-skill" data-id="${skill.id}" aria-label="${enabled ? '停用' : '启用'}${escapeHtml(skill.name)}" aria-pressed="${enabled}"></button></div><div class="card-description">${escapeHtml(skill.description)}</div><div class="tag-row"><span class="tag">${escapeHtml(skill.category)}</span><span class="tag">工作区技能</span>${!skill.installed ? '<span class="tag">市场可用</span>' : ''}</div><div class="card-footer"><span class="card-meta">${skill.uses} 次调用</span><button class="small-button" data-action="skill-detail" data-id="${skill.id}">查看详情</button>${!skill.installed ? `<button class="primary-button" style="min-height:28px;padding:0 9px;font-size:11px" data-action="install-skill" data-id="${skill.id}">安装</button>` : ''}</div></article>`; }
+      function connectorCard(connector) { const connected = isConnectorConnected(connector); const testing = ui.testingConnectorId === connector.id; const status = testing ? 'testing' : connected ? 'connected' : 'disconnected'; return `<article class="capability-card"><div class="card-top"><div class="capability-icon green">${icon('plug')}</div><div class="card-heading"><h3>${escapeHtml(connector.name)}</h3><p>MCP · ${connector.tools.length} 个工具</p></div><span class="connection-badge ${status}">${connected && !testing ? icon('check',10)+'已连接' : testing ? '<i class="status-dot running"></i>测试中' : '未连接'}</span></div><div class="card-description">${escapeHtml(connector.description)}</div><div class="tag-row">${connector.tools.slice(0,3).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div><div class="card-footer"><span class="card-meta">${escapeHtml(connector.lastTest)}</span><button class="small-button" data-action="connector-detail" data-id="${connector.id}">工具列表</button><button class="${connected ? 'small-button' : 'primary-button'}" style="min-height:28px;padding:0 9px;font-size:11px" data-action="toggle-connector" data-id="${connector.id}" ${testing ? 'disabled' : ''}>${connected ? '断开' : '连接'}</button></div></article>`; }
+
+      function automationPageTemplate() {
+        const filterOptions = [['all','全部'],['enabled','已启用'],['paused','已暂停'],['failed','失败']];
+        const workspaceAutomations = state.automations.filter(automation => automation.projectId === state.selectedProject);
+        const list = workspaceAutomations.filter(a => ui.activeAutomationFilter === 'all' || a.status === ui.activeAutomationFilter || (ui.activeAutomationFilter === 'enabled' && ['enabled','completed','running'].includes(a.status)));
+        const workspaceName = projectById(state.selectedProject).name;
+        return `<section class="page-view standard-page"><header class="page-header"><div class="header-title">自动化</div><div class="header-subtitle">按工作区管理 Scheduled Tasks</div><div class="header-actions">${workspacePickerTemplate('automation')}<button class="primary-button" data-action="new-automation">${icon('plus',14)} 创建自动化</button></div></header><div class="standard-content"><div class="content-inner"><div class="page-intro"><div><h1>让重复任务按计划运行</h1><p>当前查看 ${escapeHtml(workspaceName)} 的自动化；每次运行都会在该工作区生成任务会话。</p></div></div><div class="toolbar">${filterOptions.map(([id,label]) => `<button class="small-button ${ui.activeAutomationFilter === id ? 'active' : ''}" data-action="automation-filter" data-filter="${id}" style="${ui.activeAutomationFilter === id ? 'border-color:var(--brand-line);background:var(--brand-soft);color:#5042b0' : ''}">${label}</button>`).join('')}<span class="toolbar-count">${list.length} / ${workspaceAutomations.length} 个自动化</span></div><div class="automation-layout"><div class="automation-list">${list.length ? list.map(automationRow).join('') : `<div style="padding:18px">${emptyState('automation',`${workspaceName} 在当前筛选下没有自动化`)}</div>`}</div></div></div></div></section>`;
+      }
+      function automationRow(auto) {
+        const project = projectById(auto.projectId);
+        return `<div class="automation-row"><div class="automation-name"><span class="automation-icon">${icon('automation')}</span><span><strong>${escapeHtml(auto.name)}</strong><span>Scheduled Task · ${escapeHtml(project.name)}</span></span></div><div class="automation-cell">${escapeHtml(auto.schedule)}<span class="cell-sub">${escapeHtml(auto.cron)}</span></div><div class="automation-cell"><span class="state-badge ${auto.status}">${STATUS_LABEL[auto.status] || auto.status}</span><span class="cell-sub">${escapeHtml(auto.lastRun || '尚未运行')}</span></div><div class="automation-actions"><button class="icon-button" data-action="run-automation" data-id="${auto.id}" aria-label="立即运行" ${auto.status === 'running' ? 'disabled' : ''}>${icon('play')}</button><button class="icon-button" data-action="edit-automation" data-id="${auto.id}" aria-label="编辑">${icon('edit')}</button><button class="switch ${['enabled','running','completed'].includes(auto.status) ? 'on' : ''}" data-action="toggle-automation" data-id="${auto.id}" aria-label="启停自动化"></button></div></div>`;
+      }
+
+      function filesPageTemplate() {
+        const project = projectById(state.selectedProject);
+        const files = workspaceFiles[project.id] || [];
+        const query = ui.fileQuery.trim().toLowerCase();
+        const visibleFiles = files.filter(file => !query || file.path.toLowerCase().includes(query) || file.kind.toLowerCase().includes(query));
+        const selectedPath = ui.selectedFiles[project.id];
+        const selected = files.find(file => file.path === selectedPath) || files[0];
+        return `<section class="page-view standard-page">
+          <header class="page-header"><div class="header-title">文件</div><div class="header-subtitle">浏览当前工作区的项目文件</div><div class="header-actions">${workspacePickerTemplate('files')}</div></header>
+          <div class="files-content"><div class="files-layout">
+            <aside class="file-browser" aria-label="${escapeHtml(project.name)} 文件列表">
+              <div class="file-browser-head"><div class="file-browser-title">${icon('folder',14)}<strong>${escapeHtml(project.name)}</strong><span>${files.length} 个文件</span></div><div class="search-box" style="width:100%">${icon('search')}<input class="search-input" id="file-search" aria-label="搜索文件" placeholder="搜索文件" value="${escapeHtml(ui.fileQuery)}" /></div></div>
+              <div class="file-tree">${visibleFiles.length ? visibleFiles.map(file => `<button class="workspace-file-row ${selected?.path === file.path ? 'active' : ''}" data-action="select-file" data-path="${escapeHtml(file.path)}" title="${escapeHtml(file.path)}">${icon('file')}<span class="workspace-file-name">${escapeHtml(file.path)}</span></button>`).join('') : `<div class="file-empty">没有匹配的文件</div>`}</div>
+            </aside>
+            <section class="file-editor" aria-label="文件预览">${selected ? `<header class="file-editor-head"><span class="file-editor-path">${escapeHtml(selected.path)}</span><span class="file-meta">${escapeHtml(selected.kind)}</span><span class="file-meta">${escapeHtml(selected.modified)}</span></header><pre class="code-preview"><code>${escapeHtml(selected.content)}</code></pre>` : `<div class="file-empty">当前工作区没有可浏览的文件</div>`}</section>
+          </div></div>
+        </section>`;
+      }
+
+      function notFoundTemplate() { return `<section class="page-view standard-page"><header class="page-header"><div class="header-title">任务不存在</div></header><div class="standard-content"><div class="empty-state">${icon('search')}<div>找不到这个任务，可能已被重置。</div><button class="primary-button" style="margin-top:12px" data-nav="#/new">新建任务</button></div></div></section>`; }
+
+      function bindPostRender(route) {
+        const messages = document.getElementById('messages');
+        if (messages && (route.page === 'task')) requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
+        const prompt = document.getElementById('new-prompt');
+        if (prompt) setTimeout(() => prompt.focus(), 0);
+      }
+
+      function showToast(message, type = 'success') {
+        const stack = document.getElementById('toast-stack');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.innerHTML = `${icon(type === 'error' ? 'x' : 'check')}<span>${escapeHtml(message)}</span>`;
+        stack.appendChild(toast);
+        setTimeout(() => toast.remove(), 2700);
+      }
+      function openModal(content) {
+        document.getElementById('modal-root').innerHTML = `<div class="modal-layer" data-action="modal-backdrop">${content}</div>`;
+        setTimeout(() => document.querySelector('.modal input, .modal textarea, .modal button')?.focus(), 0);
+      }
+      function closeModal() { document.getElementById('modal-root').innerHTML = ''; ui.modal = null; }
+      function modalShell(title, subtitle, body, footer = '') {
+        return `<section class="modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}"><header class="modal-head"><div><div class="modal-title">${escapeHtml(title)}</div>${subtitle ? `<div class="modal-subtitle">${escapeHtml(subtitle)}</div>` : ''}</div><button class="icon-button modal-close" data-action="close-modal" aria-label="关闭">${icon('x')}</button></header><div class="modal-body">${body}</div>${footer ? `<footer class="modal-footer">${footer}</footer>` : ''}</section>`;
+      }
+      function showSettingsModal() {
+        const current = tenantById(state.currentTenant);
+        const tenantOptions = tenants.map(tenant => `<button class="tenant-option ${tenant.id === current.id ? 'active' : ''}" data-action="switch-tenant" data-id="${tenant.id}"><span class="tenant-mark">${tenant.letter}</span><span class="tenant-option-copy"><strong>${escapeHtml(tenant.name)}</strong><span>${escapeHtml(tenant.role)}</span></span>${tenant.id === current.id ? icon('check',14) : ''}</button>`).join('');
+        openModal(modalShell('设置', '账号、租户与本地偏好', `<div class="context-label">当前账号</div><div class="context-card" style="margin-bottom:18px"><div class="context-card-head"><span class="user-avatar">SO</span><span class="context-card-title">song</span><span class="context-card-meta">已登录</span></div></div><div class="context-label">切换租户</div><div>${tenantOptions}</div><div class="context-label" style="margin-top:18px">本地设置</div><div class="detail-list"><div class="detail-row"><span class="detail-key">语言</span><span>简体中文</span></div><div class="detail-row"><span class="detail-key">外观</span><span>浅色</span></div></div><div class="context-label" style="margin-top:18px">原型数据</div><button class="danger-button" data-action="reset-demo">${icon('reset',14)} 重置演示</button>`, `<button class="primary-button" data-action="close-modal">完成</button>`));
+      }
+
+      function showCapabilityPicker() {
+        const options = [
+          ...state.experts.filter(e => isExpertInstalled(e)).map(e => ({ kind: '专家', name: e.name, icon: 'users' })),
+          ...state.skills.filter(s => isSkillEnabled(s)).map(s => ({ kind: '技能', name: s.code, icon: 'spark' })),
+          ...state.connectors.filter(c => isConnectorConnected(c)).map(c => ({ kind: '连接器', name: c.name, icon: 'plug' }))
+        ];
+        openModal(modalShell('添加能力', `只展示 ${projectById(state.selectedProject).name} 已安装或启用的能力。`, `<div class="detail-list">${options.map(o => `<button class="artifact-link" data-action="pick-capability" data-name="${escapeHtml(o.name)}"><span class="context-card-icon">${icon(o.icon)}</span><span style="flex:1;text-align:left"><strong style="display:block">${escapeHtml(o.name)}</strong><span style="color:var(--text-3);font-size:10px">${o.kind}</span></span>${ui.selectedCapabilities.includes(o.name) ? icon('check',13) : icon('plus',13)}</button>`).join('') || emptyState('spark','当前工作区没有可用能力')}</div>`));
+      }
+      function showExpertDetail(id) {
+        const e = state.experts.find(x => x.id === id); if (!e) return;
+        const nodes = e.tags.map((t,i) => `<div class="context-card"><div class="context-card-head"><span class="context-card-icon">${icon(i === 0 ? 'search' : i === 1 ? 'brain' : 'check')}</span><span class="context-card-title">${escapeHtml(t)}</span><span class="context-card-meta">节点 ${i+1}</span></div></div>`).join('');
+        const installed = isExpertInstalled(e);
+        openModal(modalShell(e.name, `Agent Graph · ${projectById(state.selectedProject).name}`, `<div class="detail-list"><div class="detail-row"><span class="detail-key">配置类型</span><span>Agent Graph</span></div><div class="detail-row"><span class="detail-key">执行节点</span><span>${e.agents} 个</span></div><div class="detail-row"><span class="detail-key">安装状态</span><span>${installed ? '已安装到当前工作区' : '当前工作区未安装'}</span></div><div class="detail-row"><span class="detail-key">历史运行</span><span>${e.runs} 次</span></div></div><div style="margin-top:16px"><div class="context-label">执行图节点</div>${nodes}</div>`, `<button class="secondary-button" data-action="close-modal">关闭</button><button class="${installed ? 'secondary-button' : 'primary-button'}" data-action="install-expert" data-id="${e.id}" ${installed ? 'disabled' : ''}>${installed ? '已安装' : '安装到当前工作区'}</button>`));
+      }
+      function showSkillDetail(id) {
+        const s = state.skills.find(x => x.id === id); if (!s) return;
+        const enabled = isSkillEnabled(s);
+        openModal(modalShell(s.name, `${s.code} · ${s.version} · ${projectById(state.selectedProject).name}`, `<div class="detail-list"><div class="detail-row"><span class="detail-key">来源</span><span>Workspace Skills${s.installed ? ' · 已安装' : ' · 技能市场'}</span></div><div class="detail-row"><span class="detail-key">分类</span><span>${escapeHtml(s.category)}</span></div><div class="detail-row"><span class="detail-key">说明</span><span>${escapeHtml(s.description)}</span></div><div class="detail-row"><span class="detail-key">当前工作区</span><span>${enabled ? '已启用' : '未启用'}</span></div><div class="detail-row"><span class="detail-key">调用次数</span><span>${s.uses}</span></div></div>`, `<button class="secondary-button" data-action="close-modal">关闭</button><button class="primary-button" data-action="toggle-skill" data-id="${s.id}">${enabled ? '在当前工作区停用' : '在当前工作区启用'}</button>`));
+      }
+      function showConnectorDetail(id) {
+        const c = state.connectors.find(x => x.id === id); if (!c) return;
+        const connected = isConnectorConnected(c);
+        openModal(modalShell(c.name, `当前工作区：${projectById(state.selectedProject).name}`, `<div class="detail-list">${c.tools.map(t => `<div class="tool-list-item"><span class="context-card-icon">${icon('terminal')}</span><span><strong>${escapeHtml(t)}</strong><span>由 ${escapeHtml(c.name)} MCP Server 提供</span></span></div>`).join('')}</div><div class="context-card" style="margin-top:14px"><div class="context-card-head"><span class="context-card-title">最近测试</span><span class="context-card-meta">${escapeHtml(c.lastTest)}</span></div></div>`, `<button class="secondary-button" data-action="test-connector" data-id="${c.id}" ${!connected ? 'disabled' : ''}>测试连接</button><button class="primary-button" data-action="close-modal">完成</button>`));
+      }
+
+      function showAutomationForm(id = null) {
+        const auto = id ? state.automations.find(a => a.id === id) : null;
+        const a = auto || { name: '', projectId: state.selectedProject, prompt: '', schedule: '每天 09:00', cron: '0 9 * * *', model: 'Claude · Sonnet 4.5' };
+        const body = `<form id="automation-form" data-edit-id="${auto ? auto.id : ''}"><div class="form-grid"><div class="form-field full"><label for="auto-name">名称</label><input class="form-input" id="auto-name" name="name" value="${escapeHtml(a.name)}" placeholder="例如：每日代码变更评审" required /></div><div class="form-field"><label>工作区</label><input type="hidden" name="projectId" value="${a.projectId}" /><div class="select-like" aria-label="当前工作区">${icon('folder',14)}<strong>${escapeHtml(projectById(a.projectId).name)}</strong></div></div><div class="form-field"><label for="auto-schedule">显示时间</label><input class="form-input" id="auto-schedule" name="schedule" value="${escapeHtml(a.schedule)}" required /></div><div class="form-field"><label for="auto-cron">Cron 表达式</label><input class="form-input" id="auto-cron" name="cron" value="${escapeHtml(a.cron)}" required /></div><div class="form-field full"><label for="auto-prompt">任务说明</label><textarea class="form-input" id="auto-prompt" name="prompt" placeholder="每次运行时发送给模型的任务说明" required>${escapeHtml(a.prompt)}</textarea></div></div></form>`;
+        openModal(modalShell(auto ? '编辑自动化' : '创建自动化', `自动化归属于 ${projectById(a.projectId).name} 工作区；运行后生成任务会话。`, body, `<button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="save-automation">${auto ? '保存修改' : '创建并启用'}</button>`));
+      }
+
+      function createTaskFromComposer() {
+        const prompt = (document.getElementById('new-prompt')?.value || ui.newPrompt).trim();
+        if (!prompt) { showToast('请先描述要完成的任务', 'error'); document.getElementById('new-prompt')?.focus(); return; }
+        const projectId = state.selectedProject;
+        const providerValue = 'claude:sonnet-4.5';
+        const permissionMode = 'standard';
+        const providerMap = {
+          'claude:sonnet-4.5': ['Claude','Sonnet 4.5'], 'codex:gpt-5.3-codex': ['Codex','GPT-5.3-Codex'],
+          'cursor:agent': ['Cursor','Agent'], 'gemini:2.5-pro': ['Gemini','Gemini 2.5 Pro']
+        };
+        const [provider, model] = providerMap[providerValue] || providerMap['claude:sonnet-4.5'];
+        const expert = ui.selectedCapabilities.find(c => c.includes('专家')) || '未选择';
+        const task = {
+          id: uid('task'), projectId, title: prompt.length > 22 ? prompt.slice(0, 22) + '…' : prompt, status: 'draft', updatedAt: nowTime(), provider, model, permissionMode, expert, prompt,
+          messages: [{ type: 'user', text: prompt }],
+          timeline: [{ label: '读取任务上下文', detail: '等待开始', live: true }, { label: '分析并制定步骤', detail: '尚未开始' }, { label: '执行工具', detail: '尚未开始' }, { label: '生成结果', detail: '尚未开始' }],
+          agents: [{ name: '上下文分析', status: 'waiting', progress: 0, detail: '等待开始' }], files: [], artifacts: []
+        };
+        state.tasks.unshift(task);
+        state.selectedProject = projectId; state.provider = providerValue; state.permissionMode = permissionMode;
+        ui.newPrompt = '';
+        saveState(); navigate('#/task/' + task.id); startTask(task.id);
+      }
+
+      function clearTaskTimer(id) { if (ui.timers[id]) { clearTimeout(ui.timers[id]); delete ui.timers[id]; } }
+      function schedule(id, fn, delay) { clearTaskTimer(id); ui.timers[id] = setTimeout(() => { delete ui.timers[id]; fn(); }, delay); }
+      function startTask(id, retry = false) {
+        const task = taskById(id); if (!task) return;
+        clearTaskTimer(id);
+        task.status = 'preparing'; task.updatedAt = nowTime(); task.error = null;
+        if (retry) {
+          task.messages.push({ type: 'user', text: '已补充缺失信息，请重新执行。' });
+          task.messages.push({ type: 'thinking', title: '重新规划执行路径', body: '将跳过缺失的 schema 文件，直接从路由与类型定义生成文档。', expanded: true });
+        }
+        task.timeline = [{ label: '读取任务上下文', detail: '进行中', live: true }, { label: '分析并制定步骤', detail: '尚未开始' }, { label: '执行工具', detail: '尚未开始' }, { label: '生成结果', detail: '尚未开始' }];
+        task.agents = [{ name: '上下文分析', status: 'running', progress: 18, detail: '扫描项目' }];
+        commit();
+        schedule(id, () => enterReasoning(id, retry), 900);
+      }
+      function enterReasoning(id, retry) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        task.status = 'reasoning';
+        task.timeline[0] = { label: '读取任务上下文', detail: '完成', done: true };
+        task.timeline[1] = { label: '分析并制定步骤', detail: '进行中', live: true };
+        task.agents[0] = { name: '上下文分析', status: 'completed', progress: 100, detail: '项目扫描完成' };
+        if (!retry) task.messages.push({ type: 'thinking', title: '分析任务并制定步骤', body: '已读取项目结构和当前分支信息。下一步将搜索相关文件、执行只读检查，再汇总结论。', expanded: false });
+        commit();
+        schedule(id, () => requestTaskPermission(id), 1250);
+      }
+      function requestTaskPermission(id) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        if (state.rememberedPermissions || task.permissionMode === 'read' || task.permissionMode === 'plan') return beginTools(id, task.permissionMode === 'plan');
+        task.status = 'permission_required';
+        task.timeline[1] = { label: '分析并制定步骤', detail: '完成', done: true };
+        task.timeline[2] = { label: '执行只读检查', detail: '等待权限', live: true };
+        task.messages.push({ type: 'permission', id: uid('perm'), title: '允许读取项目文件和 Git 状态？', description: '这些操作只读取当前项目，不会修改文件。', command: 'rg --files && git diff --stat && git status --short', decision: null });
+        commit();
+      }
+      function beginTools(id, planOnly = false) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        task.status = 'tool_running';
+        task.timeline[1] = { label: '分析并制定步骤', detail: '完成', done: true };
+        task.timeline[2] = { label: planOnly ? '生成执行计划' : '执行工具', detail: '进行中', live: true };
+        task.messages.push({ type: 'tool', name: planOnly ? 'Plan · 构建执行方案' : 'Search · 检索相关文件', meta: '执行中', detail: planOnly ? '仅生成计划，不执行写操作。' : 'rg --files | rg "(auth|session|permission|task)"', status: 'running', expanded: false });
+        task.agents = [{ name: '代码检索', status: 'running', progress: 42, detail: '分析相关模块' }, { name: '风险检查', status: 'waiting', progress: 0, detail: '等待检索结果' }];
+        commit();
+        schedule(id, () => enterSubagents(id, planOnly), 1400);
+      }
+      function enterSubagents(id, planOnly) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        const tool = [...task.messages].reverse().find(m => m.type === 'tool' && m.status === 'running');
+        if (tool) { tool.status = 'done'; tool.meta = planOnly ? '计划已生成' : '完成 · 9 个文件'; tool.detail += planOnly ? '\n包含 4 个可验证步骤。' : '\nsrc/components/MainContent.jsx\nsrc/components/Sidebar.jsx\nserver/routes/projects.js'; }
+        task.status = 'subagent_running';
+        task.timeline[2] = { label: planOnly ? '生成执行计划' : '执行工具', detail: '完成', done: true };
+        task.timeline.splice(3, 0, { label: '子代理协作', detail: '2 个节点运行中', live: true });
+        task.messages.push({ type: 'subagent', name: 'Agent Graph · 并行分析', meta: '2 个子代理执行中', detail: '代码检索节点已完成，风险检查与测试建议节点正在并行处理。' });
+        task.agents = [{ name: '代码检索', status: 'completed', progress: 100, detail: '9 个文件' }, { name: '风险检查', status: 'running', progress: 68, detail: '分析边界条件' }, { name: '测试建议', status: 'running', progress: 51, detail: '匹配现有测试' }];
+        task.files = [{ name: 'src/components/MainContent.jsx', add: 14, del: 3 }, { name: 'src/components/Sidebar.jsx', add: 9, del: 2 }, { name: 'server/routes/projects.js', add: 0, del: 0 }];
+        commit();
+        schedule(id, () => enterStreaming(id, planOnly), 1550);
+      }
+      function enterStreaming(id, planOnly) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        task.status = 'streaming';
+        task.timeline[3] = { label: '子代理协作', detail: '完成', done: true };
+        task.timeline[4] = { label: '生成结果', detail: '进行中', live: true };
+        task.agents = task.agents.map(a => ({ ...a, status: 'completed', progress: 100, detail: a.name === '风险检查' ? '2 个关注项' : a.detail }));
+        commit();
+        schedule(id, () => completeTask(id, planOnly), 1700);
+      }
+      function completeTask(id, planOnly = false) {
+        const task = taskById(id); if (!task || task.status === 'cancelled') return;
+        task.status = 'completed'; task.updatedAt = nowTime();
+        task.timeline = task.timeline.map(item => ({ label: item.label, detail: item.label === '生成结果' ? '完成' : item.detail.replace('进行中','完成'), done: true }));
+        task.messages.push({ type: 'result', title: planOnly ? '执行计划已完成' : '任务已完成', text: planOnly ? '已生成一份不修改文件的分步执行计划。' : '已完成项目分析，并将结论整理为可执行的后续步骤。', bullets: planOnly ? ['确认涉及模块和依赖边界。', '按最小变更拆分实现步骤。', '为每一步定义验证方式。'] : ['已定位 3 个直接相关文件，现有架构可以支持该方案。', '建议先处理状态同步，再调整视图层交互。', '补充权限拒绝、失败重试和页面切换用例。'] });
+        task.artifacts = [{ name: planOnly ? '执行计划' : '任务分析报告', type: 'Markdown', icon: 'file' }, { name: '代码变更摘要', type: 'CodeHub', icon: 'branch' }];
+        commit(); showToast('任务已完成');
+      }
+      function handlePermission(taskId, choice) {
+        const task = taskById(taskId); if (!task || task.status !== 'permission_required') return;
+        const permission = [...task.messages].reverse().find(m => m.type === 'permission' && !m.decision);
+        if (permission) permission.decision = choice;
+        if (choice === 'deny') {
+          task.status = 'denied'; task.updatedAt = nowTime();
+          task.timeline[2] = { label: '执行只读检查', detail: '用户拒绝', error: true };
+          task.messages.push({ type: 'assistant', text: '操作已停止。我不会执行这条命令；你可以补充信息，或继续任务并选择其他方式。' });
+          commit(); showToast('已拒绝操作', 'error'); return;
+        }
+        if (choice === 'remember') state.rememberedPermissions = true;
+        commit(); beginTools(taskId, false);
+      }
+      function stopTask(id) {
+        const task = taskById(id); if (!task || !(isTaskRunning(task.status) || task.status === 'permission_required')) return;
+        clearTaskTimer(id); task.status = 'cancelled'; task.updatedAt = nowTime();
+        const pendingPermission = [...task.messages].reverse().find(message => message.type === 'permission' && !message.decision);
+        if (pendingPermission) pendingPermission.decision = 'cancelled';
+        const live = task.timeline.find(t => t.live); if (live) Object.assign(live, { detail: '已停止', live: false });
+        commit(); showToast('任务已停止');
+      }
+      function retryTask(id) {
+        const task = taskById(id); if (!task) return;
+        if (task.status === 'denied' || task.status === 'cancelled' || task.status === 'blocked') {
+          task.messages.push({ type: 'user', text: '继续任务；如果需要权限，请使用只读替代方案。' });
+          task.permissionMode = 'read';
+        }
+        startTask(id, task.status === 'failed');
+      }
+      function sendFollowup(id) {
+        const input = document.getElementById('task-input'); const value = input?.value.trim();
+        if (!value) { showToast('请输入补充信息', 'error'); input?.focus(); return; }
+        const task = taskById(id); if (!task) return;
+        task.messages.push({ type: 'user', text: value });
+        ui.taskDrafts[id] = '';
+        task.updatedAt = nowTime(); task.permissionMode = state.rememberedPermissions ? 'read' : task.permissionMode;
+        startTask(id, false);
+      }
+
+      function runAutomation(id) {
+        const auto = state.automations.find(a => a.id === id); if (!auto || auto.status === 'running') return;
+        auto.status = 'running'; auto.lastRun = '刚刚';
+        commit(); showToast(`正在运行「${auto.name}」`);
+        setTimeout(() => {
+          const fresh = state.automations.find(a => a.id === id); if (!fresh) return;
+          const provider = fresh.model.split(' · ')[0]; const model = fresh.model.split(' · ').slice(1).join(' · ');
+          const task = { id: uid('auto-task'), projectId: fresh.projectId, title: fresh.name + ' · 手动运行', status: 'completed', updatedAt: nowTime(), provider, model, permissionMode: 'read', expert: fresh.name.includes('SQL') ? 'SQL 检查专家' : '代码评审专家', prompt: fresh.prompt,
+            messages: [{type:'user',text:fresh.prompt},{type:'tool',name:'自动化 · 读取项目变化',meta:'完成',detail:`Scheduled Task: ${fresh.cron}\nProject: ${projectById(fresh.projectId).name}`,status:'done',expanded:false},{type:'result',title:'自动化运行完成',text:'本次定时任务已完成，结果已保存为任务会话。',bullets:['已读取项目最新状态。','未发现阻断性风险。','下次运行将沿用当前配置。']}],
+            timeline: [{label:'自动触发',detail:'手动运行',done:true},{label:'读取项目上下文',detail:'完成',done:true},{label:'执行任务',detail:'完成',done:true},{label:'保存运行结果',detail:'完成',done:true}],
+            agents:[{name:'Scheduled Task Runner',status:'completed',progress:100,detail:'运行完成'}], files:[], artifacts:[{name:'自动化运行报告',type:'Markdown',icon:'file'}] };
+          state.tasks.unshift(task); fresh.status = 'completed'; fresh.lastResult = 'completed'; fresh.lastTaskId = task.id; saveState(); render(); showToast('自动化运行完成，已生成任务会话');
+        }, 1800);
+      }
+      function toggleAutomation(id) {
+        const auto = state.automations.find(a => a.id === id); if (!auto || auto.status === 'running') return;
+        auto.status = ['enabled','completed'].includes(auto.status) ? 'paused' : 'enabled'; commit(); showToast(auto.status === 'enabled' ? '自动化已启用' : '自动化已暂停');
+      }
+      function saveAutomationForm() {
+        const form = document.getElementById('automation-form'); if (!form || !form.reportValidity()) return;
+        const data = Object.fromEntries(new FormData(form).entries()); const editId = form.dataset.editId;
+        if (editId) Object.assign(state.automations.find(a => a.id === editId), data);
+        else state.automations.unshift({ id: uid('auto'), ...data, model:'Claude · Sonnet 4.5', status:'enabled', lastRun:'尚未运行', lastResult:null, lastTaskId:null });
+        saveState(); closeModal(); render(); showToast(editId ? '自动化已更新' : '自动化已创建并启用');
+      }
+
+      function resumePendingTasks() {
+        state.tasks.forEach(task => {
+          if (task.status === 'preparing') schedule(task.id, () => enterReasoning(task.id, false), 700);
+          else if (task.status === 'reasoning') schedule(task.id, () => requestTaskPermission(task.id), 700);
+          else if (task.status === 'tool_running') schedule(task.id, () => enterSubagents(task.id, task.permissionMode === 'plan'), 700);
+          else if (task.status === 'subagent_running') schedule(task.id, () => enterStreaming(task.id, task.permissionMode === 'plan'), 700);
+          else if (task.status === 'streaming') schedule(task.id, () => completeTask(task.id, task.permissionMode === 'plan'), 700);
+        });
+      }
+
+      document.addEventListener('click', event => {
+        const target = event.target.closest('[data-action], [data-nav]'); if (!target) return;
+        if (target.dataset.nav) { navigate(target.dataset.nav); return; }
+        const action = target.dataset.action;
+        if (action === 'toggle-more') { ui.moreOpen = !ui.moreOpen; ui.accountMenuOpen = false; ui.workspaceMenu = null; ui.commandMenuScope = null; renderSidebar(); return; }
+        if (action === 'toggle-account-menu') { ui.accountMenuOpen = !ui.accountMenuOpen; ui.moreOpen = false; ui.workspaceMenu = null; ui.commandMenuScope = null; renderSidebar(); return; }
+        if (action === 'toggle-workspace-menu') { ui.workspaceMenu = ui.workspaceMenu === target.dataset.scope ? null : target.dataset.scope; ui.moreOpen = false; ui.accountMenuOpen = false; ui.commandMenuScope = null; render(); return; }
+        if (action === 'toggle-skill-command-menu') { ui.commandMenuScope = ui.commandMenuScope === target.dataset.scope ? null : target.dataset.scope; ui.workspaceMenu = null; ui.moreOpen = false; ui.accountMenuOpen = false; render(); return; }
+        if (action === 'select-workspace') {
+          state.selectedProject = target.dataset.id;
+          ui.workspaceMenu = null;
+          ui.commandMenuScope = null;
+          const available = new Set([
+            ...state.experts.filter(expert => isExpertInstalled(expert)).map(expert => expert.name),
+            ...state.skills.filter(skill => isSkillEnabled(skill)).map(skill => skill.code),
+            ...state.connectors.filter(connector => isConnectorConnected(connector)).map(connector => connector.name)
+          ]);
+          ui.selectedCapabilities = ui.selectedCapabilities.filter(capability => available.has(capability));
+          saveState(); render(); showToast(`已切换到 ${projectById(state.selectedProject).name} 工作区`); return;
+        }
+        if (action === 'toggle-project') { const id = target.dataset.id; const idx = state.collapsedProjects.indexOf(id); idx >= 0 ? state.collapsedProjects.splice(idx,1) : state.collapsedProjects.push(id); commit(); return; }
+        if (action === 'project-info') { openModal(modalShell('空间与项目', 'WorkBuddy 的“空间”映射为 DataAgent 的 Project / Workspace。', `<div class="detail-list">${projects.map(p => `<div class="detail-row"><span class="detail-key">${escapeHtml(p.name)}</span><span>${escapeHtml(p.path)}</span></div>`).join('')}</div>`, `<button class="primary-button" data-action="close-modal">知道了</button>`)); return; }
+        if (action === 'more-entry') { showToast(`「${({codehub:'CodeHub',sql:'SQL Check',admin:'管理后台'})[target.dataset.id] || target.dataset.id}」保留现有入口，未扩展为核心原型页面`); ui.moreOpen = false; renderSidebar(); return; }
+        if (action === 'open-settings') { ui.accountMenuOpen = false; showSettingsModal(); return; }
+        if (action === 'switch-tenant') { state.currentTenant = target.dataset.id; saveState(); closeModal(); render(); showToast(`已切换到 ${tenantById(state.currentTenant).name}`); return; }
+        if (action === 'logout') { ui.accountMenuOpen = false; openModal(modalShell('退出登录？', '将结束当前演示账号会话。', '<p style="color:var(--text-2)">本地原型配置不会被删除，再次登录后仍可继续查看。</p>', '<button class="secondary-button" data-action="close-modal">取消</button><button class="danger-button" data-action="confirm-logout">退出登录</button>')); return; }
+        if (action === 'confirm-logout') { closeModal(); ui.loggedOut = true; render(); return; }
+        if (action === 'login-demo') { ui.loggedOut = false; render(); showToast('已使用演示账号登录'); return; }
+        if (action === 'reset-demo') { openModal(modalShell('重置演示？', '会清除本原型保存的选择、启停状态与自动化配置。', '<p style="color:var(--text-2)">当前项目代码和真实数据不会受到影响。</p>', '<button class="secondary-button" data-action="close-modal">取消</button><button class="danger-button" data-action="confirm-reset">重置演示</button>')); return; }
+        if (action === 'confirm-reset') { Object.values(ui.timers).forEach(clearTimeout); ui.timers = {}; localStorage.removeItem(STORAGE_KEY); state = clone(defaultState); ui.selectedCapabilities = ['code-review','GitHub']; ui.newPrompt = ''; ui.taskDrafts = {}; ui.commandMenuScope = null; ui.workspaceMenu = null; ui.accountMenuOpen = false; ui.loggedOut = false; ui.fileQuery = ''; ui.selectedFiles = { p1: 'src/components/Sidebar.jsx', p2: 'server/routes/auth.ts', p3: 'queries/retention.sql' }; closeModal(); navigate('#/new'); showToast('演示状态已重置'); return; }
+        if (action === 'insert-skill-command') {
+          const inputId = target.dataset.input;
+          const input = document.getElementById(inputId);
+          if (!input) return;
+          const command = `/${target.dataset.code}`;
+          const nextValue = `${input.value}${input.value && !/\s$/.test(input.value) ? ' ' : ''}${command} `;
+          if (target.dataset.task) ui.taskDrafts[target.dataset.task] = nextValue;
+          else ui.newPrompt = nextValue;
+          ui.commandMenuScope = null;
+          render();
+          setTimeout(() => { const next = document.getElementById(inputId); if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); } }, 0);
+          return;
+        }
+        if (action === 'open-files') { const projectId = target.dataset.project || state.selectedProject; state.selectedProject = projectId; const path = target.dataset.path; if (path && (workspaceFiles[projectId] || []).some(file => file.path === path)) ui.selectedFiles[projectId] = path; saveState(); navigate('#/files'); return; }
+        if (action === 'select-file') { ui.selectedFiles[state.selectedProject] = target.dataset.path; render(); return; }
+        if (action === 'choose-capability') { showCapabilityPicker(); return; }
+        if (action === 'pick-capability') { const name = target.dataset.name; const i = ui.selectedCapabilities.indexOf(name); i >= 0 ? ui.selectedCapabilities.splice(i,1) : ui.selectedCapabilities.push(name); closeModal(); render(); return; }
+        if (action === 'remove-capability') { ui.selectedCapabilities = ui.selectedCapabilities.filter(c => c !== target.dataset.name); render(); return; }
+        if (action === 'create-task') { createTaskFromComposer(); return; }
+        if (action === 'toggle-block') { const task = taskById(currentRoute().id); const msg = task?.messages[Number(target.dataset.index)]; if (msg) { msg.expanded = !msg.expanded; commit(); } return; }
+        if (action === 'permission') { handlePermission(target.dataset.task, target.dataset.choice); return; }
+        if (action === 'stop-task') { stopTask(target.dataset.id); return; }
+        if (action === 'retry-task') { retryTask(target.dataset.id); return; }
+        if (action === 'send-followup') { sendFollowup(target.dataset.id); return; }
+        if (action === 'task-more') { showToast('任务菜单：重命名、复制链接、归档（原型）'); return; }
+        if (action === 'toggle-context') { ui.contextOpen = true; document.querySelector('.context-panel')?.classList.add('open'); document.querySelector('.scrim')?.classList.add('open'); return; }
+        if (action === 'close-context') { ui.contextOpen = false; document.querySelector('.context-panel')?.classList.remove('open'); document.querySelector('.scrim')?.classList.remove('open'); return; }
+        if (action === 'context-tab') { ui.contextTab = target.dataset.tab; render(); return; }
+        if (action === 'open-artifact') { showToast(`已打开「${target.dataset.name}」（原型）`); return; }
+        if (action === 'capability-help') { openModal(modalShell('能力映射', '命名贴近 WorkBuddy，底层继续使用 DataAgent 现有能力。', '<div class="detail-list"><div class="detail-row"><span class="detail-key">专家</span><span>Agent Graph 配置与运行</span></div><div class="detail-row"><span class="detail-key">技能</span><span>Workspace Skills 与技能市场</span></div><div class="detail-row"><span class="detail-key">连接器</span><span>MCP Servers、Tools 与预设</span></div></div>', '<button class="primary-button" data-action="close-modal">知道了</button>')); return; }
+        if (action === 'install-expert') { const e = state.experts.find(x => x.id === target.dataset.id); const caps = workspaceCaps(); if (e && !caps.experts.includes(e.id)) { caps.experts.push(e.id); saveState(); closeModal(); render(); showToast(`「${e.name}」已安装到 ${projectById(state.selectedProject).name}`); } return; }
+        if (action === 'expert-detail') { showExpertDetail(target.dataset.id); return; }
+        if (action === 'skill-detail') { showSkillDetail(target.dataset.id); return; }
+        if (action === 'toggle-skill') { const s = state.skills.find(x => x.id === target.dataset.id); if (s) { const caps = workspaceCaps(); const enabled = caps.skills.includes(s.id); if (enabled) caps.skills = caps.skills.filter(id => id !== s.id); else { s.installed = true; caps.skills.push(s.id); } saveState(); closeModal(); render(); showToast(`${s.name}已在当前工作区${enabled ? '停用' : '启用'}`); } return; }
+        if (action === 'install-skill') { const s = state.skills.find(x => x.id === target.dataset.id); if (s) { const caps = workspaceCaps(); s.installed = true; if (!caps.skills.includes(s.id)) caps.skills.push(s.id); commit(); showToast(`${s.name}已安装并在当前工作区启用`); } return; }
+        if (action === 'connector-detail') { showConnectorDetail(target.dataset.id); return; }
+        if (action === 'toggle-connector') { const c = state.connectors.find(x => x.id === target.dataset.id); if (c && ui.testingConnectorId !== c.id) { const caps = workspaceCaps(); const connected = caps.connectors.includes(c.id); caps.connectors = connected ? caps.connectors.filter(id => id !== c.id) : [...caps.connectors, c.id]; c.lastTest = connected ? '已从当前工作区断开' : '刚刚 · 46 ms'; commit(); showToast(`${c.name} 已在当前工作区${connected ? '断开' : '连接'}`); } return; }
+        if (action === 'test-connector') { const c = state.connectors.find(x => x.id === target.dataset.id); if (c && isConnectorConnected(c)) { closeModal(); ui.testingConnectorId = c.id; render(); setTimeout(() => { ui.testingConnectorId = null; c.lastTest='刚刚 · 39 ms'; commit(); showToast(`${c.name} 连接测试通过`); }, 1100); } return; }
+        if (action === 'connector-presets') { showToast('已打开 MCP 预设入口（原型）'); return; }
+        if (action === 'new-automation') { showAutomationForm(); return; }
+        if (action === 'edit-automation') { showAutomationForm(target.dataset.id); return; }
+        if (action === 'save-automation') { saveAutomationForm(); return; }
+        if (action === 'toggle-automation') { toggleAutomation(target.dataset.id); return; }
+        if (action === 'run-automation') { runAutomation(target.dataset.id); return; }
+        if (action === 'automation-filter') { ui.activeAutomationFilter = target.dataset.filter; render(); return; }
+        if (action === 'close-modal') { closeModal(); return; }
+        if (action === 'modal-backdrop' && event.target === target) closeModal();
+      });
+
+      document.addEventListener('input', event => {
+        if (event.target.id === 'new-prompt') ui.newPrompt = event.target.value;
+        if (event.target.id === 'task-input') { const taskId = currentRoute().id; if (taskId) ui.taskDrafts[taskId] = event.target.value; }
+        if (event.target.id === 'capability-search') { ui.capabilitySearch = event.target.value; const pos = event.target.selectionStart; render(); const next = document.getElementById('capability-search'); if (next) { next.focus(); next.setSelectionRange(pos,pos); } }
+        if (event.target.id === 'file-search') { ui.fileQuery = event.target.value; const pos = event.target.selectionStart; render(); const next = document.getElementById('file-search'); if (next) { next.focus(); next.setSelectionRange(pos,pos); } }
+      });
+      document.addEventListener('change', event => {
+        if (event.target.id === 'capability-category') { ui.capabilityCategory = event.target.value; render(); }
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { if (document.getElementById('modal-root').innerHTML) closeModal(); else if (ui.contextOpen) { ui.contextOpen = false; render(); } else if (ui.commandMenuScope) { ui.commandMenuScope = null; render(); } else if (ui.workspaceMenu) { ui.workspaceMenu = null; render(); } else if (ui.moreOpen || ui.accountMenuOpen) { ui.moreOpen = false; ui.accountMenuOpen = false; renderSidebar(); } }
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); navigate('#/new'); }
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          if (document.getElementById('new-prompt')) { event.preventDefault(); createTaskFromComposer(); }
+          else { const route = currentRoute(); if (route.page === 'task') { event.preventDefault(); sendFollowup(route.id); } }
+        }
+      });
+      window.addEventListener('hashchange', render);
+      window.addEventListener('storage', () => { state = loadState(); render(); });
+
+      if (!location.hash) location.hash = '#/new';
+      render();
+      resumePendingTasks();
+    })();
+  </script>
+</body>
+</html>

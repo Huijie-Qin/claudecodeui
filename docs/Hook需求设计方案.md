@@ -174,6 +174,12 @@ hookSpecificOutput.additionalContext
 
 `StopFailure` 的 Hook 返回值会被 Claude Code 忽略，因此页面不提供返回字段，只允许脚本、MCP 工具和 Skill 恢复行为。
 
+### 2.7 场景示例
+
+管理员可在 Hook 列表点击“创建场景示例”，幂等生成 SQL 指标记录、正常结束通知、HTTP 200 错误恢复三个草稿。示例预置事件、脚本、条件、记录字段和参数模板，但不绑定具体 MCP Tool 或 Skill；管理员补选自己的资源后再发布和绑定用户。已有同名示例不会被覆盖。
+
+服务接口为 `POST /api/admin/hooks/examples`。脚本入口 `scripts/configure-requested-hooks.mjs` 通过同一接口创建示例；已构建环境也支持 `--direct-database`。
+
 ## 3. 数据模型
 
 ### 3.1 hooks
@@ -190,7 +196,7 @@ CREATE TABLE hooks (
   post_actions_json TEXT NOT NULL DEFAULT '[]',
   claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}',
   version INTEGER NOT NULL DEFAULT 0,
-  activation_scope TEXT NOT NULL CHECK (activation_scope IN ('manual', 'all_users')),
+  activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users')),
   created_by INTEGER NOT NULL,
   updated_by INTEGER NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -251,6 +257,15 @@ CREATE TABLE user_hook_bindings (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, hook_id)
 );
+
+CREATE TABLE hook_tenant_bindings (
+  hook_id TEXT NOT NULL,
+  tenant_id INTEGER NOT NULL,
+  bound_by INTEGER,
+  bound_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (hook_id, tenant_id)
+);
 ```
 
 用户需要运行 Hook 的判断：
@@ -260,13 +275,16 @@ Hook.status = published
 AND (
   Hook.activation_scope = all_users
   OR user_hook_bindings 中存在 (user_id, hook_id)
+  OR 用户是 hook_tenant_bindings 对应租户的有效成员
 )
 ```
 
-- 管理员启动：`activation_scope = all_users`，当前及未来用户均生效；
-- 管理员停止：`activation_scope = manual`，不删除用户自己的绑定；
-- 用户自行启用：向 `user_hook_bindings` 插入记录；
-- 不使用数据库触发器批量物化全局绑定。
+- 发布不自动启用；管理员在每个 Hook 的绑定弹窗选择“指定用户 / 按租户 / 全部用户”；
+- 指定用户使用 `user_hook_bindings`，新用户不自动加入；
+- 按租户使用 `hook_tenant_bindings` 动态关联有效成员，新成员自动生效；
+- 全部用户使用 `activation_scope=all_users`，新建有效用户自动生效；
+- 保存时事务清理其他两类范围，保证三种模式互斥；
+- 动态范围通过查询计算，不使用数据库触发器批量物化绑定。
 
 ### 3.3 执行审计与脚本数据
 
@@ -283,8 +301,8 @@ AND (
 | `GET` | `/api/admin/hooks/:hookId` | Hook 详情 |
 | `PUT` | `/api/admin/hooks/:hookId` | 更新草稿 |
 | `POST` | `/api/admin/hooks/:hookId/publish` | 发布新版本 |
-| `POST` | `/api/admin/hooks/:hookId/start` | 对所有用户启动 |
-| `POST` | `/api/admin/hooks/:hookId/stop` | 停止全局启用 |
+| `GET` | `/api/admin/hooks/:hookId/bindings` | 查询当前范围、用户、租户与绑定状态 |
+| `PUT` | `/api/admin/hooks/:hookId/bindings` | 原子替换指定用户、租户或全部用户范围 |
 | `DELETE` | `/api/admin/hooks/:hookId` | 删除 Hook |
 | `GET` | `/api/admin/hooks/:hookId/executions` | 查询最近的 Hook 执行审计，`limit` 最大 200 |
 | `GET` | `/api/admin/hooks/:hookId/data-records` | 查询脚本主动写入的结构化数据，`limit` 最大 200 |
@@ -415,8 +433,8 @@ sequenceDiagram
 - 真实 MCP 工具和 Skill 资源选择；
 - MCP/Skill 后置行为的保存与发布校验；
 - 事件级 Claude 返回字段映射；
-- 草稿、发布、全局启动/停止和用户绑定模型。
-- 用户会话创建时查询全局 Hook 与用户绑定 Hook，并合并进现有 `sdkOptions.hooks`；
+- 草稿、发布和逐 Hook 的用户/租户/全量动态绑定模型；
+- 用户会话创建时查询显式用户绑定、有效租户成员关系和全量范围，并合并进现有 `sdkOptions.hooks`；
 - JavaScript Worker + VM 执行器、受限 Python 子进程和 CCUI API 代理；
 - 工作空间相对路径、真实路径和符号链接越界防护；
 - 独立 MCP Tool Runner；
@@ -424,7 +442,7 @@ sequenceDiagram
 - 变量解析、模板渲染、`HookJSONOutput` 组装和运行时事件白名单复核；
 - `hook_executions` 执行审计与 `hook_data_records` 结构化业务记录；
 - 配置、运行时、脚本沙箱、MCP 参数和 Skill 恢复链路自动化测试。
-- 由真实 Hook 配置服务创建、发布并全局启动 28 种事件，逐个验证用户解析、SDK Matcher 编译、回调脚本、Claude 返回值、执行审计和结构化记录。
+- 由真实 Hook 配置服务创建、发布并明确绑定测试用户的 28 种事件，逐个验证用户解析、SDK Matcher 编译、回调脚本、Claude 返回值、执行审计和结构化记录。
 - 全量行为矩阵共创建并执行 235 个已发布 Hook：56 个事件×脚本语言组合、30 个事件×后置行为组合、149 个事件×Claude 返回字段组合；每个脚本组合都会实际调用全部受控 CCUI API，每个 MCP 组合都会启动真实 stdio Server。
 - Agent SDK 控制通道测试会接收真实 `initialize` 注册数据，并为 28 个事件发送 `hook_callback` 控制请求，核对 SDK 回写的 `control_response`、CCUI 执行审计及结构化记录；测试不请求模型，因此不会产生 Claude 调用费用。
 - `npm run seed:hook-test-configs` 可把全量矩阵保存到显式指定的正式数据库中。生成项统一使用 `[Hook全量测试]` 前缀，发布后保持 `activation_scope = manual`，便于管理员查看且不会对任何用户生效；再次执行会替换旧的同前缀测试配置，不修改用户已有 Hook。

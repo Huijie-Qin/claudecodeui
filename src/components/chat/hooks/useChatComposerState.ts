@@ -23,7 +23,12 @@ import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
-import { extractSlashCommandArguments } from './useSlashCommands.utils';
+import {
+  extractSlashCommandArguments,
+  getLeadingSlashCommandName,
+  isSkillSlashCommand,
+  shouldExpandSlashCommand,
+} from './useSlashCommands.utils';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -349,6 +354,11 @@ export function useChatComposerState({
     ],
   );
 
+  const isChatCommandAvailable = useCallback(
+    (command: SlashCommand) => provider === 'claude' || !isSkillSlashCommand(command),
+    [provider],
+  );
+
   const {
     slashCommands,
     slashCommandsCount,
@@ -367,6 +377,7 @@ export function useChatComposerState({
     input,
     setInput,
     textareaRef,
+    commandFilter: isChatCommandAvailable,
   });
 
   const {
@@ -427,7 +438,7 @@ export function useChatComposerState({
           return;
         }
 
-        const supplementContent = currentInput.trim();
+        const supplementContent = currentInput;
         const clientMessageId = createClientMessageId();
         addMessage({
           type: 'user',
@@ -467,31 +478,31 @@ export function useChatComposerState({
         return;
       }
 
-      // Intercept slash commands: if input starts with /commandName, execute as command with args
-      const trimmedInput = currentInput.trim();
-      if (trimmedInput.startsWith('/')) {
-        const firstSpace = trimmedInput.indexOf(' ');
-        const commandName = firstSpace > 0 ? trimmedInput.slice(0, firstSpace) : trimmedInput;
-        const matchedCommand = slashCommands.find((cmd: SlashCommand) => cmd.name === commandName);
-        if (matchedCommand) {
-          executeCommand(matchedCommand, trimmedInput);
-          setInput('');
-          inputValueRef.current = '';
-          setAttachedImages([]);
-          setUploadingImages(new Map());
-          setImageErrors(new Map());
-          resetCommandMenuState();
-          setIsTextareaExpanded(false);
-          if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-          }
-          return;
+      // Built-in and custom commands are expanded by CCUI. Skills stay byte-for-byte intact so
+      // Claude can invoke them natively, including when their arguments contain newlines.
+      const leadingCommandName = getLeadingSlashCommandName(currentInput);
+      const matchedCommand = leadingCommandName
+        ? slashCommands.find((cmd: SlashCommand) => cmd.name === leadingCommandName)
+        : null;
+      const isNativeSkillInvocation = isSkillSlashCommand(matchedCommand);
+      if (matchedCommand && shouldExpandSlashCommand(matchedCommand)) {
+        executeCommand(matchedCommand, currentInput.trim());
+        setInput('');
+        inputValueRef.current = '';
+        setAttachedImages([]);
+        setUploadingImages(new Map());
+        setImageErrors(new Map());
+        resetCommandMenuState();
+        setIsTextareaExpanded(false);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
         }
+        return;
       }
 
       let messageContent = currentInput;
       const selectedThinkingMode = thinkingModes.find((mode: { id: string; prefix?: string }) => mode.id === thinkingMode);
-      if (selectedThinkingMode && selectedThinkingMode.prefix) {
+      if (!isNativeSkillInvocation && selectedThinkingMode && selectedThinkingMode.prefix) {
         messageContent = `${selectedThinkingMode.prefix}: ${currentInput}`;
       }
       const displayInput = pendingDisplayInputRef.current || currentInput;

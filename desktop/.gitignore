@@ -1,0 +1,5 @@
+.env.desktop
+dist/
+node_modules/
+out/
+release-layout/

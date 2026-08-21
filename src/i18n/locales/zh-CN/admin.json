@@ -7,11 +7,13 @@
     "users": "用户",
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
+    "agentTemplates": "Agent 模板",
     "mcpPresets": "MCP Server 预置",
     "skillPresets": "Skill 预置",
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
-    "runtimes": "运行时监控"
+    "runtimes": "运行时监控",
+    "scheduledTaskLogs": "定时任务日志"
   },
   "experimental": {
     "warningTitle": "实验功能控制",
@@ -36,6 +38,19 @@
     "grant": "授权",
     "admin": "管理员",
     "never": "从未"
+  },
+  "skillPresets": {
+    "pagination": {
+      "page": "第 {{page}} 页",
+      "pageWithTotal": "第 {{page}} / {{totalPages}} 页",
+      "pageSize": "每页 {{count}} 条",
+      "pageSizePrefix": "每页",
+      "pageSizeSuffix": "条",
+      "pageSizeLabel": "每页 Skill 数量",
+      "total": "共 {{count}} 条",
+      "previous": "上一页",
+      "next": "下一页"
+    }
   },
   "fields": {
     "username": "用户名",
@@ -174,7 +189,12 @@
     "usernamesHint": "粘贴用户名，可用换行、空格、逗号或分号分隔；也可以在下方手动选择用户。",
     "missingUsers": "未找到用户（{{count}}）：{{usernames}}",
     "selectAll": "选择全部用户",
-    "clearSelection": "清空选择"
+    "clearSelection": "清空选择",
+    "encryptedValue": "已加密 / 已隐藏",
+    "deleteConfigured": "从 {{username}} 删除 {{name}}",
+    "confirmDeleteConfigured": "确定从 {{username}} 删除 {{name}} 吗？",
+    "deleteConfiguredSuccess": "已从 {{username}} 删除 {{name}}",
+    "deleteConfiguredFailed": "删除用户环境变量失败"
   },
   "tenants": {
     "createTitle": "创建租户",
@@ -306,6 +326,9 @@
       "descriptionPlaceholder": "搜索内部知识库和项目文档。",
       "httpUrl": "HTTP URL",
       "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "timeout": "超时时间（毫秒）",
+      "timeoutPlaceholder": "使用 Claude 默认值",
+      "timeoutHelp": "可选的原生 MCP timeout；留空时保持 Claude 默认行为。",
       "staticHeaders": "静态 Header JSON 或键值行",
       "headersHelper": "Header helper 命令",
       "headersHelperHelp": "可选的 Claude Code headersHelper。可通过文件名使用已上传的私有脚本，例如 python3 auth.py。",
@@ -349,7 +372,8 @@
     },
     "validationErrors": {
       "headersFormat": "Header 必须是 JSON，或每行一个键值对",
-      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
+      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法",
+      "timeoutFormat": "超时时间必须是正整数毫秒值"
     },
     "tools": {
       "title": "已发现工具",
@@ -370,19 +394,32 @@
   },
   "hooks": {
     "title": "Hook 配置",
-    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果。",
+    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果；发布后可按用户、租户或全部用户绑定。",
     "noScript": "{{count}} 个后置行为",
     "create": "新建 Hook",
     "newHook": "新建 Hook",
+    "examples": {
+      "create": "创建场景示例",
+      "dialogTitle": "选择场景示例",
+      "dialogDescription": "选择本次需要创建的示例，不会覆盖已经存在的配置。",
+      "loading": "正在加载场景示例...",
+      "loadError": "加载 Hook 场景示例失败",
+      "exists": "已存在",
+      "selectedCount": "已选择 {{count}} 个",
+      "createSelected": "创建所选示例",
+      "created": "已创建 {{count}} 个 Hook 示例草稿，请补选 MCP Tool 和 Skill 后发布",
+      "alreadyExists": "所选 Hook 场景示例均已存在，未覆盖现有配置",
+      "error": "创建 Hook 场景示例失败"
+    },
     "moreEvents": "更多事件",
     "backToList": "返回列表",
     "saveDraft": "保存草稿",
     "publish": "发布",
-    "start": "启动",
-    "stop": "停止",
-    "started": "全局已启用",
-    "partiallyStarted": "部分用户已启用",
-    "stopped": "未启动",
+    "start": "绑定用户",
+    "stop": "清空绑定",
+    "started": "已绑定用户",
+    "partiallyStarted": "已绑定用户",
+    "stopped": "未绑定用户",
     "delete": "删除",
     "edit": "编辑",
     "save": "保存",
@@ -395,7 +432,144 @@
     "noDescription": "暂无功能说明",
     "actionCount": "{{count}} 个行为",
     "boundUserCount": "已绑定 {{count}} 个用户",
+    "builtin": "内置 Hook",
+    "businessData": {
+      "label": "业务数据",
+      "title": "Hook 业务数据",
+      "description": "业务数据保存在 CCUI SQLite 中；这里显示最近 50 条：",
+      "loading": "正在加载业务数据",
+      "empty": "暂无业务数据。Hook 执行“记录数据”后会显示在这里。",
+      "loadError": "加载 Hook 业务数据失败",
+      "close": "关闭业务数据"
+    },
+    "diagnostics": {
+      "title": "Hook 运行诊断",
+      "hookTitle": "{{name}} 执行记录",
+      "description": "查看 Hook 的真实输入、输出、动作、异常和并行冲突；诊断不会改变 Hook 执行行为。",
+      "configTab": "Hook 配置",
+      "diagnosticsTab": "运行诊断",
+      "executionRecords": "执行记录",
+      "detailTitle": "Hook 执行详情",
+      "copy": "复制",
+      "startedAt": "开始时间",
+      "duration": "耗时",
+      "user": "用户",
+      "session": "会话",
+      "error": "执行错误",
+      "input": "事件输入",
+      "scriptOutput": "脚本输出",
+      "actions": "后置动作",
+      "response": "返回 Claude",
+      "logs": "运行日志",
+      "failOpenWarning": "此 Hook 执行失败后返回了空结果，Agent 或工具调用仍可能继续。",
+      "failOpenSideEffect": "同一次并行事件中存在失败 Hook 和已执行的后置动作；失败不会自动撤销其他 Hook 的副作用。",
+      "search": "搜索 Hook、用户、会话、工具或 Tool Use ID",
+      "allHooks": "全部 Hook",
+      "allKinds": "全部类型",
+      "customHook": "自定义 Hook",
+      "allEvents": "全部事件",
+      "allStatuses": "全部状态",
+      "allOutcomes": "全部诊断结果",
+      "loading": "正在加载 Hook 执行记录...",
+      "loadError": "加载 Hook 执行记录失败",
+      "loadingDetail": "正在加载完整执行详情...",
+      "loadDetailError": "加载 Hook 执行详情失败",
+      "empty": "暂无匹配的 Hook 执行记录",
+      "parallelCount": "{{count}} 个并行 Hook",
+      "noSession": "无会话 ID",
+      "updatedInputConflict": "多个 Hook 同时返回 updatedInput，官方运行时使用最后完成者；本次可能由“{{name}}”生效。",
+      "permissionConflict": "检测到多个不同的权限决定；最终按 deny > defer > ask > allow 合并。",
+      "pagination": {
+        "summary": "共 {{groups}} 个事件组，{{executions}} 条执行记录",
+        "pageSize": "每页事件数",
+        "pageOf": "第 {{page}} / {{total}} 页",
+        "previous": "上一页",
+        "next": "下一页",
+        "goToPage": "前往第 {{page}} 页"
+      },
+      "statuses": {
+        "succeeded": "执行完成",
+        "failed": "执行失败",
+        "running": "执行中"
+      },
+      "outcomes": {
+        "succeeded": "成功",
+        "failed": "异常",
+        "denied": "拒绝",
+        "stopped": "停止",
+        "ask": "请求确认",
+        "defer": "延后",
+        "modified_input": "修改输入",
+        "modified_output": "修改输出",
+        "post_action": "执行后置动作",
+        "additional_context": "追加上下文"
+      }
+    },
+    "bindings": {
+      "title": "绑定生效用户",
+      "manage": "绑定用户",
+      "boundCountShort": "已绑定 {{count}} 人",
+      "boundTenantCountShort": "{{count}} 个租户（动态）",
+      "allUsersShort": "全部用户（动态）",
+      "unbound": "未绑定用户",
+      "sqlCheckManaged": "由用户在 SQL Check 开启",
+      "sqlCheckManagedCount": "{{count}} 人已开启强制校验",
+      "scopes": {
+        "users": "指定用户",
+        "tenants": "按租户",
+        "all_users": "全部用户"
+      },
+      "scopeHints": {
+        "users": "只对逐个选中的用户生效；新用户不会自动加入。",
+        "tenants": "对所选租户的全部有效成员生效；以后加入租户的新用户会自动生效。",
+        "all_users": "对系统中的全部有效用户生效；以后创建的新用户也会自动生效。"
+      },
+      "search": "搜索用户名",
+      "searchTenant": "搜索租户名称或编码",
+      "loading": "正在加载绑定范围",
+      "noUsers": "暂无可绑定用户",
+      "noTenants": "暂无可绑定租户",
+      "noMatches": "没有匹配的用户",
+      "admin": "管理员",
+      "inactive": "已停用",
+      "tenantUsers": "{{count}} 名成员",
+      "allUsersTitle": "启用全部用户动态范围",
+      "allUsersDescription": "当前包含 {{count}} 名有效用户；以后新增并激活的用户会自动获得此 Hook。",
+      "selectionSummary": {
+        "users": "已选择 {{count}} 人",
+        "tenants": "已选择 {{count}} 个租户",
+        "all_users": "当前覆盖 {{count}} 名有效用户"
+      },
+      "clear": "清空选择",
+      "save": "保存绑定",
+      "savedScopes": {
+        "users": "已保存指定用户绑定",
+        "tenants": "已保存租户动态绑定",
+        "all_users": "已启用全部用户动态绑定"
+      },
+      "loadError": "加载 Hook 用户绑定失败",
+      "saveError": "保存 Hook 用户绑定失败"
+    },
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
+    "builtinSkills": {
+      "title": "内置 Hook Skill 管理",
+      "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
+      "upload": "上传 Skill 文件夹",
+      "uploading": "正在上传",
+      "search": "搜索 Skill",
+      "empty": "暂无内置 Hook Skill",
+      "noMatches": "没有匹配的 Skill",
+      "details": "详情",
+      "collapse": "收起",
+      "versionLabel": "版本",
+      "idLabel": "标识",
+      "descriptionLabel": "说明",
+      "delete": "删除",
+      "confirmDelete": "删除内置 Skill“{{name}}”？引用它的 Hook 会保留配置并显示不可用提示。",
+      "unavailableTitle": "内置 Hook Skill 不可用",
+      "unavailableDescription": "未找到：{{skills}}。请编辑 Hook 并重新选择内置 Skill。",
+      "formatHint": "不校验扩展名、大小、frontmatter 字段或正文内容。名称优先读取 frontmatter.name，否则使用文件名；请管理员自行保证文件可用。"
+    },
     "triggerEvent": "触发位置",
     "selectEvent": "选择触发位置",
     "insertVariable": "变量",
@@ -812,15 +986,126 @@
       "start": "启动 Hook 失败",
       "stop": "停止 Hook 失败",
       "delete": "删除 Hook 失败",
-      "saveSettings": "保存 Hook 事件设置失败"
+      "saveSettings": "保存 Hook 事件设置失败",
+      "uploadSkill": "上传内置 Hook Skill 失败",
+      "deleteSkill": "删除内置 Hook Skill 失败"
     },
     "toast": {
       "saved": "Hook 草稿已保存",
-      "published": "Hook 已发布",
-      "started": "Hook 已设为全局，对当前和后续新用户生效",
-      "stopped": "Hook 已取消全局生效，用户自主绑定已保留",
+      "published": "Hook 已发布，请选择生效用户",
+      "started": "Hook 用户绑定已保存",
+      "stopped": "Hook 用户绑定已清空",
       "deleted": "Hook 已删除",
-      "eventsSaved": "可见触发位置已保存"
+      "eventsSaved": "可见触发位置已保存",
+      "skillUploaded": "内置 Hook Skill“{{name}}”已上传",
+      "skillDeleted": "内置 Hook Skill“{{name}}”已删除"
+    }
+  },
+  "claudeEnvV2": {
+    "title": "分层 Claude 环境变量",
+    "description": "管理租户统一变量和个人变量策略；现有管理员单用户配置保持不变。",
+    "addVariable": "添加变量",
+    "encryptedConfigured": "已配置加密值；输入新值后才会替换",
+    "scopeTabsLabel": "Claude 环境变量配置范围",
+    "tabs": {
+      "personal": "指定个人配置",
+      "tenant": "指定租户配置",
+      "policy": "黑白名单配置"
+    },
+    "tenant": {
+      "saved": "租户变量已保存，将在新的 Claude 会话中生效。",
+      "batchSaved": "已将环境变量变更应用到 {{count}} 个租户，并将在新的 Claude 会话中生效。",
+      "selectLabel": "选择租户",
+      "selectPlaceholder": "请选择租户",
+      "selectedCount": "已选择 {{count}} 个租户",
+      "selectAll": "全选",
+      "clearSelection": "清空",
+      "selectionLimitHint": "每批最多选择 {{count}} 个租户；全选时取前 {{count}} 个活跃租户。",
+      "noActiveTenants": "暂无活跃租户",
+      "addDelete": "添加删除项",
+      "applyToSelected": "应用到所选租户",
+      "selectHint": "选择一个租户可编辑其现有配置；选择多个租户可创建安全的批量变更。",
+      "singleEditorTitle": "正在编辑 {{tenant}}",
+      "singleEditorHint": "已有加密值始终保持掩码，只有输入替换值后才会变更。",
+      "batchEditorTitle": "批量变更 {{count}} 个租户",
+      "batchEditorHint": "这里使用独立的空操作草稿，只应用下方明确填写的值和删除名称；不会复制或改动租户中其他已有值。改变租户选择会清空本草稿。",
+      "emptyBatchUpserts": "本批次暂无新增或更新项。",
+      "batchDeletesTitle": "从每个所选租户中删除",
+      "batchDeletesHint": "只会删除这里明确列出的变量名。",
+      "emptyBatchDeletes": "本批次暂无删除项。",
+      "overviewTitle": "各租户当前配置",
+      "overviewHint": "按租户展示当前配置；加密值始终隐藏，可在此逐项删除已有配置。",
+      "loadingOverview": "正在加载租户配置…",
+      "emptyOverview": "暂无可展示的租户。",
+      "snapshotUnavailable": "暂未获取到配置快照。",
+      "noVariables": "尚未配置租户环境变量。",
+      "encrypted": "已加密",
+      "configured": "已配置",
+      "deleteConfigured": "从 {{tenant}} 删除 {{name}}",
+      "confirmDeleteConfigured": "确定从 {{tenant}} 删除 {{name}} 吗？",
+      "deleteConfiguredSuccess": "已从 {{tenant}} 删除 {{name}}。",
+      "overviewDeleteDisabled": "请先应用或移除所有待保存的租户变更，再从配置汇总中直接删除。"
+    },
+    "policy": {
+      "editorTitle": "配置黑白名单",
+      "editorHint": "通过下方表单新增配置；保存后的内容会在下方单独展示，并支持逐项删除。",
+      "allowlist": "个人变量白名单",
+      "allowlistForm": "新增白名单字段",
+      "allowlistHint": "用户只能配置这些字段；长度按 UTF-8 字节计算。",
+      "addAllowlistField": "添加字段",
+      "saveAllowlist": "保存白名单",
+      "emptyAllowlistDraft": "暂无待保存的白名单字段，请先添加字段。",
+      "emptyAllowlist": "白名单为空，用户将无法新增或更新个人环境变量；可以直接保存当前空名单。",
+      "platformDeny": "平台黑名单",
+      "denyForm": "新增黑名单规则",
+      "denyHint": "这些规则用于进一步限制个人变量，且不能覆盖内置保护。",
+      "saveDenyRule": "保存规则",
+      "savedTitle": "管理员已保存配置",
+      "savedHint": "以下配置统一面向所有用户；删除某项后，该项将从策略中移除。",
+      "savedAllowlist": "管理员白名单",
+      "savedDenylist": "管理员黑名单",
+      "emptySavedAllowlist": "管理员尚未配置白名单字段。",
+      "emptySavedDenylist": "管理员尚未配置黑名单规则。",
+      "builtIn": "内置黑名单（只读）",
+      "enabled": "启用",
+      "disabled": "停用",
+      "maxLength": "最大字节数",
+      "maxLengthValue": "{{count}} 字节",
+      "reason": "原因",
+      "deleteAllowlist": "删除 {{name}}",
+      "deleteDenyRule": "删除 {{pattern}}",
+      "confirmDeleteAllowlist": "确定从白名单中删除 {{name}} 吗？",
+      "confirmDeleteDenyRule": "确定删除黑名单规则 {{pattern}} 吗？",
+      "allowlistSaved": "白名单字段已保存。",
+      "allowlistDeleted": "已从白名单中删除 {{name}}。",
+      "denyRuleSaved": "黑名单规则已保存。",
+      "denyRuleDeleted": "已删除黑名单规则 {{pattern}}。",
+      "matchType": {
+        "exact": "精确匹配",
+        "prefix": "前缀匹配",
+        "suffix": "后缀匹配",
+        "contains": "包含匹配"
+      },
+      "saved": "个人环境变量策略已保存。"
+    },
+    "errors": {
+      "loadTenant": "加载租户环境变量失败",
+      "saveTenant": "保存租户环境变量失败",
+      "loadPolicy": "加载个人环境变量策略失败",
+      "savePolicy": "保存个人环境变量白名单失败",
+      "deleteAllowlist": "删除白名单字段失败",
+      "createRule": "创建拒绝规则失败",
+      "saveRule": "保存拒绝规则失败",
+      "deleteRule": "删除拒绝规则失败",
+      "nameRequired": "环境变量名称不能为空",
+      "duplicateName": "环境变量名称不能重复",
+      "replacementRequired": "请输入 {{name}} 的替换值",
+      "loadOverview": "加载租户环境变量概览失败",
+      "deleteNameRequired": "请填写每个待删除的环境变量名称",
+      "duplicateDeleteName": "待删除的环境变量名称不能重复",
+      "batchChangesRequired": "请至少添加一项更新或删除",
+      "batchTenantLimit": "每批最多选择 {{count}} 个租户",
+      "deleteTenantVariable": "删除租户环境变量失败"
     }
   },
   "runtimes": {
@@ -856,6 +1141,35 @@
     "errors": {
       "load": "加载运行时失败",
       "stop": "停止运行时失败"
+    }
+  },
+  "scheduledTaskLogs": {
+    "title": "定时任务日志",
+    "description": "查看调度领取、执行、成功和失败日志。时间统一按上海时区展示。",
+    "retention": "时间按上海时区展示；日志保留 {{days}} 天，最多 {{maxRows}} 条。",
+    "autoRefresh": "每 10 秒自动刷新",
+    "refresh": "刷新日志",
+    "expand": "展开日志详情",
+    "collapse": "收起日志详情",
+    "empty": "暂无符合条件的定时任务日志",
+    "filters": {
+      "searchPlaceholder": "搜索任务、租户、用户、工作区、Run ID 或错误"
+    },
+    "table": {
+      "time": "时间（上海）",
+      "task": "任务 / 工作区",
+      "scope": "租户 / 用户",
+      "result": "结果"
+    },
+    "pagination": {
+      "pageSize": "每页日志数",
+      "total": "共 {{count}} 条",
+      "page": "第 {{page}} / {{totalPages}} 页",
+      "previous": "上一页",
+      "next": "下一页"
+    },
+    "errors": {
+      "load": "加载定时任务日志失败"
     }
   }
 }

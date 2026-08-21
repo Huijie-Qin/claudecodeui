@@ -3,13 +3,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { authenticatedFetch } from '../utils/api';
 
 import {
+  showModelResponseNotification,
+  subscribeToDesktopNotificationActivations,
+} from './desktopNotificationBridge';
+import {
   DEFAULT_MODEL_RESPONSE_HOOK_CONFIG,
   buildModelResponseHookNotification,
   normalizeModelResponseHookConfig,
   shouldSuppressRunCompletedAfterUserConfirmation,
   type ModelResponseHookConfig,
   type ModelResponseHookMessage,
-  type ModelResponseHookNotification,
 } from './modelResponseNotificationHooks';
 
 type UseModelResponseBrowserNotificationsArgs = {
@@ -31,10 +34,6 @@ type StreamBuffer = {
 
 const MAX_SEEN_NOTIFICATIONS = 250;
 const MAX_TRACKED_TOOL_USES = 120;
-
-function canUseBrowserNotification(): boolean {
-  return typeof window !== 'undefined' && 'Notification' in window;
-}
 
 function rememberLimited(set: Set<string>, value: string, limit: number) {
   set.add(value);
@@ -143,37 +142,6 @@ function flushStreamBuffer(
   };
 }
 
-function showBrowserNotification(
-  notification: ModelResponseHookNotification,
-  config: ModelResponseHookConfig,
-  onNavigateToSession?: (sessionId: string) => void,
-) {
-  const handleClick = () => {
-    window.focus();
-    if (notification.sessionId) {
-      onNavigateToSession?.(notification.sessionId);
-    }
-  };
-
-  if (config.browserNotifications && canUseBrowserNotification() && Notification.permission === 'granted') {
-    const browserNotification = new Notification(notification.title, {
-      body: notification.body,
-      tag: notification.tag,
-      requireInteraction: notification.requiresUserAction === true,
-    });
-    browserNotification.onclick = () => {
-      handleClick();
-      browserNotification.close();
-    };
-    return;
-  }
-
-  if (config.fallbackAlert) {
-    window.alert(`${notification.title}\n\n${notification.body}`);
-    handleClick();
-  }
-}
-
 export function useModelResponseBrowserNotifications({
   subscribeMessage,
   onNavigateToSession,
@@ -210,6 +178,10 @@ export function useModelResponseBrowserNotifications({
     void loadConfig();
   }, [loadConfig]);
 
+  useEffect(() => (
+    subscribeToDesktopNotificationActivations(onNavigateToSession)
+  ), [onNavigateToSession]);
+
   useEffect(() => {
     if (!subscribeMessage) {
       return undefined;
@@ -241,7 +213,7 @@ export function useModelResponseBrowserNotifications({
             if (!seenKeywordBodiesRef.current.has(bodyKey)) {
               rememberLimited(seenKeywordBodiesRef.current, bodyKey, MAX_SEEN_NOTIFICATIONS);
               rememberLimited(seenNotificationsRef.current, streamNotification.tag, MAX_SEEN_NOTIFICATIONS);
-              showBrowserNotification(streamNotification, configRef.current, onNavigateToSession);
+              void showModelResponseNotification(streamNotification, configRef.current, onNavigateToSession);
             }
           }
         }
@@ -275,7 +247,7 @@ export function useModelResponseBrowserNotifications({
       }
 
       rememberLimited(seenNotificationsRef.current, notification.tag, MAX_SEEN_NOTIFICATIONS);
-      showBrowserNotification(notification, configRef.current, onNavigateToSession);
+      void showModelResponseNotification(notification, configRef.current, onNavigateToSession);
     });
   }, [onNavigateToSession, subscribeMessage]);
 }

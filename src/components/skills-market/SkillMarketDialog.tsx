@@ -103,20 +103,6 @@ export default function SkillMarketDialog({
   const activeSearchRef = useRef('');
 
   const workspaceId = selectedProject.workspaceId;
-  const visibleSkills = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return skills;
-    return skills.filter((skill) => [
-      skill.name,
-      skill.displayName,
-      skill.description,
-      skill.createUserId,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-      .includes(normalizedQuery));
-  }, [query, skills]);
   const directoryRows = useMemo(() => createDirectoryRows(detail?.files ?? []), [detail?.files]);
   const selectedDisplayName = detail?.displayName || detail?.name || '';
   const canWrite = canManage && !isReadOnly && Boolean(workspaceId);
@@ -495,11 +481,11 @@ export default function SkillMarketDialog({
             >
               {listLoading ? (
                 <CenteredState icon={<Loader2 className="h-4 w-4 animate-spin" />} text={t('skillMarketDialog.loading', 'Loading...')} />
-              ) : visibleSkills.length === 0 ? (
+              ) : skills.length === 0 ? (
                 <CenteredState icon={<AlertCircle className="h-4 w-4" />} text={t('skillMarketDialog.empty', 'No matching skills.')} />
               ) : (
                 <div className="grid min-w-0 gap-1.5">
-                  {visibleSkills.map((skill) => (
+                  {skills.map((skill) => (
                     <button
                       key={getSkillListKey(skill)}
                       type="button"

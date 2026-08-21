@@ -67,7 +67,7 @@ export type HookValueBinding =
 
 export type HookPostAction = {
   id: string;
-  type: 'call_mcp_tool' | 'invoke_skill';
+  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill';
   position: number;
   config: Record<string, unknown>;
 };
@@ -96,7 +96,66 @@ export type HookConfig = HookConfigDraft & {
   updatedAt: string;
   publishedAt: string | null;
   activationScope: 'manual' | 'all_users';
+  bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
+  boundTenantCount: number;
+  hasDataRecords: boolean;
+};
+
+export type HookExecutionOutcome =
+  | 'succeeded'
+  | 'failed'
+  | 'denied'
+  | 'stopped'
+  | 'ask'
+  | 'defer'
+  | 'modified_input'
+  | 'modified_output'
+  | 'post_action'
+  | 'additional_context';
+
+export type HookExecution = {
+  id: string;
+  hookId: string;
+  hookName: string | null;
+  hookVersion: number;
+  bindingController: 'admin' | 'sql_check';
+  userId: number | null;
+  username: string | null;
+  tenantId: number | null;
+  workspaceId: number | null;
+  sessionId: string | null;
+  eventName: HookEventName;
+  toolUseId: string | null;
+  toolName: string | null;
+  status: 'running' | 'succeeded' | 'failed';
+  input: unknown;
+  scriptOutput: unknown;
+  actions: Record<string, unknown>;
+  response: Record<string, unknown>;
+  logs: Array<{ timestamp?: string; message?: string; data?: unknown }>;
+  errorMessage: string | null;
+  durationMs: number | null;
+  startedAtMs: number | null;
+  completedAtMs: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  diagnostics: {
+    outcome: HookExecutionOutcome;
+    effects: string[];
+    permissionDecision: string | null;
+    updatedInput: boolean;
+    actionCount: number;
+    failOpen: boolean;
+  };
+};
+
+export type HookExecutionPage = {
+  executions: HookExecution[];
+  total: number;
+  executionTotal: number;
+  limit: number;
+  offset: number;
 };
 
 export type JsonSchemaProperty = {
@@ -134,9 +193,8 @@ export type HookSkillResource = {
 };
 
 export type HookSkillSource = {
-  configured: boolean;
+  type: 'builtin';
   available: boolean;
-  tenantId?: number;
   error?: string;
 };
 

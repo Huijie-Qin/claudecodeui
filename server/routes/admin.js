@@ -14,12 +14,17 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
-import { createHookSkillMarketService } from '../services/hook-skill-market.js';
+import { createRequestedHookExamples, listRequestedHookExamples } from '../services/hook-examples.js';
+import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
+import { scheduledTaskLogStore } from '../services/scheduled-task-log-store.js';
+import { agentTemplateService } from '../services/agent-templates.js';
 import {
   FEATURE_FLAGS,
   featureFlagsService,
   shouldShowExperimentalFeatures,
 } from '../services/feature-flags.js';
+
+import { createAdminClaudeEnvRouter } from './claude-env.js';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -150,6 +155,9 @@ const helperScriptUpload = multer({
     fileSize: 64 * 1024,
     files: 1,
   },
+});
+const hookSkillUpload = multer({
+  storage: multer.memoryStorage(),
 });
 
 function parseRuntimeFilterInteger(value, { min }) {
@@ -300,7 +308,7 @@ function buildLegacyClaudeEnvPatch(body = {}) {
   return env;
 }
 
-function parseClaudeEnvPatch(body = {}) {
+function parseClaudeEnvPatch(body = {}, { allowEmpty = false } = {}) {
   const rawEnv = body.env && typeof body.env === 'object' && !Array.isArray(body.env)
     ? body.env
     : buildLegacyClaudeEnvPatch(body);
@@ -321,13 +329,70 @@ function parseClaudeEnvPatch(body = {}) {
     env[name] = rawValue == null ? '' : String(rawValue);
   }
 
-  if (Object.keys(env).length === 0) {
+  if (!allowEmpty && Object.keys(env).length === 0) {
     const error = new Error('At least one Claude environment field name is required');
     error.statusCode = 400;
     throw error;
   }
 
   return env;
+}
+
+function parseClaudeEnvDeletes(body = {}) {
+  if (body.deletes === undefined) return [];
+  if (!Array.isArray(body.deletes)) {
+    const error = new Error('deletes must be an array');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const seen = new Set();
+  const deletes = [];
+  for (const rawName of body.deletes) {
+    if (typeof rawName !== 'string') {
+      const error = new Error('Each deleted Claude environment field name must be a string');
+      error.statusCode = 400;
+      throw error;
+    }
+    const name = rawName.trim();
+    if (!ENV_NAME_PATTERN.test(name)) {
+      const error = new Error('Deleted Claude environment field names must use shell-safe syntax');
+      error.statusCode = 400;
+      throw error;
+    }
+    const nameKey = name.toUpperCase();
+    if (nameKey === 'USER_KEY') {
+      const error = new Error('USER_KEY is managed and cannot be deleted');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (seen.has(nameKey)) continue;
+    seen.add(nameKey);
+    deletes.push(name);
+  }
+  return deletes;
+}
+
+function assertDisjointClaudeEnvMutation(env, deletes) {
+  const upsertNameKeys = new Set(Object.keys(env).map((name) => name.toUpperCase()));
+  const conflictingName = deletes.find((name) => upsertNameKeys.has(name.toUpperCase()));
+  if (conflictingName) {
+    const error = new Error(`${conflictingName} cannot be both updated and deleted`);
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function sanitizeAdminClaudeEnvList(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => ({
+    ...entry,
+    env: (Array.isArray(entry?.env) ? entry.env : []).map((variable) => {
+      if (variable?.encrypted !== true || !Object.hasOwn(variable, 'value')) return variable;
+      const masked = { ...variable };
+      delete masked.value;
+      return masked;
+    }),
+  }));
 }
 
 function parseClaudeEnvVisibility(body = {}, env = {}) {
@@ -407,10 +472,13 @@ export function createAdminRouter(
   hookConfigs = hookConfigService,
   featureFlags = featureFlagsService,
   showExperimentalFeatures = shouldShowExperimentalFeatures,
-  hookSkillMarket = createHookSkillMarketService({ multitenancy, skillPresets }),
+  hookSkillCatalog = createHookSkillCatalogService(),
+  scheduledTaskLogs = scheduledTaskLogStore,
+  agentTemplates = agentTemplateService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
+  router.use(createAdminClaudeEnvRouter());
 
   router.get('/feature-flags', (req, res) => {
     res.json({
@@ -465,12 +533,63 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/hook-executions', (req, res) => {
+    try {
+      return res.json(hookConfigs.listAllExecutionPage({
+        hookId: req.query.hookId,
+        eventName: req.query.eventName,
+        status: req.query.status,
+        userId: req.query.userId,
+        sessionId: req.query.sessionId,
+        toolUseId: req.query.toolUseId,
+        q: req.query.q,
+        bindingController: req.query.bindingController,
+        outcome: req.query.outcome,
+        limit: req.query.limit,
+        offset: req.query.offset,
+      }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook diagnostics');
+    }
+  });
+
+  router.get('/hook-executions/:executionId', (req, res) => {
+    try {
+      const execution = hookConfigs.getExecution(req.params.executionId);
+      if (!execution) return res.status(404).json({ error: 'Hook execution not found' });
+      return res.json({ execution });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook execution');
+    }
+  });
+
   router.post('/hooks', (req, res) => {
     try {
       const hook = hookConfigs.createHook({ input: req.body, userId: req.user.id });
       return res.status(201).json({ hook });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to create Hook');
+    }
+  });
+
+  router.get('/hooks/examples', (req, res) => {
+    try {
+      return res.json({ examples: listRequestedHookExamples({ hookConfigs }) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Hook examples');
+    }
+  });
+
+  router.post('/hooks/examples', (req, res) => {
+    try {
+      const result = createRequestedHookExamples({
+        hookConfigs,
+        userId: req.user.id,
+        exampleIds: req.body?.exampleIds,
+      });
+      return res.status(result.createdCount > 0 ? 201 : 200).json(result);
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook examples');
     }
   });
 
@@ -498,24 +617,82 @@ export function createAdminRouter(
       return sendRouteError(res, error, 'Failed to load Hook resources');
     }
     try {
-      const market = await hookSkillMarket.listConfigurationSkills({
-        accountId: resolveAdminAccountId(req, users),
-      });
+      const catalog = await hookSkillCatalog.listConfigurationSkills();
       return res.json({
         ...resources,
-        skills: market.skills,
-        skillSource: market.source,
+        skills: catalog.skills,
+        skillSource: catalog.source,
       });
     } catch (error) {
       return res.json({
         ...resources,
         skills: [],
         skillSource: {
-          ...(typeof hookSkillMarket.getSource === 'function' ? hookSkillMarket.getSource() : {}),
+          ...(typeof hookSkillCatalog.getSource === 'function' ? hookSkillCatalog.getSource() : {}),
           available: false,
-          error: error instanceof Error ? error.message : 'Failed to load Hook Skill Market',
+          error: error instanceof Error ? error.message : 'Failed to load built-in Hook Skills',
         },
       });
+    }
+  });
+
+  router.post('/hooks/skills', (req, res) => {
+    hookSkillUpload.array('files')(req, res, async (uploadError) => {
+      try {
+        if (uploadError) {
+          const error = new Error(uploadError.message);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (!Array.isArray(req.files) || req.files.length === 0) {
+          const error = new Error('Skill folder is required');
+          error.statusCode = 400;
+          throw error;
+        }
+        let relativePaths;
+        try {
+          relativePaths = JSON.parse(String(req.body?.paths || '[]'));
+        } catch {
+          relativePaths = [];
+        }
+        if (!Array.isArray(relativePaths) || relativePaths.length !== req.files.length) {
+          const error = new Error('Skill folder paths are invalid');
+          error.statusCode = 400;
+          throw error;
+        }
+        const skill = await hookSkillCatalog.uploadBuiltinSkill({
+          files: req.files.map((file, index) => ({
+            relativePath: String(relativePaths[index] || ''),
+            buffer: file.buffer,
+          })),
+          userId: req.user.id,
+        });
+        const catalog = await hookSkillCatalog.listConfigurationSkills();
+        return res.status(201).json({
+          skill,
+          skills: catalog.skills,
+          skillSource: catalog.source,
+        });
+      } catch (error) {
+        return sendRouteError(res, error, 'Failed to upload built-in Hook Skill');
+      }
+    });
+  });
+
+  router.delete('/hooks/skills/:skillId', async (req, res) => {
+    try {
+      const skill = await hookSkillCatalog.deleteBuiltinSkill({
+        skillId: req.params.skillId,
+        userId: req.user.id,
+      });
+      const catalog = await hookSkillCatalog.listConfigurationSkills();
+      return res.json({
+        skill,
+        skills: catalog.skills,
+        skillSource: catalog.source,
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete uploaded Hook Skill');
     }
   });
 
@@ -548,10 +725,7 @@ export function createAdminRouter(
       if (!draft) return res.status(404).json({ error: 'Hook not found' });
       const hasSkillAction = draft.postActions.some((action) => action.type === 'invoke_skill');
       const validatedSkills = hasSkillAction
-        ? await hookSkillMarket.validateHookSkills({
-          hook: draft,
-          accountId: resolveAdminAccountId(req, users),
-        })
+        ? await hookSkillCatalog.validateHookSkills({ hook: draft })
         : [];
       const hook = hookConfigs.publishHook({
         hookId: req.params.hookId,
@@ -564,20 +738,42 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/hooks/:hookId/start', (req, res) => {
+  router.get('/hooks/:hookId/bindings', (req, res) => {
     try {
-      const hook = hookConfigs.startHook({ hookId: req.params.hookId, userId: req.user.id });
-      return res.json({ hook });
+      return res.json(hookConfigs.listHookBindings(req.params.hookId));
     } catch (error) {
-      return sendRouteError(res, error, 'Failed to start Hook');
+      return sendRouteError(res, error, 'Failed to load Hook user bindings');
+    }
+  });
+
+  router.put('/hooks/:hookId/bindings', (req, res) => {
+    try {
+      return res.json(hookConfigs.replaceHookBindings({
+        hookId: req.params.hookId,
+        scope: req.body?.scope,
+        userIds: req.body?.userIds,
+        tenantIds: req.body?.tenantIds,
+        boundBy: req.user.id,
+      }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook user bindings');
     }
   });
 
   router.get('/hooks/:hookId/executions', (req, res) => {
     try {
-      return res.json({
-        executions: hookConfigs.listExecutions(req.params.hookId, { limit: req.query.limit }),
-      });
+      return res.json(hookConfigs.listExecutionPage(req.params.hookId, {
+        eventName: req.query.eventName,
+        status: req.query.status,
+        userId: req.query.userId,
+        sessionId: req.query.sessionId,
+        toolUseId: req.query.toolUseId,
+        q: req.query.q,
+        bindingController: req.query.bindingController,
+        outcome: req.query.outcome,
+        limit: req.query.limit,
+        offset: req.query.offset,
+      }));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook executions');
     }
@@ -590,15 +786,6 @@ export function createAdminRouter(
       });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook data records');
-    }
-  });
-
-  router.post('/hooks/:hookId/stop', (req, res) => {
-    try {
-      const hook = hookConfigs.stopHook({ hookId: req.params.hookId, userId: req.user.id });
-      return res.json({ hook });
-    } catch (error) {
-      return sendRouteError(res, error, 'Failed to stop Hook');
     }
   });
 
@@ -662,7 +849,7 @@ export function createAdminRouter(
         return res.status(501).json({ error: 'Claude environment list is not available' });
       }
 
-      return res.json({ users: users.listClaudeEnvForUsers() });
+      return res.json({ users: sanitizeAdminClaudeEnvList(users.listClaudeEnvForUsers()) });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Claude environment');
     }
@@ -847,10 +1034,18 @@ export function createAdminRouter(
         return res.status(400).json({ error: `Batch Claude environment updates are limited to ${MAX_BATCH_USER_ENV_UPDATES} users` });
       }
 
-      const env = parseClaudeEnvPatch(req.body);
+      const deletes = parseClaudeEnvDeletes(req.body);
+      const env = parseClaudeEnvPatch(req.body, { allowEmpty: deletes.length > 0 });
+      assertDisjointClaudeEnvMutation(env, deletes);
       const visibility = parseClaudeEnvVisibility(req.body, env);
       const encrypted = parseClaudeEnvEncrypted(req.body, env);
-      const results = users.updateClaudeEnvForUsers({ userIds, env, visibility, encrypted });
+      const results = users.updateClaudeEnvForUsers({
+        userIds,
+        env,
+        visibility,
+        encrypted,
+        deletes,
+      });
 
       return res.json({
         results,
@@ -1011,6 +1206,72 @@ export function createAdminRouter(
       return res.json(multitenancy.sqlCheck.replaceTenantConfig({ tenantId, ruleIds }));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to save SQL check configuration');
+    }
+  });
+
+  router.get('/agent-templates', (req, res) => {
+    try {
+      const tenantId = req.query?.tenantId == null || req.query.tenantId === ''
+        ? undefined
+        : parsePositiveId(req.query.tenantId, 'tenantId');
+      return res.json({ templates: agentTemplates.listAdminTemplates({ tenantId }) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Agent templates');
+    }
+  });
+
+  router.get('/agent-templates/preset-catalog', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      return res.json(agentTemplates.listPresetCatalog({ tenantId }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Agent template presets');
+    }
+  });
+
+  router.post('/agent-templates', (req, res) => {
+    try {
+      const template = agentTemplates.saveTemplate({ input: req.body, userId: req.user.id });
+      return res.status(201).json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Agent template');
+    }
+  });
+
+  router.put('/agent-templates/:templateId', (req, res) => {
+    try {
+      const template = agentTemplates.saveTemplate({
+        templateId: Number(req.params.templateId),
+        input: req.body,
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Agent template');
+    }
+  });
+
+  router.post('/agent-templates/:templateId/publish', (req, res) => {
+    try {
+      const template = agentTemplates.publishTemplate({
+        templateId: Number(req.params.templateId),
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish Agent template');
+    }
+  });
+
+  router.post('/agent-templates/:templateId/disable', (req, res) => {
+    try {
+      const template = agentTemplates.disableTemplate({
+        templateId: Number(req.params.templateId),
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to disable Agent template');
     }
   });
 
@@ -1351,6 +1612,18 @@ export function createAdminRouter(
         return res.status(503).json({ error: message });
       }
       return sendRouteError(res, error, 'Failed to stop runtime');
+    }
+  });
+
+  router.get('/scheduled-task-logs', (req, res) => {
+    try {
+      return res.json(scheduledTaskLogs.list(req.query));
+    } catch (error) {
+      if (error?.statusCode === 400) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error('[ScheduledTasks] Failed to list admin logs:', error);
+      return res.status(500).json({ error: 'Failed to list scheduled task logs' });
     }
   });
 

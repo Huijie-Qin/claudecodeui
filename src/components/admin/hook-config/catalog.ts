@@ -1,6 +1,7 @@
 import type {
   FieldChoice,
   FieldType,
+  HookConfig,
   HookConfigDraft,
   HookEventDefinition,
   HookEventName,
@@ -596,7 +597,7 @@ export const CCUI_SCRIPT_APIS = [
   {
     javascript: 'ccui.records.write(type, data)',
     python: 'ccui.records.write(type, data)',
-    description: '写入一条结构化 Hook 数据记录',
+    description: '写入一条结构化 Hook 业务数据',
   },
   {
     javascript: 'ccui.log.info(message, data)',
@@ -629,6 +630,12 @@ export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
     postActions: [],
     claudeResponse: { bindings: {} },
   };
+}
+
+export function shouldShowBusinessData(
+  hook: Pick<HookConfig, 'postActions' | 'hasDataRecords'>,
+): boolean {
+  return hook.hasDataRecords || hook.postActions.some((action) => action.type === 'write_record');
 }
 
 function normalizePropertyType(type?: string): FieldType {
@@ -697,7 +704,11 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
   for (const action of draft.postActions) {
     fields.push({
       path: `actions.${action.id}.output`,
-      label: action.type === 'call_mcp_tool' ? 'MCP 工具调用结果' : 'Skill 调用结果',
+      label: action.type === 'call_mcp_tool'
+        ? 'MCP 工具调用结果'
+        : action.type === 'write_record'
+          ? '业务数据写入结果'
+          : 'Skill 调用结果',
       type: 'object',
       group: 'action',
     });

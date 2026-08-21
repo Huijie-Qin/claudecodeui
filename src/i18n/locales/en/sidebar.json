@@ -19,6 +19,25 @@
     "tryDifferentSearch": "Try adjusting your search term",
     "runClaudeCli": "Run Claude CLI in a project directory to get started"
   },
+  "projectEdit": {
+    "title": "Edit project",
+    "projectName": "Project name",
+    "projectNamePlaceholder": "Enter a project name",
+    "favorite": "Favorite project",
+    "favoriteHint": "Favorite projects appear first in the project list.",
+    "syncTarget": "SDK system instructions",
+    "agentPlaceholder": "# Role\n\nDescribe the Agent's role, capabilities, and working style…",
+    "agentHint": "Agent.md is platform-managed and is loaded as the Agent system instructions in new sessions.",
+    "customInstructionsWarning": "Custom instruction files detected: {{files}}. Claude Code will continue to load them; if they conflict with Agent.md, the Agent configuration takes precedence.",
+    "readOnlyHint": "This project is read-only. You can only change its favorite status.",
+    "loading": "Loading project settings…",
+    "save": "Save",
+    "nameRequired": "Enter a project name.",
+    "workspaceUnavailable": "Workspace information is missing, so project settings cannot be loaded or saved.",
+    "loadFailed": "Failed to load project settings.",
+    "saveFailed": "Failed to save project settings.",
+    "conflict": "Agent instructions changed elsewhere. Close and reopen this editor before trying again."
+  },
   "app": {
     "title": "CloudCLI",
     "subtitle": "AI coding assistant interface"

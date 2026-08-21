@@ -30,6 +30,7 @@ type MessageComponentProps = {
   prevMessage: ChatMessage | null;
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  onOpenSubagent?: (toolId: string) => void;
   onShowSettings?: () => void;
   onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
   autoExpandTools?: boolean;
@@ -46,6 +47,7 @@ type InteractiveOption = {
 };
 
 type PermissionGrantState = 'idle' | 'granted' | 'error';
+type PreviewImage = { src: string; alt: string };
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
 function redactVisibleSecretText(value: unknown): string {
@@ -118,7 +120,7 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
   return sections.join('\n\n');
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -127,6 +129,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       (prevMessage.type === 'error'));
   const messageRef = useRef<HTMLDivElement | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
   const [permissionGrantState, setPermissionGrantState] = useState<PermissionGrantState>('idle');
   const userCopyContent = String(message.content || '');
@@ -150,6 +153,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   useEffect(() => {
     setPermissionGrantState('idle');
   }, [permissionSuggestion?.entry, message.toolId]);
+
+  useEffect(() => {
+    if (!previewImage) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [previewImage]);
 
   useEffect(() => {
     const node = messageRef.current;
@@ -218,7 +233,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     src={img.data}
                     alt={img.name}
                     className="h-auto max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
-                    onClick={() => window.open(img.data, '_blank')}
+                    onClick={() => setPreviewImage({
+                      src: img.data,
+                      alt: img.name || t('imagePreview', { defaultValue: 'Attached image' }),
+                    })}
                   />
                 ))}
               </div>
@@ -309,6 +327,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   toolId={message.toolId}
                   mode="input"
                   onFileOpen={onFileOpen}
+                  onOpenSubagent={onOpenSubagent}
                   createDiff={createDiff}
                   selectedProject={selectedProject}
                   autoExpandTools={autoExpandTools}
@@ -403,6 +422,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         toolId={message.toolId}
                         mode="result"
                         onFileOpen={onFileOpen}
+                        onOpenSubagent={onOpenSubagent}
                         createDiff={createDiff}
                         selectedProject={selectedProject}
                         autoExpandTools={autoExpandTools}
@@ -652,6 +672,30 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
           </div>
+        </div>
+      )}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('imagePreview', { defaultValue: 'Image preview' })}
+          onClick={() => setPreviewImage(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/70 text-2xl text-white hover:bg-black"
+            aria-label={t('closeImagePreview', { defaultValue: 'Close image preview' })}
+            onClick={() => setPreviewImage(null)}
+          >
+            ×
+          </button>
+          <img
+            src={previewImage.src}
+            alt={previewImage.alt}
+            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
         </div>
       )}
     </div>

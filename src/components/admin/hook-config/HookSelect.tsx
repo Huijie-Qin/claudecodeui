@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -46,7 +46,9 @@ export default function HookSelect({
     onOpenChange?.(resolved);
   }, [controlledOpen, onOpenChange, open]);
   const [search, setSearch] = useState('');
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value);
   const searchable = options.length > 8;
   const filtered = useMemo(() => {
@@ -79,6 +81,34 @@ export default function HookSelect({
     if (!open) setSearch('');
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPlacement('bottom');
+      return undefined;
+    }
+
+    const updatePlacement = () => {
+      const root = rootRef.current;
+      const menu = menuRef.current;
+      if (!root || !menu) return;
+
+      const rootRect = root.getBoundingClientRect();
+      const menuHeight = menu.getBoundingClientRect().height;
+      const viewportHeight = window.innerHeight;
+      const spaceBelow = viewportHeight - rootRect.bottom;
+      const spaceAbove = rootRect.top;
+      setMenuPlacement(spaceBelow < menuHeight + 8 && spaceAbove > spaceBelow ? 'top' : 'bottom');
+    };
+
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', updatePlacement, true);
+    return () => {
+      window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', updatePlacement, true);
+    };
+  }, [filtered.length, open]);
+
   const groups = filtered.reduce<Record<string, HookSelectOption[]>>((result, option) => {
     const group = option.group || '';
     result[group] = result[group] || [];
@@ -110,8 +140,9 @@ export default function HookSelect({
       ) : null}
 
       {open ? (
-        <div className={cn(
-          'absolute left-0 top-full z-50 mt-1.5 max-h-80 min-w-full overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl',
+        <div ref={menuRef} className={cn(
+          'absolute left-0 z-50 max-h-80 min-w-full overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl',
+          menuPlacement === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
           menuClassName,
         )}>
           {searchable ? (

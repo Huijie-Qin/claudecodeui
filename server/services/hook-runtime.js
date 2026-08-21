@@ -1,11 +1,8 @@
 import crypto from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-
-import matter from 'gray-matter';
 
 import { db as defaultDatabase } from '../database/db.js';
 
+import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
 import { allowedClaudeOutputs } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
@@ -175,13 +172,13 @@ function normalizeScriptOutput(result, declarations = []) {
   return output;
 }
 
-function createExecutionRecord(database, hook, context, input) {
+function createExecutionRecord(database, hook, context, input, startedAtMs, toolUseId) {
   const executionId = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_executions (
       id, hook_id, hook_version, user_id, tenant_id, workspace_id,
-      session_id, event_name, tool_use_id, input_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      session_id, event_name, tool_use_id, input_json, started_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     executionId,
     hook.id,
@@ -191,8 +188,9 @@ function createExecutionRecord(database, hook, context, input) {
     context.workspaceId || null,
     input?.session_id || context.sessionId?.() || null,
     hook.eventName,
-    input?.tool_use_id || null,
+    input?.tool_use_id || toolUseId || null,
     serializeForAudit(input),
+    startedAtMs,
   );
   return executionId;
 }
@@ -201,7 +199,8 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
   database.prepare(`
     UPDATE hook_executions
     SET status = ?, script_output_json = ?, actions_json = ?, response_json = ?,
-        logs_json = ?, error_message = ?, duration_ms = ?, completed_at = CURRENT_TIMESTAMP
+        logs_json = ?, error_message = ?, duration_ms = ?, completed_at_ms = ?,
+        completed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     status,
@@ -211,6 +210,7 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
     serializeForAudit(logs || []),
     error ? String(error).slice(0, 8000) : null,
     Math.max(0, Date.now() - startedAt),
+    Date.now(),
     executionId,
   );
 }
@@ -246,38 +246,43 @@ function buildEnvironment(context, event) {
   };
 }
 
-async function loadSkillContent(workspaceRoot, skillName, argumentsText) {
-  const normalizedName = String(skillName || '').trim();
-  if (!normalizedName || normalizedName === '.' || normalizedName === '..' || /[\\/\0]/.test(normalizedName)) {
-    throw new Error('Skill name is invalid');
-  }
-  const skillsRoot = path.resolve(workspaceRoot, '.claude', 'skills');
-  const filePath = path.resolve(skillsRoot, normalizedName, 'SKILL.md');
-  const relative = path.relative(skillsRoot, filePath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Skill path escapes the workspace');
-  const realSkillsRoot = await fs.realpath(skillsRoot);
-  const realFilePath = await fs.realpath(filePath);
-  const realRelative = path.relative(realSkillsRoot, realFilePath);
-  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
-    throw new Error('Skill path escapes the workspace through a symbolic link');
-  }
-  const text = await fs.readFile(filePath, 'utf8');
-  if (Buffer.byteLength(text, 'utf8') > 512 * 1024) throw new Error('Skill instructions are larger than 512 KB');
-  const parsed = matter(text);
+function expandSkillArguments(content, argumentsText) {
   const args = String(argumentsText || '').trim();
-  const hasPlaceholder = /\$(?:ARGUMENTS|\d+\b)/.test(parsed.content);
-  let content = parsed.content.replace(/\$ARGUMENTS/g, args);
+  const hasPlaceholder = /\$(?:ARGUMENTS|\d+\b)/.test(content);
+  let expanded = content.replace(/\$ARGUMENTS/g, args);
   const tokens = args ? args.split(/\s+/) : [];
   tokens.forEach((token, index) => {
-    content = content.replace(new RegExp(`\\$${index + 1}\\b`, 'g'), token);
+    expanded = expanded.replace(new RegExp(`\\$${index + 1}\\b`, 'g'), token);
   });
-  if (args && !hasPlaceholder) content = `${content.trim()}\n\n## User request\n\n${args}\n`;
-  return `${content.trim()}\n`;
+  if (args && !hasPlaceholder) expanded = `${expanded.trim()}\n\n## User request\n\n${args}\n`;
+  return `${expanded.trim()}\n`;
 }
 
-async function executePostActions({ hook, references, context, event, signal, recoveryKeys }) {
+async function loadSkillContent(skillId, skillName, argumentsText) {
+  const normalizedName = String(skillName || '').trim();
+  if (!normalizedName) throw new Error('Skill name is required');
+  if (!isBuiltinHookSkillId(skillId)) {
+    throw new Error('Only built-in Hook Skills can be invoked');
+  }
+  const skill = await loadBuiltinHookSkill({ skillId, skillName: normalizedName });
+  return expandSkillArguments(skill.content, argumentsText);
+}
+
+async function executePostActions({ hook, references, context, event, signal, recoveryKeys, writeRecord }) {
   for (const action of hook.postActions || []) {
     if (action.type === 'call_mcp_tool') {
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { called: false, reason: 'condition_false' },
+        };
+        continue;
+      }
       const input = {};
       for (const [key, binding] of Object.entries(action.config?.inputs || {})) {
         const value = resolveBinding(binding, references);
@@ -294,6 +299,31 @@ async function executePostActions({ hook, references, context, event, signal, re
       references.actions[action.id] = { output };
       continue;
     }
+    if (action.type === 'write_record') {
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { recorded: false, reason: 'condition_false' },
+        };
+        continue;
+      }
+      const data = {};
+      for (const [key, binding] of Object.entries(action.config?.fields || {})) {
+        const value = resolveBinding(binding, references);
+        if (value === UNRESOLVED) throw new Error(`Post action ${action.id} field ${key} is unresolved`);
+        data[key] = value;
+      }
+      const record = await writeRecord(action.config.recordType, data);
+      references.actions[action.id] = {
+        output: { recorded: true, ...record },
+      };
+      continue;
+    }
     if (action.type === 'invoke_skill') {
       const recoveryKey = `${hook.id}:${action.id}`;
       if (recoveryKeys.has(recoveryKey)) {
@@ -305,7 +335,7 @@ async function executePostActions({ hook, references, context, event, signal, re
         throw new Error(`Post action ${action.id} arguments contain an unresolved variable`);
       }
       const modelContent = await loadSkillContent(
-        context.workspaceRoot,
+        action.config.skillId,
         action.config.skillName,
         argumentsText,
       );
@@ -353,10 +383,10 @@ export function createHookRuntimeSession({
     mcpCaller,
   };
 
-  const executeHook = async (hook, event, _toolUseId, callbackOptions = {}) => {
+  const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
-    const executionId = createExecutionRecord(database, hook, context, event);
+    const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId);
     const logs = [];
     let scriptOutput = {};
     const references = {
@@ -401,6 +431,15 @@ export function createHookRuntimeSession({
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
+        writeRecord: async (recordType, data) => writeDataRecord(
+          database,
+          executionId,
+          hook,
+          context,
+          event,
+          recordType,
+          data,
+        ),
       });
       const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);
       completeExecution(database, executionId, {

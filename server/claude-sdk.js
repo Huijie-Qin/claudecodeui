@@ -54,9 +54,14 @@ import {
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
+import {
+  migrateLegacyWorkspaceAgentInstructions,
+  readWorkspaceAgentInstructions,
+} from './services/workspace-agent-instructions.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { userDb } from './database/db.js';
+import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
 import { hookConfigService } from './services/hook-configs.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
 import { createNormalizedMessage } from './shared/utils.js';
@@ -304,6 +309,7 @@ function mapCliOptionsToSDK(options = {}) {
     executionEnv,
     settingSources,
     spawnClaudeCodeProcess,
+    agentInstructions,
   } = options;
 
   const sdkOptions = {};
@@ -380,7 +386,17 @@ function mapCliOptionsToSDK(options = {}) {
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
     type: 'preset',
-    preset: 'claude_code'  // Required to use CLAUDE.md
+    preset: 'claude_code', // Required to use CLAUDE.md
+    ...(typeof agentInstructions === 'string' && agentInstructions.trim()
+      ? {
+        append: [
+          '# Platform-managed Agent configuration',
+          'The Agent.md instructions below define the selected Agent. If they conflict with workspace, user, or local CLAUDE.md instructions, follow Agent.md for the Agent role, behavior, and capabilities.',
+          '',
+          agentInstructions.trim(),
+        ].join('\n'),
+      }
+      : {}),
   };
 
   // Map setting sources for CLAUDE.md loading
@@ -904,6 +920,28 @@ async function queryClaudeSDK(command, options = {}, ws) {
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
     });
 
+    // Agent.md is owned by CloudCLI and is injected separately from Claude
+    // Code's project/user/local CLAUDE.md sources. Only managed workspaces are
+    // eligible, so helper flows that run Claude against arbitrary repositories
+    // never migrate or reinterpret their instruction files.
+    if (runtimeOptions.workspaceId) {
+      const hostWorkspacePath = runtimeContext.hostWorkspacePath || options.cwd || options.projectPath;
+      if (hostWorkspacePath) {
+        try {
+          const migration = await migrateLegacyWorkspaceAgentInstructions(hostWorkspacePath);
+          if (migration.removed) {
+            console.info('[AgentInstructions] Removed legacy mirrored CLAUDE.md', {
+              workspaceId: runtimeOptions.workspaceId,
+            });
+          }
+        } catch (error) {
+          console.warn('[AgentInstructions] Could not remove legacy mirrored CLAUDE.md:', error?.message || error);
+        }
+        const agentInstructions = await readWorkspaceAgentInstructions(hostWorkspacePath);
+        runtimeOptions.agentInstructions = agentInstructions.content;
+      }
+    }
+
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
@@ -922,8 +960,18 @@ async function queryClaudeSDK(command, options = {}, ws) {
       command: displayCommand,
     });
 
+    const mcpToolAccess = resolveUserWorkspaceMcpToolAccess({
+      tenantId: runtimeOptions.tenantId,
+      workspaceId: runtimeOptions.workspaceId,
+      userId: runtimeOptions.userId ?? ws?.userId,
+    });
+
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
+    sdkOptions.disallowedTools = uniqueTools([
+      ...sdkOptions.disallowedTools,
+      ...mcpToolAccess.disallowedTools,
+    ]);
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
@@ -932,6 +980,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
       workspaceId: runtimeOptions.workspaceId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
+      runtimeOwner: runtimeContext.mode === 'docker'
+        ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+        : null,
     });
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
@@ -1033,6 +1084,16 @@ async function queryClaudeSDK(command, options = {}, ws) {
         hooks: [async (input) => {
           if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
             return {};
+          }
+
+          if (!mcpToolAccess.isAllowed(input.tool_name)) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: `${input.tool_name} is not enabled in MCP Tool settings`,
+              },
+            };
           }
 
           const config = await readRuntimeMcpToolOverridesConfig();
@@ -1157,6 +1218,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
         return {
           behavior: 'deny',
           message: `${toolName} is disabled by configuration`,
+        };
+      }
+
+      if (!mcpToolAccess.isAllowed(toolName)) {
+        return {
+          behavior: 'deny',
+          message: `${toolName} is not enabled in MCP Tool settings`,
         };
       }
 
@@ -1737,6 +1805,21 @@ function sendWriterMessage(writer, message) {
   writer.send(message);
 }
 
+function resolveClaudeSupplementPayload({ sessionId, content, displayContent = null } = {}) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const modelContent = typeof content === 'string' ? content : '';
+  const visibleContent = typeof displayContent === 'string' && displayContent.trim()
+    ? displayContent
+    : modelContent;
+
+  return {
+    sessionId: normalizedSessionId,
+    content: modelContent,
+    displayContent: visibleContent,
+    valid: Boolean(normalizedSessionId && modelContent.trim()),
+  };
+}
+
 function pushClaudeSupplement({
   sessionId,
   content,
@@ -1745,15 +1828,13 @@ function pushClaudeSupplement({
   mode = 'now',
   writer = null,
 } = {}) {
-  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-  const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedDisplayContent =
-    typeof displayContent === 'string' && displayContent.trim()
-      ? displayContent.trim()
-      : normalizedContent;
-  if (!normalizedSessionId || !normalizedContent) {
+  const supplement = resolveClaudeSupplementPayload({ sessionId, content, displayContent });
+  if (!supplement.valid) {
     return { success: false, error: 'sessionId and content are required' };
   }
+  const normalizedSessionId = supplement.sessionId;
+  const normalizedContent = supplement.content;
+  const normalizedDisplayContent = supplement.displayContent;
 
   const session = getSession(normalizedSessionId);
   if (!session?.inputQueue) {
@@ -1867,4 +1948,5 @@ export {
   pushClaudeSupplement,
   createClaudePromptFactory,
   buildClaudeUserMessage,
+  resolveClaudeSupplementPayload,
 };

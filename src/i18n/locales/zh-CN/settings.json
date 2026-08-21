@@ -95,6 +95,7 @@
     "git": "CodeHub",
     "codeHub": "CodeHub",
     "apiTokens": "令牌",
+    "claudeEnv": "环境变量",
     "tasks": "任务",
     "notifications": "通知",
     "plugins": "插件",
@@ -214,10 +215,10 @@
   },
   "git": {
     "title": "CodeHub 配置",
-    "description": "配置您的 codehub 提交身份。这些设置将通过 codehub config --global 全局应用",
+    "description": "配置您的 CodeHub/Git 提交身份。换工号时名称会同步为新工号，之后仍可单独修改；设置仅作用于当前用户的后续提交。",
     "name": {
       "label": "CodeHub 名称",
-      "help": "您的 codehub 提交名称"
+      "help": "换工号时自动同步为新工号，换号完成后可再次修改"
     },
     "email": {
       "label": "CodeHub 邮箱",
@@ -468,6 +469,47 @@
     },
     "actions": {
       "add": "添加"
+    }
+  },
+  "claudeEnv": {
+    "loading": "正在加载环境变量设置…",
+    "retry": "重试",
+    "personal": {
+      "title": "环境变量",
+      "description": "按名称添加个人环境变量；保存前会根据管理员面向所有用户统一配置的白名单和黑名单校验名称和值。",
+      "name": "名称",
+      "namePlaceholder": "CUSTOM_VARIABLE",
+      "add": "添加变量",
+      "empty": "尚未配置个人环境变量。",
+      "value": "值",
+      "valuePlaceholder": "输入值",
+      "replacePlaceholder": "输入新的替换值",
+      "encryptedConfiguredHelp": "现有加密值不会回显。保持不变，或输入新的替换值。",
+      "encrypted": "加密存储",
+      "encryptedFor": "加密存储 {{name}}",
+      "deleteColumn": "删除",
+      "delete": "删除 {{name}}",
+      "globalHelp": "个人变量在所有租户中生效；租户和管理员配置仍保持独立。",
+      "save": "保存环境变量",
+      "saving": "正在保存环境变量…",
+      "saved": "环境变量已保存",
+      "restartRequired": "更改将在新启动的会话中生效；已有会话继续使用当前环境。",
+      "replacementRequired": "重命名 {{name}} 或更改其加密设置前，请输入新的替换值。",
+      "valueTooLong": "{{name}} 不能超过 {{maxLength}} 个 UTF-8 字节。",
+      "valueContainsNul": "{{name}} 不能包含 NUL 字节。",
+      "policy": {
+        "required": "请输入变量名称。",
+        "invalidSyntax": "请使用 Shell 安全名称：以字母或下划线开头，后续只能包含字母、数字和下划线。",
+        "duplicate": "变量名称忽略大小写后不能重复。",
+        "builtInDeny": "该名称命中系统统一的内置黑名单规则 {{pattern}}。",
+        "platformDeny": "该名称命中管理员面向所有用户统一配置的黑名单规则 {{pattern}}。",
+        "notAllowed": "该名称不在管理员面向所有用户统一配置的白名单中。"
+      }
+    },
+    "errors": {
+      "load": "加载环境变量设置失败。",
+      "savePersonal": "保存个人环境变量失败。",
+      "fixVariablePolicy": "请先修正标记出的变量名称再保存。"
     }
   },
   "mcpServers": {

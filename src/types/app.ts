@@ -75,6 +75,12 @@ export interface ProjectTaskmasterInfo {
   [key: string]: unknown;
 }
 
+export interface ProjectAgentTemplate {
+  id: number;
+  name: string;
+  guideText: string;
+}
+
 export interface Project {
   name: string;
   displayName: string;
@@ -91,6 +97,7 @@ export interface Project {
   scheduledTasks?: ProjectScheduledTask[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  agentTemplate?: ProjectAgentTemplate | null;
   [key: string]: unknown;
 }
 

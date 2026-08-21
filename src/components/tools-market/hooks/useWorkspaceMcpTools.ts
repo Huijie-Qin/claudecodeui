@@ -12,6 +12,8 @@ export type WorkspaceMcpPreset = {
   dockerCompatible: boolean;
   toolCount: number;
   tools?: WorkspaceMcpTool[];
+  toolSelectionConfigured?: boolean;
+  allowedToolNames?: string[];
   installed: boolean;
   connectionStatus: 'available' | 'connected' | 'probe_failed' | 'unverified';
   probeStatus?: 'healthy' | 'probe_failed' | null;
@@ -195,10 +197,41 @@ export function useWorkspaceMcpTools(workspaceId?: number) {
     }
   }, [workspaceId]);
 
+  const updateToolPreference = useCallback(async (presetId: number, allowedToolNames: string[]) => {
+    if (!workspaceId) {
+      throw new Error('Workspace MCP Tools are unavailable.');
+    }
+    const response = await api.workspaceMcpTools.updateToolPreference(workspaceId, presetId, allowedToolNames);
+    const payload = await toJson<{ preference?: {
+      toolSelectionConfigured: boolean;
+      allowedToolNames: string[];
+    }; error?: string }>(response);
+    if (!response.ok || !payload.preference) {
+      throw new Error(getApiErrorMessage(payload, 'Failed to save MCP tool access.'));
+    }
+    setState((current) => ({
+      ...current,
+      data: current.data ? {
+        ...current.data,
+        presets: current.data.presets.map((preset) => (
+          preset.id === presetId
+            ? {
+                ...preset,
+                toolSelectionConfigured: payload.preference?.toolSelectionConfigured,
+                allowedToolNames: payload.preference?.allowedToolNames ?? [],
+              }
+            : preset
+        )),
+      } : null,
+    }));
+    return payload.preference;
+  }, [workspaceId]);
+
   return {
     ...state,
     reload: load,
     installPreset,
     removePreset,
+    updateToolPreference,
   };
 }

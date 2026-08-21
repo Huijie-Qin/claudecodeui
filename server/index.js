@@ -56,6 +56,7 @@ import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
 import agentGraphDemoDataRoutes from './routes/agent-graph-demo-data.js';
+import agentTemplateRoutes from './routes/agent-templates.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -69,6 +70,7 @@ import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
+import desktopUpdatesRoutes from './routes/desktop-updates.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
@@ -83,8 +85,12 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
+import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
+import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
@@ -518,6 +524,31 @@ async function setupProjectsWatcher() {
 
 const app = express();
 const server = http.createServer(app);
+const FRONTEND_CONTENT_SECURITY_POLICY = [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "script-src 'self'",
+    "script-src-attr 'none'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https: ws: wss:",
+    "worker-src 'self' blob:",
+    "frame-src https:",
+    "media-src 'self' data: blob: https:",
+    "manifest-src 'self'",
+    "form-action 'self' https:"
+].join('; ');
+
+function setFrontendHtmlHeaders(res) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Content-Security-Policy', FRONTEND_CONTENT_SECURITY_POLICY);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+}
 
 const ptySessionsMap = new Map();
 const activeProviderCommands = new Map();
@@ -586,7 +617,13 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
-const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
+const scheduledTaskLogger = createScheduledTaskLogger({
+    onEntry: (entry) => scheduledTaskLogStore.append(entry)
+});
+const scheduledSessionTasks = createScheduledSessionTaskService({
+    clients: connectedClients,
+    logger: scheduledTaskLogger
+});
 app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
@@ -602,6 +639,10 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Public, side-effect-free simulated MCP endpoint used by the SQL response Hook.
+// It only validates the supplied text and never executes SQL or reads application data.
+app.all(SQL_SYNTAX_MCP_PATH, handleSqlSyntaxMcpRequest);
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
@@ -634,6 +675,10 @@ app.get('/health/active-work', (req, res) => {
     });
 });
 
+// Desktop update artifacts are intentionally public so electron-updater can
+// check for and download releases before a user has authenticated in the app.
+app.use('/api/desktop-updates', desktopUpdatesRoutes);
+
 // Dynamic API responses must always reflect current state.
 app.use('/api', noApiCache, validateApiKey);
 
@@ -648,6 +693,7 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
+app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
@@ -719,9 +765,7 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) {
             // Prevent HTML caching to avoid service worker issues after builds
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-            res.setHeader('Pragma', 'no-cache');
-            res.setHeader('Expires', '0');
+            setFrontendHtmlHeaders(res);
         } else if (filePath.match(/\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico)$/)) {
             // Cache static assets for 1 year (they have hashed names)
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -817,6 +861,11 @@ app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
             tenantId: req.tenant.id,
             userId: req.user.id,
             listSessions: multitenancyDb.sessions.listSessions,
+        }).map((project) => {
+            const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                workspaceId: project.workspaceId,
+            });
+            return agentTemplate ? {...project, agentTemplate} : project;
         });
         res.json(projects);
     } catch (error) {
@@ -3527,9 +3576,7 @@ app.get('*', (req, res) => {
     // Check if dist/index.html exists (production build available)
     if (fs.existsSync(indexPath)) {
         // Set no-cache headers for HTML to prevent service worker issues
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
+        setFrontendHtmlHeaders(res);
         res.sendFile(indexPath);
     } else {
         // In development, redirect to Vite dev server only if dist doesn't exist

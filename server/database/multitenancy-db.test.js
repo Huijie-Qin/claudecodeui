@@ -4,7 +4,11 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 
 import { DATABASE_SCHEMA_SQL } from './schema.js';
-import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import {
+  CLAUDE_ENV_ALLOWLIST_DEFAULT_CLEANUP_MIGRATION_KEY,
+  CLAUDE_ENV_PERSONAL_DENY_RETIREMENT_MIGRATION_KEY,
+  MULTITENANCY_SCHEMA_SQL,
+} from './multitenancy-schema.js';
 import { createMultitenancyDb, initializeMultitenancyTables } from './multitenancy-db.js';
 
 function createTestDb() {
@@ -19,6 +23,32 @@ function seedUser(database, username) {
     .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
     .run(username, `hash-${username}`);
   return Number(result.lastInsertRowid);
+}
+
+const LEGACY_CLAUDE_ALLOWLIST_DEFAULTS = [
+  ['ANTHROPIC_BASE_URL', 2048],
+  ['ANTHROPIC_AUTH_TOKEN', 8192],
+  ['ANTHROPIC_API_KEY', 8192],
+  ['ANTHROPIC_MODEL', 256],
+  ['DAS', 1024],
+];
+
+function createAllowlistMigrationDb() {
+  const database = new Database(':memory:');
+  database.exec(DATABASE_SCHEMA_SQL);
+  database.exec(MULTITENANCY_SCHEMA_SQL);
+  return database;
+}
+
+function insertLegacyAllowlistDefaults(database, { updatedByUserId = null } = {}) {
+  const insertAllowlist = database.prepare(`
+    INSERT INTO claude_env_allowlist (
+      name, max_length, enabled, updated_by_user_id
+    ) VALUES (?, ?, 1, ?)
+  `);
+  for (const [name, maxLength] of LEGACY_CLAUDE_ALLOWLIST_DEFAULTS) {
+    insertAllowlist.run(name, maxLength, updatedByUserId);
+  }
 }
 
 test('multitenancy initialization migrates tenant production code column', () => {
@@ -64,6 +94,429 @@ test('multitenancy initialization copies legacy prod_tenant_id into prod_code', 
 
   const tenant = database.prepare('SELECT code, prod_code FROM tenants WHERE code = ?').get('legacy');
   assert.deepEqual(tenant, { code: 'legacy', prod_code: 'prod-legacy' });
+});
+
+test('multitenancy initialization removes the complete untouched legacy Claude allowlist fingerprint once', () => {
+  const database = createAllowlistMigrationDb();
+  try {
+    assert.deepEqual(database.prepare('SELECT * FROM claude_env_allowlist').all(), []);
+    insertLegacyAllowlistDefaults(database);
+
+    initializeMultitenancyTables(database);
+    initializeMultitenancyTables(database);
+    assert.deepEqual(database.prepare('SELECT * FROM claude_env_allowlist').all(), []);
+    assert.equal(
+      database.prepare('SELECT value FROM app_config WHERE key = ?')
+        .get(CLAUDE_ENV_ALLOWLIST_DEFAULT_CLEANUP_MIGRATION_KEY)?.value,
+      'removed',
+    );
+
+    insertLegacyAllowlistDefaults(database);
+    initializeMultitenancyTables(database);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count, 5);
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy allowlist cleanup preserves administrator-owned rows after actor deletion', () => {
+  const database = createAllowlistMigrationDb();
+  try {
+    const adminId = seedUser(database, 'allowlist-admin');
+    insertLegacyAllowlistDefaults(database, { updatedByUserId: adminId });
+
+    initializeMultitenancyTables(database);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count, 5);
+    assert.equal(
+      database.prepare('SELECT value FROM app_config WHERE key = ?')
+        .get(CLAUDE_ENV_ALLOWLIST_DEFAULT_CLEANUP_MIGRATION_KEY)?.value,
+      'preserved',
+    );
+
+    database.prepare('DELETE FROM users WHERE id = ?').run(adminId);
+    assert.equal(
+      database.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist WHERE updated_by_user_id IS NULL').get().count,
+      5,
+    );
+    initializeMultitenancyTables(database);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count, 5);
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy allowlist cleanup preserves the whole table for partial, modified, or extended fingerprints', () => {
+  const partialDatabase = createAllowlistMigrationDb();
+  const modifiedDatabase = createAllowlistMigrationDb();
+  const extendedDatabase = createAllowlistMigrationDb();
+  try {
+    insertLegacyAllowlistDefaults(partialDatabase);
+    partialDatabase.prepare("DELETE FROM claude_env_allowlist WHERE name = 'DAS'").run();
+    initializeMultitenancyTables(partialDatabase);
+    assert.equal(
+      partialDatabase.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count,
+      4,
+    );
+
+    insertLegacyAllowlistDefaults(modifiedDatabase);
+    modifiedDatabase.prepare(`
+      UPDATE claude_env_allowlist SET max_length = 8193 WHERE name = 'ANTHROPIC_AUTH_TOKEN'
+    `).run();
+    initializeMultitenancyTables(modifiedDatabase);
+    assert.equal(
+      modifiedDatabase.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count,
+      5,
+    );
+
+    insertLegacyAllowlistDefaults(extendedDatabase);
+    extendedDatabase.prepare(`
+      INSERT INTO claude_env_allowlist (name, max_length, enabled)
+      VALUES ('CUSTOM_ALLOWED', 256, 1)
+    `).run();
+    initializeMultitenancyTables(extendedDatabase);
+    assert.equal(
+      extendedDatabase.prepare('SELECT COUNT(*) AS count FROM claude_env_allowlist').get().count,
+      6,
+    );
+  } finally {
+    partialDatabase.close();
+    modifiedDatabase.close();
+    extendedDatabase.close();
+  }
+});
+
+test('multitenancy initialization retires historical personal deny rules once without changing audit data', () => {
+  const database = createTestDb();
+  try {
+    const aliceId = seedUser(database, 'retired-deny-alice');
+    const adminId = seedUser(database, 'retired-deny-admin');
+    const insertRule = database.prepare(`
+      INSERT INTO claude_env_deny_rules (
+        id, owner_type, owner_user_id, match_type, pattern, reason, enabled,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertRule.run(
+      21,
+      'platform',
+      null,
+      'exact',
+      'PLATFORM_KEY',
+      'platform rule',
+      1,
+      adminId,
+      adminId,
+      '2026-01-02 03:04:05',
+      '2026-02-03 04:05:06',
+    );
+    insertRule.run(
+      22,
+      'user',
+      aliceId,
+      'prefix',
+      'PERSONAL_',
+      'enabled historical rule',
+      1,
+      aliceId,
+      adminId,
+      '2026-03-04 05:06:07',
+      '2026-04-05 06:07:08',
+    );
+    insertRule.run(
+      23,
+      'user',
+      aliceId,
+      'contains',
+      'OLD',
+      'already disabled rule',
+      0,
+      aliceId,
+      aliceId,
+      '2026-05-06 07:08:09',
+      '2026-06-07 08:09:10',
+    );
+
+    initializeMultitenancyTables(database);
+
+    assert.deepEqual(database.prepare(`
+      SELECT
+        id, owner_type, owner_user_id, match_type, pattern, reason, enabled,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      FROM claude_env_deny_rules
+      ORDER BY id ASC
+    `).all(), [
+      {
+        id: 21,
+        owner_type: 'platform',
+        owner_user_id: null,
+        match_type: 'exact',
+        pattern: 'PLATFORM_KEY',
+        reason: 'platform rule',
+        enabled: 1,
+        created_by_user_id: adminId,
+        updated_by_user_id: adminId,
+        created_at: '2026-01-02 03:04:05',
+        updated_at: '2026-02-03 04:05:06',
+      },
+      {
+        id: 22,
+        owner_type: 'user',
+        owner_user_id: aliceId,
+        match_type: 'prefix',
+        pattern: 'PERSONAL_',
+        reason: 'enabled historical rule',
+        enabled: 0,
+        created_by_user_id: aliceId,
+        updated_by_user_id: adminId,
+        created_at: '2026-03-04 05:06:07',
+        updated_at: '2026-04-05 06:07:08',
+      },
+      {
+        id: 23,
+        owner_type: 'user',
+        owner_user_id: aliceId,
+        match_type: 'contains',
+        pattern: 'OLD',
+        reason: 'already disabled rule',
+        enabled: 0,
+        created_by_user_id: aliceId,
+        updated_by_user_id: aliceId,
+        created_at: '2026-05-06 07:08:09',
+        updated_at: '2026-06-07 08:09:10',
+      },
+    ]);
+    assert.equal(
+      database.prepare('SELECT value FROM app_config WHERE key = ?')
+        .get(CLAUDE_ENV_PERSONAL_DENY_RETIREMENT_MIGRATION_KEY)?.value,
+      'completed',
+    );
+
+    database.prepare('UPDATE claude_env_deny_rules SET enabled = 1 WHERE id = 22').run();
+    initializeMultitenancyTables(database);
+    assert.equal(
+      database.prepare('SELECT enabled FROM claude_env_deny_rules WHERE id = 22').get().enabled,
+      1,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('multitenancy initialization safely rebuilds legacy Claude deny rules for new match types', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(DATABASE_SCHEMA_SQL);
+    const aliceId = seedUser(database, 'claude-rule-alice');
+    const adminId = seedUser(database, 'claude-rule-admin');
+    database.exec(`
+      CREATE TABLE claude_env_deny_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_type TEXT NOT NULL CHECK (owner_type IN ('platform', 'user')),
+        owner_user_id INTEGER,
+        match_type TEXT NOT NULL CHECK (match_type IN ('exact', 'prefix')),
+        pattern TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_by_user_id INTEGER,
+        updated_by_user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        CHECK (
+          (owner_type = 'platform' AND owner_user_id IS NULL)
+          OR
+          (owner_type = 'user' AND owner_user_id IS NOT NULL)
+        ),
+        FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE UNIQUE INDEX idx_claude_env_deny_rules_platform_unique_nocase
+        ON claude_env_deny_rules(match_type, pattern COLLATE NOCASE)
+        WHERE owner_type = 'platform';
+      CREATE UNIQUE INDEX idx_claude_env_deny_rules_user_unique_nocase
+        ON claude_env_deny_rules(owner_user_id, match_type, pattern COLLATE NOCASE)
+        WHERE owner_type = 'user';
+      CREATE INDEX idx_claude_env_deny_rules_active_owner
+        ON claude_env_deny_rules(owner_type, owner_user_id, enabled);
+      CREATE INDEX idx_claude_env_deny_rules_custom_reason
+        ON claude_env_deny_rules(reason);
+    `);
+    database.prepare(`
+      INSERT INTO claude_env_deny_rules (
+        id, owner_type, owner_user_id, match_type, pattern, reason, enabled,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      7,
+      'platform',
+      null,
+      'exact',
+      'PLATFORM_KEY',
+      'platform reason',
+      1,
+      adminId,
+      adminId,
+      '2026-01-02 03:04:05',
+      '2026-02-03 04:05:06',
+    );
+    database.prepare(`
+      INSERT INTO claude_env_deny_rules (
+        id, owner_type, owner_user_id, match_type, pattern, reason, enabled,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      11,
+      'user',
+      aliceId,
+      'prefix',
+      'PERSONAL_',
+      'personal reason',
+      0,
+      aliceId,
+      adminId,
+      '2026-03-04 05:06:07',
+      '2026-04-05 06:07:08',
+    );
+
+    database.exec(`
+      CREATE TABLE unrelated_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE unrelated_child (
+        id INTEGER PRIMARY KEY,
+        parent_id INTEGER NOT NULL REFERENCES unrelated_parent(id)
+      );
+    `);
+    database.pragma('foreign_keys = OFF');
+    database.prepare('INSERT INTO unrelated_child (id, parent_id) VALUES (1, 999)').run();
+    database.pragma('foreign_keys = ON');
+
+    initializeMultitenancyTables(database);
+    initializeMultitenancyTables(database);
+
+    assert.deepEqual(database.prepare(`
+      SELECT
+        id, owner_type, owner_user_id, match_type, pattern, reason, enabled,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      FROM claude_env_deny_rules
+      ORDER BY id ASC
+    `).all(), [
+      {
+        id: 7,
+        owner_type: 'platform',
+        owner_user_id: null,
+        match_type: 'exact',
+        pattern: 'PLATFORM_KEY',
+        reason: 'platform reason',
+        enabled: 1,
+        created_by_user_id: adminId,
+        updated_by_user_id: adminId,
+        created_at: '2026-01-02 03:04:05',
+        updated_at: '2026-02-03 04:05:06',
+      },
+      {
+        id: 11,
+        owner_type: 'user',
+        owner_user_id: aliceId,
+        match_type: 'prefix',
+        pattern: 'PERSONAL_',
+        reason: 'personal reason',
+        enabled: 0,
+        created_by_user_id: aliceId,
+        updated_by_user_id: adminId,
+        created_at: '2026-03-04 05:06:07',
+        updated_at: '2026-04-05 06:07:08',
+      },
+    ]);
+
+    const indexNames = new Set(
+      database.prepare("PRAGMA index_list('claude_env_deny_rules')").all().map((index) => index.name),
+    );
+    assert.equal(indexNames.has('idx_claude_env_deny_rules_platform_unique_nocase'), true);
+    assert.equal(indexNames.has('idx_claude_env_deny_rules_user_unique_nocase'), true);
+    assert.equal(indexNames.has('idx_claude_env_deny_rules_active_owner'), true);
+    assert.equal(indexNames.has('idx_claude_env_deny_rules_custom_reason'), true);
+
+    const insertRule = database.prepare(`
+      INSERT INTO claude_env_deny_rules (
+        owner_type, owner_user_id, match_type, pattern, reason,
+        created_by_user_id, updated_by_user_id
+      ) VALUES ('platform', NULL, ?, ?, ?, ?, ?)
+    `);
+    const suffixResult = insertRule.run('suffix', '_TOKEN', 'suffix reason', adminId, adminId);
+    insertRule.run('contains', 'SECRET', 'contains reason', adminId, adminId);
+    assert.equal(Number(suffixResult.lastInsertRowid) > 11, true);
+    assert.throws(
+      () => insertRule.run('glob', 'INVALID', 'invalid reason', adminId, adminId),
+      /CHECK constraint failed/,
+    );
+    assert.deepEqual(database.pragma('foreign_key_check(claude_env_deny_rules)'), []);
+    assert.deepEqual(database.pragma('foreign_key_check'), [{
+      table: 'unrelated_child',
+      rowid: 1,
+      parent: 'unrelated_parent',
+      fkid: 0,
+    }]);
+    assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
+  } finally {
+    database.close();
+  }
+});
+
+test('MCP tool preferences are isolated by workspace and user', () => {
+  const database = createTestDb();
+  const mt = createMultitenancyDb(database);
+  const ownerId = seedUser(database, 'mcp-owner');
+  const viewerId = seedUser(database, 'mcp-viewer');
+  const tenant = mt.tenants.createTenant({ code: 'mcp-team', name: 'MCP Team' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: ownerId, role: 'member', permission: 'edit', status: 'active' });
+  mt.memberships.upsertMembership({ tenantId: tenant.id, userId: viewerId, role: 'member', permission: 'view', status: 'active' });
+  const workspace = mt.workspaces.createWorkspace({
+    tenantId: tenant.id,
+    ownerUserId: ownerId,
+    slug: 'mcp-repo',
+    displayName: 'MCP Repo',
+    path: '/tmp/mcp-repo',
+  });
+  const preset = mt.mcpPresets.createPreset({
+    tenantId: tenant.id,
+    name: 'knowledge',
+    displayName: 'Knowledge',
+    description: '',
+    config: { type: 'http', url: 'https://mcp.example.test' },
+    status: 'published',
+    createdByUserId: ownerId,
+  });
+  mt.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: preset.id,
+    installedByUserId: ownerId,
+    probeStatus: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+  });
+
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: ownerId,
+    presetId: preset.id,
+    allowedToolNames: ['search_docs'],
+  });
+  mt.mcpToolPreferences.setForUser({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId: viewerId,
+    presetId: preset.id,
+    allowedToolNames: [],
+  });
+
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: ownerId })[0].allowedToolNames,
+    ['search_docs'],
+  );
+  assert.deepEqual(
+    mt.mcpToolPreferences.listForUser({ tenantId: tenant.id, workspaceId: workspace.id, userId: viewerId })[0].allowedToolNames,
+    [],
+  );
 });
 
 test('tenant membership controls visible tenants', () => {
