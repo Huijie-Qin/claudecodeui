@@ -360,6 +360,60 @@ CREATE TABLE IF NOT EXISTS user_workspace_mcp_tool_preferences (
 CREATE INDEX IF NOT EXISTS idx_user_workspace_mcp_tool_preferences_owner
   ON user_workspace_mcp_tool_preferences(tenant_id, workspace_id, user_id);
 
+CREATE TABLE IF NOT EXISTS agent_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  agent_markdown TEXT NOT NULL DEFAULT '',
+  guide_text TEXT NOT NULL DEFAULT '',
+  tenant_ids_json TEXT NOT NULL DEFAULT '[]',
+  skill_preset_refs_json TEXT NOT NULL DEFAULT '[]',
+  mcp_preset_refs_json TEXT NOT NULL DEFAULT '[]',
+  global_visible INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
+  created_by_user_id INTEGER NOT NULL,
+  updated_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_templates_status
+  ON agent_templates(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_agent_template_snapshots (
+  workspace_id INTEGER PRIMARY KEY,
+  template_id INTEGER NOT NULL,
+  template_name TEXT NOT NULL,
+  template_updated_at DATETIME,
+  agent_markdown TEXT NOT NULL DEFAULT '',
+  guide_text TEXT NOT NULL DEFAULT '',
+  skill_presets_json TEXT NOT NULL DEFAULT '[]',
+  mcp_presets_json TEXT NOT NULL DEFAULT '[]',
+  created_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (template_id) REFERENCES agent_templates(id) ON DELETE RESTRICT,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_template_snapshots_template
+  ON workspace_agent_template_snapshots(template_id);
+
+-- Template-installed MCPs are snapshots. This marker keeps later preset edits
+-- from being pushed into workspaces that were created from a template.
+CREATE TABLE IF NOT EXISTS workspace_agent_template_mcp_installs (
+  workspace_id INTEGER NOT NULL,
+  preset_id INTEGER NOT NULL,
+  template_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, preset_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE,
+  FOREIGN KEY (template_id) REFERENCES agent_templates(id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (
   workspace_id INTEGER NOT NULL,
   skill_name TEXT NOT NULL,

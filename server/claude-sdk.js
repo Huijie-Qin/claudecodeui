@@ -54,6 +54,10 @@ import {
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
+import {
+  migrateLegacyWorkspaceAgentInstructions,
+  readWorkspaceAgentInstructions,
+} from './services/workspace-agent-instructions.js';
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { userDb } from './database/db.js';
@@ -305,6 +309,7 @@ function mapCliOptionsToSDK(options = {}) {
     executionEnv,
     settingSources,
     spawnClaudeCodeProcess,
+    agentInstructions,
   } = options;
 
   const sdkOptions = {};
@@ -381,7 +386,17 @@ function mapCliOptionsToSDK(options = {}) {
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
     type: 'preset',
-    preset: 'claude_code'  // Required to use CLAUDE.md
+    preset: 'claude_code', // Required to use CLAUDE.md
+    ...(typeof agentInstructions === 'string' && agentInstructions.trim()
+      ? {
+        append: [
+          '# Platform-managed Agent configuration',
+          'The Agent.md instructions below define the selected Agent. If they conflict with workspace, user, or local CLAUDE.md instructions, follow Agent.md for the Agent role, behavior, and capabilities.',
+          '',
+          agentInstructions.trim(),
+        ].join('\n'),
+      }
+      : {}),
   };
 
   // Map setting sources for CLAUDE.md loading
@@ -904,6 +919,28 @@ async function queryClaudeSDK(command, options = {}, ws) {
     await reconcileWorkspaceSkillsForAgentTurn({
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
     });
+
+    // Agent.md is owned by CloudCLI and is injected separately from Claude
+    // Code's project/user/local CLAUDE.md sources. Only managed workspaces are
+    // eligible, so helper flows that run Claude against arbitrary repositories
+    // never migrate or reinterpret their instruction files.
+    if (runtimeOptions.workspaceId) {
+      const hostWorkspacePath = runtimeContext.hostWorkspacePath || options.cwd || options.projectPath;
+      if (hostWorkspacePath) {
+        try {
+          const migration = await migrateLegacyWorkspaceAgentInstructions(hostWorkspacePath);
+          if (migration.removed) {
+            console.info('[AgentInstructions] Removed legacy mirrored CLAUDE.md', {
+              workspaceId: runtimeOptions.workspaceId,
+            });
+          }
+        } catch (error) {
+          console.warn('[AgentInstructions] Could not remove legacy mirrored CLAUDE.md:', error?.message || error);
+        }
+        const agentInstructions = await readWorkspaceAgentInstructions(hostWorkspacePath);
+        runtimeOptions.agentInstructions = agentInstructions.content;
+      }
+    }
 
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand

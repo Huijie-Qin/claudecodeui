@@ -182,6 +182,9 @@
   "providerSelection": {
     "title": "Choose Your AI Assistant",
     "description": "Select a provider to start a new conversation",
+    "templateGuide": "{{name}} guide",
+    "defaultAgentName": "Agent",
+    "guideNotSent": "This is a prompt for starting the conversation and is not sent to the model automatically.",
     "selectModel": "Select Model",
     "providerInfo": {
       "anthropic": "by Anthropic",

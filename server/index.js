@@ -56,6 +56,7 @@ import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
 import agentGraphDemoDataRoutes from './routes/agent-graph-demo-data.js';
+import agentTemplateRoutes from './routes/agent-templates.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -89,6 +90,7 @@ import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
 import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
+import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
@@ -691,6 +693,7 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
+app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
@@ -858,6 +861,11 @@ app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
             tenantId: req.tenant.id,
             userId: req.user.id,
             listSessions: multitenancyDb.sessions.listSessions,
+        }).map((project) => {
+            const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                workspaceId: project.workspaceId,
+            });
+            return agentTemplate ? {...project, agentTemplate} : project;
         });
         res.json(projects);
     } catch (error) {

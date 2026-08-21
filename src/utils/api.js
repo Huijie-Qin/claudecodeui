@@ -127,6 +127,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ displayName }),
     }),
+  projectSettings: (projectName, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId)),
+  updateProjectSettings: (projectName, { displayName, agentMarkdown, expectedRevision, workspaceId }) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId), {
+      method: 'PUT',
+      body: JSON.stringify({ displayName, agentMarkdown, expectedRevision }),
+    }),
   deleteSession: (projectName, sessionId, provider = 'claude', workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/sessions/${encodeURIComponent(sessionId)}`, workspaceId), {
       method: 'DELETE',
@@ -173,6 +180,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(workspaceData),
     }),
+  agentTemplates: () => authenticatedFetch(withTenantParam('/api/agent-templates')),
   readFile: (projectName, filePath, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId)),
   readFileBlob: (projectName, filePath, workspaceId) =>
@@ -434,6 +442,31 @@ export const api = {
         body: JSON.stringify({ enabled }),
       }),
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    agentTemplates: (tenantId) => authenticatedFetch(
+      tenantId
+        ? `/api/admin/agent-templates?tenantId=${encodeURIComponent(String(tenantId))}`
+        : '/api/admin/agent-templates',
+    ),
+    agentTemplatePresetCatalog: (tenantId) =>
+      authenticatedFetch(`/api/admin/agent-templates/preset-catalog?tenantId=${encodeURIComponent(String(tenantId))}`),
+    createAgentTemplate: (payload) =>
+      authenticatedFetch('/api/admin/agent-templates', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateAgentTemplate: (templateId, payload) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    publishAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}/publish`, {
+        method: 'POST',
+      }),
+    disableAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}/disable`, {
+        method: 'POST',
+      }),
     hooks: () => authenticatedFetch('/api/admin/hooks'),
     hook: (hookId) => authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`),
     createHook: (payload) =>

@@ -8,6 +8,7 @@
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
+    "agentTemplates": "Agent Templates",
     "mcpPresets": "MCP Server Presets",
     "skillPresets": "Skill Presets",
     "hooks": "Hooks",

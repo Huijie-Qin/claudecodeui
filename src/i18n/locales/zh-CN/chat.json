@@ -164,6 +164,9 @@
   "providerSelection": {
     "title": "选择您的 AI 助手",
     "description": "选择一个供应商以开始新对话",
+    "templateGuide": "{{name}} 引导语",
+    "defaultAgentName": "Agent",
+    "guideNotSent": "仅作为开始对话的提示，不会自动发送给模型。",
     "selectModel": "选择模型",
     "providerInfo": {
       "anthropic": "由 Anthropic 提供",

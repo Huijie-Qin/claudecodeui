@@ -67,6 +67,31 @@ test('mapCliOptionsToSDK preserves plan mode without enabling permission bypass'
   assert.ok(options.allowedTools.includes('Task'));
 });
 
+test('mapCliOptionsToSDK appends managed Agent.md instructions with explicit precedence', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  const options = claudeSdk.mapCliOptionsToSDK({
+    executionEnv: {},
+    agentInstructions: '# Role\n\nYou are a market analyst.',
+    settingSources: ['project', 'user', 'local'],
+  });
+
+  assert.equal(options.systemPrompt.type, 'preset');
+  assert.equal(options.systemPrompt.preset, 'claude_code');
+  assert.match(options.systemPrompt.append, /Platform-managed Agent configuration/);
+  assert.match(options.systemPrompt.append, /conflict.*CLAUDE\.md.*follow Agent\.md/i);
+  assert.match(options.systemPrompt.append, /You are a market analyst/);
+  assert.deepEqual(options.settingSources, ['project', 'user', 'local']);
+});
+
+test('mapCliOptionsToSDK leaves the system prompt unextended without Agent.md content', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  const options = claudeSdk.mapCliOptionsToSDK({ executionEnv: {}, agentInstructions: '  ' });
+
+  assert.equal(options.systemPrompt.append, undefined);
+});
+
 test('createClaudePromptFactory keeps text-only prompts as strings', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

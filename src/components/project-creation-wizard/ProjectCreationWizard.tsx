@@ -1,15 +1,13 @@
-import { useCallback, useState } from 'react';
-import { FolderPlus, X } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { FolderPlus, Loader2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useTenant } from '../../contexts/TenantContext';
+
+import AgentTemplatePicker from './components/AgentTemplatePicker';
 import ErrorBanner from './components/ErrorBanner';
-import StepConfiguration from './components/StepConfiguration';
-import StepReview from './components/StepReview';
-import StepTypeSelection from './components/StepTypeSelection';
-import WizardFooter from './components/WizardFooter';
-import WizardProgress from './components/WizardProgress';
-import { createWorkspaceRequest } from './data/workspaceApi';
-import type { WizardFormState, WizardStep, WorkspaceType } from './types';
+import { createWorkspaceRequest, listAgentTemplatesRequest } from './data/workspaceApi';
+import type { AgentTemplateOption, WizardFormState } from './types';
 
 type ProjectCreationWizardProps = {
   onClose: () => void;
@@ -19,6 +17,7 @@ type ProjectCreationWizardProps = {
 const initialFormState: WizardFormState = {
   workspaceType: 'new',
   workspacePath: '',
+  templateId: null,
 };
 
 export default function ProjectCreationWizard({
@@ -26,134 +25,127 @@ export default function ProjectCreationWizard({
   onProjectCreated,
 }: ProjectCreationWizardProps) {
   const { t } = useTranslation();
-  const [step, setStep] = useState<WizardStep>(1);
+  const { currentTenant } = useTenant();
   const [formState, setFormState] = useState<WizardFormState>(initialFormState);
+  const [templates, setTemplates] = useState<AgentTemplateOption[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep cross-step values in this component; local UI state lives in child components.
-  const updateField = useCallback(<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) => {
-    setFormState((previous) => ({ ...previous, [key]: value }));
-  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingTemplates(true);
+    void listAgentTemplatesRequest()
+      .then((nextTemplates) => {
+        if (cancelled) return;
+        setTemplates(nextTemplates);
+        setFormState((previous) => ({
+          ...previous,
+          templateId: previous.templateId != null
+            && nextTemplates.some((template) => template.id === previous.templateId)
+            ? previous.templateId
+            : (nextTemplates[0]?.id ?? null),
+        }));
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Agent 模板加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingTemplates(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTenant?.id]);
 
-  const updateWorkspaceType = useCallback(
-    (workspaceType: WorkspaceType) => updateField('workspaceType', workspaceType),
-    [updateField],
-  );
-
-  const handleNext = useCallback(() => {
-    setError(null);
-
-    if (step === 1) {
-      if (!formState.workspaceType) {
-        setError(t('projectWizard.errors.selectType'));
-        return;
-      }
-      setStep(2);
+  const handleCreate = useCallback(async () => {
+    const agentName = formState.workspacePath.trim();
+    if (!agentName) {
+      setError('请输入 Agent 名称');
       return;
     }
 
-    if (step === 2) {
-      if (!formState.workspacePath.trim()) {
-        setError(
-          formState.workspaceType === 'existing'
-            ? t('projectWizard.errors.providePath')
-            : t('projectWizard.errors.provideWorkspaceName', {
-                defaultValue: 'Please provide a workspace name',
-              }),
-        );
-        return;
-      }
-      setStep(3);
-    }
-  }, [formState.workspacePath, formState.workspaceType, step, t]);
-
-  const handleBack = useCallback(() => {
-    setError(null);
-    setStep((previousStep) => (previousStep > 1 ? ((previousStep - 1) as WizardStep) : previousStep));
-  }, []);
-
-  const handleCreate = useCallback(async () => {
     setIsCreating(true);
     setError(null);
-
     try {
       const project = await createWorkspaceRequest({
-        workspaceType: formState.workspaceType,
-        path: formState.workspacePath.trim(),
+        workspaceType: 'new',
+        path: agentName,
+        templateId: formState.templateId,
       });
-
       onProjectCreated?.(project);
       onClose();
     } catch (createError) {
-      const errorMessage =
-        createError instanceof Error
-          ? createError.message
-          : t('projectWizard.errors.failedToCreate');
-      setError(errorMessage);
+      setError(createError instanceof Error ? createError.message : t('projectWizard.errors.failedToCreate'));
     } finally {
       setIsCreating(false);
     }
-  }, [formState, onClose, onProjectCreated, t]);
+  }, [formState.templateId, formState.workspacePath, onClose, onProjectCreated, t]);
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
-      <div className="h-full w-full overflow-y-auto rounded-none border-0 border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 sm:h-auto sm:max-w-2xl sm:rounded-lg sm:border">
-        <div className="flex items-center justify-between border-b border-gray-200 p-6 dark:border-gray-700">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
+      <div className="flex h-full w-full flex-col overflow-hidden rounded-none border-0 border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 sm:h-auto sm:max-h-[92vh] sm:max-w-4xl sm:rounded-xl sm:border">
+        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-5 dark:border-gray-700">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/50">
               <FolderPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {t('projectWizard.title')}
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">创建新项目</h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             disabled={isCreating}
+            aria-label="关闭"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <WizardProgress step={step} />
+        <div className="flex-1 space-y-5 overflow-y-auto p-6">
+          {error ? <ErrorBanner message={error} /> : null}
 
-        <div className="min-h-[300px] space-y-6 p-6">
-          {error && <ErrorBanner message={error} />}
-
-          {step === 1 && (
-            <StepTypeSelection
-              workspaceType={formState.workspaceType}
-              onWorkspaceTypeChange={updateWorkspaceType}
+          <div>
+            <label htmlFor="agent-name" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-200">Agent 名称</label>
+            <input
+              id="agent-name"
+              autoFocus
+              value={formState.workspacePath}
+              onChange={(event) => setFormState((previous) => ({ ...previous, workspacePath: event.target.value }))}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !isCreating) void handleCreate();
+              }}
+              placeholder="my-agent"
+              disabled={isCreating}
+              className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
             />
-          )}
+            <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">输入 Agent 名称，系统将在默认目录中创建对应的工作区。</p>
+          </div>
 
-          {step === 2 && (
-            <StepConfiguration
-              workspaceType={formState.workspaceType}
-              workspacePath={formState.workspacePath}
-              isCreating={isCreating}
-              onWorkspacePathChange={(workspacePath) => updateField('workspacePath', workspacePath)}
-              onAdvanceToConfirm={() => setStep(3)}
-            />
-          )}
-
-          {step === 3 && (
-            <StepReview
-              formState={formState}
-            />
-          )}
+          <AgentTemplatePicker
+            templates={templates}
+            selectedTemplateId={formState.templateId}
+            tenantName={currentTenant?.name}
+            isLoading={isLoadingTemplates}
+            disabled={isCreating}
+            onChange={(templateId) => setFormState((previous) => ({ ...previous, templateId }))}
+          />
         </div>
 
-        <WizardFooter
-          step={step}
-          isCreating={isCreating}
-          onClose={onClose}
-          onBack={handleBack}
-          onNext={handleNext}
-          onCreate={handleCreate}
-        />
+        <div className="flex justify-end border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+          <button
+            type="button"
+            onClick={() => void handleCreate()}
+            disabled={isCreating || isLoadingTemplates || !formState.workspacePath.trim()}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {isCreating ? '创建中...' : '创建'}
+          </button>
+        </div>
       </div>
     </div>
   );

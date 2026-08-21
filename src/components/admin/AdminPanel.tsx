@@ -17,6 +17,7 @@ import {
   Server,
   ScrollText,
   ShieldCheck,
+  Sparkles,
   Trash2,
   UserMinus,
   UserPlus,
@@ -57,6 +58,7 @@ import ScheduledTaskLogsTab from './ScheduledTaskLogsTab';
 import SkillPresetsTab from './SkillPresetsTab';
 import SqlCheckConfigTab from './SqlCheckConfigTab';
 import ExperimentalFeaturesTab from './ExperimentalFeaturesTab';
+import AgentTemplatesTab from './AgentTemplatesTab';
 
 type AdminTenant = {
   id: number;
@@ -96,7 +98,7 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck' | 'experimental';
+type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'agentTemplates' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck' | 'experimental';
 type ClaudeEnvScopeTab = 'personal' | 'tenant' | 'policy';
 
 type AdminTabConfig = {
@@ -110,6 +112,7 @@ const ADMIN_TABS: AdminTabConfig[] = [
   { id: 'users', labelKey: 'tabs.users', defaultLabel: 'Users', icon: Users },
   { id: 'tenants', labelKey: 'tabs.tenants', defaultLabel: 'Tenant Access', icon: Building2 },
   { id: 'claudeEnv', labelKey: 'tabs.claudeEnv', defaultLabel: 'Claude Env', icon: KeyRound },
+  { id: 'agentTemplates', labelKey: 'tabs.agentTemplates', defaultLabel: 'Agent 模板', icon: Sparkles },
   { id: 'mcpPresets', labelKey: 'tabs.mcpPresets', defaultLabel: 'MCP Server Presets', icon: Server },
   { id: 'skillPresets', labelKey: 'tabs.skillPresets', defaultLabel: 'Skill Presets', icon: PackagePlus },
   { id: 'hooks', labelKey: 'tabs.hooks', defaultLabel: 'Hooks', icon: Webhook },
@@ -2216,6 +2219,12 @@ export default function AdminPanel() {
           {activeTab === 'mcpPresets' ? (
             <div className="h-full overflow-y-auto px-5 py-4">
               <McpPresetsTab tenants={tenants} currentTenantId={currentTenant?.id} />
+            </div>
+          ) : null}
+
+          {activeTab === 'agentTemplates' ? (
+            <div className="h-full overflow-y-auto px-5 py-4">
+              <AgentTemplatesTab tenants={tenants} currentTenantId={currentTenant?.id} />
             </div>
           ) : null}
 

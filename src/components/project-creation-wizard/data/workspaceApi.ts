@@ -46,5 +46,16 @@ export const createWorkspaceRequest = async (payload: CreateWorkspacePayload) =>
     throw new Error(data.details || data.error || 'Failed to create workspace');
   }
 
-  return data.project;
+  return data.project
+    ? { ...data.project, agentTemplate: data.agentTemplate || null }
+    : data.project;
+};
+
+export const listAgentTemplatesRequest = async () => {
+  const response = await api.agentTemplates();
+  const data = await parseJson<{ templates?: import('../types').AgentTemplateOption[]; error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load Agent templates');
+  }
+  return data.templates || [];
 };

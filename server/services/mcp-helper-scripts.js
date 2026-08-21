@@ -278,11 +278,14 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
 
   const nextServers = { ...mcpServers };
   for (const install of installs) {
+    // A globally visible DataAgent template may reference an MCP owned by the
+    // DataAgent tenant. The joined install row carries that source tenant.
+    const sourceTenantId = requirePositiveInteger(install.tenant_id || tenantId, 'tenantId');
     const serverName = install.name;
     const currentConfig = nextServers[serverName];
     if (!currentConfig || typeof currentConfig !== 'object' || Array.isArray(currentConfig)) continue;
     const preset = multitenancy.mcpPresets?.getPresetById?.({
-      tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+      tenantId: sourceTenantId,
       presetId: install.preset_id,
     });
     const presetHeadersHelper = typeof preset?.config?.headersHelper === 'string'
@@ -295,7 +298,7 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
     const helperEnv = readStringRecord(preset?.config?.helperEnv);
 
     const script = getPresetHelperScript(multitenancy, {
-      tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+      tenantId: sourceTenantId,
       presetId: install.preset_id,
     });
     if (!script && Object.keys(helperEnv).length === 0) {
@@ -306,7 +309,7 @@ export async function applyWorkspaceMcpHelperScripts(mcpServers, {
     const isDockerRuntime = runtimeMode === 'docker' && runtimeHomePath;
     const hostDirectory = isDockerRuntime
       ? helperDirectoryForRuntime(runtimeHomePath, serverName)
-      : helperDirectoryForPreset(helperRoot, { tenantId, presetId: install.preset_id });
+      : helperDirectoryForPreset(helperRoot, { tenantId: sourceTenantId, presetId: install.preset_id });
     const commandDirectory = isDockerRuntime
       ? helperContainerDirectory(serverName)
       : hostDirectory;

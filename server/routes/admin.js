@@ -17,6 +17,7 @@ import { hookConfigService } from '../services/hook-configs.js';
 import { createRequestedHookExamples, listRequestedHookExamples } from '../services/hook-examples.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
 import { scheduledTaskLogStore } from '../services/scheduled-task-log-store.js';
+import { agentTemplateService } from '../services/agent-templates.js';
 import {
   FEATURE_FLAGS,
   featureFlagsService,
@@ -473,6 +474,7 @@ export function createAdminRouter(
   showExperimentalFeatures = shouldShowExperimentalFeatures,
   hookSkillCatalog = createHookSkillCatalogService(),
   scheduledTaskLogs = scheduledTaskLogStore,
+  agentTemplates = agentTemplateService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -1204,6 +1206,72 @@ export function createAdminRouter(
       return res.json(multitenancy.sqlCheck.replaceTenantConfig({ tenantId, ruleIds }));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to save SQL check configuration');
+    }
+  });
+
+  router.get('/agent-templates', (req, res) => {
+    try {
+      const tenantId = req.query?.tenantId == null || req.query.tenantId === ''
+        ? undefined
+        : parsePositiveId(req.query.tenantId, 'tenantId');
+      return res.json({ templates: agentTemplates.listAdminTemplates({ tenantId }) });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Agent templates');
+    }
+  });
+
+  router.get('/agent-templates/preset-catalog', (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      return res.json(agentTemplates.listPresetCatalog({ tenantId }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Agent template presets');
+    }
+  });
+
+  router.post('/agent-templates', (req, res) => {
+    try {
+      const template = agentTemplates.saveTemplate({ input: req.body, userId: req.user.id });
+      return res.status(201).json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Agent template');
+    }
+  });
+
+  router.put('/agent-templates/:templateId', (req, res) => {
+    try {
+      const template = agentTemplates.saveTemplate({
+        templateId: Number(req.params.templateId),
+        input: req.body,
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Agent template');
+    }
+  });
+
+  router.post('/agent-templates/:templateId/publish', (req, res) => {
+    try {
+      const template = agentTemplates.publishTemplate({
+        templateId: Number(req.params.templateId),
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to publish Agent template');
+    }
+  });
+
+  router.post('/agent-templates/:templateId/disable', (req, res) => {
+    try {
+      const template = agentTemplates.disableTemplate({
+        templateId: Number(req.params.templateId),
+        userId: req.user.id,
+      });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to disable Agent template');
     }
   });
 
