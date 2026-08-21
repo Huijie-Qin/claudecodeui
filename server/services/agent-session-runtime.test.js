@@ -6,19 +6,24 @@ import path from 'node:path';
 
 import {
   buildClaudeDockerExecArgs,
+  buildClaudeDockerCreateEnv,
+  buildClaudeDockerGuestEnv,
   buildClaudeDockerWrapperScript,
   buildClaudeWrapperDefaultEnv,
   buildContainerName,
+  buildDockerHostProcessEnv,
   buildDockerPythonInstallArgs,
   buildDockerRunArgs,
   buildRuntimePaths,
   buildWrapperHostEnv,
-  createAgentSessionRuntimeManager,
+  createAgentSessionRuntimeManager as createAgentSessionRuntimeManagerImpl,
   createClaudeDockerSpawn,
+  CLAUDE_DOCKER_ENV_POLICY_ENV_NAME,
   DOCKER_BIND_CONTAINER_ROOT_ENV_NAME,
   DOCKER_BIND_HOST_ROOT_ENV_NAME,
   ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
+  inspectedContainerUsesClaudeEnvPolicy,
   inspectedContainerUsesSharedPython,
   migratePathOwnership,
   parseDockerPythonPackages,
@@ -38,6 +43,52 @@ const emptyUserEnvDb = {
   getEnvForUser: () => ({}),
 };
 
+function createLayeredClaudeEnvResolver({ tenantEnvs = {}, personalEnv = {} } = {}) {
+  const calls = [];
+  return {
+    calls,
+    service: {
+      resolveEffectiveEnv(input) {
+        calls.push(input);
+        const env = {};
+        const sources = {};
+        const apply = (layer, source) => {
+          for (const [name, value] of Object.entries(layer || {})) {
+            env[name] = String(value);
+            sources[name] = source;
+          }
+        };
+        apply(input.baseEnv, 'baseEnv');
+        apply(input.adminUserEnv, 'adminUserEnv');
+        if (input.tenantId != null) apply(tenantEnvs[input.tenantId], 'tenant');
+        const personalCredentialNames = [
+          'ANTHROPIC_BASE_URL',
+          'ANTHROPIC_AUTH_TOKEN',
+          'ANTHROPIC_API_KEY',
+        ];
+        if (personalCredentialNames.some((name) => Object.hasOwn(personalEnv, name))) {
+          for (const name of personalCredentialNames) {
+            delete env[name];
+            delete sources[name];
+          }
+        }
+        apply(personalEnv, 'personal');
+        apply(input.managedEnv, 'managed');
+        return { env, sources, blockedVariables: [] };
+      },
+    },
+  };
+}
+
+const testDefaultClaudeEnvService = createLayeredClaudeEnvResolver().service;
+
+function createAgentSessionRuntimeManager(options = {}) {
+  return createAgentSessionRuntimeManagerImpl({
+    claudeEnv: testDefaultClaudeEnvService,
+    ...options,
+  });
+}
+
 test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   assert.equal(resolveClaudeExecutionMode({}), 'local');
   assert.equal(resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'local' }), 'local');
@@ -46,6 +97,88 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
     () => resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'podman' }),
     /CLAUDE_EXECUTION_MODE must be local or docker/,
   );
+});
+
+test('local Claude runtime resolves base, admin, selected tenant, personal, then managed env', async () => {
+  const resolver = createLayeredClaudeEnvResolver({
+    tenantEnvs: {
+      8: { LAYER_VALUE: 'wrong-tenant' },
+      9: { LAYER_VALUE: 'tenant', TENANT_ONLY: 'tenant-value' },
+    },
+    personalEnv: { LAYER_VALUE: 'personal', PERSONAL_ONLY: 'personal-value' },
+  });
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'local',
+      LAYER_VALUE: 'base',
+      BASE_ONLY: 'base-value',
+      LEGACY_EMPTY_OVERRIDE: 'keep-base-value',
+      W3_NAME: 'base-name',
+    },
+    users: {
+      getUserById: (userId) => ({ id: userId, username: 'alice' }),
+      getEnvForUser: () => ({
+        LAYER_VALUE: 'admin',
+        ADMIN_ONLY: 'admin-value',
+        ADMIN_EMPTY_ONLY: '',
+        LEGACY_EMPTY_OVERRIDE: '',
+        W3_NAME: 'admin-name',
+      }),
+    },
+    claudeEnv: resolver.service,
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 9,
+    userId: 4,
+    cwd: '/workspace/project',
+  });
+
+  assert.equal(resolver.calls.length, 1);
+  assert.equal(resolver.calls[0].tenantId, 9);
+  assert.equal(resolver.calls[0].userId, 4);
+  assert.equal(resolver.calls[0].baseEnv.LAYER_VALUE, 'base');
+  assert.equal(resolver.calls[0].adminUserEnv.LAYER_VALUE, 'admin');
+  assert.equal(Object.hasOwn(resolver.calls[0].adminUserEnv, 'LEGACY_EMPTY_OVERRIDE'), false);
+  assert.equal(resolver.calls[0].adminUserEnv.ADMIN_EMPTY_ONLY, '');
+  assert.equal(resolver.calls[0].managedEnv.W3_NAME, 'alice');
+  assert.equal(resolver.calls[0].managedEnv.TENANT_ID, '9');
+  assert.equal(runtime.executionEnv.LAYER_VALUE, 'personal');
+  assert.equal(runtime.executionEnv.BASE_ONLY, 'base-value');
+  assert.equal(runtime.executionEnv.ADMIN_ONLY, 'admin-value');
+  assert.equal(runtime.executionEnv.ADMIN_EMPTY_ONLY, '');
+  assert.equal(runtime.executionEnv.LEGACY_EMPTY_OVERRIDE, 'keep-base-value');
+  assert.equal(runtime.executionEnv.TENANT_ONLY, 'tenant-value');
+  assert.equal(runtime.executionEnv.PERSONAL_ONLY, 'personal-value');
+  assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+});
+
+test('local Claude runtime resolves global personal env without a tenant', async () => {
+  const resolver = createLayeredClaudeEnvResolver({
+    personalEnv: {
+      ANTHROPIC_MODEL: 'personal-model',
+      GLOBAL_PERSONAL: 'personal-value',
+    },
+  });
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'local',
+      ANTHROPIC_MODEL: 'base-model',
+    },
+    users: emptyUserEnvDb,
+    claudeEnv: resolver.service,
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    userId: 4,
+    cwd: '/workspace/project',
+  });
+
+  assert.equal(resolver.calls.length, 1);
+  assert.equal(resolver.calls[0].tenantId, null);
+  assert.equal(runtime.executionEnv.ANTHROPIC_MODEL, 'personal-model');
+  assert.equal(runtime.executionEnv.GLOBAL_PERSONAL, 'personal-value');
+  assert.equal(runtime.executionEnv.W3_NAME, 'user-4');
 });
 
 test('DAS falls back to the server environment like other Claude variables', () => {
@@ -402,12 +535,97 @@ test('docker exec args explicitly clear CodeHub email variables when git_email i
   assert.ok(args.includes('CODEHUB_EMAIL='));
 });
 
+test('docker host process env contains only server-owned Docker client variables', () => {
+  const hostEnv = buildDockerHostProcessEnv({
+    PATH: 'C:\\server-bin',
+    HOME: 'C:\\server-home',
+    DOCKER_HOST: 'tcp://docker.example.test:2376',
+    DOCKER_CONTEXT: 'production',
+    DOCKER_CONFIG: 'C:\\server-docker-config',
+    XDG_RUNTIME_DIR: '/run/user/1000',
+    HTTP_PROXY: 'http://host-proxy.example.test:8080',
+    NO_PROXY: 'docker.example.test',
+    ANTHROPIC_API_KEY: 'server-claude-key',
+    TENANT_API_KEY: 'tenant-key',
+    LD_PRELOAD: '/tmp/guest.so',
+    NODE_OPTIONS: '--require=/tmp/guest.js',
+  });
+
+  assert.deepEqual(hostEnv, {
+    PATH: 'C:\\server-bin',
+    HOME: 'C:\\server-home',
+    DOCKER_HOST: 'tcp://docker.example.test:2376',
+    DOCKER_CONTEXT: 'production',
+    DOCKER_CONFIG: 'C:\\server-docker-config',
+    XDG_RUNTIME_DIR: '/run/user/1000',
+    HTTP_PROXY: 'http://host-proxy.example.test:8080',
+    NO_PROXY: 'docker.example.test',
+  });
+});
+
+test('Claude Docker env split keeps scoped values exec-only and filters arbitrary base env', () => {
+  const resolvedEnv = {
+    env: {
+      ANTHROPIC_MODEL: 'base-model',
+      HTTP_PROXY: 'http://proxy.example.test:8080',
+      SERVER_INTERNAL_SECRET: 'do-not-forward',
+      ADMIN_CUSTOM: 'legacy-admin',
+      TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
+      PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+      W3_NAME: 'managed-user',
+      PATH: '/untrusted/path',
+      UNKNOWN_SOURCE: 'do-not-forward',
+    },
+    sources: {
+      ANTHROPIC_MODEL: 'baseEnv',
+      HTTP_PROXY: 'baseEnv',
+      SERVER_INTERNAL_SECRET: 'baseEnv',
+      ADMIN_CUSTOM: 'adminUserEnv',
+      TENANT_ENCRYPTED_TOKEN: 'tenant',
+      PERSONAL_ENCRYPTED_TOKEN: 'personal',
+      W3_NAME: 'managed',
+      PATH: 'managed',
+      UNKNOWN_SOURCE: 'unexpected',
+    },
+  };
+
+  assert.deepEqual(buildClaudeDockerGuestEnv(resolvedEnv), {
+    ANTHROPIC_MODEL: 'base-model',
+    HTTP_PROXY: 'http://proxy.example.test:8080',
+    ADMIN_CUSTOM: 'legacy-admin',
+    TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
+    PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+    W3_NAME: 'managed-user',
+  });
+  assert.deepEqual(buildClaudeDockerCreateEnv(resolvedEnv), {
+    [CLAUDE_DOCKER_ENV_POLICY_ENV_NAME]: 'exec-only-v1',
+    W3_NAME: 'managed-user',
+  });
+});
+
+test('Claude Docker env policy migrates legacy containers that may retain revoked keys', () => {
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({
+    env: [
+      'W3_NAME=managed-user',
+      'ANTHROPIC_API_KEY=revoked-key',
+    ],
+  }), false);
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({
+    env: [
+      `${CLAUDE_DOCKER_ENV_POLICY_ENV_NAME}=exec-only-v1`,
+      'W3_NAME=managed-user',
+    ],
+  }), true);
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({ running: true }), true);
+});
+
 test('custom docker spawn bypasses host wrapper execution', () => {
   const calls = [];
   const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
   const spawnClaudeCodeProcess = createClaudeDockerSpawn({
     containerName: 'cloudcli-claude-test',
     envAllowlist: ['ANTHROPIC_MODEL'],
+    hostEnv: { PATH: 'C:\\bin', HOME: 'C:\\service-home' },
     spawnImpl: (...args) => {
       calls.push(args);
       return child;
@@ -441,6 +659,58 @@ test('custom docker spawn bypasses host wrapper execution', () => {
   assert.equal(calls[0][2].env.PATH, 'C:\\bin');
   assert.deepEqual(calls[0][2].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(calls[0][2].windowsHide, true);
+});
+
+test('custom docker spawn keeps arbitrary guest env out of the Docker host process', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    envAllowlist: ['TENANT_API_KEY', 'USER_SETTING', 'DOCKER_HOST', 'LD_PRELOAD', 'NODE_OPTIONS'],
+    hostEnv: {
+      PATH: '/server/bin',
+      HOME: '/home/cloudcli-server',
+      DOCKER_HOST: 'tcp://server-docker.example.test:2376',
+      DOCKER_CONFIG: '/etc/cloudcli/docker',
+      HTTP_PROXY: 'http://server-proxy.example.test:8080',
+      SERVER_INTERNAL_SECRET: 'do-not-copy',
+    },
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  const result = spawnClaudeCodeProcess({
+    args: ['--model', 'sonnet'],
+    env: {
+      TENANT_API_KEY: 'tenant-key',
+      USER_SETTING: 'user-value',
+      DOCKER_HOST: 'tcp://guest-controlled.example.test:2375',
+      LD_PRELOAD: '/workspace/guest.so',
+      NODE_OPTIONS: '--require=/workspace/guest.js',
+    },
+  });
+
+  assert.equal(result, child);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0][1].includes('TENANT_API_KEY=tenant-key'));
+  assert.ok(calls[0][1].includes('USER_SETTING=user-value'));
+  assert.ok(calls[0][1].includes('DOCKER_HOST=tcp://guest-controlled.example.test:2375'));
+  assert.ok(calls[0][1].includes('LD_PRELOAD=/workspace/guest.so'));
+  assert.ok(calls[0][1].includes('NODE_OPTIONS=--require=/workspace/guest.js'));
+  assert.deepEqual(calls[0][2].env, {
+    PATH: '/server/bin',
+    HOME: '/home/cloudcli-server',
+    DOCKER_HOST: 'tcp://server-docker.example.test:2376',
+    DOCKER_CONFIG: '/etc/cloudcli/docker',
+    HTTP_PROXY: 'http://server-proxy.example.test:8080',
+  });
+  assert.equal(Object.hasOwn(calls[0][2].env, 'TENANT_API_KEY'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'USER_SETTING'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'LD_PRELOAD'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'NODE_OPTIONS'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'SERVER_INTERNAL_SECRET'), false);
 });
 
 test('docker runtime directory and home are owned by the sandbox user when possible', async () => {
@@ -821,13 +1091,17 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.executionEnv.https_proxy, 'http://lower-secure-proxy.example:8443');
   assert.equal(runtime.executionEnv.MCP_DATA_SOURCE_KEY, 'host-mcp-data-source-key');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
-  assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
+  assert.ok(dockerCalls[0].join(' ').includes(`${CLAUDE_DOCKER_ENV_POLICY_ENV_NAME}=exec-only-v1`));
+  assert.equal(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`), false);
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
-  assert.ok(dockerCalls[0].join(' ').includes('codehub_email=alice@example.com'));
-  assert.ok(dockerCalls[0].join(' ').includes('CODEHUB_EMAIL=alice@example.com'));
-  assert.ok(dockerCalls[0].join(' ').includes('TENANT_ID=3'));
-  assert.ok(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'));
-  assert.ok(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'));
+  assert.equal(dockerCalls[0].join(' ').includes('codehub_email=alice@example.com'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('CODEHUB_EMAIL=alice@example.com'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('TENANT_ID=3'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('HTTP_PROXY=http://proxy.example:8080'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('HTTPS_PROXY=http://secure-proxy.example:8443'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('ANTHROPIC_API_KEY=key-1'), false);
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');

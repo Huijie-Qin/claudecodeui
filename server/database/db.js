@@ -519,35 +519,78 @@ function buildUserEnvUpdateResult(env = {}, encrypted = {}) {
   );
 }
 
-function buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch = {}, encryptedPatch = {}) {
+function normalizeClaudeEnvDeleteNames(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError('deletes must be an array');
+  }
+
+  const seen = new Set();
+  const deletes = [];
+  for (const rawName of value) {
+    if (typeof rawName !== 'string') {
+      throw new TypeError('Each deleted Claude environment field name must be a string');
+    }
+    const name = rawName.trim();
+    if (!ENV_NAME_PATTERN.test(name)) {
+      throw new TypeError('Deleted Claude environment field names must use shell-safe syntax');
+    }
+    const nameKey = name.toUpperCase();
+    if (nameKey === USER_KEY_ENV_NAME) {
+      throw new TypeError(`${USER_KEY_ENV_NAME} is managed and cannot be deleted`);
+    }
+    if (seen.has(nameKey)) continue;
+    seen.add(nameKey);
+    deletes.push(name);
+  }
+  return deletes;
+}
+
+function omitClaudeEnvNames(record, deletedNameKeys) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([name]) => !deletedNameKeys.has(name.toUpperCase())),
+  );
+}
+
+function buildClaudeEnvUpdateResult(
+  row,
+  envPatch,
+  visibilityPatch = {},
+  encryptedPatch = {},
+  deletes = [],
+) {
   const existingEnv = ensureUserEnvForRow(row);
   const existingVisibility = parseUserEnvVisibilityJson(row.env_visibility);
   const existingEncrypted = parseUserEnvEncryptedJson(row.env_encrypted);
+  const deletedNameKeys = new Set(deletes.map((name) => name.toUpperCase()));
   const preparedPatch = buildUserEnvUpdateResult(envPatch, encryptedPatch);
   const nextEnv = {
-    ...existingEnv,
+    ...omitClaudeEnvNames(existingEnv, deletedNameKeys),
     ...preparedPatch,
   };
   const nextVisibility = {
-    ...existingVisibility,
+    ...omitClaudeEnvNames(existingVisibility, deletedNameKeys),
     ...visibilityPatch,
   };
   const nextEncrypted = {
-    ...existingEncrypted,
+    ...omitClaudeEnvNames(existingEncrypted, deletedNameKeys),
     ...Object.fromEntries(Object.keys(envPatch).map((name) => [name, encryptedPatch?.[name] === true])),
   };
   const envJson = buildUserEnvJson(nextEnv);
   const visibilityJson = serializeUserEnvVisibilityRecord(nextVisibility);
   const encryptedJson = serializeUserEnvEncryptedRecord(nextEncrypted);
-  db.prepare('UPDATE users SET env = ? WHERE id = ?').run(envJson, row.id);
-  db.prepare('UPDATE users SET env_visibility = ? WHERE id = ?').run(visibilityJson, row.id);
-  db.prepare('UPDATE users SET env_encrypted = ? WHERE id = ?').run(encryptedJson, row.id);
+  db.prepare(`
+    UPDATE users
+    SET env = ?, env_visibility = ?, env_encrypted = ?
+    WHERE id = ?
+  `).run(envJson, visibilityJson, encryptedJson, row.id);
 
   return {
     userId: row.id,
     username: row.username,
     success: true,
     env: Object.fromEntries(Object.keys(envPatch).map((name) => [name, nextEnv[name]])),
+    deleted: deletes,
   };
 }
 
@@ -555,6 +598,16 @@ function buildClaudeEnvListEntry(row) {
   const env = decryptUserEnvForRuntime(ensureUserEnvForRow(row) || {}, parseUserEnvEncryptedJson(row.env_encrypted));
   const visibility = parseUserEnvVisibilityJson(row.env_visibility);
   const encryptedFields = parseUserEnvEncryptedJson(row.env_encrypted);
+  const visibleNameKeys = new Set(
+    Object.entries(visibility)
+      .filter(([, visible]) => visible === true)
+      .map(([name]) => name.toUpperCase()),
+  );
+  const encryptedNameKeys = new Set(
+    Object.entries(encryptedFields)
+      .filter(([, encrypted]) => encrypted === true)
+      .map(([name]) => name.toUpperCase()),
+  );
 
   return {
     userId: row.id,
@@ -563,13 +616,15 @@ function buildClaudeEnvListEntry(row) {
       .filter(([name]) => name !== USER_KEY_ENV_NAME)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, value]) => {
-        const visible = visibility[name] === true;
+        const nameKey = name.toUpperCase();
+        const visible = visibleNameKeys.has(nameKey);
+        const encrypted = encryptedNameKeys.has(nameKey);
         return {
           name,
           configured: true,
           visible,
-          encrypted: encryptedFields[name] === true,
-          ...(visible ? { value } : {}),
+          encrypted,
+          ...(visible && !encrypted ? { value } : {}),
         };
       }),
   };
@@ -1196,7 +1251,7 @@ const userDb = {
     }
   },
 
-  updateClaudeEnvForUsers: ({ userIds, env, visibility, encrypted }) => {
+  updateClaudeEnvForUsers: ({ userIds, env, visibility, encrypted, deletes = [] }) => {
     try {
       const uniqueUserIds = Array.from(new Set(
         (Array.isArray(userIds) ? userIds : [])
@@ -1214,6 +1269,12 @@ const userDb = {
       const encryptedPatch = Object.fromEntries(
         Object.keys(envPatch).map((name) => [name, encrypted?.[name] === true]),
       );
+      const normalizedDeletes = normalizeClaudeEnvDeleteNames(deletes);
+      const upsertNameKeys = new Set(Object.keys(envPatch).map((name) => name.toUpperCase()));
+      const conflictingName = normalizedDeletes.find((name) => upsertNameKeys.has(name.toUpperCase()));
+      if (conflictingName) {
+        throw new TypeError(`${conflictingName} cannot be both updated and deleted`);
+      }
 
       const updateUsers = db.transaction(() => uniqueUserIds.map((userId) => {
         const row = db
@@ -1224,7 +1285,13 @@ const userDb = {
           return { userId, success: false, error: 'User not found' };
         }
 
-        return buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch, encryptedPatch);
+        return buildClaudeEnvUpdateResult(
+          row,
+          envPatch,
+          visibilityPatch,
+          encryptedPatch,
+          normalizedDeletes,
+        );
       }));
 
       return updateUsers();

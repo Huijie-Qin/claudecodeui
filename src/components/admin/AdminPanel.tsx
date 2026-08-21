@@ -16,6 +16,7 @@ import {
   Search,
   Server,
   ScrollText,
+  ShieldCheck,
   Trash2,
   UserMinus,
   UserPlus,
@@ -48,6 +49,7 @@ import {
 } from './adminPanelUtils';
 import AiCodeStatsTab from './AiCodeStatsTab';
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
+import ClaudeEnvManagement from './ClaudeEnvManagement';
 import HookConfigsTab from './HookConfigsTab';
 import McpPresetsTab from './McpPresetsTab';
 import RuntimeMonitorTab from './RuntimeMonitorTab';
@@ -95,6 +97,7 @@ type AdminMembership = {
 };
 
 type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck' | 'experimental';
+type ClaudeEnvScopeTab = 'personal' | 'tenant' | 'policy';
 
 type AdminTabConfig = {
   id: AdminTab;
@@ -401,6 +404,7 @@ export default function AdminPanel() {
   const [batchUserSearch, setBatchUserSearch] = useState('');
   const [batchTenantSearch, setBatchTenantSearch] = useState('');
   const [claudeEnvRows, setClaudeEnvRows] = useState<ClaudeEnvRow[]>(() => [createClaudeEnvRow()]);
+  const [claudeEnvScopeTab, setClaudeEnvScopeTab] = useState<ClaudeEnvScopeTab>('personal');
   const [claudeEnvUserSearch, setClaudeEnvUserSearch] = useState('');
   const [selectedClaudeEnvUserIds, setSelectedClaudeEnvUserIds] = useState<string[]>([]);
   const [claudeEnvUsernames, setClaudeEnvUsernames] = useState('');
@@ -409,6 +413,7 @@ export default function AdminPanel() {
   const [claudeEnvResults, setClaudeEnvResults] = useState<AdminBatchClaudeEnvResult[]>([]);
   const [claudeEnvUsers, setClaudeEnvUsers] = useState<AdminClaudeEnvUser[]>([]);
   const [isLoadingClaudeEnvUsers, setIsLoadingClaudeEnvUsers] = useState(false);
+  const [deletingClaudeEnvEntryKey, setDeletingClaudeEnvEntryKey] = useState<string | null>(null);
   const [permission, setPermission] = useState<TenantPermission>('edit');
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
@@ -924,6 +929,7 @@ export default function AdminPanel() {
   };
 
   const updateClaudeEnvBatch = async () => {
+    if (deletingClaudeEnvEntryKey != null || isSaving) return;
     const pastedUsernames = parseBatchUsernames(claudeEnvUsernames);
     const { matchedUsers, missingUsernames } = findUsersByUsernames(pastedUsernames, users);
     const userIds = dedupeIdStrings([
@@ -1012,6 +1018,57 @@ export default function AdminPanel() {
       setError(message);
       showToast(message, 'error');
     } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteClaudeEnvEntry = async (envUser: AdminClaudeEnvUser, entry: AdminClaudeEnvEntry) => {
+    const entryKey = `${envUser.userId}:${entry.name}`;
+    if (deletingClaudeEnvEntryKey != null || isSaving) return;
+    if (!window.confirm(t('claudeEnv.confirmDeleteConfigured', {
+      name: entry.name,
+      username: envUser.username,
+    }))) return;
+
+    setDeletingClaudeEnvEntryKey(entryKey);
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await api.admin.updateClaudeEnvBatch({
+        userIds: [envUser.userId],
+        env: {},
+        visibility: {},
+        encrypted: {},
+        deletes: [entry.name],
+      });
+      const payload = await response.json().catch(() => ({} as AdminBatchClaudeEnvPayload)) as AdminBatchClaudeEnvPayload;
+      const failedResult = payload.results?.find((result) => (
+        result.userId === envUser.userId && result.success === false
+      ));
+      if (!response.ok || failedResult || (payload.summary?.failed || 0) > 0) {
+        const message = failedResult?.error || payload.error || payload.message || t('claudeEnv.deleteConfiguredFailed');
+        setError(message);
+        showToast(message, 'error');
+        return;
+      }
+
+      setClaudeEnvUsers((current) => current.map((user) => (
+        user.userId === envUser.userId
+          ? { ...user, env: user.env.filter((item) => item.name !== entry.name) }
+          : user
+      )));
+      showToast(t('claudeEnv.deleteConfiguredSuccess', {
+        name: entry.name,
+        username: envUser.username,
+      }), 'success');
+      await loadClaudeEnvUsers();
+    } catch (caughtError) {
+      console.error('[AdminPanel] Failed to delete Claude environment entry:', caughtError);
+      const message = t('claudeEnv.deleteConfiguredFailed');
+      setError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeletingClaudeEnvEntryKey(null);
       setIsSaving(false);
     }
   };
@@ -1574,7 +1631,79 @@ export default function AdminPanel() {
 
           {activeTab === 'claudeEnv' ? (
             <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
-              <section className="space-y-3">
+              <div
+                className="inline-flex w-full flex-wrap rounded-lg border border-border bg-muted/30 p-1 sm:w-auto"
+                role="tablist"
+                aria-label={t('claudeEnvV2.scopeTabsLabel', { defaultValue: 'Claude environment configuration scope' })}
+              >
+                <button
+                  id="admin-claude-env-personal-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={claudeEnvScopeTab === 'personal'}
+                  aria-controls="admin-claude-env-personal-panel"
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors sm:flex-none',
+                    claudeEnvScopeTab === 'personal'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                  onClick={() => setClaudeEnvScopeTab('personal')}
+                >
+                  <Users className="h-4 w-4" />
+                  {t('claudeEnvV2.tabs.personal', { defaultValue: 'Specified personal configuration' })}
+                </button>
+                <button
+                  id="admin-claude-env-tenant-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={claudeEnvScopeTab === 'tenant'}
+                  aria-controls="admin-claude-env-tenant-panel"
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors sm:flex-none',
+                    claudeEnvScopeTab === 'tenant'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                  onClick={() => {
+                    setClaudeEnvScopeTab('tenant');
+                    setError(null);
+                  }}
+                >
+                  <Building2 className="h-4 w-4" />
+                  {t('claudeEnvV2.tabs.tenant', { defaultValue: 'Specified tenant configuration' })}
+                </button>
+                <button
+                  id="admin-claude-env-policy-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={claudeEnvScopeTab === 'policy'}
+                  aria-controls="admin-claude-env-policy-panel"
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors sm:flex-none',
+                    claudeEnvScopeTab === 'policy'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                  onClick={() => {
+                    setClaudeEnvScopeTab('policy');
+                    setError(null);
+                  }}
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  {t('claudeEnvV2.tabs.policy', { defaultValue: 'Allowlist and denylist' })}
+                </button>
+              </div>
+
+              <>
+                <div
+                  id="admin-claude-env-personal-panel"
+                  className="space-y-5"
+                  role="tabpanel"
+                  aria-labelledby="admin-claude-env-personal-tab"
+                  hidden={claudeEnvScopeTab !== 'personal'}
+                >
+                  <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h3 className="text-sm font-medium text-foreground">{t('claudeEnv.title')}</h3>
                   <div className="flex items-center gap-2">
@@ -1589,7 +1718,7 @@ export default function AdminPanel() {
                         <Plus className="h-4 w-4" />
                       </Button>
                     </Tooltip>
-                    <Button onClick={updateClaudeEnvBatch} disabled={isSaving}>
+                    <Button onClick={updateClaudeEnvBatch} disabled={isSaving || deletingClaudeEnvEntryKey != null}>
                       <Check className="h-4 w-4" />
                       {t('claudeEnv.saveButton')}
                     </Button>
@@ -1799,20 +1928,38 @@ export default function AdminPanel() {
                           <div className="mt-1 text-xs text-muted-foreground">{t('claudeEnv.noEnvFields')}</div>
                         ) : (
                           <div className="mt-2 grid gap-2">
-                            {envUser.env.map((entry) => (
-                              <div
-                                key={`${envUser.userId}:${entry.name}`}
-                                className="grid gap-2 rounded border border-border bg-muted/20 px-3 py-2 text-xs sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto]"
-                              >
-                                <span className="truncate font-mono text-foreground">{entry.name}</span>
-                                <span className={entry.visible ? 'truncate font-mono text-muted-foreground' : 'text-muted-foreground'}>
-                                  {entry.visible ? (entry.value ?? '') : t('claudeEnv.hiddenValue')}
-                                </span>
-                                <span className={entry.visible ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}>
-                                  {entry.visible ? t('claudeEnv.visibleYes') : t('claudeEnv.visibleNo')}
-                                </span>
-                              </div>
-                            ))}
+                            {envUser.env.map((entry) => {
+                              const entryKey = `${envUser.userId}:${entry.name}`;
+                              const isDeletingEntry = deletingClaudeEnvEntryKey === entryKey;
+                              const canRevealValue = entry.visible && entry.encrypted !== true;
+                              return (
+                                <div
+                                  key={entryKey}
+                                  className="grid items-center gap-2 rounded border border-border bg-muted/20 px-3 py-2 text-xs sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto_2.25rem]"
+                                >
+                                  <span className="truncate font-mono text-foreground">{entry.name}</span>
+                                  <span className={canRevealValue ? 'truncate font-mono text-muted-foreground' : 'text-muted-foreground'}>
+                                    {canRevealValue ? (entry.value ?? '') : t('claudeEnv.hiddenValue')}
+                                  </span>
+                                  <span className={canRevealValue ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}>
+                                    {entry.encrypted
+                                      ? t('claudeEnv.encryptedValue')
+                                      : entry.visible ? t('claudeEnv.visibleYes') : t('claudeEnv.visibleNo')}
+                                  </span>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    disabled={deletingClaudeEnvEntryKey != null || isLoadingClaudeEnvUsers || isSaving}
+                                    aria-label={t('claudeEnv.deleteConfigured', { name: entry.name, username: envUser.username })}
+                                    onClick={() => void deleteClaudeEnvEntry(envUser, entry)}
+                                  >
+                                    {isDeletingEntry
+                                      ? <RefreshCw className="h-4 w-4 animate-spin" />
+                                      : <Trash2 className="h-4 w-4 text-destructive" />}
+                                  </Button>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1840,11 +1987,29 @@ export default function AdminPanel() {
                 </section>
               ) : null}
 
-              {error ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  {error}
+                  {error ? (
+                    <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                      {error}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+                <div
+                  id="admin-claude-env-tenant-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-claude-env-tenant-tab"
+                  hidden={claudeEnvScopeTab !== 'tenant'}
+                >
+                  <ClaudeEnvManagement tenants={tenants} view="tenant" />
+                </div>
+                <div
+                  id="admin-claude-env-policy-panel"
+                  role="tabpanel"
+                  aria-labelledby="admin-claude-env-policy-tab"
+                  hidden={claudeEnvScopeTab !== 'policy'}
+                >
+                  <ClaudeEnvManagement tenants={tenants} view="policy" />
+                </div>
+              </>
             </div>
           ) : null}
 

@@ -295,6 +295,35 @@ export const api = {
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
       }),
+    claudePersonalEnv: () => authenticatedFetch('/api/settings/claude-env/personal'),
+    updateClaudePersonalEnv: (payload) =>
+      authenticatedFetch('/api/settings/claude-env/personal', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    claudeEffectiveEnv: (tenantId) => {
+      const params = new URLSearchParams();
+      if (tenantId != null && tenantId !== '') {
+        params.set('tenantId', String(tenantId));
+      }
+      const query = params.toString();
+      return authenticatedFetch(`/api/settings/claude-env/effective${query ? `?${query}` : ''}`);
+    },
+    claudeEnvDenyRules: () => authenticatedFetch('/api/settings/claude-env/deny-rules'),
+    createClaudeEnvDenyRule: (payload) =>
+      authenticatedFetch('/api/settings/claude-env/deny-rules', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateClaudeEnvDenyRule: (ruleId, payload) =>
+      authenticatedFetch(`/api/settings/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    deleteClaudeEnvDenyRule: (ruleId) =>
+      authenticatedFetch(`/api/settings/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'DELETE',
+      }),
   },
 
   codehub: {
@@ -616,6 +645,40 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     claudeEnvUsers: () => authenticatedFetch('/api/admin/users/claude-env'),
+    tenantClaudeEnv: (tenantId) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/claude-env`),
+    updateTenantClaudeEnv: (tenantId, payload) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/claude-env`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    tenantClaudeEnvOverview: () => authenticatedFetch('/api/admin/tenants/claude-env'),
+    updateTenantClaudeEnvBatch: (payload) =>
+      authenticatedFetch('/api/admin/tenants/claude-env', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    claudeEnvAllowlist: () => authenticatedFetch('/api/admin/claude-env/personal-allowlist'),
+    updateClaudeEnvAllowlist: (payload) =>
+      authenticatedFetch('/api/admin/claude-env/personal-allowlist', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    claudeEnvDenyRules: () => authenticatedFetch('/api/admin/claude-env/deny-rules'),
+    createClaudeEnvDenyRule: (payload) =>
+      authenticatedFetch('/api/admin/claude-env/deny-rules', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateClaudeEnvDenyRule: (ruleId, payload) =>
+      authenticatedFetch(`/api/admin/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    deleteClaudeEnvDenyRule: (ruleId) =>
+      authenticatedFetch(`/api/admin/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'DELETE',
+      }),
     users: () => authenticatedFetch('/api/admin/users'),
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>

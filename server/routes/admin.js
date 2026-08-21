@@ -23,6 +23,8 @@ import {
   shouldShowExperimentalFeatures,
 } from '../services/feature-flags.js';
 
+import { createAdminClaudeEnvRouter } from './claude-env.js';
+
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_BATCH_USER_ENV_UPDATES = 500;
@@ -305,7 +307,7 @@ function buildLegacyClaudeEnvPatch(body = {}) {
   return env;
 }
 
-function parseClaudeEnvPatch(body = {}) {
+function parseClaudeEnvPatch(body = {}, { allowEmpty = false } = {}) {
   const rawEnv = body.env && typeof body.env === 'object' && !Array.isArray(body.env)
     ? body.env
     : buildLegacyClaudeEnvPatch(body);
@@ -326,13 +328,70 @@ function parseClaudeEnvPatch(body = {}) {
     env[name] = rawValue == null ? '' : String(rawValue);
   }
 
-  if (Object.keys(env).length === 0) {
+  if (!allowEmpty && Object.keys(env).length === 0) {
     const error = new Error('At least one Claude environment field name is required');
     error.statusCode = 400;
     throw error;
   }
 
   return env;
+}
+
+function parseClaudeEnvDeletes(body = {}) {
+  if (body.deletes === undefined) return [];
+  if (!Array.isArray(body.deletes)) {
+    const error = new Error('deletes must be an array');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const seen = new Set();
+  const deletes = [];
+  for (const rawName of body.deletes) {
+    if (typeof rawName !== 'string') {
+      const error = new Error('Each deleted Claude environment field name must be a string');
+      error.statusCode = 400;
+      throw error;
+    }
+    const name = rawName.trim();
+    if (!ENV_NAME_PATTERN.test(name)) {
+      const error = new Error('Deleted Claude environment field names must use shell-safe syntax');
+      error.statusCode = 400;
+      throw error;
+    }
+    const nameKey = name.toUpperCase();
+    if (nameKey === 'USER_KEY') {
+      const error = new Error('USER_KEY is managed and cannot be deleted');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (seen.has(nameKey)) continue;
+    seen.add(nameKey);
+    deletes.push(name);
+  }
+  return deletes;
+}
+
+function assertDisjointClaudeEnvMutation(env, deletes) {
+  const upsertNameKeys = new Set(Object.keys(env).map((name) => name.toUpperCase()));
+  const conflictingName = deletes.find((name) => upsertNameKeys.has(name.toUpperCase()));
+  if (conflictingName) {
+    const error = new Error(`${conflictingName} cannot be both updated and deleted`);
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function sanitizeAdminClaudeEnvList(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => ({
+    ...entry,
+    env: (Array.isArray(entry?.env) ? entry.env : []).map((variable) => {
+      if (variable?.encrypted !== true || !Object.hasOwn(variable, 'value')) return variable;
+      const masked = { ...variable };
+      delete masked.value;
+      return masked;
+    }),
+  }));
 }
 
 function parseClaudeEnvVisibility(body = {}, env = {}) {
@@ -417,6 +476,7 @@ export function createAdminRouter(
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
+  router.use(createAdminClaudeEnvRouter());
 
   router.get('/feature-flags', (req, res) => {
     res.json({
@@ -787,7 +847,7 @@ export function createAdminRouter(
         return res.status(501).json({ error: 'Claude environment list is not available' });
       }
 
-      return res.json({ users: users.listClaudeEnvForUsers() });
+      return res.json({ users: sanitizeAdminClaudeEnvList(users.listClaudeEnvForUsers()) });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Claude environment');
     }
@@ -972,10 +1032,18 @@ export function createAdminRouter(
         return res.status(400).json({ error: `Batch Claude environment updates are limited to ${MAX_BATCH_USER_ENV_UPDATES} users` });
       }
 
-      const env = parseClaudeEnvPatch(req.body);
+      const deletes = parseClaudeEnvDeletes(req.body);
+      const env = parseClaudeEnvPatch(req.body, { allowEmpty: deletes.length > 0 });
+      assertDisjointClaudeEnvMutation(env, deletes);
       const visibility = parseClaudeEnvVisibility(req.body, env);
       const encrypted = parseClaudeEnvEncrypted(req.body, env);
-      const results = users.updateClaudeEnvForUsers({ userIds, env, visibility, encrypted });
+      const results = users.updateClaudeEnvForUsers({
+        userIds,
+        env,
+        visibility,
+        encrypted,
+        deletes,
+      });
 
       return res.json({
         results,

@@ -55,7 +55,7 @@ type NotificationPreferencesResponse = {
 type ActiveLoginProvider = AgentProvider | '';
 
 const DEFAULT_MAIN_TAB: SettingsMainTab = 'appearance';
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['appearance', 'git', 'api', 'tasks', 'notifications', 'plugins', 'about'];
+const KNOWN_MAIN_TABS: SettingsMainTab[] = ['appearance', 'git', 'api', 'claudeEnv', 'tasks', 'notifications', 'plugins', 'about'];
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".
