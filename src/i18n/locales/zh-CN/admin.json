@@ -432,6 +432,15 @@
     "actionCount": "{{count}} 个行为",
     "boundUserCount": "已绑定 {{count}} 个用户",
     "builtin": "内置 Hook",
+    "businessData": {
+      "label": "业务数据",
+      "title": "Hook 业务数据",
+      "description": "业务数据保存在 CCUI SQLite 中；这里显示最近 50 条：",
+      "loading": "正在加载业务数据",
+      "empty": "暂无业务数据。Hook 执行“记录数据”后会显示在这里。",
+      "loadError": "加载 Hook 业务数据失败",
+      "close": "关闭业务数据"
+    },
     "diagnostics": {
       "title": "Hook 运行诊断",
       "hookTitle": "{{name}} 执行记录",

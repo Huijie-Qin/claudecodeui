@@ -99,6 +99,7 @@ export type HookConfig = HookConfigDraft & {
   bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
   boundTenantCount: number;
+  hasDataRecords: boolean;
 };
 
 export type HookExecutionOutcome =

@@ -694,7 +694,7 @@ function RecordActionEditor({
         })}
       </div>
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“数据记录”即可查看最近记录。
+        记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“业务数据”即可查看最近记录。
       </div>
     </div>
   );
@@ -760,7 +760,7 @@ function PostActionsEditor({
       </div>
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加数据记录、MCP 工具或 Skill，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具或 Skill，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {

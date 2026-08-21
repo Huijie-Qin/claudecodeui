@@ -297,7 +297,7 @@ export function migrateHookActivationModel(database) {
           `).run(
             recordHookId,
             SQL_LINE_RECORD_HOOK_NAME,
-            '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 数据记录。',
+            '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 业务数据。',
             legacyHook.status,
             legacyHook.event_name,
             legacyHook.matcher_json,

@@ -8,6 +8,7 @@ import {
   buildScriptTemplate,
   getClaudeOutputFields,
   inferNativeMatcherMode,
+  shouldShowBusinessData,
 } from './catalog';
 import type { HookConfigDraft, HookResources } from './types';
 
@@ -88,6 +89,19 @@ test('reference choices include environment, script, and action outputs', () => 
   assert.ok(paths.includes('ccui.env.userId'));
   assert.ok(paths.includes('script.output.riskLevel'));
   assert.ok(paths.includes('actions.mcp-1.output'));
+});
+
+test('business data stays accessible for configured writers or historical records', () => {
+  assert.equal(shouldShowBusinessData({ postActions: [], hasDataRecords: false }), false);
+  assert.equal(shouldShowBusinessData({
+    postActions: [{ id: 'mcp-1', type: 'call_mcp_tool', position: 0, config: {} }],
+    hasDataRecords: false,
+  }), false);
+  assert.equal(shouldShowBusinessData({
+    postActions: [{ id: 'record-1', type: 'write_record', position: 0, config: {} }],
+    hasDataRecords: false,
+  }), true);
+  assert.equal(shouldShowBusinessData({ postActions: [], hasDataRecords: true }), true);
 });
 
 test('native matcher mode is inferred from the text sent to Claude Code', () => {

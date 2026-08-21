@@ -507,6 +507,7 @@ function mapHookRow(row) {
     publishedAt: row.published_at || null,
     boundUserCount: Number(row.bound_user_count || 0),
     boundTenantCount: Number(row.bound_tenant_count || 0),
+    hasDataRecords: Boolean(row.has_data_records),
   };
 }
 
@@ -756,7 +757,14 @@ const BUILTIN_TOOLS = Object.freeze([
 ]);
 
 export function createHookConfigService({ database = db, configStore = appConfigDb } = {}) {
-  const getRow = (hookId) => database.prepare('SELECT * FROM hooks WHERE id = ?').get(hookId);
+  const getRow = (hookId) => database.prepare(`
+    SELECT h.*,
+      EXISTS (
+        SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
+      ) AS has_data_records
+    FROM hooks h
+    WHERE h.id = ?
+  `).get(hookId);
   const getHook = (hookId) => {
     const row = getRow(hookId);
     if (!row) return null;
@@ -1002,7 +1010,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
           `
         SELECT h.*,
           (SELECT COUNT(*) FROM user_hook_bindings b WHERE b.hook_id = h.id) AS bound_user_count,
-          (SELECT COUNT(*) FROM hook_tenant_bindings tb WHERE tb.hook_id = h.id) AS bound_tenant_count
+          (SELECT COUNT(*) FROM hook_tenant_bindings tb WHERE tb.hook_id = h.id) AS bound_tenant_count,
+          EXISTS (
+            SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
+          ) AS has_data_records
         FROM hooks h
         ORDER BY h.updated_at DESC, h.created_at DESC
       `,
@@ -1017,7 +1028,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
           `
         SELECT h.*,
           (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
-          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count
+          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count,
+          EXISTS (
+            SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
+          ) AS has_data_records
         FROM hooks h
         WHERE h.status = 'published'
           AND (

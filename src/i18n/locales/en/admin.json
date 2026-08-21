@@ -478,6 +478,15 @@
     "actionCount": "{{count}} actions",
     "boundUserCount": "{{count}} users bound",
     "builtin": "Built-in Hook",
+    "businessData": {
+      "label": "Business data",
+      "title": "Hook business data",
+      "description": "Business data is stored in CCUI SQLite; showing the latest 50 records from:",
+      "loading": "Loading business data",
+      "empty": "No business data yet. Records appear here after the Hook runs a Record Data action.",
+      "loadError": "Failed to load Hook business data",
+      "close": "Close business data"
+    },
     "diagnostics": {
       "title": "Hook runtime diagnostics",
       "hookTitle": "{{name}} executions",

@@ -30,7 +30,12 @@ import { api } from '../../utils/api';
 
 import HookConfigEditor from './hook-config/HookConfigEditor';
 import HookDiagnosticsPanel from './hook-config/HookDiagnosticsPanel';
-import { EVENT_DEFINITIONS, EVENT_GROUPS, createEmptyHook } from './hook-config/catalog';
+import {
+  EVENT_DEFINITIONS,
+  EVENT_GROUPS,
+  createEmptyHook,
+  shouldShowBusinessData,
+} from './hook-config/catalog';
 import { findUnavailableHookSkills } from './hook-config/skillAvailability';
 import type {
   HookConfig,
@@ -121,6 +126,7 @@ function normalizeHookConfig(hook: HookConfig): HookConfig {
     ...hook,
     boundUserCount: Number(hook.boundUserCount || 0),
     boundTenantCount: Number(hook.boundTenantCount || 0),
+    hasDataRecords: Boolean(hook.hasDataRecords),
     bindingController: hook.bindingController === 'sql_check' ? 'sql_check' : 'admin',
     extensionLogic: hook.extensionLogic
       ? { ...hook.extensionLogic, outputs: hook.extensionLogic.outputs || [] }
@@ -575,22 +581,23 @@ function HookDataRecordsDialog({
   onClose: () => void;
   onRefresh: () => void;
 }) {
+  const { t, i18n } = useTranslation('admin');
   return (
     <Dialog open={Boolean(hook)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[86vh] max-w-4xl overflow-hidden">
-        <DialogTitle>Hook 数据记录</DialogTitle>
+        <DialogTitle>{t('hooks.businessData.title')}</DialogTitle>
         <div className="flex items-center gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-sm font-semibold text-foreground">{hook?.name || 'Hook 数据记录'}</h3>
+            <h3 className="truncate text-sm font-semibold text-foreground">{hook?.name || t('hooks.businessData.title')}</h3>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              数据保存在 CCUI SQLite 的 <code>hook_data_records</code> 表中；这里显示最近 50 条。
+              {t('hooks.businessData.description')} <code>hook_data_records</code>
             </p>
           </div>
           <Button type="button" variant="outline" size="sm" disabled={loading} onClick={onRefresh}>
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-            刷新
+            {t('common.refresh')}
           </Button>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="关闭数据记录">
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label={t('hooks.businessData.close')}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -600,11 +607,11 @@ function HookDataRecordsDialog({
           ) : loading && !records.length ? (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
               <RefreshCw className="h-4 w-4 animate-spin" />
-              正在加载数据记录
+              {t('hooks.businessData.loading')}
             </div>
           ) : !records.length ? (
             <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              暂无数据记录。Hook 执行“记录数据”后会显示在这里。
+              {t('hooks.businessData.empty')}
             </div>
           ) : (
             <div className="space-y-3">
@@ -612,7 +619,7 @@ function HookDataRecordsDialog({
                 <article key={record.id} className="overflow-hidden rounded-xl border border-border bg-background">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{record.type}</Badge>
-                    <span>{formatDate(record.createdAt, 'zh-CN')}</span>
+                    <span>{formatDate(record.createdAt, i18n.language)}</span>
                     {record.sessionId ? <code className="truncate">session: {record.sessionId}</code> : null}
                     <code className="ml-auto truncate">{record.id}</code>
                   </div>
@@ -960,11 +967,11 @@ export default function HookConfigsTab() {
     setRecordsError(null);
     try {
       const response = await api.admin.hookDataRecords(hook.id, 50);
-      if (!response.ok) throw new Error(await readError(response, '加载 Hook 数据记录失败'));
+      if (!response.ok) throw new Error(await readError(response, t('hooks.businessData.loadError')));
       const payload = await response.json() as { records?: HookDataRecord[] };
       setDataRecords(payload.records || []);
     } catch (caughtError) {
-      setRecordsError(caughtError instanceof Error ? caughtError.message : '加载 Hook 数据记录失败');
+      setRecordsError(caughtError instanceof Error ? caughtError.message : t('hooks.businessData.loadError'));
     } finally {
       setRecordsLoading(false);
     }
@@ -1445,10 +1452,12 @@ export default function HookConfigsTab() {
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void loadDataRecords(hook)}>
-                    <Database className="h-3.5 w-3.5" />
-                    数据记录
-                  </Button>
+                  {shouldShowBusinessData(hook) ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => void loadDataRecords(hook)}>
+                      <Database className="h-3.5 w-3.5" />
+                      {t('hooks.businessData.label')}
+                    </Button>
+                  ) : null}
                   <Button type="button" variant="ghost" size="sm" onClick={() => setDiagnosticsHook(hook)}>
                     <Activity className="h-3.5 w-3.5" />
                     {t('hooks.diagnostics.executionRecords')}

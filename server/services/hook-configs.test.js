@@ -516,6 +516,7 @@ test('execution audit and script data records can be queried for an Hook', () =>
   const { database, service } = createFixture();
   try {
     const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    assert.equal(hook.hasDataRecords, false);
     database.prepare(`
       INSERT INTO hook_executions (
         id, hook_id, hook_version, user_id, event_name, status,
@@ -544,6 +545,8 @@ test('execution audit and script data records can be queried for an Hook', () =>
     const [record] = service.listDataRecords(hook.id, { limit: 1 });
     assert.equal(record.type, 'sql_analysis');
     assert.deepEqual(record.data, { rows: 3 });
+    assert.equal(service.getHook(hook.id).hasDataRecords, true);
+    assert.equal(service.listHooks().find((item) => item.id === hook.id).hasDataRecords, true);
   } finally {
     database.close();
   }

@@ -73,7 +73,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   {
     id: 'sql-line-record',
     name: '示例 · SQL 行数记录',
-    description: '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 数据记录；不调用 SQL 检查 MCP。',
+    description: '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 业务数据；不调用 SQL 检查 MCP。',
     eventName: 'Stop',
     matcher: {},
     extensionLogic: {
