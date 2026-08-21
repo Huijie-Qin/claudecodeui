@@ -103,7 +103,49 @@ test('Hook resources remain available when the built-in Skill catalog fails', as
   assert.equal(payload.skillSource.error, 'catalog unavailable');
 });
 
-test('Hook Skill upload accepts an arbitrary admin file and returns the refreshed catalog', async () => {
+test('Hook diagnostics routes expose global lists and execution details', async () => {
+  const seen = {};
+  const execution = { id: 'execution-1', diagnostics: { outcome: 'failed' } };
+  const page = { executions: [execution], total: 1, executionTotal: 1, limit: 20, offset: 10 };
+  const router = createRouter({
+    hookConfigs: {
+      listAllExecutionPage: (filters) => {
+        seen.filters = filters;
+        return page;
+      },
+      getExecution: (executionId) => executionId === execution.id ? execution : null,
+    },
+    hookSkillMarket: {},
+  });
+
+  const listed = await requestJson(
+    router,
+    '/hook-executions?eventName=PreToolUse&status=failed&userId=2&sessionId=s1&toolUseId=t1&q=bash&bindingController=admin&outcome=failed&limit=20&offset=10',
+  );
+  assert.equal(listed.response.status, 200);
+  assert.deepEqual(listed.payload, page);
+  assert.deepEqual(seen.filters, {
+    hookId: undefined,
+    eventName: 'PreToolUse',
+    status: 'failed',
+    userId: '2',
+    sessionId: 's1',
+    toolUseId: 't1',
+    q: 'bash',
+    bindingController: 'admin',
+    outcome: 'failed',
+    limit: '20',
+    offset: '10',
+  });
+
+  const detail = await requestJson(router, '/hook-executions/execution-1');
+  assert.equal(detail.response.status, 200);
+  assert.deepEqual(detail.payload.execution, execution);
+  const missing = await requestJson(router, '/hook-executions/missing');
+  assert.equal(missing.response.status, 404);
+});
+
+test('Hook Skill upload accepts an admin folder and returns the refreshed catalog', async () => {
   const seen = {};
   const uploadedSkill = {
     skillId: 'builtin:uploaded-notifier',
@@ -126,9 +168,16 @@ test('Hook Skill upload accepts an arbitrary admin file and returns the refreshe
     },
   });
   const formData = new FormData();
-  formData.set('file', new Blob([
+  formData.append('files', new Blob([
     '---\nname: uploaded-notifier\ndescription: Uploaded notifier\n---\nNotify the user.\n',
-  ], { type: 'application/octet-stream' }), 'anything.skill-data');
+  ], { type: 'application/octet-stream' }), 'SKILL.md');
+  formData.append('files', new Blob(['console.log("notify");\n'], {
+    type: 'application/javascript',
+  }), 'notify.js');
+  formData.set('paths', JSON.stringify([
+    'uploaded-notifier/SKILL.md',
+    'uploaded-notifier/scripts/notify.js',
+  ]));
 
   const { response, payload } = await requestJson(router, '/hooks/skills', {
     method: 'POST',
@@ -136,8 +185,10 @@ test('Hook Skill upload accepts an arbitrary admin file and returns the refreshe
   });
 
   assert.equal(response.status, 201);
-  assert.equal(seen.input.fileName, 'anything.skill-data');
-  assert.match(seen.input.fileBuffer.toString('utf8'), /name: uploaded-notifier/);
+  assert.equal(seen.input.files.length, 2);
+  assert.equal(seen.input.files[0].relativePath, 'uploaded-notifier/SKILL.md');
+  assert.match(seen.input.files[0].buffer.toString('utf8'), /name: uploaded-notifier/);
+  assert.equal(seen.input.files[1].relativePath, 'uploaded-notifier/scripts/notify.js');
   assert.equal(seen.input.userId, 9);
   assert.deepEqual(payload.skill, uploadedSkill);
   assert.deepEqual(payload.skills, [uploadedSkill]);

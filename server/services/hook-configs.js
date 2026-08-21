@@ -67,6 +67,18 @@ const MAX_POST_ACTIONS = 20;
 const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill']);
 const SKILL_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
+const EXECUTION_OUTCOMES = new Set([
+  'succeeded',
+  'failed',
+  'denied',
+  'stopped',
+  'ask',
+  'defer',
+  'modified_input',
+  'modified_output',
+  'post_action',
+  'additional_context',
+]);
 const ENVIRONMENT_VARIABLE_PATHS = new Set([
   'ccui.env.userId',
   'ccui.env.username',
@@ -507,7 +519,55 @@ function normalizeRecordLimit(value) {
   return Number.isInteger(number) && number > 0 ? Math.min(number, 200) : 50;
 }
 
-function mapExecutionRow(row) {
+function normalizeRecordOffset(value) {
+  const number = Number(value ?? 0);
+  return Number.isInteger(number) && number >= 0 ? number : 0;
+}
+
+function escapeLikePattern(value) {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+function mapExecutionRow(row, { summary = false } = {}) {
+  if (!row) return null;
+  const input = parseJson(row.input_json, {});
+  const actions = parseJson(row.actions_json, {});
+  const response = parseJson(row.response_json, {});
+  const hookSpecificOutput = isPlainObject(response.hookSpecificOutput) ? response.hookSpecificOutput : {};
+  const permissionDecision = typeof hookSpecificOutput.permissionDecision === 'string'
+    ? hookSpecificOutput.permissionDecision
+    : isPlainObject(hookSpecificOutput.decision) && typeof hookSpecificOutput.decision.behavior === 'string'
+      ? hookSpecificOutput.decision.behavior
+      : null;
+  const effects = [];
+  if (Object.prototype.hasOwnProperty.call(hookSpecificOutput, 'updatedInput')) effects.push('updated_input');
+  if (Object.prototype.hasOwnProperty.call(hookSpecificOutput, 'updatedMCPToolOutput')
+      || Object.prototype.hasOwnProperty.call(hookSpecificOutput, 'updatedToolOutput')) effects.push('updated_output');
+  if (typeof hookSpecificOutput.additionalContext === 'string' && hookSpecificOutput.additionalContext) {
+    effects.push('additional_context');
+  }
+  if (Object.keys(actions).length > 0) effects.push('post_action');
+  if (permissionDecision) effects.push(`permission_${permissionDecision}`);
+  if (response.decision === 'block') effects.push('blocked');
+  if (response.continue === false) effects.push('stopped');
+  let outcome = 'succeeded';
+  if (row.status === 'failed') outcome = 'failed';
+  else if (permissionDecision === 'deny' || response.decision === 'block') outcome = 'denied';
+  else if (response.continue === false) outcome = 'stopped';
+  else if (permissionDecision === 'ask' || permissionDecision === 'defer') outcome = permissionDecision;
+  else if (effects.includes('updated_input')) outcome = 'modified_input';
+  else if (effects.includes('updated_output')) outcome = 'modified_output';
+  else if (effects.includes('post_action')) outcome = 'post_action';
+  else if (effects.includes('additional_context')) outcome = 'additional_context';
+  const parsedStartedAtMs = Number(row.started_at_ms);
+  const fallbackStartedAtMs = Date.parse(row.started_at || '');
+  const startedAtMs = Number.isFinite(parsedStartedAtMs) && parsedStartedAtMs > 0
+    ? parsedStartedAtMs
+    : Number.isFinite(fallbackStartedAtMs) ? fallbackStartedAtMs : null;
+  const parsedCompletedAtMs = Number(row.completed_at_ms);
+  const completedAtMs = Number.isFinite(parsedCompletedAtMs) && parsedCompletedAtMs > 0
+    ? parsedCompletedAtMs
+    : startedAtMs != null && row.duration_ms != null ? startedAtMs + Number(row.duration_ms || 0) : null;
   return {
     id: row.id,
     hookId: row.hook_id,
@@ -519,15 +579,29 @@ function mapExecutionRow(row) {
     eventName: row.event_name,
     toolUseId: row.tool_use_id,
     status: row.status,
-    input: parseJson(row.input_json, {}),
-    scriptOutput: parseJson(row.script_output_json, null),
-    actions: parseJson(row.actions_json, {}),
-    response: parseJson(row.response_json, {}),
-    logs: parseJson(row.logs_json, []),
-    errorMessage: row.error_message,
+    hookName: row.hook_name || null,
+    bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
+    username: row.username || null,
+    toolName: typeof input.tool_name === 'string' ? input.tool_name : null,
+    input: summary ? null : input,
+    scriptOutput: summary ? null : parseJson(row.script_output_json, null),
+    actions: summary ? {} : actions,
+    response: summary ? {} : response,
+    logs: summary ? [] : parseJson(row.logs_json, []),
+    errorMessage: summary ? null : row.error_message,
     durationMs: row.duration_ms,
+    startedAtMs,
+    completedAtMs,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+    diagnostics: {
+      outcome,
+      effects,
+      permissionDecision,
+      updatedInput: effects.includes('updated_input'),
+      actionCount: Object.keys(actions).length,
+      failOpen: row.status === 'failed',
+    },
   };
 }
 
@@ -749,6 +823,176 @@ export function createHookConfigService({ database = db, configStore = appConfig
       hookName: hook.name,
       hookStatus: hook.status,
       reason: available ? null : 'not_published',
+    };
+  };
+  const queryExecutions = ({
+    hookId,
+    eventName,
+    status,
+    userId,
+    sessionId,
+    toolUseId,
+    q,
+    bindingController,
+    outcome,
+    limit,
+    offset,
+    summary = false,
+  } = {}) => {
+    const normalizedLimit = normalizeRecordLimit(limit);
+    const normalizedOffset = normalizeRecordOffset(offset);
+    if (!hasTable(database, 'hook_executions')) {
+      return {
+        executions: [],
+        total: 0,
+        executionTotal: 0,
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+      };
+    }
+    const conditions = [];
+    const parameters = [];
+    if (hookId) {
+      conditions.push('e.hook_id = ?');
+      parameters.push(String(hookId));
+    }
+    if (eventName) {
+      conditions.push('e.event_name = ?');
+      parameters.push(normalizeEventName(eventName));
+    }
+    if (status) {
+      if (!['running', 'succeeded', 'failed'].includes(status)) {
+        throw createHttpError('status must be running, succeeded, or failed');
+      }
+      conditions.push('e.status = ?');
+      parameters.push(status);
+    }
+    if (userId != null && userId !== '') {
+      const normalizedUserId = Number(userId);
+      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+        throw createHttpError('userId must be a positive integer');
+      }
+      conditions.push('e.user_id = ?');
+      parameters.push(normalizedUserId);
+    }
+    if (sessionId) {
+      conditions.push('e.session_id = ?');
+      parameters.push(requireString(String(sessionId), 'sessionId', { max: 300 }));
+    }
+    if (toolUseId) {
+      conditions.push('e.tool_use_id = ?');
+      parameters.push(requireString(String(toolUseId), 'toolUseId', { max: 300 }));
+    }
+    if (bindingController) {
+      if (!['admin', 'sql_check'].includes(bindingController)) {
+        throw createHttpError('bindingController must be admin or sql_check');
+      }
+      conditions.push("COALESCE(h.binding_controller, 'admin') = ?");
+      parameters.push(bindingController);
+    }
+
+    const safeInputJson = "CASE WHEN json_valid(e.input_json) THEN e.input_json ELSE '{}' END";
+    const safeActionsJson = "CASE WHEN json_valid(e.actions_json) THEN e.actions_json ELSE '{}' END";
+    const safeResponseJson = "CASE WHEN json_valid(e.response_json) THEN e.response_json ELSE '{}' END";
+    const permissionDecisionSql = `COALESCE(
+      json_extract(${safeResponseJson}, '$.hookSpecificOutput.permissionDecision'),
+      json_extract(${safeResponseJson}, '$.hookSpecificOutput.decision.behavior')
+    )`;
+    const outcomeSql = `CASE
+      WHEN e.status = 'failed' THEN 'failed'
+      WHEN ${permissionDecisionSql} = 'deny'
+        OR json_extract(${safeResponseJson}, '$.decision') = 'block' THEN 'denied'
+      WHEN json_extract(${safeResponseJson}, '$.continue') = 0 THEN 'stopped'
+      WHEN ${permissionDecisionSql} = 'ask' THEN 'ask'
+      WHEN ${permissionDecisionSql} = 'defer' THEN 'defer'
+      WHEN json_type(${safeResponseJson}, '$.hookSpecificOutput.updatedInput') IS NOT NULL THEN 'modified_input'
+      WHEN json_type(${safeResponseJson}, '$.hookSpecificOutput.updatedMCPToolOutput') IS NOT NULL
+        OR json_type(${safeResponseJson}, '$.hookSpecificOutput.updatedToolOutput') IS NOT NULL THEN 'modified_output'
+      WHEN EXISTS (SELECT 1 FROM json_each(${safeActionsJson})) THEN 'post_action'
+      WHEN COALESCE(json_extract(${safeResponseJson}, '$.hookSpecificOutput.additionalContext'), '') <> ''
+        THEN 'additional_context'
+      ELSE 'succeeded'
+    END`;
+
+    if (outcome) {
+      if (!EXECUTION_OUTCOMES.has(outcome)) {
+        throw createHttpError('outcome is not supported');
+      }
+      conditions.push(`${outcomeSql} = ?`);
+      parameters.push(outcome);
+    }
+    const normalizedQuery = String(q || '').trim().toLowerCase();
+    if (normalizedQuery) {
+      if (normalizedQuery.length > 300) throw createHttpError('q must be 300 characters or fewer');
+      const pattern = `%${escapeLikePattern(normalizedQuery)}%`;
+      conditions.push(`(
+        LOWER(COALESCE(h.name, e.hook_id, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(users.username, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(CAST(e.user_id AS TEXT), '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(CAST(e.tenant_id AS TEXT), '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(CAST(e.workspace_id AS TEXT), '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(e.session_id, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(e.tool_use_id, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(e.event_name, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(json_extract(${safeInputJson}, '$.tool_name'), '')) LIKE ? ESCAPE '\\'
+      )`);
+      parameters.push(...Array(9).fill(pattern));
+    }
+
+    const groupKeySql = `CASE
+      WHEN NULLIF(e.tool_use_id, '') IS NOT NULL THEN
+        'tool:' || COALESCE(e.session_id, '') || CHAR(31) || e.event_name || CHAR(31) || e.tool_use_id
+      ELSE 'execution:' || e.id
+    END`;
+    const sortTimeSql = `COALESCE(
+      e.started_at_ms,
+      CAST(strftime('%s', e.started_at) AS INTEGER) * 1000,
+      0
+    )`;
+    const filteredCte = `
+      WITH filtered AS (
+        SELECT e.*, h.name AS hook_name, h.binding_controller, users.username,
+          ${groupKeySql} AS execution_group_key,
+          ${sortTimeSql} AS execution_sort_ms,
+          e.rowid AS execution_rowid
+        FROM hook_executions e
+        LEFT JOIN hooks h ON h.id = e.hook_id
+        LEFT JOIN users ON users.id = e.user_id
+        ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
+      )
+    `;
+    const totals = database.prepare(`
+      ${filteredCte}
+      SELECT COUNT(*) AS total, COALESCE(SUM(execution_count), 0) AS execution_total
+      FROM (
+        SELECT execution_group_key, COUNT(*) AS execution_count
+        FROM filtered
+        GROUP BY execution_group_key
+      ) grouped
+    `).get(...parameters);
+    const rows = database.prepare(`
+      ${filteredCte},
+      page_groups AS (
+        SELECT execution_group_key,
+          MAX(execution_sort_ms) AS group_sort_ms,
+          MAX(execution_rowid) AS group_sort_rowid
+        FROM filtered
+        GROUP BY execution_group_key
+        ORDER BY group_sort_ms DESC, group_sort_rowid DESC
+        LIMIT ? OFFSET ?
+      )
+      SELECT filtered.*
+      FROM filtered
+      INNER JOIN page_groups USING (execution_group_key)
+      ORDER BY page_groups.group_sort_ms DESC, page_groups.group_sort_rowid DESC,
+        filtered.execution_sort_ms DESC, filtered.execution_rowid DESC
+    `).all(...parameters, normalizedLimit, normalizedOffset);
+    return {
+      executions: rows.map((row) => mapExecutionRow(row, { summary })),
+      total: Number(totals?.total || 0),
+      executionTotal: Number(totals?.execution_total || 0),
+      limit: normalizedLimit,
+      offset: normalizedOffset,
     };
   };
   return {
@@ -1000,18 +1244,30 @@ export function createHookConfigService({ database = db, configStore = appConfig
       return getSqlCheckEnforcement({ userId: normalizedUserId });
     },
 
-    listExecutions: (hookId, { limit } = {}) => {
+    listExecutions: (hookId, filters = {}) => {
       requireHook(hookId);
-      if (!hasTable(database, 'hook_executions')) return [];
-      return database
-        .prepare(`
-          SELECT * FROM hook_executions
-          WHERE hook_id = ?
-          ORDER BY started_at DESC, rowid DESC
-          LIMIT ?
-        `)
-        .all(hookId, normalizeRecordLimit(limit))
-        .map(mapExecutionRow);
+      return queryExecutions({ ...filters, hookId }).executions;
+    },
+
+    listExecutionPage: (hookId, filters = {}) => {
+      requireHook(hookId);
+      return queryExecutions({ ...filters, hookId, summary: true });
+    },
+
+    listAllExecutions: (filters = {}) => queryExecutions({ ...filters, summary: true }).executions,
+
+    listAllExecutionPage: (filters = {}) => queryExecutions({ ...filters, summary: true }),
+
+    getExecution: (executionId) => {
+      if (!hasTable(database, 'hook_executions')) return null;
+      const row = database.prepare(`
+        SELECT e.*, h.name AS hook_name, h.binding_controller, users.username
+        FROM hook_executions e
+        LEFT JOIN hooks h ON h.id = e.hook_id
+        LEFT JOIN users ON users.id = e.user_id
+        WHERE e.id = ?
+      `).get(executionId);
+      return mapExecutionRow(row);
     },
 
     listDataRecords: (hookId, { limit } = {}) => {
@@ -1104,6 +1360,10 @@ export function createHookConfigService({ database = db, configStore = appConfig
     },
 
     deleteHook: (hookId) => {
+      const hook = requireHook(hookId);
+      if (hook.bindingController === 'sql_check') {
+        throw createHttpError('Built-in SQL Check Hook cannot be deleted', 409);
+      }
       const result = database.prepare('DELETE FROM hooks WHERE id = ?').run(hookId);
       if (result.changes === 0) throw createHttpError('Hook not found', 404);
       return true;

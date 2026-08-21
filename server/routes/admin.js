@@ -155,9 +155,6 @@ const helperScriptUpload = multer({
 });
 const hookSkillUpload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    files: 1,
-  },
 });
 
 function parseRuntimeFilterInteger(value, { min }) {
@@ -474,6 +471,36 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/hook-executions', (req, res) => {
+    try {
+      return res.json(hookConfigs.listAllExecutionPage({
+        hookId: req.query.hookId,
+        eventName: req.query.eventName,
+        status: req.query.status,
+        userId: req.query.userId,
+        sessionId: req.query.sessionId,
+        toolUseId: req.query.toolUseId,
+        q: req.query.q,
+        bindingController: req.query.bindingController,
+        outcome: req.query.outcome,
+        limit: req.query.limit,
+        offset: req.query.offset,
+      }));
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook diagnostics');
+    }
+  });
+
+  router.get('/hook-executions/:executionId', (req, res) => {
+    try {
+      const execution = hookConfigs.getExecution(req.params.executionId);
+      if (!execution) return res.status(404).json({ error: 'Hook execution not found' });
+      return res.json({ execution });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Hook execution');
+    }
+  });
+
   router.post('/hooks', (req, res) => {
     try {
       const hook = hookConfigs.createHook({ input: req.body, userId: req.user.id });
@@ -548,21 +575,34 @@ export function createAdminRouter(
   });
 
   router.post('/hooks/skills', (req, res) => {
-    hookSkillUpload.single('file')(req, res, async (uploadError) => {
+    hookSkillUpload.array('files')(req, res, async (uploadError) => {
       try {
         if (uploadError) {
           const error = new Error(uploadError.message);
           error.statusCode = 400;
           throw error;
         }
-        if (!req.file?.buffer) {
-          const error = new Error('Skill file is required');
+        if (!Array.isArray(req.files) || req.files.length === 0) {
+          const error = new Error('Skill folder is required');
+          error.statusCode = 400;
+          throw error;
+        }
+        let relativePaths;
+        try {
+          relativePaths = JSON.parse(String(req.body?.paths || '[]'));
+        } catch {
+          relativePaths = [];
+        }
+        if (!Array.isArray(relativePaths) || relativePaths.length !== req.files.length) {
+          const error = new Error('Skill folder paths are invalid');
           error.statusCode = 400;
           throw error;
         }
         const skill = await hookSkillCatalog.uploadBuiltinSkill({
-          fileName: req.file.originalname,
-          fileBuffer: req.file.buffer,
+          files: req.files.map((file, index) => ({
+            relativePath: String(relativePaths[index] || ''),
+            buffer: file.buffer,
+          })),
           userId: req.user.id,
         });
         const catalog = await hookSkillCatalog.listConfigurationSkills();
@@ -660,9 +700,18 @@ export function createAdminRouter(
 
   router.get('/hooks/:hookId/executions', (req, res) => {
     try {
-      return res.json({
-        executions: hookConfigs.listExecutions(req.params.hookId, { limit: req.query.limit }),
-      });
+      return res.json(hookConfigs.listExecutionPage(req.params.hookId, {
+        eventName: req.query.eventName,
+        status: req.query.status,
+        userId: req.query.userId,
+        sessionId: req.query.sessionId,
+        toolUseId: req.query.toolUseId,
+        q: req.query.q,
+        bindingController: req.query.bindingController,
+        outcome: req.query.outcome,
+        limit: req.query.limit,
+        offset: req.query.offset,
+      }));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook executions');
     }

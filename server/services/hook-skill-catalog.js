@@ -44,8 +44,8 @@ export function createHookSkillCatalogService({
       source: { type: 'builtin', available: true },
     }),
 
-    uploadBuiltinSkill: async ({ fileName, fileBuffer }) => (
-      normalizeBuiltinSkill(await saveBuiltinSkill({ fileName, fileBuffer }))
+    uploadBuiltinSkill: async ({ files }) => (
+      normalizeBuiltinSkill(await saveBuiltinSkill({ files }))
     ),
 
     deleteBuiltinSkill: async ({ skillId }) => (

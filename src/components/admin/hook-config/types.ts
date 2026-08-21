@@ -101,6 +101,62 @@ export type HookConfig = HookConfigDraft & {
   boundTenantCount: number;
 };
 
+export type HookExecutionOutcome =
+  | 'succeeded'
+  | 'failed'
+  | 'denied'
+  | 'stopped'
+  | 'ask'
+  | 'defer'
+  | 'modified_input'
+  | 'modified_output'
+  | 'post_action'
+  | 'additional_context';
+
+export type HookExecution = {
+  id: string;
+  hookId: string;
+  hookName: string | null;
+  hookVersion: number;
+  bindingController: 'admin' | 'sql_check';
+  userId: number | null;
+  username: string | null;
+  tenantId: number | null;
+  workspaceId: number | null;
+  sessionId: string | null;
+  eventName: HookEventName;
+  toolUseId: string | null;
+  toolName: string | null;
+  status: 'running' | 'succeeded' | 'failed';
+  input: unknown;
+  scriptOutput: unknown;
+  actions: Record<string, unknown>;
+  response: Record<string, unknown>;
+  logs: Array<{ timestamp?: string; message?: string; data?: unknown }>;
+  errorMessage: string | null;
+  durationMs: number | null;
+  startedAtMs: number | null;
+  completedAtMs: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  diagnostics: {
+    outcome: HookExecutionOutcome;
+    effects: string[];
+    permissionDecision: string | null;
+    updatedInput: boolean;
+    actionCount: number;
+    failOpen: boolean;
+  };
+};
+
+export type HookExecutionPage = {
+  executions: HookExecution[];
+  total: number;
+  executionTotal: number;
+  limit: number;
+  offset: number;
+};
+
 export type JsonSchemaProperty = {
   type?: string;
   description?: string;

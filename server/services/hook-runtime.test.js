@@ -88,7 +88,6 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
       session_id: 'session-1',
       tool_name: 'mcp__sms__send',
       tool_input: {},
-      tool_use_id: 'tool-1',
     }, 'tool-1', { signal: new AbortController().signal });
 
     assert.deepEqual(mcpInput, {
@@ -104,6 +103,10 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
     });
     const execution = database.prepare('SELECT * FROM hook_executions').get();
     assert.equal(execution.status, 'succeeded');
+    assert.ok(Number.isInteger(execution.started_at_ms));
+    assert.ok(Number.isInteger(execution.completed_at_ms));
+    assert.ok(execution.completed_at_ms >= execution.started_at_ms);
+    assert.equal(execution.tool_use_id, 'tool-1');
     assert.equal(JSON.parse(execution.script_output_json).recipient, '13800000000');
     assert.equal(JSON.parse(execution.logs_json)[0].message, 'script ran');
     const record = database.prepare('SELECT * FROM hook_data_records').get();

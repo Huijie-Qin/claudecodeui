@@ -440,6 +440,12 @@ export const api = {
       }),
     hookDataRecords: (hookId, limit = 50) =>
       authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/data-records?limit=${encodeURIComponent(String(limit))}`),
+    hookExecutions: (hookId, filters = {}) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`),
+    allHookExecutions: (filters = {}) =>
+      authenticatedFetch(`/api/admin/hook-executions${buildQueryString(filters)}`),
+    hookExecution: (executionId) =>
+      authenticatedFetch(`/api/admin/hook-executions/${encodeURIComponent(String(executionId))}`),
     hookSettings: () => authenticatedFetch('/api/admin/hooks/settings'),
     updateHookSettings: (payload) =>
       authenticatedFetch('/api/admin/hooks/settings', {

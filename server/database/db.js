@@ -32,7 +32,12 @@ import {
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
-import { HOOK_CONFIG_SCHEMA_SQL, migrateHookActivationModel, migrateHookConfigurationModel } from './hook-config-schema.js';
+import {
+  HOOK_CONFIG_SCHEMA_SQL,
+  migrateHookActivationModel,
+  migrateHookConfigurationModel,
+  migrateHookExecutionDiagnostics,
+} from './hook-config-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
@@ -194,6 +199,7 @@ const runMigrations = () => {
     db.exec(HOOK_CONFIG_SCHEMA_SQL);
     migrateHookConfigurationModel(db);
     migrateHookActivationModel(db);
+    migrateHookExecutionDiagnostics(db);
     runMultitenancyMigrations();
 
     console.log('Database migrations completed successfully');
@@ -418,6 +424,7 @@ const initializeDatabase = async () => {
     db.exec(HOOK_CONFIG_SCHEMA_SQL);
     migrateHookConfigurationModel(db);
     migrateHookActivationModel(db);
+    migrateHookExecutionDiagnostics(db);
     console.log('Database initialized successfully');
     runMigrations();
   } catch (error) {

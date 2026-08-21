@@ -81,13 +81,13 @@ test('Hook catalog uploads and returns an admin-managed built-in Skill', async (
       return uploaded;
     },
   });
-  const fileBuffer = Buffer.from('skill file');
+  const files = [{ relativePath: 'uploaded-notifier/SKILL.md', buffer: Buffer.from('skill file') }];
 
   assert.deepEqual(
-    await service.uploadBuiltinSkill({ fileName: 'SKILL.md', fileBuffer }),
+    await service.uploadBuiltinSkill({ files }),
     uploaded,
   );
-  assert.deepEqual(calls, [{ fileName: 'SKILL.md', fileBuffer }]);
+  assert.deepEqual(calls, [{ files }]);
 });
 
 test('Hook catalog deletes only through the managed Skill store', async () => {

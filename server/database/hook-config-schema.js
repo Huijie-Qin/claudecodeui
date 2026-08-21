@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS hook_executions (
   logs_json TEXT NOT NULL DEFAULT '[]',
   error_message TEXT,
   duration_ms INTEGER,
+  started_at_ms INTEGER,
+  completed_at_ms INTEGER,
   started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   completed_at DATETIME,
   FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
@@ -153,6 +155,44 @@ export function migrateHookConfigurationModel(database) {
     addedClaudeResponse: !hasClaudeResponse,
     removedGate: hasGate,
     removedAdvancedScript: hasAdvancedScript,
+  };
+}
+
+export function migrateHookExecutionDiagnostics(database) {
+  const table = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_executions'")
+    .get();
+  if (!table) return { addedStartedAtMs: false, addedCompletedAtMs: false };
+
+  const columns = database.prepare('PRAGMA table_info(hook_executions)').all();
+  const hasStartedAtMs = columns.some((column) => column.name === 'started_at_ms');
+  const hasCompletedAtMs = columns.some((column) => column.name === 'completed_at_ms');
+  const migrate = database.transaction(() => {
+    if (!hasStartedAtMs) {
+      database.exec('ALTER TABLE hook_executions ADD COLUMN started_at_ms INTEGER');
+    }
+    if (!hasCompletedAtMs) {
+      database.exec('ALTER TABLE hook_executions ADD COLUMN completed_at_ms INTEGER');
+    }
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_hook_executions_started_ms
+      ON hook_executions(started_at_ms DESC)
+    `);
+    database.prepare(`
+      UPDATE hook_executions
+      SET started_at_ms = CAST(strftime('%s', started_at) AS INTEGER) * 1000
+      WHERE started_at_ms IS NULL AND started_at IS NOT NULL
+    `).run();
+    database.prepare(`
+      UPDATE hook_executions
+      SET completed_at_ms = started_at_ms + COALESCE(duration_ms, 0)
+      WHERE completed_at_ms IS NULL AND completed_at IS NOT NULL AND started_at_ms IS NOT NULL
+    `).run();
+  });
+  migrate();
+  return {
+    addedStartedAtMs: !hasStartedAtMs,
+    addedCompletedAtMs: !hasCompletedAtMs,
   };
 }
 

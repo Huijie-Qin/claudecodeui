@@ -7,6 +7,7 @@ import {
   HOOK_CONFIG_SCHEMA_SQL,
   migrateHookActivationModel,
   migrateHookConfigurationModel,
+  migrateHookExecutionDiagnostics,
 } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
@@ -202,6 +203,136 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   }
 });
 
+test('Hook execution diagnostics expose outcomes, millisecond timestamps, and global filters', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 2, 1, 'session-1', 'PreToolUse', 'tool-1',
+        'succeeded', ?, '{}', ?, 25, 1000, 1025)
+    `).run(
+      'execution-1',
+      hook.id,
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } }),
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'blocked',
+        },
+      }),
+    );
+
+    const [execution] = service.listAllExecutions({ sessionId: 'session-1' });
+    assert.equal(execution.hookName, hook.name);
+    assert.equal(execution.username, 'admin');
+    assert.equal(execution.toolName, 'Bash');
+    assert.equal(execution.startedAtMs, 1000);
+    assert.equal(execution.completedAtMs, 1025);
+    assert.equal(execution.diagnostics.outcome, 'denied');
+    assert.equal(execution.diagnostics.permissionDecision, 'deny');
+    assert.equal(execution.input, null);
+    const detail = service.getExecution('execution-1');
+    assert.equal(detail.id, 'execution-1');
+    assert.equal(detail.input.tool_name, 'Bash');
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics paginate correlated event groups without splitting parallel Hooks', () => {
+  const { database, service } = createFixture();
+  try {
+    const firstHook = service.createHook({ input: publishableHook({ name: 'First Hook' }), userId: 1 });
+    const secondHook = service.createHook({ input: publishableHook({ name: 'Second Hook' }), userId: 1 });
+    const insert = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 1, 1, ?, 'PreToolUse', ?, 'succeeded', ?, '{}', ?, 10, ?, ?)
+    `);
+    const deniedResponse = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+      },
+    });
+    const bashInput = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } });
+    insert.run('parallel-1', firstHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1000, 1010);
+    insert.run('parallel-2', secondHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1005, 1015);
+    insert.run(
+      'latest-standalone',
+      firstHook.id,
+      'session-2',
+      'tool-2',
+      JSON.stringify({ tool_name: 'Read' }),
+      '{}',
+      2000,
+      2010,
+    );
+
+    const firstPage = service.listAllExecutionPage({ limit: 1, offset: 0 });
+    assert.equal(firstPage.total, 2);
+    assert.equal(firstPage.executionTotal, 3);
+    assert.equal(firstPage.limit, 1);
+    assert.equal(firstPage.offset, 0);
+    assert.deepEqual(firstPage.executions.map((execution) => execution.id), ['latest-standalone']);
+
+    const secondPage = service.listAllExecutionPage({ limit: 1, offset: 1 });
+    assert.equal(secondPage.total, 2);
+    assert.equal(secondPage.executionTotal, 3);
+    assert.deepEqual(
+      new Set(secondPage.executions.map((execution) => execution.id)),
+      new Set(['parallel-1', 'parallel-2']),
+    );
+
+    const filtered = service.listAllExecutionPage({
+      q: 'bash',
+      bindingController: 'admin',
+      outcome: 'denied',
+      limit: 10,
+    });
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.executionTotal, 2);
+    assert.equal(filtered.executions.every((execution) => execution.diagnostics.outcome === 'denied'), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics migration adds and backfills millisecond timestamps', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE hook_executions (
+        id TEXT PRIMARY KEY,
+        duration_ms INTEGER,
+        started_at DATETIME,
+        completed_at DATETIME
+      );
+      INSERT INTO hook_executions (id, duration_ms, started_at, completed_at)
+      VALUES ('execution-1', 50, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+    `);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: true,
+      addedCompletedAtMs: true,
+    });
+    const row = database.prepare('SELECT * FROM hook_executions').get();
+    assert.equal(row.completed_at_ms, row.started_at_ms + 50);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: false,
+      addedCompletedAtMs: false,
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test('publishing requires at least one configured effect', () => {
   const { database, service } = createFixture();
   try {
@@ -327,6 +458,10 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
         boundBy: 1,
       }),
       /managed by each user from the SQL Check page/,
+    );
+    assert.throws(
+      () => service.deleteHook(created.id),
+      /cannot be deleted/,
     );
 
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });

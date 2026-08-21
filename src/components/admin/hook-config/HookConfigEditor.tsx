@@ -1163,8 +1163,11 @@ export default function HookConfigEditor({
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
         </div>
-        {isPersisted && status === 'published' && hook.bindingController === 'sql_check' ? (
-          <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge>
+        {isPersisted && hook.bindingController === 'sql_check' ? (
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">{t('hooks.builtin')}</Badge>
+            {status === 'published' ? <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge> : null}
+          </div>
         ) : isPersisted && status === 'published' ? (
           <Button type="button" variant="outline" size="sm" onClick={onManageBindings} disabled={busy}>
             <UsersRound className="h-4 w-4" />

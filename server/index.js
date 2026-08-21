@@ -87,6 +87,7 @@ import {createScheduledSessionTaskService} from './services/scheduled-session-ta
 import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
 import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
@@ -636,6 +637,10 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Public, side-effect-free simulated MCP endpoint used by the SQL response Hook.
+// It only validates the supplied text and never executes SQL or reads application data.
+app.all(SQL_SYNTAX_MCP_PATH, handleSqlSyntaxMcpRequest);
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {

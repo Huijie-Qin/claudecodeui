@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   BookOpen,
   Building2,
   Check,
@@ -28,6 +29,7 @@ import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '
 import { api } from '../../utils/api';
 
 import HookConfigEditor from './hook-config/HookConfigEditor';
+import HookDiagnosticsPanel from './hook-config/HookDiagnosticsPanel';
 import { EVENT_DEFINITIONS, EVENT_GROUPS, createEmptyHook } from './hook-config/catalog';
 import { findUnavailableHookSkills } from './hook-config/skillAvailability';
 import type {
@@ -43,6 +45,11 @@ const EMPTY_RESOURCES: HookResources = {
   mcpTools: [],
   skills: [],
   environmentVariables: [],
+};
+
+const DIRECTORY_INPUT_ATTRIBUTES = {
+  webkitdirectory: '',
+  directory: '',
 };
 
 type Toast = { type: 'success' | 'error'; message: string } | null;
@@ -646,6 +653,8 @@ export default function HookConfigsTab() {
   const [dataRecords, setDataRecords] = useState<HookDataRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [diagnosticsHook, setDiagnosticsHook] = useState<HookConfig | null>(null);
+  const [activeView, setActiveView] = useState<'configs' | 'diagnostics'>('configs');
   const [bindingsHook, setBindingsHook] = useState<HookConfig | null>(null);
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
@@ -961,12 +970,14 @@ export default function HookConfigsTab() {
     }
   };
 
-  const uploadBuiltinSkill = async (file: File | null) => {
-    if (!file) return;
+  const uploadBuiltinSkill = async (files: File[]) => {
+    if (files.length === 0) return;
     setSkillUploadBusy(true);
     try {
       const formData = new FormData();
-      formData.set('file', file);
+      const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
+      files.forEach((file) => formData.append('files', file, file.name));
+      formData.set('paths', JSON.stringify(relativePaths));
       const response = await api.admin.uploadHookSkill(formData);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.uploadSkill')));
       const payload = await response.json() as {
@@ -980,7 +991,7 @@ export default function HookConfigsTab() {
         skillSource: payload.skillSource || current.skillSource,
       }));
       showToast(t('hooks.toast.skillUploaded', {
-        name: payload.skill?.displayName || payload.skill?.name || file.name,
+        name: payload.skill?.displayName || payload.skill?.name || relativePaths[0]?.split('/')[0],
       }), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.uploadSkill'), 'error');
@@ -1112,6 +1123,34 @@ export default function HookConfigsTab() {
     );
   }
 
+  if (activeView === 'diagnostics') {
+    return (
+      <div className="relative h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-6xl space-y-5 px-3 py-4 sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+                <Activity className="h-5 w-5 text-primary" />
+                {t('hooks.diagnostics.title')}
+              </h2>
+            </div>
+            <div className="flex rounded-lg border border-border bg-muted/20 p-1">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView('configs')}>
+                <Webhook className="h-4 w-4" />
+                {t('hooks.diagnostics.configTab')}
+              </Button>
+              <Button type="button" variant="secondary" size="sm">
+                <Activity className="h-4 w-4" />
+                {t('hooks.diagnostics.diagnosticsTab')}
+              </Button>
+            </div>
+          </div>
+          <HookDiagnosticsPanel hooks={hooks} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-full min-h-0 overflow-y-auto">
       {toast ? (
@@ -1133,6 +1172,15 @@ export default function HookConfigsTab() {
             </h2>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setActiveView('diagnostics')}
+            >
+              <Activity className="h-4 w-4" />
+              {t('hooks.diagnostics.diagnosticsTab')}
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -1174,12 +1222,14 @@ export default function HookConfigsTab() {
               <label className="shrink-0">
                 <input
                   type="file"
+                  multiple
+                  {...DIRECTORY_INPUT_ATTRIBUTES}
                   className="sr-only"
                   disabled={skillUploadBusy}
                   onChange={(event) => {
-                    const file = event.target.files?.[0] || null;
+                    const files = Array.from(event.target.files || []);
                     event.target.value = '';
-                    void uploadBuiltinSkill(file);
+                    void uploadBuiltinSkill(files);
                   }}
                 />
                 <span className={cn(
@@ -1330,6 +1380,7 @@ export default function HookConfigsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="truncate text-sm font-semibold text-foreground">{hook.name}</h3>
+                        {isSqlCheckManaged ? <Badge variant="outline">{t('hooks.builtin')}</Badge> : null}
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
                         {hook.status === 'published' ? (
                           <Badge variant={bindingActive && !isSqlCheckManaged ? 'default' : 'outline'}>
@@ -1398,6 +1449,10 @@ export default function HookConfigsTab() {
                     <Database className="h-3.5 w-3.5" />
                     数据记录
                   </Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setDiagnosticsHook(hook)}>
+                    <Activity className="h-3.5 w-3.5" />
+                    {t('hooks.diagnostics.executionRecords')}
+                  </Button>
                   {hook.status === 'published' && isSqlCheckManaged ? (
                     <span className="inline-flex h-8 items-center gap-1.5 px-3 text-xs text-muted-foreground">
                       <ShieldCheck className="h-3.5 w-3.5" />
@@ -1413,10 +1468,12 @@ export default function HookConfigsTab() {
                       {t('hooks.publish')}
                     </Button>
                   )}
-                  <Button type="button" variant="ghost" size="sm" className="ml-auto text-destructive hover:text-destructive" disabled={busy} onClick={() => void removeHook(hook)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {t('hooks.delete')}
-                  </Button>
+                  {!isSqlCheckManaged ? (
+                    <Button type="button" variant="ghost" size="sm" className="ml-auto text-destructive hover:text-destructive" disabled={busy} onClick={() => void removeHook(hook)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {t('hooks.delete')}
+                    </Button>
+                  ) : null}
                 </div>
               </Card>
               );
@@ -1437,6 +1494,13 @@ export default function HookConfigsTab() {
         }}
         onRefresh={() => { if (recordsHook) void loadDataRecords(recordsHook); }}
       />
+
+      <Dialog open={Boolean(diagnosticsHook)} onOpenChange={(open) => { if (!open) setDiagnosticsHook(null); }}>
+        <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto p-4 sm:p-5">
+          <DialogTitle className="sr-only">{t('hooks.diagnostics.executionRecords')}</DialogTitle>
+          {diagnosticsHook ? <HookDiagnosticsPanel hook={diagnosticsHook} hooks={hooks} /> : null}
+        </DialogContent>
+      </Dialog>
 
       {userBindingsDialog}
       {examplesDialog}

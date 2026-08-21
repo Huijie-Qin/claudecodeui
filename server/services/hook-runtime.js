@@ -172,13 +172,13 @@ function normalizeScriptOutput(result, declarations = []) {
   return output;
 }
 
-function createExecutionRecord(database, hook, context, input) {
+function createExecutionRecord(database, hook, context, input, startedAtMs, toolUseId) {
   const executionId = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_executions (
       id, hook_id, hook_version, user_id, tenant_id, workspace_id,
-      session_id, event_name, tool_use_id, input_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      session_id, event_name, tool_use_id, input_json, started_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     executionId,
     hook.id,
@@ -188,8 +188,9 @@ function createExecutionRecord(database, hook, context, input) {
     context.workspaceId || null,
     input?.session_id || context.sessionId?.() || null,
     hook.eventName,
-    input?.tool_use_id || null,
+    input?.tool_use_id || toolUseId || null,
     serializeForAudit(input),
+    startedAtMs,
   );
   return executionId;
 }
@@ -198,7 +199,8 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
   database.prepare(`
     UPDATE hook_executions
     SET status = ?, script_output_json = ?, actions_json = ?, response_json = ?,
-        logs_json = ?, error_message = ?, duration_ms = ?, completed_at = CURRENT_TIMESTAMP
+        logs_json = ?, error_message = ?, duration_ms = ?, completed_at_ms = ?,
+        completed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     status,
@@ -208,6 +210,7 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
     serializeForAudit(logs || []),
     error ? String(error).slice(0, 8000) : null,
     Math.max(0, Date.now() - startedAt),
+    Date.now(),
     executionId,
   );
 }
@@ -380,10 +383,10 @@ export function createHookRuntimeSession({
     mcpCaller,
   };
 
-  const executeHook = async (hook, event, _toolUseId, callbackOptions = {}) => {
+  const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
-    const executionId = createExecutionRecord(database, hook, context, event);
+    const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId);
     const logs = [];
     let scriptOutput = {};
     const references = {
