@@ -383,6 +383,60 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
   }
 });
 
+test('invoke_skill skips recovery when its condition resolves to false', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Recover only HTTP 200 failures',
+      version: 1,
+      eventName: 'StopFailure',
+      matcher: {},
+      extensionLogic: {
+        language: 'javascript',
+        code: 'export async function run() { return { output: { shouldRecover: false } }; }',
+        outputs: [{ name: 'shouldRecover', type: 'boolean', description: '' }],
+      },
+      postActions: [{
+        id: 'recover',
+        type: 'invoke_skill',
+        config: {
+          skillId: 'builtin:hook-notification',
+          skillName: 'hook-notification',
+          condition: { source: 'reference', path: 'script.output.shouldRecover' },
+          argumentsTemplate: 'details={{event.error_details}}',
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const scheduled = [];
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      enqueueSkillRecovery: async (request) => scheduled.push(request),
+    });
+
+    assert.deepEqual(await runtime.executeHook(hook, {
+      hook_event_name: 'StopFailure',
+      session_id: 'failed-session',
+      error: 'server_error',
+      error_details: 'rate limited',
+    }), {});
+    assert.equal(scheduled.length, 0);
+    const execution = database.prepare('SELECT actions_json FROM hook_executions').get();
+    assert.deepEqual(JSON.parse(execution.actions_json).recover.output, {
+      scheduled: false,
+      reason: 'condition_false',
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Stop Skill action appends a new turn after a normal answer and keeps the Stop response', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));

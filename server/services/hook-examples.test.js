@@ -32,7 +32,7 @@ function createHarness(initialHooks = []) {
   };
 }
 
-test('requested Hook examples are ready-to-edit drafts with MCP and Skill selections blank', () => {
+test('requested Hook presets create five ready-to-edit drafts with configured resources', () => {
   const harness = createHarness();
   const result = createRequestedHookExamples({
     hookConfigs: harness.hookConfigs,
@@ -40,7 +40,7 @@ test('requested Hook examples are ready-to-edit drafts with MCP and Skill select
     exampleIds: REQUESTED_HOOK_EXAMPLES.map((example) => example.id),
   });
 
-  assert.equal(result.createdCount, 4);
+  assert.equal(result.createdCount, 5);
   assert.equal(result.skippedCount, 0);
   assert.deepEqual(result.visibleEvents, ['Stop', 'StopFailure']);
   assert.equal(result.hooks.every((hook) => hook.status === 'draft'), true);
@@ -48,19 +48,27 @@ test('requested Hook examples are ready-to-edit drafts with MCP and Skill select
   const sqlCheckExample = result.hooks.find((hook) => hook.name.includes('SQL Check'));
   const sqlRecordExample = result.hooks.find((hook) => hook.name.includes('SQL 行数'));
   const notificationExample = result.hooks.find((hook) => hook.name.includes('正常结束'));
+  const failureExample = result.hooks.find((hook) => hook.name === '失败通知');
   const recoveryExample = result.hooks.find((hook) => hook.name.includes('HTTP 200'));
 
   assert.deepEqual(sqlCheckExample.extensionLogic.outputs.map((output) => output.name), ['detected']);
   assert.equal(sqlCheckExample.postActions.length, 1);
   assert.equal(sqlCheckExample.postActions[0].type, 'call_mcp_tool');
-  assert.equal(sqlCheckExample.postActions[0].config.toolName, '');
-  assert.deepEqual(sqlCheckExample.postActions[0].config.inputs, {});
+  assert.equal(sqlCheckExample.postActions[0].config.toolName, 'mcp__sql-syntax-checker__check_sql_syntax');
+  assert.deepEqual(sqlCheckExample.postActions[0].config.inputs.sql, {
+    source: 'reference',
+    path: 'event.last_assistant_message',
+  });
   assert.equal(sqlRecordExample.postActions.length, 1);
   assert.equal(sqlRecordExample.postActions[0].type, 'write_record');
-  assert.equal(notificationExample.postActions[0].config.skillId, '');
-  assert.equal(notificationExample.postActions[0].config.skillName, '');
-  assert.equal(recoveryExample.postActions[0].config.skillId, '');
-  assert.equal(recoveryExample.postActions[0].config.skillName, '');
+  assert.equal(notificationExample.postActions[0].config.skillId, 'builtin:hook-notification');
+  assert.equal(failureExample.postActions[0].config.skillId, 'builtin:hook-notification');
+  assert.doesNotMatch(failureExample.postActions[0].config.argumentsTemplate, /error_details|details=/);
+  assert.equal(recoveryExample.postActions[0].config.skillId, 'builtin:hook-notification');
+  assert.deepEqual(recoveryExample.postActions[0].config.condition, {
+    source: 'reference',
+    path: 'script.output.shouldRecover',
+  });
 });
 
 test('creating Hook examples is idempotent and never overwrites an existing example', () => {
@@ -76,11 +84,11 @@ test('creating Hook examples is idempotent and never overwrites an existing exam
   const first = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
   const second = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
 
-  assert.equal(first.createdCount, 3);
+  assert.equal(first.createdCount, 4);
   assert.equal(first.skippedCount, 1);
   assert.equal(second.createdCount, 0);
-  assert.equal(second.skippedCount, 4);
-  assert.equal(harness.hooks.length, 4);
+  assert.equal(second.skippedCount, 5);
+  assert.equal(harness.hooks.length, 5);
   assert.equal(harness.hooks[0].description, '管理员已经修改的说明');
 });
 

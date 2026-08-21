@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CircleAlert,
   Clock3,
+  Copy,
   Database,
   FileText,
   Globe2,
@@ -34,6 +35,7 @@ import {
   EVENT_DEFINITIONS,
   EVENT_GROUPS,
   createEmptyHook,
+  createHookCopyDraft,
   shouldShowBusinessData,
 } from './hook-config/catalog';
 import { findUnavailableHookSkills } from './hook-config/skillAvailability';
@@ -749,6 +751,20 @@ export default function HookConfigsTab() {
     });
   };
 
+  const copyHook = (hook: HookConfig) => {
+    const existingNames = new Set(hooks.map((item) => item.name));
+    let copyNumber = 1;
+    let copyName = '';
+    do {
+      const suffix = copyNumber === 1
+        ? t('hooks.copySuffix')
+        : t('hooks.copySuffixNumbered', { number: copyNumber });
+      copyName = `${hook.name.slice(0, Math.max(1, 120 - suffix.length))}${suffix}`;
+      copyNumber += 1;
+    } while (existingNames.has(copyName));
+    setEditor(createHookCopyDraft(hook, copyName));
+  };
+
   const openExamples = async () => {
     setExamplesOpen(true);
     setExamplesLoading(true);
@@ -1451,6 +1467,10 @@ export default function HookConfigsTab() {
                   <Button type="button" variant="ghost" size="sm" onClick={() => setEditor(hook)}>
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => copyHook(hook)}>
+                    <Copy className="h-3.5 w-3.5" />
+                    {t('hooks.copy')}
                   </Button>
                   {shouldShowBusinessData(hook) ? (
                     <Button type="button" variant="ghost" size="sm" onClick={() => void loadDataRecords(hook)}>

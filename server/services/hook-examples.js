@@ -42,11 +42,22 @@ const SQL_DETECTION_SCRIPT = [
   '}',
 ].join('\n');
 
+const HTTP_200_RECOVERY_SCRIPT = [
+  'export async function run(event) {',
+  "  const details = String(event.error_details || '');",
+  "  return { output: { shouldRecover: details.includes('HTTP 200') } };",
+  '}',
+].join('\n');
+
+const SQL_CHECK_TOOL_NAME = 'mcp__sql-syntax-checker__check_sql_syntax';
+const NOTIFICATION_SKILL_ID = 'builtin:hook-notification';
+const NOTIFICATION_SKILL_NAME = 'hook-notification';
+
 export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   {
     id: 'sql-check-enforcement',
-    name: '示例 · SQL Check 强制校验',
-    description: '检测模型输出中的 SQL 并调用 MCP Tool 做语法校验；请先选择 SQL 检查 MCP Tool 并映射工具入参，再发布。',
+    name: 'SQL Check 强制校验',
+    description: '检测模型输出中的 SQL，并调用 SQL Check MCP Tool 执行强制语法校验。',
     eventName: 'Stop',
     matcher: {},
     extensionLogic: {
@@ -62,9 +73,12 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
         type: 'call_mcp_tool',
         position: 0,
         config: {
-          toolName: '',
+          toolName: SQL_CHECK_TOOL_NAME,
           condition: { source: 'reference', path: 'script.output.detected' },
-          inputs: {},
+          inputs: {
+            sql: { source: 'reference', path: 'event.last_assistant_message' },
+            dialect: { source: 'literal', value: 'generic' },
+          },
         },
       },
     ],
@@ -72,7 +86,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   },
   {
     id: 'sql-line-record',
-    name: '示例 · SQL 行数记录',
+    name: 'SQL 行数记录',
     description: '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 业务数据；不调用 SQL 检查 MCP。',
     eventName: 'Stop',
     matcher: {},
@@ -116,8 +130,8 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   },
   {
     id: 'normal-end-notification',
-    name: '示例 · 对话正常结束通知',
-    description: '正常结束后调用通知 Skill；请先上传或选择内置 Hook Skill，再发布。',
+    name: '对话正常结束通知',
+    description: '回答正常结束后调用内置通知 Skill，写入可验证的本地通知记录。',
     eventName: 'Stop',
     matcher: {},
     extensionLogic: null,
@@ -126,28 +140,56 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
       type: 'invoke_skill',
       position: 0,
       config: {
-        skillId: '',
-        skillName: '',
+        skillId: NOTIFICATION_SKILL_ID,
+        skillName: NOTIFICATION_SKILL_NAME,
+        condition: null,
         argumentsTemplate: 'status=success event=Stop session={{ccui.env.sessionId}}',
       },
     }],
     claudeResponse: { bindings: {} },
   },
   {
-    id: 'http-200-error-recovery',
-    name: '示例 · HTTP 200 错误恢复',
-    description: '失败结束后调用恢复 Skill；Skill 应在错误详情包含 HTTP 200 时恢复原会话并重试。请先选择 Skill，再发布。',
+    id: 'failure-notification',
+    name: '失败通知',
+    description: '回答异常结束后调用内置通知 Skill；仅记录失败通知，不触发会话恢复。',
     eventName: 'StopFailure',
     matcher: {},
     extensionLogic: null,
     postActions: [{
-      id: 'notify-failure-and-recover',
+      id: 'notify-failure',
       type: 'invoke_skill',
       position: 0,
       config: {
-        skillId: '',
-        skillName: '',
-        argumentsTemplate: 'status=failure event=StopFailure session={{ccui.env.sessionId}} error={{event.error}} details={{event.error_details}}',
+        skillId: NOTIFICATION_SKILL_ID,
+        skillName: NOTIFICATION_SKILL_NAME,
+        condition: null,
+        argumentsTemplate: 'status=failure event=StopFailure session={{ccui.env.sessionId}} error={{event.error}}',
+      },
+    }],
+    claudeResponse: { bindings: {} },
+  },
+  {
+    id: 'http-200-session-recovery',
+    name: 'HTTP 200 会话恢复',
+    description: '仅当错误详情包含 HTTP 200 时调用内置 Skill，在原会话追加恢复回合并重试上一请求。',
+    eventName: 'StopFailure',
+    matcher: {},
+    extensionLogic: {
+      language: 'javascript',
+      code: HTTP_200_RECOVERY_SCRIPT,
+      outputs: [
+        { name: 'shouldRecover', type: 'boolean', description: '是否为 HTTP 200 异常' },
+      ],
+    },
+    postActions: [{
+      id: 'recover-http-200-session',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: NOTIFICATION_SKILL_ID,
+        skillName: NOTIFICATION_SKILL_NAME,
+        condition: { source: 'reference', path: 'script.output.shouldRecover' },
+        argumentsTemplate: 'status=failure recovery=http-200 event=StopFailure session={{ccui.env.sessionId}} error={{event.error}} details={{event.error_details}}',
       },
     }],
     claudeResponse: { bindings: {} },

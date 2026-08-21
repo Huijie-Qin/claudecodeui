@@ -428,6 +428,92 @@ test('legacy combined SQL Hook migrates into independent check and line-record H
   }
 });
 
+test('legacy failure notification and HTTP 200 recovery Hook migrates into two independent Hooks', () => {
+  const { database } = createFixture();
+  try {
+    database.prepare("INSERT INTO tenants (id, code, name, status) VALUES (1, 'alpha', 'Alpha', 'active')").run();
+    const legacyActions = [{
+      id: 'notify-and-recover',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: 'builtin:hook-notification',
+        skillName: 'hook-notification',
+        argumentsTemplate: 'status=failure details={{event.error_details}}',
+      },
+    }];
+    database.prepare(`
+      INSERT INTO hooks (
+        id, name, description, status, event_name, matcher_json,
+        extension_logic_json, post_actions_json, claude_response_json,
+        version, activation_scope, binding_controller,
+        created_by, updated_by, published_at
+      ) VALUES ('legacy-failure-recovery', '失败通知与 HTTP 200 会话恢复', 'combined',
+        'published', 'StopFailure', '{}', 'null', ?, '{"bindings":{}}',
+        4, 'manual', 'admin', 1, 1, CURRENT_TIMESTAMP)
+    `).run(JSON.stringify(legacyActions));
+    database.prepare(`
+      INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+      VALUES (2, 'legacy-failure-recovery', 1)
+    `).run();
+    database.prepare(`
+      INSERT INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+      VALUES ('legacy-failure-recovery', 1, 1)
+    `).run();
+
+    migrateHookActivationModel(database);
+
+    const hooks = database.prepare(`
+      SELECT id, name, status, event_name, extension_logic_json, post_actions_json
+      FROM hooks
+      WHERE name IN ('失败通知', 'HTTP 200 会话恢复')
+      ORDER BY name
+    `).all();
+    assert.equal(hooks.length, 2);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count FROM hooks WHERE name = '失败通知与 HTTP 200 会话恢复'
+    `).get().count, 0);
+
+    const failureHook = hooks.find((hook) => hook.name === '失败通知');
+    const recoveryHook = hooks.find((hook) => hook.name === 'HTTP 200 会话恢复');
+    assert.equal(failureHook.id, 'legacy-failure-recovery');
+    assert.equal(failureHook.status, 'published');
+    assert.equal(failureHook.event_name, 'StopFailure');
+    assert.equal(failureHook.extension_logic_json, 'null');
+    const failureAction = JSON.parse(failureHook.post_actions_json)[0];
+    assert.equal(failureAction.config.skillId, 'builtin:hook-notification');
+    assert.equal(failureAction.config.condition, null);
+    assert.doesNotMatch(failureAction.config.argumentsTemplate, /error_details|details=/);
+
+    const recoveryExtension = JSON.parse(recoveryHook.extension_logic_json);
+    const recoveryAction = JSON.parse(recoveryHook.post_actions_json)[0];
+    assert.deepEqual(recoveryExtension.outputs.map((output) => output.name), ['shouldRecover']);
+    assert.deepEqual(recoveryAction.config.condition, {
+      source: 'reference',
+      path: 'script.output.shouldRecover',
+    });
+    assert.match(recoveryAction.config.argumentsTemplate, /event\.error_details/);
+
+    assert.deepEqual(
+      database.prepare('SELECT hook_id FROM user_hook_bindings WHERE user_id = 2 ORDER BY hook_id').all(),
+      [{ hook_id: failureHook.id }, { hook_id: recoveryHook.id }]
+        .sort((left, right) => left.hook_id.localeCompare(right.hook_id)),
+    );
+    assert.deepEqual(
+      database.prepare('SELECT hook_id FROM hook_tenant_bindings WHERE tenant_id = 1 ORDER BY hook_id').all(),
+      [{ hook_id: failureHook.id }, { hook_id: recoveryHook.id }]
+        .sort((left, right) => left.hook_id.localeCompare(right.hook_id)),
+    );
+
+    migrateHookActivationModel(database);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count FROM hooks WHERE name IN ('失败通知', 'HTTP 200 会话恢复')
+    `).get().count, 2);
+  } finally {
+    database.close();
+  }
+});
+
 test('SQL Check Hook bindings are controlled by each user enforcement preference', () => {
   const { database, service } = createFixture();
   try {
@@ -600,6 +686,7 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
             config: {
               skillId: 'builtin:hook-notification',
               skillName: 'hook-notification',
+              condition: { source: 'literal', value: true },
               argumentsTemplate: '用户 {{ccui.env.userId}}，短信结果 {{actions.send-sms.output}}',
             },
           },
@@ -612,6 +699,7 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
     assert.equal(created.postActions[0].position, 0);
     assert.equal(created.postActions[1].position, 1);
     assert.deepEqual(created.postActions[0].config.condition, { source: 'literal', value: true });
+    assert.deepEqual(created.postActions[1].config.condition, { source: 'literal', value: true });
     const published = service.publishHook({
       hookId: created.id,
       userId: 1,

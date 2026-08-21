@@ -6,11 +6,12 @@ import {
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  createHookCopyDraft,
   getClaudeOutputFields,
   inferNativeMatcherMode,
   shouldShowBusinessData,
 } from './catalog';
-import type { HookConfigDraft, HookResources } from './types';
+import type { HookConfig, HookConfigDraft, HookResources } from './types';
 
 const resources: HookResources = {
   events: [],
@@ -102,6 +103,34 @@ test('business data stays accessible for configured writers or historical record
     hasDataRecords: false,
   }), true);
   assert.equal(shouldShowBusinessData({ postActions: [], hasDataRecords: true }), true);
+});
+
+test('copying a Hook creates an independent draft without runtime identity or bindings', () => {
+  const hook: HookConfig = {
+    ...draft,
+    postActions: [{ id: 'record-1', type: 'write_record', position: 0, config: { fields: {} } }],
+    id: 'hook-1',
+    status: 'published',
+    version: 3,
+    createdBy: 1,
+    updatedBy: 1,
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-02',
+    publishedAt: '2026-01-02',
+    activationScope: 'all_users',
+    bindingController: 'admin',
+    boundUserCount: 2,
+    boundTenantCount: 1,
+    hasDataRecords: true,
+  };
+
+  const copy = createHookCopyDraft(hook, 'SQL 分析（副本）');
+  assert.equal(copy.name, 'SQL 分析（副本）');
+  assert.equal('id' in copy, false);
+  assert.equal('activationScope' in copy, false);
+  assert.deepEqual(copy.postActions, hook.postActions);
+  copy.postActions[0].config.fields = { copied: true };
+  assert.deepEqual(hook.postActions[0].config.fields, {});
 });
 
 test('native matcher mode is inferred from the text sent to Claude Code', () => {

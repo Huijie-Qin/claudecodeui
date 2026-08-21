@@ -325,6 +325,18 @@ async function executePostActions({ hook, references, context, event, signal, re
       continue;
     }
     if (action.type === 'invoke_skill') {
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'condition_false' },
+        };
+        continue;
+      }
       const recoveryKey = `${hook.id}:${action.id}`;
       if (recoveryKeys.has(recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };

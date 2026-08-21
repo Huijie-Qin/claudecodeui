@@ -632,6 +632,18 @@ export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
   };
 }
 
+export function createHookCopyDraft(hook: HookConfig, name: string): HookConfigDraft {
+  return JSON.parse(JSON.stringify({
+    name,
+    description: hook.description,
+    eventName: hook.eventName,
+    matcher: hook.matcher,
+    extensionLogic: hook.extensionLogic,
+    postActions: hook.postActions,
+    claudeResponse: hook.claudeResponse,
+  }));
+}
+
 export function shouldShowBusinessData(
   hook: Pick<HookConfig, 'postActions' | 'hasDataRecords'>,
 ): boolean {

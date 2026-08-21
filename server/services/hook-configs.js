@@ -355,6 +355,9 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             `postActions[${index}].config.skillName`,
             { max: Number.POSITIVE_INFINITY, allowEmpty: true },
           ),
+          condition: config.condition == null
+            ? null
+            : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           argumentsTemplate: requireString(
             typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '',
             `postActions[${index}].config.argumentsTemplate`,
@@ -429,6 +432,13 @@ function validateHookReferences(hook) {
         }
       }
     } else {
+      if (action.config.condition) {
+        for (const path of bindingReferences(action.config.condition)) {
+          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+            throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
+          }
+        }
+      }
       const matches = action.config.argumentsTemplate.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g);
       for (const match of matches) {
         const path = match[1];

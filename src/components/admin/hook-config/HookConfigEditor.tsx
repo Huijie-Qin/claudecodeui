@@ -456,6 +456,9 @@ function SkillActionEditor({
   const skillId = typeof config.skillId === 'string' ? config.skillId : '';
   const skillName = typeof config.skillName === 'string' ? config.skillName : '';
   const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
+  const condition = asRecord(config.condition);
+  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
+  const booleanReferences = references.filter((field) => field.type === 'boolean');
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef({ start: template.length, end: template.length });
@@ -488,7 +491,7 @@ function SkillActionEditor({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
           <span className="text-xs font-medium text-foreground">内置 Hook Skill</span>
           <HookSelect
@@ -508,6 +511,27 @@ function SkillActionEditor({
             }}
             placeholder={resources.skills.length ? '选择内置 Hook Skill' : '暂无内置 Hook Skill'}
             ariaLabel="选择内置 Hook Skill"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
+          <HookSelect
+            value={conditionPath}
+            options={[
+              { value: '__always__', label: '始终调用' },
+              ...booleanReferences.map((field) => ({
+                value: field.path,
+                label: field.label || field.path,
+                description: field.path,
+                group: field.group === 'script' ? '脚本输出' : '当前事件',
+              })),
+            ]}
+            onChange={(value) => onChange({
+              ...config,
+              condition: value === '__always__' ? null : { source: 'reference', path: value },
+            })}
+            placeholder="始终调用"
+            ariaLabel="选择 Skill 执行条件"
           />
         </label>
       </div>
@@ -721,7 +745,7 @@ function PostActionsEditor({
         ? { toolName: '', condition: null, inputs: {} }
         : type === 'write_record'
           ? { recordType: '', condition: null, fields: {} }
-          : { skillId: '', skillName: '', argumentsTemplate: '' },
+          : { skillId: '', skillName: '', condition: null, argumentsTemplate: '' },
     };
     onChange([...hook.postActions, action]);
   };
