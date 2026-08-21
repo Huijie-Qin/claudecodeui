@@ -750,7 +750,7 @@ test('effective env resolves precedence, blocks stale personal values, and isola
     });
 
     assert.deepEqual(resolved.env, {
-      SHARED: 'tenant',
+      SHARED: 'admin',
       BASE_ONLY: 'base-only',
       USER_KEY: 'legacy-user-key',
       ANTHROPIC_MODEL: 'managed-model',
@@ -758,7 +758,7 @@ test('effective env resolves precedence, blocks stale personal values, and isola
       W3_NAME: 'alice',
     });
     assert.deepEqual(resolved.sources, {
-      SHARED: 'tenant',
+      SHARED: 'adminUserEnv',
       BASE_ONLY: 'baseEnv',
       USER_KEY: 'adminUserEnv',
       ANTHROPIC_MODEL: 'managed',

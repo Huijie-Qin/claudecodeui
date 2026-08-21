@@ -874,7 +874,6 @@ export function createClaudeEnvService({
     const legacyAdminEnv = adminUserEnv === undefined
       ? users?.getEnvForUser?.(normalizedUserId) || {}
       : adminUserEnv;
-    applyLayer(legacyAdminEnv, 'adminUserEnv');
 
     if (normalizedTenantId !== null) {
       for (const row of listVariableRows({ scopeType: 'tenant', tenantId: normalizedTenantId })) {
@@ -902,6 +901,8 @@ export function createClaudeEnvService({
         }
       }
     }
+
+    applyLayer(legacyAdminEnv, 'adminUserEnv');
 
     const activePersonal = [];
     for (const row of listVariableRows({ scopeType: 'user', userId: normalizedUserId })) {
