@@ -2070,7 +2070,7 @@
 }
 
 .da-skill-detail {
-  width: min(900px, 100%);
+  width: min(1080px, 100%);
   margin: 0 auto;
 }
 
@@ -2181,6 +2181,17 @@
   font-size: 11px;
 }
 
+.da-skill-detail-warning button {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .da-skill-detail-section {
   margin-top: 22px;
 }
@@ -2264,6 +2275,141 @@
 .da-skill-detail-empty {
   color: var(--da-muted);
   font-size: 10px;
+}
+
+.da-skill-content-section {
+  min-width: 0;
+}
+
+.da-skill-preview-layout {
+  display: grid;
+  min-height: 500px;
+  max-height: 640px;
+  grid-template-columns: 250px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--da-border);
+  border-radius: 11px;
+  background: var(--da-panel);
+}
+
+.da-skill-preview-layout > aside {
+  min-width: 0;
+  border-right: 1px solid var(--da-border);
+  border-bottom: 0;
+  background: var(--da-bg);
+}
+
+.da-skill-file-viewer {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.da-skill-file-viewer > header {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--da-border);
+  background: var(--da-panel);
+}
+
+.da-skill-file-viewer > header > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--da-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.da-skill-preview-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--da-border);
+  border-radius: 7px;
+  background: var(--da-bg);
+}
+
+.da-skill-preview-toggle button {
+  height: 25px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--da-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.da-skill-preview-toggle button.is-active {
+  background: var(--da-panel);
+  color: var(--da-text);
+  box-shadow: 0 1px 4px rgba(31, 29, 25, 0.1);
+}
+
+.da-skill-file-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: var(--da-panel);
+}
+
+.da-skill-file-empty {
+  display: flex;
+  min-height: 300px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  color: var(--da-muted);
+  font-size: 11px;
+}
+
+.da-skill-markdown-preview {
+  width: min(760px, 100%);
+  max-width: none;
+  margin: 0 auto;
+  padding: 28px 32px 44px;
+  color: var(--da-text);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.da-skill-source-preview {
+  min-height: 100%;
+  margin: 0;
+  padding: 18px 20px 36px;
+  color: var(--da-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.da-skill-image-preview {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--da-bg);
+}
+
+.da-skill-image-preview img {
+  max-width: 100%;
+  max-height: 540px;
+  border: 1px solid var(--da-border);
+  border-radius: 8px;
+  object-fit: contain;
 }
 
 .da-skill-detail-empty {
@@ -2618,6 +2764,25 @@
   .da-skill-path-list > div {
     grid-template-columns: 1fr;
     gap: 5px;
+  }
+
+  .da-skill-preview-layout {
+    max-height: none;
+    grid-template-columns: 1fr;
+  }
+
+  .da-skill-preview-layout > aside {
+    max-height: 230px;
+    border-right: 0;
+    border-bottom: 1px solid var(--da-border);
+  }
+
+  .da-skill-file-viewer {
+    min-height: 440px;
+  }
+
+  .da-skill-markdown-preview {
+    padding: 22px 18px 36px;
   }
 
   .da-automation-row {

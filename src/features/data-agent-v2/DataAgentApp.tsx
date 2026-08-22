@@ -46,9 +46,14 @@ import EditorSidebar from '../../components/code-editor/view/EditorSidebar';
 import FileTree from '../../components/file-tree/view/FileTree';
 import ProjectCreationWizard from '../../components/project-creation-wizard';
 import Settings from '../../components/settings/view/Settings';
-import SkillsPanel from '../../components/skills-market/SkillsPanel';
-import { useWorkspaceSkills } from '../../components/skills-market/hooks/useWorkspaceSkills';
-import { getSkillDisplayName, type WorkspaceSkill } from '../../components/skills-market/utils/skillFormatting';
+import MarkdownPreview from '../../components/code-editor/view/subcomponents/markdown/MarkdownPreview';
+import SkillFileTree from '../../components/skills-market/SkillFileTree';
+import SkillsWorkspacePanel from '../../components/skills-market/SkillsWorkspacePanel';
+import {
+  getSkillDisplayName,
+  type WorkspaceSkill,
+  type WorkspaceSkillEntry,
+} from '../../components/skills-market/utils/skillFormatting';
 import SqlCheckPanel from '../../components/sql-check/SqlCheckPanel';
 import McpToolsPanel from '../../components/tools-market/McpToolsPanel';
 import { useWorkspaceMcpTools, type WorkspaceMcpPreset } from '../../components/tools-market/hooks/useWorkspaceMcpTools';
@@ -103,6 +108,45 @@ type PendingInitialMessage = {
   provider: LLMProvider;
   content: string;
   timestamp: number;
+};
+
+type WorkspaceSkillFile = {
+  path: string;
+  content?: string;
+  contentBase64?: string;
+  size?: number;
+  isBinary?: boolean;
+  mimeType?: string;
+};
+
+type SkillMarketEntry = {
+  id?: string;
+  skillId?: string;
+  name: string;
+  displayName?: string;
+  skillName?: string;
+  description?: string;
+  version?: number;
+  importedVersion?: number;
+  imported?: boolean;
+  conflict?: boolean;
+  remoteDeleted?: boolean;
+  updateAvailable?: boolean;
+  targetPath?: string;
+  nspPath?: string;
+  createUserId?: string;
+  files?: Array<{
+    path: string;
+    type?: 'directory' | 'file' | 'symlink';
+    size?: number;
+    mimeType?: string;
+  }>;
+};
+
+type SkillMarketState = {
+  skills: WorkspaceSkill[];
+  isLoading: boolean;
+  error: string | null;
 };
 
 const WORKSPACE_STORAGE_KEY = 'data-agent-v2-workspace-id';
@@ -178,6 +222,75 @@ function parseJsonSettings(key: string) {
     // Keep the same defaults as the existing conversation composer.
   }
   return { allowedTools: [], disallowedTools: [], skipPermissions: false };
+}
+
+function normalizeSkillMarketEntry(entry: SkillMarketEntry, canManage = false): WorkspaceSkill {
+  const imported = entry.imported === true;
+  return {
+    name: entry.name,
+    displayName: entry.displayName || entry.skillName || entry.name,
+    description: entry.description || '',
+    kind: 'managed',
+    status: entry.remoteDeleted ? 'invalid' : imported ? 'enabled' : 'available',
+    enabled: imported,
+    manageable: canManage,
+    sourceType: '技能市场 API',
+    sourcePath: entry.nspPath,
+    origin: 'market',
+    targetPath: entry.targetPath,
+    localVersion: entry.importedVersion,
+    marketVersion: entry.version,
+    updateAvailable: entry.updateAvailable,
+    remoteDeleted: entry.remoteDeleted,
+    createUserId: entry.createUserId,
+    files: (entry.files ?? []).map((file) => ({
+      path: file.path,
+      type: file.type === 'directory' || file.type === 'symlink' ? file.type : 'file',
+      size: file.size,
+      mimeType: file.mimeType,
+    })),
+  };
+}
+
+function useDataAgentSkillMarket(workspaceId?: number) {
+  const [state, setState] = useState<SkillMarketState>({
+    skills: [],
+    isLoading: false,
+    error: null,
+  });
+
+  const load = useCallback(async () => {
+    if (!workspaceId) {
+      setState({ skills: [], isLoading: false, error: null });
+      return;
+    }
+
+    setState((current) => ({ ...current, isLoading: true, error: null }));
+    try {
+      const payload = await readSkillResponse(
+        await api.skillMarket.list(workspaceId, { page: 1, pageSize: 100 }),
+        '技能市场加载失败。',
+      );
+      const canManage = payload.canManage !== false;
+      setState({
+        skills: ((payload.skills ?? []) as SkillMarketEntry[]).map((entry) => normalizeSkillMarketEntry(entry, canManage)),
+        isLoading: false,
+        error: null,
+      });
+    } catch (marketError) {
+      setState({
+        skills: [],
+        isLoading: false,
+        error: marketError instanceof Error ? marketError.message : '技能市场加载失败。',
+      });
+    }
+  }, [workspaceId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return { ...state, reload: load };
 }
 
 function DataAgentWorkspaceSelect({
@@ -746,7 +859,7 @@ function DataAgentCapabilities({
   const [query, setQuery] = useState('');
   const [capabilityFilter, setCapabilityFilter] = useState('全部');
   const graphState = useAgentGraphs(selectedProject?.workspaceId);
-  const skillState = useWorkspaceSkills(selectedProject?.workspaceId);
+  const skillState = useDataAgentSkillMarket(selectedProject?.workspaceId);
   const connectorState = useWorkspaceMcpTools(selectedProject?.workspaceId);
 
   useEffect(() => {
@@ -762,8 +875,7 @@ function DataAgentCapabilities({
     graph.goal,
     ...graph.agents.map((agent) => agent.name),
   ].filter(Boolean).join(' ').toLowerCase().includes(normalizedQuery));
-  const skills = skillState.data?.skills ?? [];
-  const skillKinds = Array.from(new Set(skills.map((skill) => skill.kind)));
+  const skills = skillState.skills;
   const visibleSkills = skills.filter((skill) => {
     const matchesQuery = !normalizedQuery || [
       skill.name,
@@ -771,7 +883,10 @@ function DataAgentCapabilities({
       skill.description,
       skill.sourceType,
     ].filter(Boolean).join(' ').toLowerCase().includes(normalizedQuery);
-    return matchesQuery && (capabilityFilter === '全部' || skill.kind === capabilityFilter);
+    const matchesFilter = capabilityFilter === '全部'
+      || (capabilityFilter === '已安装' && skill.enabled)
+      || (capabilityFilter === '未安装' && !skill.enabled);
+    return matchesQuery && matchesFilter;
   });
   const selectedSkill = skillName
     ? skills.find((skill) => skill.name === skillName) || null
@@ -791,15 +906,20 @@ function DataAgentCapabilities({
     return matchesQuery && matchesFilter;
   });
 
+  const openSkillMarketManager = () => {
+    window.localStorage.setItem('skillsWorkspaceView', 'market');
+    setManagerOpen('skills');
+  };
+
   const introTitle = tab === 'experts'
     ? '安装并管理专家'
     : showingSkillDetail ? '技能详情' : tab === 'skills' ? '工作区技能市场' : '管理工作区连接器';
   const introDescription = tab === 'experts'
     ? `专家配置归属于 ${getWorkspaceLabel(selectedProject)}，底层沿用 Agent Graph。`
     : showingSkillDetail
-      ? `查看 ${getWorkspaceLabel(selectedProject)} 中该技能的配置、来源与文件信息。`
+      ? `查看技能市场 API 返回的配置、来源与文件内容。`
       : tab === 'skills'
-      ? `浏览并管理 ${getWorkspaceLabel(selectedProject)} 中可用的工作区技能。`
+      ? `浏览技能市场，并查看 ${getWorkspaceLabel(selectedProject)} 的安装状态。`
       : `管理 ${getWorkspaceLabel(selectedProject)} 使用的 MCP Servers、Tools 与预设。`;
 
   return (
@@ -810,7 +930,7 @@ function DataAgentCapabilities({
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={onSelectWorkspace}
-        action={<button type="button" className="da-icon-button" aria-label="能力映射说明" title="专家对应 Agent Graph，技能对应 Workspace Skills，连接器对应 MCP"><Info size={16} /></button>}
+        action={<button type="button" className="da-icon-button" aria-label="能力映射说明" title="专家对应 Agent Graph，技能对应技能市场 API，连接器对应 MCP"><Info size={16} /></button>}
       />
       <div className="da-capability-page">
         <div className="da-content-inner">
@@ -835,9 +955,8 @@ function DataAgentCapabilities({
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`搜索${tab === 'experts' ? '专家' : tab === 'skills' ? '技能' : '连接器'}`} />
               </label>
               {tab === 'skills' && (
-                <select value={capabilityFilter} onChange={(event) => setCapabilityFilter(event.target.value)} aria-label="筛选技能来源">
-                  <option>全部</option>
-                  {skillKinds.map((kind) => <option key={kind} value={kind}>{kind === 'managed' ? '已托管' : kind === 'system' ? '系统' : '工作区'}</option>)}
+                <select value={capabilityFilter} onChange={(event) => setCapabilityFilter(event.target.value)} aria-label="筛选技能安装状态">
+                  <option>全部</option><option>已安装</option><option>未安装</option>
                 </select>
               )}
               {tab === 'connectors' && (
@@ -847,7 +966,7 @@ function DataAgentCapabilities({
               )}
               <span className="da-toolbar-count">
                 {tab === 'experts' && `${graphState.graphs.length} 个 Agent Graph 配置`}
-                {tab === 'skills' && `已启用 ${skills.filter((skill) => skill.enabled).length} / ${skills.length}`}
+                {tab === 'skills' && `已安装 ${skills.filter((skill) => skill.enabled).length} / ${skills.length}`}
                 {tab === 'connectors' && `已连接 ${presets.filter((preset) => preset.installed).length} / ${presets.length}`}
               </span>
             </div>
@@ -891,11 +1010,13 @@ function DataAgentCapabilities({
           {selectedProject && tab === 'skills' && (
             showingSkillDetail ? (
               <WorkspaceSkillDetail
+                workspaceId={selectedProject.workspaceId}
+                requestedName={skillName}
                 skill={selectedSkill}
                 loading={skillState.isLoading}
                 error={skillState.error}
                 onBack={() => onNavigate('/data-agent/capabilities/skills')}
-                onManage={() => setManagerOpen('skills')}
+                onManage={openSkillMarketManager}
                 onReload={skillState.reload}
               />
             ) : (
@@ -936,7 +1057,7 @@ function DataAgentCapabilities({
             <header><div><strong>{managerOpen === 'skills' ? '管理工作区技能' : '管理工作区连接器'}</strong><span>{getWorkspaceLabel(selectedProject)}</span></div><button type="button" className="da-icon-button" onClick={() => setManagerOpen(null)} aria-label="关闭"><X size={16} /></button></header>
             <div className="da-manager-body">
               {managerOpen === 'skills'
-                ? <SkillsPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />
+                ? <SkillsWorkspacePanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />
                 : <McpToolsPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />}
             </div>
           </section>
@@ -968,7 +1089,7 @@ function CapabilityCardsState({
 
 function WorkspaceSkillCard({ skill, onDetails }: { skill: WorkspaceSkill; onDetails: () => void }) {
   const isEnabled = skill.status === 'enabled' || skill.enabled;
-  const statusLabel = isEnabled ? '已启用' : skill.status === 'invalid' ? '无效' : '未启用';
+  const statusLabel = isEnabled ? '已安装' : skill.status === 'invalid' ? '不可用' : '可安装';
   return (
     <article className="da-capability-card">
       <div className="da-card-title-row">
@@ -976,14 +1097,16 @@ function WorkspaceSkillCard({ skill, onDetails }: { skill: WorkspaceSkill; onDet
         <div><h2>{getSkillDisplayName(skill)}</h2><p>/{skill.name} · {skill.sourceType}</p></div>
         <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{statusLabel}</span>
       </div>
-      <p className="da-card-description">{skill.description || '由当前工作区提供的可复用技能。'}</p>
-      <div className="da-tag-row"><span>{skill.kind === 'managed' ? '已托管' : skill.kind === 'system' ? '系统技能' : '工作区技能'}</span><span>{skill.status}</span></div>
-      <div className="da-card-footer"><span>{skill.manageable ? '可管理' : '只读'}</span><button className="da-secondary-button da-small-button" onClick={onDetails}>查看详情</button></div>
+      <p className="da-card-description">{skill.description || '由技能市场提供的可复用技能。'}</p>
+      <div className="da-tag-row"><span>技能市场</span><span>{skill.enabled ? '已安装' : '远程可用'}</span></div>
+      <div className="da-card-footer"><span>{skill.updateAvailable ? '有可用更新' : skill.enabled ? '已同步到工作区' : '尚未安装'}</span><button className="da-secondary-button da-small-button" onClick={onDetails}>查看详情</button></div>
     </article>
   );
 }
 
 function WorkspaceSkillDetail({
+  workspaceId,
+  requestedName,
   skill,
   loading,
   error,
@@ -991,6 +1114,8 @@ function WorkspaceSkillDetail({
   onManage,
   onReload,
 }: {
+  workspaceId?: number;
+  requestedName?: string;
   skill: WorkspaceSkill | null;
   loading: boolean;
   error: string | null;
@@ -998,17 +1123,111 @@ function WorkspaceSkillDetail({
   onManage: () => void;
   onReload: () => void;
 }) {
-  if (loading) return <DataAgentLoading label="正在加载技能详情…" />;
-  if (error) return <DataAgentEmpty title="技能详情加载失败" description={error} action={<button className="da-secondary-button" onClick={onReload}>重试</button>} />;
-  if (!skill) return <DataAgentEmpty title="找不到该技能" description="该技能可能已被移除，或不再属于当前工作区。" action={<button className="da-secondary-button" onClick={onBack}>返回技能列表</button>} />;
+  const skillName = skill?.name || requestedName;
+  const [detail, setDetail] = useState<WorkspaceSkill | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [selectedEntryPath, setSelectedEntryPath] = useState<string | null>(null);
+  const [file, setFile] = useState<WorkspaceSkillFile | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState(true);
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const detailRequestRef = useRef(0);
+  const fileRequestRef = useRef(0);
 
-  const isEnabled = skill.status === 'enabled' || skill.enabled;
-  const kindLabel = skill.kind === 'managed' ? '已托管' : skill.kind === 'system' ? '系统技能' : '工作区技能';
+  const loadFile = useCallback(async (filePath: string) => {
+    if (!workspaceId || !skillName) return;
+    const requestId = ++fileRequestRef.current;
+    setSelectedFilePath(filePath);
+    setSelectedEntryPath(filePath);
+    setPreviewMode(isSkillMarkdownFile(filePath));
+    setFileLoading(true);
+    setFileError(null);
+    try {
+      const payload = await readSkillResponse(
+        await api.skillMarket.file(workspaceId, skillName, filePath),
+        '技能文件加载失败。',
+      );
+      if (requestId !== fileRequestRef.current) return;
+      setFile((payload.file ?? payload) as WorkspaceSkillFile);
+    } catch (fileLoadError) {
+      if (requestId !== fileRequestRef.current) return;
+      setFile(null);
+      setFileError(fileLoadError instanceof Error ? fileLoadError.message : '技能文件加载失败。');
+    } finally {
+      if (requestId === fileRequestRef.current) setFileLoading(false);
+    }
+  }, [skillName, workspaceId]);
+
+  useEffect(() => {
+    const requestId = ++detailRequestRef.current;
+    fileRequestRef.current += 1;
+    setDetail(null);
+    setDetailError(null);
+    setSelectedFilePath(null);
+    setSelectedEntryPath(null);
+    setFile(null);
+    setFileError(null);
+
+    if (!workspaceId || !skillName) {
+      setDetailLoading(false);
+      setFileLoading(false);
+      return undefined;
+    }
+
+    setDetailLoading(true);
+    void (async () => {
+      try {
+        const payload = await readSkillResponse(
+          await api.skillMarket.detail(workspaceId, skillName),
+          '技能详情加载失败。',
+        );
+        if (requestId !== detailRequestRef.current) return;
+        const nextDetail = normalizeSkillMarketEntry(
+          (payload.skill ?? payload) as SkillMarketEntry,
+          payload.canManage !== false,
+        );
+        setDetail(nextDetail);
+        const initialFile = findSkillPreviewFile(nextDetail.files ?? []);
+        if (initialFile) void loadFile(initialFile.path);
+      } catch (detailLoadError) {
+        if (requestId !== detailRequestRef.current) return;
+        setDetailError(detailLoadError instanceof Error ? detailLoadError.message : '技能详情加载失败。');
+        const fallbackFile = findSkillPreviewFile(skill?.files ?? []);
+        if (fallbackFile) void loadFile(fallbackFile.path);
+      } finally {
+        if (requestId === detailRequestRef.current) setDetailLoading(false);
+      }
+    })();
+
+    return () => {
+      if (requestId === detailRequestRef.current) detailRequestRef.current += 1;
+      fileRequestRef.current += 1;
+    };
+  }, [loadFile, reloadVersion, skill, skillName, workspaceId]);
+
+  const reloadDetail = () => {
+    onReload();
+    setReloadVersion((version) => version + 1);
+  };
+
+  const resolvedSkill = detail ?? skill;
+  if (!resolvedSkill) {
+    if (loading || detailLoading) return <DataAgentLoading label="正在从技能市场加载详情…" />;
+    if (detailError || error) return <DataAgentEmpty title="技能详情加载失败" description={detailError || error || '技能详情加载失败。'} action={<button className="da-secondary-button" onClick={reloadDetail}>重试</button>} />;
+    return <DataAgentEmpty title="找不到该技能" description="该技能可能已从技能市场移除。" action={<button className="da-secondary-button" onClick={onBack}>返回技能列表</button>} />;
+  }
+
+  const isEnabled = resolvedSkill.status === 'enabled' || resolvedSkill.enabled;
+  const kindLabel = '技能市场';
+  const skillFiles = resolvedSkill.files ?? [];
   const pathEntries = [
-    ['来源路径', skill.sourcePath],
-    ['运行路径', skill.runtimePath],
-    ['清单路径', skill.manifestPath],
-    ['安装位置', skill.targetPath],
+    ['市场路径', resolvedSkill.sourcePath],
+    ['运行路径', resolvedSkill.runtimePath],
+    ['清单路径', resolvedSkill.manifestPath],
+    ['安装位置', resolvedSkill.targetPath],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]));
 
   return (
@@ -1018,21 +1237,22 @@ function WorkspaceSkillDetail({
         <div className="da-skill-detail-hero">
           <span className="da-card-icon blue"><Sparkles size={20} /></span>
           <div>
-            <h2>{getSkillDisplayName(skill)}</h2>
-            <p>/{skill.name}</p>
+            <h2>{getSkillDisplayName(resolvedSkill)}</h2>
+            <p>/{resolvedSkill.name}</p>
           </div>
-          <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{isEnabled ? '已启用' : skill.status === 'invalid' ? '无效' : '未启用'}</span>
+          <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{isEnabled ? '已安装' : resolvedSkill.status === 'invalid' ? '不可用' : '可安装'}</span>
         </div>
-        <p className="da-skill-detail-description">{skill.description || '由当前工作区提供的可复用技能。'}</p>
+        <p className="da-skill-detail-description">{resolvedSkill.description || '由技能市场提供的可复用技能。'}</p>
 
         <dl className="da-skill-detail-grid">
           <div><dt>技能类型</dt><dd>{kindLabel}</dd></div>
-          <div><dt>来源</dt><dd>{skill.sourceType || '本地工作区'}</dd></div>
-          <div><dt>权限</dt><dd>{skill.manageable ? '可管理' : '只读'}</dd></div>
-          <div><dt>版本</dt><dd>{skill.localVersion ?? '—'}{skill.updateAvailable ? ' · 有可用更新' : ''}</dd></div>
+          <div><dt>来源</dt><dd>{resolvedSkill.sourceType || '技能市场 API'}</dd></div>
+          <div><dt>权限</dt><dd>{resolvedSkill.manageable ? '可管理' : '只读'}</dd></div>
+          <div><dt>版本</dt><dd>{resolvedSkill.marketVersion != null ? `市场 v${resolvedSkill.marketVersion}` : '—'}{resolvedSkill.localVersion != null ? ` · 已装 v${resolvedSkill.localVersion}` : ''}{resolvedSkill.updateAvailable ? ' · 有更新' : ''}</dd></div>
         </dl>
 
-        {skill.parseError && <div className="da-skill-detail-warning"><strong>技能解析失败</strong><span>{skill.parseError}</span></div>}
+        {resolvedSkill.parseError && <div className="da-skill-detail-warning"><strong>技能解析失败</strong><span>{resolvedSkill.parseError}</span></div>}
+        {detailError && <div className="da-skill-detail-warning"><strong>完整详情加载失败</strong><span>{detailError}</span><button type="button" onClick={reloadDetail}>重新加载</button></div>}
 
         {pathEntries.length > 0 && (
           <section className="da-skill-detail-section">
@@ -1043,21 +1263,79 @@ function WorkspaceSkillDetail({
           </section>
         )}
 
-        <section className="da-skill-detail-section">
-          <h3>包含文件 <span>{skill.files?.length ?? 0}</span></h3>
-          {skill.files?.length ? (
-            <div className="da-skill-file-list">
-              {skill.files.slice(0, 12).map((entry) => (
-                <div key={entry.path}><FileText size={14} /><span>{entry.path}</span><small>{entry.type === 'directory' ? '目录' : entry.size != null ? `${entry.size} B` : '文件'}</small></div>
-              ))}
+        <section className="da-skill-detail-section da-skill-content-section">
+          <h3>技能内容 <span>{skillFiles.filter((entry) => entry.type === 'file').length} 个文件</span></h3>
+          {detailLoading && !skillFiles.length ? <DataAgentLoading label="正在读取技能内容…" /> : skillFiles.length ? (
+            <div className="da-skill-preview-layout">
+              <SkillFileTree
+                busy={fileLoading}
+                editable={false}
+                entries={skillFiles}
+                onCreateEntry={async () => false}
+                onRenameEntry={async () => false}
+                onRequestRemove={() => undefined}
+                onSelectEntry={setSelectedEntryPath}
+                onSelectFile={(filePath) => void loadFile(filePath)}
+                selectedEntryPath={selectedEntryPath}
+                targetPath={resolvedSkill.targetPath || resolvedSkill.runtimePath || `.claude/skills/${resolvedSkill.name}`}
+                treeKey={`${workspaceId}:${resolvedSkill.name}`}
+              />
+              <div className="da-skill-file-viewer">
+                <header>
+                  <span>{selectedFilePath || '选择文件查看内容'}</span>
+                  {selectedFilePath && isSkillMarkdownFile(selectedFilePath) && !file?.isBinary && (
+                    <div className="da-skill-preview-toggle" role="group" aria-label="切换技能文件显示方式">
+                      <button type="button" className={previewMode ? 'is-active' : ''} onClick={() => setPreviewMode(true)}>预览</button>
+                      <button type="button" className={!previewMode ? 'is-active' : ''} onClick={() => setPreviewMode(false)}>源码</button>
+                    </div>
+                  )}
+                </header>
+                <div className="da-skill-file-content">
+                  {fileLoading ? <DataAgentLoading label="正在加载文件…" /> : fileError ? (
+                    <DataAgentEmpty title="文件加载失败" description={fileError} action={selectedFilePath ? <button className="da-secondary-button" onClick={() => void loadFile(selectedFilePath)}>重试</button> : undefined} />
+                  ) : file ? (
+                    <WorkspaceSkillFilePreview file={file} previewMode={previewMode} />
+                  ) : <div className="da-skill-file-empty"><FileText size={20} /><span>从左侧选择文件查看内容</span></div>}
+                </div>
+              </div>
             </div>
-          ) : <p className="da-skill-detail-empty">当前清单未提供文件列表。</p>}
+          ) : <p className="da-skill-detail-empty">当前技能没有可预览的文件。</p>}
         </section>
 
-        {skill.manageable && <div className="da-skill-detail-actions"><button type="button" className="da-primary-button" onClick={onManage}>管理此技能</button></div>}
+        {resolvedSkill.manageable && <div className="da-skill-detail-actions"><button type="button" className="da-primary-button" onClick={onManage}>在技能市场中管理</button></div>}
       </article>
     </div>
   );
+}
+
+function WorkspaceSkillFilePreview({ file, previewMode }: { file: WorkspaceSkillFile; previewMode: boolean }) {
+  if (file.isBinary) {
+    if (file.mimeType?.startsWith('image/') && file.contentBase64) {
+      return <div className="da-skill-image-preview"><img src={`data:${file.mimeType};base64,${file.contentBase64}`} alt={file.path} /></div>;
+    }
+    return <div className="da-skill-file-empty"><FileText size={20} /><span>该二进制文件暂不支持预览</span></div>;
+  }
+
+  const content = file.content ?? '';
+  if (previewMode && isSkillMarkdownFile(file.path)) {
+    return <div className="da-skill-markdown-preview prose prose-sm dark:prose-invert"><MarkdownPreview content={content} /></div>;
+  }
+  return <pre className="da-skill-source-preview"><code>{content}</code></pre>;
+}
+
+function findSkillPreviewFile(files: WorkspaceSkillEntry[]) {
+  const fileEntries = files.filter((entry) => entry.type === 'file');
+  return fileEntries.find((entry) => entry.path === 'SKILL.md') ?? fileEntries[0];
+}
+
+function isSkillMarkdownFile(filePath: string) {
+  return /\.md(?:own)?$/i.test(filePath);
+}
+
+async function readSkillResponse(response: Response, fallback: string) {
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || fallback);
+  return payload;
 }
 
 function WorkspaceConnectorCard({
