@@ -1,5 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Bot,
   CalendarClock,
   Check,
@@ -71,6 +72,10 @@ import {
 
 import './dataAgentV2.css';
 import DataAgentFileTabs from './DataAgentFileTabs';
+import {
+  isProvisionalDataAgentSessionId,
+  resolveDataAgentLaunchMessage,
+} from './dataAgentLaunchRouting';
 import { useFileEditorTabs } from './useFileEditorTabs';
 import { useDataAgentFilesSplit } from './useDataAgentFilesSplit';
 
@@ -89,9 +94,19 @@ type PendingLaunch = {
   provider: LLMProvider;
   temporarySessionId: string;
   workspaceId?: number;
+  prompt: string;
+  submittedAt: number;
+};
+
+type PendingInitialMessage = {
+  sessionId: string;
+  provider: LLMProvider;
+  content: string;
+  timestamp: number;
 };
 
 const WORKSPACE_STORAGE_KEY = 'data-agent-v2-workspace-id';
+const LAUNCH_ERROR_STORAGE_KEY = 'data-agent-v2-launch-error';
 
 function getProjectSessions(project: Project): ProjectSession[] {
   const withProvider = (sessions: ProjectSession[] | undefined, provider: LLMProvider) =>
@@ -128,9 +143,11 @@ function readSelectedWorkspaceId() {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function resolveRoute(pathname: string): { page: PageKind; sessionId?: string; tab?: CapabilityTab } {
+function resolveRoute(pathname: string): { page: PageKind; sessionId?: string; tab?: CapabilityTab; skillName?: string } {
   const sessionMatch = pathname.match(/^\/data-agent\/session\/([^/]+)$/);
   if (sessionMatch) return { page: 'conversation', sessionId: decodeURIComponent(sessionMatch[1]) };
+  const skillMatch = pathname.match(/^\/data-agent\/capabilities\/skills\/([^/]+)$/);
+  if (skillMatch) return { page: 'capabilities', tab: 'skills', skillName: decodeURIComponent(skillMatch[1]) };
   if (pathname.startsWith('/data-agent/capabilities/skills')) return { page: 'capabilities', tab: 'skills' };
   if (pathname.startsWith('/data-agent/capabilities/connectors')) return { page: 'capabilities', tab: 'connectors' };
   if (pathname.startsWith('/data-agent/capabilities')) return { page: 'capabilities', tab: 'experts' };
@@ -711,12 +728,14 @@ function DataAgentNewTask({
 
 function DataAgentCapabilities({
   tab,
+  skillName,
   projects,
   selectedProject,
   onSelectWorkspace,
   onNavigate,
 }: {
   tab: CapabilityTab;
+  skillName?: string;
   projects: Project[];
   selectedProject: Project | null;
   onSelectWorkspace: (project: Project) => void;
@@ -754,6 +773,10 @@ function DataAgentCapabilities({
     ].filter(Boolean).join(' ').toLowerCase().includes(normalizedQuery);
     return matchesQuery && (capabilityFilter === '全部' || skill.kind === capabilityFilter);
   });
+  const selectedSkill = skillName
+    ? skills.find((skill) => skill.name === skillName) || null
+    : null;
+  const showingSkillDetail = tab === 'skills' && Boolean(skillName);
   const presets = connectorState.data?.presets ?? [];
   const visiblePresets = presets.filter((preset) => {
     const matchesQuery = !normalizedQuery || [
@@ -768,10 +791,14 @@ function DataAgentCapabilities({
     return matchesQuery && matchesFilter;
   });
 
-  const introTitle = tab === 'experts' ? '安装并管理专家' : tab === 'skills' ? '工作区技能市场' : '管理工作区连接器';
+  const introTitle = tab === 'experts'
+    ? '安装并管理专家'
+    : showingSkillDetail ? '技能详情' : tab === 'skills' ? '工作区技能市场' : '管理工作区连接器';
   const introDescription = tab === 'experts'
     ? `专家配置归属于 ${getWorkspaceLabel(selectedProject)}，底层沿用 Agent Graph。`
-    : tab === 'skills'
+    : showingSkillDetail
+      ? `查看 ${getWorkspaceLabel(selectedProject)} 中该技能的配置、来源与文件信息。`
+      : tab === 'skills'
       ? `浏览并管理 ${getWorkspaceLabel(selectedProject)} 中可用的工作区技能。`
       : `管理 ${getWorkspaceLabel(selectedProject)} 使用的 MCP Servers、Tools 与预设。`;
 
@@ -801,7 +828,7 @@ function DataAgentCapabilities({
           </div>
 
           {!selectedProject && <DataAgentEmpty title="选择一个工作区" description="能力配置需要绑定到具体工作区。" />}
-          {selectedProject && !showStudio && (
+          {selectedProject && !showStudio && !showingSkillDetail && (
             <div className="da-capability-toolbar">
               <label className="da-search-box">
                 <Search size={14} />
@@ -862,9 +889,26 @@ function DataAgentCapabilities({
           )}
 
           {selectedProject && tab === 'skills' && (
-            <CapabilityCardsState loading={skillState.isLoading} error={skillState.error} emptyTitle={query ? '没有匹配的技能' : '当前工作区还没有技能'} onReload={skillState.reload}>
-              {visibleSkills.map((skill) => <WorkspaceSkillCard key={`${skill.kind}:${skill.name}`} skill={skill} onManage={() => setManagerOpen('skills')} />)}
-            </CapabilityCardsState>
+            showingSkillDetail ? (
+              <WorkspaceSkillDetail
+                skill={selectedSkill}
+                loading={skillState.isLoading}
+                error={skillState.error}
+                onBack={() => onNavigate('/data-agent/capabilities/skills')}
+                onManage={() => setManagerOpen('skills')}
+                onReload={skillState.reload}
+              />
+            ) : (
+              <CapabilityCardsState loading={skillState.isLoading} error={skillState.error} emptyTitle={query ? '没有匹配的技能' : '当前工作区还没有技能'} onReload={skillState.reload}>
+                {visibleSkills.map((skill) => (
+                  <WorkspaceSkillCard
+                    key={`${skill.kind}:${skill.name}`}
+                    skill={skill}
+                    onDetails={() => onNavigate(`/data-agent/capabilities/skills/${encodeURIComponent(skill.name)}`)}
+                  />
+                ))}
+              </CapabilityCardsState>
+            )
           )}
 
           {selectedProject && tab === 'connectors' && (
@@ -922,7 +966,7 @@ function CapabilityCardsState({
   return <div className="da-card-grid da-capability-body">{items}</div>;
 }
 
-function WorkspaceSkillCard({ skill, onManage }: { skill: WorkspaceSkill; onManage: () => void }) {
+function WorkspaceSkillCard({ skill, onDetails }: { skill: WorkspaceSkill; onDetails: () => void }) {
   const isEnabled = skill.status === 'enabled' || skill.enabled;
   const statusLabel = isEnabled ? '已启用' : skill.status === 'invalid' ? '无效' : '未启用';
   return (
@@ -934,8 +978,85 @@ function WorkspaceSkillCard({ skill, onManage }: { skill: WorkspaceSkill; onMana
       </div>
       <p className="da-card-description">{skill.description || '由当前工作区提供的可复用技能。'}</p>
       <div className="da-tag-row"><span>{skill.kind === 'managed' ? '已托管' : skill.kind === 'system' ? '系统技能' : '工作区技能'}</span><span>{skill.status}</span></div>
-      <div className="da-card-footer"><span>{skill.manageable ? '可管理' : '只读'}</span><button className="da-secondary-button da-small-button" onClick={onManage}>查看详情</button></div>
+      <div className="da-card-footer"><span>{skill.manageable ? '可管理' : '只读'}</span><button className="da-secondary-button da-small-button" onClick={onDetails}>查看详情</button></div>
     </article>
+  );
+}
+
+function WorkspaceSkillDetail({
+  skill,
+  loading,
+  error,
+  onBack,
+  onManage,
+  onReload,
+}: {
+  skill: WorkspaceSkill | null;
+  loading: boolean;
+  error: string | null;
+  onBack: () => void;
+  onManage: () => void;
+  onReload: () => void;
+}) {
+  if (loading) return <DataAgentLoading label="正在加载技能详情…" />;
+  if (error) return <DataAgentEmpty title="技能详情加载失败" description={error} action={<button className="da-secondary-button" onClick={onReload}>重试</button>} />;
+  if (!skill) return <DataAgentEmpty title="找不到该技能" description="该技能可能已被移除，或不再属于当前工作区。" action={<button className="da-secondary-button" onClick={onBack}>返回技能列表</button>} />;
+
+  const isEnabled = skill.status === 'enabled' || skill.enabled;
+  const kindLabel = skill.kind === 'managed' ? '已托管' : skill.kind === 'system' ? '系统技能' : '工作区技能';
+  const pathEntries = [
+    ['来源路径', skill.sourcePath],
+    ['运行路径', skill.runtimePath],
+    ['清单路径', skill.manifestPath],
+    ['安装位置', skill.targetPath],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+
+  return (
+    <div className="da-skill-detail">
+      <button type="button" className="da-detail-back" onClick={onBack}><ArrowLeft size={15} />返回技能列表</button>
+      <article className="da-skill-detail-card">
+        <div className="da-skill-detail-hero">
+          <span className="da-card-icon blue"><Sparkles size={20} /></span>
+          <div>
+            <h2>{getSkillDisplayName(skill)}</h2>
+            <p>/{skill.name}</p>
+          </div>
+          <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{isEnabled ? '已启用' : skill.status === 'invalid' ? '无效' : '未启用'}</span>
+        </div>
+        <p className="da-skill-detail-description">{skill.description || '由当前工作区提供的可复用技能。'}</p>
+
+        <dl className="da-skill-detail-grid">
+          <div><dt>技能类型</dt><dd>{kindLabel}</dd></div>
+          <div><dt>来源</dt><dd>{skill.sourceType || '本地工作区'}</dd></div>
+          <div><dt>权限</dt><dd>{skill.manageable ? '可管理' : '只读'}</dd></div>
+          <div><dt>版本</dt><dd>{skill.localVersion ?? '—'}{skill.updateAvailable ? ' · 有可用更新' : ''}</dd></div>
+        </dl>
+
+        {skill.parseError && <div className="da-skill-detail-warning"><strong>技能解析失败</strong><span>{skill.parseError}</span></div>}
+
+        {pathEntries.length > 0 && (
+          <section className="da-skill-detail-section">
+            <h3>位置与来源</h3>
+            <dl className="da-skill-path-list">
+              {pathEntries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+            </dl>
+          </section>
+        )}
+
+        <section className="da-skill-detail-section">
+          <h3>包含文件 <span>{skill.files?.length ?? 0}</span></h3>
+          {skill.files?.length ? (
+            <div className="da-skill-file-list">
+              {skill.files.slice(0, 12).map((entry) => (
+                <div key={entry.path}><FileText size={14} /><span>{entry.path}</span><small>{entry.type === 'directory' ? '目录' : entry.size != null ? `${entry.size} B` : '文件'}</small></div>
+              ))}
+            </div>
+          ) : <p className="da-skill-detail-empty">当前清单未提供文件列表。</p>}
+        </section>
+
+        {skill.manageable && <div className="da-skill-detail-actions"><button type="button" className="da-primary-button" onClick={onManage}>管理此技能</button></div>}
+      </article>
+    </div>
   );
 }
 
@@ -1266,6 +1387,7 @@ function DataAgentConversation({
   onNavigate,
   onOpenSettings,
   externalMessageUpdate,
+  initialUserMessage,
 }: {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
@@ -1284,6 +1406,7 @@ function DataAgentConversation({
   onNavigate: (path: string) => void;
   onOpenSettings: () => void;
   externalMessageUpdate: number;
+  initialUserMessage: PendingInitialMessage | null;
 }) {
   const editor = useEditorSidebar({ selectedProject, isMobile });
   const { preferences } = useUiPreferences();
@@ -1325,6 +1448,8 @@ function DataAgentConversation({
             autoScrollToBottom={preferences.autoScrollToBottom}
             sendByCtrlEnter={preferences.sendByCtrlEnter}
             externalMessageUpdate={externalMessageUpdate}
+            initialUserMessage={initialUserMessage ?? undefined}
+            onOpenCapabilities={() => onNavigate('/data-agent/capabilities/skills')}
             onShowAllTasks={null}
           />
         </div>
@@ -1370,8 +1495,10 @@ export default function DataAgentApp() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
   const pendingLaunchRef = useRef<PendingLaunch | null>(null);
+  const pendingFailureSessionIdRef = useRef<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [pendingSession, setPendingSession] = useState<ProjectSession | null>(null);
+  const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null);
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
   const previousConnectionRef = useRef(false);
 
@@ -1439,6 +1566,28 @@ export default function DataAgentApp() {
     || (pendingSession?.id === route.sessionId ? pendingSession : null);
 
   useEffect(() => {
+    if (route.page !== 'conversation' || !isProvisionalDataAgentSessionId(route.sessionId)) return;
+
+    const recoveryMessage = '任务启动失败，未能建立有效会话，请重试。';
+    pendingLaunchRef.current = null;
+    pendingFailureSessionIdRef.current = null;
+    setPendingLaunch(null);
+    setPendingSession(null);
+    setPendingInitialMessage(null);
+    setLaunchError(recoveryMessage);
+    sessionStorage.setItem(LAUNCH_ERROR_STORAGE_KEY, recoveryMessage);
+    navigate('/data-agent/new', { replace: true });
+  }, [navigate, route.page, route.sessionId]);
+
+  useEffect(() => {
+    if (route.page !== 'new') return;
+    const storedError = sessionStorage.getItem(LAUNCH_ERROR_STORAGE_KEY);
+    if (!storedError) return;
+    sessionStorage.removeItem(LAUNCH_ERROR_STORAGE_KEY);
+    setLaunchError(storedError);
+  }, [route.page]);
+
+  useEffect(() => {
     if (selectedProject?.workspaceId == null) return;
     if (selectedWorkspaceId !== selectedProject.workspaceId) setSelectedWorkspaceId(selectedProject.workspaceId);
     localStorage.setItem(WORKSPACE_STORAGE_KEY, String(selectedProject.workspaceId));
@@ -1450,6 +1599,7 @@ export default function DataAgentApp() {
       localStorage.setItem(WORKSPACE_STORAGE_KEY, String(project.workspaceId));
     }
     setPendingSession(null);
+    setPendingInitialMessage(null);
     setMobileSidebarOpen(false);
     if (route.page === 'conversation') navigate('/data-agent/new');
   }, [navigate, route.page]);
@@ -1478,23 +1628,51 @@ export default function DataAgentApp() {
       }
 
       const pending = pendingLaunchRef.current;
-      if (!pending || message?.kind !== 'session_created' || message?.scheduledTaskId != null) return;
-      if (message.provider && message.provider !== pending.provider) return;
-      const newSessionId = String(message.newSessionId || message.sessionId || '');
-      if (!newSessionId) return;
+      if (!pending) return;
+      const launchOutcome = resolveDataAgentLaunchMessage(
+        message || {},
+        pending.provider,
+        pendingFailureSessionIdRef.current,
+      );
+
+      if (launchOutcome.type === 'ignore') return;
+      if (launchOutcome.type === 'await-error') {
+        pendingFailureSessionIdRef.current = launchOutcome.sessionId;
+        return;
+      }
+      if (launchOutcome.type === 'failed') {
+        pendingLaunchRef.current = null;
+        pendingFailureSessionIdRef.current = null;
+        setPendingLaunch(null);
+        setPendingSession(null);
+        setPendingInitialMessage(null);
+        setLaunchError(launchOutcome.message);
+        markSessionAsInactive(pending.temporarySessionId);
+        markSessionAsNotProcessing(pending.temporarySessionId);
+        return;
+      }
+
+      const newSessionId = launchOutcome.sessionId;
 
       pendingLaunchRef.current = null;
+      pendingFailureSessionIdRef.current = null;
       setPendingLaunch(null);
       replaceTemporarySession(newSessionId);
       sessionStorage.setItem('pendingSessionId', newSessionId);
-      setPendingSession({ id: newSessionId, __provider: pending.provider });
+      setPendingSession({ id: newSessionId, summary: pending.prompt.replace(/\s+/g, ' ').slice(0, 80), __provider: pending.provider });
+      setPendingInitialMessage({
+        sessionId: newSessionId,
+        provider: pending.provider,
+        content: pending.prompt,
+        timestamp: pending.submittedAt,
+      });
       void fetchProjects();
       navigate(`/data-agent/session/${encodeURIComponent(newSessionId)}`);
     });
 
     if (isConnected) sendMessage({ type: 'get-active-sessions' });
     return unsubscribe;
-  }, [fetchProjects, isConnected, navigate, replaceTemporarySession, sendMessage, subscribeMessage, syncProcessingSessions]);
+  }, [fetchProjects, isConnected, markSessionAsInactive, markSessionAsNotProcessing, navigate, replaceTemporarySession, sendMessage, subscribeMessage, syncProcessingSessions]);
 
   useEffect(() => {
     const reconnected = isConnected && !previousConnectionRef.current;
@@ -1511,9 +1689,11 @@ export default function DataAgentApp() {
 
     const provider = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const temporarySessionId = `new-session-${Date.now()}`;
-    const launch = { provider, temporarySessionId, workspaceId: selectedProject.workspaceId };
+    const launch = { provider, temporarySessionId, workspaceId: selectedProject.workspaceId, prompt, submittedAt: Date.now() };
     pendingLaunchRef.current = launch;
+    pendingFailureSessionIdRef.current = null;
     setPendingLaunch(launch);
+    setPendingInitialMessage(null);
     setLaunchError(null);
     markSessionAsActive(temporarySessionId);
     markSessionAsProcessing(temporarySessionId);
@@ -1540,6 +1720,7 @@ export default function DataAgentApp() {
     const timeout = window.setTimeout(() => {
       if (pendingLaunchRef.current?.temporarySessionId !== pendingLaunch.temporarySessionId) return;
       pendingLaunchRef.current = null;
+      pendingFailureSessionIdRef.current = null;
       setPendingLaunch(null);
       markSessionAsInactive(pendingLaunch.temporarySessionId);
       markSessionAsNotProcessing(pendingLaunch.temporarySessionId);
@@ -1564,7 +1745,7 @@ export default function DataAgentApp() {
   const page = loadingProjects ? <DataAgentLoading label="正在加载工作区…" /> : (() => {
     switch (route.page) {
       case 'capabilities':
-        return <DataAgentCapabilities tab={route.tab || 'experts'} projects={projects} selectedProject={selectedProject} onSelectWorkspace={selectWorkspace} onNavigate={go} />;
+        return <DataAgentCapabilities tab={route.tab || 'experts'} skillName={route.skillName} projects={projects} selectedProject={selectedProject} onSelectWorkspace={selectWorkspace} onNavigate={go} />;
       case 'automation':
         return <DataAgentAutomation projects={projects} selectedProject={selectedProject} onSelectWorkspace={selectWorkspace} onNavigate={go} />;
       case 'files':
@@ -1593,6 +1774,7 @@ export default function DataAgentApp() {
             onNavigate={go}
             onOpenSettings={() => setSettingsOpen(true)}
             externalMessageUpdate={externalMessageUpdate}
+            initialUserMessage={pendingInitialMessage?.sessionId === route.sessionId ? pendingInitialMessage : null}
           />
         );
       default:

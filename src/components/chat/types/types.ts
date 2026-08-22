@@ -161,6 +161,13 @@ export interface ChatInterfaceProps {
   autoScrollToBottom?: boolean;
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
+  initialUserMessage?: {
+    sessionId: string;
+    provider: LLMProvider;
+    content: string;
+    timestamp: number;
+  };
+  onOpenCapabilities?: () => void;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
 }

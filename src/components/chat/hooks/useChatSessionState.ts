@@ -33,6 +33,12 @@ interface UseChatSessionStateArgs {
   resetStreamingState: () => void;
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   sessionStore: SessionStore;
+  initialUserMessage?: {
+    sessionId: string;
+    provider: LLMProvider;
+    content: string;
+    timestamp: number;
+  };
 }
 
 interface ScrollRestoreState {
@@ -106,6 +112,7 @@ export function useChatSessionState({
   resetStreamingState,
   pendingViewSessionRef,
   sessionStore,
+  initialUserMessage,
 }: UseChatSessionStateArgs) {
   const [isLoading, setIsLoading] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
@@ -139,6 +146,7 @@ export function useChatSessionState({
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
+  const appliedInitialMessageKeysRef = useRef(new Set<string>());
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
 
@@ -197,6 +205,26 @@ export function useChatSessionState({
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
   }, [storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
+
+  useEffect(() => {
+    if (!initialUserMessage || selectedSession?.id !== initialUserMessage.sessionId) return;
+
+    const content = initialUserMessage.content.trim();
+    if (!content) return;
+    const key = `${initialUserMessage.sessionId}:${initialUserMessage.timestamp}:${content}`;
+    if (appliedInitialMessageKeysRef.current.has(key)) return;
+    appliedInitialMessageKeysRef.current.add(key);
+
+    sessionStore.appendRealtime(initialUserMessage.sessionId, {
+      id: `local_initial_${initialUserMessage.timestamp}`,
+      sessionId: initialUserMessage.sessionId,
+      timestamp: new Date(initialUserMessage.timestamp).toISOString(),
+      provider: initialUserMessage.provider,
+      kind: 'text',
+      role: 'user',
+      content,
+    });
+  }, [initialUserMessage, selectedSession?.id, sessionStore]);
 
   const latestMessageScrollSignature = useMemo(() => {
     const latestMessage = chatMessages[chatMessages.length - 1];

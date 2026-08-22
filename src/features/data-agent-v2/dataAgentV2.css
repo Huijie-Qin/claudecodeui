@@ -1638,13 +1638,15 @@
 }
 
 .da-new-inner {
-  display: block;
+  display: flex;
   width: 100%;
   min-height: 0;
   margin: 0;
   flex: 1;
+  flex-direction: column;
+  justify-content: center;
   overflow-y: auto;
-  padding: 48px 34px 60px;
+  padding: 34px 34px 54px;
 }
 
 .da-new-intro,
@@ -2067,6 +2069,219 @@
   flex: 1;
 }
 
+.da-skill-detail {
+  width: min(900px, 100%);
+  margin: 0 auto;
+}
+
+.da-detail-back {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--da-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.da-detail-back:hover {
+  background: var(--da-soft);
+  color: var(--da-text);
+}
+
+.da-skill-detail-card {
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid var(--da-border);
+  border-radius: 14px;
+  background: var(--da-panel);
+  box-shadow: 0 8px 24px rgba(30, 29, 26, 0.05);
+}
+
+.da-skill-detail-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.da-skill-detail-hero > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.da-skill-detail-hero h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.da-skill-detail-hero p {
+  margin: 0;
+  color: var(--da-muted);
+  font-size: 12px;
+}
+
+.da-skill-detail-description {
+  margin: 20px 0;
+  color: #5f5d57;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.dark .da-skill-detail-description {
+  color: #bbb8b0;
+}
+
+.da-skill-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--da-border);
+  border-radius: 10px;
+  background: var(--da-border);
+}
+
+.da-skill-detail-grid > div {
+  min-width: 0;
+  padding: 12px;
+  background: var(--da-bg);
+}
+
+.da-skill-detail-grid dt,
+.da-skill-path-list dt {
+  color: var(--da-muted);
+  font-size: 10px;
+}
+
+.da-skill-detail-grid dd,
+.da-skill-path-list dd {
+  margin: 5px 0 0;
+  color: var(--da-text);
+  font-size: 12px;
+  font-weight: 630;
+}
+
+.da-skill-detail-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 16px;
+  padding: 11px 12px;
+  border: 1px solid #f0c8c5;
+  border-radius: 9px;
+  background: #fff5f4;
+  color: #a13f3b;
+  font-size: 11px;
+}
+
+.da-skill-detail-section {
+  margin-top: 22px;
+}
+
+.da-skill-detail-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.da-skill-detail-section h3 span {
+  color: var(--da-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.da-skill-path-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--da-border);
+  border-radius: 10px;
+}
+
+.da-skill-path-list > div {
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--da-border);
+}
+
+.da-skill-path-list > div:last-child {
+  border-bottom: 0;
+}
+
+.da-skill-path-list dd {
+  overflow: hidden;
+  margin-top: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.da-skill-file-list {
+  overflow: hidden;
+  border: 1px solid var(--da-border);
+  border-radius: 10px;
+}
+
+.da-skill-file-list > div {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--da-border);
+  color: var(--da-muted);
+}
+
+.da-skill-file-list > div:last-child {
+  border-bottom: 0;
+}
+
+.da-skill-file-list span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--da-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.da-skill-file-list small,
+.da-skill-detail-empty {
+  color: var(--da-muted);
+  font-size: 10px;
+}
+
+.da-skill-detail-empty {
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed var(--da-border);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.da-skill-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--da-border);
+}
+
 .da-standard-content {
   min-height: 0;
   flex: 1;
@@ -2361,6 +2576,7 @@
 
 @media (max-width: 720px) {
   .da-new-inner {
+    justify-content: flex-start;
     padding: 38px 14px 50px;
   }
 
@@ -2389,6 +2605,19 @@
 
   .da-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .da-skill-detail-card {
+    padding: 16px;
+  }
+
+  .da-skill-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .da-skill-path-list > div {
+    grid-template-columns: 1fr;
+    gap: 5px;
   }
 
   .da-automation-row {
