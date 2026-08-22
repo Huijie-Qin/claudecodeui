@@ -9,6 +9,7 @@ type UseCodeEditorDocumentParams = {
   file: CodeEditorFile;
   projectPath?: string;
   isReadOnly?: boolean;
+  showLoadError?: boolean;
 };
 
 const getErrorMessage = (error: unknown) => {
@@ -19,13 +20,20 @@ const getErrorMessage = (error: unknown) => {
   return String(error);
 };
 
-export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }: UseCodeEditorDocumentParams) => {
+export const useCodeEditorDocument = ({
+  file,
+  projectPath,
+  isReadOnly = false,
+  showLoadError = false,
+}: UseCodeEditorDocumentParams) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isBinary, setIsBinary] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const fileProjectName = file.projectName ?? projectPath;
   const filePath = file.path;
   const fileName = file.name;
@@ -37,6 +45,7 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
       try {
         setLoading(true);
         setIsBinary(false);
+        setLoadError(null);
 
         // Check if file is binary by extension
         if (isBinaryFile(file.name)) {
@@ -66,14 +75,19 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
       } catch (error) {
         const message = getErrorMessage(error);
         console.error('Error loading file:', error);
-        setContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
+        if (showLoadError) {
+          setContent('');
+          setLoadError(message);
+        } else {
+          setContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
+        }
       } finally {
         setLoading(false);
       }
     };
 
     loadFileContent();
-  }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName]);
+  }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName, reloadToken, showLoadError]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -149,8 +163,10 @@ export const useCodeEditorDocument = ({ file, projectPath, isReadOnly = false }:
     saving,
     saveSuccess,
     saveError,
+    loadError,
     isBinary,
     handleSave,
     handleDownload,
+    reloadFile: () => setReloadToken((current) => current + 1),
   };
 };

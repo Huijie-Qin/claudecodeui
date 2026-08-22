@@ -19,6 +19,7 @@ type CodeEditorHeaderProps = {
   onSave: () => void;
   onToggleFullscreen: () => void;
   onClose: () => void;
+  tabbed?: boolean;
   labels: {
     showingChanges: string;
     editMarkdown: string;
@@ -51,6 +52,7 @@ export default function CodeEditorHeader({
   onSave,
   onToggleFullscreen,
   onClose,
+  tabbed = false,
   labels,
 }: CodeEditorHeaderProps) {
   const saveTitle = isReadOnly ? 'Read-only' : saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
@@ -109,18 +111,14 @@ export default function CodeEditorHeader({
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
       {/* File info - can shrink */}
       <div className="flex min-w-0 flex-1 shrink items-center gap-2">
-        <div className="min-w-0 shrink">
-          <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>
-            {file.diffInfo && (
-              <span className="shrink-0 whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                {labels.showingChanges}
-              </span>
-            )}
-          </div>
-          <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-            {displayedPath}
-          </p>
+        <div className="flex min-w-0 shrink items-center gap-2">
+          {!tabbed && <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>}
+          <p className="truncate text-xs text-gray-500 dark:text-gray-400">{displayedPath}</p>
+          {file.diffInfo && (
+            <span className="shrink-0 whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
+              {labels.showingChanges}
+            </span>
+          )}
         </div>
       </div>
 
@@ -190,14 +188,16 @@ export default function CodeEditorHeader({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-          title={labels.close}
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!tabbed && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            title={labels.close}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );

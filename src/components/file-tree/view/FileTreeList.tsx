@@ -6,6 +6,8 @@ import FileTreeNode from './FileTreeNode';
 
 type FileTreeListProps = {
   items: FileTreeNodeType[];
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
@@ -51,6 +53,8 @@ type FileTreeListProps = {
 
 export default function FileTreeList({
   items,
+  activePath,
+  showSelectionControls,
   viewMode,
   expandedDirs,
   dropTarget,
@@ -98,6 +102,8 @@ export default function FileTreeList({
         <FileTreeNode
           key={item.path}
           item={item}
+          activePath={activePath}
+          showSelectionControls={showSelectionControls}
           level={0}
           viewMode={viewMode}
           expandedDirs={expandedDirs}

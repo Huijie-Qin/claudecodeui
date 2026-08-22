@@ -48,6 +48,7 @@ export type UseFileTreeOperationsOptions = {
   onRefresh: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
   isReadOnly?: boolean;
+  beforeFileMutation?: (paths: string[]) => Promise<boolean>;
 };
 
 export type UseFileTreeOperationsResult = {
@@ -127,6 +128,7 @@ export function useFileTreeOperations({
   onRefresh,
   showToast,
   isReadOnly = false,
+  beforeFileMutation,
 }: UseFileTreeOperationsOptions): UseFileTreeOperationsResult {
   const { t } = useTranslation();
 
@@ -192,6 +194,9 @@ export function useFileTreeOperations({
       return;
     }
 
+    const oldDisplayPath = getFileTreeDisplayPath(renamingItem.path, selectedProject);
+    if (beforeFileMutation && !await beforeFileMutation([oldDisplayPath])) return;
+
     setOperationLoading(true);
     try {
       const response = await api.renameFile(selectedProject.name, {
@@ -206,11 +211,13 @@ export function useFileTreeOperations({
       }
 
       showToast(t('fileTree.toast.renamed', 'Renamed successfully'), 'success');
+      const newDisplayPath = `${oldDisplayPath.slice(0, Math.max(0, oldDisplayPath.lastIndexOf('/') + 1))}${renameValue}`;
       dispatchProjectFilesChanged({
         projectName: selectedProject.name,
         workspaceId: selectedProject.workspaceId,
         changedPath: renameValue,
         reason: 'rename',
+        pathChanges: [{ oldPath: oldDisplayPath, newPath: newDisplayPath }],
       });
       onRefresh();
       handleCancelRename();
@@ -219,7 +226,7 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [renamingItem, renameValue, selectedProject, isReadOnly, validateFilename, showToast, t, onRefresh, handleCancelRename]);
+  }, [beforeFileMutation, renamingItem, renameValue, selectedProject, isReadOnly, validateFilename, showToast, t, onRefresh, handleCancelRename]);
 
   // Delete operations
   const handleStartDelete = useCallback((item: FileTreeNode) => {
@@ -234,6 +241,9 @@ export function useFileTreeOperations({
   const handleConfirmDelete = useCallback(async () => {
     const { item } = deleteConfirmation;
     if (!item || !selectedProject || isReadOnly) return;
+
+    const displayPath = getFileTreeDisplayPath(item.path, selectedProject);
+    if (beforeFileMutation && !await beforeFileMutation([displayPath])) return;
 
     setOperationLoading(true);
     try {
@@ -259,6 +269,7 @@ export function useFileTreeOperations({
         workspaceId: selectedProject.workspaceId,
         changedPath: item.path,
         reason: 'delete',
+        deletedPaths: [displayPath],
       });
       onRefresh();
       handleCancelDelete();
@@ -267,7 +278,7 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [deleteConfirmation, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelDelete]);
+  }, [beforeFileMutation, deleteConfirmation, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelDelete]);
 
   // Create operations
   const handleStartCreate = useCallback((parentPath: string, type: 'file' | 'directory') => {
@@ -468,6 +479,8 @@ export function useFileTreeOperations({
       return;
     }
 
+    if (beforeFileMutation && !await beforeFileMutation([sourcePath])) return;
+
     setOperationLoading(true);
     try {
       const response = await api.moveFile(selectedProject.name, {
@@ -482,12 +495,17 @@ export function useFileTreeOperations({
       }
 
       const result = await response.json();
+      const resultPath = normalizeWorkspaceDisplayPath(result.relativePath || '');
+      const newPath = resultPath.startsWith('/workspace')
+        ? resultPath
+        : `${normalizedTargetDirectory}/${item.name}`.replace(/\/+/g, '/');
       showToast(t('fileTree.toast.moved', 'Moved successfully'), 'success');
       dispatchProjectFilesChanged({
         projectName: selectedProject.name,
         workspaceId: selectedProject.workspaceId,
         changedPath: result.relativePath || item.path,
         reason: 'move',
+        pathChanges: [{ oldPath: sourcePath, newPath }],
       });
       onRefresh();
       handleCancelMove();
@@ -496,7 +514,7 @@ export function useFileTreeOperations({
     } finally {
       setOperationLoading(false);
     }
-  }, [moveDialog, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelMove]);
+  }, [beforeFileMutation, moveDialog, selectedProject, isReadOnly, showToast, t, onRefresh, handleCancelMove]);
 
   return {
     // Rename operations

@@ -1,7 +1,7 @@
 import { EditorView } from '@codemirror/view';
 import { unifiedMergeView } from '@codemirror/merge';
 import type { Extension } from '@codemirror/state';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useCodeEditorDocument } from '../hooks/useCodeEditorDocument';
@@ -18,6 +18,10 @@ import CodeEditorLoadingState from './subcomponents/CodeEditorLoadingState';
 import CodeEditorSurface from './subcomponents/CodeEditorSurface';
 import CodeEditorBinaryFile from './subcomponents/CodeEditorBinaryFile';
 
+export type CodeEditorHandle = {
+  save: () => Promise<boolean>;
+};
+
 type CodeEditorProps = {
   file: CodeEditorFile;
   onClose: () => void;
@@ -27,11 +31,14 @@ type CodeEditorProps = {
   isExpanded?: boolean;
   onToggleExpand?: (() => void) | null;
   onPopOut?: (() => void) | null;
+  isActive?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  headerVariant?: 'default' | 'tabbed';
 };
 
 const AUTO_SAVE_DELAY_MS = 2000;
 
-export default function CodeEditor({
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor({
   file,
   onClose,
   projectPath,
@@ -40,7 +47,10 @@ export default function CodeEditor({
   isExpanded = false,
   onToggleExpand = null,
   onPopOut = null,
-}: CodeEditorProps) {
+  isActive = true,
+  onDirtyChange,
+  headerVariant = 'default',
+}: CodeEditorProps, ref) {
   const { t } = useTranslation('codeEditor');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showDiff, setShowDiff] = useState(Boolean(file.diffInfo));
@@ -64,13 +74,16 @@ export default function CodeEditor({
     saving,
     saveSuccess,
     saveError,
+    loadError,
     isBinary,
     handleSave,
     handleDownload,
+    reloadFile,
   } = useCodeEditorDocument({
     file,
     projectPath,
     isReadOnly,
+    showLoadError: headerVariant === 'tabbed',
   });
 
   contentRef.current = content;
@@ -99,6 +112,12 @@ export default function CodeEditor({
 
   saveLatestRef.current = saveLatestContent;
 
+  useImperativeHandle(ref, () => ({ save: saveLatestContent }), [saveLatestContent]);
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
+
   useEffect(() => {
     if (isReadOnly || !hasUnsavedChanges) {
       return undefined;
@@ -118,11 +137,15 @@ export default function CodeEditor({
   }, [isReadOnly]);
 
   const handleClose = useCallback(async () => {
+    if (headerVariant === 'tabbed') {
+      onClose();
+      return;
+    }
     const saved = await saveLatestContent();
     if (saved) {
       onClose();
     }
-  }, [onClose, saveLatestContent]);
+  }, [headerVariant, onClose, saveLatestContent]);
 
   const isMarkdownFile = useMemo(() => {
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -217,6 +240,7 @@ export default function CodeEditor({
     onClose: handleClose,
     disableSave: isReadOnly,
     dependency: content,
+    enabled: isActive,
   });
 
   useEffect(() => {
@@ -233,6 +257,24 @@ export default function CodeEditor({
     );
   }
 
+  if (loadError) {
+    return (
+      <div className={isSidebar
+        ? 'flex h-full w-full items-center justify-center bg-background p-6'
+        : 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4'}>
+        <div className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-background p-6 text-center shadow-sm">
+          <h3 className="text-sm font-semibold text-foreground">{t('loadError.title', 'Unable to open file')}</h3>
+          <p className="break-all text-xs text-muted-foreground">{String(file.displayPath || file.path || '')}</p>
+          <p className="text-xs text-red-600 dark:text-red-400">{loadError}</p>
+          <div className="flex gap-2">
+            <button type="button" className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent" onClick={reloadFile}>{t('actions.retry', 'Retry')}</button>
+            <button type="button" className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent" onClick={onClose}>{t('actions.close')}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isBinary) {
     return (
       <CodeEditorBinaryFile
@@ -241,6 +283,7 @@ export default function CodeEditor({
         isFullscreen={isFullscreen}
         onClose={onClose}
         onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
+        hideHeader={headerVariant === 'tabbed'}
         title={t('binaryFile.title', 'Binary File')}
         message={t('binaryFile.message', 'The file "{{fileName}}" cannot be displayed in the text editor because it is a binary file.', { fileName: file.name })}
       />
@@ -277,6 +320,7 @@ export default function CodeEditor({
             isReadOnly={isReadOnly}
             onToggleFullscreen={() => setIsFullscreen((previous) => !previous)}
             onClose={() => void handleClose()}
+            tabbed={headerVariant === 'tabbed'}
             labels={{
               showingChanges: t('header.showingChanges'),
               editMarkdown: t('actions.editMarkdown'),
@@ -325,4 +369,8 @@ export default function CodeEditor({
 
     </>
   );
-}
+});
+
+CodeEditor.displayName = 'CodeEditor';
+
+export default CodeEditor;

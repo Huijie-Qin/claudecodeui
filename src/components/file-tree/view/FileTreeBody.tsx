@@ -11,6 +11,8 @@ type FileTreeBodyProps = {
   files: FileTreeNode[];
   filteredFiles: FileTreeNode[];
   searchQuery: string;
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
@@ -58,6 +60,8 @@ export default function FileTreeBody({
   files,
   filteredFiles,
   searchQuery,
+  activePath,
+  showSelectionControls,
   viewMode,
   expandedDirs,
   dropTarget,
@@ -118,6 +122,8 @@ export default function FileTreeBody({
       ) : (
         <FileTreeList
           items={filteredFiles}
+          activePath={activePath}
+          showSelectionControls={showSelectionControls}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}

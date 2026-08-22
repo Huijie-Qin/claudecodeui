@@ -30,9 +30,19 @@ type FileTreeProps = {
   selectedProject: Project | null;
   onFileOpen?: (filePath: string) => void;
   isReadOnly?: boolean;
+  presentation?: 'default' | 'data-agent';
+  activePath?: string | null;
+  beforeFileMutation?: (paths: string[]) => Promise<boolean>;
 };
 
-export default function FileTree({ selectedProject, onFileOpen, isReadOnly = false }: FileTreeProps) {
+export default function FileTree({
+  selectedProject,
+  onFileOpen,
+  isReadOnly = false,
+  presentation = 'default',
+  activePath,
+  beforeFileMutation,
+}: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -62,7 +72,10 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
 
   const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
   const { quota, loading: quotaLoading, refreshQuota } = useWorkspaceStorageQuota(selectedProject);
-  const { viewMode, changeViewMode } = useFileTreeViewMode();
+  const { viewMode, changeViewMode } = useFileTreeViewMode(presentation === 'data-agent'
+    ? { defaultMode: 'detailed', storageKey: 'data-agent-file-tree-view-mode' }
+    : undefined);
+  const effectiveViewMode = viewMode;
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
     files,
@@ -83,6 +96,16 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     () => Array.from(selectedPaths).map((path) => allItemsByPath.get(path)).filter((item): item is FileTreeNode => Boolean(item)),
     [allItemsByPath, selectedPaths],
   );
+
+  const filteredItemCount = useMemo(() => {
+    let count = 0;
+    const visit = (nodes: FileTreeNode[]) => nodes.forEach((node) => {
+      count += 1;
+      if (node.children) visit(node.children);
+    });
+    visit(filteredFiles);
+    return count;
+  }, [filteredFiles]);
 
   useEffect(() => {
     setSelectedPaths((previous) => new Set(Array.from(previous).filter((path) => allItemsByPath.has(path))));
@@ -106,6 +129,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
     onRefresh: refreshWorkspaceFiles,
     showToast,
     isReadOnly,
+    beforeFileMutation,
   });
 
   // File upload (drag and drop)
@@ -152,7 +176,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         return;
       }
 
-      if (isImageFile(item.name) && selectedProject) {
+      if (presentation !== 'data-agent' && isImageFile(item.name) && selectedProject) {
         setSelectedImage({
           name: item.name,
           path: item.path,
@@ -164,7 +188,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
 
       onFileOpen?.(item.path);
     },
-    [onFileOpen, selectedProject, toggleDirectory],
+    [onFileOpen, presentation, selectedProject, toggleDirectory],
   );
 
   const formatRelativeTimeLabel = useCallback(
@@ -193,6 +217,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       return;
     }
     const movableItems = getTopLevelItems(items);
+    const sourcePaths = movableItems.map((item) => getFileTreeDisplayPath(item.path, selectedProject));
     const invalidDestination = movableItems.find((item) => {
       if (item.type !== 'directory') return false;
       const sourcePath = getFileTreeDisplayPath(item.path, selectedProject).replace(/\/+$/g, '');
@@ -207,11 +232,14 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       draggedItemsRef.current = [];
       return;
     }
+    if (beforeFileMutation && !await beforeFileMutation(sourcePaths)) return;
     setBatchLoading(true);
     try {
+      const pathChanges: Array<{ oldPath: string; newPath: string }> = [];
       for (const item of movableItems) {
+        const sourcePath = getFileTreeDisplayPath(item.path, selectedProject);
         const response = await api.moveFile(selectedProject.name, {
-          sourcePath: getFileTreeDisplayPath(item.path, selectedProject),
+          sourcePath,
           targetDirectory: normalizedTarget,
           workspaceId: selectedProject.workspaceId,
         });
@@ -219,11 +247,19 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           const data = await response.json();
           throw new Error(data.error || `Failed to move ${item.name}`);
         }
+        const payload = await response.json().catch(() => ({}));
+        const returnedPath = String(payload.relativePath || '').replace(/\\/g, '/');
+        pathChanges.push({
+          oldPath: sourcePath,
+          newPath: returnedPath.startsWith('/workspace')
+            ? returnedPath
+            : `${normalizedTarget}/${item.name}`.replace(/\/+/g, '/'),
+        });
       }
       showToast(t('fileTree.toast.itemsMoved', '{{count}} item(s) moved', { count: movableItems.length }), 'success');
       setSelectedPaths(new Set());
       setBatchMoveOpen(false);
-      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: normalizedTarget, reason: 'move' });
+      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: normalizedTarget, reason: 'move', pathChanges });
       refreshWorkspaceFiles();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Move failed', 'error');
@@ -232,11 +268,13 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       setInternalDropTarget(null);
       draggedItemsRef.current = [];
     }
-  }, [getTopLevelItems, refreshWorkspaceFiles, selectedProject, showToast, t]);
+  }, [beforeFileMutation, getTopLevelItems, refreshWorkspaceFiles, selectedProject, showToast, t]);
 
   const deleteSelectedItems = useCallback(async () => {
     if (!selectedProject) return;
     const deletableItems = getTopLevelItems(selectedItems);
+    const deletedPaths = deletableItems.map((item) => getFileTreeDisplayPath(item.path, selectedProject));
+    if (beforeFileMutation && !await beforeFileMutation(deletedPaths)) return;
     setBatchLoading(true);
     try {
       for (const item of deletableItems) {
@@ -251,14 +289,14 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       showToast(t('fileTree.toast.itemsDeleted', '{{count}} item(s) deleted', { count: deletableItems.length }), 'success');
       setSelectedPaths(new Set());
       setBatchDeleteOpen(false);
-      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: '', reason: 'delete' });
+      dispatchProjectFilesChanged({ projectName: selectedProject.name, workspaceId: selectedProject.workspaceId, changedPath: '', reason: 'delete', deletedPaths });
       refreshWorkspaceFiles();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Delete failed', 'error');
     } finally {
       setBatchLoading(false);
     }
-  }, [getTopLevelItems, refreshWorkspaceFiles, selectedItems, selectedProject, showToast, t]);
+  }, [beforeFileMutation, getTopLevelItems, refreshWorkspaceFiles, selectedItems, selectedProject, showToast, t]);
 
   const handleInternalDragStart = useCallback((item: FileTreeNode, event: DragEvent<HTMLDivElement>) => {
     const items = selectedPaths.has(item.path) ? selectedItems : [item];
@@ -290,7 +328,10 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
   return (
     <div
       ref={upload.treeRef}
-      className="relative flex h-full flex-col bg-background"
+      className={cn(
+        'relative flex h-full flex-col bg-background',
+        presentation === 'data-agent' && 'data-agent-file-tree',
+      )}
       onDragEnter={isReadOnly ? undefined : (event) => {
         if (!event.dataTransfer.types.includes('application/x-cloudcli-file-tree')) upload.handleDragEnter(event);
       }}
@@ -311,7 +352,7 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
       )}
 
       <FileTreeHeader
-        viewMode={viewMode}
+        viewMode={effectiveViewMode}
         onViewModeChange={changeViewMode}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
@@ -326,6 +367,11 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         operationLoading={operations.operationLoading || upload.operationLoading}
         quota={quota}
         quotaLoading={quotaLoading}
+        presentation={presentation}
+        workspaceName={selectedProject?.displayName || selectedProject?.name}
+        itemCount={files.length}
+        totalItemCount={allItemsByPath.size}
+        filteredItemCount={filteredItemCount}
       />
 
       {!isReadOnly && selectedItems.length > 0 && (
@@ -360,14 +406,14 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
         onChange={upload.handleFileInputChange}
       />
 
-      {viewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
+      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
 
       <ScrollArea className="flex-1 px-2 py-1">
         <div className="min-h-full" onClick={() => setFocusedDirectoryPath(null)}>
         {/* New item input */}
         {operations.isCreating && operations.newItemParent === '' && (
           <FileTreeCreateInput
-            viewMode={viewMode}
+            viewMode={effectiveViewMode}
             level={0}
             newItemType={operations.newItemType}
             newItemName={operations.newItemName}
@@ -384,7 +430,9 @@ export default function FileTree({ selectedProject, onFileOpen, isReadOnly = fal
           files={files}
           filteredFiles={filteredFiles}
           searchQuery={searchQuery}
-          viewMode={viewMode}
+          activePath={activePath}
+          showSelectionControls={presentation === 'data-agent' && !isReadOnly}
+          viewMode={effectiveViewMode}
           expandedDirs={expandedDirs}
           dropTarget={upload.dropTarget}
           selectedPaths={selectedPaths}

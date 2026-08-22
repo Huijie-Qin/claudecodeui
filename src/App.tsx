@@ -10,6 +10,7 @@ import { WebSocketProvider } from './contexts/WebSocketContext';
 import { PluginsProvider } from './contexts/PluginsContext';
 import AppContent from './components/app/AppContent';
 import AdminPage from './components/admin/AdminPage';
+import DataAgentApp from './features/data-agent-v2/DataAgentApp';
 import i18n from './i18n/config.js';
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
                         <Routes>
                           <Route path="/" element={<AppContent />} />
                           <Route path="/session/:sessionId" element={<AppContent />} />
+                          <Route path="/data-agent/*" element={<DataAgentApp />} />
                           <Route path="/admin" element={<AdminPage />} />
                         </Routes>
                       </Router>

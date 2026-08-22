@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, Eye, FileText, FolderPlus, FolderUp, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
+import { ChevronDown, Eye, FileText, FolderOpen, FolderPlus, FolderUp, List, RefreshCw, Search, TableProperties, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Input } from '../../../shared/view/ui';
@@ -24,6 +24,11 @@ type FileTreeHeaderProps = {
   operationLoading?: boolean;
   quota?: WorkspaceStorageQuota | null;
   quotaLoading?: boolean;
+  presentation?: 'default' | 'data-agent';
+  workspaceName?: string;
+  itemCount?: number;
+  totalItemCount?: number;
+  filteredItemCount?: number;
 };
 
 function formatQuotaMb(bytes: number) {
@@ -46,6 +51,11 @@ export default function FileTreeHeader({
   operationLoading,
   quota,
   quotaLoading,
+  presentation = 'default',
+  workspaceName,
+  itemCount = 0,
+  totalItemCount = itemCount,
+  filteredItemCount = totalItemCount,
 }: FileTreeHeaderProps) {
   const { t } = useTranslation();
   const [isUploadMenuOpen, setIsUploadMenuOpen] = useState(false);
@@ -85,6 +95,74 @@ export default function FileTreeHeader({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeUploadMenu, isUploadMenuOpen]);
+
+  if (presentation === 'data-agent') {
+    const actionButton = 'data-agent-file-tree-action';
+    return (
+      <div className="data-agent-file-tree-header">
+        <div className="data-agent-file-tree-title">
+          <FolderOpen aria-hidden="true" />
+          <strong title={workspaceName}>{workspaceName || t('fileTree.files')}</strong>
+          <span>{searchQuery ? `${filteredItemCount} / ${totalItemCount}` : totalItemCount} 项</span>
+          {quota ? (
+            <span className={quota.exceeded ? 'is-exceeded' : ''} title={t('fileTree.storageUsage', '{{used}} / {{total}} MB', {
+              used: formatQuotaMb(quota.usedBytes),
+              total: formatQuotaMb(quota.limitBytes),
+            })}>
+              {formatQuotaMb(quota.usedBytes)} / {formatQuotaMb(quota.limitBytes)} MB
+            </span>
+          ) : quotaLoading ? <span>{t('fileTree.storageLoading', 'Calculating space...')}</span> : null}
+          <div className="data-agent-file-tree-actions">
+            {onNewFile && <button type="button" className={actionButton} onClick={onNewFile} disabled={operationLoading} title={t('fileTree.newFile', 'New File')} aria-label={t('fileTree.newFile', 'New File')}><FileText /></button>}
+            {onNewFolder && <button type="button" className={actionButton} onClick={onNewFolder} disabled={operationLoading} title={t('fileTree.newFolder', 'New Folder')} aria-label={t('fileTree.newFolder', 'New Folder')}><FolderPlus /></button>}
+            {(onUpload || onUploadFolder) && (
+              <div ref={uploadMenuRef} className="data-agent-file-tree-upload">
+                <button
+                  type="button"
+                  className={actionButton}
+                  onClick={() => hasUploadOptions ? setIsUploadMenuOpen((current) => !current) : runUploadAction(onUpload || onUploadFolder)}
+                  disabled={operationLoading}
+                  title={t('buttons.upload', 'Upload')}
+                  aria-label={t('buttons.upload', 'Upload')}
+                  aria-expanded={hasUploadOptions ? isUploadMenuOpen : undefined}
+                >
+                  <Upload />
+                </button>
+                {hasUploadOptions && isUploadMenuOpen && (
+                  <div className="data-agent-file-tree-upload-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => runUploadAction(onUpload)}><Upload />{t('fileTree.uploadFiles', 'Upload Files')}</button>
+                    <button type="button" role="menuitem" onClick={() => runUploadAction(onUploadFolder)}><FolderUp />{t('fileTree.uploadFolder', 'Upload Folder')}</button>
+                  </div>
+                )}
+              </div>
+            )}
+            {onRefresh && <button type="button" className={actionButton} onClick={onRefresh} disabled={operationLoading} title={t('fileTree.refresh', 'Refresh')} aria-label={t('fileTree.refresh', 'Refresh')}><RefreshCw className={loading ? 'animate-spin' : ''} /></button>}
+            {onCollapseAll && <button type="button" className={actionButton} onClick={onCollapseAll} title={t('fileTree.collapseAll', 'Collapse All')} aria-label={t('fileTree.collapseAll', 'Collapse All')}><ChevronDown /></button>}
+          </div>
+        </div>
+        <div className="data-agent-file-tree-controls">
+          <div className="data-agent-file-tree-search">
+            <Search aria-hidden="true" />
+            <Input
+              type="text"
+              aria-label={t('fileTree.searchPlaceholder')}
+              placeholder="搜索文件和文件夹"
+              value={searchQuery}
+              onChange={(event) => onSearchQueryChange(event.target.value)}
+            />
+            {searchQuery && (
+              <button type="button" onClick={() => onSearchQueryChange('')} aria-label={t('fileTree.clearSearch')}><X aria-hidden="true" /></button>
+            )}
+          </div>
+          <div className="data-agent-file-view-switch" aria-label="文件视图">
+            <button type="button" className={viewMode === 'simple' ? 'is-active' : ''} onClick={() => onViewModeChange('simple')} title={t('fileTree.simpleView')} aria-label={t('fileTree.simpleView')}><List /></button>
+            <button type="button" className={viewMode === 'compact' ? 'is-active' : ''} onClick={() => onViewModeChange('compact')} title={t('fileTree.compactView')} aria-label={t('fileTree.compactView')}><Eye /></button>
+            <button type="button" className={viewMode === 'detailed' ? 'is-active' : ''} onClick={() => onViewModeChange('detailed')} title={t('fileTree.detailedView')} aria-label={t('fileTree.detailedView')}><TableProperties /></button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2 border-b border-border px-3 pb-2 pt-3">
@@ -161,8 +239,8 @@ export default function FileTreeHeader({
                   }
                   runUploadAction(onUpload || onUploadFolder);
                 }}
-                title={t('fileTree.upload', 'Upload')}
-                aria-label={t('fileTree.upload', 'Upload')}
+                title={t('buttons.upload', 'Upload')}
+                aria-label={t('buttons.upload', 'Upload')}
                 aria-haspopup={hasUploadOptions ? 'menu' : undefined}
                 aria-expanded={hasUploadOptions ? isUploadMenuOpen : undefined}
                 disabled={operationLoading}

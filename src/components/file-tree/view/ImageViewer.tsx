@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+
 import { Button } from '../../../shared/view/ui';
 import { authenticatedFetch } from '../../../utils/api';
 import type { FileTreeImageSelection } from '../types/types';
@@ -7,9 +8,10 @@ import type { FileTreeImageSelection } from '../types/types';
 type ImageViewerProps = {
   file: FileTreeImageSelection;
   onClose: () => void;
+  variant?: 'modal' | 'inline';
 };
 
-export default function ImageViewer({ file, onClose }: ImageViewerProps) {
+export default function ImageViewer({ file, onClose, variant = 'modal' }: ImageViewerProps) {
   const imagePath = `/api/projects/${file.projectName}/files/content?path=${encodeURIComponent(file.path)}`;
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,17 +59,20 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
     };
   }, [imagePath]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div className="mx-4 max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-gray-800">
+  const viewer = (
+    <div className={variant === 'inline'
+      ? 'flex h-full w-full flex-col overflow-hidden bg-background'
+      : 'mx-4 max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-gray-800'}>
+      {variant === 'modal' && (
         <div className="flex items-center justify-between border-b p-4">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{file.name}</h3>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0">
-            <X className="h-4 w-4" />
-          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0"><X className="h-4 w-4" /></Button>
         </div>
+      )}
 
-        <div className="flex min-h-[400px] items-center justify-center bg-gray-50 p-4 dark:bg-gray-900">
+        <div className={variant === 'inline'
+          ? 'flex min-h-0 flex-1 items-center justify-center overflow-auto bg-gray-50 p-4 dark:bg-gray-900'
+          : 'flex min-h-[400px] items-center justify-center bg-gray-50 p-4 dark:bg-gray-900'}>
           {loading && (
             <div className="text-center text-gray-500 dark:text-gray-400">
               <p>Loading image...</p>
@@ -77,7 +82,9 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
             <img
               src={imageUrl}
               alt={file.name}
-              className="max-h-[70vh] max-w-full rounded-lg object-contain shadow-md"
+              className={variant === 'inline'
+                ? 'max-h-full max-w-full rounded-lg object-contain shadow-md'
+                : 'max-h-[70vh] max-w-full rounded-lg object-contain shadow-md'}
             />
           )}
           {!loading && !imageUrl && (
@@ -88,10 +95,21 @@ export default function ImageViewer({ file, onClose }: ImageViewerProps) {
           )}
         </div>
 
-        <div className="border-t bg-gray-50 p-4 dark:bg-gray-800">
-          <p className="text-sm text-gray-600 dark:text-gray-400">{file.path}</p>
+        <div className={variant === 'inline'
+          ? 'border-t bg-gray-50 px-4 py-2 dark:bg-gray-800'
+          : 'border-t bg-gray-50 p-4 dark:bg-gray-800'}>
+          <p className={variant === 'inline'
+            ? 'truncate text-xs text-gray-600 dark:text-gray-400'
+            : 'text-sm text-gray-600 dark:text-gray-400'}>{file.path}</p>
         </div>
       </div>
+  );
+
+  if (variant === 'inline') return viewer;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+      {viewer}
     </div>
   );
 }
