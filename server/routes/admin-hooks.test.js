@@ -345,3 +345,32 @@ test('Hook example endpoints list choices and create only the selected drafts', 
   assert.equal(skillExamples.every((hook) => hook.postActions[0].config.skillId === 'builtin:hook-notification'), true);
   assert.deepEqual(payload.visibleEvents, ['Stop', 'StopFailure']);
 });
+
+test('Hook list initializes built-in presets before returning the page data', async () => {
+  const created = [];
+  let visibleEvents = ['Stop'];
+  const hookConfigs = {
+    listHooks: () => [...created],
+    createHook: ({ input, userId }) => {
+      const hook = { ...input, id: `builtin-${created.length + 1}`, status: 'draft', createdBy: userId };
+      created.push(hook);
+      return hook;
+    },
+    getSettings: () => ({ visibleEvents: [...visibleEvents] }),
+    updateSettings: ({ visibleEvents: nextVisibleEvents }) => {
+      visibleEvents = [...nextVisibleEvents];
+      return { visibleEvents: [...visibleEvents] };
+    },
+  };
+  const router = createRouter({ hookConfigs, hookSkillMarket: {} });
+
+  const first = await requestJson(router, '/hooks');
+  const second = await requestJson(router, '/hooks');
+
+  assert.equal(first.response.status, 200);
+  assert.equal(first.payload.initializedCount, 5);
+  assert.equal(first.payload.hooks.length, 5);
+  assert.equal(second.payload.initializedCount, 0);
+  assert.equal(second.payload.hooks.length, 5);
+  assert.deepEqual(visibleEvents, ['Stop', 'StopFailure']);
+});

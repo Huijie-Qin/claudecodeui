@@ -42,6 +42,12 @@ export const SQL_SYNTAX_MCP_TOOL = Object.freeze({
         description: 'SQL dialect hint. The simulated checker currently applies common structural rules.',
         default: 'generic',
       },
+      rule_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Effective SQL Check rule IDs selected for the current user and workspace.',
+        default: [],
+      },
     },
     required: ['sql'],
     additionalProperties: false,
@@ -310,7 +316,10 @@ export async function handleSqlSyntaxMcpRequest(req, res) {
       return;
     }
     const args = rpc.params?.arguments || {};
-    const payload = checkSqlSyntax(extractSqlForSyntaxCheck(args.sql), args.dialect);
+    const payload = {
+      ...checkSqlSyntax(extractSqlForSyntaxCheck(args.sql), args.dialect),
+      ruleIds: Array.isArray(args.rule_ids) ? args.rule_ids.map(String) : [],
+    };
     sendJson(res, 200, {
       jsonrpc: '2.0',
       id: rpc.id,

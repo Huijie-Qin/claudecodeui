@@ -42,7 +42,7 @@ test('JavaScript template exposes event inputs and returns declared internal out
       label: field.path,
       type: field.type,
     })),
-    outputs: [{ name: 'riskLevel', type: 'string', description: '分析得到的风险等级' }],
+    outputs: [{ name: 'riskLevel', type: 'string' }],
     language: 'javascript',
   });
 
@@ -63,7 +63,7 @@ test('Python template uses the same event, CCUI, and internal output contract', 
     eventLabel: '用户提交问题',
     eventDescription: '问题发送给模型之前触发',
     inputs: [{ path: 'event.prompt', label: '用户问题', type: 'string' }],
-    outputs: [{ name: 'summary', type: 'string', description: '处理摘要' }],
+    outputs: [{ name: 'summary', type: 'string' }],
     language: 'python',
   });
 
@@ -81,7 +81,7 @@ test('reference choices include environment, script, and action outputs', () => 
     extensionLogic: {
       language: 'javascript',
       code: 'return { output: { riskLevel: "high" } };',
-      outputs: [{ name: 'riskLevel', type: 'string', description: '风险等级' }],
+      outputs: [{ name: 'riskLevel', type: 'string' }],
     },
     postActions: [{ id: 'mcp-1', type: 'call_mcp_tool', position: 0, config: {} }],
   }, resources);
@@ -90,6 +90,7 @@ test('reference choices include environment, script, and action outputs', () => 
   assert.ok(paths.includes('ccui.env.userId'));
   assert.ok(paths.includes('script.output.riskLevel'));
   assert.ok(paths.includes('actions.mcp-1.output'));
+  assert.equal(choices.find((field) => field.path === 'script.output.riskLevel')?.label, 'riskLevel');
 });
 
 test('business data stays accessible for configured writers or historical records', () => {

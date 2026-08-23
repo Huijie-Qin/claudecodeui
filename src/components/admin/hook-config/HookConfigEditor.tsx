@@ -270,7 +270,7 @@ function ScriptOutputsEditor({
   const addOutput = () => {
     let index = outputs.length + 1;
     while (outputs.some((output) => output.name === `output${index}`)) index += 1;
-    onChange([...outputs, { name: `output${index}`, type: 'string', description: '' }]);
+    onChange([...outputs, { name: `output${index}`, type: 'string' }]);
   };
 
   return (
@@ -291,7 +291,7 @@ function ScriptOutputsEditor({
         </div>
       ) : null}
       {outputs.map((output, index) => (
-        <div key={`${output.name}-${index}`} className="grid gap-2 rounded-xl border border-border bg-background p-3 md:grid-cols-[minmax(130px,0.7fr)_130px_minmax(180px,1fr)_auto]">
+        <div key={`${output.name}-${index}`} className="grid gap-2 rounded-xl border border-border bg-background p-3 md:grid-cols-[minmax(130px,1fr)_130px_auto]">
           <Input
             value={output.name}
             onChange={(event) => {
@@ -313,16 +313,6 @@ function ScriptOutputsEditor({
             placeholder="类型"
             ariaLabel="输出变量类型"
           />
-          <Input
-            value={output.description}
-            onChange={(event) => {
-              const next = [...outputs];
-              next[index] = { ...output, description: event.target.value };
-              onChange(next);
-            }}
-            placeholder="变量说明"
-            className="h-9 rounded-lg text-xs"
-          />
           <Button
             type="button"
             variant="ghost"
@@ -334,6 +324,60 @@ function ScriptOutputsEditor({
           </Button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function BooleanConditionEditor({
+  condition,
+  references,
+  actionVerb,
+  ariaLabel,
+  onChange,
+}: {
+  condition: unknown;
+  references: FieldChoice[];
+  actionVerb: '调用' | '记录';
+  ariaLabel: string;
+  onChange: (condition: HookValueBinding | null) => void;
+}) {
+  const conditionRecord = asRecord(condition);
+  const conditionPath = conditionRecord.source === 'reference'
+    ? String(conditionRecord.path || '')
+    : '__always__';
+  const booleanReferences = references.filter((field) => field.type === 'boolean');
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-foreground">执行条件（布尔变量，可选）</span>
+        <Badge variant="outline" className="font-mono text-[10px]">boolean</Badge>
+      </div>
+      <HookSelect
+        value={conditionPath}
+        options={[
+          { value: '__always__', label: `不限制（始终${actionVerb}）` },
+          ...booleanReferences.map((field) => ({
+            value: field.path,
+            label: field.label || field.path,
+            description: `boolean · ${field.path}`,
+            group: field.group === 'script' ? '脚本输出 · boolean' : '当前事件 · boolean',
+          })),
+        ]}
+        onChange={(value) => onChange(
+          value === '__always__' ? null : { source: 'reference', path: value },
+        )}
+        placeholder={`不限制（始终${actionVerb}）`}
+        ariaLabel={ariaLabel}
+      />
+      <p className="text-[10px] leading-4 text-muted-foreground">
+        请选择 boolean 类型变量：值为 true 时{actionVerb}，false 时跳过；不选择则始终{actionVerb}。
+      </p>
+      {booleanReferences.length === 0 ? (
+        <p className="text-[10px] leading-4 text-amber-600 dark:text-amber-400">
+          当前没有可用的布尔变量，请先在脚本输出变量中添加 boolean 类型变量。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -355,9 +399,6 @@ function MpcActionEditor({
   const inputs = asRecord(config.inputs);
   const properties = tool?.inputSchema?.properties || {};
   const required = new Set(tool?.inputSchema?.required || []);
-  const condition = asRecord(config.condition);
-  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
-  const booleanReferences = references.filter((field) => field.type === 'boolean');
 
   return (
     <div className="space-y-4">
@@ -383,27 +424,13 @@ function MpcActionEditor({
             ariaLabel="选择 MCP 工具"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
-          <HookSelect
-            value={conditionPath}
-            options={[
-              { value: '__always__', label: '始终调用' },
-              ...booleanReferences.map((field) => ({
-                value: field.path,
-                label: field.label || field.path,
-                description: field.path,
-                group: field.group === 'script' ? '脚本输出' : '当前事件',
-              })),
-            ]}
-            onChange={(value) => onChange({
-              ...config,
-              condition: value === '__always__' ? null : { source: 'reference', path: value },
-            })}
-            placeholder="始终调用"
-            ariaLabel="选择 MCP 执行条件"
-          />
-        </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="调用"
+          ariaLabel="选择 MCP 执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
 
       {tool && Object.keys(properties).length ? (
@@ -456,9 +483,6 @@ function SkillActionEditor({
   const skillId = typeof config.skillId === 'string' ? config.skillId : '';
   const skillName = typeof config.skillName === 'string' ? config.skillName : '';
   const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
-  const condition = asRecord(config.condition);
-  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
-  const booleanReferences = references.filter((field) => field.type === 'boolean');
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef({ start: template.length, end: template.length });
@@ -513,27 +537,13 @@ function SkillActionEditor({
             ariaLabel="选择内置 Hook Skill"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
-          <HookSelect
-            value={conditionPath}
-            options={[
-              { value: '__always__', label: '始终调用' },
-              ...booleanReferences.map((field) => ({
-                value: field.path,
-                label: field.label || field.path,
-                description: field.path,
-                group: field.group === 'script' ? '脚本输出' : '当前事件',
-              })),
-            ]}
-            onChange={(value) => onChange({
-              ...config,
-              condition: value === '__always__' ? null : { source: 'reference', path: value },
-            })}
-            placeholder="始终调用"
-            ariaLabel="选择 Skill 执行条件"
-          />
-        </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="调用"
+          ariaLabel="选择 Skill 执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
       {resources.skillSource?.error ? (
         <p className="text-xs leading-5 text-destructive">{resources.skillSource.error}</p>
@@ -609,9 +619,6 @@ function RecordActionEditor({
   const recordType = typeof config.recordType === 'string' ? config.recordType : '';
   const fields = asRecord(config.fields);
   const fieldEntries = Object.entries(fields);
-  const condition = asRecord(config.condition);
-  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
-  const booleanReferences = references.filter((field) => field.type === 'boolean');
 
   const updateFields = (nextFields: Record<string, unknown>) => {
     onChange({ ...config, fields: nextFields });
@@ -635,27 +642,13 @@ function RecordActionEditor({
             className="h-10 rounded-xl font-mono text-xs"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
-          <HookSelect
-            value={conditionPath}
-            options={[
-              { value: '__always__', label: '始终记录' },
-              ...booleanReferences.map((field) => ({
-                value: field.path,
-                label: field.label || field.path,
-                description: field.path,
-                group: field.group === 'script' ? '脚本输出' : '当前事件',
-              })),
-            ]}
-            onChange={(value) => onChange({
-              ...config,
-              condition: value === '__always__' ? null : { source: 'reference', path: value },
-            })}
-            placeholder="始终记录"
-            ariaLabel="选择记录执行条件"
-          />
-        </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="记录"
+          ariaLabel="选择记录执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
 
       <div className="space-y-2">

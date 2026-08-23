@@ -42,7 +42,6 @@ export type HookScriptLanguage = 'javascript' | 'python';
 export type HookScriptOutput = {
   name: string;
   type: FieldType;
-  description: string;
 };
 
 export type HookExtensionLogic = {

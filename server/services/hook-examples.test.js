@@ -4,11 +4,13 @@ import test from 'node:test';
 import {
   REQUESTED_HOOK_EXAMPLES,
   createRequestedHookExamples,
+  ensureRequestedHookExamples,
 } from './hook-examples.js';
 
 function createHarness(initialHooks = []) {
   const hooks = initialHooks.map((hook) => ({ ...hook }));
   let visibleEvents = ['Stop'];
+  let examplesInitialized = false;
   return {
     hooks,
     hookConfigs: {
@@ -27,6 +29,10 @@ function createHarness(initialHooks = []) {
       updateSettings: (input) => {
         visibleEvents = [...input.visibleEvents];
         return { visibleEvents: [...visibleEvents] };
+      },
+      areRequestedExamplesInitialized: () => examplesInitialized,
+      markRequestedExamplesInitialized: () => {
+        examplesInitialized = true;
       },
     },
   };
@@ -52,6 +58,9 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   const recoveryExample = result.hooks.find((hook) => hook.name.includes('HTTP 200'));
 
   assert.deepEqual(sqlCheckExample.extensionLogic.outputs.map((output) => output.name), ['detected']);
+  assert.equal(sqlCheckExample.extensionLogic.outputs.every((output) => (
+    Object.keys(output).sort().join(',') === 'name,type'
+  )), true);
   assert.equal(sqlCheckExample.postActions.length, 1);
   assert.equal(sqlCheckExample.postActions[0].type, 'call_mcp_tool');
   assert.equal(sqlCheckExample.postActions[0].config.toolName, 'mcp__sql-syntax-checker__check_sql_syntax');
@@ -59,7 +68,14 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
     source: 'reference',
     path: 'event.last_assistant_message',
   });
+  assert.deepEqual(sqlCheckExample.postActions[0].config.inputs.rule_ids, {
+    source: 'reference',
+    path: 'ccui.env.sqlCheckRuleIds',
+  });
   assert.equal(sqlRecordExample.postActions.length, 1);
+  assert.equal(sqlRecordExample.extensionLogic.outputs.every((output) => (
+    Object.keys(output).sort().join(',') === 'name,type'
+  )), true);
   assert.equal(sqlRecordExample.postActions[0].type, 'write_record');
   assert.equal(notificationExample.postActions[0].config.skillId, 'builtin:hook-notification');
   assert.equal(failureExample.postActions[0].config.skillId, 'builtin:hook-notification');
@@ -69,6 +85,30 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
     source: 'reference',
     path: 'script.output.shouldRecover',
   });
+});
+
+test('built-in Hook presets are initialized automatically and idempotently', () => {
+  const harness = createHarness();
+
+  const first = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
+  const second = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
+
+  assert.equal(first.createdCount, REQUESTED_HOOK_EXAMPLES.length);
+  assert.equal(second.createdCount, 0);
+  assert.equal(second.skippedCount, REQUESTED_HOOK_EXAMPLES.length);
+  assert.equal(harness.hooks.length, REQUESTED_HOOK_EXAMPLES.length);
+});
+
+test('automatic initialization does not recreate a built-in preset deleted later', () => {
+  const harness = createHarness();
+  ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
+  const deleted = harness.hooks.pop();
+
+  const afterDelete = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
+
+  assert.equal(afterDelete.createdCount, 0);
+  assert.equal(afterDelete.skippedCount, REQUESTED_HOOK_EXAMPLES.length - 1);
+  assert.equal(harness.hooks.some((hook) => hook.name === deleted.name), false);
 });
 
 test('creating Hook examples is idempotent and never overwrites an existing example', () => {

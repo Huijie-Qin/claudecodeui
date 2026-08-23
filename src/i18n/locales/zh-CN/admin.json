@@ -553,6 +553,7 @@
       "loadError": "加载 Hook 用户绑定失败",
       "saveError": "保存 Hook 用户绑定失败"
     },
+    "deleteTitle": "删除 Hook",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
     "builtinSkills": {
       "title": "内置 Hook Skill 管理",

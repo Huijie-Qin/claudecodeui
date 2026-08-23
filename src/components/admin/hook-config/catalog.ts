@@ -708,7 +708,7 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
   for (const output of draft.extensionLogic?.outputs || []) {
     fields.push({
       path: `script.output.${output.name}`,
-      label: output.description || output.name,
+      label: output.name,
       type: output.type,
       group: 'script',
     });
@@ -742,11 +742,11 @@ function scriptCommentText(value: string) {
 }
 
 function javascriptOutputLines(outputs: HookScriptOutput[]) {
-  return outputs.map((output) => `    // ${output.name}: undefined, // ${scriptCommentText(output.description || output.type)}`);
+  return outputs.map((output) => `    // ${output.name}: undefined, // ${output.type}`);
 }
 
 function pythonOutputLines(outputs: HookScriptOutput[]) {
-  return outputs.map((output) => `        # "${output.name}": None,  # ${scriptCommentText(output.description || output.type)}`);
+  return outputs.map((output) => `        # "${output.name}": None,  # ${output.type}`);
 }
 
 export function buildScriptTemplate({
@@ -767,7 +767,7 @@ export function buildScriptTemplate({
   const safeLabel = scriptCommentText(eventLabel);
   const safeDescription = scriptCommentText(eventDescription);
   const inputLines = inputs.map((input) => `${input.path} (${input.type}) - ${scriptCommentText(input.label)}`);
-  const outputLines = outputs.map((output) => `script.output.${output.name} (${output.type}) - ${output.description || output.name}`);
+  const outputLines = outputs.map((output) => `script.output.${output.name} (${output.type})`);
 
   if (language === 'python') {
     const comments = [

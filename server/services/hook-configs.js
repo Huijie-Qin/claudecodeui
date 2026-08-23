@@ -61,6 +61,7 @@ const MATCHER_EVENTS = new Set([
   'FileChanged',
 ]);
 const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
+const REQUESTED_EXAMPLES_INITIALIZED_CONFIG_KEY = 'admin_hook_requested_examples_initialized_v1';
 const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_POST_ACTIONS = 20;
@@ -85,6 +86,7 @@ const ENVIRONMENT_VARIABLE_PATHS = new Set([
   'ccui.env.tenantId',
   'ccui.env.workspaceId',
   'ccui.env.sessionId',
+  'ccui.env.sqlCheckRuleIds',
 ]);
 const COMMON_CLAUDE_OUTPUTS = Object.freeze([
   'continue',
@@ -227,11 +229,6 @@ function normalizeExtensionLogic(value) {
     return {
       name,
       type,
-      description: requireString(
-        typeof output.description === 'string' ? output.description : '',
-        `extensionLogic.outputs[${index}].description`,
-        { max: 300, allowEmpty: true },
-      ),
     };
   });
   return {
@@ -1393,6 +1390,15 @@ export function createHookConfigService({ database = db, configStore = appConfig
       return true;
     },
 
+    areRequestedExamplesInitialized: () => (
+      configStore.get(REQUESTED_EXAMPLES_INITIALIZED_CONFIG_KEY) === '1'
+    ),
+
+    markRequestedExamplesInitialized: () => {
+      configStore.set(REQUESTED_EXAMPLES_INITIALIZED_CONFIG_KEY, '1');
+      return true;
+    },
+
     getSettings: () => {
       const stored = parseJson(configStore.get(VISIBLE_EVENTS_CONFIG_KEY), null);
       const visibleEvents = Array.isArray(stored)
@@ -1427,6 +1433,7 @@ export function createHookConfigService({ database = db, configStore = appConfig
         { path: 'ccui.env.tenantId', type: 'number' },
         { path: 'ccui.env.workspaceId', type: 'number' },
         { path: 'ccui.env.sessionId', type: 'string' },
+        { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
       ],
     }),
   };

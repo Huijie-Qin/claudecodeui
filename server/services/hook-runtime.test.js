@@ -12,6 +12,11 @@ import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
 
+async function loadTestHookSkill(skillId, skillName, argumentsText) {
+  assert.equal(skillId, `builtin:${skillName}`);
+  return `Run the test Hook Skill.\nHOOK_NOTIFICATION_SKILL_EXECUTED\nPayload: ${argumentsText}\n`;
+}
+
 function createDatabase() {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
@@ -289,6 +294,61 @@ test('call_mcp_tool condition skips the tool before resolving inputs', async () 
   }
 });
 
+test('SQL Check Hook sends the effective workspace rule IDs to its MCP tool', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'SQL Check 强制校验',
+      version: 1,
+      bindingController: 'sql_check',
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'check-sql',
+        type: 'call_mcp_tool',
+        config: {
+          toolName: 'mcp__sql-syntax-checker__check_sql_syntax',
+          inputs: {
+            sql: { source: 'reference', path: 'event.last_assistant_message' },
+          },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    let mcpInput;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      tenantId: 2,
+      workspaceId: 3,
+      sqlCheckRuleIds: ['require_where', 'limit_rows'],
+      workspaceRoot,
+      database,
+      mcpCaller: async ({ input }) => {
+        mcpInput = input;
+        return { valid: true };
+      },
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-sql-check',
+      last_assistant_message: '```sql\nSELECT * FROM users;\n```',
+    });
+
+    assert.deepEqual(mcpInput, {
+      sql: '```sql\nSELECT * FROM users;\n```',
+      rule_ids: ['require_where', 'limit_rows'],
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook failures are audited and fail open to Claude', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
@@ -360,6 +420,7 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
     const event = {
@@ -396,7 +457,7 @@ test('invoke_skill skips recovery when its condition resolves to false', async (
       extensionLogic: {
         language: 'javascript',
         code: 'export async function run() { return { output: { shouldRecover: false } }; }',
-        outputs: [{ name: 'shouldRecover', type: 'boolean', description: '' }],
+        outputs: [{ name: 'shouldRecover', type: 'boolean' }],
       },
       postActions: [{
         id: 'recover',
@@ -416,6 +477,7 @@ test('invoke_skill skips recovery when its condition resolves to false', async (
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
 
@@ -467,6 +529,7 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
     const output = await runtime.executeHook(hook, {
@@ -485,7 +548,7 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
   }
 });
 
-test('built-in Hook Skill loads without a workspace copy and schedules a verifiable notification turn', async () => {
+test('Hook Skill action uses the configured content loader without creating a workspace copy', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
   try {
@@ -513,6 +576,7 @@ test('built-in Hook Skill loads without a workspace copy and schedules a verifia
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
     await runtime.executeHook(hook, {

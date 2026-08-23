@@ -40,7 +40,7 @@ test('Hook MCP client performs a real HTTP call to the simulated SQL checker', a
     const address = server.address();
     const output = await callHookMcpTool({
       qualifiedToolName: `mcp__sql-syntax-checker__${SQL_SYNTAX_MCP_TOOL_NAME}`,
-      input: { sql: 'SELECT 1;', dialect: 'generic' },
+      input: { sql: 'SELECT 1;', dialect: 'generic', rule_ids: ['limit_rows'] },
       mcpServers: {
         'sql-syntax-checker': {
           type: 'http',
@@ -52,6 +52,7 @@ test('Hook MCP client performs a real HTTP call to the simulated SQL checker', a
     assert.equal(output.valid, true);
     assert.equal(output.checker, 'ccui-simulated-sql-syntax-checker');
     assert.equal(output.statementCount, 1);
+    assert.deepEqual(output.ruleIds, ['limit_rows']);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }

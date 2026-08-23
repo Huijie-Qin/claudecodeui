@@ -14,7 +14,11 @@ import { buildAdminAnalyticsSummary, buildAdminAnalyticsUsers } from '../service
 import { buildMcpToolUsageSummary } from '../services/mcp-tool-usage.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { hookConfigService } from '../services/hook-configs.js';
-import { createRequestedHookExamples, listRequestedHookExamples } from '../services/hook-examples.js';
+import {
+  createRequestedHookExamples,
+  ensureRequestedHookExamples,
+  listRequestedHookExamples,
+} from '../services/hook-examples.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
 import { scheduledTaskLogStore } from '../services/scheduled-task-log-store.js';
 import { agentTemplateService } from '../services/agent-templates.js';
@@ -527,7 +531,14 @@ export function createAdminRouter(
 
   router.get('/hooks', (req, res) => {
     try {
-      return res.json({ hooks: hookConfigs.listHooks() });
+      const initialized = ensureRequestedHookExamples({
+        hookConfigs,
+        userId: req.user.id,
+      });
+      return res.json({
+        hooks: hookConfigs.listHooks(),
+        initializedCount: initialized.createdCount,
+      });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to list Hooks');
     }

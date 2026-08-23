@@ -243,6 +243,7 @@ function buildEnvironment(context, event) {
     tenantId: context.tenantId || null,
     workspaceId: context.workspaceId || null,
     sessionId: event?.session_id || context.sessionId?.() || null,
+    sqlCheckRuleIds: Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [],
   };
 }
 
@@ -288,6 +289,9 @@ async function executePostActions({ hook, references, context, event, signal, re
         const value = resolveBinding(binding, references);
         if (value === UNRESOLVED) throw new Error(`Post action ${action.id} input ${key} is unresolved`);
         input[key] = value;
+      }
+      if (hook.bindingController === 'sql_check' && !Object.hasOwn(input, 'rule_ids')) {
+        input.rule_ids = Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [];
       }
       const output = await context.mcpCaller({
         qualifiedToolName: action.config.toolName,
@@ -346,7 +350,7 @@ async function executePostActions({ hook, references, context, event, signal, re
       if (argumentsText === UNRESOLVED) {
         throw new Error(`Post action ${action.id} arguments contain an unresolved variable`);
       }
-      const modelContent = await loadSkillContent(
+      const modelContent = await context.skillContentLoader(
         action.config.skillId,
         action.config.skillName,
         argumentsText,
@@ -372,9 +376,11 @@ export function createHookRuntimeSession({
   username,
   tenantId,
   workspaceId,
+  sqlCheckRuleIds = [],
   workspaceRoot,
   sessionId = () => null,
   mcpServers = {},
+  skillContentLoader = loadSkillContent,
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
   },
@@ -388,9 +394,11 @@ export function createHookRuntimeSession({
     username,
     tenantId,
     workspaceId,
+    sqlCheckRuleIds,
     workspaceRoot,
     sessionId,
     mcpServers,
+    skillContentLoader,
     enqueueSkillRecovery,
     mcpCaller,
   };

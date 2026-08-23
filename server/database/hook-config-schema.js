@@ -18,7 +18,7 @@ const HTTP_200_RECOVERY_EXTENSION = Object.freeze({
     '}',
   ].join('\n'),
   outputs: [
-    { name: 'shouldRecover', type: 'boolean', description: '是否为 HTTP 200 异常' },
+    { name: 'shouldRecover', type: 'boolean' },
   ],
 });
 
@@ -203,6 +203,30 @@ export function migrateHookConfigurationModel(database) {
         ALTER TABLE hooks
         ADD COLUMN claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}'
       `);
+    }
+    const extensionRows = database.prepare('SELECT id, extension_logic_json FROM hooks').all();
+    const updateExtensionLogic = database.prepare(`
+      UPDATE hooks SET extension_logic_json = ? WHERE id = ?
+    `);
+    for (const row of extensionRows) {
+      try {
+        const extensionLogic = JSON.parse(row.extension_logic_json || 'null');
+        if (!extensionLogic || !Array.isArray(extensionLogic.outputs)) continue;
+        let changed = false;
+        const outputs = extensionLogic.outputs.map((output) => {
+          if (!output || typeof output !== 'object' || Array.isArray(output) || !Object.hasOwn(output, 'description')) {
+            return output;
+          }
+          const { description: _description, ...normalizedOutput } = output;
+          changed = true;
+          return normalizedOutput;
+        });
+        if (changed) {
+          updateExtensionLogic.run(JSON.stringify({ ...extensionLogic, outputs }), row.id);
+        }
+      } catch {
+        // Invalid legacy JSON remains available for the normal service validation path.
+      }
     }
     database.exec('DROP TABLE IF EXISTS hook_actions');
     if (hasGate) database.exec('ALTER TABLE hooks DROP COLUMN gate_json');

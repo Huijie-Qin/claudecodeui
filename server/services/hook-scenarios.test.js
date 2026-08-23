@@ -271,7 +271,7 @@ function createHookInput(eventName) {
     extensionLogic: {
       language: 'javascript',
       code: SCRIPT_CODE,
-      outputs: [{ name: 'seen', type: 'string', description: 'Triggered SDK Hook event name' }],
+      outputs: [{ name: 'seen', type: 'string' }],
     },
     postActions: [],
     claudeResponse: { bindings },
@@ -573,12 +573,12 @@ test('the real Agent SDK control channel registers and dispatches all 28 configu
 });
 
 const FULL_MATRIX_SCRIPT_OUTPUTS = Object.freeze([
-  { name: 'eventName', type: 'string', description: 'SDK Hook event' },
-  { name: 'userId', type: 'number', description: 'Current CCUI user' },
-  { name: 'text', type: 'string', description: 'Workspace text round trip' },
-  { name: 'json', type: 'object', description: 'Workspace JSON round trip' },
-  { name: 'exists', type: 'boolean', description: 'Workspace existence result' },
-  { name: 'entries', type: 'array', description: 'Workspace directory entries' },
+  { name: 'eventName', type: 'string' },
+  { name: 'userId', type: 'number' },
+  { name: 'text', type: 'string' },
+  { name: 'json', type: 'object' },
+  { name: 'exists', type: 'boolean' },
+  { name: 'entries', type: 'array' },
 ]);
 
 const SCRIPT_API_METHODS_EXERCISED = Object.freeze([
@@ -761,6 +761,10 @@ async function executePublishedMatrixHook({
     workspaceId: 22,
     workspaceRoot,
     mcpServers,
+    skillContentLoader: async (skillId, skillName, argumentsText) => {
+      assert.equal(skillId, `builtin:${skillName}`);
+      return `Run the matrix Hook Skill.\nPayload: ${argumentsText}\n`;
+    },
     enqueueSkillRecovery,
     database,
   });
@@ -783,7 +787,6 @@ test('every Hook event publishes and executes every behavior allowed by its capa
   assert.deepEqual([...SCRIPT_API_METHODS_EXERCISED].sort(), [...HOOK_SCRIPT_API_METHODS].sort());
   const { database, service } = createFixture();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-full-matrix-'));
-  const skillDirectory = path.join(workspaceRoot, '.claude', 'skills', 'matrix-recovery');
   const recoveries = [];
   const coverage = {
     javascript: 0,
@@ -806,12 +809,6 @@ test('every Hook event publishes and executes every behavior allowed by its capa
 
   try {
     seedFullMatrixResources(database);
-    await fs.mkdir(skillDirectory, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDirectory, 'SKILL.md'),
-      '---\nname: matrix-recovery\n---\nRecover this event: $ARGUMENTS\n',
-      'utf8',
-    );
 
     for (const eventName of HOOK_EVENTS) {
       for (const language of ['javascript', 'python']) {

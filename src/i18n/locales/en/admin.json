@@ -599,6 +599,7 @@
       "loadError": "Failed to load Hook user bindings",
       "saveError": "Failed to save Hook user bindings"
     },
+    "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
     "builtinSkills": {
       "title": "Built-in Hook Skill management",

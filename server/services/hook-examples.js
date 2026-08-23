@@ -64,7 +64,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
       language: 'javascript',
       code: SQL_DETECTION_SCRIPT,
       outputs: [
-        { name: 'detected', type: 'boolean', description: '是否检测到 SQL' },
+        { name: 'detected', type: 'boolean' },
       ],
     },
     postActions: [
@@ -78,6 +78,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
           inputs: {
             sql: { source: 'reference', path: 'event.last_assistant_message' },
             dialect: { source: 'literal', value: 'generic' },
+            rule_ids: { source: 'reference', path: 'ccui.env.sqlCheckRuleIds' },
           },
         },
       },
@@ -94,15 +95,15 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
       language: 'javascript',
       code: SQL_METRICS_SCRIPT,
       outputs: [
-        { name: 'detected', type: 'boolean', description: '是否检测到 SQL' },
-        { name: 'sqlBlockCount', type: 'number', description: 'SQL 代码块数量' },
-        { name: 'sqlLineCount', type: 'number', description: 'SQL 总行数' },
-        { name: 'nonEmptySqlLineCount', type: 'number', description: 'SQL 非空行数' },
-        { name: 'statementCount', type: 'number', description: 'SQL 语句数量' },
-        { name: 'statementTypes', type: 'array', description: 'SQL 语句类型' },
-        { name: 'characterCount', type: 'number', description: 'SQL 字符数' },
-        { name: 'capturedAt', type: 'string', description: '捕获时间' },
-        { name: 'sessionId', type: 'string', description: '会话 ID' },
+        { name: 'detected', type: 'boolean' },
+        { name: 'sqlBlockCount', type: 'number' },
+        { name: 'sqlLineCount', type: 'number' },
+        { name: 'nonEmptySqlLineCount', type: 'number' },
+        { name: 'statementCount', type: 'number' },
+        { name: 'statementTypes', type: 'array' },
+        { name: 'characterCount', type: 'number' },
+        { name: 'capturedAt', type: 'string' },
+        { name: 'sessionId', type: 'string' },
       ],
     },
     postActions: [
@@ -178,7 +179,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
       language: 'javascript',
       code: HTTP_200_RECOVERY_SCRIPT,
       outputs: [
-        { name: 'shouldRecover', type: 'boolean', description: '是否为 HTTP 200 异常' },
+        { name: 'shouldRecover', type: 'boolean' },
       ],
     },
     postActions: [{
@@ -259,4 +260,24 @@ export function createRequestedHookExamples({ hookConfigs, userId, exampleIds })
     skippedCount: skipped.length,
     visibleEvents,
   };
+}
+
+export function ensureRequestedHookExamples({ hookConfigs, userId }) {
+  if (hookConfigs.areRequestedExamplesInitialized?.()) {
+    const names = new Set(REQUESTED_HOOK_EXAMPLES.map((example) => example.name));
+    const hooks = hookConfigs.listHooks().filter((hook) => names.has(hook.name));
+    return {
+      hooks,
+      createdCount: 0,
+      skippedCount: hooks.length,
+      visibleEvents: hookConfigs.getSettings().visibleEvents || [],
+    };
+  }
+  const result = createRequestedHookExamples({
+    hookConfigs,
+    userId,
+    exampleIds: REQUESTED_HOOK_EXAMPLES.map((example) => example.id),
+  });
+  hookConfigs.markRequestedExamplesInitialized?.();
+  return result;
 }

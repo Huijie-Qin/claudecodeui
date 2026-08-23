@@ -61,6 +61,7 @@ import {
 import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { userDb } from './database/db.js';
+import { multitenancyDb } from './database/multitenancy-db.js';
 import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
 import { hookConfigService } from './services/hook-configs.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
@@ -1152,12 +1153,29 @@ async function queryClaudeSDK(command, options = {}, ws) {
               })
             : mcpServers;
           const hookUser = userDb.getUserById(hookUserId);
+          const hasSqlCheckHook = activeHooks.some((hook) => hook.bindingController === 'sql_check');
+          let sqlCheckRuleIds = [];
+          if (hasSqlCheckHook && runtimeOptions.tenantId && runtimeOptions.workspaceId) {
+            try {
+              const sqlCheckConfig = multitenancyDb.sqlCheck.resolveUserConfig({
+                tenantId: runtimeOptions.tenantId,
+                workspaceId: runtimeOptions.workspaceId,
+                userId: hookUserId,
+              });
+              sqlCheckRuleIds = Array.isArray(sqlCheckConfig.effectiveRuleIds)
+                ? sqlCheckConfig.effectiveRuleIds
+                : [];
+            } catch (error) {
+              console.warn('[HookRuntime] Failed to resolve SQL Check rules:', error?.message || error);
+            }
+          }
           const hookRuntime = createHookRuntimeSession({
             hooks: activeHooks,
             userId: hookUserId,
             username: hookUser?.username || null,
             tenantId: runtimeOptions.tenantId || null,
             workspaceId: runtimeOptions.workspaceId || null,
+            sqlCheckRuleIds,
             workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
             sessionId: () => capturedSessionId || sessionId || null,
             mcpServers: directMcpServers || {},

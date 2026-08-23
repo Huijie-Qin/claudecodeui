@@ -51,7 +51,7 @@ function publishableHook(overrides = {}) {
     extensionLogic: {
       language: 'javascript',
       code: 'export async function run(event, ccui) { await ccui.records.write("stop", event); return { output: { summary: "done" } }; }',
-      outputs: [{ name: 'summary', type: 'string', description: '执行摘要' }],
+      outputs: [{ name: 'summary', type: 'string' }],
     },
     postActions: [],
     claudeResponse: { bindings: {} },
@@ -66,7 +66,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     assert.equal(created.status, 'draft');
     assert.equal(created.extensionLogic.language, 'javascript');
     assert.deepEqual(created.extensionLogic.outputs, [
-      { name: 'summary', type: 'string', description: '执行摘要' },
+      { name: 'summary', type: 'string' },
     ]);
 
     const updated = service.updateHook({
@@ -76,7 +76,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
         extensionLogic: {
           language: 'python',
           code: 'async def run(event, ccui):\n    await ccui.records.write("stop", event)\n    return {"output": {"summary": "done"}}',
-          outputs: [{ name: 'summary', type: 'string', description: '执行摘要' }],
+          outputs: [{ name: 'summary', type: 'string' }],
         },
         claudeResponse: {
           bindings: {
@@ -902,6 +902,48 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
   }
 });
 
+test('requested Hook example initialization marker is persisted', () => {
+  const { database, service } = createFixture();
+  try {
+    assert.equal(service.areRequestedExamplesInitialized(), false);
+    service.markRequestedExamplesInitialized();
+    assert.equal(service.areRequestedExamplesInitialized(), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('configuration migration removes legacy script output descriptions', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        extension_logic_json TEXT NOT NULL DEFAULT 'null'
+      );
+      INSERT INTO hooks (id, extension_logic_json) VALUES (
+        'legacy-output',
+        '{"language":"javascript","code":"return {};","outputs":[{"name":"result","type":"string","description":"legacy label"}]}'
+      );
+    `);
+
+    migrateHookConfigurationModel(database);
+
+    assert.deepEqual(
+      JSON.parse(database.prepare(`
+        SELECT extension_logic_json FROM hooks WHERE id = 'legacy-output'
+      `).get().extension_logic_json),
+      {
+        language: 'javascript',
+        code: 'return {};',
+        outputs: [{ name: 'result', type: 'string' }],
+      },
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test('legacy global activation migrates to a dynamic all-user scope without binding triggers', () => {
   const database = new Database(':memory:');
   try {
@@ -1103,6 +1145,7 @@ test('resource catalog exposes only runtime-backed environment fields', () => {
       { path: 'ccui.env.tenantId', type: 'number' },
       { path: 'ccui.env.workspaceId', type: 'number' },
       { path: 'ccui.env.sessionId', type: 'string' },
+      { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
     ]);
   } finally {
     database.close();
