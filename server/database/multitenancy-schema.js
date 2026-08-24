@@ -360,6 +360,14 @@ CREATE TABLE IF NOT EXISTS user_workspace_mcp_tool_preferences (
 CREATE INDEX IF NOT EXISTS idx_user_workspace_mcp_tool_preferences_owner
   ON user_workspace_mcp_tool_preferences(tenant_id, workspace_id, user_id);
 
+CREATE TABLE IF NOT EXISTS agent_template_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  created_by_user_id INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS agent_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -395,7 +403,6 @@ CREATE TABLE IF NOT EXISTS workspace_agent_template_snapshots (
   created_by_user_id INTEGER NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
-  FOREIGN KEY (template_id) REFERENCES agent_templates(id) ON DELETE RESTRICT,
   FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -411,8 +418,7 @@ CREATE TABLE IF NOT EXISTS workspace_agent_template_mcp_installs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (workspace_id, preset_id),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
-  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE,
-  FOREIGN KEY (template_id) REFERENCES agent_templates(id) ON DELETE RESTRICT
+  FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS workspace_skill_market_imports (

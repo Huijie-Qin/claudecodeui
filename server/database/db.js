@@ -212,6 +212,14 @@ const runMigrations = () => {
 function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
+  migrateAgentTemplateSnapshotsToHistoricalReferences();
+  db.exec(`
+    INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
+    SELECT TRIM(category), MIN(created_by_user_id)
+    FROM agent_templates
+    WHERE TRIM(category) != ''
+    GROUP BY LOWER(TRIM(category))
+  `);
   migrateLegacyTenantProdCode();
 
   const mcpPresetColumns = db
@@ -269,6 +277,83 @@ function runMultitenancyMigrations() {
       ON mcp_server_presets(tenant_id, preinstall_scope, status)
   `);
 
+}
+
+function migrateAgentTemplateSnapshotsToHistoricalReferences() {
+  const hasAgentTemplateForeignKey = (tableName) => db
+    .prepare(`PRAGMA foreign_key_list(${tableName})`)
+    .all()
+    .some((foreignKey) => foreignKey.table === 'agent_templates');
+  const migrateSnapshots = hasAgentTemplateForeignKey('workspace_agent_template_snapshots');
+  const migrateMcpInstalls = hasAgentTemplateForeignKey('workspace_agent_template_mcp_installs');
+  if (!migrateSnapshots && !migrateMcpInstalls) {
+    return;
+  }
+
+  console.log('Running migration: Preserving Agent template project snapshots after template deletion');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    const migrate = db.transaction(() => {
+      if (migrateSnapshots) {
+        db.exec(`
+          ALTER TABLE workspace_agent_template_snapshots
+            RENAME TO workspace_agent_template_snapshots_legacy;
+          CREATE TABLE workspace_agent_template_snapshots (
+            workspace_id INTEGER PRIMARY KEY,
+            template_id INTEGER NOT NULL,
+            template_name TEXT NOT NULL,
+            template_updated_at DATETIME,
+            agent_markdown TEXT NOT NULL DEFAULT '',
+            guide_text TEXT NOT NULL DEFAULT '',
+            skill_presets_json TEXT NOT NULL DEFAULT '[]',
+            mcp_presets_json TEXT NOT NULL DEFAULT '[]',
+            created_by_user_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+          INSERT INTO workspace_agent_template_snapshots (
+            workspace_id, template_id, template_name, template_updated_at,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            created_by_user_id, created_at
+          )
+          SELECT
+            workspace_id, template_id, template_name, template_updated_at,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            created_by_user_id, created_at
+          FROM workspace_agent_template_snapshots_legacy;
+          DROP TABLE workspace_agent_template_snapshots_legacy;
+          CREATE INDEX idx_workspace_agent_template_snapshots_template
+            ON workspace_agent_template_snapshots(template_id);
+        `);
+      }
+
+      if (migrateMcpInstalls) {
+        db.exec(`
+          ALTER TABLE workspace_agent_template_mcp_installs
+            RENAME TO workspace_agent_template_mcp_installs_legacy;
+          CREATE TABLE workspace_agent_template_mcp_installs (
+            workspace_id INTEGER NOT NULL,
+            preset_id INTEGER NOT NULL,
+            template_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_id, preset_id),
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+            FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE
+          );
+          INSERT INTO workspace_agent_template_mcp_installs (
+            workspace_id, preset_id, template_id, created_at
+          )
+          SELECT workspace_id, preset_id, template_id, created_at
+          FROM workspace_agent_template_mcp_installs_legacy;
+          DROP TABLE workspace_agent_template_mcp_installs_legacy;
+        `);
+      }
+    });
+    migrate();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 function hasTable(tableName) {

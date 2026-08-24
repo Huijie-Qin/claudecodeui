@@ -122,6 +122,96 @@ test('template category is limited to 50 characters', () => {
   }), /category must not exceed 50 characters/);
 });
 
+test('empty Agent template categories can be managed and deleted', () => {
+  const fixture = createFixture();
+  const category = fixture.service.createCategory({ name: '研发效能', userId: 1 });
+
+  assert.deepEqual(fixture.service.listCategories().map((item) => ({
+    name: item.name,
+    templateCount: item.templateCount,
+  })), [{ name: '研发效能', templateCount: 0 }]);
+  assert.deepEqual(fixture.service.deleteCategory({ categoryId: category.id }), {
+    id: category.id,
+    name: '研发效能',
+  });
+  assert.deepEqual(fixture.service.listCategories(), []);
+});
+
+test('duplicate Agent template category names are rejected clearly', () => {
+  const fixture = createFixture();
+  fixture.service.createCategory({ name: '研发效能', userId: 1 });
+
+  assert.throws(
+    () => fixture.service.createCategory({ name: '  研发效能  ', userId: 1 }),
+    /Agent 模板分类“研发效能”已存在，请使用其他名称/,
+  );
+});
+
+test('Agent template names are unique without blocking the current template update', () => {
+  const fixture = createFixture();
+  const first = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '应用分析助手',
+      category: '应用分析',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+    },
+  });
+
+  assert.throws(
+    () => fixture.service.saveTemplate({
+      userId: 1,
+      input: {
+        name: '  应用分析助手  ',
+        category: '其他分类',
+        tenantIds: [fixture.otherTenantId],
+        skillPresetRefs: [],
+        mcpPresetRefs: [],
+      },
+    }),
+    /Agent 模板“应用分析助手”已存在，请使用其他名称/,
+  );
+  assert.equal(fixture.service.listCategories().some((category) => category.name === '其他分类'), false);
+  assert.equal(fixture.service.saveTemplate({
+    templateId: first.id,
+    userId: 1,
+    input: { ...first, summary: '更新描述' },
+  }).summary, '更新描述');
+});
+
+test('categories used by templates cannot be deleted', () => {
+  const fixture = createFixture();
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '研发助手',
+      category: '研发效能',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+    },
+  });
+  const [category] = fixture.service.listCategories();
+
+  assert.equal(category.templateCount, 1);
+  assert.throws(
+    () => fixture.service.deleteCategory({ categoryId: category.id }),
+    /still used by templates/,
+  );
+  assert.throws(
+    () => fixture.service.deleteTemplate({ templateId: draft.id }),
+    /must be disabled before deletion/,
+  );
+  fixture.service.disableTemplate({ templateId: draft.id, userId: 1 });
+  assert.deepEqual(fixture.service.deleteTemplate({ templateId: draft.id }), {
+    id: draft.id,
+    name: '研发助手',
+  });
+  assert.equal(fixture.service.listCategories()[0].templateCount, 0);
+});
+
 test('workspace snapshot preserves template content and preset versions', () => {
   const fixture = createFixture();
   fixture.database.prepare(`
@@ -181,4 +271,22 @@ test('workspace snapshot preserves template content and preset versions', () => 
     tenantId: fixture.dataAgentTenantId,
     presetId: fixture.mcpId,
   }).length, 0, 'template MCP snapshots must not receive later preset syncs');
+  assert.throws(
+    () => fixture.service.deleteTemplate({ templateId: draft.id }),
+    /must be disabled before deletion/,
+  );
+  fixture.service.disableTemplate({ templateId: draft.id, userId: 1 });
+  assert.deepEqual(fixture.service.deleteTemplate({ templateId: draft.id }), {
+    id: draft.id,
+    name: '快照模板',
+  });
+  assert.deepEqual(fixture.service.getWorkspaceTemplateInfo({ workspaceId }), {
+    id: draft.id,
+    name: '快照模板',
+    guideText: '告诉我你想完成的任务。',
+  }, 'deleting the management template must preserve the project snapshot');
+  assert.equal(Number(fixture.database.prepare(`
+    SELECT COUNT(*) AS count FROM workspace_agent_template_mcp_installs
+    WHERE workspace_id = ? AND template_id = ?
+  `).get(workspaceId, draft.id).count), 1, 'template MCP install markers must remain historical records');
 });
