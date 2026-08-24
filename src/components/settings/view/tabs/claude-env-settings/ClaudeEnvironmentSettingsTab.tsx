@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -197,15 +197,10 @@ export default function ClaudeEnvironmentSettingsTab() {
   } = useClaudeEnvironmentSettings();
 
   const [personalDrafts, setPersonalDrafts] = useState<PersonalVariableDraft[]>([]);
-  const [deletedNames, setDeletedNames] = useState<string[]>([]);
   const [personalStatus, setPersonalStatus] = useState<ActionStatus>('idle');
+  const [deletingVariableName, setDeletingVariableName] = useState<string | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setPersonalDrafts(personalVariables.map((variable) => createPersonalDraft(variable)));
-    setDeletedNames([]);
-  }, [personalVariables]);
 
   const allowlistByName = useMemo(() => new Map(
     allowlist.map((entry) => [environmentNameKey(entry.name), entry]),
@@ -235,8 +230,8 @@ export default function ClaudeEnvironmentSettingsTab() {
     ),
   ])), [allowlistByName, builtInRules, duplicateNameKeys, personalDrafts, platformRules]);
 
-  const hasPersonalChanges = deletedNames.length > 0
-    || personalDrafts.some((draft) => isPersonalDraftChanged(draft));
+  const hasPersonalChanges = personalDrafts.some((draft) => isPersonalDraftChanged(draft));
+  const isPersonalMutating = personalStatus === 'saving' || deletingVariableName !== null;
 
   const addPersonalVariable = () => {
     setPersonalDrafts((drafts) => [...drafts, createPersonalDraft()]);
@@ -265,13 +260,6 @@ export default function ClaudeEnvironmentSettingsTab() {
 
   const removePersonalVariable = (draft: PersonalVariableDraft) => {
     setPersonalDrafts((drafts) => drafts.filter((item) => item.id !== draft.id));
-    if (draft.originalName) {
-      setDeletedNames((names) => (
-        names.some((name) => environmentNameKey(name) === environmentNameKey(draft.originalName || ''))
-          ? names
-          : [...names, draft.originalName as string]
-      ));
-    }
     setPersonalStatus('idle');
     setRestartRequired(false);
     setActionError(null);
@@ -280,7 +268,7 @@ export default function ClaudeEnvironmentSettingsTab() {
   const savePersonal = async () => {
     setPersonalDrafts((drafts) => drafts.map((draft) => ({ ...draft, nameTouched: true })));
 
-    const upsertDrafts = personalDrafts.filter((draft) => isPersonalDraftChanged(draft));
+    const upsertDrafts = personalDrafts;
     const invalidDraft = upsertDrafts.find((draft) => !personalValidations.get(draft.id)?.valid);
     if (invalidDraft) {
       setActionError(t('claudeEnv.errors.fixVariablePolicy'));
@@ -321,28 +309,39 @@ export default function ClaudeEnvironmentSettingsTab() {
       value: draft.value,
       encrypted: draft.encrypted,
     }));
-    const deletes = new Map(deletedNames.map((name) => [environmentNameKey(name), name]));
-    for (const draft of upsertDrafts) {
-      const upsertName = personalValidations.get(draft.id)?.allowlistEntry?.name || draft.name.trim();
-      if (draft.originalName && environmentNameKey(draft.originalName) !== environmentNameKey(upsertName)) {
-        deletes.set(environmentNameKey(draft.originalName), draft.originalName);
-      }
-    }
-    for (const upsert of upserts) deletes.delete(environmentNameKey(upsert.name));
 
     setPersonalStatus('saving');
     setActionError(null);
     try {
       const needsRestart = await savePersonalVariables({
         upserts,
-        deletes: [...deletes.values()],
+        deletes: [],
       });
-      setDeletedNames([]);
+      setPersonalDrafts([]);
       setRestartRequired(needsRestart);
       setPersonalStatus('success');
     } catch (error) {
       setPersonalStatus('idle');
       setActionError(getActionError(error, t('claudeEnv.errors.savePersonal')));
+    }
+  };
+
+  const deleteConfiguredVariable = async (variable: ClaudePersonalEnvVariable) => {
+    if (!window.confirm(t('claudeEnv.personal.deleteConfiguredConfirm', { name: variable.name }))) return;
+
+    setDeletingVariableName(variable.name);
+    setPersonalStatus('idle');
+    setActionError(null);
+    try {
+      const needsRestart = await savePersonalVariables({
+        upserts: [],
+        deletes: [variable.name],
+      });
+      setRestartRequired(needsRestart);
+    } catch (error) {
+      setActionError(getActionError(error, t('claudeEnv.errors.savePersonal')));
+    } finally {
+      setDeletingVariableName(null);
     }
   };
 
@@ -390,7 +389,7 @@ export default function ClaudeEnvironmentSettingsTab() {
                 type="button"
                 variant="outline"
                 onClick={addPersonalVariable}
-                disabled={personalStatus === 'saving'}
+                disabled={isPersonalMutating}
               >
                 <Plus />
                 {t('claudeEnv.personal.add')}
@@ -398,7 +397,7 @@ export default function ClaudeEnvironmentSettingsTab() {
               <Button
                 type="button"
                 onClick={() => void savePersonal()}
-                disabled={!hasPersonalChanges || personalStatus === 'saving'}
+                disabled={!hasPersonalChanges || isPersonalMutating}
               >
                 {personalStatus === 'saving' ? <Loader2 className="animate-spin" /> : <Save />}
                 {personalStatus === 'saving' ? t('claudeEnv.personal.saving') : t('claudeEnv.personal.save')}
@@ -437,7 +436,7 @@ export default function ClaudeEnvironmentSettingsTab() {
                       <td className="space-y-1.5 px-2 py-3 sm:px-3">
                         <Input
                           value={draft.name}
-                          disabled={personalStatus === 'saving'}
+                          disabled={isPersonalMutating}
                           className={draft.nameTouched && !validation.valid ? 'border-destructive focus-visible:ring-destructive' : undefined}
                           placeholder={t('claudeEnv.personal.namePlaceholder')}
                           autoCapitalize="none"
@@ -455,7 +454,7 @@ export default function ClaudeEnvironmentSettingsTab() {
                         <Input
                           type={draft.encrypted ? 'password' : 'text'}
                           value={draft.value}
-                          disabled={personalStatus === 'saving'}
+                          disabled={isPersonalMutating}
                           className={valueTooLong || valueContainsNul ? 'border-destructive focus-visible:ring-destructive' : undefined}
                           autoComplete="new-password"
                           spellCheck={false}
@@ -485,7 +484,7 @@ export default function ClaudeEnvironmentSettingsTab() {
                             type="checkbox"
                             className="h-4 w-4 rounded border-input accent-primary"
                             checked={draft.encrypted}
-                            disabled={personalStatus === 'saving'}
+                            disabled={isPersonalMutating}
                             aria-label={t('claudeEnv.personal.encryptedFor', { name: draft.name })}
                             onChange={(event) => updatePersonalDraft(draft.id, { encrypted: event.target.checked })}
                           />
@@ -497,7 +496,7 @@ export default function ClaudeEnvironmentSettingsTab() {
                           size="icon"
                           variant="ghost"
                           className="text-muted-foreground hover:text-destructive"
-                          disabled={personalStatus === 'saving'}
+                          disabled={isPersonalMutating}
                           aria-label={t('claudeEnv.personal.delete', { name: draft.name })}
                           onClick={() => removePersonalVariable(draft)}
                         >
@@ -510,6 +509,78 @@ export default function ClaudeEnvironmentSettingsTab() {
               </tbody>
             </table>
           </div>
+        </SettingsCard>
+
+        <SettingsCard className="overflow-hidden">
+          <div className="border-b border-border bg-muted/20 p-4">
+            <h3 className="text-sm font-medium text-foreground">
+              {t('claudeEnv.personal.configuredTitle')}
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('claudeEnv.personal.configuredDescription')}
+            </p>
+          </div>
+          <table className="w-full table-fixed text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="w-[28%] px-2 py-2 text-left font-medium sm:px-3">{t('claudeEnv.personal.name')}</th>
+                <th className="px-2 py-2 text-left font-medium sm:px-3">{t('claudeEnv.personal.value')}</th>
+                <th className="w-14 px-2 py-2 text-center font-medium sm:w-20">{t('claudeEnv.personal.encrypted')}</th>
+                <th className="w-14 px-2 py-2 text-center font-medium sm:w-16">{t('claudeEnv.personal.deleteColumn')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {personalVariables.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                    {t('claudeEnv.personal.configuredEmpty')}
+                  </td>
+                </tr>
+              ) : personalVariables.map((variable) => {
+                const isDeleting = deletingVariableName != null
+                  && environmentNameKey(deletingVariableName) === environmentNameKey(variable.name);
+                return (
+                  <tr key={variable.name} className="border-t border-border align-middle">
+                    <td className="min-w-0 px-2 py-3 sm:px-3">
+                      <div className="truncate font-mono text-foreground">{variable.name}</div>
+                    </td>
+                    <td className="min-w-0 px-2 py-3 sm:px-3">
+                      <div className="break-all text-muted-foreground">
+                        {variable.encrypted
+                          ? '••••••••'
+                          : typeof variable.value === 'string'
+                            ? variable.value
+                            : t('claudeEnv.personal.configuredValueHidden')}
+                      </div>
+                    </td>
+                    <td className="px-2 py-3 text-center align-middle">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-input accent-primary"
+                        checked={variable.encrypted}
+                        disabled
+                        readOnly
+                        aria-label={t('claudeEnv.personal.encryptedFor', { name: variable.name })}
+                      />
+                    </td>
+                    <td className="px-2 py-3 text-center align-middle">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-destructive"
+                        disabled={isPersonalMutating}
+                        aria-label={t('claudeEnv.personal.deleteConfigured', { name: variable.name })}
+                        onClick={() => void deleteConfiguredVariable(variable)}
+                      >
+                        {isDeleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </SettingsCard>
         {restartRequired ? (
           <Alert>
