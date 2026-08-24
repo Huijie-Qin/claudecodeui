@@ -73,6 +73,7 @@ http://localhost:5173
 - `SERVER_PORT`: 后端 Express/WebSocket 端口。
 - `VITE_PORT`: Vite 前端端口。
 - `DATABASE_PATH`: 本地认证和多租数据数据库位置。
+- `CLOUDCLI_HOOK_SKILLS_ROOT`: 管理员在 Hook 配置中上传的 Skill 持久化目录，必须是绝对路径。
 - `CLAUDE_CLI_PATH`: local 模式下 Claude Code CLI 的可执行路径。
 - `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`: Provider / 模型配置。
 - `CLAUDE_EXECUTION_MODE=docker`: 开启 Docker-backed Claude runtime。

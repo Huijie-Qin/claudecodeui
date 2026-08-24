@@ -8,6 +8,7 @@ import {
   deleteManagedBuiltinHookSkill,
   listBuiltinHookSkills,
   loadBuiltinHookSkill,
+  resolveManagedHookSkillsRoot,
   saveManagedBuiltinHookSkill,
 } from './hook-builtin-skills.js';
 
@@ -36,6 +37,33 @@ function skillFolder(folderName, manifest, extraFiles = []) {
     ],
   };
 }
+
+test('managed Hook Skill root supports an explicit absolute environment override', () => {
+  assert.equal(
+    resolveManagedHookSkillsRoot({
+      CLOUDCLI_HOOK_SKILLS_ROOT: '/srv/cloudcli/custom-hook-skills/../hook-skills',
+      CLOUDCLI_DATA_ROOT: '/srv/cloudcli/data',
+      DATABASE_PATH: '/srv/cloudcli/database/auth.db',
+    }),
+    path.normalize('/srv/cloudcli/hook-skills'),
+  );
+  assert.equal(
+    resolveManagedHookSkillsRoot({ CLOUDCLI_DATA_ROOT: '/srv/cloudcli/data' }),
+    path.join('/srv/cloudcli/data', 'hook-skills'),
+  );
+  assert.equal(
+    resolveManagedHookSkillsRoot({ DATABASE_PATH: '/srv/cloudcli/database/auth.db' }),
+    path.join('/srv/cloudcli/database', 'hook-skills'),
+  );
+  assert.throws(
+    () => resolveManagedHookSkillsRoot({ CLOUDCLI_HOOK_SKILLS_ROOT: './hook-skills' }),
+    /must be an absolute path/,
+  );
+  assert.throws(
+    () => resolveManagedHookSkillsRoot({ CLOUDCLI_HOOK_SKILLS_ROOT: path.parse(process.cwd()).root }),
+    /must not be the filesystem root/,
+  );
+});
 
 test('admin-uploaded Hook Skills are the only catalog source and load by built-in id', async () => {
   const fixture = await createFixture();

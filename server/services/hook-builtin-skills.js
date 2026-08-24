@@ -10,7 +10,18 @@ const BUILTIN_SKILL_ID_PREFIX = 'builtin:';
 const MANAGED_SKILL_METADATA_FILE = 'skill.json';
 const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
 
-function resolveDefaultManagedSkillsRoot(env = process.env) {
+export function resolveManagedHookSkillsRoot(env = process.env) {
+  const configuredRoot = String(env.CLOUDCLI_HOOK_SKILLS_ROOT || '').trim();
+  if (configuredRoot) {
+    if (!path.isAbsolute(configuredRoot)) {
+      throw new Error('CLOUDCLI_HOOK_SKILLS_ROOT must be an absolute path');
+    }
+    const normalizedRoot = path.normalize(configuredRoot);
+    if (normalizedRoot === path.parse(normalizedRoot).root) {
+      throw new Error('CLOUDCLI_HOOK_SKILLS_ROOT must not be the filesystem root');
+    }
+    return normalizedRoot;
+  }
   const dataRoot = String(env.CLOUDCLI_DATA_ROOT || '').trim();
   if (dataRoot && path.isAbsolute(dataRoot)) return path.join(dataRoot, 'hook-skills');
   const databasePath = String(env.DATABASE_PATH || '').trim();
@@ -20,7 +31,7 @@ function resolveDefaultManagedSkillsRoot(env = process.env) {
   return path.join(APP_ROOT, 'data', 'hook-skills');
 }
 
-const DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT = resolveDefaultManagedSkillsRoot();
+const DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT = resolveManagedHookSkillsRoot();
 
 function createSkillError(message, statusCode = 400) {
   const error = new Error(message);

@@ -97,7 +97,7 @@ Write concise execution instructions here. Payload: $ARGUMENTS
 
 1. CCUI 不校验扩展名、文件大小、UTF-8 合法性、frontmatter 字段、名称格式或正文内容，由管理员自行保证 Skill 正确性。
 2. 名称优先读取 `frontmatter.name`；没有时使用原文件名推导。再次上传同名 Skill 会原子更新；管理员上传的同名 Skill 可覆盖镜像内置 Skill 的运行时选择。
-3. 文件原样持久化到 `CLOUDCLI_DATA_ROOT/hook-skills` 下的安全隔离目录，服务和镜像重建后仍保留；上传成功后立即进入 Hook Skill 下拉框。
+3. 文件原样持久化到 `CLOUDCLI_HOOK_SKILLS_ROOT` 指定的安全隔离目录；未配置时默认使用 `CLOUDCLI_DATA_ROOT/hook-skills`。服务和镜像重建后仍保留，上传成功后立即进入 Hook Skill 下拉框。
 4. 路径隔离、禁止符号链接和“必须实际收到一个文件”仍属于系统安全边界，不是 Skill 内容校验。
 5. 当前 Hook 运行器只把 Skill 文件正文注入恢复回合，不会把 Skill 目录下的 `scripts/`、`references/` 或 `assets/` 传入 agent 容器；确定性逻辑应放在 Hook 高级脚本或 MCP 行为中。
 
