@@ -34,15 +34,6 @@ export function applySubagentPermissionWaitingState(
   });
 }
 
-export function shouldAutoSelectSubagentQuestion(
-  isPanelOpen: boolean,
-  selectedTraceId: string | null,
-  selectedRequestCount: number,
-  targetTraceId: string,
-): boolean {
-  return !isPanelOpen || selectedRequestCount === 0 || selectedTraceId === targetTraceId;
-}
-
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

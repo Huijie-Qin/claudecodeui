@@ -7,7 +7,6 @@ import {
   applySubagentPermissionWaitingState,
   findSubagentTraceForPermissionRequest,
   partitionSubagentPermissionRequests,
-  shouldAutoSelectSubagentQuestion,
 } from './subagentPermissionRouting';
 import type { SubagentTrace } from './types';
 
@@ -112,21 +111,6 @@ test('waiting permission state clears a stale terminal result from a resumed age
   assert.equal(waiting?.completedAt, undefined);
 });
 
-test('a concurrent question does not replace a form already being answered', () => {
-  assert.equal(
-    shouldAutoSelectSubagentQuestion(true, 'parent-a', 1, 'parent-b'),
-    false,
-  );
-  assert.equal(
-    shouldAutoSelectSubagentQuestion(true, 'parent-a', 0, 'parent-b'),
-    true,
-  );
-  assert.equal(
-    shouldAutoSelectSubagentQuestion(false, null, 0, 'parent-b'),
-    true,
-  );
-});
-
 test('keeps top-level and unrelated permission requests in the main composer', () => {
   const traces = [trace('parent-a', 'agent-a', 'question-a')];
 
@@ -160,6 +144,7 @@ test('keeps routed questions reachable when the panel is closed or showing anoth
   ];
 
   const closed = partitionSubagentPermissionRequests(traces, requests, null);
+  assert.equal(closed.selectedTrace, null);
   assert.deepEqual(closed.main, []);
   assert.deepEqual(closed.selectedRequests, []);
   assert.deepEqual(closed.hidden.map(({ request: item }) => item.requestId), [
