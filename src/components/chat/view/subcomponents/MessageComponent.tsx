@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { CheckCircle2, Clock3, Loader2, Webhook, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -144,6 +145,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
+  const isQueuedUserMessage = message.type === 'user' && message.queueStatus === 'queued';
+  const isFailedQueuedUserMessage = message.type === 'user' && message.queueStatus === 'failed';
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
@@ -207,6 +210,14 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const diagnosticRows = useMemo(() => buildDiagnosticRows(errorDiagnostics), [errorDiagnostics]);
   const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
+  const hookActivity = message.hookActivity;
+  const hookStatus = hookActivity?.status || 'running';
+  const hookStatusLabel = {
+    queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
+    running: t('hookActivity.status.running', { defaultValue: 'Running' }),
+    succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
+    failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+  }[hookStatus];
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -216,12 +227,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
+      data-queue-status={message.queueStatus || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
       {message.type === 'user' ? (
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="group flex-1 rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4">
+          <div className={`group flex-1 rounded-2xl rounded-br-md px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4 ${isQueuedUserMessage
+            ? 'border border-dashed border-blue-300/80 bg-blue-600/75'
+            : isFailedQueuedUserMessage
+              ? 'border border-red-300/80 bg-red-600/85'
+              : 'bg-blue-600'
+            }`}>
             <div className="whitespace-pre-wrap break-words text-sm">
               {message.content}
             </div>
@@ -242,6 +259,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+              {isQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium" data-queued-message-indicator>
+                  <Clock3 className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.queued', { defaultValue: 'Queued' })}
+                </span>
+              )}
+              {isFailedQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium text-red-100">
+                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.failed', { defaultValue: 'Failed to queue' })}
+                </span>
+              )}
               {shouldShowUserCopyControl && (
                 <MessageCopyControl content={userCopyContent} messageType="user" />
               )}
@@ -253,6 +282,75 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               U
             </div>
           )}
+        </div>
+      ) : message.isHookActivity && hookActivity ? (
+        <div
+          className="w-full rounded-lg border border-l-4 border-violet-200/80 border-l-violet-500 bg-violet-50/60 px-3 py-2.5 dark:border-violet-900/70 dark:border-l-violet-400 dark:bg-violet-950/20"
+          data-hook-activity={hookActivity.jobId || hookActivity.hookId || 'hook'}
+          data-hook-status={hookStatus}
+        >
+          <div className="flex min-w-0 items-start gap-2.5">
+            <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
+              <Webhook className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                  {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                </span>
+                <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                  {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
+                </span>
+                <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${hookStatus === 'failed'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                  : hookStatus === 'succeeded'
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
+                  }`}
+                >
+                  {hookStatus === 'failed' ? (
+                    <XCircle className="h-3 w-3" aria-hidden="true" />
+                  ) : hookStatus === 'succeeded' ? (
+                    <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  ) : (
+                    <Loader2 className={`h-3 w-3 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  )}
+                  {hookStatusLabel}
+                </span>
+              </div>
+
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                {hookActivity.skillName ? (
+                  <span className="truncate">
+                    {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{hookActivity.skillName}</code>
+                  </span>
+                ) : hookActivity.actionType === 'send_agent_message' ? (
+                  <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                ) : null}
+                {hookStatus === 'queued' && typeof hookActivity.queuePosition === 'number' && (
+                  <span>
+                    {t('hookActivity.queuePosition', {
+                      defaultValue: 'Queue position {{position}}',
+                      position: hookActivity.queuePosition,
+                    })}
+                  </span>
+                )}
+                <span className="text-[11px] text-muted-foreground/70">{formattedTime}</span>
+              </div>
+
+              {hookActivity.summary && (
+                <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
+                  {redactVisibleSecretText(hookActivity.summary)}
+                </div>
+              )}
+
+              {hookActivity.error && (
+                <div className="mt-2 whitespace-pre-wrap break-words rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                  {redactVisibleSecretText(hookActivity.error)}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       ) : message.isTaskNotification ? (
         /* Compact task notification on the left */

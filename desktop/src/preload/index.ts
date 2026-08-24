@@ -9,6 +9,9 @@ const bridge: CloudCliDesktopBridge = Object.freeze({
   isDesktop: true,
   platform: process.platform,
   appVersion: __DESKTOP_APP_VERSION__,
+  retryConnection(): void {
+    ipcRenderer.send(IPC_CHANNELS.retryConnection);
+  },
   async showNotification(input: CloudCliDesktopNotificationInput): Promise<boolean> {
     const result = await ipcRenderer.invoke(IPC_CHANNELS.showNotification, input);
     return result === true;

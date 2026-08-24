@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getToolParameterFields } from './mcpToolOverrides';
+import {
+  getMcpToolOverrideMode,
+  getToolParameterFields,
+} from './mcpToolOverrides';
 
 test('reads the first JSON Schema example without replacing the default value', () => {
   const fields = getToolParameterFields({
@@ -51,4 +54,12 @@ test('falls back to the singular JSON Schema example field', () => {
   assert.equal(field.description, 'Search query.');
   assert.equal(field.defaultValue, undefined);
   assert.equal(field.exampleValue, 'deployment policy');
+});
+
+test('reads default and force modes while treating legacy custom entries as forced', () => {
+  assert.equal(getMcpToolOverrideMode({ mode: 'default', value: 5 }), 'default');
+  assert.equal(getMcpToolOverrideMode({ mode: 'force', value: 5 }), 'force');
+  assert.equal(getMcpToolOverrideMode({ custom: true, value: 5 }), 'force');
+  assert.equal(getMcpToolOverrideMode({ custom: false, value: 5 }), 'none');
+  assert.equal(getMcpToolOverrideMode(undefined), 'none');
 });

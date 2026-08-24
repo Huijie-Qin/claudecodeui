@@ -241,7 +241,7 @@ export function useProjectsState({
 
     const updatedProjects = projectsMessage.projects ?? [];
 
-    if (!isProjectUpdateScopedToTenant(updatedProjects, currentTenant?.id)) {
+    if (!isProjectUpdateScopedToTenant(updatedProjects, currentTenant?.id, projectsMessage.tenantId as number | null | undefined)) {
       return;
     }
 

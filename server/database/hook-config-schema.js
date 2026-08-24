@@ -3,6 +3,66 @@ import crypto from 'node:crypto';
 const LEGACY_SQL_CHECK_HOOK_NAME = 'SQL 响应指标记录';
 const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
 const SQL_LINE_RECORD_HOOK_NAME = 'SQL 行数记录';
+const LEGACY_FAILURE_RECOVERY_HOOK_NAME = '失败通知与 HTTP 200 会话恢复';
+const FAILURE_NOTIFICATION_HOOK_NAME = '失败通知';
+const HTTP_200_RECOVERY_HOOK_NAME = 'HTTP 200 会话恢复';
+const NOTIFICATION_SKILL_ID = 'builtin:hook-notification';
+const NOTIFICATION_SKILL_NAME = 'hook-notification';
+
+const HTTP_200_RECOVERY_EXTENSION = Object.freeze({
+  language: 'javascript',
+  code: [
+    'export async function run(event) {',
+    "  const details = String(event.error_details || '');",
+    "  return { output: { shouldRecover: details.includes('HTTP 200') } };",
+    '}',
+  ].join('\n'),
+  outputs: [
+    { name: 'shouldRecover', type: 'boolean' },
+  ],
+});
+
+function notificationSkillIdentity(rawActions) {
+  let actions = [];
+  try {
+    const parsed = JSON.parse(rawActions || '[]');
+    actions = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    actions = [];
+  }
+  const skillAction = actions.find((action) => action?.type === 'invoke_skill');
+  const skillId = String(skillAction?.config?.skillId || '');
+  const skillName = String(skillAction?.config?.skillName || '');
+  return skillId === `builtin:${skillName}`
+    ? { skillId, skillName }
+    : { skillId: NOTIFICATION_SKILL_ID, skillName: NOTIFICATION_SKILL_NAME };
+}
+
+function failureNotificationActions(skill) {
+  return [{
+    id: 'notify-failure',
+    type: 'invoke_skill',
+    position: 0,
+    config: {
+      ...skill,
+      condition: null,
+      argumentsTemplate: 'status=failure event=StopFailure session={{ccui.env.sessionId}} error={{event.error}}',
+    },
+  }];
+}
+
+function http200RecoveryActions(skill) {
+  return [{
+    id: 'recover-http-200-session',
+    type: 'invoke_skill',
+    position: 0,
+    config: {
+      ...skill,
+      condition: { source: 'reference', path: 'script.output.shouldRecover' },
+      argumentsTemplate: 'status=failure recovery=http-200 event=StopFailure session={{ccui.env.sessionId}} error={{event.error}} details={{event.error_details}}',
+    },
+  }];
+}
 
 export const HOOK_CONFIG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS hooks (
@@ -47,6 +107,21 @@ CREATE TABLE IF NOT EXISTS user_hook_bindings (
 CREATE INDEX IF NOT EXISTS idx_user_hook_bindings_hook
   ON user_hook_bindings(hook_id, user_id);
 
+CREATE TABLE IF NOT EXISTS hook_user_scopes (
+  hook_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  configured_by INTEGER,
+  configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (hook_id, user_id),
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (configured_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_user_scopes_user
+  ON hook_user_scopes(user_id, hook_id);
+
 CREATE TABLE IF NOT EXISTS hook_tenant_bindings (
   hook_id TEXT NOT NULL,
   tenant_id INTEGER NOT NULL,
@@ -80,6 +155,8 @@ CREATE TABLE IF NOT EXISTS hook_executions (
   logs_json TEXT NOT NULL DEFAULT '[]',
   error_message TEXT,
   duration_ms INTEGER,
+  started_at_ms INTEGER,
+  completed_at_ms INTEGER,
   started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   completed_at DATETIME,
   FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
@@ -142,6 +219,30 @@ export function migrateHookConfigurationModel(database) {
         ADD COLUMN claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}'
       `);
     }
+    const extensionRows = database.prepare('SELECT id, extension_logic_json FROM hooks').all();
+    const updateExtensionLogic = database.prepare(`
+      UPDATE hooks SET extension_logic_json = ? WHERE id = ?
+    `);
+    for (const row of extensionRows) {
+      try {
+        const extensionLogic = JSON.parse(row.extension_logic_json || 'null');
+        if (!extensionLogic || !Array.isArray(extensionLogic.outputs)) continue;
+        let changed = false;
+        const outputs = extensionLogic.outputs.map((output) => {
+          if (!output || typeof output !== 'object' || Array.isArray(output) || !Object.hasOwn(output, 'description')) {
+            return output;
+          }
+          const { description: _description, ...normalizedOutput } = output;
+          changed = true;
+          return normalizedOutput;
+        });
+        if (changed) {
+          updateExtensionLogic.run(JSON.stringify({ ...extensionLogic, outputs }), row.id);
+        }
+      } catch {
+        // Invalid legacy JSON remains available for the normal service validation path.
+      }
+    }
     database.exec('DROP TABLE IF EXISTS hook_actions');
     if (hasGate) database.exec('ALTER TABLE hooks DROP COLUMN gate_json');
     if (hasAdvancedScript) database.exec('ALTER TABLE hooks DROP COLUMN advanced_script_json');
@@ -153,6 +254,44 @@ export function migrateHookConfigurationModel(database) {
     addedClaudeResponse: !hasClaudeResponse,
     removedGate: hasGate,
     removedAdvancedScript: hasAdvancedScript,
+  };
+}
+
+export function migrateHookExecutionDiagnostics(database) {
+  const table = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_executions'")
+    .get();
+  if (!table) return { addedStartedAtMs: false, addedCompletedAtMs: false };
+
+  const columns = database.prepare('PRAGMA table_info(hook_executions)').all();
+  const hasStartedAtMs = columns.some((column) => column.name === 'started_at_ms');
+  const hasCompletedAtMs = columns.some((column) => column.name === 'completed_at_ms');
+  const migrate = database.transaction(() => {
+    if (!hasStartedAtMs) {
+      database.exec('ALTER TABLE hook_executions ADD COLUMN started_at_ms INTEGER');
+    }
+    if (!hasCompletedAtMs) {
+      database.exec('ALTER TABLE hook_executions ADD COLUMN completed_at_ms INTEGER');
+    }
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS idx_hook_executions_started_ms
+      ON hook_executions(started_at_ms DESC)
+    `);
+    database.prepare(`
+      UPDATE hook_executions
+      SET started_at_ms = CAST(strftime('%s', started_at) AS INTEGER) * 1000
+      WHERE started_at_ms IS NULL AND started_at IS NOT NULL
+    `).run();
+    database.prepare(`
+      UPDATE hook_executions
+      SET completed_at_ms = started_at_ms + COALESCE(duration_ms, 0)
+      WHERE completed_at_ms IS NULL AND completed_at IS NOT NULL AND started_at_ms IS NOT NULL
+    `).run();
+  });
+  migrate();
+  return {
+    addedStartedAtMs: !hasStartedAtMs,
+    addedCompletedAtMs: !hasCompletedAtMs,
   };
 }
 
@@ -185,6 +324,37 @@ export function migrateHookActivationModel(database) {
     'updated_by',
     'published_at',
   ].every((column) => hookColumnNames.has(column));
+  const hasTenantBindingsTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_tenant_bindings'")
+    .get());
+  const hasHookExecutionsTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_executions'")
+    .get());
+  const hasHookDataRecordsTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_data_records'")
+    .get());
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS hook_user_scopes (
+      hook_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      configured_by INTEGER,
+      configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (hook_id, user_id),
+      FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (configured_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_hook_user_scopes_user
+      ON hook_user_scopes(user_id, hook_id);
+  `);
+  const hasAppConfigTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_config'")
+    .get());
+  const hookUserScopesMigrationKey = 'hook_user_scopes_initialized_v1';
+  const hookUserScopesInitialized = hasAppConfigTable && Boolean(database
+      .prepare('SELECT value FROM app_config WHERE key = ?')
+      .get(hookUserScopesMigrationKey));
   let separatedSqlCheckHooks = 0;
 
   const migrate = database.transaction(() => {
@@ -257,7 +427,7 @@ export function migrateHookActivationModel(database) {
           `).run(
             recordHookId,
             SQL_LINE_RECORD_HOOK_NAME,
-            '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 数据记录。',
+            '检测模型输出中的 SQL，并将 SQL 行数、语句数等指标写入 Hook 业务数据。',
             legacyHook.status,
             legacyHook.event_name,
             legacyHook.matcher_json,
@@ -293,6 +463,92 @@ export function migrateHookActivationModel(database) {
         );
         separatedSqlCheckHooks += 1;
       }
+
+      const legacyFailureHooks = database.prepare(`
+        SELECT * FROM hooks WHERE name = ?
+      `).all(LEGACY_FAILURE_RECOVERY_HOOK_NAME);
+      for (const legacyHook of legacyFailureHooks) {
+        const skill = notificationSkillIdentity(legacyHook.post_actions_json);
+        let failureHook = database.prepare('SELECT * FROM hooks WHERE name = ? LIMIT 1')
+          .get(FAILURE_NOTIFICATION_HOOK_NAME);
+
+        if (!failureHook) {
+          database.prepare(`
+            UPDATE hooks
+            SET name = ?, description = ?, event_name = 'StopFailure', matcher_json = '{}',
+                extension_logic_json = 'null', post_actions_json = ?,
+                claude_response_json = '{"bindings":{}}', binding_controller = 'admin',
+                version = version + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(
+            FAILURE_NOTIFICATION_HOOK_NAME,
+            '回答异常结束后调用内置通知 Skill；仅记录失败通知，不触发会话恢复。',
+            JSON.stringify(failureNotificationActions(skill)),
+            legacyHook.id,
+          );
+          failureHook = database.prepare('SELECT * FROM hooks WHERE id = ?').get(legacyHook.id);
+        } else if (failureHook.id !== legacyHook.id) {
+          database.prepare(`
+            INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
+            SELECT user_id, ?, bound_by FROM user_hook_bindings WHERE hook_id = ?
+          `).run(failureHook.id, legacyHook.id);
+          if (hasTenantBindingsTable) {
+            database.prepare(`
+              INSERT OR IGNORE INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+              SELECT ?, tenant_id, bound_by FROM hook_tenant_bindings WHERE hook_id = ?
+            `).run(failureHook.id, legacyHook.id);
+          }
+          if (hasHookExecutionsTable) {
+            database.prepare('UPDATE hook_executions SET hook_id = ? WHERE hook_id = ?')
+              .run(failureHook.id, legacyHook.id);
+          }
+          if (hasHookDataRecordsTable) {
+            database.prepare('UPDATE hook_data_records SET hook_id = ? WHERE hook_id = ?')
+              .run(failureHook.id, legacyHook.id);
+          }
+          database.prepare('DELETE FROM hooks WHERE id = ?').run(legacyHook.id);
+        }
+
+        let recoveryHook = database.prepare('SELECT * FROM hooks WHERE name = ? LIMIT 1')
+          .get(HTTP_200_RECOVERY_HOOK_NAME);
+        if (!recoveryHook) {
+          const recoveryHookId = crypto.randomUUID();
+          const sourceHook = database.prepare('SELECT * FROM hooks WHERE id = ?').get(failureHook.id) || legacyHook;
+          database.prepare(`
+            INSERT INTO hooks (
+              id, name, description, status, event_name, matcher_json,
+              extension_logic_json, post_actions_json, claude_response_json,
+              version, activation_scope, binding_controller,
+              created_by, updated_by, created_at, updated_at, published_at
+            ) VALUES (?, ?, ?, ?, 'StopFailure', '{}', ?, ?, '{"bindings":{}}', ?, ?, 'admin', ?, ?, ?, ?, ?)
+          `).run(
+            recoveryHookId,
+            HTTP_200_RECOVERY_HOOK_NAME,
+            '仅当错误详情包含 HTTP 200 时调用内置 Skill，在原会话追加恢复回合并重试上一请求。',
+            sourceHook.status,
+            JSON.stringify(HTTP_200_RECOVERY_EXTENSION),
+            JSON.stringify(http200RecoveryActions(skill)),
+            Number(sourceHook.version || 0) + 1,
+            sourceHook.activation_scope || 'manual',
+            sourceHook.created_by,
+            sourceHook.updated_by,
+            sourceHook.created_at,
+            sourceHook.updated_at,
+            sourceHook.published_at,
+          );
+          recoveryHook = { id: recoveryHookId };
+        }
+        database.prepare(`
+          INSERT OR IGNORE INTO user_hook_bindings (user_id, hook_id, bound_by)
+          SELECT user_id, ?, bound_by FROM user_hook_bindings WHERE hook_id = ?
+        `).run(recoveryHook.id, failureHook.id);
+        if (hasTenantBindingsTable) {
+          database.prepare(`
+            INSERT OR IGNORE INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+            SELECT ?, tenant_id, bound_by FROM hook_tenant_bindings WHERE hook_id = ?
+          `).run(recoveryHook.id, failureHook.id);
+        }
+      }
     }
     database.prepare(`
       UPDATE hooks
@@ -302,10 +558,27 @@ export function migrateHookActivationModel(database) {
   });
   migrate();
 
-  const hasTenantBindings = Boolean(database
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_tenant_bindings'")
-    .get());
-  if (hasTenantBindings) {
+  if (!hookUserScopesInitialized) {
+    const initializeUserScopes = database.transaction(() => {
+      database.prepare(`
+        INSERT OR IGNORE INTO hook_user_scopes (hook_id, user_id, configured_by)
+        SELECT binding.hook_id, binding.user_id, binding.bound_by
+        FROM user_hook_bindings binding
+        INNER JOIN hooks hook ON hook.id = binding.hook_id
+        WHERE hook.binding_controller = 'admin'
+      `).run();
+      if (hasAppConfigTable) {
+        database.prepare(`
+          INSERT INTO app_config (key, value)
+          VALUES (?, '1')
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(hookUserScopesMigrationKey);
+      }
+    });
+    initializeUserScopes();
+  }
+
+  if (hasTenantBindingsTable) {
     database.prepare(`
       DELETE FROM hook_tenant_bindings
       WHERE hook_id IN (
@@ -314,10 +587,7 @@ export function migrateHookActivationModel(database) {
     `).run();
   }
 
-  const hasDataRecords = Boolean(database
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_data_records'")
-    .get());
-  if (hasDataRecords && hasHookName) {
+  if (hasHookDataRecordsTable && hasHookName) {
     database.prepare(`
       UPDATE hook_data_records
       SET hook_id = (

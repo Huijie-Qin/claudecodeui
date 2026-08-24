@@ -3,6 +3,15 @@ import test from 'node:test';
 
 import { isClaudeInternalUserContent } from './internalMessages';
 
+test('identifies internal Hook recovery prompts', () => {
+  assert.equal(isClaudeInternalUserContent([
+    '<ccui-hook-recovery>',
+    'Hook: Completion notification',
+    '</ccui-hook-recovery>',
+    '# Internal Skill body',
+  ].join('\n')), true);
+});
+
 test('detects Claude skill details wrappers as internal user content', () => {
   assert.equal(
     isClaudeInternalUserContent([

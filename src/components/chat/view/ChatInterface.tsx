@@ -64,6 +64,8 @@ function ChatInterface({
   autoScrollToBottom,
   sendByCtrlEnter,
   externalMessageUpdate,
+  initialUserMessage,
+  onOpenCapabilities,
   onShowAllTasks,
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
@@ -158,6 +160,7 @@ function ChatInterface({
     resetStreamingState,
     pendingViewSessionRef,
     sessionStore,
+    initialUserMessage,
   });
 
   const subagentTraces = useMemo(
@@ -761,6 +764,7 @@ function ChatInterface({
           tokenBudget={tokenBudget}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
+          onOpenCapabilities={onOpenCapabilities}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
@@ -801,7 +805,7 @@ function ChatInterface({
           placeholder={
             isLoading && provider === 'claude'
               ? t('input.supplementPlaceholder', {
-                  defaultValue: 'Add supplemental info while Claude is working...',
+                  defaultValue: 'Queue a follow-up after the current response...',
                 })
               : t('input.placeholder', {
                   provider:

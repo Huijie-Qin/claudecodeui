@@ -68,6 +68,8 @@ async function requestFormData(
 
 function createRouter({
   accessRole = 'view',
+  createWorkspaceSkill,
+  getWorkspaceSkillDetail,
   installGithubSkill,
   listWorkspaceSkills,
   previewGithubSkillInstall,
@@ -76,8 +78,12 @@ function createRouter({
   requireWorkspace,
   setSkillEnabled,
   uninstallManagedSkill,
+  updateWorkspaceSkillFile,
 } = {}) {
   return createWorkspaceSkillsRouter({
+    marketImports: {
+      listForWorkspace: () => [],
+    },
     tenantMiddleware: (req, res, next) => {
       req.tenant = { id: 2, permission: 'edit' };
       next();
@@ -100,6 +106,21 @@ function createRouter({
           disabled: 0,
           invalid: 0,
         },
+      })),
+      getWorkspaceSkillDetail: getWorkspaceSkillDetail || (async () => ({
+        name: 'local-skill',
+        origin: 'local',
+        files: [],
+      })),
+      createWorkspaceSkill: createWorkspaceSkill || (async () => ({
+        name: 'local-skill',
+        origin: 'local',
+        files: [{ path: 'SKILL.md', type: 'file' }],
+      })),
+      updateWorkspaceSkillFile: updateWorkspaceSkillFile || (async () => ({
+        path: 'SKILL.md',
+        content: 'updated',
+        revision: 'next-revision',
       })),
       previewGithubSkillInstall: previewGithubSkillInstall || (async () => ({
         previewId: 'preview-one',
@@ -174,6 +195,55 @@ test('GET /:workspaceId/skills marks owner and edit workspaces as manageable', a
   assert.equal(response.status, 200);
   assert.equal(payload.accessRole, 'edit');
   assert.equal(payload.canManage, true);
+});
+
+test('GET /:workspaceId/skills/:name returns a local skill detail', async () => {
+  const seen = {};
+  const router = createRouter({
+    accessRole: 'view',
+    getWorkspaceSkillDetail: async (args) => {
+      seen.detailArgs = args;
+      return { name: 'local-skill', origin: 'local', files: [{ path: 'SKILL.md', type: 'file' }] };
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/10/skills/local-skill?tenantId=2');
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.canManage, false);
+  assert.deepEqual(seen.detailArgs, {
+    workspacePath: '/tmp/workspace',
+    name: 'local-skill',
+    marketImports: [],
+  });
+  assert.equal(payload.skill.origin, 'local');
+});
+
+test('PUT /:workspaceId/skills/:name/files saves a local skill file with edit access', async () => {
+  const seen = {};
+  const router = createRouter({
+    accessRole: 'edit',
+    updateWorkspaceSkillFile: async (args) => {
+      seen.updateArgs = args;
+      return { path: 'SKILL.md', content: args.content, revision: 'next-revision' };
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/10/skills/local-skill/files?tenantId=2', {
+    method: 'PUT',
+    body: { filePath: 'SKILL.md', content: 'updated', revision: 'old-revision' },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen.updateArgs, {
+    workspacePath: '/tmp/workspace',
+    name: 'local-skill',
+    filePath: 'SKILL.md',
+    content: 'updated',
+    revision: 'old-revision',
+    marketImports: [],
+  });
+  assert.equal(payload.file.revision, 'next-revision');
 });
 
 test('GET /:workspaceId/skills serializes workspace authorization errors', async () => {

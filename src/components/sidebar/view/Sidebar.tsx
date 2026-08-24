@@ -1,4 +1,5 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
@@ -14,6 +15,7 @@ import type { MCPServerStatus, SidebarProps } from '../types/types';
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
+import ProjectEditDialog from './subcomponents/ProjectEditDialog';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 
 const SIDEBAR_WIDTH_STORAGE_KEY = 'cloudcli.sidebar.width';
@@ -64,6 +66,8 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const [shareProject, setShareProject] = useState<Project | null>(null);
+  const [editProject, setEditProject] = useState<Project | null>(null);
+  const [creationGuide, setCreationGuide] = useState<{ name: string; text: string } | null>(null);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') {
@@ -79,9 +83,7 @@ function Sidebar({
   const {
     isSidebarCollapsed,
     expandedProjects,
-    editingProject,
     showNewProject,
-    editingName,
     loadingSessions,
     initialSessionsLoaded,
     currentTime,
@@ -101,12 +103,9 @@ function Sidebar({
     filteredProjects,
     toggleProject,
     handleSessionClick,
-    toggleStarProject,
+    setProjectStarred,
     isProjectStarred,
     getProjectSessions,
-    startEditing,
-    cancelEditing,
-    saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
     requestProjectDelete,
@@ -119,7 +118,6 @@ function Sidebar({
     collapseSidebar: handleCollapseSidebar,
     expandSidebar: handleExpandSidebar,
     setShowNewProject,
-    setEditingName,
     setEditingSession,
     setEditingSessionName,
     setSearchFilter,
@@ -151,7 +149,13 @@ function Sidebar({
     document.body.classList.toggle('pwa-mode', isPWA);
   }, [isPWA]);
 
-  const handleProjectCreated = () => {
+  const handleProjectCreated = (project?: Record<string, unknown>) => {
+    const template = project?.agentTemplate as { name?: string; guideText?: string } | undefined;
+    if (template?.guideText?.trim()) {
+      setCreationGuide({ name: template.name || 'Agent', text: template.guideText.trim() });
+    } else {
+      setCreationGuide(null);
+    }
     if (window.refreshProjects) {
       void window.refreshProjects();
       return;
@@ -231,8 +235,6 @@ function Sidebar({
     isLoading,
     loadingProgress,
     expandedProjects,
-    editingProject,
-    editingName,
     loadingSessions,
     initialSessionsLoaded,
     currentTime,
@@ -243,16 +245,10 @@ function Sidebar({
     mcpServerStatus,
     getProjectSessions,
     isProjectStarred,
-    onEditingNameChange: setEditingName,
     onToggleProject: toggleProject,
     onProjectSelect: handleProjectSelect,
-    onToggleStarProject: toggleStarProject,
     onShareProject: handleShareProject,
-    onStartEditingProject: startEditing,
-    onCancelEditingProject: cancelEditing,
-    onSaveProjectName: (project) => {
-      void saveProjectName(project);
-    },
+    onEditProject: setEditProject,
     onDeleteProject: requestProjectDelete,
     onSessionSelect: handleSessionClick,
     onScheduledTaskOpen,
@@ -282,6 +278,15 @@ function Sidebar({
 
   return (
     <>
+      {creationGuide ? (
+        <div className="fixed bottom-5 right-5 z-[70] w-[min(420px,calc(100vw-2.5rem))] rounded-xl border border-blue-200 bg-white p-4 shadow-xl dark:border-blue-900 dark:bg-gray-900" role="status">
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-300"><Sparkles className="h-4 w-4" /></span>
+            <div className="min-w-0 flex-1"><div className="font-medium text-gray-900 dark:text-white">{creationGuide.name} 已创建</div><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-600 dark:text-gray-300">{creationGuide.text}</p></div>
+            <button type="button" onClick={() => setCreationGuide(null)} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800" aria-label="关闭引导语"><X className="h-4 w-4" /></button>
+          </div>
+        </div>
+      ) : null}
       <SidebarModals
         projects={projects}
         showSettings={showSettings}
@@ -306,6 +311,21 @@ function Sidebar({
           if (!open) {
             setShareProject(null);
           }
+        }}
+      />
+
+      <ProjectEditDialog
+        project={editProject}
+        open={Boolean(editProject)}
+        isStarred={editProject ? isProjectStarred(editProject.name) : false}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditProject(null);
+          }
+        }}
+        onSaved={async (project, favorited) => {
+          setProjectStarred(project.name, favorited);
+          await refreshProjects();
         }}
       />
 

@@ -172,13 +172,13 @@ function normalizeScriptOutput(result, declarations = []) {
   return output;
 }
 
-function createExecutionRecord(database, hook, context, input) {
+function createExecutionRecord(database, hook, context, input, startedAtMs, toolUseId) {
   const executionId = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_executions (
       id, hook_id, hook_version, user_id, tenant_id, workspace_id,
-      session_id, event_name, tool_use_id, input_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      session_id, event_name, tool_use_id, input_json, started_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     executionId,
     hook.id,
@@ -188,8 +188,9 @@ function createExecutionRecord(database, hook, context, input) {
     context.workspaceId || null,
     input?.session_id || context.sessionId?.() || null,
     hook.eventName,
-    input?.tool_use_id || null,
+    input?.tool_use_id || toolUseId || null,
     serializeForAudit(input),
+    startedAtMs,
   );
   return executionId;
 }
@@ -198,7 +199,8 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
   database.prepare(`
     UPDATE hook_executions
     SET status = ?, script_output_json = ?, actions_json = ?, response_json = ?,
-        logs_json = ?, error_message = ?, duration_ms = ?, completed_at = CURRENT_TIMESTAMP
+        logs_json = ?, error_message = ?, duration_ms = ?, completed_at_ms = ?,
+        completed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     status,
@@ -208,6 +210,7 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
     serializeForAudit(logs || []),
     error ? String(error).slice(0, 8000) : null,
     Math.max(0, Date.now() - startedAt),
+    Date.now(),
     executionId,
   );
 }
@@ -240,6 +243,7 @@ function buildEnvironment(context, event) {
     tenantId: context.tenantId || null,
     workspaceId: context.workspaceId || null,
     sessionId: event?.session_id || context.sessionId?.() || null,
+    sqlCheckRuleIds: Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [],
   };
 }
 
@@ -265,7 +269,16 @@ async function loadSkillContent(skillId, skillName, argumentsText) {
   return expandSkillArguments(skill.content, argumentsText);
 }
 
-async function executePostActions({ hook, references, context, event, signal, recoveryKeys, writeRecord }) {
+async function executePostActions({
+  hook,
+  executionId,
+  references,
+  context,
+  event,
+  signal,
+  recoveryKeys,
+  writeRecord,
+}) {
   for (const action of hook.postActions || []) {
     if (action.type === 'call_mcp_tool') {
       const condition = action.config?.condition == null
@@ -286,12 +299,15 @@ async function executePostActions({ hook, references, context, event, signal, re
         if (value === UNRESOLVED) throw new Error(`Post action ${action.id} input ${key} is unresolved`);
         input[key] = value;
       }
+      if (hook.bindingController === 'sql_check' && !Object.hasOwn(input, 'rule_ids')) {
+        input.rule_ids = Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [];
+      }
       const output = await context.mcpCaller({
-        qualifiedToolName: action.config.toolName,
+        ...await context.resolveMcpAction({ hook, action }),
         input,
-        mcpServers: context.mcpServers,
         cwd: context.workspaceRoot,
         signal,
+        headersHelperRunner: context.headersHelperRunner,
       });
       references.actions[action.id] = { output };
       continue;
@@ -321,7 +337,73 @@ async function executePostActions({ hook, references, context, event, signal, re
       };
       continue;
     }
+    if (action.type === 'send_agent_message') {
+      if (context.suppressSkillRecovery) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'hook_recovery_turn' },
+        };
+        continue;
+      }
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'condition_false' },
+        };
+        continue;
+      }
+      const recoveryKey = `${hook.id}:${action.id}`;
+      if (recoveryKeys.has(recoveryKey)) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
+        continue;
+      }
+      const messageText = renderTemplate(action.config.messageTemplate, references);
+      if (messageText === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} message contains an unresolved variable`);
+      }
+      if (!messageText.trim()) {
+        throw new Error(`Post action ${action.id} message is empty`);
+      }
+      const schedulingResult = await context.enqueueAgentMessage({
+        hook,
+        action,
+        event,
+        executionId,
+        messageText,
+      });
+      recoveryKeys.add(recoveryKey);
+      references.actions[action.id] = {
+        output: {
+          scheduled: true,
+          messageLength: messageText.length,
+          ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
+        },
+      };
+      continue;
+    }
     if (action.type === 'invoke_skill') {
+      if (context.suppressSkillRecovery) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'hook_recovery_turn' },
+        };
+        continue;
+      }
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'condition_false' },
+        };
+        continue;
+      }
       const recoveryKey = `${hook.id}:${action.id}`;
       if (recoveryKeys.has(recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
@@ -331,21 +413,27 @@ async function executePostActions({ hook, references, context, event, signal, re
       if (argumentsText === UNRESOLVED) {
         throw new Error(`Post action ${action.id} arguments contain an unresolved variable`);
       }
-      const modelContent = await loadSkillContent(
+      const modelContent = await context.skillContentLoader(
         action.config.skillId,
         action.config.skillName,
         argumentsText,
       );
-      await context.enqueueSkillRecovery({
+      const schedulingResult = await context.enqueueSkillRecovery({
         hook,
         action,
         event,
+        executionId,
+        argumentsText,
         modelContent,
         displayCommand: `/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`,
       });
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
-        output: { scheduled: true, skillName: action.config.skillName },
+        output: {
+          scheduled: true,
+          skillName: action.config.skillName,
+          ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
+        },
       };
     }
   }
@@ -357,11 +445,22 @@ export function createHookRuntimeSession({
   username,
   tenantId,
   workspaceId,
+  sqlCheckRuleIds = [],
   workspaceRoot,
   sessionId = () => null,
   mcpServers = {},
+  resolveMcpAction = async ({ action }) => ({
+    qualifiedToolName: action.config.toolName,
+    mcpServers,
+  }),
+  headersHelperRunner = null,
+  suppressSkillRecovery = false,
+  skillContentLoader = loadSkillContent,
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
+  },
+  enqueueAgentMessage = async () => {
+    throw new Error('Agent messaging is not available in this runtime');
   },
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
@@ -373,17 +472,23 @@ export function createHookRuntimeSession({
     username,
     tenantId,
     workspaceId,
+    sqlCheckRuleIds,
     workspaceRoot,
     sessionId,
     mcpServers,
+    resolveMcpAction,
+    headersHelperRunner,
+    suppressSkillRecovery,
+    skillContentLoader,
     enqueueSkillRecovery,
+    enqueueAgentMessage,
     mcpCaller,
   };
 
-  const executeHook = async (hook, event, _toolUseId, callbackOptions = {}) => {
+  const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
-    const executionId = createExecutionRecord(database, hook, context, event);
+    const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId);
     const logs = [];
     let scriptOutput = {};
     const references = {
@@ -423,6 +528,7 @@ export function createHookRuntimeSession({
       }
       await executePostActions({
         hook,
+        executionId,
         references,
         context,
         event,

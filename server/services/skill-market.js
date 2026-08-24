@@ -51,19 +51,20 @@ export async function listSkillMarket(options = {}) {
     page: normalizedPage,
     pageSize: normalizedPageSize,
   });
-  const remoteSkills = await fetchRemoteSkillList({
+  const remotePage = await fetchRemoteSkillPage({
     searchContent,
     page: normalizedPage,
     pageSize: normalizedPageSize,
     tenantCode,
     accountId: remoteAccountId,
   });
+  const remoteSkills = remotePage.skills;
 
   if (!workspacePath) {
     if (includePageInfo) {
       return {
         skills: remoteSkills,
-        pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+        pageInfo: remotePage.pageInfo,
         openApiRequestBody,
       };
     }
@@ -94,7 +95,7 @@ export async function listSkillMarket(options = {}) {
   if (includePageInfo) {
     return {
       skills,
-      pageInfo: createSkillListPageInfo(remoteSkills.length, normalizedPage, normalizedPageSize),
+      pageInfo: remotePage.pageInfo,
       openApiRequestBody,
     };
   }
@@ -593,6 +594,17 @@ async function fetchRemoteSkillList({
   tenantCode,
   accountId,
 } = {}) {
+  const result = await fetchRemoteSkillPage({ searchContent, page, pageSize, tenantCode, accountId });
+  return result.skills;
+}
+
+async function fetchRemoteSkillPage({
+  searchContent = '',
+  page = 1,
+  pageSize = DEFAULT_LIST_PAGE_SIZE,
+  tenantCode,
+  accountId,
+} = {}) {
   const body = createSkillListRequestBody({ searchContent, page, pageSize });
   const payload = await requestMarketJson('/api/skill/skillList', {
     method: 'POST',
@@ -601,8 +613,17 @@ async function fetchRemoteSkillList({
     body,
   });
 
-  return normalizeSkillListPayload(payload.data)
+  const skills = normalizeSkillListPayload(payload.data)
     .map(normalizeRemoteSkillSummary);
+  return {
+    skills,
+    pageInfo: createSkillListPageInfo({
+      remoteCount: skills.length,
+      page,
+      pageSize,
+      total: getSkillListTotal(payload),
+    }),
+  };
 }
 
 function createSkillListRequestBody({ searchContent = '', page = 1, pageSize = DEFAULT_LIST_PAGE_SIZE } = {}) {
@@ -618,12 +639,33 @@ function createSkillListRequestBody({ searchContent = '', page = 1, pageSize = D
   };
 }
 
-function createSkillListPageInfo(remoteCount, page, pageSize) {
-  return {
-    page,
-    pageSize,
-    hasNextPage: remoteCount >= pageSize,
-  };
+function createSkillListPageInfo({ remoteCount, page, pageSize, total }) {
+  if (total !== undefined) {
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    return {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNextPage: page < totalPages,
+    };
+  }
+  return { page, pageSize, hasNextPage: remoteCount >= pageSize };
+}
+
+function getSkillListTotal(payload) {
+  const candidates = [
+    payload?.data?.total,
+    payload?.data?.totalCount,
+    payload?.data?.pageInfo?.total,
+    payload?.pageInfo?.total,
+    payload?.total,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isInteger(value) && value >= 0) return value;
+  }
+  return undefined;
 }
 
 export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {

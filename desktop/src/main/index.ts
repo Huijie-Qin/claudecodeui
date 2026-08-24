@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import {
   app,
   BrowserWindow,
+  ipcMain,
   Menu,
   nativeImage,
   session,
@@ -22,10 +23,15 @@ import {
   installApplicationSecurity,
 } from './security';
 import { DesktopUpdater } from './updater';
+import { createDirectProxyConfig, resolveDesktopHomeUrl } from './startup-config';
 import { createSecureWebPreferences } from '../shared/security-policy';
+import { IPC_CHANNELS } from '../shared/ipc-channels';
 import {
+  ALLOW_INSECURE_HTTP,
+  ALLOWED_ORIGINS,
   APP_ID,
-  HOME_URL,
+  AUTH_ORIGINS,
+  HOME_URL as BUILT_HOME_URL,
   SESSION_PARTITION,
 } from '../shared/runtime-config';
 
@@ -33,6 +39,19 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let offlineUrl = '';
+
+const homeUrl = resolveDesktopHomeUrl({
+  argv: process.argv,
+  environmentValue: process.env.DESKTOP_HOME_URL,
+  builtValue: BUILT_HOME_URL,
+  production: app.isPackaged,
+  allowInsecureHttp: ALLOW_INSECURE_HTTP,
+});
+const homeOrigin = new URL(homeUrl).origin;
+if (AUTH_ORIGINS.has(homeOrigin)) {
+  throw new Error(`DESKTOP_HOME_URL must not overlap DESKTOP_AUTH_ORIGINS: ${homeOrigin}.`);
+}
+ALLOWED_ORIGINS.add(homeOrigin);
 
 registerOfflineScheme();
 app.setName('CloudCLI');
@@ -204,9 +223,24 @@ function createMainWindow(): BrowserWindow {
     },
   );
 
-  void window.loadURL(HOME_URL);
+  void window.loadURL(homeUrl);
   return window;
 }
+
+function retryConnection(event: Electron.IpcMainEvent): void {
+  if (
+    !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents
+    || !event.senderFrame
+    || !isOfflinePageUrl(event.senderFrame.url)
+  ) {
+    return;
+  }
+  void mainWindow.loadURL(homeUrl);
+}
+
+ipcMain.on(IPC_CHANNELS.retryConnection, retryConnection);
 
 app.on('second-instance', () => {
   showMainWindow();
@@ -222,19 +256,26 @@ app.on('window-all-closed', () => {
 });
 
 if (hasSingleInstanceLock) {
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     applyApplicationIcon();
     const desktopSession = session.fromPartition(SESSION_PARTITION);
+    await desktopSession.setProxy(createDirectProxyConfig());
     installOfflineProtocol(desktopSession);
     configureSessionPermissions(desktopSession);
     mainWindow = createMainWindow();
     notifications.register();
     createTray();
     updater.start();
+  }).catch((error: unknown) => {
+    console.error('[desktop] Failed to start.', error);
+    dialog.showErrorBox('CloudCLI 启动失败', '无法应用网络配置，应用已停止启动。');
+    prepareToQuit();
+    app.quit();
   });
 }
 
 app.on('quit', () => {
+  ipcMain.removeListener(IPC_CHANNELS.retryConnection, retryConnection);
   notifications.dispose();
   tray?.destroy();
   tray = null;

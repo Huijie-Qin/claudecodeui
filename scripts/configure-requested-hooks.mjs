@@ -25,7 +25,7 @@ if (process.argv.includes('--direct-database')) {
   const [
     { db },
     { hookConfigService },
-    { createRequestedHookExamples },
+    { REQUESTED_HOOK_EXAMPLES, createRequestedHookExamples },
   ] = await Promise.all([
     import('../dist-server/server/database/db.js'),
     import('../dist-server/server/services/hook-configs.js'),
@@ -33,7 +33,11 @@ if (process.argv.includes('--direct-database')) {
   ]);
   const admin = db.prepare('SELECT id, username, is_system_admin FROM users WHERE username = ?').get(username);
   if (!admin?.is_system_admin) throw new Error(`${username} is not a CCUI system administrator`);
-  const result = createRequestedHookExamples({ hookConfigs: hookConfigService, userId: admin.id });
+  const result = createRequestedHookExamples({
+    hookConfigs: hookConfigService,
+    userId: admin.id,
+    exampleIds: REQUESTED_HOOK_EXAMPLES.map((preset) => preset.id),
+  });
   console.log(JSON.stringify({ admin: { username }, ...result }, null, 2));
   process.exit(0);
 }
@@ -59,10 +63,15 @@ if (authStatus.needsSetup) {
 }
 
 if (!auth.user?.is_system_admin) throw new Error(`${username} is not a CCUI system administrator`);
-const result = await request('/api/admin/hooks/examples', {
-  method: 'POST',
-  token: auth.token,
-});
+const { examples = [] } = await request('/api/admin/hooks/examples', { token: auth.token });
+const exampleIds = examples.filter((preset) => !preset.exists).map((preset) => preset.id);
+const result = exampleIds.length > 0
+  ? await request('/api/admin/hooks/examples', {
+      method: 'POST',
+      token: auth.token,
+      body: { exampleIds },
+    })
+  : { hooks: [], createdCount: 0, skippedCount: examples.length };
 
 console.log(JSON.stringify({
   admin: {

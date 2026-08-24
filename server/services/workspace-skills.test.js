@@ -7,6 +7,11 @@ import test from 'node:test';
 import JSZip from 'jszip';
 
 import {
+  createWorkspaceSkill,
+  createWorkspaceSkillEntry,
+  deleteLocalWorkspaceSkill,
+  deleteWorkspaceSkillEntry,
+  getWorkspaceSkillDetail,
   installGithubSkill,
   listWorkspaceSkills,
   parseGithubSkillUrl,
@@ -16,8 +21,11 @@ import {
   reconcileManagedSkills,
   reconcileWorkspaceSkillsForAgentTurn,
   readSkillsMetadata,
+  readWorkspaceSkillFile,
+  renameWorkspaceSkillEntry,
   setSkillEnabled,
   uninstallManagedSkill,
+  updateWorkspaceSkillFile,
   writeSkillsMetadata,
 } from './workspace-skills.js';
 
@@ -188,6 +196,8 @@ test('listWorkspaceSkills classifies managed, unmanaged, and system skills', asy
     enabled: 1,
     disabled: 1,
     invalid: 0,
+    market: 0,
+    local: 2,
   });
   assert.deepEqual(
     result.skills.map((skill) => ({
@@ -224,7 +234,7 @@ test('listWorkspaceSkills classifies managed, unmanaged, and system skills', asy
         kind: 'unmanaged',
         status: 'available',
         enabled: true,
-        manageable: false,
+        manageable: true,
         sourceType: 'workspace-runtime',
       },
       {
@@ -237,6 +247,124 @@ test('listWorkspaceSkills classifies managed, unmanaged, and system skills', asy
         sourceType: 'bundled',
       },
     ],
+  );
+});
+
+test('listWorkspaceSkills classifies runtime skills from market import records', async () => {
+  const workspacePath = await makeWorkspace();
+  const runtimeRoot = path.join(workspacePath, '.claude', 'skills');
+  await writeSkill(runtimeRoot, 'market-skill', '---\nname: market-skill\ndescription: Market copy.\n---\n');
+  await writeSkill(runtimeRoot, 'local-skill', '---\nname: local-skill\ndescription: Local copy.\n---\n');
+
+  const inventory = await listWorkspaceSkills(workspacePath, [], [{
+    name: 'market-skill',
+    skillId: 'remote-one',
+    version: 3,
+    createUserId: 'alice',
+  }]);
+
+  assert.equal(inventory.summary.market, 1);
+  assert.equal(inventory.summary.local, 1);
+  assert.deepEqual(
+    inventory.skills.map((skill) => ({ name: skill.name, origin: skill.origin, manageable: skill.manageable })),
+    [
+      { name: 'local-skill', origin: 'local', manageable: true },
+      { name: 'market-skill', origin: 'market', manageable: false },
+    ],
+  );
+  assert.equal(inventory.skills.find((skill) => skill.name === 'market-skill').localVersion, 3);
+});
+
+test('local workspace skill file operations preserve SKILL.md and revision safety', async () => {
+  const workspacePath = await makeWorkspace();
+  await createWorkspaceSkill({
+    workspacePath,
+    name: 'local-skill',
+    displayName: 'Local Skill',
+    description: 'Created in the workspace.',
+  });
+  await createWorkspaceSkillEntry({
+    workspacePath,
+    name: 'local-skill',
+    entryPath: 'references',
+    entryType: 'directory',
+  });
+  await createWorkspaceSkillEntry({
+    workspacePath,
+    name: 'local-skill',
+    entryPath: 'references/notes.md',
+    entryType: 'file',
+    content: '# Notes\n',
+  });
+
+  const original = await readWorkspaceSkillFile({
+    workspacePath,
+    name: 'local-skill',
+    filePath: 'references/notes.md',
+  });
+  const updated = await updateWorkspaceSkillFile({
+    workspacePath,
+    name: 'local-skill',
+    filePath: 'references/notes.md',
+    content: '# Updated\n',
+    revision: original.revision,
+  });
+  assert.equal(updated.content, '# Updated\n');
+  await assert.rejects(
+    updateWorkspaceSkillFile({
+      workspacePath,
+      name: 'local-skill',
+      filePath: 'references/notes.md',
+      content: '# Stale\n',
+      revision: original.revision,
+    }),
+    /changed on disk/,
+  );
+
+  await renameWorkspaceSkillEntry({
+    workspacePath,
+    name: 'local-skill',
+    entryPath: 'references/notes.md',
+    nextPath: 'references/guide.md',
+  });
+  await deleteWorkspaceSkillEntry({
+    workspacePath,
+    name: 'local-skill',
+    entryPath: 'references/guide.md',
+  });
+  await assert.rejects(
+    deleteWorkspaceSkillEntry({ workspacePath, name: 'local-skill', entryPath: 'SKILL.md' }),
+    /cannot be deleted/,
+  );
+
+  const detail = await getWorkspaceSkillDetail({ workspacePath, name: 'local-skill' });
+  assert.deepEqual(detail.files.map((entry) => entry.path), ['references', 'SKILL.md']);
+  await deleteLocalWorkspaceSkill({ workspacePath, name: 'local-skill' });
+  await assert.rejects(getWorkspaceSkillDetail({ workspacePath, name: 'local-skill' }), /was not found/);
+});
+
+test('market-installed workspace skills reject local file mutations', async () => {
+  const workspacePath = await makeWorkspace();
+  await writeSkill(
+    path.join(workspacePath, '.claude', 'skills'),
+    'market-skill',
+    '---\nname: market-skill\ndescription: Market copy.\n---\n',
+  );
+  const marketImports = [{ name: 'market-skill', skillId: 'remote-one', version: 1 }];
+
+  await assert.rejects(
+    updateWorkspaceSkillFile({
+      workspacePath,
+      name: 'market-skill',
+      filePath: 'SKILL.md',
+      content: 'changed',
+      marketImports,
+    }),
+    (error) => error.statusCode === 403 && /read-only/.test(error.message),
+  );
+  await assert.rejects(
+    deleteLocalWorkspaceSkill({ workspacePath, name: 'market-skill', marketImports }),
+    (error) => error.statusCode === 403,
   );
 });
 

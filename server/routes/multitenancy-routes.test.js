@@ -668,3 +668,60 @@ test('workspace sql check route resolves tenant config and stores user overrides
   assert.deepEqual(seen.enforcement, { userId: 1, enabled: true });
   assert.equal(enforcementSaved.payload.enforcement.enabled, true);
 });
+
+test('workspace Hook settings list eligible Hooks and materialize resources before enabling', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'notify-hook',
+    name: '对话正常结束通知',
+    status: 'published',
+    bindingController: 'admin',
+    enabled: false,
+    postActions: [{ type: 'invoke_skill' }],
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: () => ({
+        workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+        accessRole: 'view',
+      }),
+    },
+    hookConfigs: {
+      listAvailableHooksForUser: (userId) => {
+        seen.push(['list', userId]);
+        return [availableHook];
+      },
+      getHook: (hookId) => ({ ...availableHook, id: hookId }),
+      setUserHookEnabled: ({ userId, hookId, enabled }) => {
+        seen.push(['enable', userId, hookId, enabled]);
+        return { hookId, enabled };
+      },
+    },
+    hookResources: {
+      materializeHook: async ({ hook, workspacePath }) => {
+        seen.push(['materialize', hook.id, workspacePath]);
+        return { root: `${workspacePath}/.cloudcli/hook-config` };
+      },
+    },
+  });
+
+  const listed = await requestJson(router, '/10/hooks');
+  const enabled = await requestJson(router, '/10/hooks/notify-hook', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+
+  assert.equal(listed.response.status, 200);
+  assert.equal(listed.payload.hooks[0].name, '对话正常结束通知');
+  assert.equal(enabled.response.status, 200);
+  assert.deepEqual(seen, [
+    ['list', 1],
+    ['list', 1],
+    ['materialize', 'notify-hook', '/tmp/hook-workspace'],
+    ['enable', 1, 'notify-hook', true],
+  ]);
+});

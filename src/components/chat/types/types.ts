@@ -66,10 +66,31 @@ export interface TaskNotificationDetails {
   raw: string;
 }
 
+export type UserQueueStatus = 'queued' | 'processing' | 'failed';
+
+export type HookActivityStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface HookActivityDetails {
+  jobId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
+  summary?: string;
+  queuePosition?: number;
+  status: HookActivityStatus;
+  error?: string;
+}
+
 export interface ChatMessage {
+  id?: string;
   type: string;
   content?: string;
   timestamp: string | number | Date;
+  clientMessageId?: string;
+  queueStatus?: UserQueueStatus;
+  queuePosition?: number;
   images?: ChatImage[];
   reasoning?: string;
   isThinking?: boolean;
@@ -85,6 +106,8 @@ export interface ChatMessage {
   toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
   isTaskNotification?: boolean;
+  isHookActivity?: boolean;
+  hookActivity?: HookActivityDetails;
   taskStatus?: string;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {
@@ -162,6 +185,13 @@ export interface ChatInterfaceProps {
   autoScrollToBottom?: boolean;
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
+  initialUserMessage?: {
+    sessionId: string;
+    provider: LLMProvider;
+    content: string;
+    timestamp: number;
+  };
+  onOpenCapabilities?: () => void;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
 }

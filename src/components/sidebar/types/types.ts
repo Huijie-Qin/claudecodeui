@@ -64,4 +64,4 @@ export type MCPServerStatus = {
   isConfigured?: boolean;
 } | null;
 
-export type SettingsProject = Pick<Project, 'name' | 'displayName' | 'fullPath' | 'path'>;
+export type SettingsProject = Pick<Project, 'name' | 'displayName' | 'fullPath' | 'path' | 'workspaceId'>;

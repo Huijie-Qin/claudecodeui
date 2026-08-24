@@ -3,6 +3,7 @@ import express from 'express';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { tenantContext } from '../middleware/tenant-context.js';
 import { hookConfigService } from '../services/hook-configs.js';
+import { hookWorkspaceResourcesService } from '../services/hook-workspace-resources.js';
 import { workspaceAccess } from '../services/workspace-access.js';
 
 function sendRouteError(res, error) {
@@ -15,6 +16,7 @@ export function createWorkspacesRouter({
   access = workspaceAccess,
   tenantMiddleware = tenantContext,
   hookConfigs = hookConfigService,
+  hookResources = hookWorkspaceResourcesService,
 } = {}) {
   const router = express.Router();
   router.use(tenantMiddleware);
@@ -132,7 +134,55 @@ export function createWorkspacesRouter({
     }
   });
 
-  router.put('/:workspaceId/sql-check/enforcement', (req, res) => {
+  router.get('/:workspaceId/hooks', (req, res) => {
+    try {
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        hooks: hookConfigs.listAvailableHooksForUser(req.user.id),
+      });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
+  router.put('/:workspaceId/hooks/:hookId', async (req, res) => {
+    try {
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      const availableHook = hookConfigs.listAvailableHooksForUser(req.user.id)
+        .find((hook) => hook.id === req.params.hookId);
+      if (!availableHook) {
+        const error = new Error('Hook is not available to this user');
+        error.statusCode = 403;
+        throw error;
+      }
+      if (req.body?.enabled === true) {
+        const hook = hookConfigs.getHook(req.params.hookId);
+        await hookResources.materializeHook({ hook, workspacePath: workspace.path });
+      }
+      const result = hookConfigs.setUserHookEnabled({
+        userId: req.user.id,
+        hookId: req.params.hookId,
+        enabled: req.body?.enabled,
+      });
+      return res.json({ workspaceId: workspace.id, accessRole, ...result });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
+  router.put('/:workspaceId/sql-check/enforcement', async (req, res) => {
     try {
       if (typeof hookConfigs?.setSqlCheckEnforcement !== 'function') {
         return res.status(501).json({ error: 'SQL Check enforcement is not available' });
@@ -144,6 +194,13 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
+      if (req.body?.enabled === true) {
+        const enforcement = hookConfigs.getSqlCheckEnforcement({ userId: req.user.id });
+        const hook = enforcement.hookId && typeof hookConfigs.getHook === 'function'
+          ? hookConfigs.getHook(enforcement.hookId)
+          : null;
+        if (hook) await hookResources.materializeHook({ hook, workspacePath: workspace.path });
+      }
       const enforcement = hookConfigs.setSqlCheckEnforcement({
         userId: req.user.id,
         enabled: req.body?.enabled,

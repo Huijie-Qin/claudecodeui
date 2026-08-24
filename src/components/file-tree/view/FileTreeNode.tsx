@@ -11,12 +11,15 @@ import FileTreeCreateInput from './FileTreeCreateInput';
 
 type FileTreeNodeProps = {
   item: FileTreeNodeType;
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   level: number;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
@@ -84,12 +87,15 @@ function TreeItemIcon({ item, isOpen, renderFileIcon }: TreeItemIconProps) {
 
 export default function FileTreeNode({
   item,
+  activePath,
+  showSelectionControls = false,
   level,
   viewMode,
   expandedDirs,
   dropTarget,
   selectedPaths = new Set(),
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -131,7 +137,17 @@ export default function FileTreeNode({
   const isRenaming = renamingItem?.path === item.path;
   const isDropTarget = isDirectory && dropTarget === item.path;
   const isSelected = selectedPaths.has(item.path);
+  const isFocusedDirectory = isDirectory && focusedDirectoryPath === item.path;
   const isInternalDropTarget = isDirectory && internalDropTarget === item.path;
+  const normalizedItemPath = String(item.path || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/+$/g, '');
+  const normalizedActivePath = String(activePath || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/+$/g, '');
+  const itemWorkspaceSuffix = normalizedItemPath.replace(/^.*\/workspace(?=\/|$)/, '');
+  const activeWorkspaceSuffix = normalizedActivePath.replace(/^.*\/workspace(?=\/|$)/, '');
+  const isActive = Boolean(normalizedActivePath) && (
+    normalizedItemPath === normalizedActivePath
+    || (Boolean(itemWorkspaceSuffix) && itemWorkspaceSuffix === activeWorkspaceSuffix)
+    || (Boolean(activeWorkspaceSuffix) && normalizedItemPath.endsWith(activeWorkspaceSuffix))
+  );
   const shouldRenderCreateInput = Boolean(isDirectory && isCreating && newItemParent === item.path);
   const shouldRenderChildren = Boolean(isDirectory && (shouldRenderCreateInput || (isOpen && hasChildren)));
   const dropTargetAttributes: Record<string, string> = isDirectory
@@ -145,6 +161,7 @@ export default function FileTreeNode({
 
   // View mode only changes the row layout; selection, expansion, and recursion stay shared.
   const rowClassName = cn(
+    'data-agent-file-row',
     viewMode === 'detailed'
       ? 'group grid grid-cols-12 gap-2 py-[3px] pr-2 hover:bg-accent/60 cursor-pointer items-center rounded-sm transition-colors duration-100'
       : viewMode === 'compact'
@@ -154,6 +171,11 @@ export default function FileTreeNode({
     (isDirectory && !isOpen) || !isDirectory ? 'border-l-2 border-transparent' : '',
     isDropTarget && 'bg-blue-500/15 ring-1 ring-inset ring-blue-500/50',
     isSelected && 'bg-primary/15 ring-1 ring-inset ring-primary/40',
+    isFocusedDirectory && 'bg-primary/10 ring-1 ring-inset ring-primary/30',
+    isActive && !isSelected && 'data-file-tree-active',
+    isDirectory ? 'is-directory' : 'is-file',
+    isSelected && 'is-batch-selected',
+    isActive && 'is-current-file',
     isInternalDropTarget && 'bg-green-500/15 ring-1 ring-inset ring-green-500/60',
   );
 
@@ -202,6 +224,17 @@ export default function FileTreeNode({
     );
   }
 
+  const selectionControl = showSelectionControls ? (
+    <input
+      type="checkbox"
+      checked={isSelected}
+      aria-label={`选择 ${item.name}`}
+      className="data-agent-file-selection"
+      onChange={() => onSelectionChange?.(item, true)}
+      onClick={(event) => event.stopPropagation()}
+    />
+  ) : null;
+
   const rowContent = (
     <div
       className={rowClassName}
@@ -213,6 +246,7 @@ export default function FileTreeNode({
       onDragLeave={(event) => onInternalDragLeave?.(item, event)}
       onDrop={(event) => onInternalDrop?.(item, event)}
       onClick={(event) => {
+        event.stopPropagation();
         if (event.ctrlKey || event.metaKey || event.shiftKey) {
           event.preventDefault();
           onSelectionChange?.(item, true);
@@ -220,24 +254,27 @@ export default function FileTreeNode({
         }
         onItemClick(item);
       }}
+      aria-current={isActive ? 'true' : undefined}
     >
       {viewMode === 'detailed' ? (
         <>
-          <div className="col-span-5 flex min-w-0 items-center gap-1.5">
+          <div className="data-agent-file-name-cell col-span-5 flex min-w-0 items-center gap-1.5">
+            {selectionControl}
             <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
-            <span className={nameClassName}>{item.name}</span>
+            <span className={cn(nameClassName, 'data-agent-file-name')}>{item.name}</span>
           </div>
-          <div className="col-span-2 text-sm tabular-nums text-muted-foreground">
+          <div className="data-agent-file-meta col-span-2 text-sm tabular-nums text-muted-foreground">
             {item.type === 'file' ? formatFileSize(item.size) : ''}
           </div>
-          <div className="col-span-3 text-sm text-muted-foreground">{formatRelativeTime(item.modified)}</div>
-          <div className="col-span-2 font-mono text-sm text-muted-foreground">{item.permissionsRwx || ''}</div>
+          <div className="data-agent-file-meta col-span-3 text-sm text-muted-foreground">{formatRelativeTime(item.modified)}</div>
+          <div className="data-agent-file-meta col-span-2 font-mono text-sm text-muted-foreground">{item.permissionsRwx || ''}</div>
         </>
       ) : viewMode === 'compact' ? (
         <>
           <div className="flex min-w-0 items-center gap-1.5">
+            {selectionControl}
             <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
-            <span className={nameClassName}>{item.name}</span>
+            <span className={cn(nameClassName, 'data-agent-file-name')}>{item.name}</span>
           </div>
           <div className="ml-2 flex flex-shrink-0 items-center gap-3 text-sm text-muted-foreground">
             {item.type === 'file' && (
@@ -250,8 +287,9 @@ export default function FileTreeNode({
         </>
       ) : (
         <>
+          {selectionControl}
           <TreeItemIcon item={item} isOpen={isOpen} renderFileIcon={renderFileIcon} />
-          <span className={nameClassName}>{item.name}</span>
+          <span className={cn(nameClassName, 'data-agent-file-name')}>{item.name}</span>
         </>
       )}
     </div>
@@ -313,12 +351,15 @@ export default function FileTreeNode({
             <FileTreeNode
               key={child.path}
               item={child}
+              activePath={activePath}
+              showSelectionControls={showSelectionControls}
               level={level + 1}
               viewMode={viewMode}
               expandedDirs={expandedDirs}
               dropTarget={dropTarget}
               selectedPaths={selectedPaths}
               internalDropTarget={internalDropTarget}
+              focusedDirectoryPath={focusedDirectoryPath}
               onSelectionChange={onSelectionChange}
               onInternalDragStart={onInternalDragStart}
               onInternalDragOver={onInternalDragOver}

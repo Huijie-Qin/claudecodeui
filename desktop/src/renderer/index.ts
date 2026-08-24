@@ -17,7 +17,7 @@ retryButton?.addEventListener('click', () => {
     retryButton.disabled = true;
     retryButton.textContent = '正在连接…';
   }
-  window.location.assign(__DESKTOP_HOME_URL__);
+  window.cloudcliDesktop.retryConnection();
 });
 window.addEventListener('online', updateNetworkStatus);
 window.addEventListener('offline', updateNetworkStatus);

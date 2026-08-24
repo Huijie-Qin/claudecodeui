@@ -357,10 +357,24 @@
     "appliesOnNextTurn": "Applies on next Agent turn",
     "toolCount": "{{count}} tools",
     "settings": {
-      "description": "Select the MCP tools this user may use, and configure parameters for the selected tool on the right.",
+      "action": "Settings",
+      "menuLabel": "Open more actions for {{name}}",
+      "requiresInstall": "Install before configuring",
+      "description": "Select the MCP tools this user may use, then set each parameter to a default or forced value on the right.",
       "selectAll": "Select all",
       "enabled": "Allowed",
-      "footer": "Tool access and custom parameters are saved together and apply on the next Agent turn. Parameter overrides remain in {{file}}.",
+      "configuredCount": "{{count}} configured",
+      "valueStrategy": "Value strategy",
+      "strategy": {
+        "none": "Not set",
+        "default": "Default value",
+        "force": "Forced value"
+      },
+      "strategyHelp": {
+        "default": "Used only when the Agent does not provide this parameter.",
+        "force": "Always used, overriding the parameter provided by the Agent."
+      },
+      "footer": "Tool access and parameter strategies are saved together and apply on the next Agent turn. Defaults fill missing parameters; forced values always override. Configuration is written to {{file}}.",
       "saveSuccess": "MCP Tool settings saved. They apply on the next Agent turn.",
       "saveFailed": "Failed to save MCP Tool settings."
     },

@@ -11,11 +11,14 @@ type FileTreeBodyProps = {
   files: FileTreeNode[];
   filteredFiles: FileTreeNode[];
   searchQuery: string;
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNode, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
@@ -57,11 +60,14 @@ export default function FileTreeBody({
   files,
   filteredFiles,
   searchQuery,
+  activePath,
+  showSelectionControls,
   viewMode,
   expandedDirs,
   dropTarget,
   selectedPaths,
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -116,11 +122,14 @@ export default function FileTreeBody({
       ) : (
         <FileTreeList
           items={filteredFiles}
+          activePath={activePath}
+          showSelectionControls={showSelectionControls}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}
           selectedPaths={selectedPaths}
           internalDropTarget={internalDropTarget}
+          focusedDirectoryPath={focusedDirectoryPath}
           onSelectionChange={onSelectionChange}
           onInternalDragStart={onInternalDragStart}
           onInternalDragOver={onInternalDragOver}

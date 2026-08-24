@@ -4,19 +4,11 @@ import path from 'node:path';
 
 import matter from 'gray-matter';
 
-import { findAppRoot, findServerRoot, getModuleDir } from '../utils/runtime-paths.js';
+import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 const BUILTIN_SKILL_ID_PREFIX = 'builtin:';
 const MANAGED_SKILL_METADATA_FILE = 'skill.json';
-const BUILTIN_HOOK_SKILL_REGISTRY = new Map([
-  ['hook-notification', {
-    displayName: 'Hook Notification (Mock)',
-    version: 1,
-  }],
-]);
-const SERVER_ROOT = findServerRoot(getModuleDir(import.meta.url));
 const APP_ROOT = findAppRoot(getModuleDir(import.meta.url));
-const DEFAULT_BUILTIN_SKILLS_ROOT = path.join(SERVER_ROOT, 'skills');
 
 function resolveDefaultManagedSkillsRoot(env = process.env) {
   const dataRoot = String(env.CLOUDCLI_DATA_ROOT || '').trim();
@@ -63,11 +55,46 @@ function inferNameFromFile(fileName, raw) {
   return `uploaded-${createHash('sha256').update(raw).digest('hex').slice(0, 12)}`;
 }
 
+function normalizeUploadedFolder(files) {
+  if (!Array.isArray(files) || files.length === 0) {
+    throw createSkillError('Skill folder is required');
+  }
+
+  const uploaded = files.map((file) => {
+    if (!Buffer.isBuffer(file?.buffer)) throw createSkillError('Skill folder contains an invalid file');
+    const rawPath = String(file.relativePath || '').replaceAll('\\', '/').replace(/^\.\/+/, '');
+    const segments = rawPath.split('/');
+    if (
+      !rawPath
+      || path.posix.isAbsolute(rawPath)
+      || segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.includes('\0'))
+    ) {
+      throw createSkillError('Skill folder contains an invalid path');
+    }
+    return { segments, buffer: file.buffer };
+  });
+
+  const folderName = uploaded[0].segments[0];
+  if (uploaded.some((file) => file.segments.length < 2 || file.segments[0] !== folderName)) {
+    throw createSkillError('Select exactly one Skill folder');
+  }
+
+  const entries = uploaded.map((file) => ({
+    relativePath: file.segments.slice(1).join('/'),
+    buffer: file.buffer,
+  }));
+  if (new Set(entries.map((entry) => entry.relativePath)).size !== entries.length) {
+    throw createSkillError('Skill folder contains duplicate paths');
+  }
+  const manifest = entries.find((entry) => entry.relativePath === 'SKILL.md');
+  if (!manifest) throw createSkillError('Skill folder root must contain SKILL.md');
+
+  return { folderName, entries, manifest };
+}
+
 function parseBuiltinManifest(raw, {
   fallbackName,
   manifestPath,
-  registration = null,
-  source,
 } = {}) {
   const parsed = parseMatterBestEffort(raw);
   const name = normalizeSkillName(parsed.data?.name) || normalizeSkillName(fallbackName);
@@ -80,14 +107,10 @@ function parseBuiltinManifest(raw, {
   return {
     skillId: toSkillId(name),
     name,
-    displayName: source === 'packaged' && registration?.displayName
-      ? registration.displayName
-      : name,
+    displayName: normalizeSkillName(parsed.data?.displayName) || name,
     description,
-    version: source === 'packaged' && registration?.version
-      ? registration.version
-      : Number(parsed.data?.version) || 1,
-    source,
+    version: Number(parsed.data?.version) || 1,
+    source: 'uploaded',
     manifestPath,
     content: content ? `${content}\n` : '',
   };
@@ -103,7 +126,7 @@ async function readManagedMetadata(skillDirectory) {
   }
 }
 
-async function scanSkillRoot(skillsRoot, { source, packagedOnly }) {
+async function scanSkillRoot(skillsRoot) {
   let entries;
   try {
     entries = await fs.readdir(skillsRoot, { withFileTypes: true });
@@ -116,22 +139,18 @@ async function scanSkillRoot(skillsRoot, { source, packagedOnly }) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const skillDirectory = path.join(skillsRoot, entry.name);
-    const registration = BUILTIN_HOOK_SKILL_REGISTRY.get(entry.name) || null;
-    if (packagedOnly && !registration) continue;
     const manifestPath = path.join(skillDirectory, 'SKILL.md');
     try {
       const [directory, file, metadata] = await Promise.all([
         fs.lstat(skillDirectory),
         fs.lstat(manifestPath),
-        packagedOnly ? {} : readManagedMetadata(skillDirectory),
+        readManagedMetadata(skillDirectory),
       ]);
       if (directory.isSymbolicLink() || !file.isFile() || file.isSymbolicLink()) continue;
       const raw = await fs.readFile(manifestPath, 'utf8');
       const skill = parseBuiltinManifest(raw, {
-        fallbackName: packagedOnly ? entry.name : metadata.name || entry.name,
+        fallbackName: metadata.name || entry.name,
         manifestPath,
-        registration,
-        source,
       });
       if (skill) skills.push(skill);
     } catch (error) {
@@ -142,90 +161,117 @@ async function scanSkillRoot(skillsRoot, { source, packagedOnly }) {
 }
 
 export async function listBuiltinHookSkills({
-  skillsRoot = DEFAULT_BUILTIN_SKILLS_ROOT,
   managedSkillsRoot = DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT,
 } = {}) {
-  const [packaged, uploaded] = await Promise.all([
-    scanSkillRoot(skillsRoot, { source: 'packaged', packagedOnly: true }),
-    scanSkillRoot(managedSkillsRoot, { source: 'uploaded', packagedOnly: false }),
-  ]);
-  const skillsById = new Map(packaged.map((skill) => [skill.skillId, skill]));
-  uploaded.forEach((skill) => skillsById.set(skill.skillId, skill));
-  return [...skillsById.values()]
+  return (await scanSkillRoot(managedSkillsRoot))
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 export async function loadBuiltinHookSkill({
   skillId,
   skillName,
-  skillsRoot = DEFAULT_BUILTIN_SKILLS_ROOT,
   managedSkillsRoot = DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT,
 } = {}) {
   const name = normalizeSkillName(skillName);
   if (!name || skillId !== toSkillId(name)) throw new Error('Built-in Hook Skill identity is invalid');
-  const skills = await listBuiltinHookSkills({ skillsRoot, managedSkillsRoot });
+  const skills = await listBuiltinHookSkills({ managedSkillsRoot });
   const skill = skills.find((candidate) => candidate.skillId === skillId && candidate.name === name);
   if (!skill) throw new Error(`Built-in Hook Skill ${name} is unavailable`);
   return skill;
 }
 
 export async function saveManagedBuiltinHookSkill({
-  fileName,
-  fileBuffer,
+  files,
   managedSkillsRoot = DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT,
 } = {}) {
-  if (!Buffer.isBuffer(fileBuffer)) throw createSkillError('Skill file is required');
-
-  const raw = fileBuffer.toString('utf8').replace(/^\uFEFF/, '');
-  const name = inferNameFromFile(fileName, raw);
+  const uploadedFolder = normalizeUploadedFolder(files);
+  const raw = uploadedFolder.manifest.buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const name = inferNameFromFile(uploadedFolder.folderName, raw);
   const directoryKey = `skill-${createHash('sha256').update(name).digest('hex')}`;
-  const existingSkills = await scanSkillRoot(managedSkillsRoot, {
-    source: 'uploaded',
-    packagedOnly: false,
-  });
+  const existingSkills = await scanSkillRoot(managedSkillsRoot);
   const existingSkill = existingSkills.find((candidate) => candidate.name === name);
   const skillDirectory = existingSkill
     ? path.dirname(existingSkill.manifestPath)
     : path.join(managedSkillsRoot, directoryKey);
   const manifestPath = path.join(skillDirectory, 'SKILL.md');
-  const metadataPath = path.join(skillDirectory, MANAGED_SKILL_METADATA_FILE);
   const skill = parseBuiltinManifest(raw, {
     fallbackName: name,
     manifestPath,
-    source: 'uploaded',
   });
 
   await fs.mkdir(managedSkillsRoot, { recursive: true, mode: 0o700 });
-  try {
-    const existing = await fs.lstat(skillDirectory);
-    if (!existing.isDirectory() || existing.isSymbolicLink()) {
-      throw createSkillError(`Managed Skill path for ${name} is not a safe directory`, 409);
-    }
-  } catch (error) {
-    if (error?.code === 'ENOENT') await fs.mkdir(skillDirectory, { mode: 0o700 });
-    else throw error;
-  }
+  const stagingDirectory = path.join(managedSkillsRoot, `.upload-${randomUUID()}`);
+  const backupDirectory = path.join(managedSkillsRoot, `.backup-${randomUUID()}`);
+  let existingMoved = false;
+  await fs.mkdir(stagingDirectory, { mode: 0o700 });
 
-  const temporarySkillPath = path.join(skillDirectory, `.SKILL.${randomUUID()}.tmp`);
-  const temporaryMetadataPath = path.join(skillDirectory, `.skill.${randomUUID()}.tmp`);
   try {
-    await Promise.all([
-      fs.writeFile(temporarySkillPath, fileBuffer, { flag: 'wx', mode: 0o600 }),
-      fs.writeFile(temporaryMetadataPath, `${JSON.stringify({ name, fileName: String(fileName || '') })}\n`, {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      }),
-    ]);
-    await fs.rename(temporarySkillPath, manifestPath);
-    await fs.rename(temporaryMetadataPath, metadataPath);
+    for (const entry of uploadedFolder.entries) {
+      const destination = path.join(stagingDirectory, ...entry.relativePath.split('/'));
+      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      await fs.writeFile(destination, entry.buffer, { flag: 'wx', mode: 0o600 });
+    }
+    await fs.writeFile(
+      path.join(stagingDirectory, MANAGED_SKILL_METADATA_FILE),
+      `${JSON.stringify({
+        name,
+        folderName: uploadedFolder.folderName,
+        fileCount: uploadedFolder.entries.length,
+      })}\n`,
+      { encoding: 'utf8', mode: 0o600 },
+    );
+
+    try {
+      const existing = await fs.lstat(skillDirectory);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) {
+        throw createSkillError(`Managed Skill path for ${name} is not a safe directory`, 409);
+      }
+      await fs.rename(skillDirectory, backupDirectory);
+      existingMoved = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+
+    await fs.rename(stagingDirectory, skillDirectory);
+    if (existingMoved) await fs.rm(backupDirectory, { recursive: true, force: true }).catch(() => {});
   } catch (error) {
-    await Promise.all([
-      fs.unlink(temporarySkillPath).catch(() => {}),
-      fs.unlink(temporaryMetadataPath).catch(() => {}),
-    ]);
+    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {});
+    if (existingMoved) {
+      try {
+        await fs.lstat(skillDirectory);
+      } catch (targetError) {
+        if (targetError?.code === 'ENOENT') await fs.rename(backupDirectory, skillDirectory).catch(() => {});
+      }
+    }
     throw error;
   }
+  return skill;
+}
+
+export async function deleteManagedBuiltinHookSkill({
+  skillId,
+  managedSkillsRoot = DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT,
+} = {}) {
+  const normalizedSkillId = normalizeSkillName(skillId);
+  if (!isBuiltinHookSkillId(normalizedSkillId)) {
+    throw createSkillError('Built-in Hook Skill id is invalid');
+  }
+
+  const uploadedSkills = await scanSkillRoot(managedSkillsRoot);
+  const skill = uploadedSkills.find((candidate) => candidate.skillId === normalizedSkillId);
+  if (!skill) throw createSkillError('Uploaded Hook Skill not found', 404);
+
+  const resolvedManagedRoot = path.resolve(managedSkillsRoot);
+  const skillDirectory = path.resolve(path.dirname(skill.manifestPath));
+  if (path.dirname(skillDirectory) !== resolvedManagedRoot) {
+    throw createSkillError('Managed Hook Skill path is invalid', 409);
+  }
+  const directory = await fs.lstat(skillDirectory);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    throw createSkillError('Managed Hook Skill path is not a safe directory', 409);
+  }
+
+  await fs.rm(skillDirectory, { recursive: true });
   return skill;
 }
 
@@ -235,6 +281,5 @@ export function isBuiltinHookSkillId(value) {
 
 export {
   BUILTIN_SKILL_ID_PREFIX,
-  DEFAULT_BUILTIN_SKILLS_ROOT,
   DEFAULT_MANAGED_BUILTIN_SKILLS_ROOT,
 };

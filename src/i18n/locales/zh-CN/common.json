@@ -357,10 +357,24 @@
     "appliesOnNextTurn": "下一次 Agent turn 生效",
     "toolCount": "{{count}} 个工具",
     "settings": {
-      "description": "勾选允许当前用户使用的 MCP Tool；右侧可继续配置所选 Tool 的参数。",
+      "action": "设置",
+      "menuLabel": "打开 {{name}} 的更多操作",
+      "requiresInstall": "安装后才能配置",
+      "description": "勾选允许当前用户使用的 MCP Tool；右侧可将参数设为默认值或强制值。",
       "selectAll": "全选",
       "enabled": "允许",
-      "footer": "工具权限和自定义参数会一起保存，并在下一次 Agent turn 生效。参数覆盖仍写入 {{file}}。",
+      "configuredCount": "已配置 {{count}} 项",
+      "valueStrategy": "取值策略",
+      "strategy": {
+        "none": "不设置",
+        "default": "默认值",
+        "force": "强制值"
+      },
+      "strategyHelp": {
+        "default": "仅当 Agent 未提供该参数时使用此值。",
+        "force": "始终使用此值，并覆盖 Agent 提供的参数。"
+      },
+      "footer": "工具权限和参数策略会一起保存，并在下一次 Agent turn 生效。默认值只补齐缺失参数，强制值始终覆盖；配置写入 {{file}}。",
       "saveSuccess": "MCP Tool 设置已保存，将在下一次 Agent turn 生效。",
       "saveFailed": "保存 MCP Tool 设置失败。"
     },
@@ -574,6 +588,5 @@
     }
   }
 }
-
 
 

@@ -56,6 +56,7 @@ import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
 import agentGraphDemoDataRoutes from './routes/agent-graph-demo-data.js';
+import agentTemplateRoutes from './routes/agent-templates.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -84,8 +85,12 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
+import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
+import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
@@ -449,20 +454,45 @@ async function setupProjectsWatcher() {
                 // Get updated projects list
                 const updatedProjects = await getProjects(broadcastProgress);
 
-                // Notify all connected clients about the project changes
-                const updateMessage = JSON.stringify({
-                    type: 'projects_updated',
-                    projects: updatedProjects,
-                    timestamp: new Date().toISOString(),
-                    changeType: eventType,
-                    changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider
-                });
-
+                // Tenant clients must receive the database-backed workspace list. The
+                // legacy provider scan reads the service account's home and can be empty
+                // even when the tenant has active Docker-backed workspaces.
+                const tenantProjects = new Map();
                 connectedClients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(updateMessage);
+                    if (client.readyState !== WebSocket.OPEN) return;
+
+                    const tenantId = Number(client.tenantId) || null;
+                    const userId = Number(client.userId) || null;
+                    let clientProjects = updatedProjects;
+
+                    if (tenantId && userId) {
+                        const cacheKey = `${tenantId}:${userId}`;
+                        if (!tenantProjects.has(cacheKey)) {
+                            const rows = multitenancyDb.workspaces.listVisibleWorkspaces({ tenantId, userId });
+                            const projects = mapWorkspaceRowsToProjects(rows, {
+                                tenantId,
+                                userId,
+                                listSessions: multitenancyDb.sessions.listSessions,
+                            }).map((project) => {
+                                const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                                    workspaceId: project.workspaceId,
+                                });
+                                return agentTemplate ? {...project, agentTemplate} : project;
+                            });
+                            tenantProjects.set(cacheKey, projects);
+                        }
+                        clientProjects = tenantProjects.get(cacheKey);
                     }
+
+                    client.send(JSON.stringify({
+                        type: 'projects_updated',
+                        projects: clientProjects,
+                        tenantId,
+                        timestamp: new Date().toISOString(),
+                        changeType: eventType,
+                        changedFile: path.relative(rootPath, filePath),
+                        watchProvider: provider
+                    }));
                 });
 
             } catch (error) {
@@ -612,7 +642,13 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
-const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
+const scheduledTaskLogger = createScheduledTaskLogger({
+    onEntry: (entry) => scheduledTaskLogStore.append(entry)
+});
+const scheduledSessionTasks = createScheduledSessionTaskService({
+    clients: connectedClients,
+    logger: scheduledTaskLogger
+});
 app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
@@ -628,6 +664,10 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Public, side-effect-free simulated MCP endpoint used by the SQL response Hook.
+// It only validates the supplied text and never executes SQL or reads application data.
+app.all(SQL_SYNTAX_MCP_PATH, handleSqlSyntaxMcpRequest);
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
@@ -678,6 +718,7 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
+app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
@@ -845,6 +886,11 @@ app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
             tenantId: req.tenant.id,
             userId: req.user.id,
             listSessions: multitenancyDb.sessions.listSessions,
+        }).map((project) => {
+            const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                workspaceId: project.workspaceId,
+            });
+            return agentTemplate ? {...project, agentTemplate} : project;
         });
         res.json(projects);
     } catch (error) {
@@ -2576,8 +2622,8 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
-    // Claude keeps its SDK stream alive while idle for fast follow-up turns.
-    // Tie the concurrency lease to processing, not to that reusable stream.
+    // Queued Claude follow-ups stay inside this command chain. The lease remains
+    // held across those turn boundaries and is released after the final turn.
     const acquireConcurrencyLease = () => {
         if (lease) return;
         lease = sessionConcurrencyLimiter.acquire({
@@ -2660,34 +2706,11 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
-                if (data.options?.sessionId) {
-                    const pushedToExistingSession = pushClaudeSupplement({
-                        sessionId: data.options.sessionId,
-                        content: data.command,
-                        displayContent: data.options.displayCommand,
-                        clientMessageId: data.clientMessageId,
-                        mode: 'now',
-                        writer,
-                    });
-                    if (pushedToExistingSession.success) {
-                        logChatSessionEvent('pushed_to_existing_stream', logContext);
-                        return;
-                    }
-                    if (pushedToExistingSession.code === 'SESSION_LIMIT_EXCEEDED') {
-                        writer.send(createNormalizedMessage({
-                            kind: 'error',
-                            content: createSessionLimitExceededMessage(pushedToExistingSession),
-                            code: pushedToExistingSession.code,
-                            provider: 'claude',
-                            sessionId: data.options.sessionId,
-                            currentConcurrentRequests: pushedToExistingSession.activeCount,
-                            sessionLimit: pushedToExistingSession.limit,
-                        }));
-                        return;
-                    }
-                }
-
-                // Use Claude Agents SDK
+                // A regular composer submission is a new query turn. Reusing a completed
+                // SDK input stream can omit Stop hooks on later turns, so resume the
+                // provider session through a fresh query with a freshly registered Hook
+                // runtime. Running-message submissions use `claude-supplement` below,
+                // which queues a fresh turn behind the active Stop Hook boundary.
                 void runLimitedProviderCommand({
                     data,
                     provider: 'claude',
@@ -2718,6 +2741,7 @@ function handleChatConnection(ws, request) {
                         clientMessageId: data.clientMessageId || null,
                         status: 'failed',
                         error: result.error,
+                        content: data.content || '',
                         timestamp: new Date().toISOString(),
                     });
                     writer.send(createNormalizedMessage({

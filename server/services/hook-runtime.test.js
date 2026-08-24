@@ -12,6 +12,11 @@ import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
 
+async function loadTestHookSkill(skillId, skillName, argumentsText) {
+  assert.equal(skillId, `builtin:${skillName}`);
+  return `Run the test Hook Skill.\nHOOK_NOTIFICATION_SKILL_EXECUTED\nPayload: ${argumentsText}\n`;
+}
+
 function createDatabase() {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
@@ -88,7 +93,6 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
       session_id: 'session-1',
       tool_name: 'mcp__sms__send',
       tool_input: {},
-      tool_use_id: 'tool-1',
     }, 'tool-1', { signal: new AbortController().signal });
 
     assert.deepEqual(mcpInput, {
@@ -104,6 +108,10 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
     });
     const execution = database.prepare('SELECT * FROM hook_executions').get();
     assert.equal(execution.status, 'succeeded');
+    assert.ok(Number.isInteger(execution.started_at_ms));
+    assert.ok(Number.isInteger(execution.completed_at_ms));
+    assert.ok(execution.completed_at_ms >= execution.started_at_ms);
+    assert.equal(execution.tool_use_id, 'tool-1');
     assert.equal(JSON.parse(execution.script_output_json).recipient, '13800000000');
     assert.equal(JSON.parse(execution.logs_json)[0].message, 'script ran');
     const record = database.prepare('SELECT * FROM hook_data_records').get();
@@ -286,6 +294,61 @@ test('call_mcp_tool condition skips the tool before resolving inputs', async () 
   }
 });
 
+test('SQL Check Hook sends the effective workspace rule IDs to its MCP tool', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'SQL Check 强制校验',
+      version: 1,
+      bindingController: 'sql_check',
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'check-sql',
+        type: 'call_mcp_tool',
+        config: {
+          toolName: 'mcp__sql-syntax-checker__check_sql_syntax',
+          inputs: {
+            sql: { source: 'reference', path: 'event.last_assistant_message' },
+          },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    let mcpInput;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      tenantId: 2,
+      workspaceId: 3,
+      sqlCheckRuleIds: ['require_where', 'limit_rows'],
+      workspaceRoot,
+      database,
+      mcpCaller: async ({ input }) => {
+        mcpInput = input;
+        return { valid: true };
+      },
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-sql-check',
+      last_assistant_message: '```sql\nSELECT * FROM users;\n```',
+    });
+
+    assert.deepEqual(mcpInput, {
+      sql: '```sql\nSELECT * FROM users;\n```',
+      rule_ids: ['require_where', 'limit_rows'],
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook failures are audited and fail open to Claude', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
@@ -357,6 +420,7 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
     const event = {
@@ -374,6 +438,61 @@ test('StopFailure Skill recovery appends one new turn and never returns fields t
     const executions = database.prepare('SELECT status, actions_json FROM hook_executions ORDER BY rowid').all();
     assert.equal(executions.length, 2);
     assert.equal(JSON.parse(executions[1].actions_json).recover.output.reason, 'already_scheduled');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('invoke_skill skips recovery when its condition resolves to false', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Recover only HTTP 200 failures',
+      version: 1,
+      eventName: 'StopFailure',
+      matcher: {},
+      extensionLogic: {
+        language: 'javascript',
+        code: 'export async function run() { return { output: { shouldRecover: false } }; }',
+        outputs: [{ name: 'shouldRecover', type: 'boolean' }],
+      },
+      postActions: [{
+        id: 'recover',
+        type: 'invoke_skill',
+        config: {
+          skillId: 'builtin:hook-notification',
+          skillName: 'hook-notification',
+          condition: { source: 'reference', path: 'script.output.shouldRecover' },
+          argumentsTemplate: 'details={{event.error_details}}',
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const scheduled = [];
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      skillContentLoader: loadTestHookSkill,
+      enqueueSkillRecovery: async (request) => scheduled.push(request),
+    });
+
+    assert.deepEqual(await runtime.executeHook(hook, {
+      hook_event_name: 'StopFailure',
+      session_id: 'failed-session',
+      error: 'server_error',
+      error_details: 'rate limited',
+    }), {});
+    assert.equal(scheduled.length, 0);
+    const execution = database.prepare('SELECT actions_json FROM hook_executions').get();
+    assert.deepEqual(JSON.parse(execution.actions_json).recover.output, {
+      scheduled: false,
+      reason: 'condition_false',
+    });
   } finally {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -410,7 +529,11 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
       userId: 1,
       workspaceRoot,
       database,
-      enqueueSkillRecovery: async (request) => scheduled.push(request),
+      skillContentLoader: loadTestHookSkill,
+      enqueueSkillRecovery: async (request) => {
+        scheduled.push(request);
+        return { queuePosition: 1, status: 'queued', executionMode: 'original_session' };
+      },
     });
     const output = await runtime.executeHook(hook, {
       hook_event_name: 'Stop',
@@ -420,15 +543,90 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
     });
     assert.deepEqual(output, { systemMessage: 'normal answer completed' });
     assert.equal(scheduled.length, 1);
+    assert.equal(typeof scheduled[0].executionId, 'string');
+    assert.equal(scheduled[0].argumentsText, '1');
     assert.equal(scheduled[0].displayCommand, '/hook-notification 1');
     assert.match(scheduled[0].modelContent, /Payload: 1/);
+    const execution = database.prepare(
+      'SELECT actions_json FROM hook_executions ORDER BY rowid DESC LIMIT 1',
+    ).get();
+    assert.deepEqual(JSON.parse(execution.actions_json)['continue-with-skill'].output, {
+      scheduled: true,
+      skillName: 'hook-notification',
+      queuePosition: 1,
+      status: 'queued',
+      executionMode: 'original_session',
+    });
   } finally {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
 });
 
-test('built-in Hook Skill loads without a workspace copy and schedules a verifiable notification turn', async () => {
+test('Stop Agent message action queues a templated next turn without loading a Skill', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Continue directly',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'follow-up',
+        type: 'send_agent_message',
+        config: {
+          condition: null,
+          messageTemplate: '继续分析会话 {{event.session_id}}，用户 {{ccui.env.userId}}',
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const scheduled = [];
+    let skillLoads = 0;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      skillContentLoader: async () => {
+        skillLoads += 1;
+        return 'unexpected';
+      },
+      enqueueAgentMessage: async (request) => {
+        scheduled.push(request);
+        return { queuePosition: 1, status: 'queued' };
+      },
+    });
+    const event = {
+      hook_event_name: 'Stop',
+      session_id: 'session-direct',
+      stop_hook_active: false,
+      last_assistant_message: 'done',
+    };
+    assert.deepEqual(await runtime.executeHook(hook, event), {});
+    assert.deepEqual(await runtime.executeHook(hook, event), {});
+    assert.equal(skillLoads, 0);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].messageText, '继续分析会话 session-direct，用户 1');
+    const messageLength = scheduled[0].messageText.length;
+    const executions = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid').all();
+    assert.deepEqual(JSON.parse(executions[0].actions_json)['follow-up'].output, {
+      scheduled: true,
+      messageLength,
+      queuePosition: 1,
+      status: 'queued',
+    });
+    assert.equal(JSON.parse(executions[1].actions_json)['follow-up'].output.reason, 'already_scheduled');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('Hook Skill action uses the configured content loader without creating a workspace copy', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
   try {
@@ -456,6 +654,7 @@ test('built-in Hook Skill loads without a workspace copy and schedules a verifia
       userId: 1,
       workspaceRoot,
       database,
+      skillContentLoader: loadTestHookSkill,
       enqueueSkillRecovery: async (request) => scheduled.push(request),
     });
     await runtime.executeHook(hook, {

@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import matter from 'gray-matter';
@@ -17,6 +17,12 @@ const KIND_ORDER = {
   unmanaged: 1,
   system: 2,
 };
+
+const MAX_SKILL_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_SKILL_ARCHIVE_ENTRY_BYTES = 10 * 1024 * 1024;
+const MAX_SKILL_ARCHIVE_TOTAL_BYTES = 50 * 1024 * 1024;
+const MAX_SKILL_ARCHIVE_ENTRIES = 500;
+const MAX_SKILL_ARCHIVE_DEPTH = 20;
 
 export function getWorkspaceSkillsPaths(workspacePath) {
   return {
@@ -156,18 +162,245 @@ export async function listUnmanagedRuntimeSkills(workspacePath) {
   return sortSkills(skills);
 }
 
-export async function listWorkspaceSkills(workspacePath, availableSystemSkills = []) {
+export async function listWorkspaceSkills(workspacePath, availableSystemSkills = [], marketImports = []) {
   const [managed, unmanaged] = await Promise.all([
     listManagedSkills(workspacePath),
     listUnmanagedRuntimeSkills(workspacePath),
   ]);
   const system = normalizeSystemSkills(availableSystemSkills);
-  const skills = sortSkills([...managed, ...unmanaged, ...system]);
+  const importsByName = createMarketImportsByName(marketImports);
+  const skills = sortSkills([...managed, ...unmanaged, ...system].map((skill) => {
+    const marketImport = importsByName.get(skill.name.toLowerCase());
+    const origin = marketImport ? 'market' : 'local';
+    return pruneUndefined({
+      ...skill,
+      origin,
+      manageable: skill.kind !== 'system' && origin === 'local',
+      targetPath: skill.kind === 'system' ? undefined : `.claude/skills/${skill.name}`,
+      localVersion: marketImport ? normalizeNonNegativeInteger(marketImport.version) : undefined,
+      createUserId: marketImport?.createUserId,
+      marketSkillId: marketImport?.skillId || marketImport?.id,
+    });
+  }));
 
   return {
     skills,
-    summary: summarizeSkills(skills),
+    summary: {
+      ...summarizeSkills(skills),
+      market: skills.filter((skill) => skill.kind !== 'system' && skill.enabled !== false && skill.origin === 'market').length,
+      local: skills.filter((skill) => skill.kind !== 'system' && skill.enabled !== false && skill.origin === 'local').length,
+    },
   };
+}
+
+export async function getWorkspaceSkillDetail({ workspacePath, name, marketImports = [] }) {
+  const context = await resolveWorkspaceSkillContext({ workspacePath, name, marketImports });
+  const manifest = await parseSkillManifest(context.rootPath);
+  const files = await listSkillEntries(context.rootPath);
+  const marketImport = context.marketImport;
+
+  return pruneUndefined({
+    name: context.name,
+    displayName: manifest.status === 'valid' ? manifest.name : context.name,
+    description: manifest.status === 'valid' ? manifest.description : '',
+    status: manifest.status === 'valid' ? 'available' : 'invalid',
+    parseError: manifest.status === 'invalid' ? manifest.parseError : undefined,
+    origin: context.origin,
+    manageable: context.origin === 'local',
+    targetPath: `.claude/skills/${context.name}`,
+    localVersion: marketImport ? normalizeNonNegativeInteger(marketImport.version) : undefined,
+    createUserId: marketImport?.createUserId,
+    marketSkillId: marketImport?.skillId || marketImport?.id,
+    files,
+  });
+}
+
+export async function readWorkspaceSkillFile({ workspacePath, name, filePath, marketImports = [] }) {
+  const context = await resolveWorkspaceSkillContext({ workspacePath, name, marketImports });
+  const targetPath = await resolveSkillEntryPath(context.rootPath, filePath, { mustExist: true });
+  const stat = await fs.stat(targetPath);
+  if (!stat.isFile()) {
+    throw createHttpError('Selected skill entry is not a file', 400);
+  }
+  if (stat.size > MAX_SKILL_FILE_BYTES) {
+    throw createHttpError('Skill file is too large to preview', 413);
+  }
+  const buffer = await fs.readFile(targetPath);
+  const binary = isBinaryBuffer(buffer);
+
+  return pruneUndefined({
+    path: normalizeSkillRelativePath(filePath),
+    size: stat.size,
+    isBinary: binary,
+    mimeType: inferSkillFileMimeType(filePath),
+    revision: createHash('sha256').update(buffer).digest('hex'),
+    content: binary ? undefined : buffer.toString('utf8'),
+    contentBase64: binary ? buffer.toString('base64') : undefined,
+  });
+}
+
+export async function createWorkspaceSkill({ workspacePath, name, displayName, description, content = '' }) {
+  const skillName = normalizeWorkspaceSkillName(name);
+  const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const skillPath = path.join(runtimeRoot, skillName);
+  if (await pathExists(skillPath)) {
+    throw createHttpError(`Skill "${skillName}" already exists`, 409);
+  }
+
+  const manifestContent = firstString(content) || [
+    '---',
+    `name: ${JSON.stringify(firstString(displayName) || skillName)}`,
+    `description: ${JSON.stringify(firstString(description) || 'Describe when this skill should be used.')}`,
+    '---',
+    '',
+    `# ${firstString(displayName) || skillName}`,
+    '',
+  ].join('\n');
+  validateSkillManifestContent(manifestContent, skillName);
+
+  await fs.mkdir(runtimeRoot, { recursive: true });
+  const stagePath = path.join(runtimeRoot, `.${skillName}.${process.pid}.${Date.now()}.stage`);
+  try {
+    await fs.mkdir(stagePath, { recursive: false });
+    await fs.writeFile(path.join(stagePath, 'SKILL.md'), manifestContent, 'utf8');
+    await fs.rename(stagePath, skillPath);
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [skillPath],
+      recursive: true,
+      reason: 'workspace_skill_create',
+      context: { skillName },
+    });
+  } catch (error) {
+    await fs.rm(stagePath, { recursive: true, force: true });
+    throw error;
+  }
+
+  return getWorkspaceSkillDetail({ workspacePath, name: skillName });
+}
+
+export async function createWorkspaceSkillEntry({
+  workspacePath,
+  name,
+  entryPath,
+  entryType,
+  content = '',
+  marketImports = [],
+}) {
+  const context = await requireLocalWorkspaceSkill({ workspacePath, name, marketImports });
+  const targetPath = await resolveSkillEntryPath(context.rootPath, entryPath, { mustExist: false });
+  if (await pathExists(targetPath)) {
+    throw createHttpError('A skill entry already exists at that path', 409);
+  }
+  if (entryType === 'directory') {
+    await fs.mkdir(targetPath, { recursive: false });
+  } else if (entryType === 'file') {
+    const nextContent = String(content ?? '');
+    if (Buffer.byteLength(nextContent, 'utf8') > MAX_SKILL_FILE_BYTES) {
+      throw createHttpError('Skill file is too large to create', 413);
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, nextContent, { encoding: 'utf8', flag: 'wx' });
+  } else {
+    throw createHttpError('Entry type must be file or directory', 400);
+  }
+  await syncManagedSkillAfterMutation(context, workspacePath);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [targetPath],
+    recursive: entryType === 'directory',
+    reason: 'workspace_skill_entry_create',
+    context: { skillName: context.name },
+  });
+  return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
+}
+
+export async function updateWorkspaceSkillFile({
+  workspacePath,
+  name,
+  filePath,
+  content,
+  revision,
+  marketImports = [],
+}) {
+  const context = await requireLocalWorkspaceSkill({ workspacePath, name, marketImports });
+  const targetPath = await resolveSkillEntryPath(context.rootPath, filePath, { mustExist: true });
+  const stat = await fs.stat(targetPath);
+  if (!stat.isFile()) {
+    throw createHttpError('Selected skill entry is not a file', 400);
+  }
+  const currentBuffer = await fs.readFile(targetPath);
+  if (isBinaryBuffer(currentBuffer)) {
+    throw createHttpError('Binary skill files cannot be edited', 400);
+  }
+  const currentRevision = createHash('sha256').update(currentBuffer).digest('hex');
+  if (firstString(revision) && revision !== currentRevision) {
+    throw createHttpError('Skill file changed on disk. Reload it before saving.', 409);
+  }
+  const nextContent = String(content ?? '');
+  if (Buffer.byteLength(nextContent, 'utf8') > MAX_SKILL_FILE_BYTES) {
+    throw createHttpError('Skill file is too large to save', 413);
+  }
+  if (normalizeSkillRelativePath(filePath) === 'SKILL.md') {
+    validateSkillManifestContent(nextContent, context.name);
+  }
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, nextContent, 'utf8');
+  await fs.rename(tempPath, targetPath);
+  await syncManagedSkillAfterMutation(context, workspacePath);
+  await applyWorkspaceOwnership({
+    workspaceRoot: workspacePath,
+    targetPaths: [targetPath],
+    reason: 'workspace_skill_file_update',
+    context: { skillName: context.name },
+  });
+  return readWorkspaceSkillFile({ workspacePath, name: context.name, filePath, marketImports });
+}
+
+export async function renameWorkspaceSkillEntry({
+  workspacePath,
+  name,
+  entryPath,
+  nextPath,
+  marketImports = [],
+}) {
+  const context = await requireLocalWorkspaceSkill({ workspacePath, name, marketImports });
+  const normalizedEntryPath = normalizeSkillRelativePath(entryPath);
+  const normalizedNextPath = normalizeSkillRelativePath(nextPath);
+  if (normalizedEntryPath === 'SKILL.md' || normalizedNextPath === 'SKILL.md') {
+    throw createHttpError('The root SKILL.md cannot be renamed', 400);
+  }
+  const sourcePath = await resolveSkillEntryPath(context.rootPath, normalizedEntryPath, { mustExist: true });
+  const destinationPath = await resolveSkillEntryPath(context.rootPath, normalizedNextPath, { mustExist: false });
+  if (await pathExists(destinationPath)) {
+    throw createHttpError('A skill entry already exists at the destination path', 409);
+  }
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  await fs.rename(sourcePath, destinationPath);
+  await syncManagedSkillAfterMutation(context, workspacePath);
+  return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
+}
+
+export async function deleteWorkspaceSkillEntry({ workspacePath, name, entryPath, marketImports = [] }) {
+  const context = await requireLocalWorkspaceSkill({ workspacePath, name, marketImports });
+  const normalizedEntryPath = normalizeSkillRelativePath(entryPath);
+  if (normalizedEntryPath === 'SKILL.md') {
+    throw createHttpError('The root SKILL.md cannot be deleted', 400);
+  }
+  const targetPath = await resolveSkillEntryPath(context.rootPath, normalizedEntryPath, { mustExist: true });
+  await fs.rm(targetPath, { recursive: true, force: false });
+  await syncManagedSkillAfterMutation(context, workspacePath);
+  return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
+}
+
+export async function deleteLocalWorkspaceSkill({ workspacePath, name, marketImports = [] }) {
+  const context = await requireLocalWorkspaceSkill({ workspacePath, name, marketImports });
+  if (context.managedEntry) {
+    await uninstallManagedSkill({ workspacePath, name: context.name });
+  } else {
+    await fs.rm(context.rootPath, { recursive: true, force: false });
+  }
+  return { deleted: context.name };
 }
 
 export async function previewGithubSkillInstall({
@@ -647,16 +880,31 @@ async function extractGithubArchive(archiveBuffer, destinationDirectory) {
   if (entries.length === 0) {
     throw createHttpError('GitHub archive is empty', 400);
   }
+  if (entries.length > MAX_SKILL_ARCHIVE_ENTRIES) {
+    throw createHttpError('Skill archive contains too many files', 400);
+  }
 
-  await Promise.all(entries.map(async (entry) => {
+  let totalBytes = 0;
+  for (const entry of entries) {
     const normalizedPath = normalizeArchivePath(entry.name);
+    if (normalizedPath.split('/').length > MAX_SKILL_ARCHIVE_DEPTH) {
+      throw createHttpError('Skill archive directory depth exceeds the limit', 400);
+    }
     const destinationPath = path.join(destinationDirectory, normalizedPath);
     if (!isPathInside(destinationDirectory, destinationPath)) {
       throw createHttpError('GitHub archive contains an unsafe file path', 400);
     }
+    const content = await entry.async('nodebuffer');
+    if (content.length > MAX_SKILL_ARCHIVE_ENTRY_BYTES) {
+      throw createHttpError('Skill archive contains a file that is too large', 400);
+    }
+    totalBytes += content.length;
+    if (totalBytes > MAX_SKILL_ARCHIVE_TOTAL_BYTES) {
+      throw createHttpError('Skill archive expands beyond the allowed size', 400);
+    }
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-    await fs.writeFile(destinationPath, await entry.async('nodebuffer'));
-  }));
+    await fs.writeFile(destinationPath, content);
+  }
 }
 
 async function resolveSingleExtractedRoot(archiveDirectory) {
@@ -747,6 +995,194 @@ async function listRelativeFiles(rootDirectory) {
     if (right === 'SKILL.md') return 1;
     return left.localeCompare(right);
   });
+}
+
+async function listSkillEntries(rootDirectory) {
+  const entries = [];
+
+  async function visit(currentDirectory) {
+    const children = await fs.readdir(currentDirectory, { withFileTypes: true });
+    children.sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
+      if (left.name === 'SKILL.md') return -1;
+      if (right.name === 'SKILL.md') return 1;
+      return left.name.localeCompare(right.name);
+    });
+    for (const child of children) {
+      const childPath = path.join(currentDirectory, child.name);
+      const relativePath = path.relative(rootDirectory, childPath).split(path.sep).join('/');
+      const childStat = await fs.lstat(childPath);
+      if (childStat.isSymbolicLink()) {
+        entries.push({ path: relativePath, type: 'symlink', size: childStat.size });
+      } else if (child.isDirectory()) {
+        entries.push({ path: relativePath, type: 'directory' });
+        await visit(childPath);
+      } else if (child.isFile()) {
+        entries.push({
+          path: relativePath,
+          type: 'file',
+          size: childStat.size,
+          mimeType: inferSkillFileMimeType(relativePath),
+        });
+      }
+    }
+  }
+
+  await visit(rootDirectory);
+  return entries;
+}
+
+function createMarketImportsByName(marketImports) {
+  return new Map((Array.isArray(marketImports) ? marketImports : [])
+    .filter((entry) => firstString(entry?.name))
+    .map((entry) => [firstString(entry.name).toLowerCase(), entry]));
+}
+
+async function resolveWorkspaceSkillContext({ workspacePath, name, marketImports = [] }) {
+  const skillName = normalizeWorkspaceSkillName(name);
+  const importsByName = createMarketImportsByName(marketImports);
+  const marketImport = importsByName.get(skillName.toLowerCase());
+  const metadata = await readSkillsMetadata(workspacePath);
+  const managedKey = Object.keys(metadata.skills).find((entryName) => entryName.toLowerCase() === skillName.toLowerCase());
+  const managedEntry = managedKey ? metadata.skills[managedKey] : null;
+  const { sourceRoot, runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const actualName = managedKey || skillName;
+  const rootPath = managedEntry ? path.join(sourceRoot, actualName) : path.join(runtimeRoot, actualName);
+  await assertDirectoryExists(rootPath, `Workspace skill "${skillName}" was not found`);
+  const rootStat = await fs.lstat(rootPath);
+  if (rootStat.isSymbolicLink()) {
+    throw createHttpError('Symbolic-link skill directories are not supported', 403);
+  }
+
+  return {
+    name: actualName,
+    origin: marketImport ? 'market' : 'local',
+    marketImport,
+    managedEntry,
+    rootPath,
+  };
+}
+
+async function requireLocalWorkspaceSkill(options) {
+  const context = await resolveWorkspaceSkillContext(options);
+  if (context.origin !== 'local') {
+    throw createHttpError('Market-installed skills are read-only. Update or remove them from Skill Market.', 403);
+  }
+  return context;
+}
+
+function normalizeWorkspaceSkillName(name) {
+  const skillName = firstString(name);
+  if (!skillName) throw createHttpError('Skill name is required', 400);
+  if (
+    skillName === '.'
+    || skillName === '..'
+    || /[\\/]/.test(skillName)
+    || /[\x00-\x1F\x7F]/.test(skillName)
+  ) {
+    throw createHttpError('Skill name contains invalid path characters', 400);
+  }
+  return skillName;
+}
+
+function normalizeSkillRelativePath(entryPath) {
+  const rawPath = firstString(entryPath).replace(/\\/g, '/');
+  if (!rawPath || rawPath.startsWith('/') || rawPath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw createHttpError('Skill entry path must be a safe relative path', 400);
+  }
+  return rawPath;
+}
+
+async function resolveSkillEntryPath(rootPath, entryPath, { mustExist }) {
+  const normalizedPath = normalizeSkillRelativePath(entryPath);
+  const targetPath = path.resolve(rootPath, normalizedPath);
+  if (!isPathInside(rootPath, targetPath)) {
+    throw createHttpError('Skill entry path must stay inside the skill directory', 403);
+  }
+
+  const relativeSegments = normalizedPath.split('/');
+  let currentPath = rootPath;
+  for (let index = 0; index < relativeSegments.length; index += 1) {
+    currentPath = path.join(currentPath, relativeSegments[index]);
+    try {
+      const stat = await fs.lstat(currentPath);
+      if (stat.isSymbolicLink()) {
+        throw createHttpError('Symbolic links are not supported in editable skill paths', 403);
+      }
+    } catch (error) {
+      if (error?.statusCode) throw error;
+      if (error?.code === 'ENOENT') {
+        if (mustExist || index < relativeSegments.length - 1) {
+          throw createHttpError('Skill entry was not found', 404);
+        }
+        break;
+      }
+      throw error;
+    }
+  }
+  return targetPath;
+}
+
+async function syncManagedSkillAfterMutation(context, workspacePath) {
+  if (!context.managedEntry || context.managedEntry.enabled === false) return;
+  const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
+  await materializeManagedSkill(context.rootPath, path.join(runtimeRoot, context.name), workspacePath);
+}
+
+function validateSkillManifestContent(content, expectedDirectoryName) {
+  try {
+    matter.clearCache();
+    const parsed = matter(String(content ?? ''));
+    const manifestName = firstString(parsed.data?.name);
+    const description = firstString(parsed.data?.description);
+    if (!manifestName) throw new Error('frontmatter name is required');
+    if (!description) throw new Error('frontmatter description is required');
+    normalizeWorkspaceSkillName(expectedDirectoryName);
+  } catch (error) {
+    throw createHttpError(`Invalid SKILL.md: ${error?.message || 'frontmatter could not be parsed'}`, 400);
+  }
+}
+
+function normalizeNonNegativeInteger(value) {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized >= 0 ? normalized : undefined;
+}
+
+function isBinaryBuffer(buffer) {
+  if (!buffer?.length) return false;
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+  let suspicious = 0;
+  for (const byte of sample) {
+    if (byte === 0) return true;
+    if (byte < 7 || (byte > 13 && byte < 32)) suspicious += 1;
+  }
+  return suspicious / sample.length > 0.1;
+}
+
+function inferSkillFileMimeType(filePath) {
+  const extension = path.extname(String(filePath || '')).toLowerCase();
+  return ({
+    '.md': 'text/markdown',
+    '.markdown': 'text/markdown',
+    '.json': 'application/json',
+    '.yaml': 'application/yaml',
+    '.yml': 'application/yaml',
+    '.js': 'text/javascript',
+    '.jsx': 'text/javascript',
+    '.ts': 'text/typescript',
+    '.tsx': 'text/typescript',
+    '.py': 'text/x-python',
+    '.sh': 'text/x-shellscript',
+    '.txt': 'text/plain',
+    '.css': 'text/css',
+    '.html': 'text/html',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+  })[extension] || 'application/octet-stream';
 }
 
 async function assertDirectoryExists(directoryPath, message) {

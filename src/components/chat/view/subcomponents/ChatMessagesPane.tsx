@@ -139,6 +139,7 @@ function ChatMessagesPane({
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
+          agentTemplate={selectedProject.agentTemplate}
         />
       ) : (
         <>
@@ -191,4 +192,3 @@ function ChatMessagesPane({
 }
 
 export default memo(ChatMessagesPane);
-

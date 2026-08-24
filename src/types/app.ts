@@ -6,6 +6,7 @@ export type AppTab =
   | 'chat'
   | 'files'
   | 'codehub'
+  | 'skills'
   | 'mcp-tools'
   | 'sql-check'
   | 'agent-graph';
@@ -74,6 +75,12 @@ export interface ProjectTaskmasterInfo {
   [key: string]: unknown;
 }
 
+export interface ProjectAgentTemplate {
+  id: number;
+  name: string;
+  guideText: string;
+}
+
 export interface Project {
   name: string;
   displayName: string;
@@ -90,6 +97,7 @@ export interface Project {
   scheduledTasks?: ProjectScheduledTask[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  agentTemplate?: ProjectAgentTemplate | null;
   [key: string]: unknown;
 }
 
@@ -105,6 +113,7 @@ export interface LoadingProgress {
 export interface ProjectsUpdatedMessage {
   type: 'projects_updated';
   projects: Project[];
+  tenantId?: number | null;
   changedFile?: string;
   [key: string]: unknown;
 }

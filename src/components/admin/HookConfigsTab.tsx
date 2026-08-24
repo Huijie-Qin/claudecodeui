@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   BookOpen,
-  Building2,
   Check,
+  ChevronDown,
+  CircleAlert,
   Clock3,
+  Copy,
   Database,
+  FileText,
+  FlaskConical,
   Globe2,
   Pencil,
   Plus,
   RefreshCw,
   Search,
+  Server,
   ShieldCheck,
   Trash2,
   Upload,
@@ -24,8 +30,18 @@ import { cn } from '../../lib/utils';
 import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { api } from '../../utils/api';
 
+import { parseHelperEnvText } from './adminMcpPresetUtils';
 import HookConfigEditor from './hook-config/HookConfigEditor';
-import { EVENT_DEFINITIONS, EVENT_GROUPS, createEmptyHook } from './hook-config/catalog';
+import HookDiagnosticsPanel from './hook-config/HookDiagnosticsPanel';
+import {
+  EVENT_DEFINITIONS,
+  EVENT_GROUPS,
+  createEmptyHook,
+  createHookCopyDraft,
+  shouldShowBusinessData,
+} from './hook-config/catalog';
+import { createHookDraftSignature } from './hook-config/editorUtils';
+import { findUnavailableHookSkills } from './hook-config/skillAvailability';
 import type {
   HookConfig,
   HookConfigDraft,
@@ -37,8 +53,14 @@ const EMPTY_RESOURCES: HookResources = {
   events: [],
   builtinTools: [],
   mcpTools: [],
+  hookMcpServers: [],
   skills: [],
   environmentVariables: [],
+};
+
+const DIRECTORY_INPUT_ATTRIBUTES = {
+  webkitdirectory: '',
+  directory: '',
 };
 
 type Toast = { type: 'success' | 'error'; message: string } | null;
@@ -60,16 +82,7 @@ type HookBindingUser = {
   bound: boolean;
 };
 
-type HookBindingTenant = {
-  id: number;
-  code: string;
-  name: string;
-  active: boolean;
-  activeUserCount: number;
-  bound: boolean;
-};
-
-type HookBindingScope = 'users' | 'tenants' | 'all_users';
+type HookBindingScope = 'users' | 'all_users';
 
 type HookExampleCatalogItem = {
   id: string;
@@ -77,6 +90,38 @@ type HookExampleCatalogItem = {
   description: string;
   eventName: HookEventName;
   exists: boolean;
+};
+
+type HookDeleteDialogState = HookConfig | null;
+type SkillDeleteDialogState = HookResources['skills'][number] | null;
+type HookMcpServer = HookResources['hookMcpServers'][number];
+type HookMcpMutationResult = {
+  server?: HookMcpServer;
+  hookMcpServers?: HookMcpServer[];
+  mcpTools?: HookResources['mcpTools'];
+};
+type HookMcpEditorState = {
+  originalName: string | null;
+  name: string;
+  displayName: string;
+  description: string;
+  url: string;
+  headersText: string;
+  headersHelper: string;
+  helperEnvText: string;
+  helperScript: HookMcpServer['helperScript'];
+};
+
+const EMPTY_HOOK_MCP_EDITOR: HookMcpEditorState = {
+  originalName: null,
+  name: '',
+  displayName: '',
+  description: '',
+  url: '',
+  headersText: '',
+  headersHelper: '',
+  helperEnvText: '',
+  helperScript: null,
 };
 
 async function readError(response: Response, fallback: string) {
@@ -109,7 +154,9 @@ function normalizeHookConfig(hook: HookConfig): HookConfig {
   return {
     ...hook,
     boundUserCount: Number(hook.boundUserCount || 0),
+    scopedUserCount: Number(hook.scopedUserCount || 0),
     boundTenantCount: Number(hook.boundTenantCount || 0),
+    hasDataRecords: Boolean(hook.hasDataRecords),
     bindingController: hook.bindingController === 'sql_check' ? 'sql_check' : 'admin',
     extensionLogic: hook.extensionLogic
       ? { ...hook.extensionLogic, outputs: hook.extensionLogic.outputs || [] }
@@ -295,36 +342,144 @@ function MoreEventsDialog({
   );
 }
 
+function HookDeleteDialog({
+  state,
+  isSaving,
+  onOpenChange,
+  onConfirm,
+}: {
+  state: HookDeleteDialogState;
+  isSaving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation('admin');
+  const title = t('hooks.deleteTitle');
+  const description = state ? t('hooks.confirmDelete', { name: state.name }) : '';
+
+  return (
+    <Dialog open={Boolean(state)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md overflow-hidden p-0">
+        <DialogTitle>{title}</DialogTitle>
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-foreground">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            disabled={isSaving}
+            onClick={() => onOpenChange(false)}
+          >
+            {t('hooks.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="flex-1"
+            disabled={isSaving}
+            onClick={onConfirm}
+          >
+            {isSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {t('hooks.delete')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SkillDeleteDialog({
+  state,
+  isSaving,
+  onOpenChange,
+  onConfirm,
+}: {
+  state: SkillDeleteDialogState;
+  isSaving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation('admin');
+  const title = t('hooks.builtinSkills.deleteTitle');
+  const description = state
+    ? t('hooks.builtinSkills.confirmDelete', { name: state.displayName || state.name })
+    : '';
+
+  return (
+    <Dialog open={Boolean(state)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md overflow-hidden p-0">
+        <DialogTitle>{title}</DialogTitle>
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-foreground">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 border-t border-border bg-muted/30 p-4">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            disabled={isSaving}
+            onClick={() => onOpenChange(false)}
+          >
+            {t('hooks.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="flex-1"
+            disabled={isSaving}
+            onClick={onConfirm}
+          >
+            {isSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {t('hooks.builtinSkills.delete')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function HookUserBindingsDialog({
   hook,
   scope,
   users,
-  tenants,
   selectedUserIds,
-  selectedTenantIds,
   loading,
   saving,
   error,
   onClose,
   onScopeChange,
   onToggle,
-  onToggleTenant,
   onClear,
   onSave,
 }: {
   hook: HookConfig | null;
   scope: HookBindingScope;
   users: HookBindingUser[];
-  tenants: HookBindingTenant[];
   selectedUserIds: number[];
-  selectedTenantIds: number[];
   loading: boolean;
   saving: boolean;
   error: string | null;
   onClose: () => void;
   onScopeChange: (scope: HookBindingScope) => void;
   onToggle: (userId: number) => void;
-  onToggleTenant: (tenantId: number) => void;
   onClear: () => void;
   onSave: () => void;
 }) {
@@ -332,33 +487,21 @@ function HookUserBindingsDialog({
   const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (hook) setQuery('');
+    if (hook?.id) setQuery('');
   }, [hook?.id]);
 
   const selectedUsers = useMemo(() => new Set(selectedUserIds), [selectedUserIds]);
-  const selectedTenants = useMemo(() => new Set(selectedTenantIds), [selectedTenantIds]);
   const filteredUsers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return users;
     return users.filter((user) => user.username.toLowerCase().includes(normalizedQuery));
   }, [query, users]);
-  const filteredTenants = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return tenants;
-    return tenants.filter((tenant) => (
-      tenant.name.toLowerCase().includes(normalizedQuery)
-      || tenant.code.toLowerCase().includes(normalizedQuery)
-    ));
-  }, [query, tenants]);
   const activeUserCount = users.filter((user) => user.isActive).length;
   const selectionCount = scope === 'users'
     ? selectedUserIds.length
-    : scope === 'tenants'
-      ? selectedTenantIds.length
-      : activeUserCount;
+    : activeUserCount;
   const scopeOptions: Array<{ value: HookBindingScope; icon: typeof UsersRound }> = [
     { value: 'users', icon: UsersRound },
-    { value: 'tenants', icon: Building2 },
     { value: 'all_users', icon: Globe2 },
   ];
 
@@ -386,7 +529,7 @@ function HookUserBindingsDialog({
         </div>
 
         <div className="space-y-3 p-4 sm:p-5">
-          <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/60 p-1.5">
+          <div className="grid grid-cols-2 gap-2 rounded-xl bg-muted/60 p-1.5">
             {scopeOptions.map((option) => {
               const Icon = option.icon;
               const active = scope === option.value;
@@ -422,7 +565,7 @@ function HookUserBindingsDialog({
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder={t(scope === 'users' ? 'hooks.bindings.search' : 'hooks.bindings.searchTenant')}
+                placeholder={t('hooks.bindings.search')}
                 className="h-10 rounded-xl pl-9"
               />
             </div>
@@ -448,11 +591,7 @@ function HookUserBindingsDialog({
               <div className="flex min-h-44 items-center justify-center text-sm text-muted-foreground">
                 {query ? t('hooks.bindings.noMatches') : t('hooks.bindings.noUsers')}
               </div>
-            ) : scope === 'tenants' && filteredTenants.length === 0 ? (
-              <div className="flex min-h-44 items-center justify-center text-sm text-muted-foreground">
-                {query ? t('hooks.bindings.noMatches') : t('hooks.bindings.noTenants')}
-              </div>
-            ) : scope === 'users' ? filteredUsers.map((user) => {
+            ) : filteredUsers.map((user) => {
               const checked = selectedUsers.has(user.id);
               const cannotAdd = !user.isActive && !checked;
               return (
@@ -485,39 +624,6 @@ function HookUserBindingsDialog({
                   {!user.isActive ? <Badge variant="secondary">{t('hooks.bindings.inactive')}</Badge> : null}
                 </label>
               );
-            }) : filteredTenants.map((tenant) => {
-              const checked = selectedTenants.has(tenant.id);
-              const cannotAdd = !tenant.active && !checked;
-              return (
-                <label
-                  key={tenant.id}
-                  className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
-                    checked ? 'bg-primary/10' : 'hover:bg-muted/50',
-                    cannotAdd && 'cursor-not-allowed opacity-55',
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={cannotAdd}
-                    onChange={() => onToggleTenant(tenant.id)}
-                    className="h-4 w-4 rounded border-input accent-primary"
-                  />
-                  <span className={cn(
-                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
-                    checked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-                  )}>
-                    <Building2 className="h-4 w-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">{tenant.name}</span>
-                    <span className="block text-[10px] text-muted-foreground">{tenant.code}</span>
-                  </span>
-                  <Badge variant="outline">{t('hooks.bindings.tenantUsers', { count: tenant.activeUserCount })}</Badge>
-                  {!tenant.active ? <Badge variant="secondary">{t('hooks.bindings.inactive')}</Badge> : null}
-                </label>
-              );
             })}
           </div>
         </div>
@@ -538,7 +644,7 @@ function HookUserBindingsDialog({
             type="button"
             size="sm"
             onClick={onSave}
-            disabled={loading || saving || (scope === 'tenants' && selectedTenantIds.length === 0)}
+            disabled={loading || saving}
           >
             {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
             {t('hooks.bindings.save')}
@@ -564,22 +670,23 @@ function HookDataRecordsDialog({
   onClose: () => void;
   onRefresh: () => void;
 }) {
+  const { t, i18n } = useTranslation('admin');
   return (
     <Dialog open={Boolean(hook)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[86vh] max-w-4xl overflow-hidden">
-        <DialogTitle>Hook 数据记录</DialogTitle>
+        <DialogTitle>{t('hooks.businessData.title')}</DialogTitle>
         <div className="flex items-center gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-sm font-semibold text-foreground">{hook?.name || 'Hook 数据记录'}</h3>
+            <h3 className="truncate text-sm font-semibold text-foreground">{hook?.name || t('hooks.businessData.title')}</h3>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              数据保存在 CCUI SQLite 的 <code>hook_data_records</code> 表中；这里显示最近 50 条。
+              {t('hooks.businessData.description')} <code>hook_data_records</code>
             </p>
           </div>
           <Button type="button" variant="outline" size="sm" disabled={loading} onClick={onRefresh}>
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-            刷新
+            {t('common.refresh')}
           </Button>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="关闭数据记录">
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label={t('hooks.businessData.close')}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -589,11 +696,11 @@ function HookDataRecordsDialog({
           ) : loading && !records.length ? (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
               <RefreshCw className="h-4 w-4 animate-spin" />
-              正在加载数据记录
+              {t('hooks.businessData.loading')}
             </div>
           ) : !records.length ? (
             <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-              暂无数据记录。Hook 执行“记录数据”后会显示在这里。
+              {t('hooks.businessData.empty')}
             </div>
           ) : (
             <div className="space-y-3">
@@ -601,7 +708,7 @@ function HookDataRecordsDialog({
                 <article key={record.id} className="overflow-hidden rounded-xl border border-border bg-background">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{record.type}</Badge>
-                    <span>{formatDate(record.createdAt, 'zh-CN')}</span>
+                    <span>{formatDate(record.createdAt, i18n.language)}</span>
                     {record.sessionId ? <code className="truncate">session: {record.sessionId}</code> : null}
                     <code className="ml-auto truncate">{record.id}</code>
                   </div>
@@ -618,6 +725,185 @@ function HookDataRecordsDialog({
   );
 }
 
+function normalizeHookMcpName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .slice(0, 80);
+}
+
+function HookMcpEditorDialog({
+  editor,
+  saving,
+  helperBusy,
+  onChange,
+  onClose,
+  onSave,
+  onUploadHelper,
+  onDeleteHelper,
+}: {
+  editor: HookMcpEditorState | null;
+  saving: boolean;
+  helperBusy: boolean;
+  onChange: (editor: HookMcpEditorState) => void;
+  onClose: () => void;
+  onSave: () => void;
+  onUploadHelper: (file: File) => void;
+  onDeleteHelper: () => void;
+}) {
+  const { t } = useTranslation('admin');
+  if (!editor) return null;
+  const isEditing = Boolean(editor.originalName);
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !saving && !helperBusy) onClose(); }}>
+      <DialogContent className="max-h-[86vh] max-w-2xl overflow-y-auto p-5">
+        <DialogTitle>{t(isEditing ? 'hooks.hookMcp.editTitle' : 'hooks.hookMcp.createTitle')}</DialogTitle>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.displayName')}</span>
+            <Input
+              value={editor.displayName}
+              onChange={(event) => {
+                const displayName = event.target.value;
+                onChange({
+                  ...editor,
+                  displayName,
+                  name: isEditing || editor.name ? editor.name : normalizeHookMcpName(displayName),
+                });
+              }}
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.name')}</span>
+            <Input
+              value={editor.name}
+              disabled={isEditing}
+              className="font-mono"
+              onChange={(event) => onChange({ ...editor, name: normalizeHookMcpName(event.target.value) })}
+            />
+          </label>
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.description')}</span>
+            <Input
+              value={editor.description}
+              onChange={(event) => onChange({ ...editor, description: event.target.value })}
+            />
+          </label>
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.url')}</span>
+            <Input
+              value={editor.url}
+              className="font-mono"
+              placeholder="https://example.com/mcp"
+              onChange={(event) => onChange({ ...editor, url: event.target.value })}
+            />
+          </label>
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.headers')}</span>
+            <textarea
+              rows={5}
+              value={editor.headersText}
+              placeholder={'{"Authorization":"Bearer ..."}'}
+              onChange={(event) => onChange({ ...editor, headersText: event.target.value })}
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <span className="block text-[11px] text-muted-foreground">{t('hooks.hookMcp.fields.headersHint')}</span>
+          </label>
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-medium text-foreground">{t('hooks.hookMcp.fields.headersHelper')}</span>
+            <Input
+              value={editor.headersHelper}
+              className="font-mono text-xs"
+              placeholder="python3 auth.py"
+              onChange={(event) => onChange({ ...editor, headersHelper: event.target.value })}
+            />
+            <span className="block text-[11px] text-muted-foreground">{t('hooks.hookMcp.fields.headersHelperHint')}</span>
+          </label>
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-medium text-foreground">{t('mcp.fields.headersHelperEnv')}</span>
+            <textarea
+              rows={4}
+              value={editor.helperEnvText}
+              placeholder="ROOT_SECRET=internal-root-key"
+              onChange={(event) => onChange({ ...editor, helperEnvText: event.target.value })}
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <span className="block text-[11px] text-muted-foreground">{t('mcp.fields.headersHelperEnvHelp')}</span>
+          </label>
+          <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-foreground">{t('hooks.hookMcp.helperScriptTitle')}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{t('hooks.hookMcp.helperScriptDescription')}</div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label>
+                  <input
+                    type="file"
+                    accept=".py,.sh,.js,.mjs,.cjs,.txt"
+                    className="sr-only"
+                    disabled={!isEditing || saving || helperBusy}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      event.target.value = '';
+                      if (file) onUploadHelper(file);
+                    }}
+                  />
+                  <span className={cn(
+                    'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
+                    !isEditing || saving || helperBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
+                  )}>
+                    {helperBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {t('mcp.helperScript.upload')}
+                  </span>
+                </label>
+                {editor.helperScript ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={saving || helperBusy}
+                    onClick={onDeleteHelper}
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {t('mcp.helperScript.delete')}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {editor.helperScript ? (
+                <span>{t('mcp.helperScript.current', {
+                  fileName: editor.helperScript.fileName,
+                  sizeKb: Math.max(1, Math.ceil(editor.helperScript.sizeBytes / 1024)),
+                })}</span>
+              ) : isEditing ? (
+                <span>{t('mcp.helperScript.none')}</span>
+              ) : (
+                <span>{t('hooks.hookMcp.helperSaveFirst')}</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving || helperBusy}>{t('hooks.cancel')}</Button>
+          <Button
+            type="button"
+            onClick={onSave}
+            disabled={saving || helperBusy || !editor.name || !editor.displayName.trim() || !editor.url.trim()}
+          >
+            {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {t('hooks.save')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function HookConfigsTab() {
   const { t, i18n } = useTranslation('admin');
   const [hooks, setHooks] = useState<HookConfig[]>([]);
@@ -625,10 +911,23 @@ export default function HookConfigsTab() {
   const [visibleEvents, setVisibleEvents] = useState<HookEventName[]>([]);
   const [visibleEventDraft, setVisibleEventDraft] = useState<HookEventName[]>([]);
   const [editor, setEditor] = useState<HookConfigDraft | HookConfig | null>(null);
+  const [editorBaseline, setEditorBaseline] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [skillSearch, setSkillSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [skillDeleteBusyId, setSkillDeleteBusyId] = useState<string | null>(null);
+  const [skillDeleteDialog, setSkillDeleteDialog] = useState<SkillDeleteDialogState>(null);
+  const [hookMcpEditor, setHookMcpEditor] = useState<HookMcpEditorState | null>(null);
+  const [hookMcpSaving, setHookMcpSaving] = useState(false);
+  const [hookMcpHelperBusyName, setHookMcpHelperBusyName] = useState<string | null>(null);
+  const [hookMcpHelperDeleteDialog, setHookMcpHelperDeleteDialog] = useState<HookMcpServer | null>(null);
+  const [hookMcpTestingName, setHookMcpTestingName] = useState<string | null>(null);
+  const [hookMcpDeleteDialog, setHookMcpDeleteDialog] = useState<HookMcpServer | null>(null);
+  const [hookMcpDeletingName, setHookMcpDeletingName] = useState<string | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<HookDeleteDialogState>(null);
+  const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [exampleCatalog, setExampleCatalog] = useState<HookExampleCatalogItem[]>([]);
   const [selectedExampleIds, setSelectedExampleIds] = useState<string[]>([]);
@@ -639,17 +938,38 @@ export default function HookConfigsTab() {
   const [dataRecords, setDataRecords] = useState<HookDataRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [diagnosticsHook, setDiagnosticsHook] = useState<HookConfig | null>(null);
+  const [activeView, setActiveView] = useState<'configs' | 'diagnostics'>('configs');
   const [bindingsHook, setBindingsHook] = useState<HookConfig | null>(null);
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
-  const [bindingTenants, setBindingTenants] = useState<HookBindingTenant[]>([]);
   const [selectedBindingUserIds, setSelectedBindingUserIds] = useState<number[]>([]);
-  const [selectedBindingTenantIds, setSelectedBindingTenantIds] = useState<number[]>([]);
   const [bindingsLoading, setBindingsLoading] = useState(false);
   const [bindingsSaving, setBindingsSaving] = useState(false);
   const [bindingsError, setBindingsError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const openHookEditor = (nextEditor: HookConfigDraft | HookConfig) => {
+    setEditor(nextEditor);
+    setEditorBaseline(createHookDraftSignature(nextEditor));
+  };
+
+  const commitHookEditor = (nextEditor: HookConfig) => {
+    setEditor(nextEditor);
+    setEditorBaseline(createHookDraftSignature(nextEditor));
+  };
+
+  const closeHookEditor = () => {
+    setEditor(null);
+    setEditorBaseline(null);
+  };
+
+  const editorDirty = Boolean(
+    editor
+    && editorBaseline !== null
+    && createHookDraftSignature(editor) !== editorBaseline,
+  );
 
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     setToast({ message, type });
@@ -683,7 +1003,11 @@ export default function HookConfigsTab() {
       setHooks((hooksPayload.hooks || []).map(normalizeHookConfig));
       setVisibleEvents(nextVisibleEvents);
       setVisibleEventDraft(nextVisibleEvents);
-      setResources(resourcesPayload);
+      setResources({
+        ...EMPTY_RESOURCES,
+        ...resourcesPayload,
+        hookMcpServers: resourcesPayload.hookMcpServers || [],
+      });
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : t('hooks.errors.load'));
     } finally {
@@ -705,6 +1029,17 @@ export default function HookConfigsTab() {
     ));
   }, [hooks, search, t]);
 
+  const filteredSkills = useMemo(() => {
+    const query = skillSearch.trim().toLowerCase();
+    if (!query) return resources.skills;
+    return resources.skills.filter((skill) => (
+      skill.name.toLowerCase().includes(query)
+      || skill.displayName.toLowerCase().includes(query)
+      || skill.skillId.toLowerCase().includes(query)
+      || skill.description.toLowerCase().includes(query)
+    ));
+  }, [resources.skills, skillSearch]);
+
   const replaceHook = (hook: HookConfig) => {
     const normalizedHook = normalizeHookConfig(hook);
     setHooks((current) => {
@@ -713,6 +1048,20 @@ export default function HookConfigsTab() {
         ? current.map((item) => item.id === normalizedHook.id ? normalizedHook : item)
         : [normalizedHook, ...current];
     });
+  };
+
+  const copyHook = (hook: HookConfig) => {
+    const existingNames = new Set(hooks.map((item) => item.name));
+    let copyNumber = 1;
+    let copyName = '';
+    do {
+      const suffix = copyNumber === 1
+        ? t('hooks.copySuffix')
+        : t('hooks.copySuffixNumbered', { number: copyNumber });
+      copyName = `${hook.name.slice(0, Math.max(1, 120 - suffix.length))}${suffix}`;
+      copyNumber += 1;
+    } while (existingNames.has(copyName));
+    openHookEditor(createHookCopyDraft(hook, copyName));
   };
 
   const openExamples = async () => {
@@ -773,9 +1122,7 @@ export default function HookConfigsTab() {
     setBindingsHook(hook);
     setBindingScope('users');
     setBindingUsers([]);
-    setBindingTenants([]);
     setSelectedBindingUserIds([]);
-    setSelectedBindingTenantIds([]);
     setBindingsError(null);
     setBindingsLoading(true);
     try {
@@ -784,15 +1131,11 @@ export default function HookConfigsTab() {
       const payload = await response.json() as {
         scope?: HookBindingScope;
         users?: HookBindingUser[];
-        tenants?: HookBindingTenant[];
       };
       const users = payload.users || [];
-      const tenants = payload.tenants || [];
       setBindingScope(payload.scope || 'users');
       setBindingUsers(users);
-      setBindingTenants(tenants);
       setSelectedBindingUserIds(users.filter((user) => user.bound).map((user) => user.id));
-      setSelectedBindingTenantIds(tenants.filter((tenant) => tenant.bound).map((tenant) => tenant.id));
     } catch (caughtError) {
       setBindingsError(caughtError instanceof Error ? caughtError.message : t('hooks.bindings.loadError'));
     } finally {
@@ -808,13 +1151,23 @@ export default function HookConfigsTab() {
       const response = await api.admin.updateHookBindings(bindingsHook.id, {
         scope: bindingScope,
         userIds: bindingScope === 'users' ? selectedBindingUserIds : [],
-        tenantIds: bindingScope === 'tenants' ? selectedBindingTenantIds : [],
       });
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.saveError')));
       const payload = await response.json() as { hook: HookConfig };
       const normalizedHook = normalizeHookConfig(payload.hook);
       replaceHook(normalizedHook);
-      if (editor && 'id' in editor && editor.id === normalizedHook.id) setEditor(normalizedHook);
+      if (editor && 'id' in editor && editor.id === normalizedHook.id) {
+        setEditor({
+          ...normalizedHook,
+          name: editor.name,
+          description: editor.description,
+          eventName: editor.eventName,
+          matcher: editor.matcher,
+          extensionLogic: editor.extensionLogic,
+          postActions: editor.postActions,
+          claudeResponse: editor.claudeResponse,
+        });
+      }
       setBindingsHook(null);
       showToast(t(`hooks.bindings.savedScopes.${bindingScope}`), 'success');
     } catch (caughtError) {
@@ -833,7 +1186,7 @@ export default function HookConfigsTab() {
     const payload = await response.json() as { hook: HookConfig };
     const normalizedHook = normalizeHookConfig(payload.hook);
     replaceHook(normalizedHook);
-    setEditor(normalizedHook);
+    commitHookEditor(normalizedHook);
     return normalizedHook;
   };
 
@@ -861,7 +1214,7 @@ export default function HookConfigsTab() {
       const payload = await response.json() as { hook: HookConfig };
       const normalizedHook = normalizeHookConfig(payload.hook);
       replaceHook(normalizedHook);
-      setEditor(normalizedHook);
+      commitHookEditor(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
       if (normalizedHook.bindingController !== 'sql_check') await openHookBindings(normalizedHook);
     } catch (caughtError) {
@@ -889,13 +1242,13 @@ export default function HookConfigsTab() {
   };
 
   const removeHook = async (hook: HookConfig) => {
-    if (!window.confirm(t('hooks.confirmDelete', { name: hook.name }))) return;
     setBusy(true);
     try {
       const response = await api.admin.deleteHook(hook.id);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.delete')));
       setHooks((current) => current.filter((item) => item.id !== hook.id));
-      if (editor && 'id' in editor && editor.id === hook.id) setEditor(null);
+      if (editor && 'id' in editor && editor.id === hook.id) closeHookEditor();
+      setDeleteDialog(null);
       showToast(t('hooks.toast.deleted'), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.delete'), 'error');
@@ -933,22 +1286,24 @@ export default function HookConfigsTab() {
     setRecordsError(null);
     try {
       const response = await api.admin.hookDataRecords(hook.id, 50);
-      if (!response.ok) throw new Error(await readError(response, '加载 Hook 数据记录失败'));
+      if (!response.ok) throw new Error(await readError(response, t('hooks.businessData.loadError')));
       const payload = await response.json() as { records?: HookDataRecord[] };
       setDataRecords(payload.records || []);
     } catch (caughtError) {
-      setRecordsError(caughtError instanceof Error ? caughtError.message : '加载 Hook 数据记录失败');
+      setRecordsError(caughtError instanceof Error ? caughtError.message : t('hooks.businessData.loadError'));
     } finally {
       setRecordsLoading(false);
     }
   };
 
-  const uploadBuiltinSkill = async (file: File | null) => {
-    if (!file) return;
+  const uploadBuiltinSkill = async (files: File[]) => {
+    if (files.length === 0) return;
     setSkillUploadBusy(true);
     try {
       const formData = new FormData();
-      formData.set('file', file);
+      const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
+      files.forEach((file) => formData.append('files', file, file.name));
+      formData.set('paths', JSON.stringify(relativePaths));
       const response = await api.admin.uploadHookSkill(formData);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.uploadSkill')));
       const payload = await response.json() as {
@@ -962,12 +1317,197 @@ export default function HookConfigsTab() {
         skillSource: payload.skillSource || current.skillSource,
       }));
       showToast(t('hooks.toast.skillUploaded', {
-        name: payload.skill?.displayName || payload.skill?.name || file.name,
+        name: payload.skill?.displayName || payload.skill?.name || relativePaths[0]?.split('/')[0],
       }), 'success');
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.uploadSkill'), 'error');
     } finally {
       setSkillUploadBusy(false);
+    }
+  };
+
+  const deleteBuiltinSkill = async (skill: HookResources['skills'][number]) => {
+    setSkillDeleteBusyId(skill.skillId);
+    try {
+      const response = await api.admin.deleteHookSkill(skill.skillId);
+      if (!response.ok) throw new Error(await readError(response, t('hooks.errors.deleteSkill')));
+      const payload = await response.json() as {
+        skills?: HookResources['skills'];
+        skillSource?: HookResources['skillSource'];
+      };
+      setResources((current) => ({
+        ...current,
+        skills: payload.skills || current.skills.filter((item) => item.skillId !== skill.skillId),
+        skillSource: payload.skillSource || current.skillSource,
+      }));
+      setSkillDeleteDialog(null);
+      showToast(t('hooks.toast.skillDeleted', { name: skill.displayName || skill.name }), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.deleteSkill'), 'error');
+    } finally {
+      setSkillDeleteBusyId(null);
+    }
+  };
+
+  const openHookMcpEditor = (server?: HookMcpServer) => {
+    setHookMcpEditor(server ? {
+      originalName: server.name,
+      name: server.name,
+      displayName: server.displayName,
+      description: server.description || '',
+      url: server.config.url,
+      headersText: Object.keys(server.config.headers || {}).length
+        ? JSON.stringify(server.config.headers, null, 2)
+        : '',
+      headersHelper: server.config.headersHelper || '',
+      helperEnvText: Object.keys(server.config.helperEnv || {}).length
+        ? Object.entries(server.config.helperEnv || {}).map(([key, value]) => `${key}=${value}`).join('\n')
+        : '',
+      helperScript: server.helperScript || null,
+    } : { ...EMPTY_HOOK_MCP_EDITOR });
+  };
+
+  const saveHookMcp = async () => {
+    if (!hookMcpEditor) return;
+    setHookMcpSaving(true);
+    try {
+      let headers: Record<string, string> = {};
+      if (hookMcpEditor.headersText.trim()) {
+        const parsed = JSON.parse(hookMcpEditor.headersText) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error(t('hooks.hookMcp.errors.headers'));
+        }
+        headers = Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
+      }
+      const payload = {
+        name: hookMcpEditor.name,
+        displayName: hookMcpEditor.displayName,
+        description: hookMcpEditor.description,
+        url: hookMcpEditor.url,
+        headers,
+        headersHelper: hookMcpEditor.headersHelper.trim() || undefined,
+        helperEnv: parseHelperEnvText(hookMcpEditor.helperEnvText, {
+          headersFormat: t('mcp.validationErrors.helperEnvSyntax'),
+          helperEnvSyntax: t('mcp.validationErrors.helperEnvSyntax'),
+        }),
+      };
+      const response = hookMcpEditor.originalName
+        ? await api.admin.updateHookMcpServer(hookMcpEditor.originalName, payload)
+        : await api.admin.createHookMcpServer(payload);
+      if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.save')));
+      const result = await response.json() as HookMcpMutationResult;
+      setResources((current) => ({
+        ...current,
+        hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
+      }));
+      if (result.server) {
+        setHookMcpEditor((current) => current ? {
+          ...current,
+          originalName: result.server?.name || current.originalName,
+          name: result.server?.name || current.name,
+          helperScript: result.server?.helperScript || null,
+        } : current);
+      }
+      showToast(t('hooks.hookMcp.saved'), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.hookMcp.errors.save'), 'error');
+    } finally {
+      setHookMcpSaving(false);
+    }
+  };
+
+  const uploadHookMcpHelper = async (file: File) => {
+    const serverName = hookMcpEditor?.originalName;
+    if (!serverName) return;
+    setHookMcpHelperBusyName(serverName);
+    try {
+      const formData = new FormData();
+      formData.set('script', file);
+      const response = await api.admin.uploadHookMcpHelperScript(serverName, formData);
+      if (!response.ok) throw new Error(await readError(response, t('mcp.errors.uploadHelper')));
+      const result = await response.json() as HookMcpMutationResult;
+      setResources((current) => ({
+        ...current,
+        hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
+      }));
+      if (result.server) {
+        setHookMcpEditor((current) => current?.originalName === serverName
+          ? { ...current, helperScript: result.server?.helperScript || null }
+          : current);
+      }
+      showToast(t('hooks.hookMcp.helperUploaded', { name: file.name }), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('mcp.errors.uploadHelper'), 'error');
+    } finally {
+      setHookMcpHelperBusyName(null);
+    }
+  };
+
+  const deleteHookMcpHelper = async (server: HookMcpServer) => {
+    setHookMcpHelperBusyName(server.name);
+    try {
+      const response = await api.admin.deleteHookMcpHelperScript(server.name);
+      if (!response.ok) throw new Error(await readError(response, t('mcp.errors.deleteHelper')));
+      const result = await response.json() as HookMcpMutationResult;
+      setResources((current) => ({
+        ...current,
+        hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
+      }));
+      setHookMcpEditor((current) => current?.originalName === server.name
+        ? { ...current, helperScript: null }
+        : current);
+      setHookMcpHelperDeleteDialog(null);
+      showToast(t('hooks.hookMcp.helperDeleted'), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('mcp.errors.deleteHelper'), 'error');
+    } finally {
+      setHookMcpHelperBusyName(null);
+    }
+  };
+
+  const testHookMcp = async (server: HookMcpServer) => {
+    setHookMcpTestingName(server.name);
+    try {
+      const response = await api.admin.testHookMcpServer(server.name);
+      if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.test')));
+      const result = await response.json() as HookMcpMutationResult;
+      setResources((current) => ({
+        ...current,
+        hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
+      }));
+      if (result.server?.lastTestStatus === 'healthy') {
+        showToast(t('hooks.hookMcp.testHealthy', { count: result.server.toolCount }), 'success');
+      } else {
+        showToast(result.server?.lastTestError || t('hooks.hookMcp.errors.test'), 'error');
+      }
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.hookMcp.errors.test'), 'error');
+    } finally {
+      setHookMcpTestingName(null);
+    }
+  };
+
+  const deleteHookMcp = async (server: HookMcpServer) => {
+    setHookMcpDeletingName(server.name);
+    try {
+      const response = await api.admin.deleteHookMcpServer(server.name);
+      if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.delete')));
+      const result = await response.json() as HookMcpMutationResult;
+      setResources((current) => ({
+        ...current,
+        hookMcpServers: result.hookMcpServers || current.hookMcpServers.filter((item) => item.name !== server.name),
+        mcpTools: result.mcpTools || current.mcpTools.filter((item) => item.mcpServerId !== server.id),
+      }));
+      setHookMcpDeleteDialog(null);
+      showToast(t('hooks.hookMcp.deleted', { name: server.displayName }), 'success');
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.hookMcp.errors.delete'), 'error');
+    } finally {
+      setHookMcpDeletingName(null);
     }
   };
 
@@ -991,9 +1531,7 @@ export default function HookConfigsTab() {
       hook={bindingsHook}
       scope={bindingScope}
       users={bindingUsers}
-      tenants={bindingTenants}
       selectedUserIds={selectedBindingUserIds}
-      selectedTenantIds={selectedBindingTenantIds}
       loading={bindingsLoading}
       saving={bindingsSaving}
       error={bindingsError}
@@ -1001,21 +1539,15 @@ export default function HookConfigsTab() {
         setBindingsHook(null);
         setBindingScope('users');
         setBindingUsers([]);
-        setBindingTenants([]);
         setSelectedBindingUserIds([]);
-        setSelectedBindingTenantIds([]);
         setBindingsError(null);
       }}
       onScopeChange={setBindingScope}
       onToggle={(userId) => setSelectedBindingUserIds((current) => (
         current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]
       ))}
-      onToggleTenant={(tenantId) => setSelectedBindingTenantIds((current) => (
-        current.includes(tenantId) ? current.filter((id) => id !== tenantId) : [...current, tenantId]
-      ))}
       onClear={() => {
         if (bindingScope === 'users') setSelectedBindingUserIds([]);
-        if (bindingScope === 'tenants') setSelectedBindingTenantIds([]);
       }}
       onSave={() => void saveHookBindings()}
     />
@@ -1058,8 +1590,9 @@ export default function HookConfigsTab() {
           visibleEvents={visibleEvents}
           resources={resources}
           busy={busy}
+          dirty={editorDirty}
           onChange={setEditor}
-          onBack={() => setEditor(null)}
+          onBack={closeHookEditor}
           onSave={() => void save()}
           onPublish={() => void publish()}
           onManageBindings={() => { if ('id' in editor) void openHookBindings(editor); }}
@@ -1067,6 +1600,34 @@ export default function HookConfigsTab() {
         />
         {moreEventsDialog}
         {userBindingsDialog}
+      </div>
+    );
+  }
+
+  if (activeView === 'diagnostics') {
+    return (
+      <div className="relative h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-6xl space-y-5 px-3 py-4 sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+                <Activity className="h-5 w-5 text-primary" />
+                {t('hooks.diagnostics.title')}
+              </h2>
+            </div>
+            <div className="flex rounded-lg border border-border bg-muted/20 p-1">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setActiveView('configs')}>
+                <Webhook className="h-4 w-4" />
+                {t('hooks.diagnostics.configTab')}
+              </Button>
+              <Button type="button" variant="secondary" size="sm">
+                <Activity className="h-4 w-4" />
+                {t('hooks.diagnostics.diagnosticsTab')}
+              </Button>
+            </div>
+          </div>
+          <HookDiagnosticsPanel hooks={hooks} />
+        </div>
       </div>
     );
   }
@@ -1090,9 +1651,17 @@ export default function HookConfigsTab() {
               <Webhook className="h-5 w-5 text-primary" />
               {t('hooks.title')}
             </h2>
-            <p className="mt-1 text-xs text-muted-foreground">{t('hooks.description')}</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setActiveView('diagnostics')}
+            >
+              <Activity className="h-4 w-4" />
+              {t('hooks.diagnostics.diagnosticsTab')}
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -1106,7 +1675,7 @@ export default function HookConfigsTab() {
             <Button
               type="button"
               size="sm"
-              onClick={() => setEditor(createEmptyHook(visibleEvents[0] || 'Stop'))}
+              onClick={() => openHookEditor(createEmptyHook(visibleEvents[0] || 'Stop'))}
             >
               <Plus className="h-4 w-4" />
               {t('hooks.create')}
@@ -1115,56 +1684,185 @@ export default function HookConfigsTab() {
         </div>
 
         <Card className="p-4 shadow-none">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-semibold text-foreground">{t('hooks.builtinSkills.title')}</h3>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {t('hooks.builtinSkills.description')}
-              </p>
+              <h3 className="text-sm font-semibold text-foreground">{t('hooks.hookMcp.title')}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">{t('hooks.hookMcp.description')}</p>
             </div>
-            <label>
-              <input
-                type="file"
-                className="sr-only"
-                disabled={skillUploadBusy}
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  event.target.value = '';
-                  void uploadBuiltinSkill(file);
-                }}
-              />
-              <span className={cn(
-                'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
-                skillUploadBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
-              )}>
-                {skillUploadBusy
-                  ? <RefreshCw className="h-4 w-4 animate-spin" />
-                  : <Upload className="h-4 w-4" />}
-                {t(skillUploadBusy ? 'hooks.builtinSkills.uploading' : 'hooks.builtinSkills.upload')}
-              </span>
-            </label>
+            <Button type="button" variant="outline" size="sm" onClick={() => openHookMcpEditor()}>
+              <Plus className="h-4 w-4" />
+              {t('hooks.hookMcp.create')}
+            </Button>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {resources.skills.length ? resources.skills.map((skill) => (
-              <span
-                key={skill.skillId}
-                className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 text-xs"
-                title={skill.description}
-              >
-                <code className="text-foreground">{skill.skillId}</code>
-                <Badge variant={skill.source === 'uploaded' ? 'default' : 'outline'}>
-                  {t(skill.source === 'uploaded'
-                    ? 'hooks.builtinSkills.uploaded'
-                    : 'hooks.builtinSkills.packaged')}
-                </Badge>
-              </span>
-            )) : (
-              <span className="text-xs text-muted-foreground">{t('hooks.builtinSkills.empty')}</span>
+          <div className="mt-3 overflow-hidden rounded-lg border border-border">
+            {resources.hookMcpServers.length ? (
+              <div className="max-h-[220px] divide-y divide-border overflow-y-auto">
+                {resources.hookMcpServers.map((server) => {
+                  const testing = hookMcpTestingName === server.name;
+                  const deleting = hookMcpDeletingName === server.name;
+                  return (
+                    <div key={server.name} className="flex min-w-0 items-center gap-2 px-3 py-2.5">
+                      <Server className="h-4 w-4 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-xs font-medium text-foreground">{server.displayName}</span>
+                          <code className="hidden truncate text-[10px] text-muted-foreground sm:inline">{server.name}</code>
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={server.config.url}>{server.config.url}</div>
+                      </div>
+                      {server.lastTestStatus === 'healthy' ? (
+                        <Badge variant="outline" className="shrink-0 border-emerald-200 text-emerald-700">
+                          {t('hooks.hookMcp.healthy', { count: server.toolCount })}
+                        </Badge>
+                      ) : server.lastTestStatus === 'failed' ? (
+                        <Badge variant="outline" className="shrink-0 border-destructive/40 text-destructive" title={server.lastTestError || undefined}>
+                          {t('hooks.hookMcp.failed')}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="shrink-0">{t('hooks.hookMcp.untested')}</Badge>
+                      )}
+                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openHookMcpEditor(server)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                        {t('hooks.edit')}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={testing} onClick={() => void testHookMcp(server)}>
+                        {testing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
+                        {t('hooks.hookMcp.test')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        disabled={deleting}
+                        onClick={() => setHookMcpDeleteDialog(server)}
+                        aria-label={t('hooks.hookMcp.delete')}
+                      >
+                        {deleting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="px-3 py-3 text-xs text-muted-foreground">{t('hooks.hookMcp.empty')}</p>
             )}
           </div>
-          <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
-            {t('hooks.builtinSkills.formatHint')}
-          </p>
+          {resources.hookMcpSource?.error ? (
+            <p className="mt-2 text-xs text-destructive">{resources.hookMcpSource.error}</p>
+          ) : null}
+        </Card>
+
+        <Card className="p-4 shadow-none">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-foreground">{t('hooks.builtinSkills.title')}</h3>
+            </div>
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+              {resources.skills.length > 5 || skillSearch ? (
+                <div className="relative min-w-0 sm:w-56">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={skillSearch}
+                    onChange={(event) => setSkillSearch(event.target.value)}
+                    placeholder={t('hooks.builtinSkills.search')}
+                    className="h-9 pl-8"
+                  />
+                </div>
+              ) : null}
+              <label className="shrink-0">
+                <input
+                  type="file"
+                  multiple
+                  {...DIRECTORY_INPUT_ATTRIBUTES}
+                  className="sr-only"
+                  disabled={skillUploadBusy}
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files || []);
+                    event.target.value = '';
+                    void uploadBuiltinSkill(files);
+                  }}
+                />
+                <span className={cn(
+                  'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
+                  skillUploadBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
+                )}>
+                  {skillUploadBusy
+                    ? <RefreshCw className="h-4 w-4 animate-spin" />
+                    : <Upload className="h-4 w-4" />}
+                  {t(skillUploadBusy ? 'hooks.builtinSkills.uploading' : 'hooks.builtinSkills.upload')}
+                </span>
+              </label>
+            </div>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-lg border border-border">
+            {filteredSkills.length ? (
+              <div className="max-h-[200px] divide-y divide-border overflow-y-auto">
+                {filteredSkills.map((skill) => {
+                  const expanded = expandedSkillIds.includes(skill.skillId);
+                  return (
+                    <div key={skill.skillId}>
+                      <div className="flex h-10 min-w-0 items-center gap-2 px-3">
+                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                          {skill.displayName || skill.name}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 gap-1 px-2 text-xs"
+                          aria-expanded={expanded}
+                          onClick={() => setExpandedSkillIds((current) => (
+                            expanded
+                              ? current.filter((skillId) => skillId !== skill.skillId)
+                              : [...current, skill.skillId]
+                          ))}
+                        >
+                          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')} />
+                          {t(expanded ? 'hooks.builtinSkills.collapse' : 'hooks.builtinSkills.details')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-xs text-destructive hover:text-destructive"
+                          disabled={skillDeleteBusyId === skill.skillId}
+                          onClick={() => setSkillDeleteDialog(skill)}
+                        >
+                          {skillDeleteBusyId === skill.skillId
+                            ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            : <Trash2 className="h-3.5 w-3.5" />}
+                          {t('hooks.builtinSkills.delete')}
+                        </Button>
+                      </div>
+                      {expanded ? (
+                        <dl className="grid gap-1 border-t border-border bg-muted/15 px-3 py-2 pl-9 text-[11px] sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-3">
+                          <dt className="text-muted-foreground">{t('hooks.builtinSkills.versionLabel')}</dt>
+                          <dd className="text-foreground">v{skill.version}</dd>
+                          <dt className="text-muted-foreground">{t('hooks.builtinSkills.idLabel')}</dt>
+                          <dd className="min-w-0"><code className="break-all text-foreground">{skill.skillId}</code></dd>
+                          {skill.description ? (
+                            <>
+                              <dt className="text-muted-foreground">{t('hooks.builtinSkills.descriptionLabel')}</dt>
+                              <dd className="min-w-0 break-words text-foreground">{skill.description}</dd>
+                            </>
+                          ) : null}
+                        </dl>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                {t(resources.skills.length ? 'hooks.builtinSkills.noMatches' : 'hooks.builtinSkills.empty')}
+              </p>
+            )}
+          </div>
+          {resources.skillSource?.error ? (
+            <p className="mt-2 text-xs text-destructive">{resources.skillSource.error}</p>
+          ) : null}
         </Card>
 
         <div className="flex items-center gap-2">
@@ -1197,7 +1895,7 @@ export default function HookConfigsTab() {
             </span>
             <h3 className="mt-4 text-sm font-semibold text-foreground">{search ? t('hooks.noMatches') : t('hooks.empty')}</h3>
             {!search ? (
-              <Button type="button" size="sm" className="mt-4" onClick={() => setEditor(createEmptyHook(visibleEvents[0] || 'Stop'))}>
+              <Button type="button" size="sm" className="mt-4" onClick={() => openHookEditor(createEmptyHook(visibleEvents[0] || 'Stop'))}>
                 <Plus className="h-4 w-4" />
                 {t('hooks.create')}
               </Button>
@@ -1207,18 +1905,18 @@ export default function HookConfigsTab() {
           <div className="grid auto-rows-fr gap-3 lg:grid-cols-2">
             {filteredHooks.map((hook) => {
               const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
+              const unavailableSkills = resources.skillSource?.available === false
+                ? []
+                : findUnavailableHookSkills(hook, resources.skills);
               const isSqlCheckManaged = hook.bindingController === 'sql_check';
               const bindingActive = hook.activationScope === 'all_users'
-                || hook.boundTenantCount > 0
-                || hook.boundUserCount > 0;
+                || hook.scopedUserCount > 0;
               const bindingLabel = isSqlCheckManaged
                 ? t('hooks.bindings.sqlCheckManagedCount', { count: hook.boundUserCount })
                 : hook.activationScope === 'all_users'
                 ? t('hooks.bindings.allUsersShort')
-                : hook.boundTenantCount > 0
-                  ? t('hooks.bindings.boundTenantCountShort', { count: hook.boundTenantCount })
-                  : hook.boundUserCount > 0
-                    ? t('hooks.bindings.boundCountShort', { count: hook.boundUserCount })
+                : hook.scopedUserCount > 0
+                    ? t('hooks.bindings.boundCountShort', { count: hook.scopedUserCount })
                     : t('hooks.bindings.unbound');
               return (
               <Card key={hook.id} className="flex h-full flex-col overflow-hidden shadow-none transition-colors hover:border-primary/30">
@@ -1230,11 +1928,14 @@ export default function HookConfigsTab() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="truncate text-sm font-semibold text-foreground">{hook.name}</h3>
+                        {isSqlCheckManaged ? <Badge variant="outline">{t('hooks.builtin')}</Badge> : null}
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
                         {hook.status === 'published' ? (
                           <Badge variant={bindingActive && !isSqlCheckManaged ? 'default' : 'outline'}>
                             {bindingLabel}
                           </Badge>
+                        ) : isSqlCheckManaged ? (
+                          <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge>
                         ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
@@ -1263,6 +1964,20 @@ export default function HookConfigsTab() {
                     </div>
                   ) : null}
 
+                  {unavailableSkills.length > 0 ? (
+                    <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+                      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium">{t('hooks.builtinSkills.unavailableTitle')}</p>
+                        <p className="mt-0.5 break-words leading-4">
+                          {t('hooks.builtinSkills.unavailableDescription', {
+                            skills: unavailableSkills.map((issue) => issue.label).join('、'),
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
                     <span>
@@ -1276,13 +1991,23 @@ export default function HookConfigsTab() {
                   </div>
                 </div>
                 <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-border bg-muted/10 px-3 py-2">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setEditor(hook)}>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => openHookEditor(hook)}>
                     <Pencil className="h-3.5 w-3.5" />
                     {t('hooks.edit')}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void loadDataRecords(hook)}>
-                    <Database className="h-3.5 w-3.5" />
-                    数据记录
+                  <Button type="button" variant="ghost" size="sm" onClick={() => copyHook(hook)}>
+                    <Copy className="h-3.5 w-3.5" />
+                    {t('hooks.copy')}
+                  </Button>
+                  {shouldShowBusinessData(hook) ? (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => void loadDataRecords(hook)}>
+                      <Database className="h-3.5 w-3.5" />
+                      {t('hooks.businessData.label')}
+                    </Button>
+                  ) : null}
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setDiagnosticsHook(hook)}>
+                    <Activity className="h-3.5 w-3.5" />
+                    {t('hooks.diagnostics.executionRecords')}
                   </Button>
                   {hook.status === 'published' && isSqlCheckManaged ? (
                     <span className="inline-flex h-8 items-center gap-1.5 px-3 text-xs text-muted-foreground">
@@ -1295,11 +2020,11 @@ export default function HookConfigsTab() {
                       {t('hooks.bindings.manage')}
                     </Button>
                   ) : (
-                    <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void publishFromList(hook)}>
+                    <Button type="button" variant="ghost" size="sm" disabled={busy || unavailableSkills.length > 0} onClick={() => void publishFromList(hook)}>
                       {t('hooks.publish')}
                     </Button>
                   )}
-                  <Button type="button" variant="ghost" size="sm" className="ml-auto text-destructive hover:text-destructive" disabled={busy} onClick={() => void removeHook(hook)}>
+                  <Button type="button" variant="ghost" size="sm" className="ml-auto text-destructive hover:text-destructive" disabled={busy} onClick={() => setDeleteDialog(hook)}>
                     <Trash2 className="h-3.5 w-3.5" />
                     {t('hooks.delete')}
                   </Button>
@@ -1324,9 +2049,115 @@ export default function HookConfigsTab() {
         onRefresh={() => { if (recordsHook) void loadDataRecords(recordsHook); }}
       />
 
+      <Dialog open={Boolean(diagnosticsHook)} onOpenChange={(open) => { if (!open) setDiagnosticsHook(null); }}>
+        <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto p-4 pt-12 sm:p-5 sm:pt-12">
+          <DialogTitle className="sr-only">{t('hooks.diagnostics.executionRecords')}</DialogTitle>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-3 top-3 z-10 h-8 w-8 rounded-full bg-background/90 shadow-sm"
+            onClick={() => setDiagnosticsHook(null)}
+            aria-label={t('hooks.close')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          {diagnosticsHook ? <HookDiagnosticsPanel hook={diagnosticsHook} hooks={hooks} /> : null}
+        </DialogContent>
+      </Dialog>
+
+      <HookDeleteDialog
+        state={deleteDialog}
+        isSaving={Boolean(deleteDialog) && busy}
+        onOpenChange={(open) => {
+          if (!open && !busy) setDeleteDialog(null);
+        }}
+        onConfirm={() => {
+          if (deleteDialog) void removeHook(deleteDialog);
+        }}
+      />
+
+      <SkillDeleteDialog
+        state={skillDeleteDialog}
+        isSaving={skillDeleteDialog ? skillDeleteBusyId === skillDeleteDialog.skillId : false}
+        onOpenChange={(open) => {
+          if (!open && !skillDeleteBusyId) setSkillDeleteDialog(null);
+        }}
+        onConfirm={() => {
+          if (skillDeleteDialog) void deleteBuiltinSkill(skillDeleteDialog);
+        }}
+      />
+
+      <HookMcpEditorDialog
+        editor={hookMcpEditor}
+        saving={hookMcpSaving}
+        helperBusy={Boolean(hookMcpEditor?.originalName && hookMcpHelperBusyName === hookMcpEditor.originalName)}
+        onChange={setHookMcpEditor}
+        onClose={() => setHookMcpEditor(null)}
+        onSave={() => void saveHookMcp()}
+        onUploadHelper={(file) => void uploadHookMcpHelper(file)}
+        onDeleteHelper={() => {
+          const server = resources.hookMcpServers.find((item) => item.name === hookMcpEditor?.originalName);
+          if (server) setHookMcpHelperDeleteDialog(server);
+        }}
+      />
+
+      <Dialog
+        open={Boolean(hookMcpHelperDeleteDialog)}
+        onOpenChange={(open) => { if (!open && !hookMcpHelperBusyName) setHookMcpHelperDeleteDialog(null); }}
+      >
+        <DialogContent className="max-w-md p-5">
+          <DialogTitle>{t('mcp.helperScript.delete')}</DialogTitle>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t('mcp.helperScript.confirmDelete', {
+              fileName: hookMcpHelperDeleteDialog?.helperScript?.fileName || '',
+            })}
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="outline" disabled={Boolean(hookMcpHelperBusyName)} onClick={() => setHookMcpHelperDeleteDialog(null)}>
+              {t('hooks.cancel')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!hookMcpHelperDeleteDialog || Boolean(hookMcpHelperBusyName)}
+              onClick={() => { if (hookMcpHelperDeleteDialog) void deleteHookMcpHelper(hookMcpHelperDeleteDialog); }}
+            >
+              {hookMcpHelperBusyName ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {t('mcp.helperScript.delete')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(hookMcpDeleteDialog)}
+        onOpenChange={(open) => { if (!open && !hookMcpDeletingName) setHookMcpDeleteDialog(null); }}
+      >
+        <DialogContent className="max-w-md p-5">
+          <DialogTitle>{t('hooks.hookMcp.deleteTitle')}</DialogTitle>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t('hooks.hookMcp.confirmDelete', { name: hookMcpDeleteDialog?.displayName || '' })}
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="outline" disabled={Boolean(hookMcpDeletingName)} onClick={() => setHookMcpDeleteDialog(null)}>
+              {t('hooks.cancel')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!hookMcpDeleteDialog || Boolean(hookMcpDeletingName)}
+              onClick={() => { if (hookMcpDeleteDialog) void deleteHookMcp(hookMcpDeleteDialog); }}
+            >
+              {hookMcpDeletingName ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {t('hooks.hookMcp.delete')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {userBindingsDialog}
       {examplesDialog}
-
     </div>
   );
 }

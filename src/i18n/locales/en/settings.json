@@ -95,6 +95,8 @@
     "git": "CodeHub",
     "codeHub": "CodeHub",
     "apiTokens": "Tokens",
+    "claudeEnv": "Environment Variables",
+    "hooks": "Utilities",
     "tasks": "Tasks",
     "notifications": "Notifications",
     "plugins": "Plugins",
@@ -214,10 +216,10 @@
   },
   "git": {
     "title": "CodeHub Configuration",
-    "description": "Configure your codehub identity for commits. These settings will be applied globally via codehub config --global",
+    "description": "Configure your CodeHub/Git commit identity. The name is reset to the new employee number during a change and can be edited again afterward; it only affects this user's future commits.",
     "name": {
       "label": "CodeHub Name",
-      "help": "Your name for codehub commits"
+      "help": "Reset to the new employee number during a change, then editable again afterward"
     },
     "email": {
       "label": "CodeHub Email",
@@ -468,6 +470,47 @@
     },
     "actions": {
       "add": "Add"
+    }
+  },
+  "claudeEnv": {
+    "loading": "Loading environment variable settings…",
+    "retry": "Retry",
+    "personal": {
+      "title": "Environment Variables",
+      "description": "Add personal environment variables by name. Before saving, names and values are checked against administrator-managed allowlist and denylist policies shared by all users.",
+      "name": "Name",
+      "namePlaceholder": "CUSTOM_VARIABLE",
+      "add": "Add variable",
+      "empty": "No personal environment variables configured.",
+      "value": "Value",
+      "valuePlaceholder": "Enter a value",
+      "replacePlaceholder": "Enter a replacement value",
+      "encryptedConfiguredHelp": "The existing encrypted value is hidden. Leave it unchanged, or enter a replacement.",
+      "encrypted": "Encrypted",
+      "encryptedFor": "Encrypt {{name}}",
+      "deleteColumn": "Delete",
+      "delete": "Delete {{name}}",
+      "globalHelp": "Personal values apply across all tenants. Tenant and administrator values remain separate.",
+      "save": "Save environment variables",
+      "saving": "Saving environment variables…",
+      "saved": "Environment variables saved",
+      "restartRequired": "Changes apply to newly started sessions. Existing sessions keep their current environment.",
+      "replacementRequired": "Enter a replacement value for {{name}} before renaming it or changing its encryption setting.",
+      "valueTooLong": "{{name}} must be no longer than {{maxLength}} UTF-8 bytes.",
+      "valueContainsNul": "{{name}} cannot contain NUL bytes.",
+      "policy": {
+        "required": "Enter a variable name.",
+        "invalidSyntax": "Use shell-safe syntax: start with a letter or underscore, then use only letters, numbers, and underscores.",
+        "duplicate": "Variable names must be unique, ignoring letter case.",
+        "builtInDeny": "This name is blocked by the system-wide built-in denylist rule {{pattern}}.",
+        "platformDeny": "This name is blocked by an administrator-managed denylist rule shared by all users: {{pattern}}.",
+        "notAllowed": "This name is not on the administrator-managed allowlist shared by all users."
+      }
+    },
+    "errors": {
+      "load": "Failed to load environment variable settings.",
+      "savePersonal": "Failed to save personal environment variables.",
+      "fixVariablePolicy": "Fix the highlighted variable names before saving."
     }
   },
   "mcpServers": {

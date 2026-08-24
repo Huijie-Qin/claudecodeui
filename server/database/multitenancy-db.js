@@ -1,7 +1,12 @@
 import crypto from 'node:crypto';
 
 import { db } from './db.js';
-import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import {
+  migrateClaudeEnvDenyRuleMatchTypes,
+  migrateLegacyDefaultClaudeEnvAllowlist,
+  migrateRetiredPersonalClaudeEnvDenyRules,
+  MULTITENANCY_SCHEMA_SQL,
+} from './multitenancy-schema.js';
 
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/;
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
@@ -24,6 +29,9 @@ const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 
 export function initializeMultitenancyTables(database = db) {
   database.exec(MULTITENANCY_SCHEMA_SQL);
+  migrateLegacyDefaultClaudeEnvAllowlist(database);
+  migrateClaudeEnvDenyRuleMatchTypes(database);
+  migrateRetiredPersonalClaudeEnvDenyRules(database);
   ensureColumn(database, 'tenants', 'prod_code', 'TEXT');
   migrateLegacyTenantProdCode(database);
 }
@@ -1801,6 +1809,12 @@ export function createMultitenancyDb(database = db) {
             AND i.preset_id = ?
             AND i.status = 'installed'
             AND w.status != 'deleted'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM workspace_agent_template_mcp_installs template_install
+              WHERE template_install.workspace_id = i.workspace_id
+                AND template_install.preset_id = i.preset_id
+            )
           ORDER BY i.workspace_id ASC
         `).all(normalizedTenantId, normalizedPresetId).map(hydrateMcpInstallRow);
       },

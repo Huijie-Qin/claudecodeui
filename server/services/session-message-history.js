@@ -5,9 +5,11 @@ function generateUserPromptMessageId() {
 }
 
 const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+const CLAUDE_SYNTHETIC_MESSAGE_KINDS = new Set(['hook_activity']);
 const SCHEDULED_SKILL_MATCH_WINDOW_MS = 60_000;
 const SLASH_INVOCATION_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
 const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
+  '<ccui-hook-recovery',
   '<local-command-caveat>',
   'Base directory for this skill:',
 ];
@@ -74,6 +76,36 @@ function getMessageTimestampMs(message) {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isClaudeSyntheticMessage(message) {
+  return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind);
+}
+
+function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
+  const mergedById = new Map();
+  const combined = [
+    ...(Array.isArray(transcriptMessages) ? transcriptMessages : []),
+    ...(Array.isArray(syntheticMessages) ? syntheticMessages : []),
+  ];
+
+  combined.forEach((message, index) => {
+    const key = typeof message?.id === 'string' && message.id
+      ? message.id
+      : `message-without-id-${index}`;
+    mergedById.set(key, { message, index });
+  });
+
+  return [...mergedById.values()]
+    .sort((left, right) => {
+      const leftTimestamp = getMessageTimestampMs(left.message);
+      const rightTimestamp = getMessageTimestampMs(right.message);
+      if (leftTimestamp === null && rightTimestamp === null) return left.index - right.index;
+      if (leftTimestamp === null) return 1;
+      if (rightTimestamp === null) return -1;
+      return leftTimestamp - rightTimestamp || left.index - right.index;
+    })
+    .map(({ message }) => message);
 }
 
 function isScheduledSlashInvocation(message) {
@@ -281,6 +313,8 @@ export function createSessionMessageHistoryService({
           limit: null,
           offset: 0,
         });
+        const syntheticMessages = dbHistory.messages.filter(isClaudeSyntheticMessage);
+        const transcriptDbMessages = dbHistory.messages.filter((message) => !isClaudeSyntheticMessage(message));
         const runtimeLookup = {
           ...historyLookup,
         };
@@ -296,44 +330,58 @@ export function createSessionMessageHistoryService({
         if (runtime?.runtime_home_path && providerSessions) {
           const scheduledSession = isScheduledSession(ownedSession);
           const legacyScheduledSkillInvocations = scheduledSession
-            ? dbHistory.messages.filter(isScheduledSlashInvocation)
+            ? transcriptDbMessages.filter(isScheduledSlashInvocation)
             : [];
           const shouldMergeScheduledSkills = legacyScheduledSkillInvocations.length > 0;
+          const needsFullJsonlHistory = syntheticMessages.length > 0
+            || shouldMergeScheduledSkills
+            || (!scheduledSession && transcriptDbMessages.length > 0);
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
             projectName: ownedSession.workspace_slug || '',
             projectPath: ownedSession.workspace_path || '',
             runtimeHomePath: runtime.runtime_home_path,
             limit: (
-              (scheduledSession && !shouldMergeScheduledSkills)
-              || dbHistory.total === 0
+              !needsFullJsonlHistory
+              && (scheduledSession || transcriptDbMessages.length === 0)
             ) ? limit : null,
             offset: (
-              (scheduledSession && !shouldMergeScheduledSkills)
-              || dbHistory.total === 0
+              !needsFullJsonlHistory
+              && (scheduledSession || transcriptDbMessages.length === 0)
             ) ? offset : 0,
           });
           if (jsonlHistory.total > 0) {
+            let transcriptHistory;
             if (shouldMergeScheduledSkills) {
-              return paginateHistory(
-                mergeLegacyScheduledSkillInvocations(
-                  jsonlHistory.messages,
-                  legacyScheduledSkillInvocations,
-                ),
-                limit,
-                offset,
+              transcriptHistory = mergeLegacyScheduledSkillInvocations(
+                jsonlHistory.messages,
+                legacyScheduledSkillInvocations,
               );
+            } else if (scheduledSession || transcriptDbMessages.length === 0) {
+              if (syntheticMessages.length === 0) {
+                return jsonlHistory;
+              }
+              transcriptHistory = jsonlHistory.messages;
+            } else {
+              const mergedLegacyHistory = mergeLegacyClaudeHistory({
+                dbMessages: transcriptDbMessages,
+                jsonlMessages: jsonlHistory.messages,
+                limit: syntheticMessages.length > 0 ? null : limit,
+                offset: syntheticMessages.length > 0 ? 0 : offset,
+              });
+              if (syntheticMessages.length === 0) {
+                return mergedLegacyHistory;
+              }
+              transcriptHistory = mergedLegacyHistory.messages;
             }
 
-            if (scheduledSession || dbHistory.total === 0) {
-              return jsonlHistory;
+            if (syntheticMessages.length === 0) {
+              return paginateHistory(transcriptHistory, limit, offset);
             }
-
-            return mergeLegacyClaudeHistory({
-              dbMessages: dbHistory.messages,
-              jsonlMessages: jsonlHistory.messages,
+            return paginateHistory(
+              mergeClaudeSyntheticMessages(transcriptHistory, syntheticMessages),
               limit,
               offset,
-            });
+            );
           }
         }
 
@@ -379,23 +427,24 @@ export function persistNormalizedMessages({
   runtimeId,
   messages,
 }) {
-  // Claude Code already persists the canonical transcript in runtime JSONL.
-  if (provider === 'claude') {
-    return 0;
-  }
+  // Claude Code persists its canonical transcript in runtime JSONL. Synthetic
+  // CCUI-only events still need the database so they survive a page refresh.
+  const candidateMessages = provider === 'claude'
+    ? messages?.filter(isClaudeSyntheticMessage)
+    : messages;
 
   if (
     !runtimeId ||
     !options.tenantId ||
     !options.workspaceId ||
     !options.userId ||
-    !Array.isArray(messages) ||
-    messages.length === 0
+    !Array.isArray(candidateMessages) ||
+    candidateMessages.length === 0
   ) {
     return 0;
   }
 
-  const persistableMessages = messages.filter(isPersistableMessage);
+  const persistableMessages = candidateMessages.filter(isPersistableMessage);
   if (persistableMessages.length === 0) {
     return 0;
   }

@@ -8,11 +8,13 @@
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
+    "agentTemplates": "Agent Templates",
     "mcpPresets": "MCP Server Presets",
     "skillPresets": "Skill Presets",
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
-    "runtimes": "Runtime Monitor"
+    "runtimes": "Runtime Monitor",
+    "scheduledTaskLogs": "Scheduled Task Logs"
   },
   "experimental": {
     "warningTitle": "Experimental feature controls",
@@ -37,6 +39,19 @@
     "grant": "Grant",
     "admin": "Admin",
     "never": "Never"
+  },
+  "skillPresets": {
+    "pagination": {
+      "page": "Page {{page}}",
+      "pageWithTotal": "Page {{page}} / {{totalPages}}",
+      "pageSize": "{{count}} per page",
+      "pageSizePrefix": "Show",
+      "pageSizeSuffix": "per page",
+      "pageSizeLabel": "Skills per page",
+      "total": "{{count}} total",
+      "previous": "Previous page",
+      "next": "Next page"
+    }
   },
   "fields": {
     "username": "Username",
@@ -175,7 +190,12 @@
     "usernamesHint": "Paste usernames separated by new lines, spaces, commas, or semicolons, or choose users below.",
     "missingUsers": "Users not found ({{count}}): {{usernames}}",
     "selectAll": "Select all users",
-    "clearSelection": "Clear selection"
+    "clearSelection": "Clear selection",
+    "encryptedValue": "Encrypted / hidden",
+    "deleteConfigured": "Delete {{name}} from {{username}}",
+    "confirmDeleteConfigured": "Delete {{name}} from {{username}}?",
+    "deleteConfiguredSuccess": "Deleted {{name}} from {{username}}",
+    "deleteConfiguredFailed": "Failed to delete the user environment variable"
   },
   "tenants": {
     "createTitle": "Create tenant",
@@ -425,17 +445,17 @@
     "create": "New Hook",
     "newHook": "New Hook",
     "examples": {
-      "create": "Create examples",
-      "dialogTitle": "Select examples",
-      "dialogDescription": "Choose only the examples to create now. Existing configurations will not be overwritten.",
-      "loading": "Loading examples...",
-      "loadError": "Failed to load Hook examples",
+      "create": "Create preset Hooks",
+      "dialogTitle": "Select preset Hooks",
+      "dialogDescription": "Choose preset Hook drafts to create. Existing configurations will not be overwritten.",
+      "loading": "Loading preset Hooks...",
+      "loadError": "Failed to load preset Hooks",
       "exists": "Already exists",
       "selectedCount": "{{count}} selected",
-      "createSelected": "Create selected",
-      "created": "Created {{count}} Hook example drafts. Select an MCP Tool and Skills before publishing.",
-      "alreadyExists": "The selected Hook examples already exist; existing configurations were preserved.",
-      "error": "Failed to create Hook examples"
+      "createSelected": "Create selected presets",
+      "created": "Created {{count}} preset Hook drafts. Confirm their MCP Tool and Skill resources before publishing.",
+      "alreadyExists": "The selected preset Hooks already exist; existing configurations were preserved.",
+      "error": "Failed to create preset Hooks"
     },
     "moreEvents": "More events",
     "backToList": "Back to list",
@@ -448,9 +468,18 @@
     "stopped": "No users bound",
     "delete": "Delete",
     "edit": "Edit",
+    "copy": "Copy",
+    "copySuffix": " (copy)",
+    "copySuffixNumbered": " (copy {{number}})",
     "save": "Save",
     "cancel": "Cancel",
     "close": "Close",
+    "unsaved": {
+      "title": "Discard unsaved changes?",
+      "description": "This Hook configuration has changes that have not been saved. Returning to the list will discard them.",
+      "continueEditing": "Continue editing",
+      "discard": "Discard changes"
+    },
     "search": "Search Hooks",
     "loading": "Loading Hook configurations...",
     "empty": "No Hook configurations",
@@ -458,13 +487,86 @@
     "noDescription": "No description",
     "actionCount": "{{count}} actions",
     "boundUserCount": "{{count}} users bound",
+    "builtin": "Built-in Hook",
+    "businessData": {
+      "label": "Business data",
+      "title": "Hook business data",
+      "description": "Business data is stored in CCUI SQLite; showing the latest 50 records from:",
+      "loading": "Loading business data",
+      "empty": "No business data yet. Records appear here after the Hook runs a Record Data action.",
+      "loadError": "Failed to load Hook business data",
+      "close": "Close business data"
+    },
+    "diagnostics": {
+      "title": "Hook runtime diagnostics",
+      "hookTitle": "{{name}} executions",
+      "description": "Inspect actual inputs, outputs, actions, errors, and parallel conflicts without changing Hook behavior.",
+      "configTab": "Hook configuration",
+      "diagnosticsTab": "Runtime diagnostics",
+      "executionRecords": "Executions",
+      "detailTitle": "Hook execution details",
+      "copy": "Copy",
+      "startedAt": "Started",
+      "duration": "Duration",
+      "user": "User",
+      "session": "Session",
+      "error": "Execution error",
+      "input": "Event input",
+      "scriptOutput": "Script output",
+      "actions": "Post-actions",
+      "response": "Response to Claude",
+      "logs": "Runtime logs",
+      "failOpenWarning": "This Hook returned an empty result after failing, so the Agent or tool call may have continued.",
+      "failOpenSideEffect": "The same parallel event contains a failed Hook and completed post-actions. A failure does not undo sibling Hook side effects.",
+      "search": "Search Hook, user, session, tool, or Tool Use ID",
+      "allHooks": "All Hooks",
+      "allKinds": "All types",
+      "customHook": "Custom Hook",
+      "allEvents": "All events",
+      "allStatuses": "All statuses",
+      "allOutcomes": "All diagnostic outcomes",
+      "loading": "Loading Hook executions...",
+      "loadError": "Failed to load Hook executions",
+      "loadingDetail": "Loading complete execution details...",
+      "loadDetailError": "Failed to load Hook execution details",
+      "empty": "No matching Hook executions",
+      "parallelCount": "{{count}} parallel Hooks",
+      "noSession": "No session ID",
+      "updatedInputConflict": "Multiple Hooks returned updatedInput. The native runtime uses the last finisher; “{{name}}” likely won this invocation.",
+      "permissionConflict": "Different permission decisions were returned; the final result follows deny > defer > ask > allow.",
+      "pagination": {
+        "summary": "{{groups}} event groups · {{executions}} executions",
+        "pageSize": "Events per page",
+        "pageOf": "Page {{page}} of {{total}}",
+        "previous": "Previous page",
+        "next": "Next page",
+        "goToPage": "Go to page {{page}}"
+      },
+      "statuses": {
+        "succeeded": "Completed",
+        "failed": "Failed",
+        "running": "Running"
+      },
+      "outcomes": {
+        "succeeded": "Succeeded",
+        "failed": "Failed",
+        "denied": "Denied",
+        "stopped": "Stopped",
+        "ask": "Ask",
+        "defer": "Deferred",
+        "modified_input": "Input modified",
+        "modified_output": "Output modified",
+        "post_action": "Post-action",
+        "additional_context": "Context added"
+      }
+    },
     "bindings": {
-      "title": "Bind enabled users",
-      "manage": "Bind users",
-      "boundCountShort": "{{count}} bound",
+      "title": "Set user visibility",
+      "manage": "User scope",
+      "boundCountShort": "Visible to {{count}}",
       "boundTenantCountShort": "{{count}} tenants (dynamic)",
-      "allUsersShort": "All users (dynamic)",
-      "unbound": "No users bound",
+      "allUsersShort": "Visible to all users",
+      "unbound": "Visible to no users",
       "sqlCheckManaged": "Enabled by users in SQL Check",
       "sqlCheckManagedCount": "{{count}} users enabled enforcement",
       "scopes": {
@@ -473,45 +575,95 @@
         "all_users": "All users"
       },
       "scopeHints": {
-        "users": "Runs only for users selected individually; new users are not added automatically.",
+        "users": "Only selected users can see this Hook in Settings; each user decides whether to enable it.",
         "tenants": "Runs for every active member of the selected tenants; future tenant members are included automatically.",
-        "all_users": "Runs for every active system user; future users are included automatically."
+        "all_users": "Every active user can see this Hook in Settings and decide whether to enable it."
       },
       "search": "Search username",
       "searchTenant": "Search tenant name or code",
-      "loading": "Loading binding scope",
+      "loading": "Loading user scope",
       "noUsers": "No users available",
       "noTenants": "No tenants available",
       "noMatches": "No matching users",
       "admin": "Admin",
       "inactive": "Inactive",
       "tenantUsers": "{{count}} members",
-      "allUsersTitle": "Enable the dynamic all-user scope",
-      "allUsersDescription": "Currently covers {{count}} active users; newly activated users will receive this Hook automatically.",
+      "allUsersTitle": "Visible to all users",
+      "allUsersDescription": "All {{count}} active users can choose whether to enable this Hook in Settings; future active users can also see it.",
       "selectionSummary": {
         "users": "{{count}} users selected",
         "tenants": "{{count}} tenants selected",
         "all_users": "Currently covers {{count}} active users"
       },
       "clear": "Clear selection",
-      "save": "Save bindings",
+      "save": "Save scope",
       "savedScopes": {
-        "users": "Specific-user bindings saved",
+        "users": "Specific-user visibility saved",
         "tenants": "Dynamic tenant bindings saved",
-        "all_users": "Dynamic all-user binding enabled"
+        "all_users": "Visible to all users"
       },
-      "loadError": "Failed to load Hook user bindings",
-      "saveError": "Failed to save Hook user bindings"
+      "loadError": "Failed to load Hook user scope",
+      "saveError": "Failed to save Hook user scope"
     },
+    "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
+    "hookMcp": {
+      "title": "Hook MCP management",
+      "description": "These MCP servers belong to Hook configurations. Enabling a Hook caches them in its workspace for Call MCP Tool post-actions only.",
+      "create": "Configure MCP",
+      "createTitle": "Configure Hook MCP",
+      "editTitle": "Edit Hook MCP",
+      "test": "Test",
+      "delete": "Delete",
+      "deleteTitle": "Delete Hook MCP",
+      "confirmDelete": "Delete Hook MCP \"{{name}}\"? Hooks that reference it will no longer be able to call it.",
+      "empty": "No Hook MCP servers",
+      "untested": "Not tested",
+      "healthy": "Healthy · {{count}} tools",
+      "failed": "Connection failed",
+      "saved": "Hook MCP configuration saved",
+      "helperUploaded": "Helper script \"{{name}}\" uploaded",
+      "helperDeleted": "Helper script deleted",
+      "helperSaveFirst": "Save the Hook MCP configuration before uploading a helper script.",
+      "helperScriptTitle": "Hook MCP helper script",
+      "helperScriptDescription": "When a user enables a Hook that references this MCP server, the script is copied to the workspace under .cloudcli/hook-config. The script itself must not contain secrets; use static headers or helper environment variables for sensitive values.",
+      "deleted": "Hook MCP \"{{name}}\" deleted",
+      "testHealthy": "MCP connection is healthy; {{count}} tools discovered",
+      "fields": {
+        "displayName": "Display name",
+        "name": "Server name",
+        "description": "Description",
+        "url": "HTTP MCP URL",
+        "headers": "Static headers (JSON)",
+        "headersHint": "Headers may contain secrets and are visible and editable only to system administrators on this page.",
+        "headersHelper": "Headers Helper command",
+        "headersHelperHint": "Optional. An uploaded script can be referenced by filename, for example python3 auth.py; the command must write a JSON headers object to stdout."
+      },
+      "errors": {
+        "headers": "Headers must be a JSON object",
+        "save": "Failed to save Hook MCP",
+        "test": "Failed to test Hook MCP",
+        "delete": "Failed to delete Hook MCP"
+      }
+    },
     "builtinSkills": {
       "title": "Built-in Hook Skill management",
       "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
-      "upload": "Upload Skill file",
+      "upload": "Upload Skill folder",
       "uploading": "Uploading",
-      "packaged": "Packaged",
-      "uploaded": "Admin upload",
+      "search": "Search Skills",
       "empty": "No built-in Hook Skills",
+      "noMatches": "No matching Skills",
+      "details": "Details",
+      "collapse": "Collapse",
+      "versionLabel": "Version",
+      "idLabel": "ID",
+      "descriptionLabel": "Description",
+      "delete": "Delete",
+      "deleteTitle": "Delete built-in Skill",
+      "confirmDelete": "Delete built-in Skill \"{{name}}\"? Hooks that reference it will keep their configuration and show an unavailable warning.",
+      "unavailableTitle": "Built-in Hook Skill unavailable",
+      "unavailableDescription": "Not found: {{skills}}. Edit the Hook and select an available built-in Skill.",
       "formatHint": "No extension, size, frontmatter-field, or body validation is applied. The name comes from frontmatter.name when present, or from the file name. Administrators are responsible for correctness."
     },
     "triggerEvent": "Trigger event",
@@ -937,7 +1089,8 @@
       "stop": "Failed to stop Hook",
       "delete": "Failed to delete Hook",
       "saveSettings": "Failed to save Hook event settings",
-      "uploadSkill": "Failed to upload built-in Hook Skill"
+      "uploadSkill": "Failed to upload built-in Hook Skill",
+      "deleteSkill": "Failed to delete built-in Hook Skill"
     },
     "toast": {
       "saved": "Hook draft saved",
@@ -946,7 +1099,115 @@
       "stopped": "Hook user bindings cleared",
       "deleted": "Hook deleted",
       "eventsSaved": "Visible trigger events saved",
-      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded"
+      "skillUploaded": "Built-in Hook Skill \"{{name}}\" uploaded",
+      "skillDeleted": "Built-in Hook Skill \"{{name}}\" deleted"
+    }
+  },
+  "claudeEnvV2": {
+    "title": "Scoped Claude environment",
+    "description": "Tenant defaults and personal-variable policy. Existing per-user administrator values remain unchanged.",
+    "addVariable": "Add variable",
+    "encryptedConfigured": "Configured — enter a value to replace",
+    "scopeTabsLabel": "Claude environment configuration scope",
+    "tabs": {
+      "personal": "Specified personal configuration",
+      "tenant": "Specified tenant configuration",
+      "policy": "Allowlist and denylist"
+    },
+    "tenant": {
+      "saved": "Tenant variables saved. New Claude sessions will use them.",
+      "batchSaved": "Applied environment variable changes to {{count}} tenants. New Claude sessions will use them.",
+      "selectLabel": "Select tenants",
+      "selectPlaceholder": "Select tenants",
+      "selectedCount": "{{count}} selected",
+      "selectAll": "Select all",
+      "clearSelection": "Clear",
+      "selectionLimitHint": "Up to {{count}} tenants per batch. Select all uses the first {{count}} active tenants.",
+      "noActiveTenants": "No active tenants",
+      "addDelete": "Add deletion",
+      "applyToSelected": "Apply to selected",
+      "selectHint": "Select one tenant to edit it, or select multiple tenants to prepare a safe batch change.",
+      "singleEditorTitle": "Editing {{tenant}}",
+      "singleEditorHint": "Existing encrypted values remain masked and are changed only after you enter a replacement.",
+      "batchEditorTitle": "Batch changes for {{count}} tenants",
+      "batchEditorHint": "This is an empty operation draft. Only values and deletion names entered below are applied; existing unrelated tenant values are not copied or changed. Changing the tenant selection clears this draft.",
+      "emptyBatchUpserts": "No additions or updates in this batch.",
+      "batchDeletesTitle": "Delete from every selected tenant",
+      "batchDeletesHint": "Only names explicitly listed here are deleted.",
+      "emptyBatchDeletes": "No deletions in this batch.",
+      "overviewTitle": "Current tenant configurations",
+      "overviewHint": "Current snapshots for every tenant. Encrypted values are always hidden, and each configured item can be deleted here.",
+      "loadingOverview": "Loading tenant configurations…",
+      "emptyOverview": "No tenants to display.",
+      "snapshotUnavailable": "Snapshot unavailable.",
+      "noVariables": "No tenant environment variables configured.",
+      "encrypted": "Encrypted",
+      "configured": "Configured",
+      "deleteConfigured": "Delete {{name}} from {{tenant}}",
+      "confirmDeleteConfigured": "Delete {{name}} from {{tenant}}?",
+      "deleteConfiguredSuccess": "Deleted {{name}} from {{tenant}}.",
+      "overviewDeleteDisabled": "Apply or remove all pending tenant changes before deleting from the configuration overview."
+    },
+    "policy": {
+      "editorTitle": "Configure allowlist and denylist",
+      "editorHint": "New entries are saved from the forms below. Saved entries are listed separately and can be deleted.",
+      "allowlist": "Personal variable allowlist",
+      "allowlistForm": "Add allowlist entries",
+      "allowlistHint": "Only these names may be configured by users. Length is measured in UTF-8 bytes.",
+      "addAllowlistField": "Add field",
+      "saveAllowlist": "Save allowlist",
+      "emptyAllowlistDraft": "No pending allowlist entries. Add a field to begin.",
+      "emptyAllowlist": "The allowlist is empty. Users cannot add or update personal environment variables; you can save this empty policy as-is.",
+      "platformDeny": "Platform denylist",
+      "denyForm": "Add a denylist rule",
+      "denyHint": "These rules add restrictions to personal variables and cannot override built-in protection.",
+      "saveDenyRule": "Save rule",
+      "savedTitle": "Saved administrator configuration",
+      "savedHint": "These entries are active for all users. Delete an entry to remove it from the policy.",
+      "savedAllowlist": "Administrator allowlist",
+      "savedDenylist": "Administrator denylist",
+      "emptySavedAllowlist": "No administrator allowlist entries are configured.",
+      "emptySavedDenylist": "No administrator denylist rules are configured.",
+      "builtIn": "Built-in denylist (read-only)",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "maxLength": "Maximum bytes",
+      "maxLengthValue": "{{count}} bytes",
+      "reason": "Reason",
+      "deleteAllowlist": "Delete {{name}}",
+      "deleteDenyRule": "Delete {{pattern}}",
+      "confirmDeleteAllowlist": "Delete {{name}} from the allowlist?",
+      "confirmDeleteDenyRule": "Delete denylist rule {{pattern}}?",
+      "allowlistSaved": "Allowlist entries saved.",
+      "allowlistDeleted": "Deleted {{name}} from the allowlist.",
+      "denyRuleSaved": "Denylist rule saved.",
+      "denyRuleDeleted": "Deleted denylist rule {{pattern}}.",
+      "matchType": {
+        "exact": "Exact name",
+        "prefix": "Starts with",
+        "suffix": "Ends with",
+        "contains": "Contains"
+      },
+      "saved": "Personal environment policy saved."
+    },
+    "errors": {
+      "loadTenant": "Failed to load tenant environment variables",
+      "saveTenant": "Failed to save tenant environment variables",
+      "loadPolicy": "Failed to load personal environment policy",
+      "savePolicy": "Failed to save personal environment allowlist",
+      "deleteAllowlist": "Failed to delete allowlist entry",
+      "createRule": "Failed to create deny rule",
+      "saveRule": "Failed to save deny rule",
+      "deleteRule": "Failed to delete deny rule",
+      "nameRequired": "Environment variable name is required",
+      "duplicateName": "Environment variable names must be unique",
+      "replacementRequired": "Enter a replacement value for {{name}}",
+      "loadOverview": "Failed to load tenant environment overview",
+      "deleteNameRequired": "Enter every environment variable name to delete",
+      "duplicateDeleteName": "Environment variable names to delete must be unique",
+      "batchChangesRequired": "Add at least one update or deletion",
+      "batchTenantLimit": "Select no more than {{count}} tenants per batch",
+      "deleteTenantVariable": "Failed to delete tenant environment variable"
     }
   },
   "runtimes": {
@@ -982,6 +1243,35 @@
     "errors": {
       "load": "Failed to load runtimes",
       "stop": "Failed to stop runtime"
+    }
+  },
+  "scheduledTaskLogs": {
+    "title": "Scheduled task logs",
+    "description": "Review scheduler claims, executions, successes, and failures. Times use Asia/Shanghai.",
+    "retention": "Times use Asia/Shanghai; logs are kept for {{days}} days, up to {{maxRows}} rows.",
+    "autoRefresh": "Refresh every 10 seconds",
+    "refresh": "Refresh logs",
+    "expand": "Expand log details",
+    "collapse": "Collapse log details",
+    "empty": "No scheduled task logs match the filters",
+    "filters": {
+      "searchPlaceholder": "Search task, tenant, user, workspace, run ID, or error"
+    },
+    "table": {
+      "time": "Time (Shanghai)",
+      "task": "Task / workspace",
+      "scope": "Tenant / user",
+      "result": "Result"
+    },
+    "pagination": {
+      "pageSize": "Logs per page",
+      "total": "{{count}} total",
+      "page": "Page {{page}} / {{totalPages}}",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "errors": {
+      "load": "Failed to load scheduled task logs"
     }
   }
 }

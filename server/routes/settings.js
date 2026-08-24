@@ -13,8 +13,11 @@ import { createNotificationEvent, notifyUserIfEnabled } from '../services/notifi
 import { featureFlagsService, getFeatureFlagsForUser } from '../services/feature-flags.js';
 
 import { createPersonalKeyHandler } from './personal-key.js';
+import { createPersonalClaudeEnvRouter } from './claude-env.js';
 
 const router = express.Router();
+
+router.use('/claude-env', createPersonalClaudeEnvRouter());
 
 router.get('/feature-flags', (req, res) => {
   res.json({ features: getFeatureFlagsForUser(featureFlagsService, req.user) });

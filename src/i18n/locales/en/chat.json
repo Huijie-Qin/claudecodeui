@@ -20,6 +20,23 @@
     "codex": "Codex",
     "gemini": "Gemini"
   },
+  "messageQueue": {
+    "queued": "Queued",
+    "failed": "Failed to queue"
+  },
+  "hookActivity": {
+    "title": "Follow-up message",
+    "unnamed": "Unnamed Hook",
+    "skill": "Skill",
+    "directMessage": "Sent to Agent",
+    "queuePosition": "Queue position {{position}}",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Completed",
+      "failed": "Failed"
+    }
+  },
   "tools": {
     "settings": "Tool Settings",
     "error": "Tool Error",
@@ -131,6 +148,8 @@
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
+    "sendSupplement": "Queue follow-up",
+    "supplementPlaceholder": "Queue a follow-up after the current response...",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands"
@@ -182,6 +201,9 @@
   "providerSelection": {
     "title": "Choose Your AI Assistant",
     "description": "Select a provider to start a new conversation",
+    "templateGuide": "{{name}} guide",
+    "defaultAgentName": "Agent",
+    "guideNotSent": "This is a prompt for starting the conversation and is not sent to the model automatically.",
     "selectModel": "Select Model",
     "providerInfo": {
       "anthropic": "by Anthropic",

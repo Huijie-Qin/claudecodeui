@@ -8,6 +8,7 @@ import {
   Database,
   FileCode2,
   Info,
+  MessageSquare,
   Plus,
   RefreshCcw,
   Save,
@@ -21,7 +22,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
-import { Badge, Button, Card, Input, Tooltip } from '../../../shared/view/ui';
+import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input, Tooltip } from '../../../shared/view/ui';
 
 import {
   CCUI_SCRIPT_APIS,
@@ -54,6 +55,7 @@ type HookConfigEditorProps = {
   visibleEvents: HookEventName[];
   resources: HookResources;
   busy: boolean;
+  dirty: boolean;
   onChange: (hook: HookConfigDraft | HookConfig) => void;
   onBack: () => void;
   onSave: () => void;
@@ -270,7 +272,7 @@ function ScriptOutputsEditor({
   const addOutput = () => {
     let index = outputs.length + 1;
     while (outputs.some((output) => output.name === `output${index}`)) index += 1;
-    onChange([...outputs, { name: `output${index}`, type: 'string', description: '' }]);
+    onChange([...outputs, { name: `output${index}`, type: 'string' }]);
   };
 
   return (
@@ -291,7 +293,7 @@ function ScriptOutputsEditor({
         </div>
       ) : null}
       {outputs.map((output, index) => (
-        <div key={`${output.name}-${index}`} className="grid gap-2 rounded-xl border border-border bg-background p-3 md:grid-cols-[minmax(130px,0.7fr)_130px_minmax(180px,1fr)_auto]">
+        <div key={`${output.name}-${index}`} className="grid gap-2 rounded-xl border border-border bg-background p-3 md:grid-cols-[minmax(130px,1fr)_130px_auto]">
           <Input
             value={output.name}
             onChange={(event) => {
@@ -313,16 +315,6 @@ function ScriptOutputsEditor({
             placeholder="类型"
             ariaLabel="输出变量类型"
           />
-          <Input
-            value={output.description}
-            onChange={(event) => {
-              const next = [...outputs];
-              next[index] = { ...output, description: event.target.value };
-              onChange(next);
-            }}
-            placeholder="变量说明"
-            className="h-9 rounded-lg text-xs"
-          />
           <Button
             type="button"
             variant="ghost"
@@ -334,6 +326,60 @@ function ScriptOutputsEditor({
           </Button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function BooleanConditionEditor({
+  condition,
+  references,
+  actionVerb,
+  ariaLabel,
+  onChange,
+}: {
+  condition: unknown;
+  references: FieldChoice[];
+  actionVerb: '调用' | '记录' | '发送';
+  ariaLabel: string;
+  onChange: (condition: HookValueBinding | null) => void;
+}) {
+  const conditionRecord = asRecord(condition);
+  const conditionPath = conditionRecord.source === 'reference'
+    ? String(conditionRecord.path || '')
+    : '__always__';
+  const booleanReferences = references.filter((field) => field.type === 'boolean');
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-foreground">执行条件（布尔变量，可选）</span>
+        <Badge variant="outline" className="font-mono text-[10px]">boolean</Badge>
+      </div>
+      <HookSelect
+        value={conditionPath}
+        options={[
+          { value: '__always__', label: `不限制（始终${actionVerb}）` },
+          ...booleanReferences.map((field) => ({
+            value: field.path,
+            label: field.label || field.path,
+            description: `boolean · ${field.path}`,
+            group: field.group === 'script' ? '脚本输出 · boolean' : '当前事件 · boolean',
+          })),
+        ]}
+        onChange={(value) => onChange(
+          value === '__always__' ? null : { source: 'reference', path: value },
+        )}
+        placeholder={`不限制（始终${actionVerb}）`}
+        ariaLabel={ariaLabel}
+      />
+      <p className="text-[10px] leading-4 text-muted-foreground">
+        请选择 boolean 类型变量：值为 true 时{actionVerb}，false 时跳过；不选择则始终{actionVerb}。
+      </p>
+      {booleanReferences.length === 0 ? (
+        <p className="text-[10px] leading-4 text-amber-600 dark:text-amber-400">
+          当前没有可用的布尔变量，请先在脚本输出变量中添加 boolean 类型变量。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -355,9 +401,6 @@ function MpcActionEditor({
   const inputs = asRecord(config.inputs);
   const properties = tool?.inputSchema?.properties || {};
   const required = new Set(tool?.inputSchema?.required || []);
-  const condition = asRecord(config.condition);
-  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
-  const booleanReferences = references.filter((field) => field.type === 'boolean');
 
   return (
     <div className="space-y-4">
@@ -377,33 +420,24 @@ function MpcActionEditor({
                 const type = propertyType(property);
                 return [key, { source: 'literal', value: literalDefault(type, property) }];
               }));
-              onChange({ ...config, toolName: nextToolName, inputs: nextInputs });
+              onChange({
+                ...config,
+                toolName: nextToolName,
+                mcpServerId: nextTool?.mcpServerId || '',
+                inputs: nextInputs,
+              });
             }}
             placeholder={resources.mcpTools.length ? '选择 MCP 工具' : '暂无可调用的 MCP 工具'}
             ariaLabel="选择 MCP 工具"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
-          <HookSelect
-            value={conditionPath}
-            options={[
-              { value: '__always__', label: '始终调用' },
-              ...booleanReferences.map((field) => ({
-                value: field.path,
-                label: field.label || field.path,
-                description: field.path,
-                group: field.group === 'script' ? '脚本输出' : '当前事件',
-              })),
-            ]}
-            onChange={(value) => onChange({
-              ...config,
-              condition: value === '__always__' ? null : { source: 'reference', path: value },
-            })}
-            placeholder="始终调用"
-            ariaLabel="选择 MCP 执行条件"
-          />
-        </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="调用"
+          ariaLabel="选择 MCP 执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
 
       {tool && Object.keys(properties).length ? (
@@ -488,7 +522,7 @@ function SkillActionEditor({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3">
+      <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
           <span className="text-xs font-medium text-foreground">内置 Hook Skill</span>
           <HookSelect
@@ -510,12 +544,19 @@ function SkillActionEditor({
             ariaLabel="选择内置 Hook Skill"
           />
         </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="调用"
+          ariaLabel="选择 Skill 执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
       {resources.skillSource?.error ? (
         <p className="text-xs leading-5 text-destructive">{resources.skillSource.error}</p>
       ) : null}
       <p className="text-xs leading-5 text-muted-foreground">
-        这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；运行时从服务端持久化目录加载，不依赖公共租户或用户工作空间。
+        这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；用户开启 Hook 时会把完整目录缓存到工作区专用的 hook-config 目录。
       </p>
       <div className="block space-y-1.5">
         <span className="text-xs font-medium text-foreground">Skill 参数</span>
@@ -572,6 +613,111 @@ function SkillActionEditor({
   );
 }
 
+function AgentMessageActionEditor({
+  action,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const template = typeof config.messageTemplate === 'string' ? config.messageTemplate : '';
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectionRef = useRef({ start: template.length, end: template.length });
+  const referenceOptions = references.map((field) => ({
+    value: field.path,
+    label: field.path,
+    description: field.label || field.description || field.type,
+    group: field.group === 'event'
+      ? '当前事件'
+      : field.group === 'environment'
+        ? '环境变量'
+        : field.group === 'script'
+          ? '脚本输出'
+          : '前序行为输出',
+  }));
+
+  const selectReference = (path: string) => {
+    const token = `{{${path}}}`;
+    const selection = selectionRef.current;
+    const next = `${template.slice(0, selection.start)}${token}${template.slice(selection.end)}`;
+    const cursor = selection.start + token.length;
+    onChange({ ...config, messageTemplate: next });
+    setPickerOpen(false);
+    selectionRef.current = { start: cursor, end: cursor };
+    globalThis.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
+  return (
+    <div className="space-y-4">
+      <BooleanConditionEditor
+        condition={config.condition}
+        references={references}
+        actionVerb="发送"
+        ariaLabel="选择 Agent 消息发送条件布尔变量"
+        onChange={(condition) => onChange({ ...config, condition })}
+      />
+      <div className="block space-y-1.5">
+        <span className="text-xs font-medium text-foreground">消息内容</span>
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            rows={5}
+            value={template}
+            onChange={(event) => {
+              const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
+              selectionRef.current = {
+                start: cursor,
+                end: event.currentTarget.selectionEnd ?? cursor,
+              };
+              onChange({ ...config, messageTemplate: event.currentTarget.value });
+            }}
+            onClick={(event) => {
+              selectionRef.current = {
+                start: event.currentTarget.selectionStart,
+                end: event.currentTarget.selectionEnd,
+              };
+            }}
+            onKeyDown={(event) => {
+              const cursor = event.currentTarget.selectionStart;
+              if (event.key === '/') {
+                event.preventDefault();
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+                setPickerOpen(true);
+              } else {
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+              }
+            }}
+            placeholder="输入发送给 Agent 的消息；输入 / 选择变量"
+            className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+          />
+          <HookSelect
+            value=""
+            options={referenceOptions}
+            onChange={selectReference}
+            placeholder="搜索变量"
+            ariaLabel="选择 Agent 消息变量"
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            hideTrigger
+            className="absolute inset-x-0 top-full z-40"
+            menuClassName="min-w-[360px]"
+          />
+        </div>
+      </div>
+      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        当前回答结束并执行 Hook 后，这条消息会进入原会话的下一回合队列，不会加载 Skill。
+      </div>
+    </div>
+  );
+}
+
 function RecordActionEditor({
   action,
   references,
@@ -585,9 +731,6 @@ function RecordActionEditor({
   const recordType = typeof config.recordType === 'string' ? config.recordType : '';
   const fields = asRecord(config.fields);
   const fieldEntries = Object.entries(fields);
-  const condition = asRecord(config.condition);
-  const conditionPath = condition.source === 'reference' ? String(condition.path || '') : '__always__';
-  const booleanReferences = references.filter((field) => field.type === 'boolean');
 
   const updateFields = (nextFields: Record<string, unknown>) => {
     onChange({ ...config, fields: nextFields });
@@ -611,27 +754,13 @@ function RecordActionEditor({
             className="h-10 rounded-xl font-mono text-xs"
           />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">执行条件（可选）</span>
-          <HookSelect
-            value={conditionPath}
-            options={[
-              { value: '__always__', label: '始终记录' },
-              ...booleanReferences.map((field) => ({
-                value: field.path,
-                label: field.label || field.path,
-                description: field.path,
-                group: field.group === 'script' ? '脚本输出' : '当前事件',
-              })),
-            ]}
-            onChange={(value) => onChange({
-              ...config,
-              condition: value === '__always__' ? null : { source: 'reference', path: value },
-            })}
-            placeholder="始终记录"
-            ariaLabel="选择记录执行条件"
-          />
-        </label>
+        <BooleanConditionEditor
+          condition={config.condition}
+          references={references}
+          actionVerb="记录"
+          ariaLabel="选择记录执行条件布尔变量"
+          onChange={(condition) => onChange({ ...config, condition })}
+        />
       </div>
 
       <div className="space-y-2">
@@ -694,7 +823,7 @@ function RecordActionEditor({
         })}
       </div>
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“数据记录”即可查看最近记录。
+        记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“业务数据”即可查看最近记录。
       </div>
     </div>
   );
@@ -711,7 +840,7 @@ function PostActionsEditor({
   references: FieldChoice[];
   onChange: (actions: HookPostAction[]) => void;
 }) {
-  const canInvokeSkill = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
   const addAction = (type: HookPostAction['type']) => {
     const action: HookPostAction = {
       id: createHookItemId(),
@@ -721,7 +850,9 @@ function PostActionsEditor({
         ? { toolName: '', condition: null, inputs: {} }
         : type === 'write_record'
           ? { recordType: '', condition: null, fields: {} }
-          : { skillId: '', skillName: '', argumentsTemplate: '' },
+          : type === 'invoke_skill'
+            ? { skillId: '', skillName: '', condition: null, argumentsTemplate: '' }
+            : { messageTemplate: '', condition: null },
     };
     onChange([...hook.postActions, action]);
   };
@@ -743,24 +874,38 @@ function PostActionsEditor({
           <Database className="h-4 w-4" />
           记录数据
         </Button>
-        <Tooltip content={canInvokeSkill ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
+        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
           <span>
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => addAction('invoke_skill')}
-              disabled={!canInvokeSkill}
+              disabled={!canQueueAgentTurn}
             >
               <Sparkles className="h-4 w-4" />
               调用 Skill
             </Button>
           </span>
         </Tooltip>
+        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，把消息排入原会话的下一回合。' : '发送 Agent 消息仅适用于回答结束或回答异常结束。'}>
+          <span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addAction('send_agent_message')}
+              disabled={!canQueueAgentTurn}
+            >
+              <MessageSquare className="h-4 w-4" />
+              发送 Agent 消息
+            </Button>
+          </span>
+        </Tooltip>
       </div>
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加数据记录、MCP 工具或 Skill，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具、Skill 或 Agent 消息，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -776,13 +921,17 @@ function PostActionsEditor({
                 ? <Wrench className="h-4 w-4 text-primary" />
                 : action.type === 'write_record'
                   ? <Database className="h-4 w-4 text-primary" />
-                  : <Sparkles className="h-4 w-4 text-primary" />}
+                  : action.type === 'invoke_skill'
+                    ? <Sparkles className="h-4 w-4 text-primary" />
+                    : <MessageSquare className="h-4 w-4 text-primary" />}
               <span className="text-xs font-semibold text-foreground">
                 {index + 1}. {action.type === 'call_mcp_tool'
                   ? '调用 MCP 工具'
                   : action.type === 'write_record'
                     ? '记录数据'
-                    : '调用 Skill（恢复回合）'}
+                    : action.type === 'invoke_skill'
+                      ? '调用 Skill（恢复回合）'
+                      : '发送 Agent 消息（下一回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
               <Button
@@ -810,10 +959,16 @@ function PostActionsEditor({
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
-              ) : (
+              ) : action.type === 'invoke_skill' ? (
                 <SkillActionEditor
                   action={action}
                   resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : (
+                <AgentMessageActionEditor
+                  action={action}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -1090,6 +1245,7 @@ export default function HookConfigEditor({
   visibleEvents,
   resources,
   busy,
+  dirty,
   onChange,
   onBack,
   onSave,
@@ -1099,6 +1255,7 @@ export default function HookConfigEditor({
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
   const [scriptReferencesOpen, setScriptReferencesOpen] = useState(false);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const isPersisted = 'id' in hook;
   const status = isPersisted ? hook.status : 'draft';
   const eventDefinition = EVENT_BY_NAME.get(hook.eventName);
@@ -1149,11 +1306,18 @@ export default function HookConfigEditor({
     || Object.keys(hook.claudeResponse.bindings).length > 0;
   const canSave = Boolean(hook.name.trim()) && !matcherRegexError;
   const canPublish = canSave && hasEffect;
+  const handleBack = () => {
+    if (dirty) {
+      setDiscardDialogOpen(true);
+      return;
+    }
+    onBack();
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/10">
       <div className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-border bg-background/95 px-3 py-2.5 backdrop-blur sm:px-5">
-        <Button type="button" variant="ghost" size="sm" onClick={onBack} className="px-2">
+        <Button type="button" variant="ghost" size="sm" onClick={handleBack} className="px-2">
           <ArrowLeft className="h-4 w-4" />
           <span className="hidden sm:inline">{t('hooks.backToList')}</span>
         </Button>
@@ -1163,8 +1327,11 @@ export default function HookConfigEditor({
             {t(`statuses.${status}`)}{isPersisted && hook.version > 0 ? ` · v${hook.version}` : ''}
           </div>
         </div>
-        {isPersisted && status === 'published' && hook.bindingController === 'sql_check' ? (
-          <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge>
+        {isPersisted && hook.bindingController === 'sql_check' ? (
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">{t('hooks.builtin')}</Badge>
+            {status === 'published' ? <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge> : null}
+          </div>
         ) : isPersisted && status === 'published' ? (
           <Button type="button" variant="outline" size="sm" onClick={onManageBindings} disabled={busy}>
             <UsersRound className="h-4 w-4" />
@@ -1229,7 +1396,9 @@ export default function HookConfigEditor({
                       matcher: {},
                       postActions: eventName === 'Stop' || eventName === 'StopFailure'
                         ? hook.postActions
-                        : hook.postActions.filter((action) => action.type !== 'invoke_skill').map((action, index) => ({ ...action, position: index })),
+                        : hook.postActions.filter((action) => (
+                            action.type !== 'invoke_skill' && action.type !== 'send_agent_message'
+                          )).map((action, index) => ({ ...action, position: index })),
                       claudeResponse: { bindings: {} },
                     });
                   }}
@@ -1434,7 +1603,7 @@ export default function HookConfigEditor({
           <Section
             number={4}
             title="Hook 后置行为"
-            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以启动新的模型回合调用 Skill。"
+            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以调用 Skill，或直接向 Agent 发送下一回合消息。"
           >
             <PostActionsEditor
               hook={hook}
@@ -1458,6 +1627,27 @@ export default function HookConfigEditor({
 
         </div>
       </div>
+      <Dialog open={discardDialogOpen} onOpenChange={setDiscardDialogOpen}>
+        <DialogContent className="max-w-md p-5">
+          <DialogTitle>{t('hooks.unsaved.title')}</DialogTitle>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">{t('hooks.unsaved.description')}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setDiscardDialogOpen(false)}>
+              {t('hooks.unsaved.continueEditing')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                setDiscardDialogOpen(false);
+                onBack();
+              }}
+            >
+              {t('hooks.unsaved.discard')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

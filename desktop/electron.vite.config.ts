@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
     __DESKTOP_UPDATE_BASE_URL__: JSON.stringify(desktopConfig.updateBaseUrl),
     __DESKTOP_ALLOWED_ORIGINS__: JSON.stringify(desktopConfig.allowedOrigins),
     __DESKTOP_AUTH_ORIGINS__: JSON.stringify(desktopConfig.authOrigins),
+    __DESKTOP_ALLOW_INSECURE_HTTP__: JSON.stringify(desktopConfig.allowInsecureHttp),
     __DESKTOP_APP_VERSION__: JSON.stringify(desktopPackage.version),
   };
 

@@ -802,3 +802,122 @@ test('Claude meta and sidechain messages are not persisted into durable session 
   assert.equal(changed, 0);
   assert.deepEqual(persisted, []);
 });
+
+test('Claude persists only synthetic Hook activity alongside its JSONL transcript', () => {
+  const persisted = [];
+  const multitenancy = {
+    sessionMessages: {
+      upsertMessages: ({ messages }) => {
+        persisted.push(...messages);
+        return messages.length;
+      },
+    },
+  };
+
+  const changed = persistNormalizedMessages({
+    multitenancy,
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [
+      {
+        id: 'assistant-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:01.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content: 'Done',
+      },
+      {
+        id: 'hook_activity_execution-1_action-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:02.000Z',
+        provider: 'claude',
+        kind: 'hook_activity',
+        status: 'running',
+        jobId: 'hook_activity_execution-1_action-1',
+      },
+    ],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.id), ['hook_activity_execution-1_action-1']);
+});
+
+test('Claude session history merges persisted Hook activity into the JSONL transcript', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{
+            id: 'hook_activity_execution-1_action-1',
+            kind: 'hook_activity',
+            timestamp: '2026-07-29T01:00:02.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+            status: 'succeeded',
+            hookId: 'notify-on-stop',
+            hookName: '对话正常结束通知',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          {
+            id: 'jsonl-user',
+            kind: 'text',
+            role: 'user',
+            content: 'Run the check.',
+            timestamp: '2026-07-29T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'jsonl-assistant',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-07-29T01:00:01.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 2,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+    limit: 20,
+    offset: 0,
+  });
+
+  assert.deepEqual(
+    result.messages.map((message) => message.id),
+    ['jsonl-user', 'jsonl-assistant', 'hook_activity_execution-1_action-1'],
+  );
+  assert.equal(result.messages[2].status, 'succeeded');
+});

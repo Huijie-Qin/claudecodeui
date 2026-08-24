@@ -13,7 +13,11 @@ import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
-import { computeMerged, reconcileRealtimeAfterServerRefresh } from './sessionMerge';
+import {
+  computeMerged,
+  reconcileRealtimeAfterServerRefresh,
+  upsertRealtimeMessages,
+} from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -31,7 +35,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'hook_activity';
 
 export interface NormalizedMessage {
   id: string;
@@ -41,8 +46,12 @@ export interface NormalizedMessage {
   kind: MessageKind;
 
   // kind-specific fields (flat for simplicity)
+  origin?: 'hook';
   role?: 'user' | 'assistant';
   content?: string;
+  clientMessageId?: string;
+  queueStatus?: 'queued' | 'processing' | 'failed';
+  queuePosition?: number;
   images?: string[];
   toolName?: string;
   toolInput?: unknown;
@@ -60,6 +69,13 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  jobId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
+  error?: string;
   taskId?: string;
   toolUseId?: string;
   outputFile?: string;
@@ -266,7 +282,7 @@ export function useSessionStore() {
     const current = shouldReplaceStream
       ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
-    let updated = [...current, msg];
+    let updated = upsertRealtimeMessages(current, [msg]);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -285,7 +301,7 @@ export function useSessionStore() {
     const current = shouldReplaceStream
       ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
-    let updated = [...current, ...msgs];
+    let updated = upsertRealtimeMessages(current, msgs);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }

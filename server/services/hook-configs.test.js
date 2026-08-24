@@ -7,12 +7,13 @@ import {
   HOOK_CONFIG_SCHEMA_SQL,
   migrateHookActivationModel,
   migrateHookConfigurationModel,
+  migrateHookExecutionDiagnostics,
 } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
 
-function createFixture() {
+function createFixture({ hookMcpServers = [], hookMcpTools = [] } = {}) {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
   database.exec(`
@@ -37,7 +38,14 @@ function createFixture() {
   };
   return {
     database,
-    service: createHookConfigService({ database, configStore }),
+    service: createHookConfigService({
+      database,
+      configStore,
+      hookMcpCatalog: {
+        listServers: () => hookMcpServers,
+        listToolResources: () => hookMcpTools,
+      },
+    }),
   };
 }
 
@@ -50,7 +58,7 @@ function publishableHook(overrides = {}) {
     extensionLogic: {
       language: 'javascript',
       code: 'export async function run(event, ccui) { await ccui.records.write("stop", event); return { output: { summary: "done" } }; }',
-      outputs: [{ name: 'summary', type: 'string', description: '执行摘要' }],
+      outputs: [{ name: 'summary', type: 'string' }],
     },
     postActions: [],
     claudeResponse: { bindings: {} },
@@ -65,7 +73,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     assert.equal(created.status, 'draft');
     assert.equal(created.extensionLogic.language, 'javascript');
     assert.deepEqual(created.extensionLogic.outputs, [
-      { name: 'summary', type: 'string', description: '执行摘要' },
+      { name: 'summary', type: 'string' },
     ]);
 
     const updated = service.updateHook({
@@ -75,7 +83,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
         extensionLogic: {
           language: 'python',
           code: 'async def run(event, ccui):\n    await ccui.records.write("stop", event)\n    return {"output": {"summary": "done"}}',
-          outputs: [{ name: 'summary', type: 'string', description: '执行摘要' }],
+          outputs: [{ name: 'summary', type: 'string' }],
         },
         claudeResponse: {
           bindings: {
@@ -111,14 +119,16 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     const firstBinding = service.replaceHookBindings({ hookId: created.id, userIds: [1], boundBy: 1 });
     assert.equal(firstBinding.hook.status, 'published');
     assert.equal(firstBinding.hook.activationScope, 'manual');
-    assert.equal(firstBinding.hook.boundUserCount, 1);
-    assert.deepEqual(
-      service.listActiveHooksForUser(1).map((hook) => hook.id),
-      [created.id],
-    );
+    assert.equal(firstBinding.hook.scopedUserCount, 1);
+    assert.equal(firstBinding.hook.boundUserCount, 0);
+    assert.equal(service.listAvailableHooksForUser(1)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+    service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
+    assert.deepEqual(service.listAvailableHooksForUser(3), []);
     assert.deepEqual(service.listActiveHooksForUser(3), []);
 
     const reassigned = service.replaceHookBindings({
@@ -126,45 +136,16 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       userIds: [2, 3, 3],
       boundBy: 1,
     });
-    assert.equal(reassigned.hook.boundUserCount, 2);
+    assert.equal(reassigned.hook.scopedUserCount, 2);
+    assert.equal(reassigned.hook.boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.deepEqual(
-      service.listActiveHooksForUser(2).map((hook) => hook.id),
-      [created.id],
-    );
-    assert.deepEqual(
-      service.listActiveHooksForUser(3).map((hook) => hook.id),
-      [created.id],
-    );
+    assert.equal(service.listAvailableHooksForUser(2)[0].enabled, false);
+    service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
+    service.setUserHookEnabled({ userId: 3, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
     database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
     assert.deepEqual(service.listActiveHooksForUser(4), []);
-
-    database.prepare("INSERT INTO tenants (id, code, name, status) VALUES (1, 'alpha', 'Alpha', 'active')").run();
-    database.prepare(`
-      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
-      VALUES (1, 2, 'member', 'view', 'active')
-    `).run();
-    const tenantBinding = service.replaceHookBindings({
-      hookId: created.id,
-      scope: 'tenants',
-      tenantIds: [1],
-      boundBy: 1,
-    });
-    assert.equal(tenantBinding.hook.boundUserCount, 0);
-    assert.equal(tenantBinding.hook.boundTenantCount, 1);
-    assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
-    assert.deepEqual(service.listActiveHooksForUser(4), []);
-
-    database.prepare(`
-      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
-      VALUES (1, 4, 'member', 'view', 'active')
-    `).run();
-    assert.deepEqual(
-      service.listActiveHooksForUser(4).map((hook) => hook.id),
-      [created.id],
-      'a user added to a bound tenant should become effective automatically',
-    );
 
     const globalBinding = service.replaceHookBindings({
       hookId: created.id,
@@ -173,13 +154,13 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     });
     assert.equal(globalBinding.hook.activationScope, 'all_users');
     assert.equal(globalBinding.hook.boundTenantCount, 0);
-    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
+    assert.equal(service.listAvailableHooksForUser(1)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     database.prepare('INSERT INTO users (id, username) VALUES (5, ?)').run('future-global-member');
-    assert.deepEqual(
-      service.listActiveHooksForUser(5).map((hook) => hook.id),
-      [created.id],
-      'a new active user should inherit an all-user Hook automatically',
-    );
+    assert.equal(service.listAvailableHooksForUser(5)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(5), []);
+    service.setUserHookEnabled({ userId: 5, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(5).map((hook) => hook.id), [created.id]);
 
     const cleared = service.replaceHookBindings({
       hookId: created.id,
@@ -197,6 +178,136 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
 
     assert.equal(service.deleteHook(created.id), true);
     assert.equal(service.getHook(created.id), null);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics expose outcomes, millisecond timestamps, and global filters', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 2, 1, 'session-1', 'PreToolUse', 'tool-1',
+        'succeeded', ?, '{}', ?, 25, 1000, 1025)
+    `).run(
+      'execution-1',
+      hook.id,
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } }),
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'blocked',
+        },
+      }),
+    );
+
+    const [execution] = service.listAllExecutions({ sessionId: 'session-1' });
+    assert.equal(execution.hookName, hook.name);
+    assert.equal(execution.username, 'admin');
+    assert.equal(execution.toolName, 'Bash');
+    assert.equal(execution.startedAtMs, 1000);
+    assert.equal(execution.completedAtMs, 1025);
+    assert.equal(execution.diagnostics.outcome, 'denied');
+    assert.equal(execution.diagnostics.permissionDecision, 'deny');
+    assert.equal(execution.input, null);
+    const detail = service.getExecution('execution-1');
+    assert.equal(detail.id, 'execution-1');
+    assert.equal(detail.input.tool_name, 'Bash');
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics paginate correlated event groups without splitting parallel Hooks', () => {
+  const { database, service } = createFixture();
+  try {
+    const firstHook = service.createHook({ input: publishableHook({ name: 'First Hook' }), userId: 1 });
+    const secondHook = service.createHook({ input: publishableHook({ name: 'Second Hook' }), userId: 1 });
+    const insert = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, actions_json, response_json, duration_ms,
+        started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 1, 1, ?, 'PreToolUse', ?, 'succeeded', ?, '{}', ?, 10, ?, ?)
+    `);
+    const deniedResponse = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+      },
+    });
+    const bashInput = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } });
+    insert.run('parallel-1', firstHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1000, 1010);
+    insert.run('parallel-2', secondHook.id, 'session-1', 'tool-1', bashInput, deniedResponse, 1005, 1015);
+    insert.run(
+      'latest-standalone',
+      firstHook.id,
+      'session-2',
+      'tool-2',
+      JSON.stringify({ tool_name: 'Read' }),
+      '{}',
+      2000,
+      2010,
+    );
+
+    const firstPage = service.listAllExecutionPage({ limit: 1, offset: 0 });
+    assert.equal(firstPage.total, 2);
+    assert.equal(firstPage.executionTotal, 3);
+    assert.equal(firstPage.limit, 1);
+    assert.equal(firstPage.offset, 0);
+    assert.deepEqual(firstPage.executions.map((execution) => execution.id), ['latest-standalone']);
+
+    const secondPage = service.listAllExecutionPage({ limit: 1, offset: 1 });
+    assert.equal(secondPage.total, 2);
+    assert.equal(secondPage.executionTotal, 3);
+    assert.deepEqual(
+      new Set(secondPage.executions.map((execution) => execution.id)),
+      new Set(['parallel-1', 'parallel-2']),
+    );
+
+    const filtered = service.listAllExecutionPage({
+      q: 'bash',
+      bindingController: 'admin',
+      outcome: 'denied',
+      limit: 10,
+    });
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.executionTotal, 2);
+    assert.equal(filtered.executions.every((execution) => execution.diagnostics.outcome === 'denied'), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hook execution diagnostics migration adds and backfills millisecond timestamps', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE hook_executions (
+        id TEXT PRIMARY KEY,
+        duration_ms INTEGER,
+        started_at DATETIME,
+        completed_at DATETIME
+      );
+      INSERT INTO hook_executions (id, duration_ms, started_at, completed_at)
+      VALUES ('execution-1', 50, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
+    `);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: true,
+      addedCompletedAtMs: true,
+    });
+    const row = database.prepare('SELECT * FROM hook_executions').get();
+    assert.equal(row.completed_at_ms, row.started_at_ms + 50);
+    assert.deepEqual(migrateHookExecutionDiagnostics(database), {
+      addedStartedAtMs: false,
+      addedCompletedAtMs: false,
+    });
   } finally {
     database.close();
   }
@@ -297,6 +408,92 @@ test('legacy combined SQL Hook migrates into independent check and line-record H
   }
 });
 
+test('legacy failure notification and HTTP 200 recovery Hook migrates into two independent Hooks', () => {
+  const { database } = createFixture();
+  try {
+    database.prepare("INSERT INTO tenants (id, code, name, status) VALUES (1, 'alpha', 'Alpha', 'active')").run();
+    const legacyActions = [{
+      id: 'notify-and-recover',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: 'builtin:hook-notification',
+        skillName: 'hook-notification',
+        argumentsTemplate: 'status=failure details={{event.error_details}}',
+      },
+    }];
+    database.prepare(`
+      INSERT INTO hooks (
+        id, name, description, status, event_name, matcher_json,
+        extension_logic_json, post_actions_json, claude_response_json,
+        version, activation_scope, binding_controller,
+        created_by, updated_by, published_at
+      ) VALUES ('legacy-failure-recovery', '失败通知与 HTTP 200 会话恢复', 'combined',
+        'published', 'StopFailure', '{}', 'null', ?, '{"bindings":{}}',
+        4, 'manual', 'admin', 1, 1, CURRENT_TIMESTAMP)
+    `).run(JSON.stringify(legacyActions));
+    database.prepare(`
+      INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+      VALUES (2, 'legacy-failure-recovery', 1)
+    `).run();
+    database.prepare(`
+      INSERT INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+      VALUES ('legacy-failure-recovery', 1, 1)
+    `).run();
+
+    migrateHookActivationModel(database);
+
+    const hooks = database.prepare(`
+      SELECT id, name, status, event_name, extension_logic_json, post_actions_json
+      FROM hooks
+      WHERE name IN ('失败通知', 'HTTP 200 会话恢复')
+      ORDER BY name
+    `).all();
+    assert.equal(hooks.length, 2);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count FROM hooks WHERE name = '失败通知与 HTTP 200 会话恢复'
+    `).get().count, 0);
+
+    const failureHook = hooks.find((hook) => hook.name === '失败通知');
+    const recoveryHook = hooks.find((hook) => hook.name === 'HTTP 200 会话恢复');
+    assert.equal(failureHook.id, 'legacy-failure-recovery');
+    assert.equal(failureHook.status, 'published');
+    assert.equal(failureHook.event_name, 'StopFailure');
+    assert.equal(failureHook.extension_logic_json, 'null');
+    const failureAction = JSON.parse(failureHook.post_actions_json)[0];
+    assert.equal(failureAction.config.skillId, 'builtin:hook-notification');
+    assert.equal(failureAction.config.condition, null);
+    assert.doesNotMatch(failureAction.config.argumentsTemplate, /error_details|details=/);
+
+    const recoveryExtension = JSON.parse(recoveryHook.extension_logic_json);
+    const recoveryAction = JSON.parse(recoveryHook.post_actions_json)[0];
+    assert.deepEqual(recoveryExtension.outputs.map((output) => output.name), ['shouldRecover']);
+    assert.deepEqual(recoveryAction.config.condition, {
+      source: 'reference',
+      path: 'script.output.shouldRecover',
+    });
+    assert.match(recoveryAction.config.argumentsTemplate, /event\.error_details/);
+
+    assert.deepEqual(
+      database.prepare('SELECT hook_id FROM user_hook_bindings WHERE user_id = 2 ORDER BY hook_id').all(),
+      [{ hook_id: failureHook.id }, { hook_id: recoveryHook.id }]
+        .sort((left, right) => left.hook_id.localeCompare(right.hook_id)),
+    );
+    assert.deepEqual(
+      database.prepare('SELECT hook_id FROM hook_tenant_bindings WHERE tenant_id = 1 ORDER BY hook_id').all(),
+      [{ hook_id: failureHook.id }, { hook_id: recoveryHook.id }]
+        .sort((left, right) => left.hook_id.localeCompare(right.hook_id)),
+    );
+
+    migrateHookActivationModel(database);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count FROM hooks WHERE name IN ('失败通知', 'HTTP 200 会话恢复')
+    `).get().count, 2);
+  } finally {
+    database.close();
+  }
+});
+
 test('SQL Check Hook bindings are controlled by each user enforcement preference', () => {
   const { database, service } = createFixture();
   try {
@@ -328,7 +525,6 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
       }),
       /managed by each user from the SQL Check page/,
     );
-
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
     assert.equal(enabled.enabled, true);
     assert.equal(service.getHook(created.id).boundUserCount, 1);
@@ -338,6 +534,8 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
     assert.equal(disabled.enabled, false);
     assert.equal(service.getHook(created.id).boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.equal(service.deleteHook(created.id), true);
+    assert.equal(service.getHook(created.id), null);
   } finally {
     database.close();
   }
@@ -381,6 +579,7 @@ test('execution audit and script data records can be queried for an Hook', () =>
   const { database, service } = createFixture();
   try {
     const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    assert.equal(hook.hasDataRecords, false);
     database.prepare(`
       INSERT INTO hook_executions (
         id, hook_id, hook_version, user_id, event_name, status,
@@ -409,13 +608,31 @@ test('execution audit and script data records can be queried for an Hook', () =>
     const [record] = service.listDataRecords(hook.id, { limit: 1 });
     assert.equal(record.type, 'sql_analysis');
     assert.deepEqual(record.data, { rows: 3 });
+    assert.equal(service.getHook(hook.id).hasDataRecords, true);
+    assert.equal(service.listHooks().find((item) => item.id === hook.id).hasDataRecords, true);
   } finally {
     database.close();
   }
 });
 
 test('StopFailure can call a published MCP tool and then start a Skill recovery turn', () => {
-  const { database, service } = createFixture();
+  const { database, service } = createFixture({
+    hookMcpServers: [{ id: 'hook-mcp-notify', name: 'notify' }],
+    hookMcpTools: [{
+      name: 'mcp__notify__send_sms',
+      mcpServerId: 'hook-mcp-notify',
+      serverName: 'notify',
+      toolName: 'send_sms',
+      inputSchema: {
+        type: 'object',
+        required: ['user_id', 'content'],
+        properties: {
+          user_id: { type: 'number' },
+          content: { type: 'string' },
+        },
+      },
+    }],
+  });
   try {
     database.prepare("INSERT INTO tenants (id, code, name) VALUES (1, 'demo', 'Demo')").run();
     database.prepare(`
@@ -462,6 +679,7 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
             config: {
               skillId: 'builtin:hook-notification',
               skillName: 'hook-notification',
+              condition: { source: 'literal', value: true },
               argumentsTemplate: '用户 {{ccui.env.userId}}，短信结果 {{actions.send-sms.output}}',
             },
           },
@@ -474,6 +692,7 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
     assert.equal(created.postActions[0].position, 0);
     assert.equal(created.postActions[1].position, 1);
     assert.deepEqual(created.postActions[0].config.condition, { source: 'literal', value: true });
+    assert.deepEqual(created.postActions[1].config.condition, { source: 'literal', value: true });
     const published = service.publishHook({
       hookId: created.id,
       userId: 1,
@@ -500,11 +719,29 @@ test('post action and Claude response validation follows the selected event', ()
             skillId: 'builtin:hook-notification',
             skillName: 'hook-notification',
             argumentsTemplate: '',
+            mcpServerIds: ['legacy-hook-mcp'],
           },
         }],
       }),
     });
     assert.equal(stopSkill.postActions[0].type, 'invoke_skill');
+    assert.equal(Object.hasOwn(stopSkill.postActions[0].config, 'mcpServerIds'), false);
+
+    const agentMessage = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        extensionLogic: null,
+        postActions: [{
+          id: 'follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '继续处理会话 {{ccui.env.sessionId}}' },
+        }],
+      }),
+    });
+    assert.equal(agentMessage.postActions[0].config.messageTemplate, '继续处理会话 {{ccui.env.sessionId}}');
+    assert.equal(service.publishHook({ hookId: agentMessage.id, userId: 1 }).status, 'published');
 
     assert.throws(() => service.createHook({
       userId: 1,
@@ -531,6 +768,37 @@ test('post action and Claude response validation follows the selected event', ()
         }],
       }),
     }), /only supported for Stop and StopFailure/);
+
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'SessionEnd',
+        postActions: [{
+          id: 'follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '继续处理' },
+        }],
+      }),
+    }), /only supported for Stop and StopFailure/);
+
+    const emptyAgentMessage = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'StopFailure',
+        extensionLogic: null,
+        postActions: [{
+          id: 'empty-follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '' },
+        }],
+      }),
+    });
+    assert.throws(
+      () => service.publishHook({ hookId: emptyAgentMessage.id, userId: 1 }),
+      /must set an Agent message/,
+    );
 
     const invalidOutput = service.createHook({
       userId: 1,
@@ -564,6 +832,48 @@ test('post action and Claude response validation follows the selected event', ()
       () => service.publishHook({ hookId: missingTool.id, userId: 1 }),
       /is not available/,
     );
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy non-built-in Skill references remain readable but cannot be republished', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        postActions: [{
+          id: 'notify',
+          type: 'invoke_skill',
+          position: 0,
+          config: {
+            skillId: 'builtin:hook-notification',
+            skillName: 'hook-notification',
+            argumentsTemplate: '',
+          },
+        }],
+      }),
+    });
+    database.prepare('UPDATE hooks SET post_actions_json = ? WHERE id = ?').run(JSON.stringify([{
+      id: 'notify',
+      type: 'invoke_skill',
+      position: 0,
+      config: {
+        skillId: 'legacy-market-skill',
+        skillName: 'legacy-notifier',
+        argumentsTemplate: '',
+      },
+    }]), created.id);
+
+    const listed = service.listHooks().find((hook) => hook.id === created.id);
+    assert.equal(listed.postActions[0].config.skillId, 'legacy-market-skill');
+    assert.throws(() => service.publishHook({
+      hookId: created.id,
+      userId: 1,
+      validatedSkills: [],
+    }), /must reference a built-in Hook Skill/);
   } finally {
     database.close();
   }
@@ -628,6 +938,37 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         database.prepare("SELECT extension_logic_json FROM hooks WHERE id = 'legacy'").get().extension_logic_json,
       ),
       null,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('configuration migration removes legacy script output descriptions', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        extension_logic_json TEXT NOT NULL DEFAULT 'null'
+      );
+      INSERT INTO hooks (id, extension_logic_json) VALUES (
+        'legacy-output',
+        '{"language":"javascript","code":"return {};","outputs":[{"name":"result","type":"string","description":"legacy label"}]}'
+      );
+    `);
+
+    migrateHookConfigurationModel(database);
+
+    assert.deepEqual(
+      JSON.parse(database.prepare(`
+        SELECT extension_logic_json FROM hooks WHERE id = 'legacy-output'
+      `).get().extension_logic_json),
+      {
+        language: 'javascript',
+        code: 'return {};',
+        outputs: [{ name: 'result', type: 'string' }],
+      },
     );
   } finally {
     database.close();
@@ -835,6 +1176,7 @@ test('resource catalog exposes only runtime-backed environment fields', () => {
       { path: 'ccui.env.tenantId', type: 'number' },
       { path: 'ccui.env.workspaceId', type: 'number' },
       { path: 'ccui.env.sessionId', type: 'string' },
+      { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
     ]);
   } finally {
     database.close();

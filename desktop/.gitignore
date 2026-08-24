@@ -1,4 +1,5 @@
 .env.desktop
+.runtime/
 dist/
 node_modules/
 out/

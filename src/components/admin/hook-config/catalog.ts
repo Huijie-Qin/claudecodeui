@@ -1,6 +1,7 @@
 import type {
   FieldChoice,
   FieldType,
+  HookConfig,
   HookConfigDraft,
   HookEventDefinition,
   HookEventName,
@@ -596,7 +597,7 @@ export const CCUI_SCRIPT_APIS = [
   {
     javascript: 'ccui.records.write(type, data)',
     python: 'ccui.records.write(type, data)',
-    description: '写入一条结构化 Hook 数据记录',
+    description: '写入一条结构化 Hook 业务数据',
   },
   {
     javascript: 'ccui.log.info(message, data)',
@@ -629,6 +630,24 @@ export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
     postActions: [],
     claudeResponse: { bindings: {} },
   };
+}
+
+export function createHookCopyDraft(hook: HookConfig, name: string): HookConfigDraft {
+  return JSON.parse(JSON.stringify({
+    name,
+    description: hook.description,
+    eventName: hook.eventName,
+    matcher: hook.matcher,
+    extensionLogic: hook.extensionLogic,
+    postActions: hook.postActions,
+    claudeResponse: hook.claudeResponse,
+  }));
+}
+
+export function shouldShowBusinessData(
+  hook: Pick<HookConfig, 'postActions' | 'hasDataRecords'>,
+): boolean {
+  return hook.hasDataRecords || hook.postActions.some((action) => action.type === 'write_record');
 }
 
 function normalizePropertyType(type?: string): FieldType {
@@ -689,7 +708,7 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
   for (const output of draft.extensionLogic?.outputs || []) {
     fields.push({
       path: `script.output.${output.name}`,
-      label: output.description || output.name,
+      label: output.name,
       type: output.type,
       group: 'script',
     });
@@ -700,8 +719,10 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
       label: action.type === 'call_mcp_tool'
         ? 'MCP 工具调用结果'
         : action.type === 'write_record'
-          ? '数据记录结果'
-          : 'Skill 调用结果',
+          ? '业务数据写入结果'
+          : action.type === 'invoke_skill'
+            ? 'Skill 调用结果'
+            : 'Agent 消息发送结果',
       type: 'object',
       group: 'action',
     });
@@ -723,11 +744,11 @@ function scriptCommentText(value: string) {
 }
 
 function javascriptOutputLines(outputs: HookScriptOutput[]) {
-  return outputs.map((output) => `    // ${output.name}: undefined, // ${scriptCommentText(output.description || output.type)}`);
+  return outputs.map((output) => `    // ${output.name}: undefined, // ${output.type}`);
 }
 
 function pythonOutputLines(outputs: HookScriptOutput[]) {
-  return outputs.map((output) => `        # "${output.name}": None,  # ${scriptCommentText(output.description || output.type)}`);
+  return outputs.map((output) => `        # "${output.name}": None,  # ${output.type}`);
 }
 
 export function buildScriptTemplate({
@@ -748,7 +769,7 @@ export function buildScriptTemplate({
   const safeLabel = scriptCommentText(eventLabel);
   const safeDescription = scriptCommentText(eventDescription);
   const inputLines = inputs.map((input) => `${input.path} (${input.type}) - ${scriptCommentText(input.label)}`);
-  const outputLines = outputs.map((output) => `script.output.${output.name} (${output.type}) - ${output.description || output.name}`);
+  const outputLines = outputs.map((output) => `script.output.${output.name} (${output.type})`);
 
   if (language === 'python') {
     const comments = [

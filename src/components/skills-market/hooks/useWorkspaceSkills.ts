@@ -11,6 +11,8 @@ export type WorkspaceSkillsSummary = {
   enabled: number;
   disabled: number;
   invalid: number;
+  market?: number;
+  local?: number;
 };
 
 export type WorkspaceSkillsResponse = {
@@ -60,6 +62,11 @@ export function useWorkspaceSkills(workspaceId?: number) {
         error: null,
         isLoading: false,
       });
+      void enrichMarketState(payload, workspaceId).then((data) => {
+        setState((current) => current.data?.workspaceId === workspaceId
+          ? { data, error: null, isLoading: false }
+          : current);
+      });
     } catch (error) {
       setState({
         data: null,
@@ -97,6 +104,14 @@ export function useWorkspaceSkills(workspaceId?: number) {
             error: null,
             isLoading: false,
           });
+          void enrichMarketState(payload, workspaceId).then((data) => {
+            if (!active) return;
+            setState({
+              data,
+              error: null,
+              isLoading: false,
+            });
+          });
         }
       } catch (error) {
         if (active) {
@@ -119,5 +134,43 @@ export function useWorkspaceSkills(workspaceId?: number) {
   return {
     ...state,
     reload: load,
+  };
+}
+
+async function enrichMarketState(
+  payload: WorkspaceSkillsResponse,
+  workspaceId: number,
+): Promise<WorkspaceSkillsResponse> {
+  const marketSkills = (payload.skills ?? []).filter((skill) => skill.origin === 'market');
+  if (marketSkills.length === 0) return payload;
+
+  const remoteStates = await Promise.all(marketSkills.map(async (skill) => {
+    try {
+      const response = await api.skillMarket.detail(workspaceId, skill.name);
+      if (!response.ok) return null;
+      const detailPayload = await response.json();
+      return { name: skill.name, detail: detailPayload.skill ?? null };
+    } catch {
+      return null;
+    }
+  }));
+  const byName = new Map(remoteStates
+    .filter((entry): entry is { name: string; detail: Record<string, unknown> } => Boolean(entry?.detail))
+    .map((entry) => [entry.name, entry.detail]));
+
+  return {
+    ...payload,
+    skills: payload.skills.map((skill) => {
+      const detail = byName.get(skill.name);
+      if (!detail) return skill;
+      return {
+        ...skill,
+        marketVersion: typeof detail.version === 'number' ? detail.version : undefined,
+        localVersion: typeof detail.importedVersion === 'number' ? detail.importedVersion : skill.localVersion,
+        updateAvailable: detail.updateAvailable === true,
+        remoteDeleted: detail.remoteDeleted === true,
+        createUserId: typeof detail.createUserId === 'string' ? detail.createUserId : skill.createUserId,
+      };
+    }),
   };
 }

@@ -42,7 +42,6 @@ export type HookScriptLanguage = 'javascript' | 'python';
 export type HookScriptOutput = {
   name: string;
   type: FieldType;
-  description: string;
 };
 
 export type HookExtensionLogic = {
@@ -67,7 +66,7 @@ export type HookValueBinding =
 
 export type HookPostAction = {
   id: string;
-  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill';
+  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message';
   position: number;
   config: Record<string, unknown>;
 };
@@ -98,7 +97,65 @@ export type HookConfig = HookConfigDraft & {
   activationScope: 'manual' | 'all_users';
   bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
+  scopedUserCount: number;
   boundTenantCount: number;
+  hasDataRecords: boolean;
+};
+
+export type HookExecutionOutcome =
+  | 'succeeded'
+  | 'failed'
+  | 'denied'
+  | 'stopped'
+  | 'ask'
+  | 'defer'
+  | 'modified_input'
+  | 'modified_output'
+  | 'post_action'
+  | 'additional_context';
+
+export type HookExecution = {
+  id: string;
+  hookId: string;
+  hookName: string | null;
+  hookVersion: number;
+  bindingController: 'admin' | 'sql_check';
+  userId: number | null;
+  username: string | null;
+  tenantId: number | null;
+  workspaceId: number | null;
+  sessionId: string | null;
+  eventName: HookEventName;
+  toolUseId: string | null;
+  toolName: string | null;
+  status: 'running' | 'succeeded' | 'failed';
+  input: unknown;
+  scriptOutput: unknown;
+  actions: Record<string, unknown>;
+  response: Record<string, unknown>;
+  logs: Array<{ timestamp?: string; message?: string; data?: unknown }>;
+  errorMessage: string | null;
+  durationMs: number | null;
+  startedAtMs: number | null;
+  completedAtMs: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  diagnostics: {
+    outcome: HookExecutionOutcome;
+    effects: string[];
+    permissionDecision: string | null;
+    updatedInput: boolean;
+    actionCount: number;
+    failOpen: boolean;
+  };
+};
+
+export type HookExecutionPage = {
+  executions: HookExecution[];
+  total: number;
+  executionTotal: number;
+  limit: number;
+  offset: number;
 };
 
 export type JsonSchemaProperty = {
@@ -121,10 +178,12 @@ export type HookToolResource = {
 };
 
 export type HookMcpToolResource = HookToolResource & {
+  mcpServerId: string;
   serverName: string;
   serverDisplayName: string;
   toolName: string;
   tenantCodes: string[];
+  runtimeAlias: string;
 };
 
 export type HookSkillResource = {
@@ -133,10 +192,43 @@ export type HookSkillResource = {
   displayName: string;
   description: string;
   version: number;
-  source: 'packaged' | 'uploaded';
 };
 
 export type HookSkillSource = {
+  type: 'builtin';
+  available: boolean;
+  error?: string;
+};
+
+export type HookMcpServer = {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  config: {
+    type: 'http';
+    url: string;
+    headers?: Record<string, string>;
+    headersHelper?: string;
+    helperEnv?: Record<string, string>;
+    alwaysLoad?: boolean;
+  };
+  lastTestStatus: 'healthy' | 'failed' | null;
+  lastTestError: string | null;
+  lastTestedAt: string | null;
+  toolCount: number;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
+  helperScript?: {
+    fileName: string;
+    sizeBytes: number;
+    sha256: string;
+    updatedAt?: string | null;
+  } | null;
+  contentHash: string;
+  runtimeAlias: string;
+};
+
+export type HookMcpSource = {
   type: 'builtin';
   available: boolean;
   error?: string;
@@ -152,6 +244,8 @@ export type HookResources = {
   events: HookEventName[];
   builtinTools: HookToolResource[];
   mcpTools: HookMcpToolResource[];
+  hookMcpServers: HookMcpServer[];
+  hookMcpSource?: HookMcpSource;
   skills: HookSkillResource[];
   skillSource?: HookSkillSource;
   environmentVariables: HookEnvironmentVariable[];
