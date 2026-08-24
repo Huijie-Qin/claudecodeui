@@ -441,9 +441,12 @@ export function useChatComposerState({
         const supplementContent = currentInput;
         const clientMessageId = createClientMessageId();
         addMessage({
+          id: `local_supplement_${clientMessageId}`,
           type: 'user',
           content: supplementContent,
           timestamp: new Date(),
+          clientMessageId,
+          queueStatus: 'queued',
         });
         setIsLoading(true);
         setClaudeStatus({

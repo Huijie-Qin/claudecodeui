@@ -44,6 +44,9 @@ export type NormalizedMessage = {
   kind: MessageKind;
   role?: 'user' | 'assistant';
   content?: string;
+  clientMessageId?: string;
+  queueStatus?: 'queued' | 'processing' | 'failed';
+  queuePosition?: number;
   images?: unknown;
   toolName?: string;
   toolInput?: unknown;

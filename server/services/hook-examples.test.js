@@ -4,13 +4,12 @@ import test from 'node:test';
 import {
   REQUESTED_HOOK_EXAMPLES,
   createRequestedHookExamples,
-  ensureRequestedHookExamples,
 } from './hook-examples.js';
+import { executeHookScript } from './hook-script-executor.js';
 
 function createHarness(initialHooks = []) {
   const hooks = initialHooks.map((hook) => ({ ...hook }));
   let visibleEvents = ['Stop'];
-  let examplesInitialized = false;
   return {
     hooks,
     hookConfigs: {
@@ -29,10 +28,6 @@ function createHarness(initialHooks = []) {
       updateSettings: (input) => {
         visibleEvents = [...input.visibleEvents];
         return { visibleEvents: [...visibleEvents] };
-      },
-      areRequestedExamplesInitialized: () => examplesInitialized,
-      markRequestedExamplesInitialized: () => {
-        examplesInitialized = true;
       },
     },
   };
@@ -57,7 +52,7 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   const failureExample = result.hooks.find((hook) => hook.name === '失败通知');
   const recoveryExample = result.hooks.find((hook) => hook.name.includes('HTTP 200'));
 
-  assert.deepEqual(sqlCheckExample.extensionLogic.outputs.map((output) => output.name), ['detected']);
+  assert.deepEqual(sqlCheckExample.extensionLogic.outputs.map((output) => output.name), ['detected', 'sql']);
   assert.equal(sqlCheckExample.extensionLogic.outputs.every((output) => (
     Object.keys(output).sort().join(',') === 'name,type'
   )), true);
@@ -66,7 +61,7 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   assert.equal(sqlCheckExample.postActions[0].config.toolName, 'mcp__sql-syntax-checker__check_sql_syntax');
   assert.deepEqual(sqlCheckExample.postActions[0].config.inputs.sql, {
     source: 'reference',
-    path: 'event.last_assistant_message',
+    path: 'script.output.sql',
   });
   assert.deepEqual(sqlCheckExample.postActions[0].config.inputs.rule_ids, {
     source: 'reference',
@@ -87,28 +82,108 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   });
 });
 
-test('built-in Hook presets are initialized automatically and idempotently', () => {
-  const harness = createHarness();
+async function runSqlExample(example, message) {
+  return executeHookScript({
+    hookId: example.id,
+    language: example.extensionLogic.language,
+    code: example.extensionLogic.code,
+    event: {
+      hook_event_name: 'Stop',
+      session_id: 'sql-return-matrix',
+      last_assistant_message: message,
+    },
+    env: { sessionId: 'sql-return-matrix' },
+    workspaceRoot: process.cwd(),
+  });
+}
 
-  const first = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
-  const second = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
+test('SQL Hook presets detect common Agent SQL return formats and extract clean SQL', async () => {
+  const sqlCheckExample = REQUESTED_HOOK_EXAMPLES.find((hook) => hook.id === 'sql-check-enforcement');
+  const sqlRecordExample = REQUESTED_HOOK_EXAMPLES.find((hook) => hook.id === 'sql-line-record');
+  const cases = [
+    {
+      name: 'sql fence',
+      message: '```sql\nSELECT 1 AS fenced_case;\n```',
+      expectedSql: 'SELECT 1 AS fenced_case;',
+    },
+    {
+      name: 'dialect fence',
+      message: '```postgresql\nSELECT 2 AS dialect_case;\n```',
+      expectedSql: 'SELECT 2 AS dialect_case;',
+    },
+    {
+      name: 'unlabelled fence',
+      message: '```\nSELECT 3 AS unlabelled_case;\n```',
+      expectedSql: 'SELECT 3 AS unlabelled_case;',
+    },
+    {
+      name: 'inline code',
+      message: 'Use `SELECT 4 AS inline_case;`',
+      expectedSql: 'SELECT 4 AS inline_case;',
+    },
+    {
+      name: 'markdown list',
+      message: '- SELECT 5 AS list_case;',
+      expectedSql: 'SELECT 5 AS list_case;',
+    },
+    {
+      name: 'labelled text',
+      message: 'SQL: SELECT 6 AS labelled_case;',
+      expectedSql: 'SELECT 6 AS labelled_case;',
+    },
+    {
+      name: 'JSON field',
+      message: JSON.stringify({ sql: 'SELECT 7 AS json_case;' }),
+      expectedSql: 'SELECT 7 AS json_case;',
+    },
+    {
+      name: 'JSON fence field',
+      message: '```json\n{"query":"SELECT 71 AS json_fence_case;"}\n```',
+      expectedSql: 'SELECT 71 AS json_fence_case;',
+    },
+    {
+      name: 'XML element',
+      message: '<sql>SELECT 8 AS xml_case;</sql>',
+      expectedSql: 'SELECT 8 AS xml_case;',
+    },
+    {
+      name: 'extended SQL keyword',
+      message: 'EXPLAIN SELECT * FROM orders;',
+      expectedSql: 'EXPLAIN SELECT * FROM orders;',
+      expectedType: 'EXPLAIN',
+    },
+    {
+      name: 'prose before multiline SQL',
+      message: '查询结果如下：\nSELECT user_id, COUNT(*)\nFROM orders\nGROUP BY user_id;',
+      expectedSql: 'SELECT user_id, COUNT(*)\nFROM orders\nGROUP BY user_id;',
+      expectedLines: 3,
+    },
+  ];
 
-  assert.equal(first.createdCount, REQUESTED_HOOK_EXAMPLES.length);
-  assert.equal(second.createdCount, 0);
-  assert.equal(second.skippedCount, REQUESTED_HOOK_EXAMPLES.length);
-  assert.equal(harness.hooks.length, REQUESTED_HOOK_EXAMPLES.length);
+  for (const testCase of cases) {
+    const [checkResult, recordResult] = await Promise.all([
+      runSqlExample(sqlCheckExample, testCase.message),
+      runSqlExample(sqlRecordExample, testCase.message),
+    ]);
+    assert.equal(checkResult.output.detected, true, testCase.name);
+    assert.equal(checkResult.output.sql, testCase.expectedSql, testCase.name);
+    assert.equal(recordResult.output.detected, true, testCase.name);
+    assert.equal(recordResult.output.sqlBlockCount, 1, testCase.name);
+    assert.equal(recordResult.output.sqlLineCount, testCase.expectedLines || 1, testCase.name);
+    assert.deepEqual(recordResult.output.statementTypes, [testCase.expectedType || 'SELECT'], testCase.name);
+  }
 });
 
-test('automatic initialization does not recreate a built-in preset deleted later', () => {
-  const harness = createHarness();
-  ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
-  const deleted = harness.hooks.pop();
-
-  const afterDelete = ensureRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9 });
-
-  assert.equal(afterDelete.createdCount, 0);
-  assert.equal(afterDelete.skippedCount, REQUESTED_HOOK_EXAMPLES.length - 1);
-  assert.equal(harness.hooks.some((hook) => hook.name === deleted.name), false);
+test('SQL Hook presets ignore prose and non-SQL code', async () => {
+  const sqlRecordExample = REQUESTED_HOOK_EXAMPLES.find((hook) => hook.id === 'sql-line-record');
+  for (const message of [
+    'The SELECT keyword starts a query.',
+    '```javascript\nconst statement = "SELECT 1";\n```',
+    JSON.stringify({ message: 'SELECT is available' }),
+  ]) {
+    const result = await runSqlExample(sqlRecordExample, message);
+    assert.equal(result.output.detected, false, message);
+  }
 });
 
 test('creating Hook examples is idempotent and never overwrites an existing example', () => {

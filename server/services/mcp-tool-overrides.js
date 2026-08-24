@@ -143,7 +143,15 @@ export function applyMcpToolOverrides({ toolName, input, config }) {
   const appliedParams = [];
 
   for (const [key, entry] of Object.entries(params)) {
-    if (!isPlainObject(entry) || entry.custom !== true) continue;
+    if (!isPlainObject(entry)) continue;
+
+    const mode = entry.mode === 'default' || entry.mode === 'force'
+      ? entry.mode
+      : entry.custom === true
+        ? 'force'
+        : null;
+    if (!mode) continue;
+    if (mode === 'default' && Object.prototype.hasOwnProperty.call(mergedInput, key)) continue;
 
     mergedInput[key] = entry.value;
     appliedParams.push(key);
@@ -180,4 +188,3 @@ export function buildMcpToolOverridePreToolUseOutput({ toolName, input, config }
     overrideResult,
   };
 }
-

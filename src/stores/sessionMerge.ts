@@ -4,6 +4,41 @@ const OPTIMISTIC_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const OPTIMISTIC_USER_CLOCK_SKEW_MS = 2_000;
 const FINALIZED_STREAM_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 
+export function upsertRealtimeMessages(
+  current: NormalizedMessage[],
+  incoming: NormalizedMessage[],
+): NormalizedMessage[] {
+  const updated = [...current];
+  for (const message of incoming) {
+    const existingIndex = updated.findIndex((candidate) => candidate.id === message.id);
+    if (existingIndex >= 0) {
+      const existing = updated[existingIndex];
+      if (existing.queueStatus === 'queued' && message.queueStatus === 'processing') {
+        updated.splice(existingIndex, 1);
+        updated.push(message);
+      } else {
+        updated[existingIndex] = message;
+      }
+    } else {
+      updated.push(message);
+    }
+  }
+  return updated;
+}
+
+function pinQueuedUserMessagesToEnd(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const queued = messages.filter(message =>
+    message.kind === 'text' &&
+    message.role === 'user' &&
+    message.queueStatus === 'queued'
+  );
+  if (queued.length === 0) return messages;
+
+  const queuedIds = new Set(queued.map(message => message.id));
+  const settled = messages.filter(message => !queuedIds.has(message.id));
+  return [...settled, ...queued];
+}
+
 function isLocalOptimisticUserText(message: NormalizedMessage): boolean {
   return message.id.startsWith('local_') &&
     message.kind === 'text' &&
@@ -206,17 +241,17 @@ function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessag
 
 /**
  * Compute merged messages: server + realtime, deduped by id.
- * Server messages take priority (they're the persisted source of truth).
- * Realtime messages that aren't yet in server stay (in-flight streaming).
+ * Persisted messages take priority; realtime messages that are not persisted
+ * yet remain visible.
  */
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   const realtimeUnique = dropSupersededStreamingPlaceholders(dedupeRealtimeMessages(realtime));
   if (realtimeUnique.length === 0) return server;
-  if (server.length === 0) return realtimeUnique;
+  if (server.length === 0) return pinQueuedUserMessagesToEnd(realtimeUnique);
   const serverIds = new Set(server.map(m => m.id));
   const extra = dropPersistedRealtimeCopies(server, realtimeUnique, serverIds);
   if (extra.length === 0) return server;
-  return extra.reduce(insertByTimestamp, server);
+  return pinQueuedUserMessagesToEnd(extra.reduce(insertByTimestamp, server));
 }
 
 /**

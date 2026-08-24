@@ -20,6 +20,10 @@
     "codex": "Codex",
     "gemini": "Gemini"
   },
+  "messageQueue": {
+    "queued": "Queued",
+    "failed": "Failed to queue"
+  },
   "tools": {
     "settings": "Tool Settings",
     "error": "Tool Error",
@@ -131,6 +135,8 @@
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
+    "sendSupplement": "Queue follow-up",
+    "supplementPlaceholder": "Queue a follow-up after the current response...",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands"

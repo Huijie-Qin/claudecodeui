@@ -459,6 +459,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               type: 'user',
               content: unescapeWithMathProtection(decodeHtmlEntities(content)),
               timestamp: msg.timestamp,
+              clientMessageId: msg.clientMessageId,
+              queueStatus: msg.queueStatus,
+              queuePosition: msg.queuePosition,
             });
           }
         } else {

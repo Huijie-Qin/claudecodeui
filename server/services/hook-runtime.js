@@ -269,7 +269,16 @@ async function loadSkillContent(skillId, skillName, argumentsText) {
   return expandSkillArguments(skill.content, argumentsText);
 }
 
-async function executePostActions({ hook, references, context, event, signal, recoveryKeys, writeRecord }) {
+async function executePostActions({
+  hook,
+  executionId,
+  references,
+  context,
+  event,
+  signal,
+  recoveryKeys,
+  writeRecord,
+}) {
   for (const action of hook.postActions || []) {
     if (action.type === 'call_mcp_tool') {
       const condition = action.config?.condition == null
@@ -294,11 +303,11 @@ async function executePostActions({ hook, references, context, event, signal, re
         input.rule_ids = Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [];
       }
       const output = await context.mcpCaller({
-        qualifiedToolName: action.config.toolName,
+        ...await context.resolveMcpAction({ hook, action }),
         input,
-        mcpServers: context.mcpServers,
         cwd: context.workspaceRoot,
         signal,
+        headersHelperRunner: context.headersHelperRunner,
       });
       references.actions[action.id] = { output };
       continue;
@@ -329,6 +338,12 @@ async function executePostActions({ hook, references, context, event, signal, re
       continue;
     }
     if (action.type === 'invoke_skill') {
+      if (context.suppressSkillRecovery) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'hook_recovery_turn' },
+        };
+        continue;
+      }
       const condition = action.config?.condition == null
         ? true
         : resolveBinding(action.config.condition, references);
@@ -355,16 +370,22 @@ async function executePostActions({ hook, references, context, event, signal, re
         action.config.skillName,
         argumentsText,
       );
-      await context.enqueueSkillRecovery({
+      const schedulingResult = await context.enqueueSkillRecovery({
         hook,
         action,
         event,
+        executionId,
+        argumentsText,
         modelContent,
         displayCommand: `/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`,
       });
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
-        output: { scheduled: true, skillName: action.config.skillName },
+        output: {
+          scheduled: true,
+          skillName: action.config.skillName,
+          ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
+        },
       };
     }
   }
@@ -380,6 +401,12 @@ export function createHookRuntimeSession({
   workspaceRoot,
   sessionId = () => null,
   mcpServers = {},
+  resolveMcpAction = async ({ action }) => ({
+    qualifiedToolName: action.config.toolName,
+    mcpServers,
+  }),
+  headersHelperRunner = null,
+  suppressSkillRecovery = false,
   skillContentLoader = loadSkillContent,
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
@@ -398,6 +425,9 @@ export function createHookRuntimeSession({
     workspaceRoot,
     sessionId,
     mcpServers,
+    resolveMcpAction,
+    headersHelperRunner,
+    suppressSkillRecovery,
     skillContentLoader,
     enqueueSkillRecovery,
     mcpCaller,
@@ -446,6 +476,7 @@ export function createHookRuntimeSession({
       }
       await executePostActions({
         hook,
+        executionId,
         references,
         context,
         event,

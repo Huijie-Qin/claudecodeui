@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { NormalizedMessage } from './useSessionStore';
-import { computeMerged } from './sessionMerge';
+import {
+  computeMerged,
+  reconcileRealtimeAfterServerRefresh,
+  upsertRealtimeMessages,
+} from './sessionMerge';
 
 const makeUserText = (fields: Partial<NormalizedMessage>): NormalizedMessage => ({
   id: fields.id || 'msg-1',
@@ -12,6 +16,9 @@ const makeUserText = (fields: Partial<NormalizedMessage>): NormalizedMessage => 
   kind: 'text',
   role: 'user',
   content: fields.content || '你能联网查询当前的热点资讯吗',
+  clientMessageId: fields.clientMessageId,
+  queueStatus: fields.queueStatus,
+  queuePosition: fields.queuePosition,
 });
 
 const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessage => ({
@@ -22,6 +29,60 @@ const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessag
   kind: 'text',
   role: 'assistant',
   content: fields.content || '可以。',
+});
+
+test('computeMerged pins running-message follow-ups below the active response', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-26T10:31:34.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Current response',
+  };
+  const queuedFollowup = makeUserText({
+    id: 'local_supplement_followup-1',
+    timestamp: '2026-04-26T10:31:35.000Z',
+    content: 'Handle this next',
+    queueStatus: 'queued',
+    clientMessageId: 'followup-1',
+  });
+  const completedResponse = makeAssistantText({
+    id: 'assistant-current-turn',
+    timestamp: '2026-04-26T10:31:36.000Z',
+    content: 'Current response',
+  });
+
+  const merged = computeMerged([], [streamingPlaceholder, queuedFollowup, completedResponse]);
+
+  assert.deepEqual(merged, [completedResponse, queuedFollowup]);
+});
+
+test('processing a queued follow-up moves it before later queued messages', () => {
+  const firstQueued = makeUserText({
+    id: 'local_supplement_followup-1',
+    content: 'First follow-up',
+    queueStatus: 'queued',
+  });
+  const secondQueued = makeUserText({
+    id: 'local_supplement_followup-2',
+    content: 'Second follow-up',
+    queueStatus: 'queued',
+  });
+  const completedResponse = makeAssistantText({ id: 'assistant-current-turn' });
+  const firstProcessing = {
+    ...firstQueued,
+    timestamp: '2026-04-26T10:31:37.000Z',
+    queueStatus: 'processing' as const,
+  };
+
+  const realtime = upsertRealtimeMessages(
+    [firstQueued, secondQueued, completedResponse],
+    [firstProcessing],
+  );
+  const merged = computeMerged([], realtime);
+
+  assert.deepEqual(merged, [completedResponse, firstProcessing, secondQueued]);
 });
 
 test('computeMerged drops local optimistic user message after the server copy arrives', () => {

@@ -13,7 +13,7 @@ import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
 
-function createFixture() {
+function createFixture({ hookMcpServers = [], hookMcpTools = [] } = {}) {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
   database.exec(`
@@ -38,7 +38,14 @@ function createFixture() {
   };
   return {
     database,
-    service: createHookConfigService({ database, configStore }),
+    service: createHookConfigService({
+      database,
+      configStore,
+      hookMcpCatalog: {
+        listServers: () => hookMcpServers,
+        listToolResources: () => hookMcpTools,
+      },
+    }),
   };
 }
 
@@ -112,14 +119,16 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     const firstBinding = service.replaceHookBindings({ hookId: created.id, userIds: [1], boundBy: 1 });
     assert.equal(firstBinding.hook.status, 'published');
     assert.equal(firstBinding.hook.activationScope, 'manual');
-    assert.equal(firstBinding.hook.boundUserCount, 1);
-    assert.deepEqual(
-      service.listActiveHooksForUser(1).map((hook) => hook.id),
-      [created.id],
-    );
+    assert.equal(firstBinding.hook.scopedUserCount, 1);
+    assert.equal(firstBinding.hook.boundUserCount, 0);
+    assert.equal(service.listAvailableHooksForUser(1)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+    service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
+    assert.deepEqual(service.listAvailableHooksForUser(3), []);
     assert.deepEqual(service.listActiveHooksForUser(3), []);
 
     const reassigned = service.replaceHookBindings({
@@ -127,45 +136,16 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       userIds: [2, 3, 3],
       boundBy: 1,
     });
-    assert.equal(reassigned.hook.boundUserCount, 2);
+    assert.equal(reassigned.hook.scopedUserCount, 2);
+    assert.equal(reassigned.hook.boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.deepEqual(
-      service.listActiveHooksForUser(2).map((hook) => hook.id),
-      [created.id],
-    );
-    assert.deepEqual(
-      service.listActiveHooksForUser(3).map((hook) => hook.id),
-      [created.id],
-    );
+    assert.equal(service.listAvailableHooksForUser(2)[0].enabled, false);
+    service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
+    service.setUserHookEnabled({ userId: 3, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
     database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
     assert.deepEqual(service.listActiveHooksForUser(4), []);
-
-    database.prepare("INSERT INTO tenants (id, code, name, status) VALUES (1, 'alpha', 'Alpha', 'active')").run();
-    database.prepare(`
-      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
-      VALUES (1, 2, 'member', 'view', 'active')
-    `).run();
-    const tenantBinding = service.replaceHookBindings({
-      hookId: created.id,
-      scope: 'tenants',
-      tenantIds: [1],
-      boundBy: 1,
-    });
-    assert.equal(tenantBinding.hook.boundUserCount, 0);
-    assert.equal(tenantBinding.hook.boundTenantCount, 1);
-    assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
-    assert.deepEqual(service.listActiveHooksForUser(4), []);
-
-    database.prepare(`
-      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
-      VALUES (1, 4, 'member', 'view', 'active')
-    `).run();
-    assert.deepEqual(
-      service.listActiveHooksForUser(4).map((hook) => hook.id),
-      [created.id],
-      'a user added to a bound tenant should become effective automatically',
-    );
 
     const globalBinding = service.replaceHookBindings({
       hookId: created.id,
@@ -174,13 +154,13 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     });
     assert.equal(globalBinding.hook.activationScope, 'all_users');
     assert.equal(globalBinding.hook.boundTenantCount, 0);
-    assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
+    assert.equal(service.listAvailableHooksForUser(1)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
     database.prepare('INSERT INTO users (id, username) VALUES (5, ?)').run('future-global-member');
-    assert.deepEqual(
-      service.listActiveHooksForUser(5).map((hook) => hook.id),
-      [created.id],
-      'a new active user should inherit an all-user Hook automatically',
-    );
+    assert.equal(service.listAvailableHooksForUser(5)[0].enabled, false);
+    assert.deepEqual(service.listActiveHooksForUser(5), []);
+    service.setUserHookEnabled({ userId: 5, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(5).map((hook) => hook.id), [created.id]);
 
     const cleared = service.replaceHookBindings({
       hookId: created.id,
@@ -545,11 +525,6 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
       }),
       /managed by each user from the SQL Check page/,
     );
-    assert.throws(
-      () => service.deleteHook(created.id),
-      /cannot be deleted/,
-    );
-
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
     assert.equal(enabled.enabled, true);
     assert.equal(service.getHook(created.id).boundUserCount, 1);
@@ -559,6 +534,8 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
     assert.equal(disabled.enabled, false);
     assert.equal(service.getHook(created.id).boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.equal(service.deleteHook(created.id), true);
+    assert.equal(service.getHook(created.id), null);
   } finally {
     database.close();
   }
@@ -639,7 +616,23 @@ test('execution audit and script data records can be queried for an Hook', () =>
 });
 
 test('StopFailure can call a published MCP tool and then start a Skill recovery turn', () => {
-  const { database, service } = createFixture();
+  const { database, service } = createFixture({
+    hookMcpServers: [{ id: 'hook-mcp-notify', name: 'notify' }],
+    hookMcpTools: [{
+      name: 'mcp__notify__send_sms',
+      mcpServerId: 'hook-mcp-notify',
+      serverName: 'notify',
+      toolName: 'send_sms',
+      inputSchema: {
+        type: 'object',
+        required: ['user_id', 'content'],
+        properties: {
+          user_id: { type: 'number' },
+          content: { type: 'string' },
+        },
+      },
+    }],
+  });
   try {
     database.prepare("INSERT INTO tenants (id, code, name) VALUES (1, 'demo', 'Demo')").run();
     database.prepare(`
@@ -897,17 +890,6 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
       ),
       null,
     );
-  } finally {
-    database.close();
-  }
-});
-
-test('requested Hook example initialization marker is persisted', () => {
-  const { database, service } = createFixture();
-  try {
-    assert.equal(service.areRequestedExamplesInitialized(), false);
-    service.markRequestedExamplesInitialized();
-    assert.equal(service.areRequestedExamplesInitialized(), true);
   } finally {
     database.close();
   }

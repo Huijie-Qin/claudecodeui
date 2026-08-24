@@ -1,8 +1,22 @@
+import type { HookConfigDraft } from './types';
+
 type HookItemIdRuntime = {
   randomUUID?: () => string;
   now?: () => number;
   random?: () => number;
 };
+
+export function createHookDraftSignature(hook: HookConfigDraft): string {
+  return JSON.stringify({
+    name: hook.name,
+    description: hook.description,
+    eventName: hook.eventName,
+    matcher: hook.matcher,
+    extensionLogic: hook.extensionLogic,
+    postActions: hook.postActions,
+    claudeResponse: hook.claudeResponse,
+  });
+}
 
 export function createHookItemId(runtime?: HookItemIdRuntime) {
   const randomUUID = runtime

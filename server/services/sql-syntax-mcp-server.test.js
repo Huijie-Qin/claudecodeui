@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { callHookMcpTool } from './hook-mcp-client.js';
+import { callHookMcpTool, resolveHostRuntimeMcpUrl } from './hook-mcp-client.js';
 import {
   SQL_SYNTAX_MCP_TOOL_NAME,
   checkSqlSyntax,
@@ -44,7 +44,7 @@ test('Hook MCP client performs a real HTTP call to the simulated SQL checker', a
       mcpServers: {
         'sql-syntax-checker': {
           type: 'http',
-          url: `http://127.0.0.1:${address.port}`,
+          url: `http://host.docker.internal:${address.port}`,
         },
       },
       cwd: process.cwd(),
@@ -56,4 +56,15 @@ test('Hook MCP client performs a real HTTP call to the simulated SQL checker', a
   } finally {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
+});
+
+test('Hook MCP host URL normalization leaves ordinary remote servers unchanged', () => {
+  assert.equal(
+    resolveHostRuntimeMcpUrl('sql-syntax-checker', 'https://mcp.example.com/tools').toString(),
+    'https://mcp.example.com/tools',
+  );
+  assert.equal(
+    resolveHostRuntimeMcpUrl('custom-host-service', 'http://host.docker.internal:4500/mcp').toString(),
+    'http://host.docker.internal:4500/mcp',
+  );
 });

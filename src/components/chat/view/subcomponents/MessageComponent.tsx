@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Clock3, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -144,6 +145,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
+  const isQueuedUserMessage = message.type === 'user' && message.queueStatus === 'queued';
+  const isFailedQueuedUserMessage = message.type === 'user' && message.queueStatus === 'failed';
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
@@ -216,12 +219,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
+      data-queue-status={message.queueStatus || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
       {message.type === 'user' ? (
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="group flex-1 rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4">
+          <div className={`group flex-1 rounded-2xl rounded-br-md px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4 ${isQueuedUserMessage
+            ? 'border border-dashed border-blue-300/80 bg-blue-600/75'
+            : isFailedQueuedUserMessage
+              ? 'border border-red-300/80 bg-red-600/85'
+              : 'bg-blue-600'
+            }`}>
             <div className="whitespace-pre-wrap break-words text-sm">
               {message.content}
             </div>
@@ -242,6 +251,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+              {isQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium" data-queued-message-indicator>
+                  <Clock3 className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.queued', { defaultValue: 'Queued' })}
+                </span>
+              )}
+              {isFailedQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium text-red-100">
+                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.failed', { defaultValue: 'Failed to queue' })}
+                </span>
+              )}
               {shouldShowUserCopyControl && (
                 <MessageCopyControl content={userCopyContent} messageType="user" />
               )}

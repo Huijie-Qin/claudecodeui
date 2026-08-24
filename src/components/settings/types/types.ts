@@ -4,7 +4,7 @@ import type { LLMProvider } from '../../../types/app';
 import type { ModelResponseHookConfig } from '../../../hooks/modelResponseNotificationHooks';
 import type { ProviderAuthStatus } from '../../provider-auth/types';
 
-export type SettingsMainTab = 'appearance' | 'git' | 'api' | 'claudeEnv' | 'tasks' | 'notifications' | 'plugins' | 'about';
+export type SettingsMainTab = 'appearance' | 'git' | 'api' | 'claudeEnv' | 'hooks' | 'tasks' | 'notifications' | 'plugins' | 'about';
 export type AgentProvider = LLMProvider;
 export type AgentCategory = 'account' | 'permissions';
 export type ProjectSortOrder = 'name' | 'date';
@@ -17,6 +17,7 @@ export type SettingsProject = {
   displayName?: string;
   fullPath?: string;
   path?: string;
+  workspaceId?: number;
 };
 
 export type AuthStatus = ProviderAuthStatus;

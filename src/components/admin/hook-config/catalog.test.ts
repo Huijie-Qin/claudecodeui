@@ -17,6 +17,7 @@ const resources: HookResources = {
   events: [],
   builtinTools: [],
   mcpTools: [],
+  hookMcpServers: [],
   skills: [],
   environmentVariables: [{ path: 'ccui.env.userId', type: 'number' }],
 };
@@ -121,6 +122,7 @@ test('copying a Hook creates an independent draft without runtime identity or bi
     activationScope: 'all_users',
     bindingController: 'admin',
     boundUserCount: 2,
+    scopedUserCount: 2,
     boundTenantCount: 1,
     hasDataRecords: true,
   };

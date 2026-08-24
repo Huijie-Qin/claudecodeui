@@ -43,6 +43,7 @@ const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
+export const DOCKER_CLI_PATH_ENV_NAME = 'CLOUDCLI_DOCKER_CLI_PATH';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
 const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
 const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
@@ -281,6 +282,11 @@ export function resolveClaudeExecutionMode(env = process.env) {
     return mode;
   }
   throw new Error('CLAUDE_EXECUTION_MODE must be local or docker');
+}
+
+export function resolveDockerCliExecutable(env = process.env) {
+  const configuredPath = String(env?.[DOCKER_CLI_PATH_ENV_NAME] || '').trim();
+  return configuredPath || 'docker';
 }
 
 function resolveClaudeDockerImage(env = process.env) {
@@ -596,10 +602,11 @@ export function createClaudeDockerSpawn({
   spawnImpl = spawnChildProcess,
 } = {}) {
   const dockerHostEnv = buildDockerHostProcessEnv(hostEnv);
+  const dockerExecutable = resolveDockerCliExecutable(hostEnv);
   // The SDK's options.env is guest-facing and may contain user or tenant values.
   // Use it only to build docker exec -e arguments, never as the Docker CLI's host env.
   return (options = {}) => spawnImpl(
-    'docker',
+    dockerExecutable,
     buildClaudeDockerExecArgs({
       containerName,
       args: options.args,
@@ -1040,9 +1047,13 @@ function resolveRuntimeDirectoryForCleanup(runtimeHomePath, runtimeRoot) {
 }
 
 export class DockerCliClient {
+  constructor({ env = process.env, executable } = {}) {
+    this.executable = String(executable || '').trim() || resolveDockerCliExecutable(env);
+  }
+
   async inspectContainer(containerName) {
     try {
-      const { stdout } = await execFileAsync('docker', [
+      const { stdout } = await execFileAsync(this.executable, [
         'inspect',
         '-f',
         '{{json .}}',
@@ -1073,16 +1084,16 @@ export class DockerCliClient {
   }
 
   async startContainer(containerName) {
-    await execFileAsync('docker', ['start', containerName]);
+    await execFileAsync(this.executable, ['start', containerName]);
   }
 
   async stopContainer(containerName) {
-    await execFileAsync('docker', ['stop', '-t', '1', containerName]);
+    await execFileAsync(this.executable, ['stop', '-t', '1', containerName]);
   }
 
   async removeContainer(containerName) {
     try {
-      await execFileAsync('docker', ['rm', '-f', containerName]);
+      await execFileAsync(this.executable, ['rm', '-f', containerName]);
     } catch (error) {
       if (error?.code === 1 || error?.stderr?.includes('No such object')) {
         return;
@@ -1092,7 +1103,7 @@ export class DockerCliClient {
   }
 
   async verifyWorkspaceCwd(containerName) {
-    await execFileAsync('docker', [
+    await execFileAsync(this.executable, [
       'exec',
       '-w',
       '/workspace',
@@ -1108,7 +1119,7 @@ export class DockerCliClient {
   async installPythonPackages(containerName, packages = []) {
     const args = buildDockerPythonInstallArgs(containerName, packages);
     if (args.length === 0) return;
-    await execFileAsync('docker', args);
+    await execFileAsync(this.executable, args);
   }
 
   async statsContainers(containerNames) {
@@ -1117,7 +1128,7 @@ export class DockerCliClient {
       : [];
     if (names.length === 0) return new Map();
 
-    const { stdout } = await execFileAsync('docker', [
+    const { stdout } = await execFileAsync(this.executable, [
       'stats',
       '--no-stream',
       '--format',
@@ -1137,7 +1148,7 @@ export class DockerCliClient {
   }
 
   async runDetached(args) {
-    await execFileAsync('docker', args);
+    await execFileAsync(this.executable, args);
   }
 }
 
@@ -1147,7 +1158,7 @@ export function createAgentSessionRuntimeManager({
   users = defaultUserDb,
   claudeEnv = defaultClaudeEnvService,
   codeHub = null,
-  docker = new DockerCliClient(),
+  docker = new DockerCliClient({ env }),
   fs = fsPromises,
 } = {}) {
   const runtimeLocks = new Map();
@@ -1566,22 +1577,22 @@ export function createAgentSessionRuntimeManager({
   async function createNewRuntime({
     tenantId,
     userId,
-    workspaceId,
-    workspaceHostPath,
-    pathSegments,
-    logRequestId = null,
-  }) {
-    const runtimeId = buildRuntimeId();
-    const runtimePaths = buildRuntimePaths({
-      runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
-      provider: 'claude',
+  workspaceId,
+  workspaceHostPath,
+  pathSegments,
+  logRequestId = null,
+}) {
+  const runtimeId = buildRuntimeId();
+  const runtimePaths = buildRuntimePaths({
+    runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+    provider: 'claude',
       ...pathSegments,
       tenantId,
       userId,
       workspaceId,
     });
-    const containerName = buildContainerName({
-      provider: 'claude',
+  const containerName = buildContainerName({
+    provider: 'claude',
       tenantId,
       userId,
       workspaceId,
@@ -1615,22 +1626,22 @@ export function createAgentSessionRuntimeManager({
   async function createNewLocalRuntime({
     tenantId,
     userId,
-    workspaceId,
-    workspaceHostPath,
-    pathSegments,
-    logRequestId = null,
-  }) {
-    const runtimeId = buildRuntimeId();
-    const runtimePaths = buildRuntimePaths({
-      runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
-      provider: 'claude',
+  workspaceId,
+  workspaceHostPath,
+  pathSegments,
+  logRequestId = null,
+}) {
+  const runtimeId = buildRuntimeId();
+  const runtimePaths = buildRuntimePaths({
+    runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+    provider: 'claude',
       ...pathSegments,
       tenantId,
       userId,
       workspaceId,
     });
-    const containerName = buildContainerName({
-      provider: 'claude-local',
+  const containerName = buildContainerName({
+    provider: 'claude-local',
       tenantId,
       userId,
       workspaceId,

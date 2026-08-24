@@ -1913,7 +1913,7 @@ export default function DataAgentApp() {
     if (
       latestMessage?.type === 'projects_updated'
       && Array.isArray(latestMessage.projects)
-      && isProjectUpdateScopedToTenant(latestMessage.projects, currentTenant?.id)
+      && isProjectUpdateScopedToTenant(latestMessage.projects, currentTenant?.id, latestMessage.tenantId)
     ) {
       setProjects(latestMessage.projects);
     }

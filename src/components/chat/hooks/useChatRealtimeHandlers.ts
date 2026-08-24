@@ -148,6 +148,32 @@ export function useChatRealtimeHandlers({
           return;
         }
 
+        case 'claude-supplement-ack': {
+          const supplementSessionId = typeof msg.sessionId === 'string' ? msg.sessionId : '';
+          const clientMessageId = typeof msg.clientMessageId === 'string' ? msg.clientMessageId : '';
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          const queueStatus = ['queued', 'processing', 'failed'].includes(msg.status)
+            ? msg.status as 'queued' | 'processing' | 'failed'
+            : null;
+          if (!supplementSessionId || !clientMessageId || !content.trim() || !queueStatus) {
+            return;
+          }
+
+          sessionStore.appendRealtime(supplementSessionId, {
+            id: `local_supplement_${clientMessageId}`,
+            sessionId: supplementSessionId,
+            timestamp: msg.timestamp || new Date().toISOString(),
+            provider: 'claude',
+            kind: 'text',
+            role: 'user',
+            content,
+            clientMessageId,
+            queueStatus,
+            ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
+          });
+          return;
+        }
+
         case 'session-status': {
           const statusSessionId = msg.sessionId;
           if (!statusSessionId) return;

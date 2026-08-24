@@ -474,6 +474,12 @@
     "save": "Save",
     "cancel": "Cancel",
     "close": "Close",
+    "unsaved": {
+      "title": "Discard unsaved changes?",
+      "description": "This Hook configuration has changes that have not been saved. Returning to the list will discard them.",
+      "continueEditing": "Continue editing",
+      "discard": "Discard changes"
+    },
     "search": "Search Hooks",
     "loading": "Loading Hook configurations...",
     "empty": "No Hook configurations",
@@ -555,12 +561,12 @@
       }
     },
     "bindings": {
-      "title": "Bind enabled users",
-      "manage": "Bind users",
-      "boundCountShort": "{{count}} bound",
+      "title": "Set user visibility",
+      "manage": "User scope",
+      "boundCountShort": "Visible to {{count}}",
       "boundTenantCountShort": "{{count}} tenants (dynamic)",
-      "allUsersShort": "All users (dynamic)",
-      "unbound": "No users bound",
+      "allUsersShort": "Visible to all users",
+      "unbound": "Visible to no users",
       "sqlCheckManaged": "Enabled by users in SQL Check",
       "sqlCheckManagedCount": "{{count}} users enabled enforcement",
       "scopes": {
@@ -569,38 +575,77 @@
         "all_users": "All users"
       },
       "scopeHints": {
-        "users": "Runs only for users selected individually; new users are not added automatically.",
+        "users": "Only selected users can see this Hook in Settings; each user decides whether to enable it.",
         "tenants": "Runs for every active member of the selected tenants; future tenant members are included automatically.",
-        "all_users": "Runs for every active system user; future users are included automatically."
+        "all_users": "Every active user can see this Hook in Settings and decide whether to enable it."
       },
       "search": "Search username",
       "searchTenant": "Search tenant name or code",
-      "loading": "Loading binding scope",
+      "loading": "Loading user scope",
       "noUsers": "No users available",
       "noTenants": "No tenants available",
       "noMatches": "No matching users",
       "admin": "Admin",
       "inactive": "Inactive",
       "tenantUsers": "{{count}} members",
-      "allUsersTitle": "Enable the dynamic all-user scope",
-      "allUsersDescription": "Currently covers {{count}} active users; newly activated users will receive this Hook automatically.",
+      "allUsersTitle": "Visible to all users",
+      "allUsersDescription": "All {{count}} active users can choose whether to enable this Hook in Settings; future active users can also see it.",
       "selectionSummary": {
         "users": "{{count}} users selected",
         "tenants": "{{count}} tenants selected",
         "all_users": "Currently covers {{count}} active users"
       },
       "clear": "Clear selection",
-      "save": "Save bindings",
+      "save": "Save scope",
       "savedScopes": {
-        "users": "Specific-user bindings saved",
+        "users": "Specific-user visibility saved",
         "tenants": "Dynamic tenant bindings saved",
-        "all_users": "Dynamic all-user binding enabled"
+        "all_users": "Visible to all users"
       },
-      "loadError": "Failed to load Hook user bindings",
-      "saveError": "Failed to save Hook user bindings"
+      "loadError": "Failed to load Hook user scope",
+      "saveError": "Failed to save Hook user scope"
     },
     "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
+    "hookMcp": {
+      "title": "Hook MCP management",
+      "description": "These MCP servers belong to Hook configurations. Enabling a Hook caches them in its workspace and loads them only for Hook calls or recovery turns.",
+      "create": "Configure MCP",
+      "createTitle": "Configure Hook MCP",
+      "editTitle": "Edit Hook MCP",
+      "test": "Test",
+      "delete": "Delete",
+      "deleteTitle": "Delete Hook MCP",
+      "confirmDelete": "Delete Hook MCP \"{{name}}\"? Hooks that reference it will no longer be able to call it.",
+      "empty": "No Hook MCP servers",
+      "untested": "Not tested",
+      "healthy": "Healthy · {{count}} tools",
+      "failed": "Connection failed",
+      "saved": "Hook MCP configuration saved",
+      "helperUploaded": "Helper script \"{{name}}\" uploaded",
+      "helperDeleted": "Helper script deleted",
+      "helperSaveFirst": "Save the Hook MCP configuration before uploading a helper script.",
+      "helperScriptTitle": "Hook MCP helper script",
+      "helperScriptDescription": "When a user enables a Hook that references this MCP server, the script is copied to the workspace under .cloudcli/hook-config. The script itself must not contain secrets; use static headers or helper environment variables for sensitive values.",
+      "deleted": "Hook MCP \"{{name}}\" deleted",
+      "testHealthy": "MCP connection is healthy; {{count}} tools discovered",
+      "fields": {
+        "displayName": "Display name",
+        "name": "Server name",
+        "description": "Description",
+        "url": "HTTP MCP URL",
+        "headers": "Static headers (JSON)",
+        "headersHint": "Headers may contain secrets and are visible and editable only to system administrators on this page.",
+        "headersHelper": "Headers Helper command",
+        "headersHelperHint": "Optional. An uploaded script can be referenced by filename, for example python3 auth.py; the command must write a JSON headers object to stdout."
+      },
+      "errors": {
+        "headers": "Headers must be a JSON object",
+        "save": "Failed to save Hook MCP",
+        "test": "Failed to test Hook MCP",
+        "delete": "Failed to delete Hook MCP"
+      }
+    },
     "builtinSkills": {
       "title": "Built-in Hook Skill management",
       "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
@@ -615,6 +660,7 @@
       "idLabel": "ID",
       "descriptionLabel": "Description",
       "delete": "Delete",
+      "deleteTitle": "Delete built-in Skill",
       "confirmDelete": "Delete built-in Skill \"{{name}}\"? Hooks that reference it will keep their configuration and show an unavailable warning.",
       "unavailableTitle": "Built-in Hook Skill unavailable",
       "unavailableDescription": "Not found: {{skills}}. Edit the Hook and select an available built-in Skill.",

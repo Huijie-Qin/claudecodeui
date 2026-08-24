@@ -96,6 +96,7 @@
     "codeHub": "CodeHub",
     "apiTokens": "令牌",
     "claudeEnv": "环境变量",
+    "hooks": "Hook",
     "tasks": "任务",
     "notifications": "通知",
     "plugins": "插件",

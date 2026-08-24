@@ -10,10 +10,11 @@ import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
+import HookSettingsTab from '../view/tabs/HookSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
 
-function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const {
     activeTab,
@@ -89,6 +90,8 @@ function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps)
               {activeTab === 'api' && <CredentialsSettingsTab />}
 
               {activeTab === 'claudeEnv' && <ClaudeEnvironmentSettingsTab />}
+
+              {activeTab === 'hooks' && <HookSettingsTab projects={projects} />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
             </div>

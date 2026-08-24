@@ -1,4 +1,4 @@
-import { GitBranch, Key, KeyRound, Palette } from 'lucide-react';
+import { GitBranch, Key, KeyRound, Palette, Webhook } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
@@ -21,6 +21,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'git', labelKey: 'mainTabs.git', icon: GitBranch },
   { id: 'api', labelKey: 'mainTabs.apiTokens', icon: Key },
   { id: 'claudeEnv', labelKey: 'mainTabs.claudeEnv', icon: KeyRound },
+  { id: 'hooks', labelKey: 'mainTabs.hooks', icon: Webhook },
 ];
 
 export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {

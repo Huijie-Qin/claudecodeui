@@ -530,7 +530,10 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
       workspaceRoot,
       database,
       skillContentLoader: loadTestHookSkill,
-      enqueueSkillRecovery: async (request) => scheduled.push(request),
+      enqueueSkillRecovery: async (request) => {
+        scheduled.push(request);
+        return { queuePosition: 1, status: 'queued', executionMode: 'original_session' };
+      },
     });
     const output = await runtime.executeHook(hook, {
       hook_event_name: 'Stop',
@@ -540,8 +543,20 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
     });
     assert.deepEqual(output, { systemMessage: 'normal answer completed' });
     assert.equal(scheduled.length, 1);
+    assert.equal(typeof scheduled[0].executionId, 'string');
+    assert.equal(scheduled[0].argumentsText, '1');
     assert.equal(scheduled[0].displayCommand, '/hook-notification 1');
     assert.match(scheduled[0].modelContent, /Payload: 1/);
+    const execution = database.prepare(
+      'SELECT actions_json FROM hook_executions ORDER BY rowid DESC LIMIT 1',
+    ).get();
+    assert.deepEqual(JSON.parse(execution.actions_json)['continue-with-skill'].output, {
+      scheduled: true,
+      skillName: 'hook-notification',
+      queuePosition: 1,
+      status: 'queued',
+      executionMode: 'original_session',
+    });
   } finally {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });

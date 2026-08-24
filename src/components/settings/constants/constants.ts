@@ -12,6 +12,7 @@ export const SETTINGS_MAIN_TABS: SettingsMainTab[] = [
   'git',
   'api',
   'claudeEnv',
+  'hooks',
   'tasks',
   'notifications',
   'plugins',

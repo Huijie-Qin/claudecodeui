@@ -11,6 +11,8 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const HEADER_HELPER_TIMEOUT_MS = 10_000;
 const HOST_SHELL_COMMAND = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
 const HOST_SHELL_ARGS = process.platform === 'win32' ? ['/d', '/c'] : ['-lc'];
+const DOCKER_HOST_ALIAS = 'host.docker.internal';
+const HOST_LOOPBACK_ADDRESS = '127.0.0.1';
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -30,22 +32,24 @@ function resolveMcpTarget(qualifiedToolName, mcpServers) {
   return { serverName, toolName, config: mcpServers[serverName] };
 }
 
-async function resolveHeaders(serverName, config) {
+async function resolveHeaders(serverName, config, headersHelperRunner) {
   const headers = isPlainObject(config?.headers)
     ? Object.fromEntries(Object.entries(config.headers).map(([key, value]) => [key, String(value)]))
     : {};
   const helper = typeof config?.headersHelper === 'string' ? config.headersHelper.trim() : '';
   if (!helper) return headers;
-  const { stdout } = await execFileAsync(HOST_SHELL_COMMAND, [...HOST_SHELL_ARGS, helper], {
-    timeout: HEADER_HELPER_TIMEOUT_MS,
-    maxBuffer: 64 * 1024,
-    env: {
-      ...process.env,
-      CLAUDE_CODE_MCP_SERVER_NAME: serverName,
-      CLAUDE_CODE_MCP_SERVER_URL: config.url || '',
-    },
-    windowsHide: true,
-  });
+  const helperEnvironment = {
+    CLAUDE_CODE_MCP_SERVER_NAME: serverName,
+    CLAUDE_CODE_MCP_SERVER_URL: config.url || '',
+  };
+  const { stdout } = headersHelperRunner
+    ? await headersHelperRunner({ command: helper, env: helperEnvironment, timeoutMs: HEADER_HELPER_TIMEOUT_MS })
+    : await execFileAsync(HOST_SHELL_COMMAND, [...HOST_SHELL_ARGS, helper], {
+        timeout: HEADER_HELPER_TIMEOUT_MS,
+        maxBuffer: 64 * 1024,
+        env: { ...process.env, ...helperEnvironment },
+        windowsHide: true,
+      });
   let parsed;
   try {
     parsed = JSON.parse(String(stdout || '').trim());
@@ -58,7 +62,15 @@ async function resolveHeaders(serverName, config) {
   return { ...headers, ...parsed };
 }
 
-async function createTransport(serverName, config, cwd) {
+function resolveHostRuntimeMcpUrl(serverName, value) {
+  const url = new URL(value);
+  if (url.hostname.toLowerCase() === DOCKER_HOST_ALIAS) {
+    url.hostname = HOST_LOOPBACK_ADDRESS;
+  }
+  return url;
+}
+
+async function createTransport(serverName, config, cwd, headersHelperRunner) {
   if (!isPlainObject(config)) throw new Error(`MCP server ${serverName} has an invalid configuration`);
   if (config.type === 'sdk') {
     throw new Error(`MCP server ${serverName} is an in-process SDK server and cannot be called by a Hook action`);
@@ -77,8 +89,12 @@ async function createTransport(serverName, config, cwd) {
   if (typeof config.url !== 'string' || !config.url.trim()) {
     throw new Error(`MCP server ${serverName} must configure command or url`);
   }
-  const headers = await resolveHeaders(serverName, config);
-  const url = new URL(config.url);
+  const headers = await resolveHeaders(serverName, config, headersHelperRunner);
+  // Hook post-actions execute in the CCUI Node.js process even when the
+  // originating Claude session runs in Docker. The built-in SQL checker points
+  // back to CCUI itself, so its Docker host alias must become loopback for this
+  // direct call. Custom MCP addresses are intentionally left untouched.
+  const url = resolveHostRuntimeMcpUrl(serverName, config.url);
   if (config.type === 'sse') {
     return new SSEClientTransport(url, {
       requestInit: { headers },
@@ -132,10 +148,11 @@ export async function callHookMcpTool({
   mcpServers,
   cwd,
   signal,
+  headersHelperRunner,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   const { serverName, toolName, config } = resolveMcpTarget(qualifiedToolName, mcpServers);
-  const transport = await createTransport(serverName, config, cwd);
+  const transport = await createTransport(serverName, config, cwd, headersHelperRunner);
   const client = new Client({ name: 'ccui-hook-runtime', version: '1.0.0' });
   const controller = new AbortController();
   const handleCallerAbort = () => controller.abort(signal?.reason || new Error('MCP Hook action was aborted'));
@@ -160,4 +177,4 @@ export async function callHookMcpTool({
   }
 }
 
-export { normalizeToolOutput, resolveMcpTarget };
+export { normalizeToolOutput, resolveHeaders, resolveHostRuntimeMcpUrl, resolveMcpTarget };

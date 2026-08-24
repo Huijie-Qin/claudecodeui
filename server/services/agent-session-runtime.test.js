@@ -19,6 +19,7 @@ import {
   createAgentSessionRuntimeManager as createAgentSessionRuntimeManagerImpl,
   createClaudeDockerSpawn,
   CLAUDE_DOCKER_ENV_POLICY_ENV_NAME,
+  DOCKER_CLI_PATH_ENV_NAME,
   DOCKER_BIND_CONTAINER_ROOT_ENV_NAME,
   DOCKER_BIND_HOST_ROOT_ENV_NAME,
   ensureClaudeCleanupPeriod,
@@ -29,6 +30,7 @@ import {
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
   resolveDockerBindSourcePath,
+  resolveDockerCliExecutable,
   resolveDockerSharedPythonPath,
   rewriteDockerProxyEnv,
 } from './agent-session-runtime.js';
@@ -96,6 +98,14 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   assert.throws(
     () => resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'podman' }),
     /CLAUDE_EXECUTION_MODE must be local or docker/,
+  );
+});
+
+test('Docker CLI executable supports an explicit service path', () => {
+  assert.equal(resolveDockerCliExecutable({}), 'docker');
+  assert.equal(
+    resolveDockerCliExecutable({ [DOCKER_CLI_PATH_ENV_NAME]: ' /usr/local/bin/docker ' }),
+    '/usr/local/bin/docker',
   );
 });
 
@@ -665,6 +675,25 @@ test('custom docker spawn bypasses host wrapper execution', () => {
   assert.equal(calls[0][2].env.PATH, 'C:\\bin');
   assert.deepEqual(calls[0][2].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(calls[0][2].windowsHide, true);
+});
+
+test('custom docker spawn uses the configured Docker CLI path', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    hostEnv: {
+      PATH: '/usr/bin:/bin',
+      [DOCKER_CLI_PATH_ENV_NAME]: '/usr/local/bin/docker',
+    },
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  assert.equal(spawnClaudeCodeProcess({ args: ['--version'] }), child);
+  assert.equal(calls[0][0], '/usr/local/bin/docker');
 });
 
 test('custom docker spawn keeps arbitrary guest env out of the Docker host process', () => {

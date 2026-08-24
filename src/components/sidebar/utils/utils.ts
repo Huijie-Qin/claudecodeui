@@ -245,6 +245,7 @@ export const normalizeProjectForSettings = (project: Project): SettingsProject =
 
   return {
     name: project.name,
+    workspaceId: project.workspaceId,
     displayName:
       typeof project.displayName === 'string' && project.displayName.trim().length > 0
         ? project.displayName

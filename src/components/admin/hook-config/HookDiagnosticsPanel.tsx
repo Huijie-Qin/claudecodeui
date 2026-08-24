@@ -11,6 +11,7 @@ import {
   Search,
   ShieldAlert,
   Timer,
+  X,
   XCircle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -90,9 +91,19 @@ function HookExecutionDetail({
     <Dialog open={Boolean(execution)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
         <DialogTitle className="sr-only">{t('hooks.diagnostics.detailTitle')}</DialogTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute right-3 top-3 z-20 h-8 w-8 rounded-full bg-background/90 shadow-sm"
+          onClick={onClose}
+          aria-label={t('hooks.close')}
+        >
+          <X className="h-4 w-4" />
+        </Button>
         {execution ? (
           <>
-            <div className="border-b border-border bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4">
+            <div className="border-b border-border bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4 pr-14">
               <div className="flex flex-wrap items-start gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
                   <Activity className="h-5 w-5" />

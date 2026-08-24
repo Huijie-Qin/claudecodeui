@@ -17,6 +17,12 @@ test('isProjectUpdateScopedToTenant rejects legacy or cross-tenant updates', () 
   assert.equal(isProjectUpdateScopedToTenant([
     { name: 'other', displayName: 'Other', fullPath: '/tmp/other', tenantId: 1 },
   ], 2), false);
+  assert.equal(isProjectUpdateScopedToTenant([], 2), false);
+  assert.equal(isProjectUpdateScopedToTenant([], 2, 1), false);
+});
+
+test('isProjectUpdateScopedToTenant accepts an explicitly scoped empty update', () => {
+  assert.equal(isProjectUpdateScopedToTenant([], 2, 2), true);
 });
 
 test('isProjectUpdateScopedToTenant allows updates when no tenant is selected', () => {

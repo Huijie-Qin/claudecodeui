@@ -13,7 +13,11 @@ import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
-import { computeMerged, reconcileRealtimeAfterServerRefresh } from './sessionMerge';
+import {
+  computeMerged,
+  reconcileRealtimeAfterServerRefresh,
+  upsertRealtimeMessages,
+} from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -43,6 +47,9 @@ export interface NormalizedMessage {
   // kind-specific fields (flat for simplicity)
   role?: 'user' | 'assistant';
   content?: string;
+  clientMessageId?: string;
+  queueStatus?: 'queued' | 'processing' | 'failed';
+  queuePosition?: number;
   images?: string[];
   toolName?: string;
   toolInput?: unknown;
@@ -266,7 +273,7 @@ export function useSessionStore() {
     const current = shouldReplaceStream
       ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
-    let updated = [...current, msg];
+    let updated = upsertRealtimeMessages(current, [msg]);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -285,7 +292,7 @@ export function useSessionStore() {
     const current = shouldReplaceStream
       ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
       : slot.realtimeMessages;
-    let updated = [...current, ...msgs];
+    let updated = upsertRealtimeMessages(current, msgs);
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }

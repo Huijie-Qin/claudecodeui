@@ -5,6 +5,26 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
+test('normalizedToChatMessages preserves queued user message state', () => {
+  const [queuedMessage] = normalizedToChatMessages([{
+    id: 'local_supplement_followup-1',
+    sessionId: 'session-1',
+    timestamp: '2026-06-30T00:00:01.000Z',
+    provider: 'claude',
+    kind: 'text',
+    role: 'user',
+    content: 'Handle this after the current response',
+    clientMessageId: 'followup-1',
+    queueStatus: 'queued',
+    queuePosition: 2,
+  }]);
+
+  assert.equal(queuedMessage.type, 'user');
+  assert.equal(queuedMessage.clientMessageId, 'followup-1');
+  assert.equal(queuedMessage.queueStatus, 'queued');
+  assert.equal(queuedMessage.queuePosition, 2);
+});
+
 test('normalizedToChatMessages hides live Claude skill detail user text', () => {
   const messages: NormalizedMessage[] = [
     {
@@ -40,6 +60,41 @@ test('normalizedToChatMessages hides live Claude skill detail user text', () => 
   assert.equal(chatMessages.length, 1);
   assert.equal(chatMessages[0].type, 'assistant');
   assert.equal(chatMessages[0].content, 'I will take a look.');
+});
+
+test('normalizedToChatMessages hides the internal Hook recovery prompt in the original session', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'hook-recovery-prompt',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'user',
+      content: [
+        '<ccui-hook-recovery>',
+        'Hook: Completion notification (hook-1)',
+        'Skill root: /workspace/.cloudcli/hook-config/skills/builtin-notify/hash',
+        '</ccui-hook-recovery>',
+        '# Hook notification internal instructions',
+      ].join('\n'),
+    },
+    {
+      id: 'hook-recovery-result',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+    },
+  ];
+
+  const chatMessages = normalizedToChatMessages(messages);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0].type, 'assistant');
+  assert.equal(chatMessages[0].content, 'HOOK_NOTIFICATION_SKILL_EXECUTED');
 });
 
 test('normalizedToChatMessages hides Claude user text immediately after a Skill tool use', () => {

@@ -20,6 +20,10 @@
     "codex": "Codex",
     "gemini": "Gemini"
   },
+  "messageQueue": {
+    "queued": "队列中",
+    "failed": "入队失败"
+  },
   "tools": {
     "settings": "工具设置",
     "error": "工具错误",
@@ -113,6 +117,8 @@
     "attachImages": "附加图片",
     "send": "发送",
     "stop": "停止",
+    "sendSupplement": "排队发送",
+    "supplementPlaceholder": "当前回答结束后发送下一条消息...",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
       "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令"

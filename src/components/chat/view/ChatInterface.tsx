@@ -702,7 +702,7 @@ function ChatInterface({
           placeholder={
             isLoading && provider === 'claude'
               ? t('input.supplementPlaceholder', {
-                  defaultValue: 'Add supplemental info while Claude is working...',
+                  defaultValue: 'Queue a follow-up after the current response...',
                 })
               : t('input.placeholder', {
                   provider:

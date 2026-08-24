@@ -3,6 +3,7 @@ const CLAUDE_INTERNAL_CONTENT_MARKERS = [
 ] as const;
 
 const CLAUDE_INTERNAL_CONTENT_PATTERNS = [
+  /^\s*<ccui-hook-recovery\b[^>]*>/i,
   /^\s*<[^>\n]*skill[^>\n]*>/i,
   /^\s*skill\s+(?:body|content|detail|details|instructions|parameters|params|arguments|args)\s*:/i,
 ] as const;

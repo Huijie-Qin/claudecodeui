@@ -66,10 +66,16 @@ export interface TaskNotificationDetails {
   raw: string;
 }
 
+export type UserQueueStatus = 'queued' | 'processing' | 'failed';
+
 export interface ChatMessage {
+  id?: string;
   type: string;
   content?: string;
   timestamp: string | number | Date;
+  clientMessageId?: string;
+  queueStatus?: UserQueueStatus;
+  queuePosition?: number;
   images?: ChatImage[];
   reasoning?: string;
   isThinking?: boolean;

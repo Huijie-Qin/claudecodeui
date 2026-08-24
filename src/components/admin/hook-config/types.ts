@@ -97,6 +97,7 @@ export type HookConfig = HookConfigDraft & {
   activationScope: 'manual' | 'all_users';
   bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
+  scopedUserCount: number;
   boundTenantCount: number;
   hasDataRecords: boolean;
 };
@@ -177,10 +178,12 @@ export type HookToolResource = {
 };
 
 export type HookMcpToolResource = HookToolResource & {
+  mcpServerId: string;
   serverName: string;
   serverDisplayName: string;
   toolName: string;
   tenantCodes: string[];
+  runtimeAlias: string;
 };
 
 export type HookSkillResource = {
@@ -197,6 +200,40 @@ export type HookSkillSource = {
   error?: string;
 };
 
+export type HookMcpServer = {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  config: {
+    type: 'http';
+    url: string;
+    headers?: Record<string, string>;
+    headersHelper?: string;
+    helperEnv?: Record<string, string>;
+    alwaysLoad?: boolean;
+  };
+  lastTestStatus: 'healthy' | 'failed' | null;
+  lastTestError: string | null;
+  lastTestedAt: string | null;
+  toolCount: number;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
+  helperScript?: {
+    fileName: string;
+    sizeBytes: number;
+    sha256: string;
+    updatedAt?: string | null;
+  } | null;
+  contentHash: string;
+  runtimeAlias: string;
+};
+
+export type HookMcpSource = {
+  type: 'builtin';
+  available: boolean;
+  error?: string;
+};
+
 export type HookEnvironmentVariable = {
   path: string;
   type: string;
@@ -207,6 +244,8 @@ export type HookResources = {
   events: HookEventName[];
   builtinTools: HookToolResource[];
   mcpTools: HookMcpToolResource[];
+  hookMcpServers: HookMcpServer[];
+  hookMcpSource?: HookMcpSource;
   skills: HookSkillResource[];
   skillSource?: HookSkillSource;
   environmentVariables: HookEnvironmentVariable[];

@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS user_hook_bindings (
 CREATE INDEX IF NOT EXISTS idx_user_hook_bindings_hook
   ON user_hook_bindings(hook_id, user_id);
 
+CREATE TABLE IF NOT EXISTS hook_user_scopes (
+  hook_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  configured_by INTEGER,
+  configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (hook_id, user_id),
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (configured_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_user_scopes_user
+  ON hook_user_scopes(user_id, hook_id);
+
 CREATE TABLE IF NOT EXISTS hook_tenant_bindings (
   hook_id TEXT NOT NULL,
   tenant_id INTEGER NOT NULL,
@@ -318,6 +333,28 @@ export function migrateHookActivationModel(database) {
   const hasHookDataRecordsTable = Boolean(database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_data_records'")
     .get());
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS hook_user_scopes (
+      hook_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      configured_by INTEGER,
+      configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (hook_id, user_id),
+      FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (configured_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_hook_user_scopes_user
+      ON hook_user_scopes(user_id, hook_id);
+  `);
+  const hasAppConfigTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_config'")
+    .get());
+  const hookUserScopesMigrationKey = 'hook_user_scopes_initialized_v1';
+  const hookUserScopesInitialized = hasAppConfigTable && Boolean(database
+      .prepare('SELECT value FROM app_config WHERE key = ?')
+      .get(hookUserScopesMigrationKey));
   let separatedSqlCheckHooks = 0;
 
   const migrate = database.transaction(() => {
@@ -520,6 +557,26 @@ export function migrateHookActivationModel(database) {
     `).run();
   });
   migrate();
+
+  if (!hookUserScopesInitialized) {
+    const initializeUserScopes = database.transaction(() => {
+      database.prepare(`
+        INSERT OR IGNORE INTO hook_user_scopes (hook_id, user_id, configured_by)
+        SELECT binding.hook_id, binding.user_id, binding.bound_by
+        FROM user_hook_bindings binding
+        INNER JOIN hooks hook ON hook.id = binding.hook_id
+        WHERE hook.binding_controller = 'admin'
+      `).run();
+      if (hasAppConfigTable) {
+        database.prepare(`
+          INSERT INTO app_config (key, value)
+          VALUES (?, '1')
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(hookUserScopesMigrationKey);
+      }
+    });
+    initializeUserScopes();
+  }
 
   if (hasTenantBindingsTable) {
     database.prepare(`

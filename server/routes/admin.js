@@ -16,10 +16,10 @@ import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.
 import { hookConfigService } from '../services/hook-configs.js';
 import {
   createRequestedHookExamples,
-  ensureRequestedHookExamples,
   listRequestedHookExamples,
 } from '../services/hook-examples.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
+import { hookMcpCatalogService } from '../services/hook-mcp-catalog.js';
 import { scheduledTaskLogStore } from '../services/scheduled-task-log-store.js';
 import { agentTemplateService } from '../services/agent-templates.js';
 import {
@@ -479,6 +479,7 @@ export function createAdminRouter(
   hookSkillCatalog = createHookSkillCatalogService(),
   scheduledTaskLogs = scheduledTaskLogStore,
   agentTemplates = agentTemplateService,
+  hookMcpCatalog = hookMcpCatalogService,
 ) {
   const router = express.Router();
   router.use(requireSystemAdmin);
@@ -531,14 +532,7 @@ export function createAdminRouter(
 
   router.get('/hooks', (req, res) => {
     try {
-      const initialized = ensureRequestedHookExamples({
-        hookConfigs,
-        userId: req.user.id,
-      });
-      return res.json({
-        hooks: hookConfigs.listHooks(),
-        initializedCount: initialized.createdCount,
-      });
+      return res.json({ hooks: hookConfigs.listHooks() });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to list Hooks');
     }
@@ -627,16 +621,37 @@ export function createAdminRouter(
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Hook resources');
     }
+    let hookMcpServers = [];
+    let hookMcpTools = [];
+    let hookMcpSource = { type: 'builtin', available: true };
+    try {
+      hookMcpServers = hookMcpCatalog.listServers();
+      hookMcpTools = typeof hookMcpCatalog.listToolResources === 'function'
+        ? hookMcpCatalog.listToolResources()
+        : resources.mcpTools || [];
+    } catch (error) {
+      hookMcpSource = {
+        type: 'builtin',
+        available: false,
+        error: error instanceof Error ? error.message : 'Failed to load Hook MCP servers',
+      };
+    }
     try {
       const catalog = await hookSkillCatalog.listConfigurationSkills();
       return res.json({
         ...resources,
+        mcpTools: hookMcpTools,
+        hookMcpServers,
+        hookMcpSource,
         skills: catalog.skills,
         skillSource: catalog.source,
       });
     } catch (error) {
       return res.json({
         ...resources,
+        mcpTools: hookMcpTools,
+        hookMcpServers,
+        hookMcpSource,
         skills: [],
         skillSource: {
           ...(typeof hookSkillCatalog.getSource === 'function' ? hookSkillCatalog.getSource() : {}),
@@ -644,6 +659,89 @@ export function createAdminRouter(
           error: error instanceof Error ? error.message : 'Failed to load built-in Hook Skills',
         },
       });
+    }
+  });
+
+  router.post('/hooks/mcp-servers', (req, res) => {
+    try {
+      const server = hookMcpCatalog.createServer({ input: req.body, userId: req.user.id });
+      return res.status(201).json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Hook MCP server');
+    }
+  });
+
+  router.put('/hooks/mcp-servers/:serverName', (req, res) => {
+    try {
+      const server = hookMcpCatalog.updateServer({
+        serverName: req.params.serverName,
+        input: req.body,
+        userId: req.user.id,
+      });
+      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to update Hook MCP server');
+    }
+  });
+
+  router.post('/hooks/mcp-servers/:serverName/test', async (req, res) => {
+    try {
+      const server = await hookMcpCatalog.testServer({
+        serverName: req.params.serverName,
+        userId: req.user.id,
+      });
+      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to test Hook MCP server');
+    }
+  });
+
+  router.post('/hooks/mcp-servers/:serverName/helper-script', (req, res) => {
+    helperScriptUpload.single('script')(req, res, (uploadError) => {
+      try {
+        if (uploadError) {
+          const error = new Error(uploadError.code === 'LIMIT_FILE_SIZE'
+            ? 'Helper script must be 64KB or smaller'
+            : uploadError.message);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (!req.file?.buffer) {
+          const error = new Error('Helper script file is required');
+          error.statusCode = 400;
+          throw error;
+        }
+        const server = hookMcpCatalog.uploadHelperScript({
+          serverName: req.params.serverName,
+          userId: req.user.id,
+          originalName: req.file.originalname,
+          content: req.file.buffer.toString('utf8'),
+        });
+        return res.status(201).json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      } catch (error) {
+        return sendRouteError(res, error, 'Failed to upload Hook MCP helper script');
+      }
+    });
+  });
+
+  router.delete('/hooks/mcp-servers/:serverName/helper-script', (req, res) => {
+    try {
+      const server = hookMcpCatalog.deleteHelperScript({
+        serverName: req.params.serverName,
+        userId: req.user.id,
+      });
+      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Hook MCP helper script');
+    }
+  });
+
+  router.delete('/hooks/mcp-servers/:serverName', (req, res) => {
+    try {
+      const server = hookMcpCatalog.deleteServer({ serverName: req.params.serverName });
+      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Hook MCP server');
     }
   });
 
@@ -763,7 +861,6 @@ export function createAdminRouter(
         hookId: req.params.hookId,
         scope: req.body?.scope,
         userIds: req.body?.userIds,
-        tenantIds: req.body?.tenantIds,
         boundBy: req.user.id,
       }));
     } catch (error) {

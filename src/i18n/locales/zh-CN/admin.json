@@ -428,6 +428,12 @@
     "save": "保存",
     "cancel": "取消",
     "close": "关闭",
+    "unsaved": {
+      "title": "放弃未保存的修改？",
+      "description": "当前 Hook 配置已修改但尚未保存。返回列表会丢失这些修改。",
+      "continueEditing": "继续编辑",
+      "discard": "放弃修改"
+    },
     "search": "搜索 Hook",
     "loading": "正在加载 Hook 配置...",
     "empty": "暂无 Hook 配置",
@@ -509,12 +515,12 @@
       }
     },
     "bindings": {
-      "title": "绑定生效用户",
-      "manage": "绑定用户",
-      "boundCountShort": "已绑定 {{count}} 人",
+      "title": "设置用户可见范围",
+      "manage": "用户范围",
+      "boundCountShort": "{{count}} 人可见",
       "boundTenantCountShort": "{{count}} 个租户（动态）",
-      "allUsersShort": "全部用户（动态）",
-      "unbound": "未绑定用户",
+      "allUsersShort": "全部用户可见",
+      "unbound": "无用户可见",
       "sqlCheckManaged": "由用户在 SQL Check 开启",
       "sqlCheckManagedCount": "{{count}} 人已开启强制校验",
       "scopes": {
@@ -523,38 +529,77 @@
         "all_users": "全部用户"
       },
       "scopeHints": {
-        "users": "只对逐个选中的用户生效；新用户不会自动加入。",
+        "users": "只有选中的用户能在设置中看到此 Hook；是否启用由用户自己决定。",
         "tenants": "对所选租户的全部有效成员生效；以后加入租户的新用户会自动生效。",
-        "all_users": "对系统中的全部有效用户生效；以后创建的新用户也会自动生效。"
+        "all_users": "全部有效用户都能在设置中看到此 Hook；是否启用由用户自己决定。"
       },
       "search": "搜索用户名",
       "searchTenant": "搜索租户名称或编码",
-      "loading": "正在加载绑定范围",
-      "noUsers": "暂无可绑定用户",
+      "loading": "正在加载用户范围",
+      "noUsers": "暂无可选用户",
       "noTenants": "暂无可绑定租户",
       "noMatches": "没有匹配的用户",
       "admin": "管理员",
       "inactive": "已停用",
       "tenantUsers": "{{count}} 名成员",
-      "allUsersTitle": "启用全部用户动态范围",
-      "allUsersDescription": "当前包含 {{count}} 名有效用户；以后新增并激活的用户会自动获得此 Hook。",
+      "allUsersTitle": "对全部用户可见",
+      "allUsersDescription": "当前 {{count}} 名有效用户都可以在设置中选择是否开启此 Hook；以后新增并激活的用户也可看到。",
       "selectionSummary": {
         "users": "已选择 {{count}} 人",
         "tenants": "已选择 {{count}} 个租户",
         "all_users": "当前覆盖 {{count}} 名有效用户"
       },
       "clear": "清空选择",
-      "save": "保存绑定",
+      "save": "保存范围",
       "savedScopes": {
-        "users": "已保存指定用户绑定",
+        "users": "已保存指定用户可见范围",
         "tenants": "已保存租户动态绑定",
-        "all_users": "已启用全部用户动态绑定"
+        "all_users": "已设为全部用户可见"
       },
-      "loadError": "加载 Hook 用户绑定失败",
-      "saveError": "保存 Hook 用户绑定失败"
+      "loadError": "加载 Hook 用户范围失败",
+      "saveError": "保存 Hook 用户范围失败"
     },
     "deleteTitle": "删除 Hook",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
+    "hookMcp": {
+      "title": "Hook 专用 MCP 管理",
+      "description": "这些 MCP 属于 Hook 配置；用户开启 Hook 时缓存到工作区专用目录，并只在 Hook 调用或恢复回合临时加载。",
+      "create": "配置 MCP",
+      "createTitle": "配置 Hook MCP",
+      "editTitle": "编辑 Hook MCP",
+      "test": "测试",
+      "delete": "删除",
+      "deleteTitle": "删除 Hook MCP",
+      "confirmDelete": "删除 Hook MCP“{{name}}”？引用它的 Hook 将无法继续调用。",
+      "empty": "暂无 Hook 专用 MCP",
+      "untested": "未测试",
+      "healthy": "正常 · {{count}} 个工具",
+      "failed": "连接失败",
+      "saved": "Hook MCP 配置已保存",
+      "helperUploaded": "Helper 脚本“{{name}}”已上传",
+      "helperDeleted": "Helper 脚本已删除",
+      "helperSaveFirst": "请先保存 Hook MCP 配置，再上传 helper 脚本。",
+      "helperScriptTitle": "Hook MCP helper 脚本",
+      "helperScriptDescription": "用户开启引用此 MCP 的 Hook 后，脚本会复制到工作区 .cloudcli/hook-config。脚本本身不得包含密钥；敏感值请配置在静态 Header 或 helper 环境变量中。",
+      "deleted": "Hook MCP“{{name}}”已删除",
+      "testHealthy": "MCP 连接正常，发现 {{count}} 个工具",
+      "fields": {
+        "displayName": "显示名称",
+        "name": "Server 名称",
+        "description": "说明",
+        "url": "HTTP MCP 地址",
+        "headers": "静态 Headers（JSON）",
+        "headersHint": "Header 可能包含密钥，仅系统管理员可在 Hook 页面查看和修改。",
+        "headersHelper": "Headers Helper 命令",
+        "headersHelperHint": "可选。可直接引用已上传的脚本文件名，例如 python3 auth.py；命令需向标准输出写入 JSON Header 对象。"
+      },
+      "errors": {
+        "headers": "Headers 必须是 JSON 对象",
+        "save": "保存 Hook MCP 失败",
+        "test": "测试 Hook MCP 失败",
+        "delete": "删除 Hook MCP 失败"
+      }
+    },
     "builtinSkills": {
       "title": "内置 Hook Skill 管理",
       "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
@@ -569,6 +614,7 @@
       "idLabel": "标识",
       "descriptionLabel": "说明",
       "delete": "删除",
+      "deleteTitle": "删除内置 Skill",
       "confirmDelete": "删除内置 Skill“{{name}}”？引用它的 Hook 会保留配置并显示不可用提示。",
       "unavailableTitle": "内置 Hook Skill 不可用",
       "unavailableDescription": "未找到：{{skills}}。请编辑 Hook 并重新选择内置 Skill。",

@@ -183,6 +183,54 @@ export function normalizeUploadedHelperScript({ originalName, content }) {
   };
 }
 
+export async function materializeMcpHelperConfig({
+  config,
+  helperScript = null,
+  hostDirectory,
+  commandDirectory = hostDirectory,
+  runtimeMode = 'local',
+  runtimeOwner = null,
+  fsImpl = fs,
+} = {}) {
+  const helperEnv = readStringRecord(config?.helperEnv);
+  const normalizedScript = helperScript
+    ? normalizeUploadedHelperScript({
+        originalName: helperScript.fileName ?? helperScript.file_name,
+        content: helperScript.content,
+      })
+    : null;
+  if (!config?.headersHelper || (!normalizedScript && Object.keys(helperEnv).length === 0)) {
+    return withoutHelperEnv(config);
+  }
+  if (!hostDirectory || !path.isAbsolute(hostDirectory)) {
+    throw createHttpError('MCP helper host directory must be absolute', 500);
+  }
+  if (!commandDirectory) {
+    throw createHttpError('MCP helper command directory is required', 500);
+  }
+
+  const dockerMode = runtimeMode === 'docker';
+  const modes = dockerMode ? DOCKER_HELPER_MODES : PRIVATE_HELPER_MODES;
+  const owner = dockerMode ? normalizeHelperOwner(runtimeOwner) : null;
+  const scriptPath = normalizedScript
+    ? await writeHelperScript({
+        directory: hostDirectory,
+        fileName: normalizedScript.fileName,
+        content: normalizedScript.content,
+        modes,
+        fsImpl,
+      })
+    : null;
+  const envPath = await writeHelperEnvFile({
+    directory: hostDirectory,
+    helperEnv,
+    modes,
+    fsImpl,
+  });
+  await applyHelperOwnership(fsImpl, [scriptPath, envPath, hostDirectory].filter(Boolean), owner);
+  return withHelperWorkingDirectory(config, commandDirectory, { includeEnvFile: Boolean(envPath) });
+}
+
 export function buildMcpHelperScriptMetadata(row) {
   if (!row) return null;
   return {
@@ -235,24 +283,13 @@ export async function resolvePresetProbeConfig({
   }
 
   const helperDirectory = helperDirectoryForPreset(helperRoot, { tenantId, presetId });
-  if (script) {
-    await writeHelperScript({
-      directory: helperDirectory,
-      fileName: script.file_name,
-      content: script.content,
-      fsImpl,
-    });
-  }
-  const envPath = await writeHelperEnvFile({
-    directory: helperDirectory,
-    helperEnv,
+  return materializeMcpHelperConfig({
+    config: { ...config, name: presetName },
+    helperScript: script,
+    hostDirectory: helperDirectory,
+    commandDirectory: helperDirectory,
     fsImpl,
   });
-  return withHelperWorkingDirectory(
-    { ...config, name: presetName },
-    helperDirectory,
-    { includeEnvFile: Boolean(envPath) },
-  );
 }
 
 export async function applyWorkspaceMcpHelperScripts(mcpServers, {

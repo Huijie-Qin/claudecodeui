@@ -185,7 +185,7 @@ export default function ChatComposer({
   };
 
   const submitLabel = isLoading && hasInput
-    ? t('input.sendSupplement', { defaultValue: 'Send supplemental info' })
+    ? t('input.sendSupplement', { defaultValue: 'Queue follow-up' })
     : canAbortCurrentSession
       ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
       : t('input.sendMessage', { defaultValue: 'Send message' });

@@ -209,8 +209,19 @@ const SCRIPT_CODE = `export async function run(event, ccui) {
   return { output: { seen: event.hook_event_name } };
 }`;
 
-function createFixture() {
+function createFixture({ hookMcpCatalog } = {}) {
   const database = new Database(':memory:');
+  // Node 24 can collect transient better-sqlite3 Statement wrappers while a
+  // spawned SDK/MCP child process is exiting, which triggers an upstream native
+  // cleanup assertion. Keep the wrappers alive for the fixture lifetime; close()
+  // still finalizes them normally.
+  const retainedStatements = [];
+  const prepare = database.prepare.bind(database);
+  database.prepare = (...args) => {
+    const statement = prepare(...args);
+    retainedStatements.push(statement);
+    return statement;
+  };
   database.pragma('foreign_keys = ON');
   database.exec(`
     CREATE TABLE users (
@@ -232,6 +243,7 @@ function createFixture() {
     database,
     service: createHookConfigService({
       database,
+      ...(hookMcpCatalog ? { hookMcpCatalog } : {}),
       configStore: {
         get: (key) => configValues.get(key) || null,
         set: (key, value) => configValues.set(key, value),
@@ -425,9 +437,11 @@ test('all 28 Claude Agent SDK Hook events execute from published CCUI configurat
     for (const eventName of HOOK_EVENTS) {
       const created = service.createHook({ input: createHookInput(eventName), userId: 1 });
       const published = service.publishHook({ hookId: created.id, userId: 1 });
-      const binding = service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
+      service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
+      service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
+      const binding = service.getHook(created.id);
       assert.equal(published.status, 'published', `${eventName} should publish`);
-      assert.equal(binding.hook.boundUserCount, 1, `${eventName} should bind the target user`);
+      assert.equal(binding.boundUserCount, 1, `${eventName} should bind the target user`);
     }
 
     const effectiveHooks = service.listActiveHooksForUser(2);
@@ -507,6 +521,7 @@ test('the real Agent SDK control channel registers and dispatches all 28 configu
       const created = service.createHook({ input: createHookInput(eventName), userId: 1 });
       service.publishHook({ hookId: created.id, userId: 1 });
       service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
+      service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
     }
     const effectiveHooks = service.listActiveHooksForUser(2);
     const runtime = createHookRuntimeSession({
@@ -713,9 +728,11 @@ function publishBoundMatrixHook(service, eventName, suffix, overrides) {
     .filter((action) => action.type === 'invoke_skill')
     .map((action) => ({ skillId: action.config.skillId, name: action.config.skillName }));
   const published = service.publishHook({ hookId: created.id, userId: 1, validatedSkills });
-  const binding = service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
+  service.replaceHookBindings({ hookId: created.id, userIds: [2], boundBy: 1 });
+  service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
+  const binding = service.getHook(created.id);
   assert.equal(published.status, 'published', `${eventName}/${suffix} must publish`);
-  assert.equal(binding.hook.boundUserCount, 1, `${eventName}/${suffix} must bind the target user`);
+  assert.equal(binding.boundUserCount, 1, `${eventName}/${suffix} must bind the target user`);
   const effective = service.listActiveHooksForUser(2).find((hook) => hook.id === created.id);
   assert.ok(effective, `${eventName}/${suffix} must be effective for another user`);
   return effective;
@@ -785,7 +802,26 @@ async function executePublishedMatrixHook({
 
 test('every Hook event publishes and executes every behavior allowed by its capability matrix', async () => {
   assert.deepEqual([...SCRIPT_API_METHODS_EXERCISED].sort(), [...HOOK_SCRIPT_API_METHODS].sort());
-  const { database, service } = createFixture();
+  const matrixMcpServerId = 'hook-mcp-matrix-server';
+  const { database, service } = createFixture({
+    hookMcpCatalog: {
+      listServers: () => [{ id: matrixMcpServerId, name: 'matrix_server' }],
+      listToolResources: () => [{
+        name: 'mcp__matrix_server__echo',
+        mcpServerId: matrixMcpServerId,
+        inputSchema: {
+          type: 'object',
+          required: ['event_name', 'payload', 'user_id', 'literal'],
+          properties: {
+            event_name: { type: 'string' },
+            payload: { type: 'string' },
+            user_id: { type: 'number' },
+            literal: { type: 'boolean' },
+          },
+        },
+      }],
+    },
+  });
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-full-matrix-'));
   const recoveries = [];
   const coverage = {

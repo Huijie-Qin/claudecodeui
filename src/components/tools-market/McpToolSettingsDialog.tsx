@@ -10,11 +10,13 @@ import type { WorkspaceMcpPreset, WorkspaceMcpTool } from './hooks/useWorkspaceM
 import {
   MCP_TOOL_OVERRIDES_FILE,
   createEmptyOverridesConfig,
+  getMcpToolOverrideMode,
   getToolOverrideParams,
   getToolParameterFields,
   normalizeOverridesConfig,
   withToolOverrideParams,
   type McpToolOverrideParam,
+  type McpToolOverrideMode,
   type McpToolOverridesConfig,
   type McpToolParameterField,
 } from './mcpToolOverrides';
@@ -28,7 +30,7 @@ type McpToolSettingsDialogProps = {
 };
 
 type ParameterFormState = Record<string, {
-  custom: boolean;
+  mode: McpToolOverrideMode | 'none';
   rawValue: string;
 }>;
 
@@ -90,7 +92,7 @@ function getInitialFormState(
     return [
       field.key,
       {
-        custom: override?.custom === true,
+        mode: getMcpToolOverrideMode(override),
         rawValue: stringifyOverrideValue(field, override?.value),
       },
     ];
@@ -205,7 +207,7 @@ export default function McpToolSettingsDialog({
     setFormState((current) => ({
       ...current,
       [key]: {
-        ...(current[key] ?? { custom: false, rawValue: '' }),
+        ...(current[key] ?? { mode: 'none', rawValue: '' }),
         ...patch,
       },
     }));
@@ -218,15 +220,15 @@ export default function McpToolSettingsDialog({
     setSuccess(null);
     try {
       const params = Object.fromEntries(fields.flatMap((field) => {
-        const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
-        if (!state.custom) {
+        const state = formState[field.key] ?? { mode: 'none', rawValue: readDefaultValue(field) };
+        if (state.mode === 'none') {
           return [];
         }
 
         return [[
           field.key,
           {
-            custom: true,
+            mode: state.mode,
             value: parseFieldValue(field, state.rawValue),
           },
         ]];
@@ -319,7 +321,9 @@ export default function McpToolSettingsDialog({
                   const isSelected = selectedTool?.name === tool.name;
                   const toolFields = getToolParameterFields(tool);
                   const overrides = getToolOverrideParams(config, preset, tool.name);
-                  const customCount = Object.values(overrides).filter((entry) => entry?.custom === true).length;
+                  const configuredCount = Object.values(overrides)
+                    .filter((entry) => getMcpToolOverrideMode(entry) !== 'none')
+                    .length;
                   return (
                     <div
                       key={tool.name}
@@ -356,9 +360,9 @@ export default function McpToolSettingsDialog({
                           <span className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground">
                             {toolFields.length} 参数
                           </span>
-                          {customCount > 0 ? (
+                          {configuredCount > 0 ? (
                             <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                              {customCount} 自定义
+                              {t('mcpTools.settings.configuredCount', { count: configuredCount })}
                             </span>
                           ) : null}
                         </div>
@@ -391,7 +395,7 @@ export default function McpToolSettingsDialog({
                   <div className="grid grid-cols-[160px_minmax(260px,1fr)_260px] bg-muted text-xs font-semibold uppercase text-muted-foreground">
                     <div className="border-r border-border px-3 py-2">参数</div>
                     <div className="border-r border-border px-3 py-2">参数描述</div>
-                    <div className="px-3 py-2">自定义值</div>
+                    <div className="px-3 py-2">{t('mcpTools.settings.valueStrategy')}</div>
                   </div>
                   {isLoading ? (
                     <div className="flex min-h-[260px] items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -404,7 +408,7 @@ export default function McpToolSettingsDialog({
                     </div>
                   ) : (
                     fields.map((field) => {
-                      const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
+                      const state = formState[field.key] ?? { mode: 'none', rawValue: readDefaultValue(field) };
                       const exampleValue = formatExampleValue(field);
                       return (
                         <div key={field.key} className="grid min-h-[76px] grid-cols-[160px_minmax(260px,1fr)_260px] border-t border-border">
@@ -420,29 +424,39 @@ export default function McpToolSettingsDialog({
                             </div>
                           </div>
                           <div className="px-3 py-3">
-                            <label className="mb-2 flex items-center justify-end gap-2 text-xs font-medium text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                checked={state.custom}
+                            <label className="mb-2 block text-xs font-medium text-muted-foreground">
+                              <span className="sr-only">{t('mcpTools.settings.valueStrategy')}</span>
+                              <select
+                                aria-label={`${field.key} ${t('mcpTools.settings.valueStrategy')}`}
+                                value={state.mode}
                                 disabled={!canManage}
                                 onChange={(event) => {
-                                  const custom = event.target.checked;
+                                  const mode = event.target.value as ParameterFormState[string]['mode'];
                                   updateField(field.key, {
-                                    custom,
-                                    ...(custom && state.rawValue.length === 0 && exampleValue
+                                    mode,
+                                    ...(mode !== 'none' && state.rawValue.length === 0 && exampleValue
                                       ? { rawValue: exampleValue }
                                       : {}),
                                   });
                                 }}
-                              />
-                              自定义
+                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+                              >
+                                <option value="none">{t('mcpTools.settings.strategy.none')}</option>
+                                <option value="default">{t('mcpTools.settings.strategy.default')}</option>
+                                <option value="force">{t('mcpTools.settings.strategy.force')}</option>
+                              </select>
                             </label>
                             <ParameterInput
                               field={field}
-                              disabled={!canManage || !state.custom}
+                              disabled={!canManage || state.mode === 'none'}
                               value={state.rawValue}
                               onChange={(rawValue) => updateField(field.key, { rawValue })}
                             />
+                            {state.mode !== 'none' ? (
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                {t(`mcpTools.settings.strategyHelp.${state.mode}`)}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       );

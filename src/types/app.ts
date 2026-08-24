@@ -113,6 +113,7 @@ export interface LoadingProgress {
 export interface ProjectsUpdatedMessage {
   type: 'projects_updated';
   projects: Project[];
+  tenantId?: number | null;
   changedFile?: string;
   [key: string]: unknown;
 }

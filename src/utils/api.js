@@ -102,6 +102,15 @@ export const api = {
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: () => authenticatedFetch(withTenantParam('/api/projects')),
+  workspaceHooks: (workspaceId) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks`,
+  )),
+  updateWorkspaceHook: (workspaceId, hookId, enabled) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}`,
+  ), {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  }),
   checkProjectAgentList: (projectName, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/agent-list-check`, workspaceId), {
       method: 'POST',
@@ -515,6 +524,33 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     hookResources: () => authenticatedFetch('/api/admin/hooks/resources'),
+    createHookMcpServer: (payload) =>
+      authenticatedFetch('/api/admin/hooks/mcp-servers', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateHookMcpServer: (serverName, payload) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    testHookMcpServer: (serverName) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/test`, {
+        method: 'POST',
+      }),
+    uploadHookMcpHelperScript: (serverName, formData) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/helper-script`, {
+        method: 'POST',
+        body: formData,
+      }),
+    deleteHookMcpHelperScript: (serverName) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/helper-script`, {
+        method: 'DELETE',
+      }),
+    deleteHookMcpServer: (serverName) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}`, {
+        method: 'DELETE',
+      }),
     uploadHookSkill: (formData) =>
       authenticatedFetch('/api/admin/hooks/skills', {
         method: 'POST',

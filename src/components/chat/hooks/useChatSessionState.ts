@@ -55,7 +55,9 @@ function chatMessageToNormalized(
   sessionId: string,
   provider: LLMProvider,
 ): NormalizedMessage | null {
-  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = typeof msg.id === 'string' && msg.id.trim()
+    ? msg.id
+    : `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const ts = msg.timestamp instanceof Date
     ? msg.timestamp.toISOString()
     : typeof msg.timestamp === 'number'
@@ -94,6 +96,9 @@ function chatMessageToNormalized(
     kind: 'text',
     role: msg.type === 'user' ? 'user' : 'assistant',
     content: msg.content || '',
+    ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
+    ...(msg.queueStatus ? { queueStatus: msg.queueStatus } : {}),
+    ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
   } as NormalizedMessage;
 }
 

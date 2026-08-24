@@ -21,7 +21,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
-import { Badge, Button, Card, Input, Tooltip } from '../../../shared/view/ui';
+import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input, Tooltip } from '../../../shared/view/ui';
 
 import {
   CCUI_SCRIPT_APIS,
@@ -54,6 +54,7 @@ type HookConfigEditorProps = {
   visibleEvents: HookEventName[];
   resources: HookResources;
   busy: boolean;
+  dirty: boolean;
   onChange: (hook: HookConfigDraft | HookConfig) => void;
   onBack: () => void;
   onSave: () => void;
@@ -418,7 +419,12 @@ function MpcActionEditor({
                 const type = propertyType(property);
                 return [key, { source: 'literal', value: literalDefault(type, property) }];
               }));
-              onChange({ ...config, toolName: nextToolName, inputs: nextInputs });
+              onChange({
+                ...config,
+                toolName: nextToolName,
+                mcpServerId: nextTool?.mcpServerId || '',
+                inputs: nextInputs,
+              });
             }}
             placeholder={resources.mcpTools.length ? '选择 MCP 工具' : '暂无可调用的 MCP 工具'}
             ariaLabel="选择 MCP 工具"
@@ -483,6 +489,9 @@ function SkillActionEditor({
   const skillId = typeof config.skillId === 'string' ? config.skillId : '';
   const skillName = typeof config.skillName === 'string' ? config.skillName : '';
   const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
+  const mcpServerIds = Array.isArray(config.mcpServerIds)
+    ? config.mcpServerIds.map(String)
+    : [];
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef({ start: template.length, end: template.length });
@@ -549,8 +558,46 @@ function SkillActionEditor({
         <p className="text-xs leading-5 text-destructive">{resources.skillSource.error}</p>
       ) : null}
       <p className="text-xs leading-5 text-muted-foreground">
-        这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；运行时从服务端持久化目录加载，不依赖公共租户或用户工作空间。
+        这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；用户开启 Hook 时会把完整目录缓存到工作区专用的 hook-config 目录。
       </p>
+      <div className="space-y-2">
+        <div>
+          <div className="text-xs font-medium text-foreground">Skill 可用的 Hook MCP</div>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            只在该 Hook 恢复回合临时加载；内部别名可避免覆盖用户同名 MCP。
+          </p>
+        </div>
+        {resources.hookMcpServers.length ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {resources.hookMcpServers.map((server) => {
+              const checked = mcpServerIds.includes(server.id);
+              return (
+                <label key={server.id} className="flex cursor-pointer items-start gap-2 rounded-xl border border-border px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onChange({
+                      ...config,
+                      mcpServerIds: checked
+                        ? mcpServerIds.filter((id) => id !== server.id)
+                        : [...mcpServerIds, server.id],
+                    })}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-medium text-foreground">{server.displayName}</span>
+                    <code className="block truncate text-[10px] text-muted-foreground">{server.name}</code>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
+            暂无 Hook MCP；可在本页 MCP 预置区域创建并测试。
+          </div>
+        )}
+      </div>
       <div className="block space-y-1.5">
         <span className="text-xs font-medium text-foreground">Skill 参数</span>
         <div className="relative">
@@ -738,7 +785,7 @@ function PostActionsEditor({
         ? { toolName: '', condition: null, inputs: {} }
         : type === 'write_record'
           ? { recordType: '', condition: null, fields: {} }
-          : { skillId: '', skillName: '', condition: null, argumentsTemplate: '' },
+          : { skillId: '', skillName: '', condition: null, argumentsTemplate: '', mcpServerIds: [] },
     };
     onChange([...hook.postActions, action]);
   };
@@ -1107,6 +1154,7 @@ export default function HookConfigEditor({
   visibleEvents,
   resources,
   busy,
+  dirty,
   onChange,
   onBack,
   onSave,
@@ -1116,6 +1164,7 @@ export default function HookConfigEditor({
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
   const [scriptReferencesOpen, setScriptReferencesOpen] = useState(false);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const isPersisted = 'id' in hook;
   const status = isPersisted ? hook.status : 'draft';
   const eventDefinition = EVENT_BY_NAME.get(hook.eventName);
@@ -1166,11 +1215,18 @@ export default function HookConfigEditor({
     || Object.keys(hook.claudeResponse.bindings).length > 0;
   const canSave = Boolean(hook.name.trim()) && !matcherRegexError;
   const canPublish = canSave && hasEffect;
+  const handleBack = () => {
+    if (dirty) {
+      setDiscardDialogOpen(true);
+      return;
+    }
+    onBack();
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/10">
       <div className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-border bg-background/95 px-3 py-2.5 backdrop-blur sm:px-5">
-        <Button type="button" variant="ghost" size="sm" onClick={onBack} className="px-2">
+        <Button type="button" variant="ghost" size="sm" onClick={handleBack} className="px-2">
           <ArrowLeft className="h-4 w-4" />
           <span className="hidden sm:inline">{t('hooks.backToList')}</span>
         </Button>
@@ -1478,6 +1534,27 @@ export default function HookConfigEditor({
 
         </div>
       </div>
+      <Dialog open={discardDialogOpen} onOpenChange={setDiscardDialogOpen}>
+        <DialogContent className="max-w-md p-5">
+          <DialogTitle>{t('hooks.unsaved.title')}</DialogTitle>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">{t('hooks.unsaved.description')}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setDiscardDialogOpen(false)}>
+              {t('hooks.unsaved.continueEditing')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                setDiscardDialogOpen(false);
+                onBack();
+              }}
+            >
+              {t('hooks.unsaved.discard')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

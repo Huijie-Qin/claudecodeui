@@ -454,20 +454,45 @@ async function setupProjectsWatcher() {
                 // Get updated projects list
                 const updatedProjects = await getProjects(broadcastProgress);
 
-                // Notify all connected clients about the project changes
-                const updateMessage = JSON.stringify({
-                    type: 'projects_updated',
-                    projects: updatedProjects,
-                    timestamp: new Date().toISOString(),
-                    changeType: eventType,
-                    changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider
-                });
-
+                // Tenant clients must receive the database-backed workspace list. The
+                // legacy provider scan reads the service account's home and can be empty
+                // even when the tenant has active Docker-backed workspaces.
+                const tenantProjects = new Map();
                 connectedClients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(updateMessage);
+                    if (client.readyState !== WebSocket.OPEN) return;
+
+                    const tenantId = Number(client.tenantId) || null;
+                    const userId = Number(client.userId) || null;
+                    let clientProjects = updatedProjects;
+
+                    if (tenantId && userId) {
+                        const cacheKey = `${tenantId}:${userId}`;
+                        if (!tenantProjects.has(cacheKey)) {
+                            const rows = multitenancyDb.workspaces.listVisibleWorkspaces({ tenantId, userId });
+                            const projects = mapWorkspaceRowsToProjects(rows, {
+                                tenantId,
+                                userId,
+                                listSessions: multitenancyDb.sessions.listSessions,
+                            }).map((project) => {
+                                const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                                    workspaceId: project.workspaceId,
+                                });
+                                return agentTemplate ? {...project, agentTemplate} : project;
+                            });
+                            tenantProjects.set(cacheKey, projects);
+                        }
+                        clientProjects = tenantProjects.get(cacheKey);
                     }
+
+                    client.send(JSON.stringify({
+                        type: 'projects_updated',
+                        projects: clientProjects,
+                        tenantId,
+                        timestamp: new Date().toISOString(),
+                        changeType: eventType,
+                        changedFile: path.relative(rootPath, filePath),
+                        watchProvider: provider
+                    }));
                 });
 
             } catch (error) {
@@ -2597,8 +2622,8 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
-    // Claude keeps its SDK stream alive while idle for fast follow-up turns.
-    // Tie the concurrency lease to processing, not to that reusable stream.
+    // Queued Claude follow-ups stay inside this command chain. The lease remains
+    // held across those turn boundaries and is released after the final turn.
     const acquireConcurrencyLease = () => {
         if (lease) return;
         lease = sessionConcurrencyLimiter.acquire({
@@ -2681,34 +2706,11 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
-                if (data.options?.sessionId) {
-                    const pushedToExistingSession = pushClaudeSupplement({
-                        sessionId: data.options.sessionId,
-                        content: data.command,
-                        displayContent: data.options.displayCommand,
-                        clientMessageId: data.clientMessageId,
-                        mode: 'now',
-                        writer,
-                    });
-                    if (pushedToExistingSession.success) {
-                        logChatSessionEvent('pushed_to_existing_stream', logContext);
-                        return;
-                    }
-                    if (pushedToExistingSession.code === 'SESSION_LIMIT_EXCEEDED') {
-                        writer.send(createNormalizedMessage({
-                            kind: 'error',
-                            content: createSessionLimitExceededMessage(pushedToExistingSession),
-                            code: pushedToExistingSession.code,
-                            provider: 'claude',
-                            sessionId: data.options.sessionId,
-                            currentConcurrentRequests: pushedToExistingSession.activeCount,
-                            sessionLimit: pushedToExistingSession.limit,
-                        }));
-                        return;
-                    }
-                }
-
-                // Use Claude Agents SDK
+                // A regular composer submission is a new query turn. Reusing a completed
+                // SDK input stream can omit Stop hooks on later turns, so resume the
+                // provider session through a fresh query with a freshly registered Hook
+                // runtime. Running-message submissions use `claude-supplement` below,
+                // which queues a fresh turn behind the active Stop Hook boundary.
                 void runLimitedProviderCommand({
                     data,
                     provider: 'claude',
@@ -2739,6 +2741,7 @@ function handleChatConnection(ws, request) {
                         clientMessageId: data.clientMessageId || null,
                         status: 'failed',
                         error: result.error,
+                        content: data.content || '',
                         timestamp: new Date().toISOString(),
                     });
                     writer.send(createNormalizedMessage({
