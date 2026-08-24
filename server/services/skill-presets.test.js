@@ -216,6 +216,114 @@ test('admin skill presets install only into the Claude workspace skill directory
   assert.deepEqual(await readSkillsMetadata(workspacePath), { version: 1, skills: {} });
 });
 
+test('creating the same tenant Skill preset is idempotent', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const service = createSkillPresetService({
+    multitenancy,
+    marketService: createFakeMarketService(),
+  });
+  const create = () => service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: { sourceRef: 'remote-code-reviewer' },
+    tenantCode: tenant.code,
+    accountId: 'admin',
+  });
+
+  const [first, second] = await Promise.all([create(), create()]);
+
+  assert.equal(second.id, first.id);
+  assert.equal(multitenancy.skillPresets.listPresets({ tenantId: tenant.id }).length, 1);
+});
+
+test('a different market Skill cannot silently reuse an occupied preset name', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const originalService = createSkillPresetService({
+    multitenancy,
+    marketService: createFakeMarketService(),
+  });
+  await originalService.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: { sourceRef: 'remote-code-reviewer' },
+    tenantCode: tenant.code,
+    accountId: 'admin',
+  });
+  const conflictingService = createSkillPresetService({
+    multitenancy,
+    marketService: createFakeMarketService({
+      remoteSkill: {
+        ...REMOTE_SKILL,
+        id: 'other-remote-skill',
+        skillId: 'other-skill-id',
+      },
+    }),
+  });
+
+  await assert.rejects(() => conflictingService.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: { sourceRef: 'other-remote-skill' },
+    tenantCode: tenant.code,
+    accountId: 'admin',
+  }), (error) => error?.statusCode === 409 && /already in use/.test(error.message));
+});
+
+test('tenant Skill presets reject SKILL.md nested below the package root', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const marketService = createFakeMarketService({
+    skillName: null,
+    files: {
+      'repo-main/README.md': '# Repository\n',
+      'repo-main/skills/code-reviewer/SKILL.md': [
+        '---',
+        'name: code-reviewer',
+        'description: Review nested code changes.',
+        '---',
+      ].join('\n'),
+      'repo-main/skills/code-reviewer/references/checklist.md': 'Review carefully.\n',
+    },
+  });
+  const service = createSkillPresetService({ multitenancy, marketService });
+  await assert.rejects(() => service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: { sourceRef: 'remote-code-reviewer' },
+    tenantCode: tenant.code,
+    accountId: 'admin',
+  }), (error) => error?.statusCode === 400
+    && /must be located at the package root/.test(error.message)
+    && /repo-main\/skills\/code-reviewer\/SKILL\.md/.test(error.message));
+});
+
+test('tenant Skill presets report a clear error when SKILL.md is missing', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const service = createSkillPresetService({
+    multitenancy,
+    marketService: createFakeMarketService({ files: { 'README.md': '# Missing manifest\n' } }),
+  });
+
+  await assert.rejects(() => service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: { sourceRef: 'remote-code-reviewer' },
+    tenantCode: tenant.code,
+    accountId: 'admin',
+  }), /SKILL\.md is required at the package root/);
+});
+
 test('applying a published preset to existing workspaces skips unmanaged Skill name conflicts', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);

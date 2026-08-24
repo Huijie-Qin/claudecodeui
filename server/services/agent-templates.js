@@ -115,6 +115,45 @@ export function createAgentTemplateService(database = db) {
     };
   };
 
+  const getCategoryByName = (name) => database.prepare(`
+    SELECT id, name, created_by_user_id, created_at
+    FROM agent_template_categories
+    WHERE name = ? COLLATE NOCASE
+  `).get(name);
+
+  const ensureCategory = ({ name, userId }) => {
+    const normalizedName = limitedRequiredString(name, 'category', 50);
+    database.prepare(`
+      INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
+      VALUES (?, ?)
+    `).run(normalizedName, positiveInteger(userId, 'userId'));
+    return getCategoryByName(normalizedName);
+  };
+
+  const createCategory = ({ name, userId }) => {
+    const normalizedName = limitedRequiredString(name, 'category', 50);
+    if (getCategoryByName(normalizedName)) {
+      throw createHttpError(`Agent 模板分类“${normalizedName}”已存在，请使用其他名称`, 409);
+    }
+    database.prepare(`
+      INSERT INTO agent_template_categories (name, created_by_user_id)
+      VALUES (?, ?)
+    `).run(normalizedName, positiveInteger(userId, 'userId'));
+    return getCategoryByName(normalizedName);
+  };
+
+  const assertUniqueTemplateName = (name, excludedTemplateId = null) => {
+    const duplicate = database.prepare(`
+      SELECT id FROM agent_templates
+      WHERE name = ? COLLATE NOCASE
+        AND (? IS NULL OR id != ?)
+      LIMIT 1
+    `).get(name, excludedTemplateId, excludedTemplateId);
+    if (duplicate) {
+      throw createHttpError(`Agent 模板“${name}”已存在，请使用其他名称`, 409);
+    }
+  };
+
   const loadTenants = (tenantIds) => {
     if (tenantIds.length === 0) return [];
     const placeholders = tenantIds.map(() => '?').join(', ');
@@ -205,6 +244,8 @@ export function createAgentTemplateService(database = db) {
     const existing = templateId == null ? null : getTemplate(templateId);
     if (templateId != null && !existing) throw createHttpError('Agent template not found', 404);
     const values = normalizeInput(input || {}, existing);
+    assertUniqueTemplateName(values.name, existing?.id ?? null);
+    values.category = ensureCategory({ name: values.category, userId: normalizedUserId }).name;
 
     if (!existing) {
       const result = database.prepare(`
@@ -328,6 +369,39 @@ export function createAgentTemplateService(database = db) {
       const normalizedTenantId = positiveInteger(tenantId, 'tenantId');
       return templates.filter((template) => template.tenantIds.includes(normalizedTenantId));
     },
+    listCategories: () => database.prepare(`
+      SELECT
+        category.id,
+        category.name,
+        category.created_at AS createdAt,
+        COUNT(template.id) AS templateCount
+      FROM agent_template_categories category
+      LEFT JOIN agent_templates template
+        ON template.category = category.name COLLATE NOCASE
+      GROUP BY category.id, category.name, category.created_at
+      ORDER BY category.name COLLATE NOCASE ASC, category.id ASC
+    `).all().map((category) => ({
+      ...category,
+      id: Number(category.id),
+      templateCount: Number(category.templateCount || 0),
+    })),
+    createCategory,
+    deleteCategory: ({ categoryId }) => {
+      const normalizedCategoryId = positiveInteger(categoryId, 'categoryId');
+      const category = database.prepare(`
+        SELECT id, name FROM agent_template_categories WHERE id = ?
+      `).get(normalizedCategoryId);
+      if (!category) throw createHttpError('Agent template category not found', 404);
+      const templateCount = Number(database.prepare(`
+        SELECT COUNT(*) AS count FROM agent_templates
+        WHERE category = ? COLLATE NOCASE
+      `).get(category.name)?.count || 0);
+      if (templateCount > 0) {
+        throw createHttpError('Agent template category is still used by templates', 409);
+      }
+      database.prepare('DELETE FROM agent_template_categories WHERE id = ?').run(normalizedCategoryId);
+      return { id: normalizedCategoryId, name: category.name };
+    },
     saveTemplate,
     publishTemplate,
     disableTemplate: ({ templateId, userId }) => {
@@ -337,6 +411,16 @@ export function createAgentTemplateService(database = db) {
       `).run(positiveInteger(userId, 'userId'), positiveInteger(templateId, 'templateId'));
       if (result.changes === 0) throw createHttpError('Agent template not found', 404);
       return getTemplate(templateId);
+    },
+    deleteTemplate: ({ templateId }) => {
+      const normalizedTemplateId = positiveInteger(templateId, 'templateId');
+      const template = getTemplate(normalizedTemplateId);
+      if (!template) throw createHttpError('Agent template not found', 404);
+      if (template.status !== 'disabled') {
+        throw createHttpError('Agent template must be disabled before deletion', 409);
+      }
+      database.prepare('DELETE FROM agent_templates WHERE id = ?').run(normalizedTemplateId);
+      return { id: normalizedTemplateId, name: template.name };
     },
     listPresetCatalog: ({ tenantId }) => {
       const normalizedTenantId = positiveInteger(tenantId, 'tenantId');

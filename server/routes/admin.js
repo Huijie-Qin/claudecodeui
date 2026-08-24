@@ -1344,6 +1344,32 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/agent-template-categories', (_req, res) => {
+    try {
+      return res.json({ categories: agentTemplates.listCategories() });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to list Agent template categories');
+    }
+  });
+
+  router.post('/agent-template-categories', (req, res) => {
+    try {
+      const category = agentTemplates.createCategory({ name: req.body?.name, userId: req.user.id });
+      return res.status(201).json({ category });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to create Agent template category');
+    }
+  });
+
+  router.delete('/agent-template-categories/:categoryId', (req, res) => {
+    try {
+      const category = agentTemplates.deleteCategory({ categoryId: req.params.categoryId });
+      return res.json({ category });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Agent template category');
+    }
+  });
+
   router.post('/agent-templates', (req, res) => {
     try {
       const template = agentTemplates.saveTemplate({ input: req.body, userId: req.user.id });
@@ -1387,6 +1413,15 @@ export function createAdminRouter(
       return res.json({ template });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to disable Agent template');
+    }
+  });
+
+  router.delete('/agent-templates/:templateId', (req, res) => {
+    try {
+      const template = agentTemplates.deleteTemplate({ templateId: req.params.templateId });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to delete Agent template');
     }
   });
 

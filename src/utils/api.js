@@ -479,6 +479,19 @@ export const api = {
       authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}/disable`, {
         method: 'POST',
       }),
+    deleteAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}`, {
+        method: 'DELETE',
+      }),
+    agentTemplateCategories: () => authenticatedFetch('/api/admin/agent-template-categories'),
+    createAgentTemplateCategory: (name) => authenticatedFetch('/api/admin/agent-template-categories', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+    deleteAgentTemplateCategory: (categoryId) => authenticatedFetch(
+      `/api/admin/agent-template-categories/${encodeURIComponent(String(categoryId))}`,
+      { method: 'DELETE' },
+    ),
     hooks: () => authenticatedFetch('/api/admin/hooks'),
     hook: (hookId) => authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`),
     createHook: (payload) =>
