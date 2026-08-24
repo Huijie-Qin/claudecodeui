@@ -25,10 +25,10 @@
     "projectNamePlaceholder": "Enter a project name",
     "favorite": "Favorite project",
     "favoriteHint": "Favorite projects appear first in the project list.",
-    "syncTarget": "SDK system instructions",
-    "agentPlaceholder": "# Role\n\nDescribe the Agent's role, capabilities, and working style…",
-    "agentHint": "Agent.md is platform-managed and is loaded as the Agent system instructions in new sessions.",
-    "customInstructionsWarning": "Custom instruction files detected: {{files}}. Claude Code will continue to load them; if they conflict with Agent.md, the Agent configuration takes precedence.",
+    "syncTarget": "Project memory",
+    "agentPlaceholder": "# Project Memory\n\nRecord project context, conventions, and the Agent's working style…",
+    "agentHint": "CLAUDE.md is the project memory file. Changes made here or in Files are loaded by the Claude Code SDK in new sessions.",
+    "customInstructionsWarning": "Other instruction files detected: {{files}}. Claude Code may load them too; avoid conflicts with the project CLAUDE.md.",
     "readOnlyHint": "This project is read-only. You can only change its favorite status.",
     "loading": "Loading project settings…",
     "save": "Save",
@@ -36,7 +36,7 @@
     "workspaceUnavailable": "Workspace information is missing, so project settings cannot be loaded or saved.",
     "loadFailed": "Failed to load project settings.",
     "saveFailed": "Failed to save project settings.",
-    "conflict": "Agent instructions changed elsewhere. Close and reopen this editor before trying again."
+    "conflict": "CLAUDE.md changed elsewhere. Close and reopen this editor before trying again."
   },
   "app": {
     "title": "CloudCLI",

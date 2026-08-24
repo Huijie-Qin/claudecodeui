@@ -11,7 +11,7 @@ import {
 } from './workspace-agent-instructions.js';
 
 async function withWorkspace(run) {
-  const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-agent-instructions-'));
+  const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-claude-memory-'));
   try {
     await run(workspacePath);
   } finally {
@@ -19,113 +19,92 @@ async function withWorkspace(run) {
   }
 }
 
-test('uses Agent.md as the only platform-managed instruction source', async () => {
+test('uses root CLAUDE.md as project memory', async () => {
   await withWorkspace(async (workspacePath) => {
-    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Agent\n', 'utf8');
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# User project instructions\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Project memory\n', 'utf8');
 
     const result = await readWorkspaceAgentInstructions(workspacePath);
-    assert.equal(result.content, '# Agent\n');
-    assert.equal(result.source, 'agent');
-    assert.deepEqual(result.customInstructions.customInstructionFiles, ['CLAUDE.md']);
-    assert.equal(result.customInstructions.hasCustomInstructions, true);
-    assert.equal(result.customInstructions.legacyRootMirror, false);
+
+    assert.equal(result.content, '# Project memory\n');
+    assert.equal(result.source, 'claude');
+    assert.equal(result.customInstructions.hasCustomInstructions, false);
     assert.match(result.revision, /^[a-f0-9]{64}$/);
   });
 });
 
-test('does not reinterpret user CLAUDE.md as Agent.md', async () => {
+test('migrates a legacy Agent.md to CLAUDE.md when project memory is absent', async () => {
   await withWorkspace(async (workspacePath) => {
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# User instructions\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Legacy memory\n', 'utf8');
 
     const result = await readWorkspaceAgentInstructions(workspacePath);
-    assert.equal(result.content, '');
-    assert.equal(result.source, 'empty');
-    assert.deepEqual(result.customInstructions.customInstructionFiles, ['CLAUDE.md']);
+
+    assert.equal(result.content, '# Legacy memory\n');
+    assert.equal(result.migration.migrated, true);
+    assert.equal(await fs.readFile(path.join(workspacePath, 'CLAUDE.md'), 'utf8'), '# Legacy memory\n');
+    await assert.rejects(fs.access(path.join(workspacePath, 'Agent.md')), (error) => error?.code === 'ENOENT');
   });
 });
 
-test('detects both supported user CLAUDE.md locations', async () => {
+test('preserves a differing legacy Agent.md when CLAUDE.md already exists', async () => {
   await withWorkspace(async (workspacePath) => {
-    await fs.mkdir(path.join(workspacePath, '.claude'));
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Root\n', 'utf8');
-    await fs.writeFile(path.join(workspacePath, '.claude', 'CLAUDE.md'), '# Dot Claude\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Current memory\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Legacy content\n', 'utf8');
 
     const result = await readWorkspaceAgentInstructions(workspacePath);
-    assert.deepEqual(
-      result.customInstructions.customInstructionFiles,
-      ['CLAUDE.md', path.join('.claude', 'CLAUDE.md')],
-    );
+
+    assert.equal(result.content, '# Current memory\n');
+    assert.equal(result.migration.legacyConflict, true);
+    assert.deepEqual(result.customInstructions.customInstructionFiles, ['Agent.md']);
+    assert.equal(await fs.readFile(path.join(workspacePath, 'Agent.md'), 'utf8'), '# Legacy content\n');
   });
 });
 
-test('writes only Agent.md and preserves user-authored CLAUDE.md files', async () => {
+test('removes an identical legacy Agent.md duplicate', async () => {
   await withWorkspace(async (workspacePath) => {
-    await fs.mkdir(path.join(workspacePath, '.claude'));
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Root custom\n', 'utf8');
-    await fs.writeFile(path.join(workspacePath, '.claude', 'CLAUDE.md'), '# Dot custom\n', 'utf8');
-    const content = '# Role\n\nYou are a market analyst.\n';
-
-    const written = await writeWorkspaceAgentInstructions(workspacePath, content);
-
-    assert.equal(await fs.readFile(path.join(workspacePath, 'Agent.md'), 'utf8'), content);
-    assert.equal(await fs.readFile(path.join(workspacePath, 'CLAUDE.md'), 'utf8'), '# Root custom\n');
-    assert.equal(await fs.readFile(path.join(workspacePath, '.claude', 'CLAUDE.md'), 'utf8'), '# Dot custom\n');
-    assert.deepEqual(written.paths, [path.join(workspacePath, 'Agent.md')]);
-    assert.equal(written.migration.removed, false);
-  });
-});
-
-test('removes an unchanged legacy root CLAUDE.md mirror while saving Agent.md', async () => {
-  await withWorkspace(async (workspacePath) => {
-    const oldContent = '# Old Agent\n';
-    await fs.writeFile(path.join(workspacePath, 'Agent.md'), oldContent, 'utf8');
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), oldContent, 'utf8');
-
-    const written = await writeWorkspaceAgentInstructions(workspacePath, '# Updated Agent\n');
-
-    assert.equal(written.migration.removed, true);
-    await assert.rejects(
-      fs.access(path.join(workspacePath, 'CLAUDE.md')),
-      (error) => error?.code === 'ENOENT',
-    );
-    assert.equal(await fs.readFile(path.join(workspacePath, 'Agent.md'), 'utf8'), '# Updated Agent\n');
-  });
-});
-
-test('runtime migration removes only an exact legacy mirror', async () => {
-  await withWorkspace(async (workspacePath) => {
-    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Agent\n', 'utf8');
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Agent\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Same memory\n', 'utf8');
+    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Same memory\n', 'utf8');
 
     const migration = await migrateLegacyWorkspaceAgentInstructions(workspacePath);
 
     assert.equal(migration.removed, true);
-    await assert.rejects(
-      fs.access(path.join(workspacePath, 'CLAUDE.md')),
-      (error) => error?.code === 'ENOENT',
-    );
+    await assert.rejects(fs.access(path.join(workspacePath, 'Agent.md')), (error) => error?.code === 'ENOENT');
   });
 });
 
-test('runtime migration preserves a customized root CLAUDE.md', async () => {
+test('writes CLAUDE.md and preserves .claude/CLAUDE.md', async () => {
   await withWorkspace(async (workspacePath) => {
-    await fs.writeFile(path.join(workspacePath, 'Agent.md'), '# Agent\n', 'utf8');
-    await fs.writeFile(path.join(workspacePath, 'CLAUDE.md'), '# Custom\n', 'utf8');
+    await fs.mkdir(path.join(workspacePath, '.claude'));
+    await fs.writeFile(path.join(workspacePath, '.claude', 'CLAUDE.md'), '# Additional memory\n', 'utf8');
 
-    const migration = await migrateLegacyWorkspaceAgentInstructions(workspacePath);
+    const written = await writeWorkspaceAgentInstructions(workspacePath, '# Updated memory\n');
 
-    assert.equal(migration.removed, false);
-    assert.equal(await fs.readFile(path.join(workspacePath, 'CLAUDE.md'), 'utf8'), '# Custom\n');
+    assert.equal(await fs.readFile(path.join(workspacePath, 'CLAUDE.md'), 'utf8'), '# Updated memory\n');
+    assert.equal(await fs.readFile(path.join(workspacePath, '.claude', 'CLAUDE.md'), 'utf8'), '# Additional memory\n');
+    assert.deepEqual(written.paths, [path.join(workspacePath, 'CLAUDE.md')]);
+    assert.deepEqual(written.customInstructions.customInstructionFiles, [path.join('.claude', 'CLAUDE.md')]);
   });
 });
 
-test('rejects Agent.md symlinks without writing outside the workspace', async () => {
+test('file-page edits are reflected in the next settings read and revision', async () => {
   await withWorkspace(async (workspacePath) => {
-    const outsidePath = path.join(os.tmpdir(), `cloudcli-agent-outside-${Date.now()}.md`);
+    const claudePath = path.join(workspacePath, 'CLAUDE.md');
+    await fs.writeFile(claudePath, '# First memory\n', 'utf8');
+    const first = await readWorkspaceAgentInstructions(workspacePath);
+
+    await fs.writeFile(claudePath, '# Edited from Files\n', 'utf8');
+    const second = await readWorkspaceAgentInstructions(workspacePath);
+
+    assert.equal(second.content, '# Edited from Files\n');
+    assert.notEqual(second.revision, first.revision);
+  });
+});
+
+test('rejects CLAUDE.md symlinks without writing outside the workspace', async () => {
+  await withWorkspace(async (workspacePath) => {
+    const outsidePath = path.join(os.tmpdir(), `cloudcli-claude-outside-${Date.now()}.md`);
     try {
       await fs.writeFile(outsidePath, 'outside content', 'utf8');
-      await fs.symlink(outsidePath, path.join(workspacePath, 'Agent.md'));
+      await fs.symlink(outsidePath, path.join(workspacePath, 'CLAUDE.md'));
 
       await assert.rejects(
         writeWorkspaceAgentInstructions(workspacePath, '# Safe content\n'),
@@ -133,7 +112,6 @@ test('rejects Agent.md symlinks without writing outside the workspace', async ()
       );
 
       assert.equal(await fs.readFile(outsidePath, 'utf8'), 'outside content');
-      assert.equal((await fs.lstat(path.join(workspacePath, 'Agent.md'))).isSymbolicLink(), true);
     } finally {
       await fs.rm(outsidePath, { force: true });
     }
@@ -144,7 +122,7 @@ test('does not recreate a missing workspace directory', async () => {
   const missingPath = path.join(os.tmpdir(), `cloudcli-missing-workspace-${Date.now()}`);
 
   await assert.rejects(
-    writeWorkspaceAgentInstructions(missingPath, '# Instructions\n'),
+    writeWorkspaceAgentInstructions(missingPath, '# Memory\n'),
     (error) => error?.code === 'ENOENT',
   );
   await assert.rejects(fs.access(missingPath), (error) => error?.code === 'ENOENT');

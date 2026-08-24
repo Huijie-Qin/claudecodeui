@@ -2,62 +2,44 @@ import { promises as fs } from 'fs';
 import crypto from 'crypto';
 import path from 'path';
 
-const AGENT_INSTRUCTIONS_FILE = 'Agent.md';
-const ROOT_CLAUDE_INSTRUCTIONS_FILE = 'CLAUDE.md';
-const DOT_CLAUDE_INSTRUCTIONS_FILE = path.join('.claude', 'CLAUDE.md');
+const CLAUDE_MEMORY_FILE = 'CLAUDE.md';
+const LEGACY_AGENT_FILE = 'Agent.md';
+const DOT_CLAUDE_MEMORY_FILE = path.join('.claude', 'CLAUDE.md');
 
-async function readManagedFileIfPresent(filePath) {
+async function readManagedFileIfPresent(filePath, fileName) {
   try {
     const stats = await fs.lstat(filePath);
     if (stats.isSymbolicLink()) {
-      const error = new Error('Agent.md must not be a symbolic link');
+      const error = new Error(`${fileName} must not be a symbolic link`);
       error.code = 'ELOOP';
       error.statusCode = 400;
       throw error;
     }
     if (!stats.isFile()) {
-      const error = new Error('Agent.md must be a file');
+      const error = new Error(`${fileName} must be a file`);
       error.code = 'EINVAL';
       error.statusCode = 400;
       throw error;
     }
     return await fs.readFile(filePath, 'utf8');
   } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return null;
-    }
+    if (error?.code === 'ENOENT') return null;
     throw error;
   }
 }
 
-async function inspectUserInstructionFile(
-  filePath,
-  relativePath,
-  { includeContent = false, expectedByteLength = null } = {},
-) {
+async function inspectFile(filePath, relativePath) {
   try {
     const stats = await fs.lstat(filePath);
-    const isRegularFile = stats.isFile() && !stats.isSymbolicLink();
     return {
       path: relativePath,
       exists: true,
-      isRegularFile,
+      isRegularFile: stats.isFile() && !stats.isSymbolicLink(),
       isSymbolicLink: stats.isSymbolicLink(),
-      content: includeContent
-        && isRegularFile
-        && (expectedByteLength === null || stats.size === expectedByteLength)
-        ? await fs.readFile(filePath, 'utf8')
-        : null,
     };
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      return {
-        path: relativePath,
-        exists: false,
-        isRegularFile: false,
-        isSymbolicLink: false,
-        content: null,
-      };
+      return { path: relativePath, exists: false, isRegularFile: false, isSymbolicLink: false };
     }
     throw error;
   }
@@ -72,10 +54,10 @@ async function assertWorkspaceDirectory(workspacePath) {
   }
 }
 
-function createRevision(agentMarkdown) {
+function createRevision(claudeMarkdown) {
   return crypto
     .createHash('sha256')
-    .update(JSON.stringify({ agentMarkdown }))
+    .update(JSON.stringify({ claudeMarkdown }))
     .digest('hex');
 }
 
@@ -88,138 +70,103 @@ async function writeTemporaryFile(workspacePath, fileName, content) {
   return temporaryPath;
 }
 
-async function restoreFile(workspacePath, targetPath, fileName, previousContent) {
-  if (previousContent === null) {
-    await fs.rm(targetPath, { force: true });
-    return;
+async function replaceManagedFile(workspacePath, fileName, content) {
+  const targetPath = path.join(workspacePath, fileName);
+  const previousContent = await readManagedFileIfPresent(targetPath, fileName);
+  let temporaryPath = null;
+  try {
+    temporaryPath = await writeTemporaryFile(workspacePath, fileName, content);
+    await fs.rename(temporaryPath, targetPath);
+    return { targetPath, previousContent };
+  } catch (error) {
+    if (temporaryPath) await fs.rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
   }
-
-  const restorePath = await writeTemporaryFile(workspacePath, `${fileName}.restore`, previousContent);
-  await fs.rename(restorePath, targetPath);
 }
 
-async function inspectWorkspaceInstructionFiles(workspacePath, agentMarkdown) {
-  const rootClaudePath = path.join(workspacePath, ROOT_CLAUDE_INSTRUCTIONS_FILE);
-  const dotClaudePath = path.join(workspacePath, DOT_CLAUDE_INSTRUCTIONS_FILE);
-  const [rootClaude, dotClaude] = await Promise.all([
-    inspectUserInstructionFile(rootClaudePath, ROOT_CLAUDE_INSTRUCTIONS_FILE, {
-      includeContent: agentMarkdown !== null,
-      expectedByteLength: agentMarkdown === null ? null : Buffer.byteLength(agentMarkdown, 'utf8'),
-    }),
-    inspectUserInstructionFile(dotClaudePath, DOT_CLAUDE_INSTRUCTIONS_FILE),
-  ]);
-
-  const legacyRootMirror = agentMarkdown !== null
-    && rootClaude.isRegularFile
-    && rootClaude.content === agentMarkdown;
+async function inspectWorkspaceInstructionFiles(workspacePath, legacyConflict = false) {
+  const dotClaude = await inspectFile(
+    path.join(workspacePath, DOT_CLAUDE_MEMORY_FILE),
+    DOT_CLAUDE_MEMORY_FILE,
+  );
   const customInstructionFiles = [
-    rootClaude.exists && !legacyRootMirror ? rootClaude.path : null,
     dotClaude.exists ? dotClaude.path : null,
+    legacyConflict ? LEGACY_AGENT_FILE : null,
   ].filter(Boolean);
-
   return {
-    legacyRootMirror,
+    legacyRootMirror: false,
+    legacyAgentConflict: legacyConflict,
     customInstructionFiles,
     hasCustomInstructions: customInstructionFiles.length > 0,
   };
 }
 
 /**
- * Remove the root CLAUDE.md created by older CloudCLI versions only when it is
- * still byte-for-byte identical to Agent.md. User-authored or symlinked files
- * are never removed.
+ * Move the former platform-managed Agent.md memory into the root CLAUDE.md.
+ * A user-authored CLAUDE.md always wins; a differing Agent.md is preserved as
+ * a legacy file so migration never destroys user content.
  */
-async function removeRootClaudeMirrorIfUnchanged(workspacePath, expectedContent) {
-  const rootClaudePath = path.join(workspacePath, ROOT_CLAUDE_INSTRUCTIONS_FILE);
-  if (expectedContent === null) {
-    return { removed: false, removedPath: null };
-  }
-
-  const rootClaude = await inspectUserInstructionFile(
-    rootClaudePath,
-    ROOT_CLAUDE_INSTRUCTIONS_FILE,
-    { includeContent: true, expectedByteLength: Buffer.byteLength(expectedContent, 'utf8') },
-  );
-  if (!rootClaude.isRegularFile || rootClaude.content !== expectedContent) {
-    return { removed: false, removedPath: null };
-  }
-
-  // Re-read before deletion so an edit made during migration is preserved.
-  const latestRootClaude = await inspectUserInstructionFile(
-    rootClaudePath,
-    ROOT_CLAUDE_INSTRUCTIONS_FILE,
-    { includeContent: true, expectedByteLength: Buffer.byteLength(expectedContent, 'utf8') },
-  );
-  if (!latestRootClaude.isRegularFile || latestRootClaude.content !== expectedContent) {
-    return { removed: false, removedPath: null };
-  }
-
-  await fs.rm(rootClaudePath);
-  return { removed: true, removedPath: rootClaudePath };
-}
-
 export async function migrateLegacyWorkspaceAgentInstructions(workspacePath) {
   await assertWorkspaceDirectory(workspacePath);
-  const agentPath = path.join(workspacePath, AGENT_INSTRUCTIONS_FILE);
-  const agentMarkdown = await readManagedFileIfPresent(agentPath);
-  return removeRootClaudeMirrorIfUnchanged(workspacePath, agentMarkdown);
+  const claudePath = path.join(workspacePath, CLAUDE_MEMORY_FILE);
+  const legacyAgentPath = path.join(workspacePath, LEGACY_AGENT_FILE);
+  const [claudeMarkdown, legacyAgentMarkdown] = await Promise.all([
+    readManagedFileIfPresent(claudePath, CLAUDE_MEMORY_FILE),
+    readManagedFileIfPresent(legacyAgentPath, LEGACY_AGENT_FILE),
+  ]);
+
+  if (legacyAgentMarkdown === null) {
+    return { migrated: false, removed: false, removedPath: null, legacyConflict: false };
+  }
+  if (claudeMarkdown === null) {
+    const written = await replaceManagedFile(workspacePath, CLAUDE_MEMORY_FILE, legacyAgentMarkdown);
+    await fs.rm(legacyAgentPath);
+    return {
+      migrated: true,
+      removed: true,
+      removedPath: legacyAgentPath,
+      writtenPath: written.targetPath,
+      legacyConflict: false,
+    };
+  }
+  if (claudeMarkdown === legacyAgentMarkdown) {
+    await fs.rm(legacyAgentPath);
+    return { migrated: false, removed: true, removedPath: legacyAgentPath, legacyConflict: false };
+  }
+  return { migrated: false, removed: false, removedPath: null, legacyConflict: true };
 }
 
 export async function readWorkspaceAgentInstructions(workspacePath) {
-  await assertWorkspaceDirectory(workspacePath);
-  const agentPath = path.join(workspacePath, AGENT_INSTRUCTIONS_FILE);
-  const agentMarkdown = await readManagedFileIfPresent(agentPath);
-  const customInstructions = await inspectWorkspaceInstructionFiles(workspacePath, agentMarkdown);
+  const migration = await migrateLegacyWorkspaceAgentInstructions(workspacePath);
+  const claudePath = path.join(workspacePath, CLAUDE_MEMORY_FILE);
+  const claudeMarkdown = await readManagedFileIfPresent(claudePath, CLAUDE_MEMORY_FILE);
+  const customInstructions = await inspectWorkspaceInstructionFiles(
+    workspacePath,
+    migration.legacyConflict,
+  );
 
   return {
-    content: agentMarkdown ?? '',
-    source: agentMarkdown === null ? 'empty' : 'agent',
-    revision: createRevision(agentMarkdown),
+    content: claudeMarkdown ?? '',
+    source: claudeMarkdown === null ? 'empty' : 'claude',
+    revision: createRevision(claudeMarkdown),
+    migration,
     customInstructions,
   };
 }
 
 export async function writeWorkspaceAgentInstructions(workspacePath, content) {
   const normalizedContent = String(content ?? '');
-  const agentPath = path.join(workspacePath, AGENT_INSTRUCTIONS_FILE);
   await assertWorkspaceDirectory(workspacePath);
-
-  const previousAgent = await readManagedFileIfPresent(agentPath);
-  let agentTemporaryPath = null;
-  let agentReplaced = false;
-
-  try {
-    agentTemporaryPath = await writeTemporaryFile(workspacePath, AGENT_INSTRUCTIONS_FILE, normalizedContent);
-    await fs.rename(agentTemporaryPath, agentPath);
-    agentTemporaryPath = null;
-    agentReplaced = true;
-  } catch (error) {
-    if (agentTemporaryPath) {
-      await fs.rm(agentTemporaryPath, { force: true }).catch(() => {});
-    }
-    if (agentReplaced) {
-      await restoreFile(workspacePath, agentPath, AGENT_INSTRUCTIONS_FILE, previousAgent).catch(() => {});
-    }
-    throw error;
-  }
-
-  let migration = { removed: false, removedPath: null };
-  try {
-    migration = await removeRootClaudeMirrorIfUnchanged(workspacePath, previousAgent);
-  } catch (error) {
-    // Cleaning up an old duplicate must never turn a successful Agent.md save
-    // into a failed request. The duplicate can be retried on the next session.
-    migration = {
-      removed: false,
-      removedPath: null,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-  const customInstructions = await inspectWorkspaceInstructionFiles(workspacePath, normalizedContent);
+  const migration = await migrateLegacyWorkspaceAgentInstructions(workspacePath);
+  const written = await replaceManagedFile(workspacePath, CLAUDE_MEMORY_FILE, normalizedContent);
+  const customInstructions = await inspectWorkspaceInstructionFiles(
+    workspacePath,
+    migration.legacyConflict,
+  );
 
   return {
     content: normalizedContent,
-    paths: [agentPath],
+    paths: [written.targetPath],
     revision: createRevision(normalizedContent),
     migration,
     customInstructions,
@@ -227,7 +174,9 @@ export async function writeWorkspaceAgentInstructions(workspacePath, content) {
 }
 
 export const workspaceAgentInstructionFiles = Object.freeze({
-  agent: AGENT_INSTRUCTIONS_FILE,
-  rootClaude: ROOT_CLAUDE_INSTRUCTIONS_FILE,
-  dotClaude: DOT_CLAUDE_INSTRUCTIONS_FILE,
+  claude: CLAUDE_MEMORY_FILE,
+  legacyAgent: LEGACY_AGENT_FILE,
+  agent: LEGACY_AGENT_FILE,
+  rootClaude: CLAUDE_MEMORY_FILE,
+  dotClaude: DOT_CLAUDE_MEMORY_FILE,
 });

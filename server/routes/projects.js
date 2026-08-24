@@ -110,10 +110,9 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
     tenantId: tenant.id,
   });
 
-  const instructions = snapshot.template.agentMarkdown.trim();
+  const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
   if (instructions) {
-    // Agent.md is the platform-managed source of truth. It is injected into
-    // the Claude Agent SDK system prompt when a managed workspace session starts.
+    // CLAUDE.md is the project memory source loaded natively by Claude Code SDK.
     await writeWorkspaceAgentInstructions(workspace.path, `${instructions}\n`);
   }
 
@@ -197,6 +196,9 @@ router.get('/:projectName/settings', tenantContext, async (req, res) => {
     return res.json({
       workspaceId: workspace.id,
       displayName: workspace.display_name,
+      claudeMarkdown: instructions.content,
+      claudeMarkdownSource: instructions.source,
+      // Compatibility aliases for clients that have not migrated yet.
       agentMarkdown: instructions.content,
       agentMarkdownSource: instructions.source,
       revision: instructions.revision,
@@ -214,12 +216,13 @@ router.get('/:projectName/settings', tenantContext, async (req, res) => {
 
 router.put('/:projectName/settings', tenantContext, async (req, res) => {
   try {
-    const { displayName, agentMarkdown, expectedRevision } = req.body || {};
+    const { displayName, expectedRevision } = req.body || {};
+    const claudeMarkdown = req.body?.claudeMarkdown ?? req.body?.agentMarkdown;
     if (typeof displayName !== 'string' || !displayName.trim()) {
       return res.status(400).json({ error: 'Display name is required' });
     }
-    if (typeof agentMarkdown !== 'string') {
-      return res.status(400).json({ error: 'Agent.md content is required' });
+    if (typeof claudeMarkdown !== 'string') {
+      return res.status(400).json({ error: 'CLAUDE.md content is required' });
     }
     if (typeof expectedRevision !== 'string' || !expectedRevision) {
       return res.status(400).json({ error: 'Project settings revision is required' });
@@ -227,19 +230,19 @@ router.put('/:projectName/settings', tenantContext, async (req, res) => {
     if (displayName.trim().length > 120) {
       return res.status(400).json({ error: 'Display name must not exceed 120 characters' });
     }
-    if (Buffer.byteLength(agentMarkdown, 'utf8') > MAX_AGENT_MARKDOWN_BYTES) {
-      return res.status(413).json({ error: 'Agent.md content must not exceed 1 MB' });
+    if (Buffer.byteLength(claudeMarkdown, 'utf8') > MAX_AGENT_MARKDOWN_BYTES) {
+      return res.status(413).json({ error: 'CLAUDE.md content must not exceed 1 MB' });
     }
 
     const { workspace } = resolveProjectSettingsWorkspace(req, { requireEdit: true });
     const currentInstructions = await readWorkspaceAgentInstructions(workspace.path);
     if (currentInstructions.revision !== expectedRevision) {
       return res.status(409).json({
-        error: 'Agent instructions changed after this editor was opened. Reload and try again.',
+        error: 'CLAUDE.md changed after this editor was opened. Reload and try again.',
         code: 'PROJECT_SETTINGS_CONFLICT',
       });
     }
-    const written = await writeWorkspaceAgentInstructions(workspace.path, agentMarkdown);
+    const written = await writeWorkspaceAgentInstructions(workspace.path, claudeMarkdown);
     await applyWorkspaceOwnership({
       workspaceRoot: workspace.path,
       targetPaths: written.paths,
@@ -255,10 +258,11 @@ router.put('/:projectName/settings', tenantContext, async (req, res) => {
       success: true,
       workspaceId: workspace.id,
       displayName: updatedWorkspace.display_name,
+      claudeMarkdown: written.content,
       agentMarkdown: written.content,
       revision: written.revision,
-      updatedFiles: ['Agent.md'],
-      removedLegacyFiles: written.migration.removed ? ['CLAUDE.md'] : [],
+      updatedFiles: ['CLAUDE.md'],
+      removedLegacyFiles: written.migration.removed ? ['Agent.md'] : [],
       customInstructions: written.customInstructions,
     });
   } catch (error) {
