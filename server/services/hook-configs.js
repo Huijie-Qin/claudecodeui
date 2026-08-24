@@ -1101,14 +1101,19 @@ export function createHookConfigService({
           ) AS has_data_records
         FROM hooks h
         WHERE h.status = 'published'
-          AND h.binding_controller = 'admin'
           AND (
-            h.activation_scope = 'all_users'
-            OR EXISTS (
-              SELECT 1
-              FROM hook_user_scopes scope
-              WHERE scope.hook_id = h.id
-                AND scope.user_id = ?
+            h.binding_controller = 'sql_check'
+            OR (
+              h.binding_controller = 'admin'
+              AND (
+                h.activation_scope = 'all_users'
+                OR EXISTS (
+                  SELECT 1
+                  FROM hook_user_scopes scope
+                  WHERE scope.hook_id = h.id
+                    AND scope.user_id = ?
+                )
+              )
             )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC

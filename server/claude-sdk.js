@@ -102,6 +102,7 @@ function createHookActivityDescriptor({
   const actionId = String(action?.id || 'follow-up');
   return {
     id: `hook_activity_${executionId}_${actionId}`,
+    activityKind: 'followup',
     timestamp: queuedAt,
     hookId: hook.id,
     hookName: hook.name,
@@ -109,6 +110,20 @@ function createHookActivityDescriptor({
     actionType: action?.type || 'send_agent_message',
     ...(skillName ? { skillName } : {}),
     summary: String(summary || '').slice(0, 8000),
+  };
+}
+
+function createHookExecutionActivityDescriptor({ hook, executionId, startedAt }) {
+  return {
+    id: `hook_activity_${executionId}_execution`,
+    activityKind: 'execution',
+    timestamp: new Date(startedAt).toISOString(),
+    hookId: hook.id,
+    hookName: hook.name,
+    eventName: hook.eventName,
+    actionTypes: [...new Set((hook.postActions || []).map((action) => action.type).filter(Boolean))],
+    hasScript: Boolean(hook.extensionLogic?.code?.trim()),
+    summary: String(hook.description || '').slice(0, 8000),
   };
 }
 
@@ -130,6 +145,7 @@ function emitHookActivity({
     sessionId,
     provider: 'claude',
     origin: 'hook',
+    activityKind: activity.activityKind || 'followup',
     status,
     jobId: activity.id,
     hookId: activity.hookId,
@@ -137,6 +153,9 @@ function emitHookActivity({
     actionId: activity.actionId,
     actionType: activity.actionType,
     skillName: activity.skillName,
+    eventName: activity.eventName,
+    actionTypes: activity.actionTypes,
+    hasScript: activity.hasScript,
     summary: activity.summary,
     queuePosition: activity.queuePosition,
     ...(error ? { error: String(error).slice(0, 8000) } : {}),
@@ -1642,6 +1661,27 @@ async function queryClaudeSDK(command, options = {}, ws) {
               });
               return { queued: true, queuePosition, sessionId: recoverySessionId };
             },
+            onExecutionActivity: ({
+              hook,
+              event,
+              executionId,
+              status,
+              startedAt,
+              error,
+            }) => emitHookActivity({
+              hookRecovery: {
+                activity: createHookExecutionActivityDescriptor({
+                  hook,
+                  executionId,
+                  startedAt,
+                }),
+              },
+              sessionId: event?.session_id || capturedSessionId || sessionId || null,
+              status,
+              runtimeOptions,
+              writer: ws,
+              error,
+            }),
           });
           configuredSdkHooks = hookRuntime.hooks;
           console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);

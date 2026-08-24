@@ -26,6 +26,14 @@
   },
   "hookActivity": {
     "title": "后置消息",
+    "executionTitle": "Hook 执行",
+    "script": "脚本",
+    "actions": {
+      "call_mcp_tool": "MCP 调用",
+      "write_record": "写入记录",
+      "invoke_skill": "调用技能",
+      "send_agent_message": "发送给 Agent"
+    },
     "unnamed": "未命名 Hook",
     "skill": "技能",
     "directMessage": "发送给 Agent",

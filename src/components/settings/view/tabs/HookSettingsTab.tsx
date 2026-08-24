@@ -14,6 +14,7 @@ type AvailableHook = {
   eventName: string;
   version: number;
   enabled: boolean;
+  bindingController?: 'admin' | 'sql_check';
   postActions?: Array<{ type?: string }>;
 };
 
@@ -123,6 +124,7 @@ export default function HookSettingsTab({
         ) : hooks.length === 0 ? (
           <div className="p-5 text-sm text-muted-foreground">管理员暂未向你开放 Hook。</div>
         ) : hooks.map((hook) => {
+          const isSqlCheckManaged = hook.bindingController === 'sql_check';
           const hasSkill = hook.postActions?.some((action) => action.type === 'invoke_skill');
           const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool');
           const hasAgentMessage = hook.postActions?.some((action) => action.type === 'send_agent_message');
@@ -138,12 +140,17 @@ export default function HookSettingsTab({
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}
+                  {isSqlCheckManaged ? (
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                      SQL Check 强制校验管理
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
               </div>
               <SettingsToggle
                 checked={hook.enabled}
-                disabled={Boolean(busyHookId)}
+                disabled={Boolean(busyHookId) || isSqlCheckManaged}
                 ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
                 onChange={(enabled) => void toggleHook(hook, enabled)}
               />

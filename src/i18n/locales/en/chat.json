@@ -26,6 +26,14 @@
   },
   "hookActivity": {
     "title": "Follow-up message",
+    "executionTitle": "Hook execution",
+    "script": "Script",
+    "actions": {
+      "call_mcp_tool": "MCP call",
+      "write_record": "Write record",
+      "invoke_skill": "Invoke Skill",
+      "send_agent_message": "Send to Agent"
+    },
     "unnamed": "Unnamed Hook",
     "skill": "Skill",
     "directMessage": "Sent to Agent",

@@ -47,6 +47,7 @@ export interface NormalizedMessage {
 
   // kind-specific fields (flat for simplicity)
   origin?: 'hook';
+  activityKind?: 'execution' | 'followup';
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
@@ -74,6 +75,9 @@ export interface NormalizedMessage {
   hookName?: string;
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  hasScript?: boolean;
   skillName?: string;
   error?: string;
   taskId?: string;

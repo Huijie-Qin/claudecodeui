@@ -74,8 +74,12 @@ export interface HookActivityDetails {
   jobId?: string;
   hookId?: string;
   hookName?: string;
+  activityKind?: 'execution' | 'followup';
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  hasScript?: boolean;
   skillName?: string;
   summary?: string;
   queuePosition?: number;

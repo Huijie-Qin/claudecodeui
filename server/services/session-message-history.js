@@ -1,5 +1,7 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
+import { hookConfigService } from './hook-configs.js';
+
 function generateUserPromptMessageId() {
   return `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -106,6 +108,53 @@ function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
       return leftTimestamp - rightTimestamp || left.index - right.index;
     })
     .map(({ message }) => message);
+}
+
+function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }) {
+  if (!providerSessionId || typeof hookConfigs?.listAllExecutions !== 'function') return [];
+
+  try {
+    const hooks = new Map();
+    return hookConfigs.listAllExecutions({
+      sessionId: providerSessionId,
+      userId,
+      limit: 200,
+    }).map((execution) => {
+      let hook = hooks.get(execution.hookId);
+      if (hook === undefined) {
+        hook = typeof hookConfigs.getHook === 'function' ? hookConfigs.getHook(execution.hookId) : null;
+        hooks.set(execution.hookId, hook || null);
+      }
+      const startedAt = Number(execution.startedAtMs) > 0
+        ? new Date(Number(execution.startedAtMs))
+        : new Date(execution.startedAt);
+      const timestamp = Number.isFinite(startedAt.getTime())
+        ? startedAt.toISOString()
+        : new Date(0).toISOString();
+      return {
+        id: `hook_activity_${execution.id}_execution`,
+        sessionId: providerSessionId,
+        timestamp,
+        provider: 'claude',
+        kind: 'hook_activity',
+        origin: 'hook',
+        activityKind: 'execution',
+        status: ['running', 'succeeded', 'failed'].includes(execution.status)
+          ? execution.status
+          : 'failed',
+        jobId: `hook_activity_${execution.id}_execution`,
+        hookId: execution.hookId,
+        hookName: execution.hookName || hook?.name || null,
+        eventName: execution.eventName || hook?.eventName || null,
+        actionTypes: [...new Set((hook?.postActions || []).map((action) => action.type).filter(Boolean))],
+        hasScript: Boolean(hook?.extensionLogic?.code?.trim()),
+        summary: String(hook?.description || '').slice(0, 8000),
+      };
+    });
+  } catch (error) {
+    console.warn('[SessionHistory] Failed to restore Hook execution activities:', error?.message || error);
+    return [];
+  }
 }
 
 function isScheduledSlashInvocation(message) {
@@ -289,6 +338,7 @@ export function shouldSuppressLiveUserTextMessage(message, writer) {
 export function createSessionMessageHistoryService({
   multitenancy = multitenancyDb,
   providerSessions = null,
+  hookConfigs = hookConfigService,
 } = {}) {
   return {
     async fetchHistory({
@@ -313,7 +363,15 @@ export function createSessionMessageHistoryService({
           limit: null,
           offset: 0,
         });
-        const syntheticMessages = dbHistory.messages.filter(isClaudeSyntheticMessage);
+        const historicalHookActivities = listHistoricalHookActivities({
+          hookConfigs,
+          providerSessionId,
+          userId,
+        });
+        const syntheticMessages = mergeClaudeSyntheticMessages(
+          dbHistory.messages.filter(isClaudeSyntheticMessage),
+          historicalHookActivities,
+        );
         const transcriptDbMessages = dbHistory.messages.filter((message) => !isClaudeSyntheticMessage(message));
         const runtimeLookup = {
           ...historyLookup,
@@ -387,7 +445,11 @@ export function createSessionMessageHistoryService({
 
         // Transitional fallback for legacy sessions whose runtime home or JSONL
         // was removed before runtime-aware history was introduced.
-        return paginateHistory(dbHistory.messages, limit, offset);
+        return paginateHistory(
+          mergeClaudeSyntheticMessages(dbHistory.messages, historicalHookActivities),
+          limit,
+          offset,
+        );
       }
 
       const dbHistory = multitenancy.sessionMessages.listMessages({

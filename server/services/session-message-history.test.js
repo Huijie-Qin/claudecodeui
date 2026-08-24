@@ -599,6 +599,89 @@ test('Claude session history falls back to legacy DB when runtime JSONL is unava
   assert.equal(result.messages[0].id, 'legacy-msg');
 });
 
+test('Claude session history restores generic Hook cards from existing execution audits', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => null,
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{
+            id: 'assistant-1',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-08-24T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    hookConfigs: {
+      listAllExecutions: ({ sessionId, userId }) => {
+        assert.equal(sessionId, 's1');
+        assert.equal(userId, 2);
+        return [{
+          id: 'execution-1',
+          hookId: 'sql-check',
+          hookName: 'SQL Check 强制校验',
+          eventName: 'Stop',
+          status: 'succeeded',
+          startedAtMs: Date.parse('2026-08-24T01:00:01.000Z'),
+        }];
+      },
+      getHook: () => ({
+        id: 'sql-check',
+        name: 'SQL Check 强制校验',
+        description: '校验模型返回的 SQL。',
+        eventName: 'Stop',
+        extensionLogic: { code: 'export async function run() {}' },
+        postActions: [{ type: 'call_mcp_tool' }],
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+  });
+
+  assert.deepEqual(result.messages.map((message) => message.id), [
+    'assistant-1',
+    'hook_activity_execution-1_execution',
+  ]);
+  assert.deepEqual(result.messages[1], {
+    id: 'hook_activity_execution-1_execution',
+    sessionId: 's1',
+    timestamp: '2026-08-24T01:00:01.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    activityKind: 'execution',
+    status: 'succeeded',
+    jobId: 'hook_activity_execution-1_execution',
+    hookId: 'sql-check',
+    hookName: 'SQL Check 强制校验',
+    eventName: 'Stop',
+    actionTypes: ['call_mcp_tool'],
+    hasScript: true,
+    summary: '校验模型返回的 SQL。',
+  });
+});
+
 test('interactive Claude user and assistant messages are not persisted to the database', () => {
   const persisted = [];
   const multitenancy = {

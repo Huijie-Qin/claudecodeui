@@ -178,3 +178,67 @@ RemoveEnvironmentCleanupHook
 - `src/components/admin/hook-config/editorUtils.test.ts`
 - `src/i18n/locales/zh-CN/admin.json`
 - `src/i18n/locales/en/admin.json`
+
+## 9. 2026-08-24 补充：启用的 Hook 与会话展示不完整
+
+### 现象与实际证据
+
+同时启用全部预置 Hook 和 SQL Check 强制校验后，执行诊断中能看到多个 Hook 已执行，但会话中只显示了“发送通知”产生的后置消息；设置页的“辅助功能”列表也没有显示已经启用并执行的 SQL Check Hook。
+
+修复前在真实页面复现时，“辅助功能”只列出 4 条普通 Hook，SQL Check 页面则明确显示强制校验已启用。执行记录和设置列表因此出现了不一致。
+
+### 原因
+
+问题由三条数据链路不一致共同导致：
+
+1. 设置页的可用 Hook 查询只返回 `binding_controller=admin` 的配置，而运行时会同时加载 `binding_controller=sql_check` 的配置。因此 SQL Check 能执行，却被设置页过滤掉。
+2. 会话事件只在 Hook 后置动作是 `invoke_skill` 或 `send_agent_message` 时生成 `hook_activity`。脚本、`write_record`、`call_mcp_tool` 以及 SQL Check 自身的执行只写入审计表，没有发送会话卡片。
+3. 单纯修复实时事件只能覆盖新执行；既有会话加载历史时没有把 `hook_executions` 审计记录还原为 Hook 卡片，所以刷新旧会话仍然缺失。
+
+### 修复方案
+
+- Hook 运行时现在为每一次执行统一报告 `running -> succeeded/failed` 生命周期，不再依赖是否产生后置消息。
+- 会话中把“Hook 执行”和“后置消息”作为两类卡片：
+  - “Hook 执行”展示 Hook 名称、事件、状态、脚本以及 MCP 调用、写入记录、调用技能、发送 Agent 消息等动作类型。
+  - “后置消息”继续表示 Hook 生成并送入下一轮对话的内容，避免把执行记录和模型消息混为一谈。
+- 会话历史加载时从 `hook_executions` 恢复通用 Hook 执行卡片，并按稳定 ID 去重。这样修复前已经产生的执行记录也能在旧会话中补显。
+- 设置页的可用列表纳入已发布的 SQL Check Hook。SQL Check 行显示“SQL Check 强制校验管理”标记，并保持开关只读，防止绕过专用 SQL Check 页面中的校验与配置流程。
+- 所有活动上报和历史恢复均采用 fail-open：UI 辅助展示失败不会中断 Hook 本身或会话执行。
+
+### 实际 UI 回归
+
+使用最终生产镜像和现有测试会话完成真实页面验证：
+
+1. “辅助功能”由原来的 4 条恢复为 5 条：失败通知、HTTP 200 会话恢复、SQL 行数记录、SQL Check 强制校验、对话正常结束通知。
+2. SQL Check 行显示已启用、开关只读，并带有“SQL Check 强制校验管理”标记。
+3. 重新加载修复前已有执行记录的旧会话后，页面恢复出 4 张 Hook 执行卡片，不需要重新运行 Hook。
+4. 两次 SQL Check 记录均显示“Stop / 脚本 / MCP 调用 / 已完成”；两次正常结束通知记录均显示“Stop / 调用技能 / 已完成”。
+5. Hook 执行卡片和后置消息使用不同标题，用户可以明确判断一条会话内容来自执行审计还是 Hook 生成的后续对话。
+
+### 补充自动化验证
+
+| 验证项 | 结果 |
+| --- | --- |
+| Hook 配置、运行时、历史恢复聚焦测试 | 52/52 通过 |
+| 前端消息归一化与会话 Store 测试 | 39/39 通过 |
+| Hook 服务端主套件 | 72/72 通过 |
+| 28 类 SDK Hook 事件与行为矩阵 | 3/3 通过 |
+| Workspace 路由聚焦测试 | 1/1 通过 |
+| 客户端与服务端 TypeScript | 全部通过 |
+| 本次涉及文件 Lint、JSON 解析、`git diff --check` | 全部通过 |
+| Vite 生产构建、Docker 生产镜像构建与健康检查 | 全部通过 |
+
+### 本次补充涉及文件
+
+- `server/claude-sdk.js`
+- `server/services/hook-configs.js`
+- `server/services/hook-runtime.js`
+- `server/services/session-message-history.js`
+- `server/shared/types.ts`
+- `src/components/chat/hooks/useChatMessages.ts`
+- `src/components/chat/types/types.ts`
+- `src/components/chat/view/subcomponents/MessageComponent.tsx`
+- `src/components/settings/view/tabs/HookSettingsTab.tsx`
+- `src/stores/useSessionStore.ts`
+- `src/i18n/locales/zh-CN/chat.json`
+- `src/i18n/locales/en/chat.json`

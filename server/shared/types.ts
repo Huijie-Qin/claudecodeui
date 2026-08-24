@@ -44,6 +44,7 @@ export type NormalizedMessage = {
   provider: LLMProvider;
   kind: MessageKind;
   origin?: 'hook';
+  activityKind?: 'execution' | 'followup';
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
@@ -75,6 +76,9 @@ export type NormalizedMessage = {
   hookName?: string;
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  hasScript?: boolean;
   skillName?: string;
   subagentTools?: unknown;
   toolUseResult?: unknown;

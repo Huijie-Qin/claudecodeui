@@ -626,6 +626,46 @@ test('Stop Agent message action queues a templated next turn without loading a S
   }
 });
 
+test('every Hook execution reports one activity lifecycle even without a follow-up action', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Record completion',
+      description: 'Persist completion metadata',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [],
+      claudeResponse: { bindings: {} },
+    };
+    const activities = [];
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      onExecutionActivity: (activity) => activities.push(activity),
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'Stop',
+      session_id: 'session-activity',
+      last_assistant_message: 'done',
+    });
+
+    assert.deepEqual(activities.map((activity) => activity.status), ['running', 'succeeded']);
+    assert.equal(activities[0].executionId, activities[1].executionId);
+    assert.equal(activities[0].hook.id, 'hook-1');
+    assert.equal(activities[0].event.session_id, 'session-activity');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook Skill action uses the configured content loader without creating a workspace copy', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));

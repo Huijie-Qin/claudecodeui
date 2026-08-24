@@ -462,6 +462,7 @@ export function createHookRuntimeSession({
   enqueueAgentMessage = async () => {
     throw new Error('Agent messaging is not available in this runtime');
   },
+  onExecutionActivity = () => {},
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
   mcpCaller = callHookMcpTool,
@@ -482,13 +483,34 @@ export function createHookRuntimeSession({
     skillContentLoader,
     enqueueSkillRecovery,
     enqueueAgentMessage,
+    onExecutionActivity,
     mcpCaller,
+  };
+
+  const reportExecutionActivity = (activity) => {
+    try {
+      const result = context.onExecutionActivity(activity);
+      if (result && typeof result.catch === 'function') {
+        result.catch((error) => {
+          console.warn(`[Hook:${activity.hook.id}] Failed to report execution activity:`, error?.message || error);
+        });
+      }
+    } catch (error) {
+      console.warn(`[Hook:${activity.hook.id}] Failed to report execution activity:`, error?.message || error);
+    }
   };
 
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
     const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId);
+    reportExecutionActivity({
+      hook,
+      event,
+      executionId,
+      status: 'running',
+      startedAt,
+    });
     const logs = [];
     let scriptOutput = {};
     const references = {
@@ -553,6 +575,15 @@ export function createHookRuntimeSession({
         response,
         logs,
       });
+      reportExecutionActivity({
+        hook,
+        event,
+        executionId,
+        status: 'succeeded',
+        startedAt,
+        completedAt: Date.now(),
+        actions: references.actions,
+      });
       return response;
     } catch (error) {
       completeExecution(database, executionId, {
@@ -563,6 +594,16 @@ export function createHookRuntimeSession({
         response: {},
         logs,
         error: error?.stack || error?.message || String(error),
+      });
+      reportExecutionActivity({
+        hook,
+        event,
+        executionId,
+        status: 'failed',
+        startedAt,
+        completedAt: Date.now(),
+        actions: references.actions,
+        error: error?.message || String(error),
       });
       console.error(`[Hook:${hook.id}] Runtime execution failed:`, error?.message || error);
       return {};

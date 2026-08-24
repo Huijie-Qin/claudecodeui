@@ -29,14 +29,42 @@ test('normalizedToChatMessages renders Hook follow-up activity as a distinct mes
     jobId: 'hook_activity_execution-1_action-1',
     hookId: 'notify-on-stop',
     hookName: '对话正常结束通知',
+    activityKind: undefined,
     actionId: 'send-message',
     actionType: 'send_agent_message',
+    eventName: undefined,
+    actionTypes: undefined,
+    hasScript: undefined,
     skillName: undefined,
     summary: '请总结本轮结果',
     queuePosition: 1,
     status: 'queued',
     error: undefined,
   });
+});
+
+test('normalizedToChatMessages preserves generic Hook execution details', () => {
+  const [hookMessage] = normalizedToChatMessages([{
+    id: 'hook_activity_execution-2_execution',
+    sessionId: 'session-1',
+    timestamp: '2026-06-30T00:00:01.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    activityKind: 'execution',
+    status: 'succeeded',
+    hookId: 'sql-check',
+    hookName: 'SQL Check 强制校验',
+    eventName: 'Stop',
+    actionTypes: ['call_mcp_tool'],
+    hasScript: true,
+    summary: '校验模型返回的 SQL。',
+  }]);
+
+  assert.equal(hookMessage.hookActivity?.activityKind, 'execution');
+  assert.equal(hookMessage.hookActivity?.eventName, 'Stop');
+  assert.deepEqual(hookMessage.hookActivity?.actionTypes, ['call_mcp_tool']);
+  assert.equal(hookMessage.hookActivity?.hasScript, true);
 });
 
 test('normalizedToChatMessages preserves queued user message state', () => {

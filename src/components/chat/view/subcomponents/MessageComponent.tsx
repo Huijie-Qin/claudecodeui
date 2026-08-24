@@ -212,6 +212,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
   const hookActivity = message.hookActivity;
   const hookStatus = hookActivity?.status || 'running';
+  const isHookExecution = hookActivity?.activityKind === 'execution';
+  const hookActionLabels = {
+    call_mcp_tool: t('hookActivity.actions.call_mcp_tool', { defaultValue: 'MCP call' }),
+    write_record: t('hookActivity.actions.write_record', { defaultValue: 'Write record' }),
+    invoke_skill: t('hookActivity.actions.invoke_skill', { defaultValue: 'Invoke Skill' }),
+    send_agent_message: t('hookActivity.actions.send_agent_message', { defaultValue: 'Send to Agent' }),
+  };
   const hookStatusLabel = {
     queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
     running: t('hookActivity.status.running', { defaultValue: 'Running' }),
@@ -296,7 +303,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
-                  {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                  {isHookExecution
+                    ? t('hookActivity.executionTitle', { defaultValue: 'Hook execution' })
+                    : t('hookActivity.title', { defaultValue: 'Follow-up message' })}
                 </span>
                 <span className="min-w-0 truncate text-sm font-medium text-foreground">
                   {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
@@ -320,7 +329,17 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
 
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                {hookActivity.skillName ? (
+                {isHookExecution ? (
+                  <>
+                    {hookActivity.eventName ? <span>{hookActivity.eventName}</span> : null}
+                    {hookActivity.hasScript ? (
+                      <span>{t('hookActivity.script', { defaultValue: 'Script' })}</span>
+                    ) : null}
+                    {hookActivity.actionTypes?.map((actionType) => (
+                      <span key={actionType}>{hookActionLabels[actionType]}</span>
+                    ))}
+                  </>
+                ) : hookActivity.skillName ? (
                   <span className="truncate">
                     {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{hookActivity.skillName}</code>
                   </span>

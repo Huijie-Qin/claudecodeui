@@ -512,6 +512,15 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
       hookStatus: 'published',
       reason: null,
     });
+    assert.deepEqual(service.listAvailableHooksForUser(2).map((hook) => ({
+      id: hook.id,
+      bindingController: hook.bindingController,
+      enabled: hook.enabled,
+    })), [{
+      id: created.id,
+      bindingController: 'sql_check',
+      enabled: false,
+    }]);
 
     assert.throws(
       () => service.listHookBindings(created.id),
@@ -527,11 +536,13 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
     );
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
     assert.equal(enabled.enabled, true);
+    assert.equal(service.listAvailableHooksForUser(2)[0].enabled, true);
     assert.equal(service.getHook(created.id).boundUserCount, 1);
     assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
 
     const disabled = service.setSqlCheckEnforcement({ userId: 2, enabled: false });
     assert.equal(disabled.enabled, false);
+    assert.equal(service.listAvailableHooksForUser(2)[0].enabled, false);
     assert.equal(service.getHook(created.id).boundUserCount, 0);
     assert.deepEqual(service.listActiveHooksForUser(2), []);
     assert.equal(service.deleteHook(created.id), true);
