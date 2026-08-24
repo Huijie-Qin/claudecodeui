@@ -2491,7 +2491,7 @@
   gap: 12px;
 }
 
-.da-skill-detail-hero > div {
+.da-skill-detail-hero > div:not(.da-skill-detail-header-actions) {
   min-width: 0;
   flex: 1;
 }

@@ -2061,19 +2061,22 @@ export default function DataAgentApp() {
     replaceTemporarySession,
   } = useSessionProtection();
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (): Promise<Project[]> => {
     if (!currentTenant) {
       setProjects([]);
       setLoadingProjects(false);
-      return;
+      return [];
     }
     try {
       const response = await api.projects();
       const payload = await response.json();
-      setProjects(Array.isArray(payload) ? payload : []);
+      const nextProjects = (Array.isArray(payload) ? payload : []) as Project[];
+      setProjects(nextProjects);
+      return nextProjects;
     } catch (error) {
       console.error('Failed to load DataAgent workspaces:', error);
       setProjects([]);
+      return [];
     } finally {
       setLoadingProjects(false);
     }
@@ -2159,17 +2162,32 @@ export default function DataAgentApp() {
   }, [navigate, selectWorkspace]);
 
   const handleExpertCreated = useCallback(async (project: Project) => {
-    if (project.workspaceId != null) {
-      setSelectedWorkspaceId(project.workspaceId);
-      localStorage.setItem(WORKSPACE_STORAGE_KEY, String(project.workspaceId));
+    const latestProjects = await fetchProjects();
+    const createdPath = project.fullPath || project.path;
+    const createdWorkspace = latestProjects.find((candidate) => (
+      project.workspaceId != null && candidate.workspaceId === project.workspaceId
+    )) || latestProjects.find((candidate) => (
+      Boolean(createdPath) && (candidate.fullPath === createdPath || candidate.path === createdPath)
+    )) || project;
+
+    if (createdWorkspace.workspaceId == null) {
+      throw new Error('专家创建成功，但未能定位对应工作区，请刷新后重试。');
     }
-    await fetchProjects();
-  }, [fetchProjects]);
+
+    setProjects((current) => current.some((candidate) => candidate.workspaceId === createdWorkspace.workspaceId)
+      ? current
+      : [...current, createdWorkspace]);
+    selectWorkspace(createdWorkspace);
+    navigate('/data-agent/new');
+  }, [fetchProjects, navigate, selectWorkspace]);
 
   useEffect(() => {
-    window.refreshProjects = fetchProjects;
+    const refreshProjects = async () => {
+      await fetchProjects();
+    };
+    window.refreshProjects = refreshProjects;
     return () => {
-      if (window.refreshProjects === fetchProjects) delete window.refreshProjects;
+      if (window.refreshProjects === refreshProjects) delete window.refreshProjects;
     };
   }, [fetchProjects]);
 
