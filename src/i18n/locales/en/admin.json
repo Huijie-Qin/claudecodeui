@@ -651,6 +651,8 @@
       "description": "Administrators can upload a Skill file directly. It is persisted as-is and added to the Hook Skill selector immediately. Uploading the same Skill name updates it.",
       "upload": "Upload Skill folder",
       "uploading": "Uploading",
+      "dropHint": "Drop a Skill folder here to upload",
+      "dropActive": "Release to upload the Skill folder",
       "search": "Search Skills",
       "empty": "No built-in Hook Skills",
       "noMatches": "No matching Skills",

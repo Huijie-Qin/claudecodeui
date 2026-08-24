@@ -605,6 +605,8 @@
       "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
       "upload": "上传 Skill 文件夹",
       "uploading": "正在上传",
+      "dropHint": "将 Skill 文件夹拖到这里上传",
+      "dropActive": "松开后上传 Skill 文件夹",
       "search": "搜索 Skill",
       "empty": "暂无内置 Hook Skill",
       "noMatches": "没有匹配的 Skill",

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { DragEvent } from 'react';
 import {
   Activity,
   BookOpen,
@@ -58,10 +59,96 @@ const EMPTY_RESOURCES: HookResources = {
   environmentVariables: [],
 };
 
-const DIRECTORY_INPUT_ATTRIBUTES = {
-  webkitdirectory: '',
-  directory: '',
+type HookSkillUploadFile = {
+  file: File;
+  relativePath: string;
 };
+
+type DirectoryPickerFileHandle = FileSystemFileHandle & { kind: 'file' };
+type DirectoryPickerDirectoryHandle = FileSystemDirectoryHandle & {
+  kind: 'directory';
+  values: () => AsyncIterableIterator<DirectoryPickerFileHandle | DirectoryPickerDirectoryHandle>;
+};
+
+type DirectoryPickerWindow = Window & {
+  showDirectoryPicker?: () => Promise<DirectoryPickerDirectoryHandle>;
+};
+
+async function readHookSkillDirectory(
+  directory: DirectoryPickerDirectoryHandle,
+  rootName = directory.name,
+): Promise<HookSkillUploadFile[]> {
+  const files: HookSkillUploadFile[] = [];
+
+  const visit = async (current: DirectoryPickerDirectoryHandle, relativeDirectory: string) => {
+    for await (const entry of current.values()) {
+      const relativePath = `${relativeDirectory}/${entry.name}`;
+      if (entry.kind === 'directory') {
+        await visit(entry, relativePath);
+      } else {
+        files.push({
+          file: await entry.getFile(),
+          relativePath,
+        });
+      }
+    }
+  };
+
+  await visit(directory, rootName);
+  return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+async function readDroppedHookSkillDirectory(
+  directory: FileSystemDirectoryEntry,
+  relativeDirectory = directory.name,
+): Promise<HookSkillUploadFile[]> {
+  const reader = directory.createReader();
+  const entries: FileSystemEntry[] = [];
+  let batch: FileSystemEntry[];
+
+  do {
+    batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+    entries.push(...batch);
+  } while (batch.length > 0);
+
+  const files: HookSkillUploadFile[] = [];
+  for (const entry of entries) {
+    const relativePath = `${relativeDirectory}/${entry.name}`;
+    if (entry.isDirectory) {
+      files.push(...await readDroppedHookSkillDirectory(entry as FileSystemDirectoryEntry, relativePath));
+    } else {
+      const file = await new Promise<File>((resolve, reject) => (
+        (entry as FileSystemFileEntry).file(resolve, reject)
+      ));
+      files.push({ file, relativePath });
+    }
+  }
+  return files;
+}
+
+async function readDroppedHookSkillFiles(dataTransfer: DataTransfer): Promise<HookSkillUploadFile[]> {
+  const files: HookSkillUploadFile[] = [];
+  for (const item of Array.from(dataTransfer.items || [])) {
+    if (item.kind !== 'file') continue;
+    const entry = item.webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      files.push(...await readDroppedHookSkillDirectory(entry as FileSystemDirectoryEntry));
+    } else if (entry?.isFile) {
+      const file = await new Promise<File>((resolve, reject) => (
+        (entry as FileSystemFileEntry).file(resolve, reject)
+      ));
+      files.push({ file, relativePath: file.name });
+    }
+  }
+
+  if (files.length === 0) {
+    files.push(...Array.from(dataTransfer.files || []).map((file) => ({
+      file,
+      relativePath: file.webkitRelativePath || file.name,
+    })));
+  }
+  return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
 
 type Toast = { type: 'success' | 'error'; message: string } | null;
 
@@ -917,6 +1004,8 @@ export default function HookConfigsTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [skillDropGuideOpen, setSkillDropGuideOpen] = useState(false);
+  const [skillDragActive, setSkillDragActive] = useState(false);
   const [skillDeleteBusyId, setSkillDeleteBusyId] = useState<string | null>(null);
   const [skillDeleteDialog, setSkillDeleteDialog] = useState<SkillDeleteDialogState>(null);
   const [hookMcpEditor, setHookMcpEditor] = useState<HookMcpEditorState | null>(null);
@@ -1296,13 +1385,13 @@ export default function HookConfigsTab() {
     }
   };
 
-  const uploadBuiltinSkill = async (files: File[]) => {
+  const uploadBuiltinSkill = async (files: HookSkillUploadFile[]) => {
     if (files.length === 0) return;
     setSkillUploadBusy(true);
     try {
       const formData = new FormData();
-      const relativePaths = files.map((file) => file.webkitRelativePath || file.name);
-      files.forEach((file) => formData.append('files', file, file.name));
+      const relativePaths = files.map((entry) => entry.relativePath);
+      files.forEach((entry) => formData.append('files', entry.file, entry.file.name));
       formData.set('paths', JSON.stringify(relativePaths));
       const response = await api.admin.uploadHookSkill(formData);
       if (!response.ok) throw new Error(await readError(response, t('hooks.errors.uploadSkill')));
@@ -1323,6 +1412,33 @@ export default function HookConfigsTab() {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.uploadSkill'), 'error');
     } finally {
       setSkillUploadBusy(false);
+    }
+  };
+
+  const selectAndUploadBuiltinSkill = async () => {
+    const showDirectoryPicker = (window as DirectoryPickerWindow).showDirectoryPicker;
+    if (!showDirectoryPicker) {
+      setSkillDropGuideOpen(true);
+      return;
+    }
+
+    try {
+      const directory = await showDirectoryPicker.call(window);
+      await uploadBuiltinSkill(await readHookSkillDirectory(directory));
+    } catch (caughtError) {
+      if (caughtError instanceof DOMException && caughtError.name === 'AbortError') return;
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.uploadSkill'), 'error');
+    }
+  };
+
+  const dropAndUploadBuiltinSkill = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSkillDragActive(false);
+    try {
+      await uploadBuiltinSkill(await readDroppedHookSkillFiles(event.dataTransfer));
+    } catch (caughtError) {
+      showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.uploadSkill'), 'error');
     }
   };
 
@@ -1770,31 +1886,52 @@ export default function HookConfigsTab() {
                   />
                 </div>
               ) : null}
-              <label className="shrink-0">
-                <input
-                  type="file"
-                  multiple
-                  {...DIRECTORY_INPUT_ATTRIBUTES}
-                  className="sr-only"
+              <div className="shrink-0">
+                <button
+                  type="button"
                   disabled={skillUploadBusy}
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files || []);
-                    event.target.value = '';
-                    void uploadBuiltinSkill(files);
-                  }}
-                />
-                <span className={cn(
+                  onClick={() => void selectAndUploadBuiltinSkill()}
+                  className={cn(
                   'inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm',
                   skillUploadBusy ? 'pointer-events-none opacity-50' : 'hover:bg-accent',
-                )}>
+                  )}
+                >
                   {skillUploadBusy
                     ? <RefreshCw className="h-4 w-4 animate-spin" />
                     : <Upload className="h-4 w-4" />}
                   {t(skillUploadBusy ? 'hooks.builtinSkills.uploading' : 'hooks.builtinSkills.upload')}
-                </span>
-              </label>
+                </button>
+              </div>
             </div>
           </div>
+          {skillDropGuideOpen ? (
+            <div
+              className={cn(
+                'relative mt-3 flex min-h-24 items-center justify-center rounded-lg border border-dashed px-10 text-center text-sm transition-colors',
+                skillDragActive ? 'border-primary bg-primary/5 text-primary' : 'border-border bg-muted/20 text-muted-foreground',
+              )}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setSkillDragActive(true);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={() => setSkillDragActive(false)}
+              onDrop={(event) => void dropAndUploadBuiltinSkill(event)}
+            >
+              <Upload className="mr-2 h-4 w-4 shrink-0" />
+              <span>{t(skillDragActive ? 'hooks.builtinSkills.dropActive' : 'hooks.builtinSkills.dropHint')}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 top-2 h-7 w-7"
+                onClick={() => setSkillDropGuideOpen(false)}
+                aria-label={t('common.close')}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : null}
           <div className="mt-3 overflow-hidden rounded-lg border border-border">
             {filteredSkills.length ? (
               <div className="max-h-[200px] divide-y divide-border overflow-y-auto">
