@@ -20,7 +20,6 @@ import { SubagentPanel } from '../subagent/SubagentPanel';
 import {
   applySubagentPermissionWaitingState,
   partitionSubagentPermissionRequests,
-  shouldAutoSelectSubagentQuestion,
 } from '../subagent/subagentPermissionRouting';
 import { useSubagentPanelLayout } from '../subagent/useSubagentPanelLayout';
 
@@ -77,7 +76,6 @@ function ChatInterface({
   const lastRealtimeActivityAtRef = useRef(Date.now());
   const lastSessionStatusProbeAtRef = useRef(0);
   const subagentReturnFocusRef = useRef<HTMLElement | null>(null);
-  const lastAutoOpenedQuestionRef = useRef<string | null>(null);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
   const [selectedSubagentTraceId, setSelectedSubagentTraceId] = useState<string | null>(null);
@@ -173,7 +171,6 @@ function ChatInterface({
     [pendingPermissionRequests, selectedSubagentTraceId, subagentTraces],
   );
   const routedSubagentQuestions = subagentPermissionRouting.routed;
-  const selectedSubagentTrace = subagentPermissionRouting.selectedTrace;
   const selectedSubagentQuestionRequests = subagentPermissionRouting.selectedRequests;
   const hiddenSubagentQuestions = subagentPermissionRouting.hidden;
   const unresolvedSubagentQuestions = subagentPermissionRouting.unresolved;
@@ -201,6 +198,7 @@ function ChatInterface({
     window.requestAnimationFrame(() => returnFocusTarget?.focus());
   }, []);
 
+  // Keep opening explicit: only the matching Task/Agent tool card receives this callback.
   const handleOpenSubagent = useCallback((toolId: string) => {
     const trace = subagentTraces.find((candidate) => (
       candidate.id === toolId || candidate.sourceToolIds.includes(toolId)
@@ -214,20 +212,6 @@ function ChatInterface({
     }
   }, [subagentTraces]);
 
-  const handleOpenLatestSubagent = useCallback(() => {
-    const runningTrace = [...subagentDisplayTraces]
-      .reverse()
-      .find((trace) => trace.status === 'running' || trace.status === 'waiting');
-    const trace = runningTrace || subagentDisplayTraces[subagentDisplayTraces.length - 1];
-    if (trace) {
-      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-      setIsQuickSettingsOpen(false);
-      setSelectedSubagentTraceId(trace.id);
-    }
-  }, [subagentDisplayTraces]);
-
   const latestHiddenSubagentQuestion = hiddenSubagentQuestions[hiddenSubagentQuestions.length - 1];
   const hiddenSubagentQuestionCount = hiddenSubagentQuestions.length + unresolvedSubagentQuestions.length;
 
@@ -235,40 +219,7 @@ function ChatInterface({
     setSelectedSubagentTraceId(null);
     setIsQuickSettingsOpen(false);
     subagentReturnFocusRef.current = null;
-    lastAutoOpenedQuestionRef.current = null;
   }, [selectedSession?.id]);
-
-  useEffect(() => {
-    const latestQuestion = routedSubagentQuestions[routedSubagentQuestions.length - 1];
-    if (!latestQuestion || lastAutoOpenedQuestionRef.current === latestQuestion.request.requestId) {
-      return;
-    }
-
-    if (!shouldAutoSelectSubagentQuestion(
-      isSubagentPanelOpen,
-      selectedSubagentTrace?.id ?? null,
-      selectedSubagentQuestionRequests.length,
-      latestQuestion.trace.id,
-    )) {
-      // Keep the current form mounted so partially entered answers and focus
-      // survive when another subagent asks a question concurrently.
-      return;
-    }
-
-    lastAutoOpenedQuestionRef.current = latestQuestion.request.requestId;
-    if (!isSubagentPanelOpen) {
-      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    }
-    setIsQuickSettingsOpen(false);
-    setSelectedSubagentTraceId(latestQuestion.trace.id);
-  }, [
-    isSubagentPanelOpen,
-    routedSubagentQuestions,
-    selectedSubagentQuestionRequests.length,
-    selectedSubagentTrace?.id,
-  ]);
 
   const handleQuickSettingsOpenChange = useCallback((nextOpen: boolean) => {
     setIsQuickSettingsOpen(nextOpen);
@@ -647,28 +598,6 @@ function ChatInterface({
         className="relative flex h-full min-h-0 overflow-hidden"
       >
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-          {subagentDisplayTraces.length > 0 && (
-            <button
-              type="button"
-              onClick={handleOpenLatestSubagent}
-              aria-controls="subagent-activity-panel"
-              aria-expanded={isSubagentPanelOpen}
-              aria-hidden={isSubagentPanelOpen}
-              tabIndex={isSubagentPanelOpen ? -1 : undefined}
-              className={`absolute right-3 top-3 z-20 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-2.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground ${isSubagentPanelOpen ? 'pointer-events-none invisible' : 'visible'}`}
-              title={t('subagent.openPanel', { defaultValue: 'Open agent activity' })}
-            >
-              <Bot className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>{t('subagent.agents', { defaultValue: 'Agents' })}</span>
-              <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-foreground">
-                {subagentDisplayTraces.length}
-              </span>
-              {subagentDisplayTraces.some((trace) => trace.status === 'running' || trace.status === 'waiting') && (
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-500" aria-hidden="true" />
-              )}
-            </button>
-          )}
-
           <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
@@ -730,16 +659,6 @@ function ChatInterface({
                   <span className="rounded-full bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-purple-600 dark:text-purple-300">
                     {hiddenSubagentQuestionCount}
                   </span>
-                )}
-                {latestHiddenSubagentQuestion && (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenSubagent(latestHiddenSubagentQuestion.trace.id)}
-                    aria-controls="subagent-activity-panel"
-                    className="shrink-0 rounded px-1 font-medium text-purple-600 hover:bg-purple-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-purple-300"
-                  >
-                    {t('subagentPanel.openQuestion', { defaultValue: 'Open' })}
-                  </button>
                 )}
               </div>
             </div>

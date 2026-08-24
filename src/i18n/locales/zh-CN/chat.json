@@ -371,8 +371,6 @@
     }
   },
   "subagent": {
-    "agents": "子代理",
-    "openPanel": "打开子代理活动",
     "resizePanel": "调整子代理活动面板宽度"
   },
   "subagentPanel": {
@@ -416,9 +414,8 @@
     "finalResult": "最终结果",
     "usage": "用量",
     "pendingQuestion": "子代理正在等待你的回答",
-    "questionWaiting": "有子代理正在等待你的回答",
+    "questionWaiting": "有子代理正在等待你的回答，请从对应的子代理工具调用中打开侧栏。",
     "locatingQuestion": "正在连接子代理的问题…",
-    "openQuestion": "打开",
     "newUpdates": "{{count}} 条新动态 · 回到最新",
     "newUpdates_other": "{{count}} 条新动态 · 回到最新"
   }

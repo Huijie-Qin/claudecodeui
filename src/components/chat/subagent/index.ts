@@ -11,5 +11,4 @@ export {
   findSubagentTraceForPermissionRequest,
   getSubagentPermissionIdentity,
   partitionSubagentPermissionRequests,
-  shouldAutoSelectSubagentQuestion,
 } from './subagentPermissionRouting';
