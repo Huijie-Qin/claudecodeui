@@ -586,16 +586,15 @@ function DataAgentSidebar({
                     >
                       <ChevronRight className={isExpanded ? 'is-open' : ''} size={13} />
                       <span className="da-project-mark">{getWorkspaceLabel(project).slice(0, 1).toUpperCase()}</span>
-                      <strong>{getWorkspaceLabel(project)}</strong>
-                      {expertName && (
-                        <span className="da-project-expert-icon">
-                          <Bot size={14} aria-hidden="true" />
+                      <span className={`da-project-title ${expertName ? 'has-expert-source' : ''}`}>
+                        <strong>{getWorkspaceLabel(project)}</strong>
+                        {expertName && (
                           <span className="da-project-expert-tooltip" role="tooltip" aria-hidden="true">
                             <span>来源专家</span>
                             <span>{expertName}</span>
                           </span>
-                        </span>
-                      )}
+                        )}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -1971,7 +1970,7 @@ function DataAgentConversation({
     <section className="da-page">
       <DataAgentPageHeader
         title={selectedSession ? getSessionLabel(selectedSession) : '任务对话'}
-        subtitle={`${getWorkspaceLabel(selectedProject)} · 复用既有对话详情`}
+        subtitle={`${getWorkspaceLabel(selectedProject)} · 对话详情`}
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={onSelectWorkspace}
