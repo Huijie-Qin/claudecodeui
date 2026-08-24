@@ -337,6 +337,54 @@ async function executePostActions({
       };
       continue;
     }
+    if (action.type === 'send_agent_message') {
+      if (context.suppressSkillRecovery) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'hook_recovery_turn' },
+        };
+        continue;
+      }
+      const condition = action.config?.condition == null
+        ? true
+        : resolveBinding(action.config.condition, references);
+      if (condition === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} condition is unresolved`);
+      }
+      if (!condition) {
+        references.actions[action.id] = {
+          output: { scheduled: false, reason: 'condition_false' },
+        };
+        continue;
+      }
+      const recoveryKey = `${hook.id}:${action.id}`;
+      if (recoveryKeys.has(recoveryKey)) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
+        continue;
+      }
+      const messageText = renderTemplate(action.config.messageTemplate, references);
+      if (messageText === UNRESOLVED) {
+        throw new Error(`Post action ${action.id} message contains an unresolved variable`);
+      }
+      if (!messageText.trim()) {
+        throw new Error(`Post action ${action.id} message is empty`);
+      }
+      const schedulingResult = await context.enqueueAgentMessage({
+        hook,
+        action,
+        event,
+        executionId,
+        messageText,
+      });
+      recoveryKeys.add(recoveryKey);
+      references.actions[action.id] = {
+        output: {
+          scheduled: true,
+          messageLength: messageText.length,
+          ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
+        },
+      };
+      continue;
+    }
     if (action.type === 'invoke_skill') {
       if (context.suppressSkillRecovery) {
         references.actions[action.id] = {
@@ -411,6 +459,9 @@ export function createHookRuntimeSession({
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
   },
+  enqueueAgentMessage = async () => {
+    throw new Error('Agent messaging is not available in this runtime');
+  },
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
   mcpCaller = callHookMcpTool,
@@ -430,6 +481,7 @@ export function createHookRuntimeSession({
     suppressSkillRecovery,
     skillContentLoader,
     enqueueSkillRecovery,
+    enqueueAgentMessage,
     mcpCaller,
   };
 

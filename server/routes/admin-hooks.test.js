@@ -117,6 +117,9 @@ test('Hook MCP routes create, update, test, and delete managed Hook servers', as
   let servers = [];
   const hookMcpCatalog = {
     listServers: () => servers,
+    listToolResources: () => servers[0]?.lastTestStatus === 'healthy'
+      ? [{ name: 'mcp__notify__send', mcpServerId: 'hook-mcp-notify', toolName: 'send' }]
+      : [],
     createServer: (input) => {
       calls.push(['create', input]);
       const server = { name: input.input.name, displayName: input.input.displayName };
@@ -194,10 +197,12 @@ test('Hook MCP routes create, update, test, and delete managed Hook servers', as
   const tested = await requestJson(router, '/hooks/mcp-servers/notify/test', { method: 'POST' });
   assert.equal(tested.response.status, 200);
   assert.equal(tested.payload.server.lastTestStatus, 'healthy');
+  assert.equal(tested.payload.mcpTools[0].name, 'mcp__notify__send');
 
   const deleted = await requestJson(router, '/hooks/mcp-servers/notify', { method: 'DELETE' });
   assert.equal(deleted.response.status, 200);
   assert.deepEqual(deleted.payload.hookMcpServers, []);
+  assert.deepEqual(deleted.payload.mcpTools, []);
   assert.deepEqual(calls.map(([operation]) => operation), [
     'create',
     'update',

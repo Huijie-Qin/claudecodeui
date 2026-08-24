@@ -62,7 +62,7 @@ test('Hook resources materialize full Skill folders and non-secret MCP cache ent
     postActions: [
       {
         type: 'invoke_skill',
-        config: { skillId: 'builtin:notify', skillName: 'notify', mcpServerIds: [rawServer.id] },
+        config: { skillId: 'builtin:notify', skillName: 'notify' },
       },
       {
         type: 'call_mcp_tool',
@@ -91,6 +91,21 @@ test('Hook resources materialize full Skill folders and non-secret MCP cache ent
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('Hook Skill MCP selections are ignored; only MCP call actions materialize servers', () => {
+  const catalog = {
+    listServers: () => [],
+    getServerById: () => null,
+    listToolResources: () => [],
+  };
+  const service = createHookWorkspaceResourcesService({ hookMcpCatalog: catalog });
+  assert.deepEqual(service.resolveActionMcpServerIds({
+    postActions: [{
+      type: 'invoke_skill',
+      config: { skillId: 'builtin:notify', skillName: 'notify', mcpServerIds: ['legacy-mcp'] },
+    }],
+  }, catalog), []);
 });
 
 test('Hook Skill materialization rejects symbolic links', async () => {

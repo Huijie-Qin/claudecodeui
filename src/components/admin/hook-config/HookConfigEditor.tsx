@@ -8,6 +8,7 @@ import {
   Database,
   FileCode2,
   Info,
+  MessageSquare,
   Plus,
   RefreshCcw,
   Save,
@@ -338,7 +339,7 @@ function BooleanConditionEditor({
 }: {
   condition: unknown;
   references: FieldChoice[];
-  actionVerb: '调用' | '记录';
+  actionVerb: '调用' | '记录' | '发送';
   ariaLabel: string;
   onChange: (condition: HookValueBinding | null) => void;
 }) {
@@ -489,9 +490,6 @@ function SkillActionEditor({
   const skillId = typeof config.skillId === 'string' ? config.skillId : '';
   const skillName = typeof config.skillName === 'string' ? config.skillName : '';
   const template = typeof config.argumentsTemplate === 'string' ? config.argumentsTemplate : '';
-  const mcpServerIds = Array.isArray(config.mcpServerIds)
-    ? config.mcpServerIds.map(String)
-    : [];
   const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef({ start: template.length, end: template.length });
@@ -560,44 +558,6 @@ function SkillActionEditor({
       <p className="text-xs leading-5 text-muted-foreground">
         这里只显示 CCUI Hook 内置 Skill（镜像随附或管理员上传）；用户开启 Hook 时会把完整目录缓存到工作区专用的 hook-config 目录。
       </p>
-      <div className="space-y-2">
-        <div>
-          <div className="text-xs font-medium text-foreground">Skill 可用的 Hook MCP</div>
-          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-            只在该 Hook 恢复回合临时加载；内部别名可避免覆盖用户同名 MCP。
-          </p>
-        </div>
-        {resources.hookMcpServers.length ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {resources.hookMcpServers.map((server) => {
-              const checked = mcpServerIds.includes(server.id);
-              return (
-                <label key={server.id} className="flex cursor-pointer items-start gap-2 rounded-xl border border-border px-3 py-2.5">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => onChange({
-                      ...config,
-                      mcpServerIds: checked
-                        ? mcpServerIds.filter((id) => id !== server.id)
-                        : [...mcpServerIds, server.id],
-                    })}
-                    className="mt-0.5"
-                  />
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-medium text-foreground">{server.displayName}</span>
-                    <code className="block truncate text-[10px] text-muted-foreground">{server.name}</code>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
-            暂无 Hook MCP；可在本页 MCP 预置区域创建并测试。
-          </div>
-        )}
-      </div>
       <div className="block space-y-1.5">
         <span className="text-xs font-medium text-foreground">Skill 参数</span>
         <div className="relative">
@@ -648,6 +608,111 @@ function SkillActionEditor({
       </div>
       <div className="rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
         实际恢复问题：<code>/{skillName || 'skill'} {template}</code>
+      </div>
+    </div>
+  );
+}
+
+function AgentMessageActionEditor({
+  action,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const template = typeof config.messageTemplate === 'string' ? config.messageTemplate : '';
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectionRef = useRef({ start: template.length, end: template.length });
+  const referenceOptions = references.map((field) => ({
+    value: field.path,
+    label: field.path,
+    description: field.label || field.description || field.type,
+    group: field.group === 'event'
+      ? '当前事件'
+      : field.group === 'environment'
+        ? '环境变量'
+        : field.group === 'script'
+          ? '脚本输出'
+          : '前序行为输出',
+  }));
+
+  const selectReference = (path: string) => {
+    const token = `{{${path}}}`;
+    const selection = selectionRef.current;
+    const next = `${template.slice(0, selection.start)}${token}${template.slice(selection.end)}`;
+    const cursor = selection.start + token.length;
+    onChange({ ...config, messageTemplate: next });
+    setPickerOpen(false);
+    selectionRef.current = { start: cursor, end: cursor };
+    globalThis.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
+  return (
+    <div className="space-y-4">
+      <BooleanConditionEditor
+        condition={config.condition}
+        references={references}
+        actionVerb="发送"
+        ariaLabel="选择 Agent 消息发送条件布尔变量"
+        onChange={(condition) => onChange({ ...config, condition })}
+      />
+      <div className="block space-y-1.5">
+        <span className="text-xs font-medium text-foreground">消息内容</span>
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            rows={5}
+            value={template}
+            onChange={(event) => {
+              const cursor = event.currentTarget.selectionStart ?? event.currentTarget.value.length;
+              selectionRef.current = {
+                start: cursor,
+                end: event.currentTarget.selectionEnd ?? cursor,
+              };
+              onChange({ ...config, messageTemplate: event.currentTarget.value });
+            }}
+            onClick={(event) => {
+              selectionRef.current = {
+                start: event.currentTarget.selectionStart,
+                end: event.currentTarget.selectionEnd,
+              };
+            }}
+            onKeyDown={(event) => {
+              const cursor = event.currentTarget.selectionStart;
+              if (event.key === '/') {
+                event.preventDefault();
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+                setPickerOpen(true);
+              } else {
+                selectionRef.current = { start: cursor, end: event.currentTarget.selectionEnd };
+              }
+            }}
+            placeholder="输入发送给 Agent 的消息；输入 / 选择变量"
+            className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+          />
+          <HookSelect
+            value=""
+            options={referenceOptions}
+            onChange={selectReference}
+            placeholder="搜索变量"
+            ariaLabel="选择 Agent 消息变量"
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            hideTrigger
+            className="absolute inset-x-0 top-full z-40"
+            menuClassName="min-w-[360px]"
+          />
+        </div>
+      </div>
+      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        当前回答结束并执行 Hook 后，这条消息会进入原会话的下一回合队列，不会加载 Skill。
       </div>
     </div>
   );
@@ -775,7 +840,7 @@ function PostActionsEditor({
   references: FieldChoice[];
   onChange: (actions: HookPostAction[]) => void;
 }) {
-  const canInvokeSkill = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
   const addAction = (type: HookPostAction['type']) => {
     const action: HookPostAction = {
       id: createHookItemId(),
@@ -785,7 +850,9 @@ function PostActionsEditor({
         ? { toolName: '', condition: null, inputs: {} }
         : type === 'write_record'
           ? { recordType: '', condition: null, fields: {} }
-          : { skillId: '', skillName: '', condition: null, argumentsTemplate: '', mcpServerIds: [] },
+          : type === 'invoke_skill'
+            ? { skillId: '', skillName: '', condition: null, argumentsTemplate: '' }
+            : { messageTemplate: '', condition: null },
     };
     onChange([...hook.postActions, action]);
   };
@@ -807,24 +874,38 @@ function PostActionsEditor({
           <Database className="h-4 w-4" />
           记录数据
         </Button>
-        <Tooltip content={canInvokeSkill ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
+        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
           <span>
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => addAction('invoke_skill')}
-              disabled={!canInvokeSkill}
+              disabled={!canQueueAgentTurn}
             >
               <Sparkles className="h-4 w-4" />
               调用 Skill
             </Button>
           </span>
         </Tooltip>
+        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，把消息排入原会话的下一回合。' : '发送 Agent 消息仅适用于回答结束或回答异常结束。'}>
+          <span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addAction('send_agent_message')}
+              disabled={!canQueueAgentTurn}
+            >
+              <MessageSquare className="h-4 w-4" />
+              发送 Agent 消息
+            </Button>
+          </span>
+        </Tooltip>
       </div>
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加业务数据写入、MCP 工具或 Skill，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具、Skill 或 Agent 消息，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -840,13 +921,17 @@ function PostActionsEditor({
                 ? <Wrench className="h-4 w-4 text-primary" />
                 : action.type === 'write_record'
                   ? <Database className="h-4 w-4 text-primary" />
-                  : <Sparkles className="h-4 w-4 text-primary" />}
+                  : action.type === 'invoke_skill'
+                    ? <Sparkles className="h-4 w-4 text-primary" />
+                    : <MessageSquare className="h-4 w-4 text-primary" />}
               <span className="text-xs font-semibold text-foreground">
                 {index + 1}. {action.type === 'call_mcp_tool'
                   ? '调用 MCP 工具'
                   : action.type === 'write_record'
                     ? '记录数据'
-                    : '调用 Skill（恢复回合）'}
+                    : action.type === 'invoke_skill'
+                      ? '调用 Skill（恢复回合）'
+                      : '发送 Agent 消息（下一回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
               <Button
@@ -874,10 +959,16 @@ function PostActionsEditor({
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
-              ) : (
+              ) : action.type === 'invoke_skill' ? (
                 <SkillActionEditor
                   action={action}
                   resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : (
+                <AgentMessageActionEditor
+                  action={action}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -1305,7 +1396,9 @@ export default function HookConfigEditor({
                       matcher: {},
                       postActions: eventName === 'Stop' || eventName === 'StopFailure'
                         ? hook.postActions
-                        : hook.postActions.filter((action) => action.type !== 'invoke_skill').map((action, index) => ({ ...action, position: index })),
+                        : hook.postActions.filter((action) => (
+                            action.type !== 'invoke_skill' && action.type !== 'send_agent_message'
+                          )).map((action, index) => ({ ...action, position: index })),
                       claudeResponse: { bindings: {} },
                     });
                   }}

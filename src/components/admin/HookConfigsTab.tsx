@@ -95,6 +95,11 @@ type HookExampleCatalogItem = {
 type HookDeleteDialogState = HookConfig | null;
 type SkillDeleteDialogState = HookResources['skills'][number] | null;
 type HookMcpServer = HookResources['hookMcpServers'][number];
+type HookMcpMutationResult = {
+  server?: HookMcpServer;
+  hookMcpServers?: HookMcpServer[];
+  mcpTools?: HookResources['mcpTools'];
+};
 type HookMcpEditorState = {
   originalName: string | null;
   name: string;
@@ -1390,13 +1395,11 @@ export default function HookConfigsTab() {
         ? await api.admin.updateHookMcpServer(hookMcpEditor.originalName, payload)
         : await api.admin.createHookMcpServer(payload);
       if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.save')));
-      const result = await response.json() as {
-        server?: HookMcpServer;
-        hookMcpServers?: HookMcpServer[];
-      };
+      const result = await response.json() as HookMcpMutationResult;
       setResources((current) => ({
         ...current,
         hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
       }));
       if (result.server) {
         setHookMcpEditor((current) => current ? {
@@ -1423,13 +1426,11 @@ export default function HookConfigsTab() {
       formData.set('script', file);
       const response = await api.admin.uploadHookMcpHelperScript(serverName, formData);
       if (!response.ok) throw new Error(await readError(response, t('mcp.errors.uploadHelper')));
-      const result = await response.json() as {
-        server?: HookMcpServer;
-        hookMcpServers?: HookMcpServer[];
-      };
+      const result = await response.json() as HookMcpMutationResult;
       setResources((current) => ({
         ...current,
         hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
       }));
       if (result.server) {
         setHookMcpEditor((current) => current?.originalName === serverName
@@ -1449,13 +1450,11 @@ export default function HookConfigsTab() {
     try {
       const response = await api.admin.deleteHookMcpHelperScript(server.name);
       if (!response.ok) throw new Error(await readError(response, t('mcp.errors.deleteHelper')));
-      const result = await response.json() as {
-        server?: HookMcpServer;
-        hookMcpServers?: HookMcpServer[];
-      };
+      const result = await response.json() as HookMcpMutationResult;
       setResources((current) => ({
         ...current,
         hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
       }));
       setHookMcpEditor((current) => current?.originalName === server.name
         ? { ...current, helperScript: null }
@@ -1474,13 +1473,11 @@ export default function HookConfigsTab() {
     try {
       const response = await api.admin.testHookMcpServer(server.name);
       if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.test')));
-      const result = await response.json() as {
-        server?: HookMcpServer;
-        hookMcpServers?: HookMcpServer[];
-      };
+      const result = await response.json() as HookMcpMutationResult;
       setResources((current) => ({
         ...current,
         hookMcpServers: result.hookMcpServers || current.hookMcpServers,
+        mcpTools: result.mcpTools || current.mcpTools,
       }));
       if (result.server?.lastTestStatus === 'healthy') {
         showToast(t('hooks.hookMcp.testHealthy', { count: result.server.toolCount }), 'success');
@@ -1499,10 +1496,11 @@ export default function HookConfigsTab() {
     try {
       const response = await api.admin.deleteHookMcpServer(server.name);
       if (!response.ok) throw new Error(await readError(response, t('hooks.hookMcp.errors.delete')));
-      const result = await response.json() as { hookMcpServers?: HookMcpServer[] };
+      const result = await response.json() as HookMcpMutationResult;
       setResources((current) => ({
         ...current,
         hookMcpServers: result.hookMcpServers || current.hookMcpServers.filter((item) => item.name !== server.name),
+        mcpTools: result.mcpTools || current.mcpTools.filter((item) => item.mcpServerId !== server.id),
       }));
       setHookMcpDeleteDialog(null);
       showToast(t('hooks.hookMcp.deleted', { name: server.displayName }), 'success');

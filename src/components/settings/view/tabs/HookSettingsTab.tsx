@@ -81,10 +81,7 @@ export default function HookSettingsTab({ projects }: { projects: SettingsProjec
   };
 
   return (
-    <SettingsSection
-      title="Hook"
-      description="这里只显示管理员为你开放的 Hook。开启后，完整 Skill 与 Hook MCP 脚本会缓存到所选工作区的 .cloudcli/hook-config，不会写入日常 Skill 或 MCP 配置。"
-    >
+    <SettingsSection title="辅助功能">
       {availableProjects.length > 1 ? (
         <label className="block space-y-1.5">
           <span className="text-xs font-medium text-muted-foreground">工作区</span>
@@ -120,6 +117,7 @@ export default function HookSettingsTab({ projects }: { projects: SettingsProjec
         ) : hooks.map((hook) => {
           const hasSkill = hook.postActions?.some((action) => action.type === 'invoke_skill');
           const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool');
+          const hasAgentMessage = hook.postActions?.some((action) => action.type === 'send_agent_message');
           return (
             <div key={hook.id} className="flex items-start gap-3 p-4">
               <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -131,6 +129,7 @@ export default function HookSettingsTab({ projects }: { projects: SettingsProjec
                   <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{hook.eventName}</span>
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
+                  {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
               </div>

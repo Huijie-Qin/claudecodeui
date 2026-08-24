@@ -720,7 +720,9 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
         ? 'MCP 工具调用结果'
         : action.type === 'write_record'
           ? '业务数据写入结果'
-          : 'Skill 调用结果',
+          : action.type === 'invoke_skill'
+            ? 'Skill 调用结果'
+            : 'Agent 消息发送结果',
       type: 'object',
       group: 'action',
     });

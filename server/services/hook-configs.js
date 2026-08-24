@@ -65,8 +65,8 @@ const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
 const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_POST_ACTIONS = 20;
-const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill']);
-const SKILL_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
+const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill', 'send_agent_message']);
+const AGENT_TURN_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
 const EXECUTION_OUTCOMES = new Set([
   'succeeded',
@@ -133,9 +133,9 @@ const EVENT_CLAUDE_OUTPUTS = Object.freeze({
 });
 
 function allowedPostActions(eventName) {
-  return new Set(SKILL_ACTION_EVENTS.has(eventName)
+  return new Set(AGENT_TURN_ACTION_EVENTS.has(eventName)
     ? POST_ACTION_TYPES
-    : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill'));
+    : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill' && type !== 'send_agent_message'));
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -279,8 +279,8 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
     ids.add(id);
     const config = isPlainObject(action.config) ? action.config : {};
     if (!allowedPostActions(eventName).has(action.type)) {
-      if (action.type === 'invoke_skill') {
-        throw createHttpError('invoke_skill is only supported for Stop and StopFailure');
+      if (action.type === 'invoke_skill' || action.type === 'send_agent_message') {
+        throw createHttpError(`${action.type} is only supported for Stop and StopFailure`);
       }
       throw createHttpError(`postActions[${index}].type is not supported`);
     }
@@ -365,13 +365,23 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             `postActions[${index}].config.argumentsTemplate`,
             { max: 10000, allowEmpty: true },
           ),
-          mcpServerIds: Array.isArray(config.mcpServerIds)
-            ? [...new Set(config.mcpServerIds.map((value) => requireString(
-                String(value || ''),
-                `postActions[${index}].config.mcpServerIds`,
-                { max: 120 },
-              )))]
-            : [],
+        },
+      };
+    }
+    if (action.type === 'send_agent_message') {
+      return {
+        id,
+        type: 'send_agent_message',
+        position: index,
+        config: {
+          condition: config.condition == null
+            ? null
+            : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
+          messageTemplate: requireString(
+            typeof config.messageTemplate === 'string' ? config.messageTemplate : '',
+            `postActions[${index}].config.messageTemplate`,
+            { max: 20000, allowEmpty: true },
+          ),
         },
       };
     }
@@ -448,7 +458,10 @@ function validateHookReferences(hook) {
           }
         }
       }
-      const matches = action.config.argumentsTemplate.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g);
+      const template = action.type === 'invoke_skill'
+        ? action.config.argumentsTemplate
+        : action.config.messageTemplate;
+      const matches = template.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g);
       for (const match of matches) {
         const path = match[1];
         if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
@@ -680,7 +693,6 @@ function listMcpToolCatalog(database) {
 
 function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
   const mcpTools = new Map(hookMcpCatalog.listToolResources().map((tool) => [tool.name, tool]));
-  const mcpServers = new Map(hookMcpCatalog.listServers().map((server) => [server.id, server]));
   const skills = new Map((validatedSkills || []).map((skill) => [String(skill.skillId || ''), skill]));
   for (const action of hook.postActions) {
     if (action.type === 'call_mcp_tool') {
@@ -701,7 +713,7 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
       if (!action.config.recordType) {
         throw createHttpError(`Post action ${action.id} must set a record type`);
       }
-    } else {
+    } else if (action.type === 'invoke_skill') {
       const skill = skills.get(action.config.skillId);
       if (
         !isBuiltinHookSkillId(action.config.skillId)
@@ -710,11 +722,8 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
       ) {
         throw createHttpError(`Skill ${action.config.skillName || '(empty)'} was not validated as a built-in Hook Skill`);
       }
-      for (const serverId of action.config.mcpServerIds || []) {
-        if (!mcpServers.has(serverId)) {
-          throw createHttpError(`Hook MCP server ${serverId} selected by Skill ${action.config.skillName} is unavailable`);
-        }
-      }
+    } else if (!action.config.messageTemplate.trim()) {
+      throw createHttpError(`Post action ${action.id} must set an Agent message`);
     }
   }
 }

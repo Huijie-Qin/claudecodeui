@@ -66,7 +66,7 @@ export type HookValueBinding =
 
 export type HookPostAction = {
   id: string;
-  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill';
+  type: 'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message';
   position: number;
   config: Record<string, unknown>;
 };

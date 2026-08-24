@@ -563,6 +563,69 @@ test('Stop Skill action appends a new turn after a normal answer and keeps the S
   }
 });
 
+test('Stop Agent message action queues a templated next turn without loading a Skill', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Continue directly',
+      version: 1,
+      eventName: 'Stop',
+      matcher: {},
+      extensionLogic: null,
+      postActions: [{
+        id: 'follow-up',
+        type: 'send_agent_message',
+        config: {
+          condition: null,
+          messageTemplate: '继续分析会话 {{event.session_id}}，用户 {{ccui.env.userId}}',
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const scheduled = [];
+    let skillLoads = 0;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      skillContentLoader: async () => {
+        skillLoads += 1;
+        return 'unexpected';
+      },
+      enqueueAgentMessage: async (request) => {
+        scheduled.push(request);
+        return { queuePosition: 1, status: 'queued' };
+      },
+    });
+    const event = {
+      hook_event_name: 'Stop',
+      session_id: 'session-direct',
+      stop_hook_active: false,
+      last_assistant_message: 'done',
+    };
+    assert.deepEqual(await runtime.executeHook(hook, event), {});
+    assert.deepEqual(await runtime.executeHook(hook, event), {});
+    assert.equal(skillLoads, 0);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].messageText, '继续分析会话 session-direct，用户 1');
+    const messageLength = scheduled[0].messageText.length;
+    const executions = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid').all();
+    assert.deepEqual(JSON.parse(executions[0].actions_json)['follow-up'].output, {
+      scheduled: true,
+      messageLength,
+      queuePosition: 1,
+      status: 'queued',
+    });
+    assert.equal(JSON.parse(executions[1].actions_json)['follow-up'].output.reason, 'already_scheduled');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook Skill action uses the configured content loader without creating a workspace copy', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));

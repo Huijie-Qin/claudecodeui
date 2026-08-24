@@ -482,6 +482,13 @@ export function createAdminRouter(
   hookMcpCatalog = hookMcpCatalogService,
 ) {
   const router = express.Router();
+  const hookMcpResponse = (server) => ({
+    server,
+    hookMcpServers: hookMcpCatalog.listServers(),
+    mcpTools: typeof hookMcpCatalog.listToolResources === 'function'
+      ? hookMcpCatalog.listToolResources()
+      : [],
+  });
   router.use(requireSystemAdmin);
   router.use(createAdminClaudeEnvRouter());
 
@@ -665,7 +672,7 @@ export function createAdminRouter(
   router.post('/hooks/mcp-servers', (req, res) => {
     try {
       const server = hookMcpCatalog.createServer({ input: req.body, userId: req.user.id });
-      return res.status(201).json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      return res.status(201).json(hookMcpResponse(server));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to create Hook MCP server');
     }
@@ -678,7 +685,7 @@ export function createAdminRouter(
         input: req.body,
         userId: req.user.id,
       });
-      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      return res.json(hookMcpResponse(server));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to update Hook MCP server');
     }
@@ -690,7 +697,7 @@ export function createAdminRouter(
         serverName: req.params.serverName,
         userId: req.user.id,
       });
-      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      return res.json(hookMcpResponse(server));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to test Hook MCP server');
     }
@@ -717,7 +724,7 @@ export function createAdminRouter(
           originalName: req.file.originalname,
           content: req.file.buffer.toString('utf8'),
         });
-        return res.status(201).json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+        return res.status(201).json(hookMcpResponse(server));
       } catch (error) {
         return sendRouteError(res, error, 'Failed to upload Hook MCP helper script');
       }
@@ -730,7 +737,7 @@ export function createAdminRouter(
         serverName: req.params.serverName,
         userId: req.user.id,
       });
-      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      return res.json(hookMcpResponse(server));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to delete Hook MCP helper script');
     }
@@ -739,7 +746,7 @@ export function createAdminRouter(
   router.delete('/hooks/mcp-servers/:serverName', (req, res) => {
     try {
       const server = hookMcpCatalog.deleteServer({ serverName: req.params.serverName });
-      return res.json({ server, hookMcpServers: hookMcpCatalog.listServers() });
+      return res.json(hookMcpResponse(server));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to delete Hook MCP server');
     }

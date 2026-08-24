@@ -769,6 +769,7 @@ async function executePublishedMatrixHook({
   workspaceRoot,
   mcpServers,
   enqueueSkillRecovery,
+  enqueueAgentMessage = enqueueSkillRecovery,
 }) {
   const runtime = createHookRuntimeSession({
     hooks: [hook],
@@ -783,6 +784,7 @@ async function executePublishedMatrixHook({
       return `Run the matrix Hook Skill.\nPayload: ${argumentsText}\n`;
     },
     enqueueSkillRecovery,
+    enqueueAgentMessage,
     database,
   });
   const compiled = runtime.hooks[hook.eventName];
@@ -830,6 +832,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     callMcpTool: 0,
     writeRecord: 0,
     invokeSkill: 0,
+    sendAgentMessage: 0,
     claudeOutputs: 0,
   };
   const executedHookIds = new Set();
@@ -973,6 +976,32 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           continue;
         }
 
+        if (actionType === 'send_agent_message') {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-send-agent-message', {
+            postActions: [{
+              id: 'send-agent-message',
+              type: 'send_agent_message',
+              position: 0,
+              config: {
+                messageTemplate: 'continue event={{event.hook_event_name}} user={{ccui.env.userId}}',
+              },
+            }],
+          });
+          const { execution, output } = await executePublishedMatrixHook({
+            database,
+            hook,
+            workspaceRoot,
+            mcpServers,
+            enqueueSkillRecovery,
+          });
+          assert.deepEqual(output, {});
+          assert.equal(JSON.parse(execution.actions_json)['send-agent-message'].output.scheduled, true);
+          assert.equal(recoveries.at(-1).messageText, `continue event=${eventName} user=2`);
+          coverage.sendAgentMessage += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
+
         if (actionType === 'write_record') {
           const hook = publishBoundMatrixHook(service, eventName, 'action-write-record', {
             postActions: [{
@@ -1050,10 +1079,11 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       callMcpTool: HOOK_EVENTS.length,
       writeRecord: HOOK_EVENTS.length,
       invokeSkill: 2,
+      sendAgentMessage: 2,
       claudeOutputs: expectedClaudeOutputs,
     });
-    assert.equal(recoveries.length, 2);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 2 + expectedClaudeOutputs);
+    assert.equal(recoveries.length, 4);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 4 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,

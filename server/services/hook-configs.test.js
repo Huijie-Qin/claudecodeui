@@ -719,11 +719,29 @@ test('post action and Claude response validation follows the selected event', ()
             skillId: 'builtin:hook-notification',
             skillName: 'hook-notification',
             argumentsTemplate: '',
+            mcpServerIds: ['legacy-hook-mcp'],
           },
         }],
       }),
     });
     assert.equal(stopSkill.postActions[0].type, 'invoke_skill');
+    assert.equal(Object.hasOwn(stopSkill.postActions[0].config, 'mcpServerIds'), false);
+
+    const agentMessage = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'Stop',
+        extensionLogic: null,
+        postActions: [{
+          id: 'follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '继续处理会话 {{ccui.env.sessionId}}' },
+        }],
+      }),
+    });
+    assert.equal(agentMessage.postActions[0].config.messageTemplate, '继续处理会话 {{ccui.env.sessionId}}');
+    assert.equal(service.publishHook({ hookId: agentMessage.id, userId: 1 }).status, 'published');
 
     assert.throws(() => service.createHook({
       userId: 1,
@@ -750,6 +768,37 @@ test('post action and Claude response validation follows the selected event', ()
         }],
       }),
     }), /only supported for Stop and StopFailure/);
+
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'SessionEnd',
+        postActions: [{
+          id: 'follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '继续处理' },
+        }],
+      }),
+    }), /only supported for Stop and StopFailure/);
+
+    const emptyAgentMessage = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'StopFailure',
+        extensionLogic: null,
+        postActions: [{
+          id: 'empty-follow-up',
+          type: 'send_agent_message',
+          position: 0,
+          config: { messageTemplate: '' },
+        }],
+      }),
+    });
+    assert.throws(
+      () => service.publishHook({ hookId: emptyAgentMessage.id, userId: 1 }),
+      /must set an Agent message/,
+    );
 
     const invalidOutput = service.createHook({
       userId: 1,

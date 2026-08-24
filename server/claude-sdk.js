@@ -1300,7 +1300,31 @@ async function queryClaudeSDK(command, options = {}, ws) {
                     hookId: hook.id,
                     executionId,
                     skillId: action.config?.skillId,
-                    mcpServerIds: action.config?.mcpServerIds || [],
+                  },
+                },
+              });
+              return { queued: true, queuePosition, sessionId: recoverySessionId };
+            },
+            enqueueAgentMessage: async ({
+              hook,
+              event,
+              executionId,
+              messageText,
+            }) => {
+              const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
+              const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
+              if (!activeSession) throw new Error('Original Claude session is unavailable for Hook Agent message');
+              const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
+                content: messageText,
+                displayContent: messageText,
+                mode: 'hook_recovery',
+                priority: 'next',
+                writer: ws,
+                queuedAt: new Date().toISOString(),
+                runtimeOptions: {
+                  hookRecovery: {
+                    hookId: hook.id,
+                    executionId,
                   },
                 },
               });
