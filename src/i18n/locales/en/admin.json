@@ -609,7 +609,7 @@
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
     "hookMcp": {
       "title": "Hook MCP management",
-      "description": "These MCP servers belong to Hook configurations. Enabling a Hook caches them in its workspace and loads them only for Hook calls or recovery turns.",
+      "description": "These MCP servers belong to Hook configurations. Enabling a Hook caches them in its workspace for Call MCP Tool post-actions only.",
       "create": "Configure MCP",
       "createTitle": "Configure Hook MCP",
       "editTitle": "Edit Hook MCP",

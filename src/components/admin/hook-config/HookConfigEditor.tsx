@@ -1603,7 +1603,7 @@ export default function HookConfigEditor({
           <Section
             number={4}
             title="Hook 后置行为"
-            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以启动新的模型回合调用 Skill。"
+            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以调用 Skill，或直接向 Agent 发送下一回合消息。"
           >
             <PostActionsEditor
               hook={hook}

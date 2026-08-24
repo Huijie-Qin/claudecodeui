@@ -563,7 +563,7 @@
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
     "hookMcp": {
       "title": "Hook 专用 MCP 管理",
-      "description": "这些 MCP 属于 Hook 配置；用户开启 Hook 时缓存到工作区专用目录，并只在 Hook 调用或恢复回合临时加载。",
+      "description": "这些 MCP 属于 Hook 配置；用户开启 Hook 时缓存到工作区专用目录，并仅供“调用 MCP 工具”后置行为使用。",
       "create": "配置 MCP",
       "createTitle": "配置 Hook MCP",
       "editTitle": "编辑 Hook MCP",
