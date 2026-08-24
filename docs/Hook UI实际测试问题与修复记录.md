@@ -242,3 +242,22 @@ RemoveEnvironmentCleanupHook
 - `src/stores/useSessionStore.ts`
 - `src/i18n/locales/zh-CN/chat.json`
 - `src/i18n/locales/en/chat.json`
+
+## 10. 2026-08-24 UI 评审补充：执行卡片隐藏 Hook 说明
+
+### 现象与原因
+
+“Hook 执行”卡片原来会在状态和动作信息下方再次展示 Hook 配置说明，例如“正常结束时调用 CCUI 内置模拟通知 Skill，并写入可验证的本地通知记录。”。这段文字不是本次执行的动态结果，并且设置页已经展示相同说明，因此在对话中造成重复信息和过高的卡片占用。
+
+### 调整方案
+
+- “Hook 执行”卡片不再展示配置说明，只保留 Hook 名称、执行状态、事件、脚本/动作类型和时间。
+- “后置消息”卡片仍保留消息摘要；本次调整不影响 Hook 生成的后续对话内容。
+- 后端历史记录和实时事件仍保留 `summary` 字段，只调整执行卡片的展示，避免改变审计数据或兼容性。
+
+### 实际 UI 回归
+
+- 生产容器重新构建并健康启动后，旧会话中的 4 张 Hook 执行卡片仍完整存在。
+- 通知 Hook 说明文本和 SQL Check 说明文本在会话 DOM 中的匹配数量均为 0。
+- 卡片分别保留“Stop / 调用技能”和“Stop / 脚本 / MCP 调用”等执行关键信息。
+- 涉及文件 Lint、客户端 TypeScript、Vite 生产构建和 Docker 生产镜像构建均通过。

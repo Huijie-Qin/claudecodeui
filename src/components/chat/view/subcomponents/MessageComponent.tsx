@@ -357,7 +357,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 <span className="text-[11px] text-muted-foreground/70">{formattedTime}</span>
               </div>
 
-              {hookActivity.summary && (
+              {!isHookExecution && hookActivity.summary && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
                   {redactVisibleSecretText(hookActivity.summary)}
                 </div>
