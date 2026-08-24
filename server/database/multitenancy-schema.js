@@ -363,6 +363,7 @@ CREATE INDEX IF NOT EXISTS idx_user_workspace_mcp_tool_preferences_owner
 CREATE TABLE IF NOT EXISTS agent_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',
   agent_markdown TEXT NOT NULL DEFAULT '',
   guide_text TEXT NOT NULL DEFAULT '',

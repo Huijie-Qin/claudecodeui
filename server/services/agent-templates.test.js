@@ -50,8 +50,9 @@ test('DataAgent管理 templates become globally visible after publish', () => {
     userId: 1,
     input: {
       name: '应用市场分析专家',
+      category: '市场分析',
       summary: '分析应用市场',
-      agentMarkdown: '# 应用市场分析专家',
+      claudeMarkdown: '# 应用市场分析专家',
       guideText: '告诉我需要分析的应用。',
       tenantIds: [fixture.dataAgentTenantId],
       skillPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.skillId }],
@@ -59,11 +60,13 @@ test('DataAgent管理 templates become globally visible after publish', () => {
     },
   });
   assert.equal(draft.globalVisible, true);
+  assert.equal(draft.category, '市场分析');
 
   fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
   const templates = fixture.service.listAvailableTemplates({ tenantId: fixture.otherTenantId });
   assert.equal(templates.length, 1);
   assert.equal(templates[0].name, '应用市场分析专家');
+  assert.equal(templates[0].category, '市场分析');
   assert.deepEqual(templates[0].skills.map((skill) => skill.name), ['市场研究']);
   assert.deepEqual(templates[0].mcps.map((mcp) => mcp.name), ['Web Search']);
 });
@@ -74,6 +77,7 @@ test('ordinary tenant templates stay isolated to selected tenants', () => {
     userId: 1,
     input: {
       name: '应用分析模板',
+      category: '应用分析',
       tenantIds: [fixture.appTenantId],
       skillPresetRefs: [],
       mcpPresetRefs: [],
@@ -88,6 +92,34 @@ test('ordinary tenant templates stay isolated to selected tenants', () => {
     [draft.id],
   );
   assert.equal(fixture.service.listAdminTemplates({ tenantId: fixture.otherTenantId }).length, 0);
+  assert.equal(draft.category, '应用分析');
+});
+
+test('template category is required', () => {
+  const fixture = createFixture();
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '未分类模板',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+    },
+  }), /category is required/);
+});
+
+test('template category is limited to 50 characters', () => {
+  const fixture = createFixture();
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '分类过长模板',
+      category: 'x'.repeat(51),
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+    },
+  }), /category must not exceed 50 characters/);
 });
 
 test('workspace snapshot preserves template content and preset versions', () => {
@@ -104,7 +136,8 @@ test('workspace snapshot preserves template content and preset versions', () => 
     userId: 1,
     input: {
       name: '快照模板',
-      agentMarkdown: '# v1',
+      category: '通用助手',
+      claudeMarkdown: '# v1',
       guideText: '告诉我你想完成的任务。',
       tenantIds: [fixture.dataAgentTenantId],
       skillPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.skillId }],
@@ -135,7 +168,7 @@ test('workspace snapshot preserves template content and preset versions', () => 
   fixture.service.saveTemplate({
     templateId: draft.id,
     userId: 1,
-    input: { ...draft, agentMarkdown: '# v2' },
+    input: { ...draft, claudeMarkdown: '# v2' },
   });
   const stored = fixture.database.prepare(`
     SELECT agent_markdown, skill_presets_json, mcp_presets_json

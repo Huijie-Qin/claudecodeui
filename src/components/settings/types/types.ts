@@ -66,6 +66,7 @@ export type SettingsProps = {
   onClose: () => void;
   projects?: SettingsProject[];
   initialTab?: string;
+  workspaceTerminology?: 'workspace' | 'expert';
 };
 
 export type SetState<T> = Dispatch<SetStateAction<T>>;

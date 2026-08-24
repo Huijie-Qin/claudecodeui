@@ -67,6 +67,7 @@ function ChatInterface({
   initialUserMessage,
   onOpenCapabilities,
   onShowAllTasks,
+  workspaceTerminology = 'workspace',
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
@@ -887,6 +888,7 @@ function ChatInterface({
           selectedSessionId={null}
           selectedSessionName={scheduledTaskSessionName}
           mode="create"
+          terminology={workspaceTerminology}
           onClose={() => setShowScheduledTasks(false)}
         />
       ) : null}

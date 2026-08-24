@@ -3870,6 +3870,7 @@
 
 .da-file-editor-pane {
   position: relative;
+  z-index: 0;
   display: flex;
   min-width: 0;
   flex: 1;

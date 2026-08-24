@@ -26,7 +26,13 @@ async function readError(response: Response, fallback: string) {
   }
 }
 
-export default function HookSettingsTab({ projects }: { projects: SettingsProject[] }) {
+export default function HookSettingsTab({
+  projects,
+  workspaceTerminology = 'workspace',
+}: {
+  projects: SettingsProject[];
+  workspaceTerminology?: 'workspace' | 'expert';
+}) {
   const availableProjects = useMemo(
     () => projects.filter((project) => Number.isInteger(project.workspaceId) && Number(project.workspaceId) > 0),
     [projects],
@@ -84,7 +90,7 @@ export default function HookSettingsTab({ projects }: { projects: SettingsProjec
     <SettingsSection title="辅助功能">
       {availableProjects.length > 1 ? (
         <label className="block space-y-1.5">
-          <span className="text-xs font-medium text-muted-foreground">工作区</span>
+          <span className="text-xs font-medium text-muted-foreground">{workspaceTerminology === 'expert' ? '专家' : '工作区'}</span>
           <select
             value={workspaceId || ''}
             onChange={(event) => setWorkspaceId(Number(event.target.value) || null)}
@@ -107,7 +113,9 @@ export default function HookSettingsTab({ projects }: { projects: SettingsProjec
 
       <SettingsCard divided>
         {!workspaceId ? (
-          <div className="p-5 text-sm text-muted-foreground">当前没有可配置的工作区。</div>
+          <div className="p-5 text-sm text-muted-foreground">
+            {workspaceTerminology === 'expert' ? '当前没有可配置的专家。' : '当前没有可配置的工作区。'}
+          </div>
         ) : loading ? (
           <div className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
             <RefreshCw className="h-4 w-4 animate-spin" /> 正在加载 Hook

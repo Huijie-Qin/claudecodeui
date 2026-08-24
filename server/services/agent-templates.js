@@ -27,6 +27,14 @@ function optionalString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function limitedRequiredString(value, name, maxLength) {
+  const normalized = requiredString(value, name);
+  if (normalized.length > maxLength) {
+    throw createHttpError(`${name} must not exceed ${maxLength} characters`);
+  }
+  return normalized;
+}
+
 function parseJson(value, fallback = []) {
   try {
     const parsed = JSON.parse(value || '');
@@ -55,7 +63,10 @@ function hydrateTemplate(row) {
   return {
     id: Number(row.id),
     name: row.name,
+    category: row.category || '',
     summary: row.summary || '',
+    claudeMarkdown: row.agent_markdown || '',
+    // Compatibility alias for templates saved by earlier clients.
     agentMarkdown: row.agent_markdown || '',
     guideText: row.guide_text || '',
     tenantIds: parseJson(row.tenant_ids_json, []),
@@ -169,10 +180,18 @@ export function createAgentTemplateService(database = db) {
     }
     resolveSkillRows(skillPresetRefs);
     resolveMcpRows(mcpPresetRefs);
+    const legacyAgentMarkdownWasEdited = existing
+      && input.agentMarkdown !== undefined
+      && input.agentMarkdown !== existing.agentMarkdown
+      && input.claudeMarkdown === existing.claudeMarkdown;
+    const claudeMarkdownInput = legacyAgentMarkdownWasEdited
+      ? input.agentMarkdown
+      : input.claudeMarkdown ?? input.agentMarkdown ?? existing?.claudeMarkdown ?? existing?.agentMarkdown;
     return {
       name: requiredString(input.name ?? existing?.name, 'name'),
+      category: limitedRequiredString(input.category ?? existing?.category, 'category', 50),
       summary: optionalString(input.summary ?? existing?.summary),
-      agentMarkdown: optionalString(input.agentMarkdown ?? existing?.agentMarkdown),
+      claudeMarkdown: optionalString(claudeMarkdownInput),
       guideText: optionalString(input.guideText ?? existing?.guideText),
       tenantIds,
       skillPresetRefs,
@@ -190,14 +209,15 @@ export function createAgentTemplateService(database = db) {
     if (!existing) {
       const result = database.prepare(`
         INSERT INTO agent_templates (
-          name, summary, agent_markdown, guide_text, tenant_ids_json,
+          name, category, summary, agent_markdown, guide_text, tenant_ids_json,
           skill_preset_refs_json, mcp_preset_refs_json, global_visible,
           status, created_by_user_id, updated_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
       `).run(
         values.name,
+        values.category,
         values.summary,
-        values.agentMarkdown,
+        values.claudeMarkdown,
         values.guideText,
         JSON.stringify(values.tenantIds),
         JSON.stringify(values.skillPresetRefs),
@@ -211,15 +231,16 @@ export function createAgentTemplateService(database = db) {
 
     database.prepare(`
       UPDATE agent_templates SET
-        name = ?, summary = ?, agent_markdown = ?, guide_text = ?,
+        name = ?, category = ?, summary = ?, agent_markdown = ?, guide_text = ?,
         tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?,
         global_visible = ?, status = 'draft', updated_by_user_id = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       values.name,
+      values.category,
       values.summary,
-      values.agentMarkdown,
+      values.claudeMarkdown,
       values.guideText,
       JSON.stringify(values.tenantIds),
       JSON.stringify(values.skillPresetRefs),
@@ -234,6 +255,7 @@ export function createAgentTemplateService(database = db) {
   const publishTemplate = ({ templateId, userId }) => {
     const template = getTemplate(templateId);
     if (!template) throw createHttpError('Agent template not found', 404);
+    limitedRequiredString(template.category, 'category', 50);
     validateTenantSelection(template.tenantIds);
     resolveSkillRows(template.skillPresetRefs, { requirePublished: true });
     resolveMcpRows(template.mcpPresetRefs, { requirePublished: true });
@@ -262,6 +284,7 @@ export function createAgentTemplateService(database = db) {
         available.push({
           id: template.id,
           name: template.name,
+          category: template.category,
           summary: template.summary,
           guideText: template.guideText,
           skills: skills.map((preset) => ({ id: preset.id, name: preset.display_name || preset.name })),
@@ -346,7 +369,7 @@ export function createAgentTemplateService(database = db) {
         snapshot.template.id,
         snapshot.template.name,
         snapshot.template.updatedAt,
-        snapshot.template.agentMarkdown,
+        snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown,
         snapshot.template.guideText,
         JSON.stringify(snapshot.skills),
         JSON.stringify(snapshot.mcps),

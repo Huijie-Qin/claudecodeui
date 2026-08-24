@@ -138,10 +138,10 @@ export const api = {
     }),
   projectSettings: (projectName, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId)),
-  updateProjectSettings: (projectName, { displayName, agentMarkdown, expectedRevision, workspaceId }) =>
+  updateProjectSettings: (projectName, { displayName, claudeMarkdown, expectedRevision, workspaceId }) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId), {
       method: 'PUT',
-      body: JSON.stringify({ displayName, agentMarkdown, expectedRevision }),
+      body: JSON.stringify({ displayName, claudeMarkdown, expectedRevision }),
     }),
   deleteSession: (projectName, sessionId, provider = 'claude', workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/sessions/${encodeURIComponent(sessionId)}`, workspaceId), {

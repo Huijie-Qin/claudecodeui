@@ -25,10 +25,10 @@
     "projectNamePlaceholder": "请输入项目名称",
     "favorite": "收藏项目",
     "favoriteHint": "收藏后项目会优先显示在项目列表中。",
-    "syncTarget": "SDK 系统指令",
-    "agentPlaceholder": "# Role\n\n描述 Agent 的角色、能力和工作方式…",
-    "agentHint": "Agent.md 由平台管理，并在新会话中作为 Agent 系统指令加载。",
-    "customInstructionsWarning": "检测到自定义指令文件：{{files}}。这些文件会继续由 Claude Code 加载；如与 Agent.md 冲突，以 Agent 配置为准。",
+    "syncTarget": "项目记忆",
+    "agentPlaceholder": "# Project Memory\n\n记录项目背景、约定和 Agent 的工作方式…",
+    "agentHint": "CLAUDE.md 是项目记忆文件；在这里或文件页面修改后，内容会在新会话中由 Claude Code SDK 加载。",
+    "customInstructionsWarning": "检测到其他指令文件：{{files}}。它们也可能被 Claude Code 加载，请避免与项目 CLAUDE.md 内容冲突。",
     "readOnlyHint": "当前项目为只读权限，仅可修改收藏状态。",
     "loading": "正在加载项目配置…",
     "save": "保存",
@@ -36,7 +36,7 @@
     "workspaceUnavailable": "缺少项目空间信息，无法加载或保存项目配置。",
     "loadFailed": "加载项目配置失败。",
     "saveFailed": "保存项目配置失败。",
-    "conflict": "Agent 指令已在其他页面发生变化，请关闭后重新打开再编辑。"
+    "conflict": "CLAUDE.md 已在其他页面发生变化，请关闭后重新打开再编辑。"
   },
   "app": {
     "title": "CloudCLI",

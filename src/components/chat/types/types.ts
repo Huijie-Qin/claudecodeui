@@ -194,4 +194,5 @@ export interface ChatInterfaceProps {
   onOpenCapabilities?: () => void;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  workspaceTerminology?: 'workspace' | 'expert';
 }

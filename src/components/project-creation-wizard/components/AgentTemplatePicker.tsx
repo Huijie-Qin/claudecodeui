@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Box, Check, Minus, Plug, Sparkles } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -20,7 +21,18 @@ export default function AgentTemplatePicker({
   disabled,
   onChange,
 }: AgentTemplatePickerProps) {
+  const [selectedCategory, setSelectedCategory] = useState('');
   const selected = templates.find((template) => template.id === selectedTemplateId) || null;
+  const categories = useMemo(() => [...new Set(templates
+    .map((template) => template.category?.trim() || '未分类'))]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN')), [templates]);
+  const filteredTemplates = selectedCategory
+    ? templates.filter((template) => (template.category?.trim() || '未分类') === selectedCategory)
+    : templates;
+
+  useEffect(() => {
+    if (selectedCategory && !categories.includes(selectedCategory)) setSelectedCategory('');
+  }, [categories, selectedCategory]);
 
   return (
     <div className="space-y-2">
@@ -61,7 +73,32 @@ export default function AgentTemplatePicker({
 
               <div className="my-2 border-t border-gray-200 dark:border-gray-700" />
 
-              {templates.map((template) => {
+              {categories.length > 0 ? (
+                <label className="block space-y-1.5 px-1 pb-1">
+                  <span className="text-xs font-medium text-gray-600 dark:text-gray-300">按分类选择</span>
+                  <select
+                    value={selectedCategory}
+                    disabled={disabled}
+                    onChange={(event) => {
+                      const nextCategory = event.target.value;
+                      setSelectedCategory(nextCategory);
+                      if (!nextCategory) return;
+                      const templatesInCategory = templates.filter((template) => (
+                        template.category?.trim() || '未分类'
+                      ) === nextCategory);
+                      if (!templatesInCategory.some((template) => template.id === selectedTemplateId)) {
+                        onChange(templatesInCategory[0]?.id ?? null);
+                      }
+                    }}
+                    className="h-9 w-full rounded-lg border border-gray-300 bg-white px-2.5 text-sm text-gray-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                  >
+                    <option value="">全部分类</option>
+                    {categories.map((category) => <option key={category} value={category}>{category}（{templates.filter((template) => (template.category?.trim() || '未分类') === category).length}）</option>)}
+                  </select>
+                </label>
+              ) : null}
+
+              {filteredTemplates.map((template) => {
                 const active = selectedTemplateId === template.id;
                 return (
                   <button
@@ -80,6 +117,7 @@ export default function AgentTemplatePicker({
                       <Sparkles className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
+                      <span className="mb-1 block truncate text-[11px] font-medium text-blue-600 dark:text-blue-300">{template.category || '未分类'}</span>
                       <span className="block truncate text-sm font-medium text-gray-900 dark:text-white">{template.name}</span>
                       <span className="mt-0.5 line-clamp-2 block text-xs text-gray-500 dark:text-gray-400">{template.summary}</span>
                     </span>
@@ -87,6 +125,9 @@ export default function AgentTemplatePicker({
                   </button>
                 );
               })}
+              {templates.length > 0 && filteredTemplates.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-gray-500">该分类暂无可用模板</div>
+              ) : null}
             </>
           )}
         </div>
@@ -99,6 +140,7 @@ export default function AgentTemplatePicker({
                   <Sparkles className="h-6 w-6" />
                 </span>
                 <div>
+                  <span className="mb-1 inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/50 dark:text-blue-200">{selected.category || '未分类'}</span>
                   <h4 className="font-semibold text-gray-900 dark:text-white">{selected.name}</h4>
                   <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300">{selected.summary}</p>
                 </div>

@@ -211,6 +211,7 @@ const runMigrations = () => {
 
 function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
+  ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
   migrateLegacyTenantProdCode();
 
   const mcpPresetColumns = db

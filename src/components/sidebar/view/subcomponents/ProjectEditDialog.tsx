@@ -18,6 +18,7 @@ type ProjectEditDialogProps = {
 
 type ProjectSettingsPayload = {
   displayName?: string;
+  claudeMarkdown?: string;
   agentMarkdown?: string;
   revision?: string;
   canEdit?: boolean;
@@ -44,7 +45,7 @@ export default function ProjectEditDialog({
 }: ProjectEditDialogProps) {
   const { t } = useTranslation('sidebar');
   const [displayName, setDisplayName] = useState('');
-  const [agentMarkdown, setAgentMarkdown] = useState('');
+  const [claudeMarkdown, setClaudeMarkdown] = useState('');
   const [favorited, setFavorited] = useState(false);
   const [revision, setRevision] = useState('');
   const [canEdit, setCanEdit] = useState(true);
@@ -78,7 +79,7 @@ export default function ProjectEditDialog({
         return;
       }
       setDisplayName(payload.displayName || project.displayName || project.name);
-      setAgentMarkdown(payload.agentMarkdown || '');
+      setClaudeMarkdown(payload.claudeMarkdown ?? payload.agentMarkdown ?? '');
       setRevision(payload.revision || '');
       setCanEdit(payload.canEdit !== false && project.accessRole !== 'view');
       setCustomInstructionFiles(payload.customInstructions?.customInstructionFiles || []);
@@ -106,7 +107,7 @@ export default function ProjectEditDialog({
     }
 
     setDisplayName(project.displayName || project.name);
-    setAgentMarkdown('');
+    setClaudeMarkdown('');
     setRevision('');
     setCustomInstructionFiles([]);
     setFavorited(isStarred);
@@ -138,14 +139,14 @@ export default function ProjectEditDialog({
         }
         const response = await api.updateProjectSettings(project.name, {
           displayName: displayName.trim(),
-          agentMarkdown,
+          claudeMarkdown,
           expectedRevision: revision,
           workspaceId: project.workspaceId,
         });
         if (!response.ok) {
           if (response.status === 409) {
             throw new Error(t('projectEdit.conflict', {
-              defaultValue: 'Agent 指令已在其他页面发生变化，请关闭后重新打开再编辑。',
+              defaultValue: 'CLAUDE.md 已在其他页面发生变化，请关闭后重新打开再编辑。',
             }));
           }
           throw new Error(await readResponseError(
@@ -157,7 +158,7 @@ export default function ProjectEditDialog({
         dispatchProjectFilesChanged({
           projectName: project.name,
           workspaceId: project.workspaceId,
-          changedPath: 'Agent.md',
+          changedPath: 'CLAUDE.md',
           reason: 'project_settings_update',
         });
       }
@@ -262,23 +263,23 @@ export default function ProjectEditDialog({
 
                 <label className="block space-y-1.5">
                   <span className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-foreground">Agent.md</span>
+                    <span className="text-sm font-medium text-foreground">CLAUDE.md</span>
                     <span className="text-xs text-muted-foreground">
-                      {t('projectEdit.syncTarget', { defaultValue: 'SDK 系统指令' })}
+                      {t('projectEdit.syncTarget', { defaultValue: '项目记忆' })}
                     </span>
                   </span>
                   <textarea
-                    value={agentMarkdown}
-                    onChange={(event) => setAgentMarkdown(event.target.value)}
+                    value={claudeMarkdown}
+                    onChange={(event) => setClaudeMarkdown(event.target.value)}
                     disabled={!canEdit || isSaving}
                     rows={13}
                     spellCheck={false}
                     className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm leading-6 text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={t('projectEdit.agentPlaceholder', { defaultValue: '# Role\n\n描述 Agent 的角色、能力和工作方式…' })}
+                    placeholder={t('projectEdit.agentPlaceholder', { defaultValue: '# Project Memory\n\n记录项目背景、约定和 Agent 的工作方式…' })}
                   />
                   <span className="block text-xs leading-5 text-muted-foreground">
                     {canEdit
-                      ? t('projectEdit.agentHint', { defaultValue: 'Agent.md 由平台管理，并在新会话中作为 Agent 系统指令加载。' })
+                      ? t('projectEdit.agentHint', { defaultValue: 'CLAUDE.md 是项目记忆文件；在这里或文件页面修改后，内容会在新会话中由 Claude Code SDK 加载。' })
                       : t('projectEdit.readOnlyHint', { defaultValue: '当前项目为只读权限，仅可修改收藏状态。' })}
                   </span>
                 </label>
@@ -288,7 +289,7 @@ export default function ProjectEditDialog({
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>
                       {t('projectEdit.customInstructionsWarning', {
-                        defaultValue: '检测到自定义指令文件：{{files}}。这些文件会继续由 Claude Code 加载；如与 Agent.md 冲突，以 Agent 配置为准。',
+                        defaultValue: '检测到其他指令文件：{{files}}。它们也可能被 Claude Code 加载，请避免与项目 CLAUDE.md 内容冲突。',
                         files: customInstructionFiles.join('、'),
                       })}
                     </span>

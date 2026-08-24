@@ -53,6 +53,7 @@ export type AgentTemplateCapability = {
 export type AgentTemplateOption = {
   id: number;
   name: string;
+  category?: string;
   summary: string;
   guideText?: string;
   skills: AgentTemplateCapability[];

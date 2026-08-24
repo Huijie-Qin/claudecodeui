@@ -14,7 +14,7 @@ import HookSettingsTab from '../view/tabs/HookSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
 
-function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance', workspaceTerminology = 'workspace' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const {
     activeTab,
@@ -91,7 +91,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance' }:
 
               {activeTab === 'claudeEnv' && <ClaudeEnvironmentSettingsTab />}
 
-              {activeTab === 'hooks' && <HookSettingsTab projects={projects} />}
+              {activeTab === 'hooks' && <HookSettingsTab projects={projects} workspaceTerminology={workspaceTerminology} />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
             </div>
