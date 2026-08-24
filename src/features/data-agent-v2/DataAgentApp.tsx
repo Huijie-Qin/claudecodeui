@@ -47,8 +47,8 @@ import FileTree from '../../components/file-tree/view/FileTree';
 import ProjectCreationWizard from '../../components/project-creation-wizard';
 import Settings from '../../components/settings/view/Settings';
 import MarkdownPreview from '../../components/code-editor/view/subcomponents/markdown/MarkdownPreview';
+import RemovalConfirmDialog from '../../components/skills-market/RemovalConfirmDialog';
 import SkillFileTree from '../../components/skills-market/SkillFileTree';
-import SkillsWorkspacePanel from '../../components/skills-market/SkillsWorkspacePanel';
 import {
   getSkillDisplayName,
   type WorkspaceSkill,
@@ -57,6 +57,8 @@ import {
 import SqlCheckPanel from '../../components/sql-check/SqlCheckPanel';
 import McpToolsPanel from '../../components/tools-market/McpToolsPanel';
 import { useWorkspaceMcpTools, type WorkspaceMcpPreset } from '../../components/tools-market/hooks/useWorkspaceMcpTools';
+import { dispatchSlashCommandsChangedForPath } from '../../components/chat/utils/slashCommandEvents';
+import { dispatchProjectFilesChanged } from '../../components/file-tree/utils/fileTreeEvents';
 import { isSystemAdminUser } from '../../components/admin/adminPanelUtils';
 import { useAuth } from '../../components/auth/context/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
@@ -144,10 +146,18 @@ type SkillMarketEntry = {
 };
 
 type SkillMarketState = {
-  skills: WorkspaceSkill[];
+  skills: DataAgentMarketSkill[];
   isLoading: boolean;
   error: string | null;
 };
+
+type DataAgentMarketSkill = WorkspaceSkill & {
+  imported: boolean;
+  conflict: boolean;
+  skillId?: string;
+};
+
+type SkillMarketAction = 'import' | 'remove' | 'update';
 
 const WORKSPACE_STORAGE_KEY = 'data-agent-v2-workspace-id';
 const LAUNCH_ERROR_STORAGE_KEY = 'data-agent-v2-launch-error';
@@ -224,7 +234,7 @@ function parseJsonSettings(key: string) {
   return { allowedTools: [], disallowedTools: [], skipPermissions: false };
 }
 
-function normalizeSkillMarketEntry(entry: SkillMarketEntry, canManage = false): WorkspaceSkill {
+function normalizeSkillMarketEntry(entry: SkillMarketEntry, canManage = false): DataAgentMarketSkill {
   const imported = entry.imported === true;
   return {
     name: entry.name,
@@ -233,6 +243,9 @@ function normalizeSkillMarketEntry(entry: SkillMarketEntry, canManage = false): 
     kind: 'managed',
     status: entry.remoteDeleted ? 'invalid' : imported ? 'enabled' : 'available',
     enabled: imported,
+    imported,
+    conflict: entry.conflict === true,
+    skillId: entry.skillId || entry.id,
     manageable: canManage,
     sourceType: '技能市场 API',
     sourcePath: entry.nspPath,
@@ -855,18 +868,25 @@ function DataAgentCapabilities({
   onNavigate: (path: string) => void;
 }) {
   const [showStudio, setShowStudio] = useState(false);
-  const [managerOpen, setManagerOpen] = useState<'skills' | 'connectors' | null>(null);
+  const [connectorManagerOpen, setConnectorManagerOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [capabilityFilter, setCapabilityFilter] = useState('全部');
+  const [skillAction, setSkillAction] = useState<{ action: SkillMarketAction; name: string } | null>(null);
+  const [skillActionError, setSkillActionError] = useState<string | null>(null);
+  const [skillRemovalTarget, setSkillRemovalTarget] = useState<DataAgentMarketSkill | null>(null);
+  const [skillMutationVersion, setSkillMutationVersion] = useState(0);
   const graphState = useAgentGraphs(selectedProject?.workspaceId);
   const skillState = useDataAgentSkillMarket(selectedProject?.workspaceId);
   const connectorState = useWorkspaceMcpTools(selectedProject?.workspaceId);
 
   useEffect(() => {
     setShowStudio(false);
-    setManagerOpen(null);
+    setConnectorManagerOpen(false);
     setQuery('');
     setCapabilityFilter('全部');
+    setSkillAction(null);
+    setSkillActionError(null);
+    setSkillRemovalTarget(null);
   }, [selectedProject?.workspaceId, tab]);
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -906,9 +926,58 @@ function DataAgentCapabilities({
     return matchesQuery && matchesFilter;
   });
 
-  const openSkillMarketManager = () => {
-    window.localStorage.setItem('skillsWorkspaceView', 'market');
-    setManagerOpen('skills');
+  const runSkillMarketAction = async (skill: DataAgentMarketSkill, action: SkillMarketAction) => {
+    const workspaceId = selectedProject?.workspaceId;
+    if (!workspaceId || skillAction) return false;
+    setSkillAction({ action, name: skill.name });
+    setSkillActionError(null);
+    try {
+      const response = action === 'import'
+        ? await api.skillMarket.importSkill(workspaceId, skill.name)
+        : action === 'update'
+          ? await api.skillMarket.updateImport(workspaceId, skill.name)
+          : await api.skillMarket.remove(workspaceId, skill.name);
+      const payload = await readSkillResponse(
+        response,
+        action === 'import' ? '技能导入失败。' : action === 'update' ? '技能更新失败。' : '技能移除失败。',
+      );
+      const changedSkillName = payload.skill?.name || skill.name;
+      const changedPath = `.claude/skills/${changedSkillName}`;
+      const reason = `skill-market-${action}`;
+      dispatchProjectFilesChanged({
+        projectName: selectedProject.name,
+        workspaceId,
+        changedPath,
+        reason,
+      });
+      dispatchSlashCommandsChangedForPath(changedPath, {
+        projectName: selectedProject.name,
+        workspaceId,
+        reason,
+      });
+      await skillState.reload();
+      setSkillMutationVersion((version) => version + 1);
+      return true;
+    } catch (actionError) {
+      setSkillActionError(actionError instanceof Error ? actionError.message : '技能操作失败。');
+      return false;
+    } finally {
+      setSkillAction(null);
+    }
+  };
+
+  const requestSkillMarketAction = (skill: DataAgentMarketSkill, action: SkillMarketAction) => {
+    if (action === 'remove') {
+      setSkillRemovalTarget(skill);
+      return;
+    }
+    void runSkillMarketAction(skill, action);
+  };
+
+  const confirmSkillRemoval = async () => {
+    if (!skillRemovalTarget) return;
+    const removed = await runSkillMarketAction(skillRemovalTarget, 'remove');
+    if (removed) setSkillRemovalTarget(null);
   };
 
   const introTitle = tab === 'experts'
@@ -917,7 +986,7 @@ function DataAgentCapabilities({
   const introDescription = tab === 'experts'
     ? `专家配置归属于 ${getWorkspaceLabel(selectedProject)}，底层沿用 Agent Graph。`
     : showingSkillDetail
-      ? `查看技能市场 API 返回的配置、来源与文件内容。`
+      ? '查看技能说明与文件内容。'
       : tab === 'skills'
       ? `浏览技能市场，并查看 ${getWorkspaceLabel(selectedProject)} 的安装状态。`
       : `管理 ${getWorkspaceLabel(selectedProject)} 使用的 MCP Servers、Tools 与预设。`;
@@ -939,13 +1008,14 @@ function DataAgentCapabilities({
               <h1>{introTitle}</h1>
               <p>{introDescription}</p>
             </div>
-            {tab === 'connectors' && <button className="da-secondary-button da-intro-action" type="button" onClick={() => setManagerOpen('connectors')}><Server size={14} />MCP 预设</button>}
+            {tab === 'connectors' && <button className="da-secondary-button da-intro-action" type="button" onClick={() => setConnectorManagerOpen(true)}><Server size={14} />MCP 预设</button>}
           </div>
           <div className="da-tabs" role="tablist">
             <button className={tab === 'experts' ? 'is-active' : ''} onClick={() => onNavigate('/data-agent/capabilities/experts')}>专家</button>
             <button className={tab === 'skills' ? 'is-active' : ''} onClick={() => onNavigate('/data-agent/capabilities/skills')}>技能</button>
             <button className={tab === 'connectors' ? 'is-active' : ''} onClick={() => onNavigate('/data-agent/capabilities/connectors')}>连接器</button>
           </div>
+          {skillActionError && tab === 'skills' && <div className="da-inline-error da-capability-action-error">{skillActionError}<button type="button" onClick={() => setSkillActionError(null)} aria-label="关闭错误"><X size={13} /></button></div>}
 
           {!selectedProject && <DataAgentEmpty title="选择一个工作区" description="能力配置需要绑定到具体工作区。" />}
           {selectedProject && !showStudio && !showingSkillDetail && (
@@ -993,11 +1063,8 @@ function DataAgentCapabilities({
                   <div className="da-card-grid">
                     {visibleGraphs.map((graph) => (
                       <article className="da-capability-card" key={graph.id}>
-                        <div className="da-card-title-row"><span className="da-card-icon purple"><Bot size={18} /></span><div><h2>{graph.name}</h2><p>Agent Graph · {graph.agents.length} 个执行节点</p></div></div>
-                        <p className="da-card-description">{graph.goal || '通过多个执行节点协作完成工作区任务。'}</p>
-                        <div className="da-tag-row">
-                          {graph.agents.slice(0, 4).map((agent) => <span key={agent.id}>{agent.name}</span>)}
-                        </div>
+                        <div className="da-card-title-row"><span className="da-card-icon purple"><Bot size={18} /></span><div><h2 title={graph.name}>{graph.name}</h2><p title={`Agent Graph · ${graph.agents.length} 个执行节点`}>Agent Graph · {graph.agents.length} 个执行节点</p></div></div>
+                        <p className="da-card-description" title={graph.goal || '通过多个执行节点协作完成工作区任务。'}>{graph.goal || '通过多个执行节点协作完成工作区任务。'}</p>
                         <div className="da-card-footer"><span>{graph.relations.length} 个协作关系</span><button className="da-secondary-button da-small-button" onClick={() => setShowStudio(true)}>查看配置</button></div>
                       </article>
                     ))}
@@ -1015,8 +1082,10 @@ function DataAgentCapabilities({
                 skill={selectedSkill}
                 loading={skillState.isLoading}
                 error={skillState.error}
+                actionVersion={skillMutationVersion}
+                actionBusy={skillAction?.name === (selectedSkill?.name || skillName)}
                 onBack={() => onNavigate('/data-agent/capabilities/skills')}
-                onManage={openSkillMarketManager}
+                onAction={requestSkillMarketAction}
                 onReload={skillState.reload}
               />
             ) : (
@@ -1025,6 +1094,8 @@ function DataAgentCapabilities({
                   <WorkspaceSkillCard
                     key={`${skill.kind}:${skill.name}`}
                     skill={skill}
+                    busy={skillAction?.name === skill.name}
+                    onAction={requestSkillMarketAction}
                     onDetails={() => onNavigate(`/data-agent/capabilities/skills/${encodeURIComponent(skill.name)}`)}
                   />
                 ))}
@@ -1040,7 +1111,7 @@ function DataAgentCapabilities({
                   preset={preset}
                   busy={connectorState.installingPresetIds.has(preset.id) || connectorState.removingPresetIds.has(preset.id)}
                   canManage={selectedProject.accessRole !== 'view' && connectorState.data?.canManage !== false}
-                  onManage={() => setManagerOpen('connectors')}
+                  onManage={() => setConnectorManagerOpen(true)}
                   onToggle={() => {
                     const action = preset.installed ? connectorState.removePreset(preset.id) : connectorState.installPreset(preset.id);
                     void action.catch(() => undefined);
@@ -1051,17 +1122,27 @@ function DataAgentCapabilities({
           )}
         </div>
       </div>
-      {managerOpen && selectedProject && (
-        <div className="da-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManagerOpen(null); }}>
-          <section className="da-manager-modal" role="dialog" aria-modal="true" aria-label={managerOpen === 'skills' ? '管理工作区技能' : '管理工作区连接器'}>
-            <header><div><strong>{managerOpen === 'skills' ? '管理工作区技能' : '管理工作区连接器'}</strong><span>{getWorkspaceLabel(selectedProject)}</span></div><button type="button" className="da-icon-button" onClick={() => setManagerOpen(null)} aria-label="关闭"><X size={16} /></button></header>
+      {connectorManagerOpen && selectedProject && (
+        <div className="da-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConnectorManagerOpen(false); }}>
+          <section className="da-manager-modal" role="dialog" aria-modal="true" aria-label="管理工作区连接器">
+            <header><div><strong>管理工作区连接器</strong><span>{getWorkspaceLabel(selectedProject)}</span></div><button type="button" className="da-icon-button" onClick={() => setConnectorManagerOpen(false)} aria-label="关闭"><X size={16} /></button></header>
             <div className="da-manager-body">
-              {managerOpen === 'skills'
-                ? <SkillsWorkspacePanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />
-                : <McpToolsPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />}
+              <McpToolsPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />
             </div>
           </section>
         </div>
+      )}
+      {skillRemovalTarget && (
+        <RemovalConfirmDialog
+          busy={skillAction?.action === 'remove' && skillAction.name === skillRemovalTarget.name}
+          onCancel={() => { if (!skillAction) setSkillRemovalTarget(null); }}
+          onConfirm={() => void confirmSkillRemoval()}
+          target={{
+            title: '移除技能',
+            description: '这会从当前工作区移除已导入的技能，技能市场中的远程内容不会被删除。',
+            path: `.claude/skills/${skillRemovalTarget.name}`,
+          }}
+        />
       )}
     </section>
   );
@@ -1087,20 +1168,58 @@ function CapabilityCardsState({
   return <div className="da-card-grid da-capability-body">{items}</div>;
 }
 
-function WorkspaceSkillCard({ skill, onDetails }: { skill: WorkspaceSkill; onDetails: () => void }) {
-  const isEnabled = skill.status === 'enabled' || skill.enabled;
-  const statusLabel = isEnabled ? '已安装' : skill.status === 'invalid' ? '不可用' : '可安装';
+function WorkspaceSkillCard({
+  skill,
+  busy,
+  onAction,
+  onDetails,
+}: {
+  skill: DataAgentMarketSkill;
+  busy: boolean;
+  onAction: (skill: DataAgentMarketSkill, action: SkillMarketAction) => void;
+  onDetails: () => void;
+}) {
   return (
     <article className="da-capability-card">
       <div className="da-card-title-row">
         <span className="da-card-icon blue"><Sparkles size={18} /></span>
-        <div><h2>{getSkillDisplayName(skill)}</h2><p>/{skill.name} · {skill.sourceType}</p></div>
-        <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{statusLabel}</span>
+        <div><h2 title={getSkillDisplayName(skill)}>{getSkillDisplayName(skill)}</h2><p title={`/${skill.name}`}>/{skill.name}</p></div>
       </div>
-      <p className="da-card-description">{skill.description || '由技能市场提供的可复用技能。'}</p>
-      <div className="da-tag-row"><span>技能市场</span><span>{skill.enabled ? '已安装' : '远程可用'}</span></div>
-      <div className="da-card-footer"><span>{skill.updateAvailable ? '有可用更新' : skill.enabled ? '已同步到工作区' : '尚未安装'}</span><button className="da-secondary-button da-small-button" onClick={onDetails}>查看详情</button></div>
+      <p className="da-card-description" title={skill.description || '由技能市场提供的可复用技能。'}>{skill.description || '由技能市场提供的可复用技能。'}</p>
+      <div className="da-card-footer da-card-actions-footer">
+        <SkillMarketActionButtons skill={skill} busy={busy} compact onAction={onAction} />
+        <button className="da-secondary-button da-small-button" onClick={onDetails}>详情</button>
+      </div>
     </article>
+  );
+}
+
+function SkillMarketActionButtons({
+  skill,
+  busy,
+  compact = false,
+  onAction,
+}: {
+  skill: DataAgentMarketSkill;
+  busy: boolean;
+  compact?: boolean;
+  onAction: (skill: DataAgentMarketSkill, action: SkillMarketAction) => void;
+}) {
+  const buttonClass = compact ? 'da-small-button' : '';
+  const disabled = busy || !skill.manageable;
+
+  return (
+    <div className="da-skill-action-buttons">
+      {!skill.imported && !skill.remoteDeleted && (
+        <button type="button" className={`da-primary-button ${buttonClass}`} disabled={disabled || skill.conflict} onClick={() => onAction(skill, 'import')}>{busy ? '处理中' : '导入'}</button>
+      )}
+      {skill.imported && skill.updateAvailable && !skill.remoteDeleted && (
+        <button type="button" className={`da-primary-button ${buttonClass}`} disabled={disabled} onClick={() => onAction(skill, 'update')}>{busy ? '处理中' : '更新'}</button>
+      )}
+      {skill.imported && (
+        <button type="button" className={`da-secondary-button da-danger-button ${buttonClass}`} disabled={disabled} onClick={() => onAction(skill, 'remove')}>{busy ? '处理中' : '移除'}</button>
+      )}
+    </div>
   );
 }
 
@@ -1110,21 +1229,25 @@ function WorkspaceSkillDetail({
   skill,
   loading,
   error,
+  actionBusy,
+  actionVersion,
   onBack,
-  onManage,
+  onAction,
   onReload,
 }: {
   workspaceId?: number;
   requestedName?: string;
-  skill: WorkspaceSkill | null;
+  skill: DataAgentMarketSkill | null;
   loading: boolean;
   error: string | null;
+  actionBusy: boolean;
+  actionVersion: number;
   onBack: () => void;
-  onManage: () => void;
+  onAction: (skill: DataAgentMarketSkill, action: SkillMarketAction) => void;
   onReload: () => void;
 }) {
   const skillName = skill?.name || requestedName;
-  const [detail, setDetail] = useState<WorkspaceSkill | null>(null);
+  const [detail, setDetail] = useState<DataAgentMarketSkill | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
@@ -1206,7 +1329,7 @@ function WorkspaceSkillDetail({
       if (requestId === detailRequestRef.current) detailRequestRef.current += 1;
       fileRequestRef.current += 1;
     };
-  }, [loadFile, reloadVersion, skill, skillName, workspaceId]);
+  }, [actionVersion, loadFile, reloadVersion, skill, skillName, workspaceId]);
 
   const reloadDetail = () => {
     onReload();
@@ -1220,15 +1343,7 @@ function WorkspaceSkillDetail({
     return <DataAgentEmpty title="找不到该技能" description="该技能可能已从技能市场移除。" action={<button className="da-secondary-button" onClick={onBack}>返回技能列表</button>} />;
   }
 
-  const isEnabled = resolvedSkill.status === 'enabled' || resolvedSkill.enabled;
-  const kindLabel = '技能市场';
   const skillFiles = resolvedSkill.files ?? [];
-  const pathEntries = [
-    ['市场路径', resolvedSkill.sourcePath],
-    ['运行路径', resolvedSkill.runtimePath],
-    ['清单路径', resolvedSkill.manifestPath],
-    ['安装位置', resolvedSkill.targetPath],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
 
   return (
     <div className="da-skill-detail">
@@ -1240,28 +1355,13 @@ function WorkspaceSkillDetail({
             <h2>{getSkillDisplayName(resolvedSkill)}</h2>
             <p>/{resolvedSkill.name}</p>
           </div>
-          <span className={`da-connection-badge ${isEnabled ? 'is-connected' : ''}`}>{isEnabled ? '已安装' : resolvedSkill.status === 'invalid' ? '不可用' : '可安装'}</span>
+          <div className="da-skill-detail-header-actions">
+            <SkillMarketActionButtons skill={resolvedSkill} busy={actionBusy} onAction={onAction} />
+          </div>
         </div>
         <p className="da-skill-detail-description">{resolvedSkill.description || '由技能市场提供的可复用技能。'}</p>
 
-        <dl className="da-skill-detail-grid">
-          <div><dt>技能类型</dt><dd>{kindLabel}</dd></div>
-          <div><dt>来源</dt><dd>{resolvedSkill.sourceType || '技能市场 API'}</dd></div>
-          <div><dt>权限</dt><dd>{resolvedSkill.manageable ? '可管理' : '只读'}</dd></div>
-          <div><dt>版本</dt><dd>{resolvedSkill.marketVersion != null ? `市场 v${resolvedSkill.marketVersion}` : '—'}{resolvedSkill.localVersion != null ? ` · 已装 v${resolvedSkill.localVersion}` : ''}{resolvedSkill.updateAvailable ? ' · 有更新' : ''}</dd></div>
-        </dl>
-
-        {resolvedSkill.parseError && <div className="da-skill-detail-warning"><strong>技能解析失败</strong><span>{resolvedSkill.parseError}</span></div>}
         {detailError && <div className="da-skill-detail-warning"><strong>完整详情加载失败</strong><span>{detailError}</span><button type="button" onClick={reloadDetail}>重新加载</button></div>}
-
-        {pathEntries.length > 0 && (
-          <section className="da-skill-detail-section">
-            <h3>位置与来源</h3>
-            <dl className="da-skill-path-list">
-              {pathEntries.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
-            </dl>
-          </section>
-        )}
 
         <section className="da-skill-detail-section da-skill-content-section">
           <h3>技能内容 <span>{skillFiles.filter((entry) => entry.type === 'file').length} 个文件</span></h3>
@@ -1301,8 +1401,6 @@ function WorkspaceSkillDetail({
             </div>
           ) : <p className="da-skill-detail-empty">当前技能没有可预览的文件。</p>}
         </section>
-
-        {resolvedSkill.manageable && <div className="da-skill-detail-actions"><button type="button" className="da-primary-button" onClick={onManage}>在技能市场中管理</button></div>}
       </article>
     </div>
   );
@@ -1355,11 +1453,9 @@ function WorkspaceConnectorCard({
     <article className="da-capability-card">
       <div className="da-card-title-row">
         <span className="da-card-icon green"><Plug size={18} /></span>
-        <div><h2>{preset.displayName || preset.name}</h2><p>MCP · {preset.toolCount} 个工具</p></div>
-        <span className={`da-connection-badge ${preset.installed ? 'is-connected' : ''}`}>{preset.installed ? '已连接' : '未连接'}</span>
+        <div><h2 title={preset.displayName || preset.name}>{preset.displayName || preset.name}</h2><p title={`MCP · ${preset.toolCount} 个工具`}>MCP · {preset.toolCount} 个工具</p></div>
       </div>
-      <p className="da-card-description">{preset.description || '为当前工作区提供 MCP 工具。'}</p>
-      <div className="da-tag-row">{(preset.tools ?? []).slice(0, 3).map((tool) => <span key={tool.name}>{tool.name}</span>)}</div>
+      <p className="da-card-description" title={preset.description || '为当前工作区提供 MCP 工具。'}>{preset.description || '为当前工作区提供 MCP 工具。'}</p>
       <div className="da-card-footer">
         <span>{preset.lastTestedAt ? `最近测试 ${formatRelativeTime(preset.lastTestedAt)}` : '尚未测试'}</span>
         <button className="da-secondary-button da-small-button" onClick={onManage}>工具列表</button>

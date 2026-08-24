@@ -1908,7 +1908,10 @@
 }
 
 .da-capability-card {
-  min-height: 192px;
+  height: 204px;
+  min-height: 204px;
+  max-height: 204px;
+  overflow: hidden;
   padding: 15px;
   border-radius: 12px;
   transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
@@ -1938,8 +1941,11 @@
 }
 
 .da-card-title-row p {
+  overflow: hidden;
   margin: 0;
   font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .da-card-icon.blue {
@@ -1948,11 +1954,15 @@
 }
 
 .da-card-description {
+  display: -webkit-box;
   min-height: 37px;
   flex: 1;
+  overflow: hidden;
   margin: 12px 0 11px;
   font-size: 11px;
   line-height: 1.48;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .da-tag-row span {
@@ -1971,6 +1981,53 @@
 
 .da-card-footer .da-small-button:first-of-type {
   margin-left: auto;
+}
+
+.da-card-actions-footer {
+  justify-content: flex-end;
+}
+
+.da-card-actions-footer .da-small-button:first-of-type {
+  margin-left: 0;
+}
+
+.da-skill-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.da-skill-action-buttons button {
+  white-space: nowrap;
+}
+
+.da-danger-button {
+  border-color: #efcbc8;
+  color: #b3433e;
+}
+
+.da-danger-button:hover {
+  border-color: #e5aaa5;
+  background: #fff4f3;
+}
+
+.da-capability-action-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.da-capability-action-error button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .da-primary-button,
@@ -2124,6 +2181,13 @@
   margin: 0;
   color: var(--da-muted);
   font-size: 12px;
+}
+
+.da-skill-detail-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: auto;
 }
 
 .da-skill-detail-description {
@@ -2283,9 +2347,10 @@
 
 .da-skill-preview-layout {
   display: grid;
-  min-height: 500px;
-  max-height: 640px;
+  height: clamp(420px, calc(100vh - 320px), 640px);
+  min-height: 0;
   grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--da-border);
   border-radius: 11px;
@@ -2294,6 +2359,7 @@
 
 .da-skill-preview-layout > aside {
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--da-border);
   border-bottom: 0;
   background: var(--da-bg);
@@ -2355,10 +2421,13 @@
 }
 
 .da-skill-file-content {
+  position: relative;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   flex: 1;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--da-panel);
 }
 
@@ -2767,8 +2836,9 @@
   }
 
   .da-skill-preview-layout {
-    max-height: none;
+    height: min(700px, calc(100vh - 150px));
     grid-template-columns: 1fr;
+    grid-template-rows: 210px minmax(0, 1fr);
   }
 
   .da-skill-preview-layout > aside {
@@ -2778,7 +2848,17 @@
   }
 
   .da-skill-file-viewer {
-    min-height: 440px;
+    min-height: 0;
+  }
+
+  .da-skill-detail-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .da-skill-detail-header-actions {
+    width: 100%;
+    margin-left: 48px;
   }
 
   .da-skill-markdown-preview {
