@@ -875,6 +875,7 @@ function DataAgentCapabilities({
   const [connectorManagerOpen, setConnectorManagerOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [capabilityFilter, setCapabilityFilter] = useState('全部');
+  const [expertCategory, setExpertCategory] = useState('全部');
   const [summonTemplate, setSummonTemplate] = useState<AgentTemplateOption | null>(null);
   const [summonName, setSummonName] = useState('');
   const [summonBusy, setSummonBusy] = useState(false);
@@ -891,6 +892,7 @@ function DataAgentCapabilities({
     setConnectorManagerOpen(false);
     setQuery('');
     setCapabilityFilter('全部');
+    setExpertCategory('全部');
     setSummonTemplate(null);
     setSummonName('');
     setSummonError(null);
@@ -900,12 +902,35 @@ function DataAgentCapabilities({
   }, [selectedProject?.workspaceId, tab]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleTemplates = templateState.templates.filter((template) => !normalizedQuery || [
-    template.name,
-    template.summary,
-    ...template.skills.map((skill) => skill.name),
-    ...template.mcps.map((mcp) => mcp.name),
-  ].filter(Boolean).join(' ').toLowerCase().includes(normalizedQuery));
+  const expertCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+    templateState.templates.forEach((template) => {
+      const category = template.category?.trim() || '未分类';
+      counts.set(category, (counts.get(category) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+      .map(([name, count]) => ({ name, count }));
+  }, [templateState.templates]);
+
+  useEffect(() => {
+    if (expertCategory !== '全部' && !expertCategories.some((category) => category.name === expertCategory)) {
+      setExpertCategory('全部');
+    }
+  }, [expertCategories, expertCategory]);
+
+  const visibleTemplates = templateState.templates.filter((template) => {
+    const category = template.category?.trim() || '未分类';
+    const matchesCategory = expertCategory === '全部' || category === expertCategory;
+    const matchesQuery = !normalizedQuery || [
+      template.name,
+      category,
+      template.summary,
+      ...template.skills.map((skill) => skill.name),
+      ...template.mcps.map((mcp) => mcp.name),
+    ].filter(Boolean).join(' ').toLowerCase().includes(normalizedQuery);
+    return matchesCategory && matchesQuery;
+  });
   const skills = skillState.skills;
   const visibleSkills = skills.filter((skill) => {
     const matchesQuery = !normalizedQuery || [
@@ -1084,10 +1109,38 @@ function DataAgentCapabilities({
                 </select>
               )}
               <span className="da-toolbar-count">
-                {tab === 'experts' && `${templateState.templates.length} 位可召唤专家`}
+                {tab === 'experts' && `${visibleTemplates.length} 位可召唤专家`}
                 {tab === 'skills' && `已安装 ${skills.filter((skill) => skill.enabled).length} / ${skills.length}`}
                 {tab === 'connectors' && `已连接 ${presets.filter((preset) => preset.installed).length} / ${presets.length}`}
               </span>
+            </div>
+          )}
+
+          {tab === 'experts' && !templateState.isLoading && !templateState.error && templateState.templates.length > 0 && (
+            <div className="da-expert-category-filter" role="group" aria-label="按分类筛选专家">
+              <button
+                type="button"
+                className={expertCategory === '全部' ? 'is-active' : ''}
+                aria-pressed={expertCategory === '全部'}
+                aria-label={`全部，${templateState.templates.length} 位专家`}
+                title={`${templateState.templates.length} 位专家`}
+                onClick={() => setExpertCategory('全部')}
+              >
+                全部
+              </button>
+              {expertCategories.map((category) => (
+                <button
+                  key={category.name}
+                  type="button"
+                  className={expertCategory === category.name ? 'is-active' : ''}
+                  aria-pressed={expertCategory === category.name}
+                  aria-label={`${category.name}，${category.count} 位专家`}
+                  title={`${category.count} 位专家`}
+                  onClick={() => setExpertCategory(category.name)}
+                >
+                  {category.name}
+                </button>
+              ))}
             </div>
           )}
 
@@ -1099,9 +1152,10 @@ function DataAgentCapabilities({
                   <div className="da-card-grid">
                     {visibleTemplates.map((template) => {
                       const templateProjects = projects.filter((project) => project.agentTemplate?.id === template.id);
+                      const category = template.category?.trim() || '未分类';
                       return (
                         <article className="da-capability-card da-expert-card" key={template.id}>
-                          <div className="da-card-title-row"><span className="da-card-icon purple"><Bot size={18} /></span><div><h2 title={template.name}>{template.name}</h2><p title={`专家能力 · ${template.skills.length} 个技能 · ${template.mcps.length} 个连接器`}>专家能力 · {template.skills.length} 技能 · {template.mcps.length} 连接器</p></div></div>
+                          <div className="da-card-title-row"><span className="da-card-icon purple"><Bot size={18} /></span><div><div className="da-expert-card-title-line"><h2 title={template.name}>{template.name}</h2><span className="da-expert-category-badge" title={category}>{category}</span></div><p title={`专家能力 · ${template.skills.length} 个技能 · ${template.mcps.length} 个连接器`}>专家能力 · {template.skills.length} 技能 · {template.mcps.length} 连接器</p></div></div>
                           <p className="da-card-description" title={template.summary || '可召唤为独立专家，并在专属空间中持续对话。'}>{template.summary || '可召唤为独立专家，并在专属空间中持续对话。'}</p>
                           <div className="da-card-footer da-expert-card-footer">
                             <span>已召唤 {templateProjects.length} 位专家</span>
@@ -1111,7 +1165,7 @@ function DataAgentCapabilities({
                       );
                     })}
                   </div>
-                ) : <DataAgentEmpty title={query ? '没有匹配的专家' : '还没有可用的专家'} description={query ? '尝试使用其他关键词搜索。' : '请联系管理员为当前租户配置专家。'} />}
+                ) : <DataAgentEmpty title={normalizedQuery || expertCategory !== '全部' ? '没有匹配的专家' : '还没有可用的专家'} description={expertCategory !== '全部' ? '当前分类下没有符合搜索条件的专家，请调整关键词或切换分类。' : normalizedQuery ? '尝试使用其他关键词搜索。' : '请联系管理员为当前租户配置专家。'} />}
             </div>
           )}
 
