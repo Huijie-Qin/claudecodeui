@@ -61,7 +61,6 @@ describe('offline protocol', () => {
         privileges: {
           standard: true,
           secure: true,
-          bypassCSP: false,
           allowServiceWorkers: false,
           supportFetchAPI: false,
           corsEnabled: false,
@@ -80,7 +79,7 @@ describe('offline protocol', () => {
     expect(documentResponse.status).toBe(200);
     expect(documentResponse.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(documentResponse.headers.get('cache-control')).toBe('no-store, max-age=0');
-    expect(documentResponse.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(documentResponse.headers.has('content-security-policy')).toBe(false);
     expect(documentResponse.headers.get('x-content-type-options')).toBe('nosniff');
     expect(await documentResponse.text()).toBe(INDEX_HTML);
 

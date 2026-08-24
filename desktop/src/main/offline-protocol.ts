@@ -7,22 +7,6 @@ export const OFFLINE_HOST = 'app';
 export const OFFLINE_PAGE_URL = `${OFFLINE_SCHEME}://${OFFLINE_HOST}/`;
 const DEVELOPMENT_RENDERER_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
-const OFFLINE_CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self'",
-  "connect-src 'none'",
-  "font-src 'none'",
-  "media-src 'none'",
-  "object-src 'none'",
-  "frame-src 'none'",
-  "worker-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
-
 const MIME_TYPES = new Map<string, string>([
   ['.css', 'text/css; charset=utf-8'],
   ['.html', 'text/html; charset=utf-8'],
@@ -43,7 +27,6 @@ function secureHeaders(contentType: string, contentLength: number): Record<strin
   return {
     'Cache-Control': 'no-store, max-age=0',
     'Content-Length': String(contentLength),
-    'Content-Security-Policy': OFFLINE_CSP,
     'Content-Type': contentType,
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': 'same-origin',
@@ -198,7 +181,6 @@ export function registerOfflineScheme(): void {
       privileges: {
         standard: true,
         secure: true,
-        bypassCSP: false,
         allowServiceWorkers: false,
         supportFetchAPI: false,
         corsEnabled: false,

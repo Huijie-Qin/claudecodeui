@@ -549,29 +549,10 @@ async function setupProjectsWatcher() {
 
 const app = express();
 const server = http.createServer(app);
-const FRONTEND_CONTENT_SECURITY_POLICY = [
-    "default-src 'self'",
-    "base-uri 'self'",
-    "object-src 'none'",
-    "frame-ancestors 'none'",
-    "script-src 'self'",
-    "script-src-attr 'none'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
-    "font-src 'self' data:",
-    "connect-src 'self' https: ws: wss:",
-    "worker-src 'self' blob:",
-    "frame-src https:",
-    "media-src 'self' data: blob: https:",
-    "manifest-src 'self'",
-    "form-action 'self' https:"
-].join('; ');
-
 function setFrontendHtmlHeaders(res) {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.setHeader('Content-Security-Policy', FRONTEND_CONTENT_SECURITY_POLICY);
     res.setHeader('X-Content-Type-Options', 'nosniff');
 }
 
