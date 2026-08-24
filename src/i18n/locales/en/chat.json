@@ -149,7 +149,7 @@
     "send": "Send",
     "stop": "Stop",
     "sendSupplement": "Queue follow-up",
-    "supplementPlaceholder": "Queue a follow-up after the current response...",
+    "supplementPlaceholder": "Add supplementary information while DataAgent is running",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands"

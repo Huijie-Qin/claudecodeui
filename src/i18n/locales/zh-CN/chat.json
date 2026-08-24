@@ -131,7 +131,7 @@
     "send": "发送",
     "stop": "停止",
     "sendSupplement": "排队发送",
-    "supplementPlaceholder": "当前回答结束后发送下一条消息...",
+    "supplementPlaceholder": "在 DataAgent 运行时补充附加信息",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
       "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令"
