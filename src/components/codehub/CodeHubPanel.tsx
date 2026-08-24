@@ -130,6 +130,7 @@ type CodeHubPanelProps = {
   selectedProject: Project;
   isReadOnly?: boolean;
   onFileOpen?: (filePath: string) => void;
+  terminology?: 'workspace' | 'expert';
 };
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -192,7 +193,7 @@ function toRepoRelativeSavedPath(
   return normalizedSavedPath.slice(normalizedRepoPath.length + 1);
 }
 
-export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFileOpen }: CodeHubPanelProps) {
+export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFileOpen, terminology = 'workspace' }: CodeHubPanelProps) {
   const { t } = useTranslation('codehub');
   const workspaceId = selectedProject.workspaceId;
   const [repositories, setRepositories] = useState<CodeHubRepository[]>([]);
@@ -351,7 +352,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
           setChanges([]);
           setSelectedFiles([]);
           clearDiffPreview();
-          setError(t('errors.repositoryMissing'));
+          setError(terminology === 'expert' ? '该 CodeHub 代码仓文件夹已不在专家目录中，代码仓列表已刷新。' : t('errors.repositoryMissing'));
           await loadRepositories();
           return;
         }
@@ -387,7 +388,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
       console.error('[CodeHubPanel] Failed to load changes:', caughtError);
       setError(t('errors.loadChanges'));
     }
-  }, [clearDiffPreview, loadRepositories, selectedRepoId, t, workspaceId]);
+  }, [clearDiffPreview, loadRepositories, selectedRepoId, t, terminology, workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !selectedRepoId || !selectedRepo || !conflictState) return undefined;
@@ -1121,7 +1122,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
   if (!workspaceId) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t('workspaceUnsupported')}
+        {terminology === 'expert' ? '当前专家不支持 CodeHub。' : t('workspaceUnsupported')}
       </div>
     );
   }
@@ -1210,7 +1211,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">{t('clone.folderName')}</span>
+              <span className="text-xs font-medium text-muted-foreground">{terminology === 'expert' ? '专家目录名称' : t('clone.folderName')}</span>
               <Input
                 value={cloneDirectory}
                 onChange={(event) => setCloneDirectory(event.target.value)}
@@ -1326,7 +1327,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                               })}
                             </span>
                           ) : (
-                            <span>{t('pull.clean')}</span>
+                            <span>{terminology === 'expert' ? '专家目录干净。' : t('pull.clean')}</span>
                           )}
                         </div>
                       </div>
@@ -1375,7 +1376,7 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                           ) : (
                             <div className="flex min-h-[140px] flex-col rounded-md border border-border/70 bg-background p-3 shadow-sm">
                               <div className="font-medium text-foreground">{t('pull.options.manualTitle')}</div>
-                              <div className="mt-1 flex-1 text-muted-foreground">{t('pull.options.manualDescription')}</div>
+                              <div className="mt-1 flex-1 text-muted-foreground">{terminology === 'expert' ? '现在拉取，并在专家目录内手动解决 merge 冲突文件。' : t('pull.options.manualDescription')}</div>
                               <Button
                                 className="mt-3 w-full"
                                 variant="outline"
@@ -1401,7 +1402,9 @@ export default function CodeHubPanel({ selectedProject, isReadOnly = false, onFi
                       <div className="mt-1">
                         {conflictState
                           ? t('pull.restore.waitForConflict')
-                          : canRestoreLastStash ? t('pull.restore.description') : t('pull.restore.waitForPull')}
+                          : canRestoreLastStash
+                            ? terminology === 'expert' ? '拉取远程更新后，可以把刚才 stash 的本地变更恢复到专家目录。' : t('pull.restore.description')
+                            : t('pull.restore.waitForPull')}
                       </div>
                     </div>
                     <Button

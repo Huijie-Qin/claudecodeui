@@ -193,7 +193,7 @@ function getSessionLabel(session: ProjectSession) {
 }
 
 function getWorkspaceLabel(project: Project | null) {
-  return project?.displayName || project?.name || '选择工作区';
+  return project?.displayName || project?.name || '选择专家';
 }
 
 function readSelectedWorkspaceId() {
@@ -349,11 +349,13 @@ function DataAgentWorkspaceSelect({
   selectedProject,
   onSelect,
   compact = false,
+  label = '专家',
 }: {
   projects: Project[];
   selectedProject: Project | null;
   onSelect: (project: Project) => void;
   compact?: boolean;
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -381,19 +383,19 @@ function DataAgentWorkspaceSelect({
       <button
         type="button"
         className={`da-workspace-trigger ${open ? 'is-open' : ''}`}
-        aria-label="选择工作区"
+        aria-label={`选择${label}`}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
         <FolderOpen size={15} aria-hidden="true" />
-        {!compact && <span className="da-workspace-select-label">工作区</span>}
+        {!compact && <span className="da-workspace-select-label">{label}</span>}
         <strong className="da-workspace-name">{getWorkspaceLabel(selectedProject)}</strong>
         <ChevronDown className={open ? 'is-open' : ''} size={14} aria-hidden="true" />
       </button>
       {open && (
-        <div className="da-workspace-menu" role="menu" aria-label="选择工作区">
-          <div className="da-menu-label">选择工作区</div>
+        <div className="da-workspace-menu" role="menu" aria-label={`选择${label}`}>
+          <div className="da-menu-label">选择{label}</div>
           <div className="da-workspace-options">
             {projects.map((project) => {
               const selected = project.workspaceId === selectedProject?.workspaceId
@@ -413,7 +415,7 @@ function DataAgentWorkspaceSelect({
                   <span className="da-workspace-mark">{getWorkspaceLabel(project).slice(0, 1).toUpperCase()}</span>
                   <span className="da-workspace-option-copy">
                     <strong>{getWorkspaceLabel(project)}</strong>
-                    <small>{project.fullPath || project.path || '本地工作区'}</small>
+                    <small>{project.fullPath || project.path || '本地专家'}</small>
                   </span>
                   {selected && <Check size={14} aria-hidden="true" />}
                 </button>
@@ -600,7 +602,7 @@ function DataAgentSidebar({
                       type="button"
                       className="da-project-new-task"
                       aria-label={`在 ${getWorkspaceLabel(project)} 中新建任务`}
-                      title="在此工作区新建任务"
+                      title="在此专家中新建任务"
                       onClick={() => onCreateTask(project)}
                     >
                       <MessageSquarePlus size={14} />
@@ -674,6 +676,7 @@ function DataAgentPageHeader({
   onSelectWorkspace,
   action,
   showWorkspace = true,
+  workspaceLabel = '专家',
 }: {
   title: string;
   subtitle: string;
@@ -682,6 +685,7 @@ function DataAgentPageHeader({
   onSelectWorkspace: (project: Project) => void;
   action?: React.ReactNode;
   showWorkspace?: boolean;
+  workspaceLabel?: string;
 }) {
   return (
     <header className="da-page-header">
@@ -690,7 +694,7 @@ function DataAgentPageHeader({
         <span>{subtitle}</span>
       </div>
       <div className="da-page-actions">
-        {showWorkspace && <DataAgentWorkspaceSelect projects={projects} selectedProject={selectedProject} onSelect={onSelectWorkspace} compact />}
+        {showWorkspace && <DataAgentWorkspaceSelect projects={projects} selectedProject={selectedProject} onSelect={onSelectWorkspace} compact label={workspaceLabel} />}
         {action}
       </div>
     </header>
@@ -770,7 +774,7 @@ function DataAgentNewTask({
     <section className="da-page da-new-page">
       <DataAgentPageHeader
         title="新建任务"
-        subtitle="在当前工作区开始一个 AI 会话"
+        subtitle="在当前专家中开始一个 AI 会话"
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={onSelectWorkspace}
@@ -780,7 +784,7 @@ function DataAgentNewTask({
         <div className="da-new-intro">
           <span className="da-intro-icon"><WandSparkles size={20} /></span>
           <h1>今天想完成什么？</h1>
-          <p>描述目标，DataAgent 会在所选工作区中规划并执行。</p>
+          <p>描述目标，DataAgent 会由所选专家规划并执行。</p>
         </div>
 
         <div className={`da-composer-card ${pending ? 'is-pending' : ''}`}>
@@ -815,9 +819,9 @@ function DataAgentNewTask({
                     onClick={() => handleCommandSelect(command, index, false)}
                   >
                     <Zap size={15} />
-                    <span><strong>{command.name}</strong><small>{command.description || '工作区技能'}</small></span>
+                    <span><strong>{command.name}</strong><small>{command.description || '专家技能'}</small></span>
                   </button>
-                )) : <div className="da-popover-empty">当前工作区还没有可用技能</div>}
+                )) : <div className="da-popover-empty">当前专家还没有可用技能</div>}
               </div>
             </div>
           )}
@@ -828,8 +832,8 @@ function DataAgentNewTask({
                 <TerminalSquare size={16} />
                 <span>{slashCommandsCount}</span>
               </button>
-              <DataAgentWorkspaceSelect projects={projects} selectedProject={selectedProject} onSelect={onSelectWorkspace} />
-              <button type="button" className="da-tool-button" onClick={onOpenAutomation} title="管理当前工作区的自动化">
+              <DataAgentWorkspaceSelect projects={projects} selectedProject={selectedProject} onSelect={onSelectWorkspace} label="专家" />
+              <button type="button" className="da-tool-button" onClick={onOpenAutomation} title="管理当前专家的自动化">
                 <Clock3 size={16} />
               </button>
             </div>
@@ -1013,7 +1017,7 @@ function DataAgentCapabilities({
         path: expertName,
         templateId: summonTemplate.id,
       });
-      if (!created) throw new Error('专家创建成功，但未返回工作区信息。');
+      if (!created) throw new Error('专家创建成功，但未返回专家信息。');
       await onExpertCreated(created as unknown as Project);
       setSummonTemplate(null);
       setSummonName('');
@@ -1026,9 +1030,9 @@ function DataAgentCapabilities({
 
   const introTitle = tab === 'experts'
     ? '选择并召唤专家'
-    : showingSkillDetail ? '技能详情' : tab === 'skills' ? '工作区技能市场' : '管理工作区连接器';
+    : showingSkillDetail ? '技能详情' : tab === 'skills' ? '专家技能市场' : '管理专家连接器';
   const introDescription = tab === 'experts'
-    ? `浏览 ${currentTenant?.name || '当前租户'} 可用的专家；召唤后会创建一个独立专家工作区。`
+    ? `浏览 ${currentTenant?.name || '当前租户'} 可用的专家；召唤后会创建一个独立专家。`
     : showingSkillDetail
       ? '查看技能说明与文件内容。'
       : tab === 'skills'
@@ -1039,10 +1043,12 @@ function DataAgentCapabilities({
     <section className="da-page">
       <DataAgentPageHeader
         title="专家 · 技能 · 连接器"
-        subtitle={tab === 'experts' ? '创建和管理当前租户的专家' : '按工作区管理 DataAgent 能力'}
+        subtitle={tab === 'experts' ? '创建和管理当前租户的专家' : '按专家管理 DataAgent 能力'}
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={onSelectWorkspace}
+        showWorkspace={tab !== 'experts'}
+        workspaceLabel="专家"
       />
       <div className="da-capability-page">
         <div className="da-content-inner">
@@ -1060,7 +1066,7 @@ function DataAgentCapabilities({
           </div>
           {skillActionError && tab === 'skills' && <div className="da-inline-error da-capability-action-error">{skillActionError}<button type="button" onClick={() => setSkillActionError(null)} aria-label="关闭错误"><X size={13} /></button></div>}
 
-          {!selectedProject && tab !== 'experts' && <DataAgentEmpty title="选择一个工作区" description="能力配置需要绑定到具体工作区。" />}
+          {!selectedProject && tab !== 'experts' && <DataAgentEmpty title="选择一个专家" description="能力配置需要绑定到具体专家。" />}
           {(tab === 'experts' || selectedProject) && !showingSkillDetail && (
             <div className="da-capability-toolbar">
               <label className="da-search-box">
@@ -1093,13 +1099,12 @@ function DataAgentCapabilities({
                   <div className="da-card-grid">
                     {visibleTemplates.map((template) => {
                       const templateProjects = projects.filter((project) => project.agentTemplate?.id === template.id);
-                      const conversationCount = templateProjects.reduce((count, project) => count + getProjectSessions(project).length, 0);
                       return (
                         <article className="da-capability-card da-expert-card" key={template.id}>
                           <div className="da-card-title-row"><span className="da-card-icon purple"><Bot size={18} /></span><div><h2 title={template.name}>{template.name}</h2><p title={`专家能力 · ${template.skills.length} 个技能 · ${template.mcps.length} 个连接器`}>专家能力 · {template.skills.length} 技能 · {template.mcps.length} 连接器</p></div></div>
                           <p className="da-card-description" title={template.summary || '可召唤为独立专家，并在专属空间中持续对话。'}>{template.summary || '可召唤为独立专家，并在专属空间中持续对话。'}</p>
                           <div className="da-card-footer da-expert-card-footer">
-                            <span>{templateProjects.length} 位专家 · {conversationCount} 个对话</span>
+                            <span>已召唤 {templateProjects.length} 位专家</span>
                             <button className="da-primary-button da-small-button" type="button" disabled={currentTenant?.permission !== 'edit'} title={currentTenant?.permission === 'edit' ? '召唤此专家' : '当前租户为只读'} onClick={() => openSummonDialog(template)}><WandSparkles size={13} />召唤</button>
                           </div>
                         </article>
@@ -1125,7 +1130,7 @@ function DataAgentCapabilities({
                 onReload={skillState.reload}
               />
             ) : (
-              <CapabilityCardsState loading={skillState.isLoading} error={skillState.error} emptyTitle={query ? '没有匹配的技能' : '当前工作区还没有技能'} onReload={skillState.reload}>
+              <CapabilityCardsState loading={skillState.isLoading} error={skillState.error} emptyTitle={query ? '没有匹配的技能' : '当前专家还没有技能'} onReload={skillState.reload}>
                 {visibleSkills.map((skill) => (
                   <WorkspaceSkillCard
                     key={`${skill.kind}:${skill.name}`}
@@ -1140,7 +1145,7 @@ function DataAgentCapabilities({
           )}
 
           {selectedProject && tab === 'connectors' && (
-            <CapabilityCardsState loading={connectorState.isLoading} error={connectorState.error} emptyTitle={query ? '没有匹配的连接器' : '当前工作区还没有连接器预设'} onReload={connectorState.reload}>
+            <CapabilityCardsState loading={connectorState.isLoading} error={connectorState.error} emptyTitle={query ? '没有匹配的连接器' : '当前专家还没有连接器预设'} onReload={connectorState.reload}>
               {visiblePresets.map((preset) => (
                 <WorkspaceConnectorCard
                   key={preset.id}
@@ -1160,8 +1165,8 @@ function DataAgentCapabilities({
       </div>
       {connectorManagerOpen && selectedProject && (
         <div className="da-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConnectorManagerOpen(false); }}>
-          <section className="da-manager-modal" role="dialog" aria-modal="true" aria-label="管理工作区连接器">
-            <header><div><strong>管理工作区连接器</strong><span>{getWorkspaceLabel(selectedProject)}</span></div><button type="button" className="da-icon-button" onClick={() => setConnectorManagerOpen(false)} aria-label="关闭"><X size={16} /></button></header>
+          <section className="da-manager-modal" role="dialog" aria-modal="true" aria-label="管理专家连接器">
+            <header><div><strong>管理专家连接器</strong><span>{getWorkspaceLabel(selectedProject)}</span></div><button type="button" className="da-icon-button" onClick={() => setConnectorManagerOpen(false)} aria-label="关闭"><X size={16} /></button></header>
             <div className="da-manager-body">
               <McpToolsPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} />
             </div>
@@ -1197,7 +1202,7 @@ function DataAgentCapabilities({
           onConfirm={() => void confirmSkillRemoval()}
           target={{
             title: '移除技能',
-            description: '这会从当前工作区移除已导入的技能，技能市场中的远程内容不会被删除。',
+            description: '这会从当前专家移除已导入的技能，技能市场中的远程内容不会被删除。',
             path: `.claude/skills/${skillRemovalTarget.name}`,
           }}
         />
@@ -1235,18 +1240,18 @@ function ExpertSummonDialog({
         <header>
           <div className="da-expert-dialog-title">
             <span className="da-card-icon purple"><Bot size={17} /></span>
-            <div><strong id="da-expert-summon-title">{template.name}</strong><span>召唤新专家，或继续已有对话</span></div>
+            <div><strong id="da-expert-summon-title">{template.name}</strong><span>召唤专家，或继续已有对话</span></div>
           </div>
           <button type="button" className="da-icon-button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={16} /></button>
         </header>
         <div className="da-expert-dialog-body">
           <form className="da-expert-summon-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
             <div className="da-expert-create-copy">
-              <span>新建专家</span>
-              <h2>给新专家起个名字</h2>
+              <span>召唤专家</span>
+              <h2>给专家起个别名</h2>
               <p>{template.summary || '创建一个独立专家空间，用于持续处理同类任务和对话。'}</p>
             </div>
-            <label htmlFor="da-expert-name">专家名字</label>
+            <label htmlFor="da-expert-name">专家别名</label>
             <input
               id="da-expert-name"
               autoFocus
@@ -1287,7 +1292,7 @@ function ExpertHistoryList({
   return (
     <section className="da-expert-history-section" aria-labelledby="da-expert-history-title">
       <div className="da-expert-history-section-title">
-        <div><strong id="da-expert-history-title">已有专家</strong><span>选择专家继续工作</span></div>
+        <div><strong id="da-expert-history-title">已召唤专家</strong><span>选择专家继续工作</span></div>
         <span>{projects.length ? `${projects.length} 位 · ${conversationCount} 个对话` : '尚未召唤'}</span>
       </div>
       <div className="da-expert-history-body">
@@ -1339,9 +1344,9 @@ function CapabilityCardsState({
   children: React.ReactNode;
 }) {
   const items = React.Children.toArray(children);
-  if (loading) return <DataAgentLoading label="正在加载工作区能力…" />;
+  if (loading) return <DataAgentLoading label="正在加载专家能力…" />;
   if (error) return <DataAgentEmpty title="能力加载失败" description={error} action={<button className="da-secondary-button" onClick={onReload}>重试</button>} />;
-  if (!items.length) return <DataAgentEmpty title={emptyTitle} description="可以调整筛选条件，或打开管理面板安装工作区能力。" />;
+  if (!items.length) return <DataAgentEmpty title={emptyTitle} description="可以调整筛选条件，或打开管理面板安装专家能力。" />;
   return <div className="da-card-grid da-capability-body">{items}</div>;
 }
 
@@ -1632,7 +1637,7 @@ function WorkspaceConnectorCard({
         <span className="da-card-icon green"><Plug size={18} /></span>
         <div><h2 title={preset.displayName || preset.name}>{preset.displayName || preset.name}</h2><p title={`MCP · ${preset.toolCount} 个工具`}>MCP · {preset.toolCount} 个工具</p></div>
       </div>
-      <p className="da-card-description" title={preset.description || '为当前工作区提供 MCP 工具。'}>{preset.description || '为当前工作区提供 MCP 工具。'}</p>
+      <p className="da-card-description" title={preset.description || '为当前专家提供 MCP 工具。'}>{preset.description || '为当前专家提供 MCP 工具。'}</p>
       <div className="da-card-footer">
         <span>{preset.lastTestedAt ? `最近测试 ${formatRelativeTime(preset.lastTestedAt)}` : '尚未测试'}</span>
         <button className="da-secondary-button da-small-button" onClick={onManage}>工具列表</button>
@@ -1703,7 +1708,7 @@ function DataAgentAutomation({
     <section className="da-page">
       <DataAgentPageHeader
         title="自动化"
-        subtitle="按工作区管理 Scheduled Tasks"
+        subtitle="按专家管理 Scheduled Tasks"
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={onSelectWorkspace}
@@ -1714,7 +1719,7 @@ function DataAgentAutomation({
       <div className="da-standard-content">
         <div className="da-content-inner">
           <div className="da-content-heading">
-            <div><h1>让重复任务按计划运行</h1><p>当前查看 {getWorkspaceLabel(selectedProject)} 的自动化；运行会话仍在该工作区的任务历史中查看。</p></div>
+            <div><h1>让重复任务按计划运行</h1><p>当前查看 {getWorkspaceLabel(selectedProject)} 的自动化；运行会话仍在该专家的任务历史中查看。</p></div>
           </div>
           <div className="da-automation-toolbar">
             {([['all', '全部'], ['enabled', '已启用'], ['paused', '已暂停'], ['failed', '失败']] as const).map(([value, label]) => (
@@ -1724,7 +1729,7 @@ function DataAgentAutomation({
           </div>
           {error && <div className="da-inline-error">{error}</div>}
           {loading ? <DataAgentLoading label="正在加载自动化…" /> : !selectedProject ? (
-            <DataAgentEmpty title="选择一个工作区" description="自动化按工作区隔离管理。" />
+            <DataAgentEmpty title="选择一个专家" description="自动化按专家隔离管理。" />
           ) : (
             <div className="da-automation-list">
               {visibleTasks.length ? visibleTasks.map((task) => (
@@ -1747,7 +1752,7 @@ function DataAgentAutomation({
                     {selectedProject.accessRole !== 'view' && <button type="button" className={`da-switch ${task.enabled ? 'is-on' : ''}`} onClick={() => void toggleTask(task)} aria-label={task.enabled ? '暂停自动化' : '启用自动化'} aria-pressed={task.enabled} />}
                   </div>
                 </article>
-              )) : <div className="da-automation-empty"><DataAgentEmpty title={tasks.length ? '当前筛选下没有自动化' : '还没有自动化'} description={tasks.length ? '切换筛选条件查看其他自动化。' : '为当前工作区创建第一个定时任务。'} action={!tasks.length && selectedProject.accessRole !== 'view' ? <button className="da-primary-button" onClick={() => setDialog({ provider: 'claude', mode: 'create' })}>创建自动化</button> : undefined} /></div>}
+              )) : <div className="da-automation-empty"><DataAgentEmpty title={tasks.length ? '当前筛选下没有自动化' : '还没有自动化'} description={tasks.length ? '切换筛选条件查看其他自动化。' : '为当前专家创建第一个定时任务。'} action={!tasks.length && selectedProject.accessRole !== 'view' ? <button className="da-primary-button" onClick={() => setDialog({ provider: 'claude', mode: 'create' })}>创建自动化</button> : undefined} /></div>}
             </div>
           )}
         </div>
@@ -1759,6 +1764,7 @@ function DataAgentAutomation({
           provider={dialog.provider}
           initialTaskId={dialog.taskId ?? null}
           mode={dialog.mode === 'manage' ? 'manage' : 'create'}
+          terminology="expert"
           onClose={() => { setDialog(null); void loadTasks(); }}
         />
       )}
@@ -1792,8 +1798,8 @@ function DataAgentFiles({
 
   return (
     <section className="da-page">
-      <DataAgentPageHeader title="文件" subtitle="浏览并编辑当前工作区文件" projects={projects} selectedProject={selectedProject} onSelectWorkspace={onSelectWorkspace} />
-      <DataAgentEmpty title="选择一个工作区" description="文件浏览需要绑定到具体工作区。" />
+      <DataAgentPageHeader title="文件" subtitle="浏览并编辑当前专家文件" projects={projects} selectedProject={selectedProject} onSelectWorkspace={onSelectWorkspace} />
+      <DataAgentEmpty title="选择一个专家" description="文件浏览需要绑定到具体专家。" />
     </section>
   );
 }
@@ -1828,7 +1834,7 @@ function DataAgentFilesWorkspace({
     <section className="da-page">
       <DataAgentPageHeader
         title="文件"
-        subtitle="浏览并编辑当前工作区文件"
+        subtitle="浏览并编辑当前专家文件"
         projects={projects}
         selectedProject={selectedProject}
         onSelectWorkspace={(project) => void selectWorkspace(project)}
@@ -1889,12 +1895,12 @@ function DataAgentExistingWorkspacePanel({
   const title = kind === 'codehub' ? 'CodeHub' : 'SQL Check';
   return (
     <section className="da-page">
-      <DataAgentPageHeader title={title} subtitle={`复用既有 ${title} 工作区能力`} projects={projects} selectedProject={selectedProject} onSelectWorkspace={onSelectWorkspace} />
-      {!selectedProject ? <DataAgentEmpty title="选择一个工作区" description={`${title} 需要绑定到具体工作区。`} /> : (
+      <DataAgentPageHeader title={title} subtitle={`复用既有 ${title} 专家能力`} projects={projects} selectedProject={selectedProject} onSelectWorkspace={onSelectWorkspace} />
+      {!selectedProject ? <DataAgentEmpty title="选择一个专家" description={`${title} 需要绑定到具体专家。`} /> : (
         <div className="da-existing-tool-layout">
           <div className={editor.editorExpanded ? 'da-existing-tool is-hidden' : 'da-existing-tool'}>
             {kind === 'codehub' ? (
-              <CodeHubPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} onFileOpen={(path) => editor.handleFileOpen(path, null, 'files')} />
+              <CodeHubPanel selectedProject={selectedProject} isReadOnly={selectedProject.accessRole === 'view'} onFileOpen={(path) => editor.handleFileOpen(path, null, 'files')} terminology="expert" />
             ) : <SqlCheckPanel selectedProject={selectedProject} />}
           </div>
           {kind === 'codehub' && (
@@ -2001,6 +2007,7 @@ function DataAgentConversation({
             externalMessageUpdate={externalMessageUpdate}
             initialUserMessage={initialUserMessage ?? undefined}
             onShowAllTasks={null}
+            workspaceTerminology="expert"
           />
         </div>
         <EditorSidebar
@@ -2171,7 +2178,7 @@ export default function DataAgentApp() {
     )) || project;
 
     if (createdWorkspace.workspaceId == null) {
-      throw new Error('专家创建成功，但未能定位对应工作区，请刷新后重试。');
+      throw new Error('专家创建成功，但未能定位对应专家，请刷新后重试。');
     }
 
     setProjects((current) => current.some((candidate) => candidate.workspaceId === createdWorkspace.workspaceId)
@@ -2317,7 +2324,7 @@ export default function DataAgentApp() {
     navigate(path);
   }, [location.hash, location.pathname, location.search, navigate]);
 
-  const page = loadingProjects ? <DataAgentLoading label="正在加载工作区…" /> : (() => {
+  const page = loadingProjects ? <DataAgentLoading label="正在加载专家…" /> : (() => {
     switch (route.page) {
       case 'capabilities':
         return <DataAgentCapabilities tab={route.tab || 'experts'} skillName={route.skillName} projects={projects} selectedProject={selectedProject} onSelectWorkspace={selectWorkspace} onNavigate={go} onExpertCreated={handleExpertCreated} />;
@@ -2375,7 +2382,7 @@ export default function DataAgentApp() {
         />
       </div>
       <main className="da-main">{page}</main>
-      <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} workspaceTerminology="expert" />
     </div>
   );
 }
