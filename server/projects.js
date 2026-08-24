@@ -1021,12 +1021,17 @@ async function parseAgentTools(filePath) {
           if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
             for (const part of entry.message.content) {
               if (part.type === 'tool_use') {
-                tools.push({
+                const tool = {
                   toolId: part.id,
                   toolName: part.name,
                   toolInput: part.input,
-                  timestamp: entry.timestamp
-                });
+                  timestamp: entry.timestamp,
+                };
+                const parentToolUseId = entry.parentToolUseId || entry.parent_tool_use_id;
+                if (typeof parentToolUseId === 'string' && parentToolUseId.trim()) {
+                  tool.parentToolUseId = parentToolUseId.trim();
+                }
+                tools.push(tool);
               }
             }
           }
@@ -1069,12 +1074,42 @@ async function getSessionMessagesFromProjectDirectory(
   transcriptFiles = null,
 ) {
   try {
+    const safeSessionId = validateClaudeSessionId(sessionId);
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
     const jsonlFiles = Array.isArray(transcriptFiles)
       ? transcriptFiles.filter((file) => files.includes(file))
       : files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
-    const agentFiles = files.filter(file => file.endsWith('.jsonl') && file.startsWith('agent-'));
+    const agentTranscriptPaths = new Map();
+    for (const file of files) {
+      const match = file.match(/^agent-(.+)\.jsonl$/);
+      if (match?.[1]) {
+        // Legacy Claude versions stored subagent transcripts beside the main
+        // session transcript.
+        agentTranscriptPaths.set(match[1], path.join(projectDir, file));
+      }
+    }
+
+    // Current Claude versions keep subagent transcripts below
+    // <sessionId>/subagents/. Prefer those files when both layouts exist.
+    const sessionDataDir = resolveDirectChildPath(projectDir, safeSessionId, {
+      label: 'Claude session id',
+      pattern: CLAUDE_SESSION_ID_PATTERN,
+    });
+    const subagentsDir = path.join(sessionDataDir, 'subagents');
+    try {
+      const nestedAgentFiles = await fs.readdir(subagentsDir);
+      for (const file of nestedAgentFiles) {
+        const match = file.match(/^agent-(.+)\.jsonl$/);
+        if (match?.[1]) {
+          agentTranscriptPaths.set(match[1], path.join(subagentsDir, file));
+        }
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.warn(`Error reading subagent directory ${subagentsDir}:`, error.message);
+      }
+    }
 
     if (jsonlFiles.length === 0) {
       return { messages: [], total: 0, hasMore: false };
@@ -1097,7 +1132,7 @@ async function getSessionMessagesFromProjectDirectory(
         if (line.trim()) {
           try {
             const entry = JSON.parse(line);
-            if (entry.sessionId === sessionId) {
+            if (entry.sessionId === safeSessionId) {
               messages.push(entry);
             }
           } catch (parseError) {
@@ -1107,19 +1142,59 @@ async function getSessionMessagesFromProjectDirectory(
       }
     }
 
-    // Collect agentIds from Task tool results
-    const agentIds = new Set();
+    const parseTimestamp = (value) => {
+      const timestamp = Date.parse(value || '');
+      return Number.isFinite(timestamp) ? timestamp : null;
+    };
+    const mainToolUseStartTimes = new Map();
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        agentIds.add(message.toolUseResult.agentId);
+      if (!Array.isArray(message.message?.content)) continue;
+      for (const part of message.message.content) {
+        if (part?.type === 'tool_use' && typeof part.id === 'string' && part.id.trim()) {
+          mainToolUseStartTimes.set(part.id.trim(), parseTimestamp(message.timestamp));
+        }
       }
+    }
+
+    // Collect agentIds and invocation windows from Agent/Task tool results.
+    const agentIds = new Set();
+    const agentInvocations = new Map();
+    for (const [sequence, message] of messages.entries()) {
+      const toolUseResult = message.toolUseResult || message.tool_use_result;
+      const agentId = toolUseResult?.agentId || toolUseResult?.agent_id;
+      if (typeof agentId === 'string' && agentId.trim()) {
+        const normalizedAgentId = agentId.trim();
+        agentIds.add(normalizedAgentId);
+        const parentToolUseId = Array.isArray(message.message?.content)
+          ? message.message.content.find((part) => (
+              part?.type === 'tool_result' &&
+              typeof part.tool_use_id === 'string' &&
+              part.tool_use_id.trim()
+            ))?.tool_use_id?.trim()
+          : undefined;
+        const startedAt = parentToolUseId
+          ? mainToolUseStartTimes.get(parentToolUseId) ?? parseTimestamp(message.timestamp)
+          : parseTimestamp(message.timestamp);
+        const invocations = agentInvocations.get(normalizedAgentId) || [];
+        invocations.push({ message, parentToolUseId, startedAt, sequence });
+        agentInvocations.set(normalizedAgentId, invocations);
+      }
+    }
+    for (const invocations of agentInvocations.values()) {
+      invocations.sort((left, right) => {
+        if (left.startedAt !== null && right.startedAt !== null) {
+          return left.startedAt - right.startedAt || left.sequence - right.sequence;
+        }
+        if (left.startedAt !== null) return -1;
+        if (right.startedAt !== null) return 1;
+        return left.sequence - right.sequence;
+      });
     }
 
     // Load agent tools for each agentId found
     for (const agentId of agentIds) {
-      const agentFileName = `agent-${agentId}.jsonl`;
-      if (agentFiles.includes(agentFileName)) {
-        const agentFilePath = path.join(projectDir, agentFileName);
+      const agentFilePath = agentTranscriptPaths.get(agentId);
+      if (agentFilePath) {
         const tools = await parseAgentTools(agentFilePath);
         agentToolsCache.set(agentId, tools);
       }
@@ -1127,11 +1202,49 @@ async function getSessionMessagesFromProjectDirectory(
 
     // Attach agent tools to their parent Task messages
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        const agentId = message.toolUseResult.agentId;
+      const toolUseResult = message.toolUseResult || message.tool_use_result;
+      const rawAgentId = toolUseResult?.agentId || toolUseResult?.agent_id;
+      const agentId = typeof rawAgentId === 'string' ? rawAgentId.trim() : '';
+      if (agentId) {
         const agentTools = agentToolsCache.get(agentId);
         if (agentTools && agentTools.length > 0) {
-          message.subagentTools = agentTools;
+          const invocations = agentInvocations.get(agentId) || [];
+          const invocationIndex = invocations.findIndex((invocation) => invocation.message === message);
+          const invocation = invocationIndex >= 0 ? invocations[invocationIndex] : null;
+          const nextInvocation = invocationIndex >= 0 ? invocations[invocationIndex + 1] : null;
+          const scopedTools = agentTools.filter((tool) => {
+            if (tool.parentToolUseId) {
+              return Boolean(invocation?.parentToolUseId) &&
+                tool.parentToolUseId === invocation.parentToolUseId;
+            }
+
+            if (invocations.length <= 1) {
+              return true;
+            }
+
+            // Older transcripts do not carry parent_tool_use_id. Divide those
+            // tools by the main Agent invocation start times so resumed turns
+            // cannot inherit the full cumulative transcript from one another.
+            const toolTimestamp = parseTimestamp(tool.timestamp);
+            if (toolTimestamp === null || !invocation) return false;
+            if (invocation.startedAt !== null && toolTimestamp < invocation.startedAt) {
+              return false;
+            }
+            if (nextInvocation && nextInvocation.startedAt !== null && toolTimestamp >= nextInvocation.startedAt) {
+              return false;
+            }
+            return invocation.startedAt !== null || Boolean(
+              nextInvocation && nextInvocation.startedAt !== null,
+            );
+          });
+
+          // Resumed agents reuse their agent ID and transcript file. Current
+          // transcripts retain parent_tool_use_id, which lets each invocation
+          // restore only its own tools instead of inheriting every prior turn.
+          // Legacy multi-invocation history is conservatively time-sliced.
+          if (scopedTools.length > 0) {
+            message.subagentTools = scopedTools;
+          }
         }
       }
     }

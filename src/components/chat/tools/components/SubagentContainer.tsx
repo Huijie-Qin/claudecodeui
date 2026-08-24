@@ -19,6 +19,7 @@ interface SubagentContainerProps {
   taskNotification?: TaskNotificationDetails;
   onOpenSubagent?: (toolId: string) => void;
   subagentState: {
+    agentId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;

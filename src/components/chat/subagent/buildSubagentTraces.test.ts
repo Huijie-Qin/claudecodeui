@@ -231,3 +231,79 @@ test('buildSubagentTraces derives running, waiting, completed, and error states'
   assert.equal(traces[2]?.completedAt?.toISOString(), '2026-08-17T03:00:05.000Z');
   assert.equal(traces[3]?.taskStatus, 'failed');
 });
+
+test('buildSubagentTraces treats stopped and killed lifecycle states as errors', () => {
+  const messages = ['stopped', 'killed'].map((status, index) => subagentMessage({
+    toolId: `${status}-agent`,
+    timestamp: `2026-08-17T03:10:0${index}.000Z`,
+    taskNotification: notification(status, `${status} result`),
+    subagentState: {
+      childTools: [],
+      currentToolIndex: -1,
+      isComplete: true,
+    },
+  }));
+
+  assert.deepEqual(
+    buildSubagentTraces(messages).map((trace) => trace.status),
+    ['error', 'error'],
+  );
+});
+
+test('buildSubagentTraces trusts the current owner generation and hides stale final output while running', () => {
+  const alias = subagentMessage({
+    toolId: 'legacy-task',
+    toolName: 'Task',
+    timestamp: '2026-08-17T04:00:00.000Z',
+    toolResult: { content: 'Old alias result' },
+    subagentState: {
+      childTools: [],
+      currentToolIndex: -1,
+      isComplete: true,
+      detailsOwnerToolId: 'current-agent',
+    },
+  });
+  const runningOwner = subagentMessage({
+    toolId: 'current-agent',
+    timestamp: '2026-08-17T04:00:01.000Z',
+    toolResult: { content: 'Old owner result', toolUseResult: { agentId: 'agent-42' } },
+    taskNotification: {
+      ...notification('completed', 'Old owner result'),
+      taskId: 'agent-42',
+    },
+    subagentState: {
+      childTools: [{
+        toolId: 'new-read',
+        toolName: 'Read',
+        toolInput: { file_path: '/workspace/new.ts' },
+        toolResult: null,
+        timestamp: new Date('2026-08-17T04:00:02.000Z'),
+      }],
+      currentToolIndex: 0,
+      isComplete: false,
+    },
+  });
+
+  const [runningTrace] = buildSubagentTraces([alias, runningOwner]);
+  assert.equal(runningTrace?.status, 'running');
+  assert.equal(runningTrace?.result, undefined);
+  assert.equal(runningTrace?.agentId, 'agent-42');
+
+  const completedOwner = subagentMessage({
+    ...runningOwner,
+    toolId: 'current-agent',
+    timestamp: '2026-08-17T04:00:01.000Z',
+    toolResult: { content: 'Current result', toolUseResult: { agentId: 'agent-42' } },
+    taskNotification: {
+      ...notification('completed', 'Current result'),
+      taskId: 'agent-42',
+    },
+    subagentState: {
+      ...runningOwner.subagentState!,
+      isComplete: true,
+    },
+  });
+  const [completedTrace] = buildSubagentTraces([alias, completedOwner]);
+  assert.equal(completedTrace?.status, 'completed');
+  assert.equal(completedTrace?.result, 'Current result');
+});

@@ -229,6 +229,7 @@ test('normalizedToChatMessages keeps an async Agent card running before its noti
   assert.equal(agentCard.toolName, 'Agent');
   assert.equal(agentCard.isSubagentContainer, true);
   assert.equal(agentCard.subagentState?.isComplete, false);
+  assert.equal(agentCard.subagentState?.agentId, 'agent-1');
   assert.equal(agentCard.toolResult, null);
 });
 
@@ -670,4 +671,196 @@ test('normalizedToChatMessages attaches a structured task notification by task i
   assert.deepEqual(agentCard.taskNotification?.usage, {
     total_tokens: 900,
   });
+});
+
+test('normalizedToChatMessages routes reused task ids to the invocation active at each event', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'agent-a', sessionId: 'session-1', timestamp: '2026-06-30T01:00:00.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_a',
+      toolInput: { description: 'First pass', run_in_background: true },
+      toolResult: { content: 'launched', isError: false, toolUseResult: { status: 'async_launched', agentId: 'agent-shared' } },
+    },
+    {
+      id: 'output-a', sessionId: 'session-1', timestamp: '2026-06-30T01:00:01.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'TaskOutput', toolId: 'toolu_output_a',
+      toolInput: { task_id: 'agent-shared', block: true, timeout: 1000 },
+    },
+    {
+      id: 'output-a-result', sessionId: 'session-1', timestamp: '2026-06-30T01:00:01.100Z', provider: 'claude',
+      kind: 'tool_result', toolId: 'toolu_output_a', isError: false,
+      content: '<status>completed</status><output>First result</output>',
+    },
+    {
+      id: 'agent-b', sessionId: 'session-1', timestamp: '2026-06-30T01:00:02.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_b',
+      toolInput: { description: 'Second pass', resume: 'agent-shared', run_in_background: true },
+      toolResult: { content: 'resumed', isError: false, toolUseResult: { status: 'async_launched', agentId: 'agent-shared' } },
+    },
+    {
+      id: 'read-b', sessionId: 'session-1', timestamp: '2026-06-30T01:00:03.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Read', toolId: 'toolu_read_b', parentToolUseId: 'toolu_agent_b',
+      toolInput: { file_path: '/workspace/current.ts' },
+    },
+    {
+      id: 'output-b', sessionId: 'session-1', timestamp: '2026-06-30T01:00:04.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'TaskOutput', toolId: 'toolu_output_b',
+      toolInput: { task_id: 'agent-shared', block: false, timeout: 1000 },
+    },
+    {
+      id: 'output-b-result', sessionId: 'session-1', timestamp: '2026-06-30T01:00:04.100Z', provider: 'claude',
+      kind: 'tool_result', toolId: 'toolu_output_b', isError: false,
+      content: '<status>running</status>',
+    },
+  ];
+
+  const cards = normalizedToChatMessages(messages).filter((message) => message.isSubagentContainer);
+  const first = cards.find((message) => message.toolId === 'toolu_agent_a');
+  const second = cards.find((message) => message.toolId === 'toolu_agent_b');
+
+  assert.equal(first?.subagentState?.isComplete, true);
+  assert.match(String(first?.toolResult?.content), /First result/);
+  assert.equal(second?.subagentState?.isComplete, false);
+  assert.equal(second?.toolResult, null);
+  assert.deepEqual(second?.subagentState?.childTools.map((tool) => tool.toolName), ['Read', 'TaskOutput']);
+});
+
+test('normalizedToChatMessages lets newer child activity supersede an old terminal notification', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'agent-tool', sessionId: 'session-1', timestamp: '2026-06-30T02:00:00.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent',
+      toolInput: { description: 'Interactive pass', run_in_background: true },
+      toolResult: { content: 'launched', isError: false, toolUseResult: { status: 'async_launched', agentId: 'agent-1' } },
+    },
+    {
+      id: 'old-terminal', sessionId: 'session-1', timestamp: '2026-06-30T02:00:01.000Z', provider: 'claude',
+      kind: 'task_notification', taskId: 'agent-1', toolUseId: 'toolu_agent', status: 'completed',
+      summary: 'Old completion', result: 'Old result', usage: {},
+    },
+    {
+      id: 'new-read', sessionId: 'session-1', timestamp: '2026-06-30T02:00:02.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Read', toolId: 'toolu_read', parentToolUseId: 'toolu_agent',
+      toolInput: { file_path: '/workspace/new.ts' },
+    },
+  ];
+
+  const [agentCard] = normalizedToChatMessages(messages);
+  assert.equal(agentCard.subagentState?.isComplete, false);
+  assert.equal(agentCard.toolResult, null);
+  assert.equal(agentCard.subagentState?.childTools[0]?.toolName, 'Read');
+});
+
+test('normalizedToChatMessages restores subagent tools when tool use and result came from separate pages', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'agent-use', sessionId: 'session-1', timestamp: '2026-06-30T03:00:00.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent',
+      toolInput: { description: 'Paged history' },
+    },
+    {
+      id: 'agent-result', sessionId: 'session-1', timestamp: '2026-06-30T03:00:01.000Z', provider: 'claude',
+      kind: 'tool_result', toolId: 'toolu_agent', content: 'Complete', isError: false,
+      toolUseResult: { status: 'completed', agentId: 'agent-1' },
+      subagentTools: [{
+        toolId: 'toolu_read',
+        toolName: 'Read',
+        toolInput: { file_path: '/workspace/paged.ts' },
+        toolResult: { content: 'source', isError: false },
+        timestamp: '2026-06-30T03:00:00.500Z',
+      }],
+    },
+  ];
+
+  const [agentCard] = normalizedToChatMessages(messages);
+  assert.deepEqual(agentCard.subagentState?.childTools.map((tool) => tool.toolId), ['toolu_read']);
+  assert.equal(agentCard.subagentState?.childTools[0]?.toolResult?.content, 'source');
+});
+
+test('normalizedToChatMessages lets newer restored activity supersede an old terminal notification', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'agent-use', sessionId: 'session-1', timestamp: '2026-06-30T04:00:00.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent',
+      toolInput: { description: 'Restored interactive pass', run_in_background: true },
+      toolResult: { content: 'launched', isError: false, toolUseResult: { status: 'async_launched', agentId: 'agent-1' } },
+      subagentTools: [{
+        toolId: 'toolu_read_new',
+        toolName: 'Read',
+        toolInput: { file_path: '/workspace/new.ts' },
+        timestamp: '2026-06-30T04:00:02.000Z',
+      }],
+    },
+    {
+      id: 'old-terminal', sessionId: 'session-1', timestamp: '2026-06-30T04:00:01.000Z', provider: 'claude',
+      kind: 'task_notification', taskId: 'agent-1', toolUseId: 'toolu_agent', status: 'completed',
+      summary: 'Old completion', result: 'Old result', usage: {},
+    },
+  ];
+
+  const [agentCard] = normalizedToChatMessages(messages);
+  assert.equal(agentCard.subagentState?.isComplete, false);
+  assert.equal(agentCard.toolResult, null);
+  assert.deepEqual(agentCard.subagentState?.childTools.map((tool) => tool.toolId), ['toolu_read_new']);
+});
+
+test('normalizedToChatMessages surfaces a background subagent launch failure as terminal', () => {
+  const [agentCard] = normalizedToChatMessages([{
+    id: 'agent-use', sessionId: 'session-1', timestamp: '2026-06-30T05:00:00.000Z', provider: 'claude',
+    kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent',
+    toolInput: { description: 'Failing launch', run_in_background: true },
+    toolResult: {
+      content: 'Unable to launch subagent',
+      isError: true,
+      toolUseResult: { status: 'failed' },
+    },
+  }]);
+
+  assert.equal(agentCard.subagentState?.isComplete, true);
+  assert.equal(agentCard.toolResult?.isError, true);
+  assert.equal(agentCard.toolResult?.content, 'Unable to launch subagent');
+});
+
+test('normalizedToChatMessages does not pair a current Agent alias with an older unmatched Task', () => {
+  const subagentResult = {
+    content: 'launched',
+    isError: false,
+    toolUseResult: { status: 'async_launched', agentId: 'agent-shared' },
+  };
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'task-old', sessionId: 'session-1', timestamp: '2026-06-30T06:00:00.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Task', toolId: 'toolu_task_old',
+      toolInput: { description: 'Old unmatched generation', run_in_background: true },
+      toolResult: subagentResult,
+    },
+    {
+      id: 'task-current', sessionId: 'session-1', timestamp: '2026-06-30T06:00:01.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Task', toolId: 'toolu_task_current',
+      toolInput: { description: 'Current generation', run_in_background: true },
+      toolResult: subagentResult,
+    },
+    {
+      id: 'agent-current', sessionId: 'session-1', timestamp: '2026-06-30T06:00:01.100Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_current',
+      toolInput: { description: 'Current generation', resume: 'agent-shared', run_in_background: true },
+      toolResult: subagentResult,
+    },
+    {
+      id: 'read-current', sessionId: 'session-1', timestamp: '2026-06-30T06:00:02.000Z', provider: 'claude',
+      kind: 'tool_use', toolName: 'Read', toolId: 'toolu_read_current',
+      parentToolUseId: 'toolu_agent_current', toolInput: { file_path: '/workspace/current.ts' },
+    },
+  ];
+
+  const cards = normalizedToChatMessages(messages).filter((message) => message.isSubagentContainer);
+  const oldTask = cards.find((message) => message.toolId === 'toolu_task_old');
+  const currentTask = cards.find((message) => message.toolId === 'toolu_task_current');
+  const currentAgent = cards.find((message) => message.toolId === 'toolu_agent_current');
+
+  assert.equal(oldTask?.subagentState?.detailsOwnerToolId, undefined);
+  assert.equal(currentTask?.subagentState?.detailsOwnerToolId, 'toolu_agent_current');
+  assert.deepEqual(currentAgent?.subagentState?.childTools.map((tool) => tool.toolId), [
+    'toolu_read_current',
+  ]);
 });

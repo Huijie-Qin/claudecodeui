@@ -152,18 +152,25 @@ function isWaitingStatus(status: string | undefined): boolean {
 
 function resolveTraceStatus(
   candidates: TraceCandidate[],
+  primary: TraceCandidate,
   taskStatus: string | undefined,
 ): SubagentTraceStatus {
-  const hasError = candidates.some(({ message }) => (
+  const primaryState = primary.message.subagentState;
+  if (primaryState && !primaryState.isComplete) {
+    return isWaitingStatus(taskStatus) ? 'waiting' : 'running';
+  }
+
+  const statusCandidates = primaryState ? [primary] : candidates;
+  const hasError = statusCandidates.some(({ message }) => (
     Boolean(message.toolResult?.isError) ||
     Boolean(message.taskNotification && isTaskNotificationError(message.taskNotification.status))
-  )) || Boolean(taskStatus && isTaskNotificationError(taskStatus));
+  )) || Boolean(primaryState?.isComplete && taskStatus && isTaskNotificationError(taskStatus));
 
   if (hasError) {
     return 'error';
   }
 
-  const isComplete = candidates.some(({ message }) => Boolean(message.subagentState?.isComplete)) ||
+  const isComplete = statusCandidates.some(({ message }) => Boolean(message.subagentState?.isComplete)) ||
     Boolean(taskStatus && isTaskNotificationTerminal(taskStatus));
   if (isComplete) {
     return 'completed';
@@ -213,6 +220,33 @@ function firstTaskStatus(
     const status = candidateTaskStatus(candidate);
     if (status) {
       return status;
+    }
+  }
+  return undefined;
+}
+
+function firstAgentId(
+  candidates: TraceCandidate[],
+  primary: TraceCandidate,
+): string | undefined {
+  for (const candidate of orderedWithPrimaryFirst(candidates, primary)) {
+    const stateAgentId = readString(candidate.message.subagentState?.agentId);
+    if (stateAgentId) {
+      return stateAgentId;
+    }
+    const notificationTaskId = readString(candidate.message.taskNotification?.taskId);
+    if (notificationTaskId) {
+      return notificationTaskId;
+    }
+    const toolResult = parseToolInput(candidate.message.toolResult?.toolUseResult);
+    const resultAgentId = readInputString(toolResult, 'agentId', 'agent_id', 'taskId', 'task_id');
+    if (resultAgentId) {
+      return resultAgentId;
+    }
+    const toolInput = parseToolInput(candidate.message.toolInput);
+    const resumedAgentId = readInputString(toolInput, 'resume', 'resumeId', 'resume_id');
+    if (resumedAgentId) {
+      return resumedAgentId;
     }
   }
   return undefined;
@@ -279,8 +313,14 @@ function buildTrace(group: TraceGroup): SubagentTrace {
   const description = firstInputValue(candidates, primary, ['description']) || 'Running task';
   const agentType = firstInputValue(candidates, primary, ['subagent_type', 'subagentType']) || 'Agent';
   const prompt = firstInputValue(candidates, primary, ['prompt']) || '';
-  const taskStatus = firstTaskStatus(candidates, primary);
-  const status = resolveTraceStatus(candidates, taskStatus);
+  const primaryTaskStatus = candidateTaskStatus(primary);
+  const taskStatus = primaryTaskStatus || (
+    primary.message.subagentState?.isComplete
+      ? firstTaskStatus(candidates, primary)
+      : undefined
+  );
+  const status = resolveTraceStatus(candidates, primary, taskStatus);
+  const agentId = firstAgentId(candidates, primary);
   const activities = buildActivities(candidates);
   const completedAt = status === 'completed' || status === 'error'
     ? maxDate(candidates.map(candidateCompletedAt))
@@ -292,14 +332,16 @@ function buildTrace(group: TraceGroup): SubagentTrace {
   }
 
   let result: unknown;
-  for (const candidate of orderedWithPrimaryFirst(candidates, primary)) {
-    if (candidate.message.taskNotification?.result !== undefined) {
-      result = candidate.message.taskNotification.result;
-      break;
-    }
-    if (candidate.message.toolResult?.content !== undefined) {
-      result = candidate.message.toolResult.content;
-      break;
+  if (status === 'completed' || status === 'error') {
+    for (const candidate of orderedWithPrimaryFirst(candidates, primary)) {
+      if (candidate.message.taskNotification?.result !== undefined) {
+        result = candidate.message.taskNotification.result;
+        break;
+      }
+      if (candidate.message.toolResult?.content !== undefined) {
+        result = candidate.message.toolResult.content;
+        break;
+      }
     }
   }
 
@@ -318,6 +360,9 @@ function buildTrace(group: TraceGroup): SubagentTrace {
     usage,
   };
 
+  if (agentId) {
+    trace.agentId = agentId;
+  }
   if (completedAt) {
     trace.completedAt = completedAt;
   }

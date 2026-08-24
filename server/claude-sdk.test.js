@@ -67,6 +67,110 @@ test('mapCliOptionsToSDK preserves plan mode without enabling permission bypass'
   assert.ok(options.allowedTools.includes('Task'));
 });
 
+test('buildToolInteractionContext preserves subagent and tool identities for UI routing', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  assert.deepEqual(claudeSdk.buildToolInteractionContext({
+    toolUseID: ' toolu_question_1 ',
+    agentID: ' agent-1 ',
+  }), {
+    toolUseId: 'toolu_question_1',
+    agentId: 'agent-1',
+  });
+  assert.equal(claudeSdk.buildToolInteractionContext({}), undefined);
+});
+
+test('Claude turn completion waits for authoritative idle while a background task is active', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-1',
+  }), 'processing');
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-1',
+    status: 'completed',
+  }), null);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), 'complete');
+  assert.equal(lifecycle.flush(), false);
+});
+
+test('Claude turn completion still waits for idle after a fast task already became terminal', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-fast',
+  });
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-fast',
+    status: 'completed',
+  });
+
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), 'complete');
+});
+
+test('Claude turn completion keeps the immediate fallback for SDKs without lifecycle events', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  assert.equal(lifecycle.finishResult(0), true);
+  assert.equal(lifecycle.flush(), false);
+});
+
+test('a newly queued Claude turn supersedes completion waiting on an older idle event', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-1',
+  });
+  assert.equal(lifecycle.finishResult(0), false);
+
+  lifecycle.beginTurn();
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), null);
+  assert.equal(lifecycle.flush(), false);
+});
+
+test('Claude stream timeout stays paused until all concurrent interactions finish', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const interactions = claudeSdk.createPendingInteractionTracker();
+
+  interactions.begin('request-a');
+  interactions.begin('request-b');
+  assert.equal(interactions.isPaused(), true);
+
+  interactions.end('request-a');
+  assert.equal(interactions.isPaused(), true);
+
+  interactions.end('request-b');
+  assert.equal(interactions.isPaused(), false);
+});
+
 test('createClaudePromptFactory keeps text-only prompts as strings', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

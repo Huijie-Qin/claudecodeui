@@ -24,6 +24,8 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
+import { AskUserQuestionPanel } from '../tools/components/InteractiveRenderers';
+import type { PendingPermissionRequest } from '../types/types';
 
 import { SubagentActivityItem } from './SubagentActivityItem';
 import type { SubagentTrace, SubagentTraceStatus } from './types';
@@ -34,6 +36,11 @@ export interface SubagentPanelProps {
   onSelectTrace: (id: string) => void;
   onClose: () => void;
   mode: 'docked' | 'drawer';
+  permissionRequests?: PendingPermissionRequest[];
+  onPermissionDecision?: (
+    requestIds: string | string[],
+    decision: { allow?: boolean; message?: string; updatedInput?: unknown },
+  ) => void;
 }
 
 const STATUS_STYLES: Record<SubagentTraceStatus, {
@@ -179,6 +186,8 @@ export function SubagentPanel({
   onSelectTrace,
   onClose,
   mode,
+  permissionRequests = [],
+  onPermissionDecision,
 }: SubagentPanelProps) {
   const { t } = useTranslation('chat');
   const panelTitleId = useId();
@@ -287,6 +296,10 @@ export function SubagentPanel({
         event.defaultPrevented ||
         event.isComposing
       ) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-subagent-question-panel]')
+      ) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       onClose();
@@ -297,9 +310,10 @@ export function SubagentPanel({
   }, [mode, onClose]);
 
   useEffect(() => {
+    if (permissionRequests.length > 0) return undefined;
     const animationFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [mode]);
+  }, [mode, permissionRequests.length]);
 
   useLayoutEffect(() => {
     const traceId = activeTraceId ?? '';
@@ -365,7 +379,12 @@ export function SubagentPanel({
         seconds: totalSeconds % 60,
         defaultValue: '{{minutes}}m {{seconds}}s',
       });
-  const hasFinalResult = selectedTrace?.result !== undefined && selectedTrace?.result !== null;
+  const hasFinalResult = Boolean(
+    selectedTrace &&
+    (selectedTrace.status === 'completed' || selectedTrace.status === 'error') &&
+    selectedTrace.result !== undefined &&
+    selectedTrace.result !== null,
+  );
 
   return (
     <>
@@ -650,6 +669,24 @@ export function SubagentPanel({
             </div>
           )}
         </div>
+
+        {permissionRequests.length > 0 && onPermissionDecision && (
+          <section
+            data-subagent-question-panel
+            aria-label={t('subagentPanel.pendingQuestion', {
+              defaultValue: 'Subagent question awaiting your answer',
+            })}
+            className="max-h-[60%] shrink-0 space-y-3 overflow-y-auto border-t border-border bg-background px-3 py-3 shadow-[0_-8px_24px_-20px_rgba(0,0,0,0.45)]"
+          >
+            {permissionRequests.map((request) => (
+              <AskUserQuestionPanel
+                key={request.requestId}
+                request={request}
+                onDecision={onPermissionDecision}
+              />
+            ))}
+          </section>
+        )}
       </aside>
     </>
   );

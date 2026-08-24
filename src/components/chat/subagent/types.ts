@@ -20,6 +20,7 @@ export interface SubagentActivity {
 
 export interface SubagentTrace {
   id: string;
+  agentId?: string;
   sourceToolIds: string[];
   title: string;
   description: string;

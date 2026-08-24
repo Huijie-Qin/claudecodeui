@@ -432,6 +432,10 @@
     },
     "finalResult": "Final result",
     "usage": "Usage",
+    "pendingQuestion": "Subagent question awaiting your answer",
+    "questionWaiting": "A subagent is waiting for your answer",
+    "locatingQuestion": "Connecting a subagent question…",
+    "openQuestion": "Open",
     "newUpdates": "{{count}} new updates · Back to latest",
     "newUpdates_one": "{{count}} new update · Back to latest",
     "newUpdates_other": "{{count}} new updates · Back to latest"

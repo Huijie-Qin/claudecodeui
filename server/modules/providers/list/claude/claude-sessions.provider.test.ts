@@ -259,6 +259,99 @@ test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user mes
   assert.equal(result.messages[0].content, '/report-skill generate report');
 });
 
+test('ClaudeSessionsProvider restores nested subagent tools into the Agent history card', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'claude-provider-subagent-history-'),
+  );
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+
+  const sessionId = 'runtime-subagent-session';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const mainRows = [
+    {
+      sessionId,
+      uuid: 'agent-use',
+      type: 'assistant',
+      timestamp: '2026-08-24T01:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_agent_1',
+          name: 'Agent',
+          input: { description: 'Inspect authentication' },
+        }],
+      },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result',
+      type: 'user',
+      timestamp: '2026-08-24T01:00:01.000Z',
+      tool_use_result: { status: 'async_launched', agent_id: 'agent-1' },
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_agent_1',
+          content: 'Agent launched.',
+        }],
+      },
+    },
+  ];
+  const subagentRows = [
+    {
+      timestamp: '2026-08-24T01:00:00.200Z',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_read_1',
+          name: 'Read',
+          input: { file_path: '/workspace/auth.ts' },
+        }],
+      },
+    },
+    {
+      timestamp: '2026-08-24T01:00:00.300Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_read_1',
+          content: 'source',
+        }],
+      },
+    },
+  ];
+
+  await fs.mkdir(path.join(projectDirectory, sessionId, 'subagents'), { recursive: true });
+  await fs.writeFile(
+    path.join(projectDirectory, `${sessionId}.jsonl`),
+    `${mainRows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+    'utf8',
+  );
+  await fs.writeFile(
+    path.join(projectDirectory, sessionId, 'subagents', 'agent-agent-1.jsonl'),
+    `${subagentRows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+    'utf8',
+  );
+
+  const provider = new ClaudeSessionsProvider();
+  const result = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  const agentMessage = result.messages.find((message) => (
+    message.kind === 'tool_use' && message.toolId === 'toolu_agent_1'
+  ));
+
+  assert.deepEqual(agentMessage?.subagentTools, [{
+    toolId: 'toolu_read_1',
+    toolName: 'Read',
+    toolInput: { file_path: '/workspace/auth.ts' },
+    timestamp: '2026-08-24T01:00:00.200Z',
+    toolResult: { content: 'source', isError: false },
+  }]);
+});
+
 test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {
   const provider = new ClaudeSessionsProvider();
   const content = [
@@ -349,6 +442,64 @@ test('ClaudeSessionsProvider normalizes SDK partial stream events into stream me
   assert.equal(endMessages.length, 1);
   assert.equal(endMessages[0].kind, 'stream_end');
   assert.equal(endMessages[0].sessionId, 'session-1');
+});
+
+test('ClaudeSessionsProvider normalizes SDK background task lifecycle events', () => {
+  const provider = new ClaudeSessionsProvider();
+  const started = provider.normalizeMessage({
+    type: 'system',
+    subtype: 'task_started',
+    uuid: 'task-started',
+    task_id: 'agent-1',
+    tool_use_id: 'toolu_agent_1',
+    description: 'Review authentication',
+  }, 'session-1');
+  const progress = provider.normalizeMessage({
+    type: 'system',
+    subtype: 'task_progress',
+    uuid: 'task-progress',
+    task_id: 'agent-1',
+    tool_use_id: 'toolu_agent_1',
+    description: 'Review authentication',
+    summary: 'Reading auth.ts',
+    usage: { total_tokens: 120 },
+  }, 'session-1');
+  const completed = provider.normalizeMessage({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'task-completed',
+    task_id: 'agent-1',
+    tool_use_id: 'toolu_agent_1',
+    status: 'completed',
+    summary: 'Review complete',
+    output_file: '/tmp/agent-1.output',
+    usage: { total_tokens: 900, tool_uses: 3 },
+  }, 'session-1');
+  const killed = provider.normalizeMessage({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'task-killed',
+    task_id: 'agent-2',
+    tool_use_id: 'toolu_agent_2',
+    status: 'killed',
+  }, 'session-1');
+
+  assert.deepEqual(started.map(({ id: _id, timestamp: _timestamp, ...message }) => message), [{
+    sessionId: 'session-1',
+    provider: 'claude',
+    kind: 'task_notification',
+    taskId: 'agent-1',
+    toolUseId: 'toolu_agent_1',
+    status: 'running',
+    summary: 'Review authentication',
+  }]);
+  assert.equal(progress[0]?.status, 'running');
+  assert.equal(progress[0]?.summary, 'Reading auth.ts');
+  assert.deepEqual(progress[0]?.usage, { total_tokens: 120 });
+  assert.equal(completed[0]?.status, 'completed');
+  assert.equal(completed[0]?.outputFile, '/tmp/agent-1.output');
+  assert.deepEqual(completed[0]?.usage, { total_tokens: 900, tool_uses: 3 });
+  assert.equal(killed[0]?.status, 'stopped');
 });
 
 test('ClaudeSessionsProvider strips assistant sentinel tokens from Claude text', () => {

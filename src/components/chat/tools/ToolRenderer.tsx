@@ -33,6 +33,7 @@ interface ToolRendererProps {
   isSubagentContainer?: boolean;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {
+    agentId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;

@@ -88,6 +88,7 @@ export interface ChatMessage {
   taskStatus?: string;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {
+    agentId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
