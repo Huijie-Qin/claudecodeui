@@ -12,8 +12,9 @@ test('Hook resources materialize full Skill folders and non-secret MCP cache ent
   const workspacePath = path.join(root, 'workspace');
   await fs.mkdir(path.join(skillSource, 'scripts'), { recursive: true });
   await fs.mkdir(workspacePath, { recursive: true });
-  await fs.writeFile(path.join(skillSource, 'SKILL.md'), '# Notify\nRun scripts/notify.py.\n');
-  await fs.writeFile(path.join(skillSource, 'scripts', 'notify.py'), 'print("ok")\n', { mode: 0o755 });
+  await fs.writeFile(path.join(skillSource, 'SKILL.md'), '# Notify\nRun scripts/notify.py.\n', { mode: 0o600 });
+  await fs.writeFile(path.join(skillSource, 'scripts', 'notify.py'), 'print("ok")\n', { mode: 0o600 });
+  await fs.writeFile(path.join(skillSource, 'scripts', 'run.sh'), '#!/bin/sh\n', { mode: 0o755 });
 
   const rawServer = {
     id: 'hook-mcp-notify',
@@ -73,14 +74,40 @@ test('Hook resources materialize full Skill folders and non-secret MCP cache ent
 
   try {
     const first = await service.materializeHook({ hook, workspacePath });
+    const copiedSkillPath = path.join(first.skills[0].hostDirectory, 'SKILL.md');
+    const copiedScriptPath = path.join(first.skills[0].hostDirectory, 'scripts', 'notify.py');
+    const copiedExecutablePath = path.join(first.skills[0].hostDirectory, 'scripts', 'run.sh');
+    const metadataPath = path.join(first.skills[0].hostDirectory, '.ccui-resource.json');
+
+    assert.equal((await fs.stat(path.join(skillSource, 'SKILL.md'))).mode & 0o777, 0o600);
+    assert.equal((await fs.stat(path.join(skillSource, 'scripts', 'notify.py'))).mode & 0o777, 0o600);
+    assert.equal((await fs.stat(copiedSkillPath)).mode & 0o777, 0o644);
+    assert.equal((await fs.stat(copiedScriptPath)).mode & 0o777, 0o644);
+    assert.equal((await fs.stat(copiedExecutablePath)).mode & 0o777, 0o755);
+
+    // Simulate a legacy cache created for another container user. Cache hits
+    // must repair its modes instead of returning the stale private files.
+    await fs.chmod(path.join(workspacePath, '.cloudcli'), 0o700);
+    await fs.chmod(first.skills[0].hostDirectory, 0o700);
+    await fs.chmod(path.join(first.skills[0].hostDirectory, 'scripts'), 0o700);
+    await fs.chmod(copiedSkillPath, 0o600);
+    await fs.chmod(copiedScriptPath, 0o600);
+    await fs.chmod(copiedExecutablePath, 0o600);
+    await fs.chmod(metadataPath, 0o600);
+
     const second = await service.materializeHook({ hook, workspacePath });
     assert.equal(first.skills[0].hostDirectory, second.skills[0].hostDirectory);
     assert.equal(
-      await fs.readFile(path.join(first.skills[0].hostDirectory, 'scripts', 'notify.py'), 'utf8'),
+      await fs.readFile(copiedScriptPath, 'utf8'),
       'print("ok")\n',
     );
-    const copiedMode = (await fs.stat(path.join(first.skills[0].hostDirectory, 'scripts', 'notify.py'))).mode & 0o777;
-    assert.equal(copiedMode & 0o111, 0o111);
+    assert.equal((await fs.stat(path.join(workspacePath, '.cloudcli'))).mode & 0o111, 0o111);
+    assert.equal((await fs.stat(first.skills[0].hostDirectory)).mode & 0o777, 0o755);
+    assert.equal((await fs.stat(path.join(first.skills[0].hostDirectory, 'scripts'))).mode & 0o777, 0o755);
+    assert.equal((await fs.stat(copiedSkillPath)).mode & 0o777, 0o644);
+    assert.equal((await fs.stat(copiedScriptPath)).mode & 0o777, 0o644);
+    assert.equal((await fs.stat(copiedExecutablePath)).mode & 0o777, 0o755);
+    assert.equal((await fs.stat(metadataPath)).mode & 0o777, 0o644);
 
     const mcpDirectory = first.mcpServers[0].hostDirectory;
     assert.equal(await fs.readFile(path.join(mcpDirectory, 'headers.py'), 'utf8'), rawServer.helperScript.content);
