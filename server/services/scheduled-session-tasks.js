@@ -306,29 +306,33 @@ class ScheduledTaskWriter {
   }
 }
 
-function hasBoundClaudeRuntime(task, sessionId, logger) {
+function getClaudeResumeRuntimeBinding(task, sessionId) {
   if (task.provider !== 'claude' || !isResumableSessionId(sessionId)) {
-    return true;
-  }
-
-  if (typeof multitenancyDb.runtimes?.findByProviderSession !== 'function') {
-    return true;
+    return null;
   }
 
   try {
-    return Boolean(multitenancyDb.runtimes.findByProviderSession({
+    const sessionRuntime = multitenancyDb.runtimes?.findByProviderSession?.({
       tenantId: task.tenant_id,
       workspaceId: task.workspace_id,
       userId: task.user_id,
       provider: 'claude',
       providerSessionId: sessionId,
-    }));
-  } catch (error) {
-    logger.warn('task_resume_runtime_verification_failed', getTaskLogContext(task, {
-      sessionId,
-      error: formatScheduledTaskError(error),
-    }));
-    return false;
+    });
+    if (sessionRuntime) {
+      return 'session_bound';
+    }
+
+    const ownerRuntime = multitenancyDb.runtimes?.findByOwner?.({
+      tenantId: task.tenant_id,
+      workspaceId: task.workspace_id,
+      userId: task.user_id,
+      provider: 'claude',
+      workspaceHostPath: task.workspace_path,
+    });
+    return ownerRuntime ? 'owner_runtime_reused' : 'runtime_missing';
+  } catch {
+    return 'lookup_failed';
   }
 }
 
@@ -341,8 +345,13 @@ function createScheduledTaskOptions(task, logger) {
     sessionMode: task.session_mode || 'new',
     sessionId: boundSessionId,
     isResumable: isResumableSessionId,
-    canResume: (candidateSessionId) => hasBoundClaudeRuntime(task, candidateSessionId, logger),
   });
+  if (resumableSessionId) {
+    logger.info('task_resume_selected', getTaskLogContext(task, {
+      sessionId: resumableSessionId,
+      runtimeBinding: getClaudeResumeRuntimeBinding(task, resumableSessionId),
+    }));
+  }
   const baseOptions = {
     tenantId: task.tenant_id,
     workspaceId: task.workspace_id,

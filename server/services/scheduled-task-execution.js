@@ -24,7 +24,6 @@ export function resolveScheduledTaskResumeSession({
   sessionMode,
   sessionId,
   isResumable = () => true,
-  canResume = () => true,
 }) {
   const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
   const storedSessionMode = sessionMode == null || String(sessionMode).trim() === ''
@@ -34,7 +33,6 @@ export function resolveScheduledTaskResumeSession({
     normalizeScheduledTaskSessionMode(storedSessionMode) !== 'merge'
     || !normalizedSessionId
     || !isResumable(normalizedSessionId)
-    || !canResume(normalizedSessionId)
   ) {
     return null;
   }

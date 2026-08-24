@@ -1462,6 +1462,71 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(runtime.runtimeId, 'existing');
 });
 
+test('docker mode reuses the owner runtime home when another session replaced its current binding', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-rebound-resume-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'interactive-session',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let created = false;
+  let ownerRuntimeSelected = false;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: () => {
+          created = true;
+        },
+        findByProviderSession: () => null,
+        findByOwner: () => {
+          ownerRuntimeSelected = true;
+          return runtimeRow;
+        },
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, status: 'running' }),
+      verifyWorkspaceCwd: async () => undefined,
+      runDetached: async () => {
+        throw new Error('must not create a fresh container when the owner runtime home is reusable');
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'scheduled-session',
+  });
+
+  assert.equal(created, false);
+  assert.equal(ownerRuntimeSelected, true);
+  assert.equal(runtime.runtimeHomePath, runtimeHomePath);
+  assert.equal(runtime.runtimeId, 'existing');
+});
+
 test('docker mode recreates an existing runtime container when the configured image changes', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-change-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
