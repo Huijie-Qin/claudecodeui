@@ -898,6 +898,8 @@ export function createHookConfigService({
     eventName,
     status,
     userId,
+    tenantId,
+    workspaceId,
     sessionId,
     toolUseId,
     q,
@@ -942,6 +944,22 @@ export function createHookConfigService({
       }
       conditions.push('e.user_id = ?');
       parameters.push(normalizedUserId);
+    }
+    if (tenantId != null && tenantId !== '') {
+      const normalizedTenantId = Number(tenantId);
+      if (!Number.isSafeInteger(normalizedTenantId) || normalizedTenantId <= 0) {
+        throw createHttpError('tenantId must be a positive integer');
+      }
+      conditions.push('e.tenant_id = ?');
+      parameters.push(normalizedTenantId);
+    }
+    if (workspaceId != null && workspaceId !== '') {
+      const normalizedWorkspaceId = Number(workspaceId);
+      if (!Number.isSafeInteger(normalizedWorkspaceId) || normalizedWorkspaceId <= 0) {
+        throw createHttpError('workspaceId must be a positive integer');
+      }
+      conditions.push('e.workspace_id = ?');
+      parameters.push(normalizedWorkspaceId);
     }
     if (sessionId) {
       conditions.push('e.session_id = ?');
@@ -1061,6 +1079,110 @@ export function createHookConfigService({
       executionTotal: Number(totals?.execution_total || 0),
       limit: normalizedLimit,
       offset: normalizedOffset,
+    };
+  };
+  const listUserExecutionPage = ({ hookId, userId, tenantId, workspaceId, limit, offset } = {}) => {
+    const normalizedUserId = Number(userId);
+    const normalizedTenantId = Number(tenantId);
+    const normalizedWorkspaceId = Number(workspaceId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    if (!Number.isSafeInteger(normalizedTenantId) || normalizedTenantId <= 0) {
+      throw createHttpError('tenantId must be a positive integer');
+    }
+    if (!Number.isSafeInteger(normalizedWorkspaceId) || normalizedWorkspaceId <= 0) {
+      throw createHttpError('workspaceId must be a positive integer');
+    }
+
+    requireHook(hookId);
+    const page = queryExecutions({
+      hookId,
+      userId: normalizedUserId,
+      tenantId: normalizedTenantId,
+      workspaceId: normalizedWorkspaceId,
+      limit,
+      offset,
+      summary: true,
+    });
+    if (!hasTable(database, 'hook_data_records')) {
+      return {
+        ...page,
+        executions: page.executions.map((execution) => ({ ...execution, records: [] })),
+        standaloneRecords: [],
+      };
+    }
+
+    const recordsByExecution = new Map();
+    if (page.executions.length > 0) {
+      const executionIds = [...new Set(page.executions.map((execution) => execution.id))];
+      const placeholders = executionIds.map(() => '?').join(', ');
+      const records = database.prepare(`
+        SELECT *
+        FROM hook_data_records
+        WHERE execution_id IN (${placeholders})
+          AND hook_id = ?
+          AND user_id = ?
+          AND tenant_id = ?
+          AND workspace_id = ?
+        ORDER BY created_at DESC, rowid DESC
+      `).all(
+        ...executionIds,
+        String(hookId),
+        normalizedUserId,
+        normalizedTenantId,
+        normalizedWorkspaceId,
+      );
+      for (const row of records) {
+        const record = mapDataRecordRow(row);
+        const current = recordsByExecution.get(record.executionId) || [];
+        current.push({
+          id: record.id,
+          type: record.type,
+          data: record.data,
+          createdAt: record.createdAt,
+        });
+        recordsByExecution.set(record.executionId, current);
+      }
+    }
+
+    // Early combined-Hook releases migrated data records to their new Hook while
+    // retaining the original execution row. Keep those records visible under the
+    // owning Hook without attaching them to an unrelated execution card.
+    const standaloneRows = page.offset === 0 ? database.prepare(`
+      SELECT records.*
+      FROM hook_data_records records
+      LEFT JOIN hook_executions executions ON executions.id = records.execution_id
+      WHERE records.hook_id = ?
+        AND records.user_id = ?
+        AND records.tenant_id = ?
+        AND records.workspace_id = ?
+        AND (executions.id IS NULL OR executions.hook_id <> records.hook_id)
+      ORDER BY records.created_at DESC, records.rowid DESC
+      LIMIT 50
+    `).all(
+      String(hookId),
+      normalizedUserId,
+      normalizedTenantId,
+      normalizedWorkspaceId,
+    ) : [];
+
+    return {
+      ...page,
+      executions: page.executions.map((execution) => ({
+        ...execution,
+        records: recordsByExecution.get(execution.id) || [],
+      })),
+      standaloneRecords: standaloneRows.map((row) => {
+        const record = mapDataRecordRow(row);
+        return {
+          id: record.id,
+          type: record.type,
+          data: record.data,
+          createdAt: record.createdAt,
+          sessionId: record.sessionId,
+        };
+      }),
     };
   };
   return {
@@ -1346,6 +1468,8 @@ export function createHookConfigService({
     listAllExecutions: (filters = {}) => queryExecutions({ ...filters, summary: true }).executions,
 
     listAllExecutionPage: (filters = {}) => queryExecutions({ ...filters, summary: true }),
+
+    listUserExecutionPage,
 
     getExecution: (executionId) => {
       if (!hasTable(database, 'hook_executions')) return null;

@@ -167,6 +167,8 @@ CREATE INDEX IF NOT EXISTS idx_hook_executions_hook_started
   ON hook_executions(hook_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hook_executions_user_started
   ON hook_executions(user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_hook_user_workspace_started
+  ON hook_executions(hook_id, user_id, tenant_id, workspace_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hook_executions_session
   ON hook_executions(session_id, started_at DESC);
 
@@ -190,6 +192,10 @@ CREATE INDEX IF NOT EXISTS idx_hook_data_records_hook_created
   ON hook_data_records(hook_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hook_data_records_type_created
   ON hook_data_records(record_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hook_data_records_execution
+  ON hook_data_records(execution_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hook_data_records_hook_user_workspace_created
+  ON hook_data_records(hook_id, user_id, tenant_id, workspace_id, created_at DESC);
 `;
 
 export function migrateHookConfigurationModel(database) {

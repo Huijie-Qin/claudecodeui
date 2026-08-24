@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Webhook } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { History, RefreshCw, Webhook } from 'lucide-react';
 
 import { api } from '../../../../utils/api';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
 import SettingsSection from '../SettingsSection';
 import SettingsToggle from '../SettingsToggle';
+
+import HookExecutionRecordsDrawer, {
+  type UserHookExecution,
+  type UserHookStandaloneRecord,
+} from './HookExecutionRecordsDrawer';
+
+const EXECUTION_PAGE_SIZE = 20;
 
 type AvailableHook = {
   id: string;
@@ -43,11 +50,28 @@ export default function HookSettingsTab({
   const [loading, setLoading] = useState(false);
   const [busyHookId, setBusyHookId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recordsHook, setRecordsHook] = useState<AvailableHook | null>(null);
+  const [executions, setExecutions] = useState<UserHookExecution[]>([]);
+  const [standaloneRecords, setStandaloneRecords] = useState<UserHookStandaloneRecord[]>([]);
+  const [executionTotal, setExecutionTotal] = useState(0);
+  const [executionOffset, setExecutionOffset] = useState(0);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordsLoadingMore, setRecordsLoadingMore] = useState(false);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (workspaceId && availableProjects.some((project) => project.workspaceId === workspaceId)) return;
     setWorkspaceId(availableProjects[0]?.workspaceId || null);
   }, [availableProjects, workspaceId]);
+
+  useEffect(() => {
+    setRecordsHook(null);
+    setExecutions([]);
+    setStandaloneRecords([]);
+    setExecutionTotal(0);
+    setExecutionOffset(0);
+    setRecordsError(null);
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!workspaceId) {
@@ -87,8 +111,64 @@ export default function HookSettingsTab({
     }
   };
 
+  const loadExecutionRecords = useCallback(async (
+    hook: AvailableHook,
+    offset: number,
+    append: boolean,
+  ) => {
+    if (!workspaceId) return;
+    if (append) setRecordsLoadingMore(true);
+    else setRecordsLoading(true);
+    setRecordsError(null);
+    try {
+      const response = await api.workspaceHookExecutions(workspaceId, hook.id, {
+        limit: EXECUTION_PAGE_SIZE,
+        offset,
+      });
+      if (!response.ok) throw new Error(await readError(response, '加载执行记录失败'));
+      const payload = await response.json() as {
+        executions?: UserHookExecution[];
+        standaloneRecords?: UserHookStandaloneRecord[];
+        total?: number;
+        offset?: number;
+      };
+      const nextExecutions = Array.isArray(payload.executions) ? payload.executions : [];
+      if (!append) {
+        setStandaloneRecords(Array.isArray(payload.standaloneRecords) ? payload.standaloneRecords : []);
+      }
+      setExecutions((current) => {
+        if (!append) return nextExecutions;
+        const merged = new Map(current.map((execution) => [execution.id, execution]));
+        nextExecutions.forEach((execution) => merged.set(execution.id, execution));
+        return [...merged.values()];
+      });
+      setExecutionTotal(Number(payload.total || 0));
+      setExecutionOffset(Number(payload.offset ?? offset));
+    } catch (caughtError) {
+      setRecordsError(caughtError instanceof Error ? caughtError.message : '加载执行记录失败');
+    } finally {
+      setRecordsLoading(false);
+      setRecordsLoadingMore(false);
+    }
+  }, [workspaceId]);
+
+  const openExecutionRecords = (hook: AvailableHook) => {
+    setRecordsHook(hook);
+    setExecutions([]);
+    setStandaloneRecords([]);
+    setExecutionTotal(0);
+    setExecutionOffset(0);
+    void loadExecutionRecords(hook, 0, false);
+  };
+
+  const closeExecutionRecords = useCallback(() => {
+    setRecordsHook(null);
+    setRecordsError(null);
+  }, []);
+
   return (
-    <SettingsSection title="辅助功能">
+    <>
+      <SettingsSection title="辅助功能">
       {availableProjects.length > 1 ? (
         <label className="block space-y-1.5">
           <span className="text-xs font-medium text-muted-foreground">{workspaceTerminology === 'expert' ? '专家' : '工作区'}</span>
@@ -148,16 +228,48 @@ export default function HookSettingsTab({
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
               </div>
-              <SettingsToggle
-                checked={hook.enabled}
-                disabled={Boolean(busyHookId) || isSqlCheckManaged}
-                ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
-                onChange={(enabled) => void toggleHook(hook, enabled)}
-              />
+              <div className="flex flex-shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`查看 ${hook.name} 的执行记录`}
+                  onClick={() => openExecutionRecords(hook)}
+                >
+                  <History className="h-3.5 w-3.5" aria-hidden="true" />
+                  执行记录
+                </button>
+                <SettingsToggle
+                  checked={hook.enabled}
+                  disabled={Boolean(busyHookId) || isSqlCheckManaged}
+                  ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
+                  onChange={(enabled) => void toggleHook(hook, enabled)}
+                />
+              </div>
             </div>
           );
         })}
       </SettingsCard>
-    </SettingsSection>
+      </SettingsSection>
+
+      {recordsHook ? (
+        <HookExecutionRecordsDrawer
+          hook={recordsHook}
+          executions={executions}
+          standaloneRecords={standaloneRecords}
+          total={executionTotal}
+          loading={recordsLoading}
+          loadingMore={recordsLoadingMore}
+          error={recordsError}
+          hasMore={executionOffset + EXECUTION_PAGE_SIZE < executionTotal}
+          onClose={closeExecutionRecords}
+          onRefresh={() => void loadExecutionRecords(recordsHook, 0, false)}
+          onLoadMore={() => void loadExecutionRecords(
+            recordsHook,
+            executionOffset + EXECUTION_PAGE_SIZE,
+            true,
+          )}
+        />
+      ) : null}
+    </>
   );
 }

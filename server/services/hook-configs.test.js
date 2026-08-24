@@ -224,6 +224,102 @@ test('Hook execution diagnostics expose outcomes, millisecond timestamps, and gl
   }
 });
 
+test('user Hook execution history is scoped to the authenticated workspace and includes owned data records', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    const otherHook = service.createHook({ input: publishableHook({ name: 'Other Hook' }), userId: 1 });
+    const insertExecution = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, tenant_id, workspace_id,
+        session_id, event_name, status, input_json, actions_json, response_json,
+        duration_ms, started_at_ms, completed_at_ms
+      ) VALUES (?, ?, 1, ?, ?, ?, ?, 'Stop', 'succeeded', '{}', '{}', '{}', 12, ?, ?)
+    `);
+    insertExecution.run('mine', hook.id, 2, 7, 10, 'session-mine', 1000, 1012);
+    insertExecution.run('other-user', hook.id, 1, 7, 10, 'session-other-user', 2000, 2012);
+    insertExecution.run('other-workspace', hook.id, 2, 7, 11, 'session-other-workspace', 3000, 3012);
+    insertExecution.run('legacy-source', otherHook.id, 2, 7, 10, 'session-legacy', 4000, 4012);
+    database.prepare(`
+      INSERT INTO hook_data_records (
+        id, execution_id, hook_id, user_id, tenant_id, workspace_id,
+        session_id, record_type, data_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'record-mine',
+      'mine',
+      hook.id,
+      2,
+      7,
+      10,
+      'session-mine',
+      'sql_metrics',
+      JSON.stringify({ sqlLineCount: 2 }),
+    );
+    database.prepare(`
+      INSERT INTO hook_data_records (
+        id, execution_id, hook_id, user_id, tenant_id, workspace_id,
+        session_id, record_type, data_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'record-other-hook',
+      'mine',
+      otherHook.id,
+      2,
+      7,
+      10,
+      'session-mine',
+      'legacy_migrated_record',
+      JSON.stringify({ shouldNotLeak: true }),
+    );
+    database.prepare(`
+      INSERT INTO hook_data_records (
+        id, execution_id, hook_id, user_id, tenant_id, workspace_id,
+        session_id, record_type, data_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'record-legacy-owner',
+      'legacy-source',
+      hook.id,
+      2,
+      7,
+      10,
+      'session-legacy',
+      'legacy_owned_record',
+      JSON.stringify({ sqlLineCount: 3 }),
+    );
+
+    const page = service.listUserExecutionPage({
+      hookId: hook.id,
+      userId: 2,
+      tenantId: 7,
+      workspaceId: 10,
+      limit: 20,
+    });
+
+    assert.equal(page.total, 1);
+    assert.equal(page.executionTotal, 1);
+    assert.deepEqual(page.executions.map((execution) => execution.id), ['mine']);
+    assert.deepEqual(page.executions[0].records.map(({ createdAt, ...record }) => record), [{
+      id: 'record-mine',
+      type: 'sql_metrics',
+      data: { sqlLineCount: 2 },
+    }]);
+    assert.ok(page.executions[0].records[0].createdAt);
+    assert.equal(page.executions[0].input, null);
+    assert.deepEqual(page.executions[0].actions, {});
+    assert.deepEqual(page.standaloneRecords.map(({ createdAt, ...record }) => record), [{
+      id: 'record-legacy-owner',
+      type: 'legacy_owned_record',
+      data: { sqlLineCount: 3 },
+      sessionId: 'session-legacy',
+    }]);
+    assert.ok(page.standaloneRecords[0].createdAt);
+  } finally {
+    database.close();
+  }
+});
+
 test('Hook execution diagnostics paginate correlated event groups without splitting parallel Hooks', () => {
   const { database, service } = createFixture();
   try {

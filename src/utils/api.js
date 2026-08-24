@@ -105,6 +105,9 @@ export const api = {
   workspaceHooks: (workspaceId) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks`,
   )),
+  workspaceHookExecutions: (workspaceId, hookId, filters = {}) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`,
+  )),
   updateWorkspaceHook: (workspaceId, hookId, enabled) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}`,
   ), {

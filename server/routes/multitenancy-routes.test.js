@@ -725,3 +725,66 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
     ['enable', 1, 'notify-hook', true],
   ]);
 });
+
+test('workspace Hook execution history is forced to the current user, tenant, and workspace', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'record-hook',
+    name: 'SQL 行数记录',
+    eventName: 'Stop',
+    status: 'published',
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: (args) => {
+        seen.push(['access', args]);
+        return {
+          workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+          accessRole: 'view',
+        };
+      },
+    },
+    hookConfigs: {
+      listAvailableHooksForUser: (userId) => {
+        seen.push(['available', userId]);
+        return [availableHook];
+      },
+      listUserExecutionPage: (filters) => {
+        seen.push(['history', filters]);
+        return {
+          executions: [{ id: 'execution-1', hookId: availableHook.id, records: [] }],
+          standaloneRecords: [],
+          total: 1,
+          executionTotal: 1,
+          limit: 20,
+          offset: 0,
+        };
+      },
+    },
+  });
+
+  const loaded = await requestJson(
+    router,
+    '/10/hooks/record-hook/executions?limit=20&offset=0&userId=999&tenantId=999',
+  );
+
+  assert.equal(loaded.response.status, 200);
+  assert.equal(loaded.payload.hook.name, 'SQL 行数记录');
+  assert.deepEqual(loaded.payload.executions.map((execution) => execution.id), ['execution-1']);
+  assert.deepEqual(seen, [
+    ['access', { tenantId: 2, userId: 1, workspaceId: 10 }],
+    ['available', 1],
+    ['history', {
+      hookId: 'record-hook',
+      userId: 1,
+      tenantId: 2,
+      workspaceId: 10,
+      limit: '20',
+      offset: '0',
+    }],
+  ]);
+});
