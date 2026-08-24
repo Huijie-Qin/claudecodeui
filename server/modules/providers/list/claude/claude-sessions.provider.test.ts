@@ -193,6 +193,21 @@ test('ClaudeSessionsProvider restores a stored slash-only invocation', () => {
   assert.equal(messages[0].content, '/dataops-html-report');
 });
 
+test('ClaudeSessionsProvider hides an internal Hook display command', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'user',
+    uuid: 'hook-recovery',
+    timestamp: '2026-04-29T01:19:50.247Z',
+    message: {
+      role: 'user',
+      content: 'Internal Hook model prompt',
+    },
+  }, 'session-1', '<ccui-hook-recovery activity="activity-1"></ccui-hook-recovery>');
+
+  assert.deepEqual(messages, []);
+});
+
 test('ClaudeSessionsProvider restores one stored invocation from array text content', () => {
   const provider = new ClaudeSessionsProvider();
   const messages = provider.normalizeMessage({

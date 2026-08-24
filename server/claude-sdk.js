@@ -90,6 +90,74 @@ const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
+
+function createHookActivityDescriptor({
+  hook,
+  action,
+  executionId,
+  summary,
+  skillName = null,
+  queuedAt,
+}) {
+  const actionId = String(action?.id || 'follow-up');
+  return {
+    id: `hook_activity_${executionId}_${actionId}`,
+    timestamp: queuedAt,
+    hookId: hook.id,
+    hookName: hook.name,
+    actionId,
+    actionType: action?.type || 'send_agent_message',
+    ...(skillName ? { skillName } : {}),
+    summary: String(summary || '').slice(0, 8000),
+  };
+}
+
+function emitHookActivity({
+  hookRecovery,
+  sessionId,
+  status,
+  runtimeOptions,
+  writer,
+  error = null,
+}) {
+  const activity = hookRecovery?.activity;
+  if (!activity?.id || !sessionId) return null;
+
+  const activityMessage = createNormalizedMessage({
+    kind: 'hook_activity',
+    id: activity.id,
+    timestamp: activity.timestamp,
+    sessionId,
+    provider: 'claude',
+    origin: 'hook',
+    status,
+    jobId: activity.id,
+    hookId: activity.hookId,
+    hookName: activity.hookName,
+    actionId: activity.actionId,
+    actionType: activity.actionType,
+    skillName: activity.skillName,
+    summary: activity.summary,
+    queuePosition: activity.queuePosition,
+    ...(error ? { error: String(error).slice(0, 8000) } : {}),
+  });
+
+  try {
+    persistNormalizedMessages({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: sessionId,
+      runtimeId: runtimeOptions.runtimeId,
+      messages: [activityMessage],
+    });
+  } catch (persistError) {
+    console.warn('[HookRuntime] Failed to persist Hook activity:', persistError?.message || persistError);
+  }
+  sendWriterMessage(writer, activityMessage);
+  return activityMessage;
+}
+
 class StreamStalledError extends Error {
   constructor(provider, timeoutMs) {
     super(`${provider} stream stalled: no events received for ${Math.round(timeoutMs / 1000)} seconds`);
@@ -862,7 +930,24 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let initialDisplayCommandRecord = null;
   let initialDisplayCommandPersisted = false;
   let queuedFollowupTurn = null;
+  let hookActivityTerminalSent = false;
   const inputQueue = new ClaudeInputQueue();
+
+  const updateHookActivity = (status, error = null) => {
+    if (hookActivityTerminalSent) return null;
+    const message = emitHookActivity({
+      hookRecovery: runtimeOptions.hookRecovery,
+      sessionId: capturedSessionId || sessionId || null,
+      status,
+      runtimeOptions,
+      writer: ws,
+      error,
+    });
+    if (message && HOOK_ACTIVITY_TERMINAL_STATUSES.has(status)) {
+      hookActivityTerminalSent = true;
+    }
+    return message;
+  };
 
   const persistInitialDisplayCommand = async (providerSessionId) => {
     if (initialDisplayCommandPersisted || !initialDisplayCommandRecord) {
@@ -941,6 +1026,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
     processDiagnostics.addRedactionEnv(runtimeOptions.executionEnv || process.env);
     runtimeOptions.spawnClaudeCodeProcess = processDiagnostics.createSpawn(runtimeContext.spawnClaudeCodeProcess);
 
+    updateHookActivity('running');
+
     await reconcileWorkspaceSkillsForAgentTurn({
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
     });
@@ -976,7 +1063,6 @@ async function queryClaudeSDK(command, options = {}, ws) {
       displayCommand,
       modelContent: command,
     };
-
     persistUserPromptMessage({
       options: runtimeOptions,
       provider: 'claude',
@@ -1288,25 +1374,45 @@ async function queryClaudeSDK(command, options = {}, ws) {
                 '',
                 modelContent,
               ].join('\n');
+              const queuedAt = new Date().toISOString();
+              const activity = createHookActivityDescriptor({
+                hook,
+                action,
+                executionId,
+                summary: `/${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                skillName: action.config?.skillName || null,
+                queuedAt,
+              });
+              const hookRecovery = {
+                hookId: hook.id,
+                executionId,
+                skillId: action.config?.skillId,
+                activity,
+              };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: recoveryContent,
                 displayContent: `Hook · /${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,
-                queuedAt: new Date().toISOString(),
+                queuedAt,
                 runtimeOptions: {
-                  hookRecovery: {
-                    hookId: hook.id,
-                    executionId,
-                    skillId: action.config?.skillId,
-                  },
+                  hookRecovery,
                 },
+              });
+              hookRecovery.activity.queuePosition = queuePosition;
+              emitHookActivity({
+                hookRecovery,
+                sessionId: recoverySessionId,
+                status: 'queued',
+                runtimeOptions,
+                writer: ws,
               });
               return { queued: true, queuePosition, sessionId: recoverySessionId };
             },
             enqueueAgentMessage: async ({
               hook,
+              action,
               event,
               executionId,
               messageText,
@@ -1314,19 +1420,37 @@ async function queryClaudeSDK(command, options = {}, ws) {
               const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
               const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
               if (!activeSession) throw new Error('Original Claude session is unavailable for Hook Agent message');
+              const queuedAt = new Date().toISOString();
+              const activity = createHookActivityDescriptor({
+                hook,
+                action,
+                executionId,
+                summary: messageText,
+                queuedAt,
+              });
+              const hookRecovery = {
+                hookId: hook.id,
+                executionId,
+                activity,
+              };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: messageText,
                 displayContent: messageText,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,
-                queuedAt: new Date().toISOString(),
+                queuedAt,
                 runtimeOptions: {
-                  hookRecovery: {
-                    hookId: hook.id,
-                    executionId,
-                  },
+                  hookRecovery,
                 },
+              });
+              hookRecovery.activity.queuePosition = queuePosition;
+              emitHookActivity({
+                hookRecovery,
+                sessionId: recoverySessionId,
+                status: 'queued',
+                runtimeOptions,
+                writer: ws,
               });
               return { queued: true, queuePosition, sessionId: recoverySessionId };
             },
@@ -1637,6 +1761,8 @@ async function queryClaudeSDK(command, options = {}, ws) {
           status: 'completed',
         });
 
+        updateHookActivity('succeeded');
+
         if (!queuedFollowupTurn) {
           runtimeOptions.onConcurrencyIdle?.();
           ws.send(createNormalizedMessage({
@@ -1683,12 +1809,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
         content: queuedFollowupTurn.displayContent || queuedFollowupTurn.content,
         timestamp: new Date().toISOString(),
       });
+      const followupDisplayCommand = queuedFollowupTurn.mode === 'hook_recovery'
+        ? `<ccui-hook-recovery activity="${queuedFollowupTurn.runtimeOptions?.hookRecovery?.activity?.id || ''}"></ccui-hook-recovery>`
+        : queuedFollowupTurn.displayContent || queuedFollowupTurn.content;
       return queryClaudeSDK(queuedFollowupTurn.content, {
         ...runtimeOptions,
         ...(queuedFollowupTurn.runtimeOptions || {}),
         hookRecovery: queuedFollowupTurn.runtimeOptions?.hookRecovery || null,
         sessionId: finalSessionId,
-        displayCommand: queuedFollowupTurn.displayContent || queuedFollowupTurn.content,
+        displayCommand: followupDisplayCommand,
         images: [],
       }, followupWriter);
     }
@@ -1702,6 +1831,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
 
     if (wasAborted) {
+      updateHookActivity('failed', 'Hook follow-up was stopped');
       ws.send(createNormalizedMessage({
         kind: 'complete',
         exitCode: 0,
@@ -1725,6 +1855,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
     console.error('SDK query error:', error);
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    updateHookActivity(
+      'failed',
+      wasAborted ? 'Hook follow-up was stopped' : processDiagnostics.redactText(error?.message || String(error)),
+    );
 
     // Clean up session on error
     if (finalSessionId) {

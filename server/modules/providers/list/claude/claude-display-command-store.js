@@ -7,6 +7,7 @@ const CLAUDE_PROJECTS_DIRECTORY = path.join('.claude', 'projects');
 const DISPLAY_COMMANDS_FILE_NAME = 'display-commands.jsonl';
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 const SLASH_COMMAND_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
+const HOOK_RECOVERY_DISPLAY_PATTERN = /^<ccui-hook-recovery(?:\s[^>]*)?><\/ccui-hook-recovery>$/;
 const SESSION_DIRECTORY_MODE = 0o700;
 const DISPLAY_COMMAND_FILE_MODE = 0o600;
 const DISPLAY_COMMAND_OPEN_FLAGS = fsConstants.O_APPEND
@@ -130,7 +131,10 @@ export function normalizeClaudeDisplayCommand(value) {
   }
 
   const normalized = value.trim();
-  return normalized && SLASH_COMMAND_PATTERN.test(normalized)
+  return normalized && (
+    SLASH_COMMAND_PATTERN.test(normalized)
+    || HOOK_RECOVERY_DISPLAY_PATTERN.test(normalized)
+  )
     ? normalized
     : null;
 }

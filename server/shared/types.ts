@@ -27,7 +27,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'hook_activity';
 
 /**
  * Provider-neutral message event emitted over REST and realtime transports.
@@ -42,6 +43,7 @@ export type NormalizedMessage = {
   timestamp: string;
   provider: LLMProvider;
   kind: MessageKind;
+  origin?: 'hook';
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
@@ -68,6 +70,12 @@ export type NormalizedMessage = {
   status?: string;
   summary?: string;
   tokenBudget?: unknown;
+  jobId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
   subagentTools?: unknown;
   toolUseResult?: unknown;
   sequence?: number;

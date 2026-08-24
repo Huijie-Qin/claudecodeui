@@ -68,6 +68,21 @@ export interface TaskNotificationDetails {
 
 export type UserQueueStatus = 'queued' | 'processing' | 'failed';
 
+export type HookActivityStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface HookActivityDetails {
+  jobId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
+  summary?: string;
+  queuePosition?: number;
+  status: HookActivityStatus;
+  error?: string;
+}
+
 export interface ChatMessage {
   id?: string;
   type: string;
@@ -91,6 +106,8 @@ export interface ChatMessage {
   toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
   isTaskNotification?: boolean;
+  isHookActivity?: boolean;
+  hookActivity?: HookActivityDetails;
   taskStatus?: string;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {

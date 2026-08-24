@@ -103,6 +103,35 @@ test('Claude display command store records only expanded slash invocations', asy
   ]);
 });
 
+test('Claude display command store records internal Hook recovery markers', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-hook',
+  });
+
+  const marker = '<ccui-hook-recovery activity="activity-1"></ccui-hook-recovery>';
+  assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-hook',
+    messageId: 'message-hook',
+    displayCommand: marker,
+    modelContent: 'Hook follow-up model instructions',
+  }), true);
+
+  const commands = await readClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-hook',
+  });
+  assert.deepEqual([...commands.entries()], [
+    ['message-hook', marker],
+  ]);
+});
+
 test('Claude display command store keeps the latest command inside the session data directory', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));

@@ -5,6 +5,40 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
+test('normalizedToChatMessages renders Hook follow-up activity as a distinct message type', () => {
+  const [hookMessage] = normalizedToChatMessages([{
+    id: 'hook_activity_execution-1_action-1',
+    sessionId: 'session-1',
+    timestamp: '2026-06-30T00:00:02.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    status: 'queued',
+    jobId: 'hook_activity_execution-1_action-1',
+    hookId: 'notify-on-stop',
+    hookName: '对话正常结束通知',
+    actionId: 'send-message',
+    actionType: 'send_agent_message',
+    summary: '请总结本轮结果',
+    queuePosition: 1,
+  }]);
+
+  assert.equal(hookMessage.type, 'hook');
+  assert.equal(hookMessage.isHookActivity, true);
+  assert.deepEqual(hookMessage.hookActivity, {
+    jobId: 'hook_activity_execution-1_action-1',
+    hookId: 'notify-on-stop',
+    hookName: '对话正常结束通知',
+    actionId: 'send-message',
+    actionType: 'send_agent_message',
+    skillName: undefined,
+    summary: '请总结本轮结果',
+    queuePosition: 1,
+    status: 'queued',
+    error: undefined,
+  });
+});
+
 test('normalizedToChatMessages preserves queued user message state', () => {
   const [queuedMessage] = normalizedToChatMessages([{
     id: 'local_supplement_followup-1',

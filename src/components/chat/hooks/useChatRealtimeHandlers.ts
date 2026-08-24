@@ -149,6 +149,9 @@ export function useChatRealtimeHandlers({
         }
 
         case 'claude-supplement-ack': {
+          if (msg.mode === 'hook_recovery') {
+            return;
+          }
           const supplementSessionId = typeof msg.sessionId === 'string' ? msg.sessionId : '';
           const clientMessageId = typeof msg.clientMessageId === 'string' ? msg.clientMessageId : '';
           const content = typeof msg.content === 'string' ? msg.content : '';

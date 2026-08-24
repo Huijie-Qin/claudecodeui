@@ -31,6 +31,66 @@ const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessag
   content: fields.content || '可以。',
 });
 
+const makeHookActivity = (
+  status: 'queued' | 'running' | 'succeeded' | 'failed',
+): NormalizedMessage => ({
+  id: 'hook_activity_execution-1_action-1',
+  sessionId: 'session-1',
+  timestamp: '2026-04-26T10:31:35.000Z',
+  provider: 'claude',
+  kind: 'hook_activity',
+  origin: 'hook',
+  status,
+  jobId: 'hook_activity_execution-1_action-1',
+});
+
+test('upsertRealtimeMessages updates one Hook follow-up card in place', () => {
+  const messages = upsertRealtimeMessages(
+    [makeHookActivity('queued')],
+    [makeHookActivity('running'), makeHookActivity('succeeded')],
+  );
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].status, 'succeeded');
+});
+
+test('computeMerged keeps a realtime Hook terminal state over stale persisted state', () => {
+  const merged = computeMerged(
+    [makeHookActivity('running')],
+    [makeHookActivity('succeeded')],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'succeeded');
+});
+
+test('computeMerged does not regress a persisted Hook terminal state', () => {
+  const merged = computeMerged(
+    [makeHookActivity('succeeded')],
+    [makeHookActivity('running')],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'succeeded');
+});
+
+test('server refresh retains a newer realtime Hook state until persistence catches up', () => {
+  assert.deepEqual(
+    reconcileRealtimeAfterServerRefresh(
+      [makeHookActivity('running')],
+      [makeHookActivity('succeeded')],
+    ),
+    [makeHookActivity('succeeded')],
+  );
+  assert.deepEqual(
+    reconcileRealtimeAfterServerRefresh(
+      [makeHookActivity('succeeded')],
+      [makeHookActivity('succeeded')],
+    ),
+    [],
+  );
+});
+
 test('computeMerged pins running-message follow-ups below the active response', () => {
   const streamingPlaceholder: NormalizedMessage = {
     id: '__streaming_session-1',

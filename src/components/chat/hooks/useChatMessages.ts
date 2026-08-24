@@ -716,6 +716,32 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         });
         break;
 
+      case 'hook_activity': {
+        const status = ['queued', 'running', 'succeeded', 'failed'].includes(msg.status || '')
+          ? msg.status as 'queued' | 'running' | 'succeeded' | 'failed'
+          : 'running';
+        converted.push({
+          ...getMessageIdentity(msg),
+          type: 'hook',
+          content: msg.summary || msg.hookName || msg.skillName || '',
+          timestamp: msg.timestamp,
+          isHookActivity: true,
+          hookActivity: {
+            jobId: msg.jobId,
+            hookId: msg.hookId,
+            hookName: msg.hookName,
+            actionId: msg.actionId,
+            actionType: msg.actionType,
+            skillName: msg.skillName,
+            summary: msg.summary,
+            queuePosition: msg.queuePosition,
+            status,
+            error: msg.error,
+          },
+        });
+        break;
+      }
+
       case 'stream_delta':
         if (msg.content) {
           converted.push({

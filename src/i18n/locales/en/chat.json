@@ -24,6 +24,19 @@
     "queued": "Queued",
     "failed": "Failed to queue"
   },
+  "hookActivity": {
+    "title": "Follow-up message",
+    "unnamed": "Unnamed Hook",
+    "skill": "Skill",
+    "directMessage": "Sent to Agent",
+    "queuePosition": "Queue position {{position}}",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Completed",
+      "failed": "Failed"
+    }
+  },
   "tools": {
     "settings": "Tool Settings",
     "error": "Tool Error",

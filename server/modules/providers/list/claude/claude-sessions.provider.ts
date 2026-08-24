@@ -55,6 +55,7 @@ export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOption
  * Those are useful for the CLI but should not appear in the user-facing chat.
  */
 const INTERNAL_CONTENT_PREFIXES = [
+  '<ccui-hook-recovery',
   '<command-name>',
   '<command-message>',
   '<command-args>',
@@ -98,7 +99,7 @@ function resolveVisibleUserText(
   storedDisplayCommand: string | null = null,
 ): string | null {
   if (storedDisplayCommand) {
-    return storedDisplayCommand;
+    return isInternalContent(storedDisplayCommand) ? null : storedDisplayCommand;
   }
 
   return isInternalContent(text) ? null : text;

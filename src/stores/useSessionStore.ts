@@ -35,7 +35,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'hook_activity';
 
 export interface NormalizedMessage {
   id: string;
@@ -45,6 +46,7 @@ export interface NormalizedMessage {
   kind: MessageKind;
 
   // kind-specific fields (flat for simplicity)
+  origin?: 'hook';
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
@@ -67,6 +69,13 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  jobId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
+  error?: string;
   taskId?: string;
   toolUseId?: string;
   outputFile?: string;
