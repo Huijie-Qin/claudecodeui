@@ -71,6 +71,7 @@ export interface NormalizedMessage {
   status?: string;
   summary?: string;
   jobId?: string;
+  executionId?: string;
   hookId?: string;
   hookName?: string;
   actionId?: string;

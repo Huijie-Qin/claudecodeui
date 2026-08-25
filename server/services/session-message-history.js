@@ -143,6 +143,7 @@ function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }
           ? execution.status
           : 'failed',
         jobId: `hook_activity_${execution.id}_execution`,
+        executionId: execution.id,
         hookId: execution.hookId,
         hookName: execution.hookName || hook?.name || null,
         eventName: execution.eventName || hook?.eventName || null,

@@ -111,6 +111,7 @@ function createHookActivityDescriptor({
   const actionId = String(action?.id || 'follow-up');
   return {
     id: `hook_activity_${executionId}_${actionId}`,
+    executionId,
     activityKind: 'followup',
     timestamp: queuedAt,
     hookId: hook.id,
@@ -125,6 +126,7 @@ function createHookActivityDescriptor({
 function createHookExecutionActivityDescriptor({ hook, executionId, startedAt }) {
   return {
     id: `hook_activity_${executionId}_execution`,
+    executionId,
     activityKind: 'execution',
     timestamp: new Date(startedAt).toISOString(),
     hookId: hook.id,
@@ -157,6 +159,7 @@ function emitHookActivity({
     activityKind: activity.activityKind || 'followup',
     status,
     jobId: activity.id,
+    executionId: activity.executionId,
     hookId: activity.hookId,
     hookName: activity.hookName,
     actionId: activity.actionId,

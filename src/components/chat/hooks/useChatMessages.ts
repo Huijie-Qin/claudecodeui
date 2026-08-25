@@ -4,7 +4,12 @@
  */
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
-import type { ChatMessage, SubagentChildTool } from '../types/types';
+import type {
+  ChatMessage,
+  HookActivityStatus,
+  HookFollowupActivityDetails,
+  SubagentChildTool,
+} from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 import { isClaudeInternalUserContent } from '../utils/internalMessages';
 import {
@@ -90,6 +95,38 @@ function isClaudeSkillToolUse(message: NormalizedMessage | undefined): boolean {
     typeof message.toolName === 'string' &&
     message.toolName.toLowerCase().includes('skill'),
   );
+}
+
+function normalizeHookActivityStatus(status: unknown): HookActivityStatus {
+  return ['queued', 'running', 'succeeded', 'failed'].includes(String(status || ''))
+    ? status as HookActivityStatus
+    : 'running';
+}
+
+function hookActivityIdentity(message: NormalizedMessage): string {
+  return message.jobId || message.id;
+}
+
+function hookExecutionActivityPrefix(message: NormalizedMessage): string | null {
+  const identity = hookActivityIdentity(message);
+  return identity.endsWith('_execution')
+    ? identity.slice(0, -'_execution'.length)
+    : null;
+}
+
+function toHookFollowupDetails(message: NormalizedMessage): HookFollowupActivityDetails {
+  return {
+    jobId: message.jobId,
+    executionId: message.executionId,
+    actionId: message.actionId,
+    actionType: message.actionType,
+    skillName: message.skillName,
+    summary: message.summary,
+    queuePosition: message.queuePosition,
+    status: normalizeHookActivityStatus(message.status),
+    error: message.error,
+    timestamp: message.timestamp,
+  };
 }
 
 function isSubagentToolName(toolName: unknown): boolean {
@@ -251,6 +288,40 @@ function readTaskNotificationMessage(msg: NormalizedMessage): ChatMessage['taskN
  */
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
+
+  const hookExecutionMessages = messages.filter((message) => (
+    message.kind === 'hook_activity' && message.activityKind === 'execution'
+  ));
+  const hookExecutionByExecutionId = new Map<string, NormalizedMessage>();
+  const hookExecutionPrefixes = hookExecutionMessages
+    .map((message) => ({ message, prefix: hookExecutionActivityPrefix(message) }))
+    .filter((entry): entry is { message: NormalizedMessage; prefix: string } => Boolean(entry.prefix));
+  const hookFollowupsByExecutionMessageId = new Map<string, NormalizedMessage[]>();
+  const groupedHookFollowupIds = new Set<string>();
+
+  for (const message of hookExecutionMessages) {
+    if (message.executionId) {
+      hookExecutionByExecutionId.set(message.executionId, message);
+    }
+  }
+
+  for (const message of messages) {
+    if (message.kind !== 'hook_activity' || message.activityKind === 'execution') {
+      continue;
+    }
+    const identity = hookActivityIdentity(message);
+    const executionMessage = (
+      (message.executionId ? hookExecutionByExecutionId.get(message.executionId) : undefined) ||
+      hookExecutionPrefixes.find(({ prefix }) => identity.startsWith(`${prefix}_`))?.message
+    );
+    if (!executionMessage) {
+      continue;
+    }
+    const followups = hookFollowupsByExecutionMessageId.get(executionMessage.id) || [];
+    followups.push(message);
+    hookFollowupsByExecutionMessageId.set(executionMessage.id, followups);
+    groupedHookFollowupIds.add(message.id);
+  }
 
   // First pass: collect tool results for attachment
   const toolResultMap = new Map<string, NormalizedMessage>();
@@ -853,9 +924,13 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         break;
 
       case 'hook_activity': {
-        const status = ['queued', 'running', 'succeeded', 'failed'].includes(msg.status || '')
-          ? msg.status as 'queued' | 'running' | 'succeeded' | 'failed'
-          : 'running';
+        if (groupedHookFollowupIds.has(msg.id)) {
+          break;
+        }
+        const status = normalizeHookActivityStatus(msg.status);
+        const followups = msg.activityKind === 'execution'
+          ? hookFollowupsByExecutionMessageId.get(msg.id)?.map(toHookFollowupDetails)
+          : undefined;
         converted.push({
           ...getMessageIdentity(msg),
           type: 'hook',
@@ -864,6 +939,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           isHookActivity: true,
           hookActivity: {
             jobId: msg.jobId,
+            executionId: msg.executionId,
             hookId: msg.hookId,
             hookName: msg.hookName,
             activityKind: msg.activityKind,
@@ -877,6 +953,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             queuePosition: msg.queuePosition,
             status,
             error: msg.error,
+            followups,
           },
         });
         break;

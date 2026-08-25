@@ -5,7 +5,7 @@ import type { NormalizedMessage } from '../../../stores/useSessionStore';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
-test('normalizedToChatMessages renders Hook follow-up activity as a distinct message type', () => {
+test('normalizedToChatMessages renders an orphan Hook follow-up as a distinct message type', () => {
   const [hookMessage] = normalizedToChatMessages([{
     id: 'hook_activity_execution-1_action-1',
     sessionId: 'session-1',
@@ -15,6 +15,7 @@ test('normalizedToChatMessages renders Hook follow-up activity as a distinct mes
     origin: 'hook',
     status: 'queued',
     jobId: 'hook_activity_execution-1_action-1',
+    executionId: undefined,
     hookId: 'notify-on-stop',
     hookName: '对话正常结束通知',
     actionId: 'send-message',
@@ -27,6 +28,7 @@ test('normalizedToChatMessages renders Hook follow-up activity as a distinct mes
   assert.equal(hookMessage.isHookActivity, true);
   assert.deepEqual(hookMessage.hookActivity, {
     jobId: 'hook_activity_execution-1_action-1',
+    executionId: undefined,
     hookId: 'notify-on-stop',
     hookName: '对话正常结束通知',
     activityKind: undefined,
@@ -40,7 +42,96 @@ test('normalizedToChatMessages renders Hook follow-up activity as a distinct mes
     queuePosition: 1,
     status: 'queued',
     error: undefined,
+    followups: undefined,
   });
+});
+
+test('normalizedToChatMessages groups a Hook follow-up into its execution card', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'hook_activity_execution-1_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: 'hook_activity_execution-1_execution',
+      executionId: 'execution-1',
+      hookId: 'notify-on-stop',
+      hookName: '对话正常结束通知',
+      eventName: 'Stop',
+      actionTypes: ['invoke_skill'],
+    },
+    {
+      id: 'hook_activity_execution-1_notify',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'followup',
+      status: 'succeeded',
+      jobId: 'hook_activity_execution-1_notify',
+      executionId: 'execution-1',
+      hookId: 'notify-on-stop',
+      hookName: '对话正常结束通知',
+      actionId: 'notify',
+      actionType: 'invoke_skill',
+      skillName: 'hook-notification',
+      summary: '/hook-notification status=success',
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0].hookActivity?.activityKind, 'execution');
+  assert.deepEqual(chatMessages[0].hookActivity?.followups, [{
+    jobId: 'hook_activity_execution-1_notify',
+    executionId: 'execution-1',
+    actionId: 'notify',
+    actionType: 'invoke_skill',
+    skillName: 'hook-notification',
+    summary: '/hook-notification status=success',
+    queuePosition: undefined,
+    status: 'succeeded',
+    error: undefined,
+    timestamp: '2026-06-30T00:00:02.000Z',
+  }]);
+});
+
+test('normalizedToChatMessages groups legacy Hook activities by their shared job id prefix', () => {
+  const executionId = 'e412c904-92d8-4551-9e6f-b1359d7e017b';
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: `hook_activity_${executionId}_execution`,
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: `hook_activity_${executionId}_execution`,
+      hookName: '对话正常结束通知',
+    },
+    {
+      id: `hook_activity_${executionId}_notify-normal-stop`,
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'followup',
+      status: 'succeeded',
+      jobId: `hook_activity_${executionId}_notify-normal-stop`,
+      hookName: '对话正常结束通知',
+      skillName: 'hook-notification',
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0].hookActivity?.followups?.length, 1);
 });
 
 test('normalizedToChatMessages preserves generic Hook execution details', () => {

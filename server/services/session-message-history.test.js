@@ -673,6 +673,7 @@ test('Claude session history restores generic Hook cards from existing execution
     activityKind: 'execution',
     status: 'succeeded',
     jobId: 'hook_activity_execution-1_execution',
+    executionId: 'execution-1',
     hookId: 'sql-check',
     hookName: 'SQL Check 强制校验',
     eventName: 'Stop',

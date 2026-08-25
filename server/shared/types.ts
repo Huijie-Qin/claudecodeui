@@ -72,6 +72,7 @@ export type NormalizedMessage = {
   summary?: string;
   tokenBudget?: unknown;
   jobId?: string;
+  executionId?: string;
   hookId?: string;
   hookName?: string;
   actionId?: string;

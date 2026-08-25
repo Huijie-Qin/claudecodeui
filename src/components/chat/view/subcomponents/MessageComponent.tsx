@@ -302,11 +302,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
-                  {isHookExecution
-                    ? t('hookActivity.executionTitle', { defaultValue: 'Hook execution' })
-                    : t('hookActivity.title', { defaultValue: 'Follow-up message' })}
-                </span>
+                {!isHookExecution && (
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                    {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                  </span>
+                )}
                 <span className="min-w-0 truncate text-sm font-medium text-foreground">
                   {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
                 </span>
@@ -360,6 +360,81 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               {!isHookExecution && hookActivity.summary && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
                   {redactVisibleSecretText(hookActivity.summary)}
+                </div>
+              )}
+
+              {isHookExecution && hookActivity.followups && hookActivity.followups.length > 0 && (
+                <div className="mt-2 space-y-2 border-t border-violet-200/70 pt-2 dark:border-violet-900/70">
+                  {hookActivity.followups.map((followup) => {
+                    const followupStatus = followup.status || 'running';
+                    const followupStatusLabel = {
+                      queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
+                      running: t('hookActivity.status.running', { defaultValue: 'Running' }),
+                      succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
+                      failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+                    }[followupStatus];
+
+                    return (
+                      <div
+                        key={followup.jobId || followup.actionId || String(followup.timestamp)}
+                        className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
+                        data-hook-followup={followup.jobId || followup.actionId || 'followup'}
+                        data-hook-status={followupStatus}
+                      >
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                            {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                          </span>
+                          <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupStatus === 'failed'
+                            ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                            : followupStatus === 'succeeded'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
+                            }`}
+                          >
+                            {followupStatus === 'failed' ? (
+                              <XCircle className="h-3 w-3" aria-hidden="true" />
+                            ) : followupStatus === 'succeeded' ? (
+                              <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                            ) : (
+                              <Loader2 className={`h-3 w-3 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                            )}
+                            {followupStatusLabel}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                          {followup.skillName ? (
+                            <span className="truncate">
+                              {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{followup.skillName}</code>
+                            </span>
+                          ) : followup.actionType === 'send_agent_message' ? (
+                            <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                          ) : null}
+                          {followupStatus === 'queued' && typeof followup.queuePosition === 'number' && (
+                            <span>
+                              {t('hookActivity.queuePosition', {
+                                defaultValue: 'Queue position {{position}}',
+                                position: followup.queuePosition,
+                              })}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground/70">
+                            {new Date(followup.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        {followup.summary && (
+                          <div className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground/80">
+                            {redactVisibleSecretText(followup.summary)}
+                          </div>
+                        )}
+                        {followup.error && (
+                          <div className="mt-2 whitespace-pre-wrap break-words rounded bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                            {redactVisibleSecretText(followup.error)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

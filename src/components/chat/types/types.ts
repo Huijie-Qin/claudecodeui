@@ -70,8 +70,22 @@ export type UserQueueStatus = 'queued' | 'processing' | 'failed';
 
 export type HookActivityStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
+export interface HookFollowupActivityDetails {
+  jobId?: string;
+  executionId?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message';
+  skillName?: string;
+  summary?: string;
+  queuePosition?: number;
+  status: HookActivityStatus;
+  error?: string;
+  timestamp: string | number | Date;
+}
+
 export interface HookActivityDetails {
   jobId?: string;
+  executionId?: string;
   hookId?: string;
   hookName?: string;
   activityKind?: 'execution' | 'followup';
@@ -85,6 +99,7 @@ export interface HookActivityDetails {
   queuePosition?: number;
   status: HookActivityStatus;
   error?: string;
+  followups?: HookFollowupActivityDetails[];
 }
 
 export interface ChatMessage {
