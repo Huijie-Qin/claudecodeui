@@ -447,12 +447,6 @@ export const api = {
   featureFlags: () => authenticatedFetch('/api/settings/feature-flags'),
 
   admin: {
-    featureFlags: () => authenticatedFetch('/api/admin/feature-flags'),
-    updateAgentGraphFeature: (enabled) =>
-      authenticatedFetch('/api/admin/feature-flags/agent-graph', {
-        method: 'PUT',
-        body: JSON.stringify({ enabled }),
-      }),
     tenants: () => authenticatedFetch('/api/admin/tenants'),
     agentTemplates: (tenantId) => authenticatedFetch(
       tenantId

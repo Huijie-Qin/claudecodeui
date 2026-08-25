@@ -4,7 +4,6 @@
   "tabs": {
     "analytics": "Analytics",
     "aiCode": "AI Code",
-    "experimental": "Experimental",
     "users": "Users",
     "tenants": "Tenant Access",
     "claudeEnv": "Claude Env",
@@ -15,16 +14,6 @@
     "sqlCheck": "SQL Check",
     "runtimes": "Runtime Monitor",
     "scheduledTaskLogs": "Scheduled Task Logs"
-  },
-  "experimental": {
-    "warningTitle": "Experimental feature controls",
-    "warningDescription": "These global settings affect every CCUI user. When Agent Graph is disabled, its UI entry points and server endpoints are unavailable.",
-    "agentGraph": {
-      "label": "Enable Agent Graph Studio",
-      "description": "Show Agent Graph workspace navigation and enable its graph management APIs for all users."
-    },
-    "updateSuccess": "Agent Graph setting updated",
-    "updateError": "Failed to update Agent Graph setting"
   },
   "common": {
     "select": "Select",
