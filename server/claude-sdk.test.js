@@ -37,6 +37,17 @@ test('resolveClaudeModel falls back to the UI model when no environment override
   });
 });
 
+test('configured Hooks are not registered for an internal Hook follow-up turn', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  assert.equal(claudeSdk.resolveConfiguredHookUserId({ userId: 42 }, 7), 42);
+  assert.equal(claudeSdk.resolveConfiguredHookUserId({}, 7), 7);
+  assert.equal(claudeSdk.resolveConfiguredHookUserId({
+    userId: 42,
+    hookRecovery: { hookId: 'normal-end-notification', executionId: 'execution-1' },
+  }, 7), null);
+});
+
 test('mapCliOptionsToSDK makes normal sessions fully authorized for subagent inheritance', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

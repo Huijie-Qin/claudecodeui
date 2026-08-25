@@ -91,6 +91,15 @@ const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAM
 const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
 
+function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
+  if (runtimeOptions.hookRecovery) {
+    return null;
+  }
+
+  const hookUserId = Number(runtimeOptions.userId ?? writerUserId);
+  return Number.isInteger(hookUserId) && hookUserId > 0 ? hookUserId : null;
+}
+
 function createHookActivityDescriptor({
   hook,
   action,
@@ -1472,9 +1481,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }]
     };
 
-    const hookUserId = Number(runtimeOptions.userId ?? ws?.userId);
+    // A Hook-created follow-up is an internal continuation of the original
+    // turn. Registering configured Hooks again would make its terminal Stop
+    // event execute every user Hook a second time.
+    const hookUserId = resolveConfiguredHookUserId(runtimeOptions, ws?.userId);
     let configuredSdkHooks = {};
-    if (Number.isInteger(hookUserId) && hookUserId > 0) {
+    if (hookUserId !== null) {
       try {
         const activeHooks = hookConfigService.listActiveHooksForUser(hookUserId);
         if (activeHooks.length > 0) {
@@ -2432,4 +2444,5 @@ export {
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,
   resolveClaudeSupplementPayload,
+  resolveConfiguredHookUserId,
 };

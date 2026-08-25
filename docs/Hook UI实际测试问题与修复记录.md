@@ -332,3 +332,31 @@ hook_id + current_user_id + workspace.tenant_id + workspace.id
 | 客户端与服务端 TypeScript | 全部通过 |
 | 本次涉及文件 Lint | 通过 |
 | Docker 生产镜像构建与健康检查 | 通过；Vite 完成 3571 个模块转换 |
+
+## 12. 2026-08-25 内部 Hook 后置回合重复触发 Stop Hook
+
+### 现象与原因
+
+启用“对话正常结束通知”后，原始回答的 `Stop` 会调用通知 Skill，并在原会话中排入一个内部 `hook_recovery` 回合。该内部回合结束时也会产生 `Stop` 事件。此前运行时仍会为这个内部回合注册全部用户 Hook，因此 SQL 行数记录、SQL Check 强制校验、对话正常结束通知等 `Stop` Hook 会产生第二次真实执行和审计记录。
+
+原有的 `suppressSkillRecovery` 只阻止 `invoke_skill` 和 `send_agent_message` 再次排入后置回合，用于避免无限递归；它不会阻止 Hook 脚本、MCP 调用、写记录以及执行审计再次运行。
+
+### 修复方案
+
+- 在 Claude 运行时注册用户 Hook 之前识别 `runtimeOptions.hookRecovery`。
+- 内部 Hook 后置回合不再注册任何用户配置 Hook，因此其 `Stop` 或 `StopFailure` 不会进入用户 Hook 运行时。
+- Claude 内置运行时 Hook 保持不变；原始用户回合的 Hook 执行和后置 Skill 调用保持不变。
+- 前端 Hook 卡片展示逻辑不做调整，本次修复只消除内部回合造成的第二次真实执行。
+
+### 回归要求
+
+- 普通用户回合仍能解析当前用户并注册 Hook。
+- 内部 `hook_recovery` 回合即使携带有效用户 ID，也必须返回“无用户 Hook 可注册”。
+- 实际页面验证时，同一次正常结束通知只新增一次该 Hook 的执行记录；内部 Skill 回合结束后不得新增第二次执行。
+
+### 实际验证结果
+
+- 使用重建后的 Docker 生产页面发送“只回复 `RUNTIME_HOOK_FIX_OK`”。原始回答在 10:33:21 执行 SQL 行数记录、SQL Check 强制校验和对话正常结束通知，并正常排入通知 Skill 后置回合。
+- 通知 Skill 在 10:33:32 完成后，没有再次出现上述三项 Hook 的执行卡片，也没有再次运行其脚本、MCP 或写记录动作。
+- “对话正常结束通知”的执行记录总数由测试前 4 次增加为 5 次，而不是旧逻辑下的 6 次，确认本轮只产生一次真实执行。
+- Claude SDK 回归 19/19、Hook 主套件 74/74、28 类事件矩阵 3/3、前端 Hook 配置工具 8/8 通过；服务端 TypeScript 与涉及文件 Lint 通过。
