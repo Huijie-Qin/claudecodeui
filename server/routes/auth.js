@@ -43,20 +43,20 @@ function hashPasswordResetToken(token) {
 
 function getInvitationFailure(invitation) {
   if (!invitation) {
-    return { statusCode: 404, message: '邀请不存在' };
+    return { statusCode: 404, code: 'INVITATION_NOT_FOUND', message: '邀请不存在' };
   }
 
   if (invitation.accepted_at || invitation.is_active === 1) {
-    return { statusCode: 410, message: '该邀请已被接受' };
+    return { statusCode: 410, code: 'INVITATION_ALREADY_ACCEPTED', message: '该邀请已被接受' };
   }
 
   if (invitation.revoked_at) {
-    return { statusCode: 410, message: '该邀请已被撤销' };
+    return { statusCode: 410, code: 'INVITATION_REVOKED', message: '该邀请已被撤销' };
   }
 
   const expiresAt = Date.parse(invitation.expires_at);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    return { statusCode: 410, message: '该邀请已过期' };
+    return { statusCode: 410, code: 'INVITATION_EXPIRED', message: '该邀请已过期' };
   }
 
   return null;
@@ -235,7 +235,7 @@ export function createAuthRouter({
       const invitation = userDb.getInvitationByTokenHash(hashInvitationToken(req.params.token));
       const failure = getInvitationFailure(invitation);
       if (failure) {
-        return res.status(failure.statusCode).json({ error: failure.message });
+        return res.status(failure.statusCode).json({ code: failure.code, error: failure.message });
       }
 
       return res.json({
@@ -277,7 +277,7 @@ export function createAuthRouter({
       const invitation = userDb.getInvitationByTokenHash(tokenHash);
       const failure = getInvitationFailure(invitation);
       if (failure) {
-        return res.status(failure.statusCode).json({ error: failure.message });
+        return res.status(failure.statusCode).json({ code: failure.code, error: failure.message });
       }
 
       const saltRounds = 12;

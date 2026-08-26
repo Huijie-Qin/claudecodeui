@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
 import { useAuth } from '../context/AuthContext';
+import { shouldRedirectAcceptedInvitation } from '../invitationNavigation';
 import { parseJsonSafely, resolveApiErrorMessage } from '../utils';
 
 import AuthErrorAlert from './AuthErrorAlert';
@@ -19,6 +20,7 @@ type InvitationPayload = {
     username?: string;
     expires_at?: string;
   };
+  code?: string;
   error?: string;
   message?: string;
 };
@@ -80,6 +82,11 @@ export default function InviteAcceptForm({ token }: InviteAcceptFormProps) {
       try {
         const response = await api.auth.invitation(token);
         const payload = await parseJsonSafely<InvitationPayload>(response);
+
+        if (shouldRedirectAcceptedInvitation(response.status, payload)) {
+          window.location.replace(getHomePath());
+          return;
+        }
 
         if (!response.ok || !payload?.invitation?.username) {
           const message = resolveApiErrorMessage(payload, t('invite.errors.invalidInvitation'));

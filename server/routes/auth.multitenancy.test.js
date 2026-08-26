@@ -215,6 +215,33 @@ test('invitation lookup returns the admin-selected username', async () => {
   assert.deepEqual(payload.invitation.username, 'member');
 });
 
+test('an accepted invitation returns a machine-readable terminal state', async () => {
+  const deps = createFakeDeps();
+  const token = 'accepted-invite-token';
+  deps.users.push({
+    id: 1,
+    username: 'member',
+    password_hash: 'password-hash',
+    is_system_admin: 0,
+    is_active: 1,
+  });
+  deps.invitations.push({
+    id: 1,
+    user_id: 1,
+    token_hash: invitationTokenHash(token),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    accepted_at: new Date().toISOString(),
+    revoked_at: null,
+  });
+
+  const router = createAuthRouter(deps);
+  const { response, payload } = await createRequest(router, 'GET', `/api/auth/invitations/${token}`);
+
+  assert.equal(response.status, 410);
+  assert.equal(payload.code, 'INVITATION_ALREADY_ACCEPTED');
+  assert.equal(payload.error, '该邀请已被接受');
+});
+
 test('accepting an invitation activates the user and signs them in', async () => {
   const deps = createFakeDeps();
   const token = 'invite-token';
