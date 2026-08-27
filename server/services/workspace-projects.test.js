@@ -16,6 +16,23 @@ test('slugifyWorkspaceName creates DB-compatible workspace slugs', () => {
   assert.equal(slugifyWorkspaceName('---'), '');
 });
 
+test('slugifyWorkspaceName supports Chinese display names with safe stable slugs', () => {
+  const chineseSlug = slugifyWorkspaceName('市场分析专家');
+
+  assert.match(chineseSlug, /^agent-[a-f0-9]{8}$/);
+  assert.equal(slugifyWorkspaceName('市场分析专家'), chineseSlug);
+  assert.notEqual(slugifyWorkspaceName('竞品分析专家'), chineseSlug);
+});
+
+test('slugifyWorkspaceName keeps mixed-language names distinct', () => {
+  const marketAnalysisSlug = slugifyWorkspaceName('市场分析1');
+  const competitorAnalysisSlug = slugifyWorkspaceName('竞品分析1');
+
+  assert.match(marketAnalysisSlug, /^1-[a-f0-9]{8}$/);
+  assert.match(competitorAnalysisSlug, /^1-[a-f0-9]{8}$/);
+  assert.notEqual(marketAnalysisSlug, competitorAnalysisSlug);
+});
+
 test('buildTenantWorkspacePath isolates tenant and owner paths under workspace root', () => {
   assert.equal(
     buildTenantWorkspacePath({
@@ -40,6 +57,20 @@ test('resolveWorkspaceTarget keeps new workspaces inside tenant isolation root',
   assert.equal(target.requestedName, 'Team App');
   assert.equal(target.workspaceSlug, 'team-app');
   assert.equal(target.targetPath, path.join('/tmp/cloudcli', '2', '7', 'team-app'));
+});
+
+test('resolveWorkspaceTarget preserves a Chinese display name while using an ASCII path', () => {
+  const target = resolveWorkspaceTarget({
+    workspaceType: 'new',
+    workspacesRoot: '/tmp/cloudcli',
+    tenantId: 2,
+    userId: 7,
+    requestedPath: '市场分析专家',
+  });
+
+  assert.equal(target.requestedName, '市场分析专家');
+  assert.match(target.workspaceSlug, /^agent-[a-f0-9]{8}$/);
+  assert.equal(target.targetPath, path.join('/tmp/cloudcli', '2', '7', target.workspaceSlug));
 });
 
 test('resolveWorkspaceTarget keeps existing workspace paths user selected', () => {

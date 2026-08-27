@@ -241,7 +241,9 @@ export default function AgentTemplatesTab({
   const [isCategorySaving, setIsCategorySaving] = useState(false);
   const [actionTemplateId, setActionTemplateId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentTemplate | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const isEditing = editing !== null;
   const availableCategories = useMemo(() => categories.map((category) => category.name), [categories]);
   const filteredTenantOptions = useMemo(() => {
     const keyword = tenantFilterSearch.trim().toLocaleLowerCase();
@@ -269,12 +271,12 @@ export default function AgentTemplatesTab({
 
   const loadTemplates = useCallback(async () => {
     setIsLoading(true);
-    setError(null);
+    setListError(null);
     try {
       const payload = await readJson<{ templates: AgentTemplate[] }>(await api.admin.agentTemplates());
       setTemplates((payload.templates || []).map(normalizeTemplate));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '模板加载失败');
+      setListError(loadError instanceof Error ? loadError.message : '模板加载失败');
     } finally {
       setIsLoading(false);
     }
@@ -291,12 +293,12 @@ export default function AgentTemplatesTab({
 
   useEffect(() => {
     void Promise.all([loadTemplates(), loadCategories()]).catch((loadError) => {
-      setError(loadError instanceof Error ? loadError.message : '模板数据加载失败');
+      setListError(loadError instanceof Error ? loadError.message : '模板数据加载失败');
     });
   }, [loadCategories, loadTemplates]);
 
   useEffect(() => {
-    if (!catalogTenantId) {
+    if (!isEditing || !catalogTenantId) {
       setCatalog({ skills: [], mcps: [] });
       return;
     }
@@ -319,16 +321,31 @@ export default function AgentTemplatesTab({
           }),
         });
       })
-      .catch((catalogError) => { if (!cancelled) setError(catalogError instanceof Error ? catalogError.message : '预设加载失败'); });
+      .catch((catalogError) => { if (!cancelled) setEditorError(catalogError instanceof Error ? catalogError.message : '预设加载失败'); });
     return () => { cancelled = true; };
-  }, [catalogTenantId]);
+  }, [catalogTenantId, isEditing]);
+
+  const closeEditor = () => {
+    setEditing(null);
+    setIsAddingCategory(false);
+    setEditorError(null);
+  };
+
+  const beginEdit = (template: AgentTemplate) => {
+    setListError(null);
+    setEditorError(null);
+    setEditing(template);
+    setIsAddingCategory(false);
+    setCatalogTenantId(template.tenantIds[0] || null);
+  };
 
   const beginCreate = () => {
     const initialTenantId = tenantFilterIds[0] || normalizedCurrentTenantId || activeTenants[0]?.id;
     setEditing({ ...EMPTY_TEMPLATE, tenantIds: initialTenantId ? [initialTenantId] : [] });
     setCatalogTenantId(initialTenantId || null);
     setIsAddingCategory(availableCategories.length === 0);
-    setError(null);
+    setListError(null);
+    setEditorError(null);
   };
 
   const update = <K extends keyof Omit<AgentTemplate, 'id'>>(key: K, value: Omit<AgentTemplate, 'id'>[K]) => {
@@ -383,7 +400,7 @@ export default function AgentTemplatesTab({
     const skillKey = `${skill.tenantId}:${skill.sourceRef}`;
     if (preparingSkillKeys.has(skillKey)) return;
     setPreparingSkillKeys((previous) => new Set(previous).add(skillKey));
-    setError(null);
+    setEditorError(null);
     try {
       let preset: AdminSkillPreset | undefined = skill.presetId ? {
         id: skill.presetId,
@@ -446,7 +463,7 @@ export default function AgentTemplatesTab({
         };
       });
     } catch (skillError) {
-      setError(skillError instanceof Error ? skillError.message : 'Skill 准备失败');
+      setEditorError(skillError instanceof Error ? skillError.message : 'Skill 准备失败');
     } finally {
       setPreparingSkillKeys((previous) => {
         const next = new Set(previous);
@@ -459,11 +476,11 @@ export default function AgentTemplatesTab({
   const save = async (publish = false) => {
     if (!editing) return;
     if (!editing.category.trim()) {
-      setError('请选择或新建模板分类');
+      setEditorError('请选择或新建模板分类');
       return;
     }
     setIsSaving(true);
-    setError(null);
+    setEditorError(null);
     try {
       const response = editing.id
         ? await api.admin.updateAgentTemplate(editing.id, editing)
@@ -476,14 +493,14 @@ export default function AgentTemplatesTab({
       setIsAddingCategory(false);
       if (publish) {
         setTenantFilterIds(finalTemplate.tenantIds || []);
-        setEditing(null);
+        closeEditor();
         showToast(`Agent 模板“${finalTemplate.name}”发布成功`);
       } else {
         setEditing(normalizeTemplate(finalTemplate));
         showToast('草稿保存成功');
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : '模板保存失败');
+      setEditorError(saveError instanceof Error ? saveError.message : '模板保存失败');
     } finally {
       setIsSaving(false);
     }
@@ -497,14 +514,14 @@ export default function AgentTemplatesTab({
 
   const disableTemplate = async (template: AgentTemplate) => {
     setActionTemplateId(template.id);
-    setError(null);
+    setListError(null);
     try {
       await readJson(await api.admin.disableAgentTemplate(template.id));
       await loadTemplates();
       showToast(`Agent 模板“${template.name}”${template.status === 'published' ? '已下线' : '已停用'}`);
     } catch (actionError) {
       const message = actionError instanceof Error ? actionError.message : '模板下线失败';
-      setError(message);
+      setListError(message);
       showToast(message, 'error');
     } finally {
       setActionTemplateId(null);
@@ -514,7 +531,7 @@ export default function AgentTemplatesTab({
   const deleteTemplate = async () => {
     if (!deleteTarget) return;
     setActionTemplateId(deleteTarget.id);
-    setError(null);
+    setListError(null);
     try {
       await readJson(await api.admin.deleteAgentTemplate(deleteTarget.id));
       await Promise.all([loadTemplates(), loadCategories()]);
@@ -522,7 +539,7 @@ export default function AgentTemplatesTab({
       setDeleteTarget(null);
     } catch (actionError) {
       const message = actionError instanceof Error ? actionError.message : '模板删除失败';
-      setError(message);
+      setListError(message);
       showToast(message, 'error');
     } finally {
       setActionTemplateId(null);
@@ -613,7 +630,7 @@ export default function AgentTemplatesTab({
             </div>
           </div>
 
-          {error ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
+          {listError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{listError}</div> : null}
           <div className="overflow-hidden rounded-lg border border-border bg-card">
             {isLoading ? <div className="flex justify-center p-10"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div> : null}
             {!isLoading && filteredTemplates.length === 0 ? <div className="p-10 text-center text-sm text-muted-foreground">当前筛选条件下暂无 Agent 模板</div> : null}
@@ -624,7 +641,7 @@ export default function AgentTemplatesTab({
               const actionLoading = actionTemplateId === template.id;
               return (
                 <div key={template.id} className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/30">
-                  <button type="button" onClick={() => { setEditing(template); setIsAddingCategory(false); setCatalogTenantId(template.tenantIds[0] || null); }} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left">
+                  <button type="button" onClick={() => beginEdit(template)} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></span>
                     <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span>{template.unavailableCapabilities?.length ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{template.unavailableCapabilities.length} 项能力不可用</span> : null}</span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
                     <span className={cn('rounded-full px-2.5 py-1 text-xs', template.status === 'published' ? 'bg-emerald-100 text-emerald-700' : template.status === 'disabled' ? 'bg-amber-100 text-amber-700' : 'bg-muted text-muted-foreground')}>{statusLabel(template.status)}</span>
@@ -652,10 +669,10 @@ export default function AgentTemplatesTab({
   return (
     <div className="mx-auto max-w-6xl space-y-4 pb-10">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><button type="button" onClick={() => setEditing(null)} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
+        <div><button type="button" onClick={closeEditor} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
         <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
       </div>
-      {error ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
+      {editorError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{editorError}</div> : null}
       {editing.unavailableCapabilities?.length ? <div className="flex items-start gap-2 rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>以下模板能力当前不可用，新项目创建时会自动跳过：{editing.unavailableCapabilities.map((capability) => `${capability.name}（${capability.unavailableReason || '不可用'}）`).join('、')}</span></div> : null}
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-5">
@@ -668,6 +685,7 @@ export default function AgentTemplatesTab({
             required
             value={isAddingCategory ? '__new__' : editing.category}
             onChange={(event) => {
+              setEditorError(null);
               if (event.target.value === '__new__') {
                 setIsAddingCategory(true);
                 update('category', '');
@@ -682,7 +700,7 @@ export default function AgentTemplatesTab({
             {availableCategories.map((category) => <option key={category} value={category}>{category}</option>)}
             <option value="__new__">+新建分类</option>
           </select>
-          {isAddingCategory ? <Input autoFocus required value={editing.category} onChange={(event) => update('category', event.target.value)} maxLength={50} placeholder="输入新分类名称，例如：市场分析" /> : null}
+          {isAddingCategory ? <Input autoFocus required value={editing.category} onChange={(event) => { setEditorError(null); update('category', event.target.value); }} maxLength={50} placeholder="输入新分类名称，例如：市场分析" /> : null}
           <span className="block text-xs text-muted-foreground">分类为必填项，可选择当前租户已有分类或创建新分类。</span>
         </div>
         <label className="block space-y-1.5"><span className="text-sm font-medium text-foreground">模板简介</span><Input value={editing.summary} onChange={(event) => update('summary', event.target.value)} placeholder="简要说明模板能帮助用户完成什么" /></label>
