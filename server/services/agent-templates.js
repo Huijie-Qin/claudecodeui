@@ -182,6 +182,18 @@ export function createAgentTemplateService(database = db) {
     return row;
   });
 
+  const inspectSkillRefs = (refs) => refs.map((ref) => {
+    const row = database.prepare(`
+      SELECT * FROM tenant_skill_presets WHERE tenant_id = ? AND id = ?
+    `).get(ref.tenantId, ref.presetId);
+    return {
+      ref,
+      row,
+      available: row?.status === 'published',
+      unavailableReason: !row ? '已删除' : row.status === 'disabled' ? '已下线' : '未发布',
+    };
+  });
+
   const resolveMcpRows = (refs, { requirePublished = false } = {}) => refs.map((ref) => {
     const row = database.prepare(`
       SELECT * FROM mcp_server_presets WHERE tenant_id = ? AND id = ?
@@ -196,6 +208,43 @@ export function createAgentTemplateService(database = db) {
     }
     return row;
   });
+
+  const inspectMcpRefs = (refs) => refs.map((ref) => {
+    const row = database.prepare(`
+      SELECT * FROM mcp_server_presets WHERE tenant_id = ? AND id = ?
+    `).get(ref.tenantId, ref.presetId);
+    const available = Boolean(
+      row
+      && row.status === 'published'
+      && row.last_test_status === 'healthy'
+      && Number(row.tool_count || 0) > 0,
+    );
+    let unavailableReason = '';
+    if (!row) unavailableReason = '已删除';
+    else if (row.status === 'disabled') unavailableReason = '已下线';
+    else if (row.status !== 'published') unavailableReason = '未发布';
+    else if (row.last_test_status !== 'healthy') unavailableReason = '当前不可用';
+    else if (Number(row.tool_count || 0) <= 0) unavailableReason = '暂无可用工具';
+    return { ref, row, available, unavailableReason };
+  });
+
+  const toCapability = (inspection, type) => ({
+    id: Number(inspection.row?.id || inspection.ref.presetId),
+    name: inspection.row?.display_name || inspection.row?.name || `${type} #${inspection.ref.presetId}`,
+    available: inspection.available,
+    unavailableReason: inspection.available ? undefined : inspection.unavailableReason,
+  });
+
+  const getUnavailableCapabilities = (template) => [
+    ...inspectSkillRefs(template.skillPresetRefs).filter((inspection) => !inspection.available).map((inspection) => ({
+      type: 'skill',
+      ...toCapability(inspection, 'Skill'),
+    })),
+    ...inspectMcpRefs(template.mcpPresetRefs).filter((inspection) => !inspection.available).map((inspection) => ({
+      type: 'mcp',
+      ...toCapability(inspection, 'MCP'),
+    })),
+  ];
 
   const normalizeInput = (input, existing = null) => {
     const tenantIds = normalizeIds(input.tenantIds ?? existing?.tenantIds ?? [], 'tenantIds');
@@ -317,27 +366,20 @@ export function createAgentTemplateService(database = db) {
     `).all()
       .map(hydrateTemplate)
       .filter((template) => template.globalVisible || template.tenantIds.includes(normalizedTenantId));
-    const available = [];
-    for (const template of visibleTemplates) {
-      try {
-        const skills = resolveSkillRows(template.skillPresetRefs, { requirePublished: true });
-        const mcps = resolveMcpRows(template.mcpPresetRefs, { requirePublished: true });
-        available.push({
-          id: template.id,
-          name: template.name,
-          category: template.category,
-          summary: template.summary,
-          guideText: template.guideText,
-          skills: skills.map((preset) => ({ id: preset.id, name: preset.display_name || preset.name })),
-          mcps: mcps.map((preset) => ({ id: preset.id, name: preset.display_name || preset.name })),
-          updatedAt: template.updatedAt,
-        });
-      } catch {
-        // A preset may have been disabled after the template was published.
-        // Hide the affected template until an administrator republishes it.
-      }
-    }
-    return available;
+    return visibleTemplates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      category: template.category,
+      summary: template.summary,
+      guideText: template.guideText,
+      skills: inspectSkillRefs(template.skillPresetRefs)
+        .filter((inspection) => inspection.available)
+        .map((inspection) => ({ id: Number(inspection.row.id), name: inspection.row.display_name || inspection.row.name })),
+      mcps: inspectMcpRefs(template.mcpPresetRefs)
+        .filter((inspection) => inspection.available)
+        .map((inspection) => ({ id: Number(inspection.row.id), name: inspection.row.display_name || inspection.row.name })),
+      updatedAt: template.updatedAt,
+    }));
   };
 
   const resolveTemplateSnapshot = ({ templateId, tenantId }) => {
@@ -349,12 +391,14 @@ export function createAgentTemplateService(database = db) {
     if (!template.globalVisible && !template.tenantIds.includes(normalizedTenantId)) {
       throw createHttpError('Agent template is not visible to this tenant', 403);
     }
-    const skills = resolveSkillRows(template.skillPresetRefs, { requirePublished: true });
-    const mcps = resolveMcpRows(template.mcpPresetRefs, { requirePublished: true });
+    const skillInspections = inspectSkillRefs(template.skillPresetRefs);
+    const mcpInspections = inspectMcpRefs(template.mcpPresetRefs);
+    const unavailableCapabilities = getUnavailableCapabilities(template);
     return {
       template,
-      skills: buildPresetSnapshot(skills),
-      mcps: buildPresetSnapshot(mcps),
+      skills: buildPresetSnapshot(skillInspections.filter((inspection) => inspection.available).map((inspection) => inspection.row)),
+      mcps: buildPresetSnapshot(mcpInspections.filter((inspection) => inspection.available).map((inspection) => inspection.row)),
+      unavailableCapabilities,
     };
   };
 
@@ -364,7 +408,10 @@ export function createAgentTemplateService(database = db) {
     listAdminTemplates: ({ tenantId } = {}) => {
       const templates = database.prepare(`
         SELECT * FROM agent_templates ORDER BY updated_at DESC, id DESC
-      `).all().map(hydrateTemplate);
+      `).all().map(hydrateTemplate).map((template) => ({
+        ...template,
+        unavailableCapabilities: getUnavailableCapabilities(template),
+      }));
       if (tenantId == null || tenantId === '') return templates;
       const normalizedTenantId = positiveInteger(tenantId, 'tenantId');
       return templates.filter((template) => template.tenantIds.includes(normalizedTenantId));

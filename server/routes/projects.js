@@ -109,6 +109,9 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
     templateId: Number(templateId),
     tenantId: tenant.id,
   });
+  const appliedSkills = [];
+  const appliedMcps = [];
+  const warnings = [...(snapshot.unavailableCapabilities || [])];
 
   const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
   if (instructions) {
@@ -121,40 +124,71 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
       .map((install) => Number(install.preset_id)),
   );
   for (const preset of snapshot.skills) {
-    if (installedSkillPresetIds.has(preset.id)) continue;
-    const sourceTenant = multitenancyDb.tenants.getTenantById(preset.tenantId);
-    await skillPresetService.installWorkspaceSkillPreset({
-      tenantId: preset.tenantId,
-      workspaceId: workspace.id,
-      workspacePath: workspace.path,
-      presetId: preset.id,
-      userId: user.id,
-      tenantCode: sourceTenant?.prod_code || sourceTenant?.code,
-      accountId: user.username,
-    });
+    if (installedSkillPresetIds.has(preset.id)) {
+      appliedSkills.push(preset);
+      continue;
+    }
+    try {
+      const sourceTenant = multitenancyDb.tenants.getTenantById(preset.tenantId);
+      await skillPresetService.installWorkspaceSkillPreset({
+        tenantId: preset.tenantId,
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        presetId: preset.id,
+        userId: user.id,
+        tenantCode: sourceTenant?.prod_code || sourceTenant?.code,
+        accountId: user.username,
+      });
+      appliedSkills.push(preset);
+    } catch (error) {
+      warnings.push({
+        type: 'skill',
+        id: preset.id,
+        name: preset.name,
+        unavailableReason: error instanceof Error ? error.message : '安装失败',
+      });
+    }
   }
 
   for (const preset of snapshot.mcps) {
-    await workspaceMcpTools.installWorkspaceMcpPreset({
-      tenantId: preset.tenantId,
-      workspaceId: workspace.id,
-      workspacePath: workspace.path,
-      workspaceDisplayName: workspace.display_name,
-      presetId: preset.id,
-      userId: user.id,
-    });
-    agentTemplateService.markTemplateMcpInstall({
-      workspaceId: workspace.id,
-      presetId: preset.id,
-      templateId: snapshot.template.id,
-    });
+    try {
+      await workspaceMcpTools.installWorkspaceMcpPreset({
+        tenantId: preset.tenantId,
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        workspaceDisplayName: workspace.display_name,
+        presetId: preset.id,
+        userId: user.id,
+      });
+      agentTemplateService.markTemplateMcpInstall({
+        workspaceId: workspace.id,
+        presetId: preset.id,
+        templateId: snapshot.template.id,
+      });
+      appliedMcps.push(preset);
+    } catch (error) {
+      warnings.push({
+        type: 'mcp',
+        id: preset.id,
+        name: preset.name,
+        unavailableReason: error instanceof Error ? error.message : '安装失败',
+      });
+    }
   }
 
   agentTemplateService.saveWorkspaceSnapshot({
     workspaceId: workspace.id,
     userId: user.id,
-    snapshot,
+    snapshot: { ...snapshot, skills: appliedSkills, mcps: appliedMcps },
   });
+
+  if (warnings.length > 0) {
+    console.warn('Agent template applied with unavailable capabilities:', {
+      templateId: snapshot.template.id,
+      workspaceId: workspace.id,
+      warnings,
+    });
+  }
 
   return {
     id: snapshot.template.id,

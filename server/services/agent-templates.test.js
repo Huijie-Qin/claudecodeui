@@ -95,6 +95,50 @@ test('ordinary tenant templates stay isolated to selected tenants', () => {
   assert.equal(draft.category, '应用分析');
 });
 
+test('published templates remain visible and skip MCPs that go offline later', () => {
+  const fixture = createFixture();
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '可降级模板',
+      category: '应用分析',
+      tenantIds: [fixture.dataAgentTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.mcpId }],
+    },
+  });
+  fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+  fixture.database.prepare(`
+    UPDATE mcp_server_presets SET status = 'disabled' WHERE id = ?
+  `).run(fixture.mcpId);
+
+  const [listed] = fixture.service.listAvailableTemplates({ tenantId: fixture.appTenantId });
+  assert.equal(listed.id, draft.id);
+  assert.deepEqual(listed.mcps, [], 'end users only see capabilities that can currently be applied');
+
+  const [adminTemplate] = fixture.service.listAdminTemplates();
+  assert.deepEqual(adminTemplate.unavailableCapabilities, [{
+    type: 'mcp',
+    id: fixture.mcpId,
+    name: 'Web Search',
+    available: false,
+    unavailableReason: '已下线',
+  }]);
+
+  const snapshot = fixture.service.resolveTemplateSnapshot({
+    templateId: draft.id,
+    tenantId: fixture.appTenantId,
+  });
+  assert.deepEqual(snapshot.mcps, []);
+  assert.deepEqual(snapshot.unavailableCapabilities, [{
+    type: 'mcp',
+    id: fixture.mcpId,
+    name: 'Web Search',
+    available: false,
+    unavailableReason: '已下线',
+  }]);
+});
+
 test('template category is required', () => {
   const fixture = createFixture();
   assert.throws(() => fixture.service.saveTemplate({

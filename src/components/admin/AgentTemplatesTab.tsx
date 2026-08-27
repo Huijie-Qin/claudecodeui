@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, Sparkles, Tags, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, Sparkles, Tags, Trash2, X } from 'lucide-react';
 
 import { api } from '../../utils/api';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
@@ -48,6 +48,12 @@ type AgentTemplate = {
   mcpPresetRefs: PresetRef[];
   globalVisible: boolean;
   status: 'draft' | 'published' | 'disabled';
+  unavailableCapabilities?: Array<{
+    type: 'skill' | 'mcp';
+    id: number;
+    name: string;
+    unavailableReason?: string;
+  }>;
 };
 type Preset = { id: number; tenantId: number; name: string; displayName: string; description?: string };
 type SkillCandidate = Preset & {
@@ -620,7 +626,7 @@ export default function AgentTemplatesTab({
                 <div key={template.id} className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/30">
                   <button type="button" onClick={() => { setEditing(template); setIsAddingCategory(false); setCatalogTenantId(template.tenantIds[0] || null); }} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></span>
-                    <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span></span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
+                    <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span>{template.unavailableCapabilities?.length ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{template.unavailableCapabilities.length} 项能力不可用</span> : null}</span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
                     <span className={cn('rounded-full px-2.5 py-1 text-xs', template.status === 'published' ? 'bg-emerald-100 text-emerald-700' : template.status === 'disabled' ? 'bg-amber-100 text-amber-700' : 'bg-muted text-muted-foreground')}>{statusLabel(template.status)}</span>
                   </button>
                   <div className="flex shrink-0 items-center gap-1">
@@ -650,6 +656,7 @@ export default function AgentTemplatesTab({
         <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
       </div>
       {error ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
+      {editing.unavailableCapabilities?.length ? <div className="flex items-start gap-2 rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>以下模板能力当前不可用，新项目创建时会自动跳过：{editing.unavailableCapabilities.map((capability) => `${capability.name}（${capability.unavailableReason || '不可用'}）`).join('、')}</span></div> : null}
 
       <section className="space-y-4 rounded-lg border border-border bg-card p-5">
         <div><h3 className="font-semibold text-foreground">基本信息</h3><p className="mt-1 text-sm text-muted-foreground">用于用户在创建项目时识别和选择模板。</p></div>
