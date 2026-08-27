@@ -114,6 +114,12 @@ export const api = {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
   }),
+  updateWorkspaceHookChatVisibility: (workspaceId, hookId, showInChat) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/chat-visibility`,
+  ), {
+    method: 'PUT',
+    body: JSON.stringify({ showInChat }),
+  }),
   checkProjectAgentList: (projectName, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/agent-list-check`, workspaceId), {
       method: 'POST',

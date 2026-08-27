@@ -21,6 +21,7 @@ type AvailableHook = {
   eventName: string;
   version: number;
   enabled: boolean;
+  showInChat: boolean;
   bindingController?: 'admin' | 'sql_check';
   postActions?: Array<{ type?: string }>;
 };
@@ -49,6 +50,7 @@ export default function HookSettingsTab({
   const [hooks, setHooks] = useState<AvailableHook[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyHookId, setBusyHookId] = useState<string | null>(null);
+  const [visibilityBusyHookId, setVisibilityBusyHookId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recordsHook, setRecordsHook] = useState<AvailableHook | null>(null);
   const [executions, setExecutions] = useState<UserHookExecution[]>([]);
@@ -85,7 +87,11 @@ export default function HookSettingsTab({
       .then(async (response) => {
         if (!response.ok) throw new Error(await readError(response, '加载 Hook 失败'));
         const payload = await response.json() as { hooks?: AvailableHook[] };
-        if (!cancelled) setHooks(Array.isArray(payload.hooks) ? payload.hooks : []);
+        if (!cancelled) {
+          setHooks(Array.isArray(payload.hooks)
+            ? payload.hooks.map((hook) => ({ ...hook, showInChat: hook.showInChat !== false }))
+            : []);
+        }
       })
       .catch((caughtError) => {
         if (!cancelled) setError(caughtError instanceof Error ? caughtError.message : '加载 Hook 失败');
@@ -108,6 +114,25 @@ export default function HookSettingsTab({
       setError(caughtError instanceof Error ? caughtError.message : '更新 Hook 失败');
     } finally {
       setBusyHookId(null);
+    }
+  };
+
+  const toggleHookVisibility = async (hook: AvailableHook, showInChat: boolean) => {
+    if (!workspaceId) return;
+    setVisibilityBusyHookId(hook.id);
+    setError(null);
+    try {
+      const response = await api.updateWorkspaceHookChatVisibility(workspaceId, hook.id, showInChat);
+      if (!response.ok) {
+        throw new Error(await readError(response, showInChat ? '开启对话展示失败' : '关闭对话展示失败'));
+      }
+      setHooks((current) => current.map((candidate) => (
+        candidate.id === hook.id ? { ...candidate, showInChat } : candidate
+      )));
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : '更新对话展示失败');
+    } finally {
+      setVisibilityBusyHookId(null);
     }
   };
 
@@ -192,6 +217,10 @@ export default function HookSettingsTab({
         </div>
       ) : null}
 
+      <p className="text-xs leading-5 text-muted-foreground">
+        对话展示只影响你自己的紫色 Hook 卡片；关闭后 Hook 仍会执行，并可在执行记录中查看结果。
+      </p>
+
       <SettingsCard divided>
         {!workspaceId ? (
           <div className="p-5 text-sm text-muted-foreground">
@@ -228,7 +257,7 @@ export default function HookSettingsTab({
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
               </div>
-              <div className="flex flex-shrink-0 items-center gap-2">
+              <div className="flex flex-shrink-0 flex-col items-end gap-2">
                 <button
                   type="button"
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -238,12 +267,27 @@ export default function HookSettingsTab({
                   <History className="h-3.5 w-3.5" aria-hidden="true" />
                   执行记录
                 </button>
-                <SettingsToggle
-                  checked={hook.enabled}
-                  disabled={Boolean(busyHookId) || isSqlCheckManaged}
-                  ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
-                  onChange={(enabled) => void toggleHook(hook, enabled)}
-                />
+                <div className="flex min-h-7 items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">启用</span>
+                  <SettingsToggle
+                    checked={hook.enabled}
+                    disabled={Boolean(busyHookId) || isSqlCheckManaged}
+                    ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
+                    onChange={(enabled) => void toggleHook(hook, enabled)}
+                  />
+                </div>
+                <div
+                  className="flex min-h-7 items-center gap-2"
+                  title="只控制你自己的对话展示，不影响 Hook 执行和执行记录"
+                >
+                  <span className="text-[11px] font-medium text-foreground">对话展示</span>
+                  <SettingsToggle
+                    checked={hook.showInChat}
+                    disabled={visibilityBusyHookId === hook.id}
+                    ariaLabel={`${hook.showInChat ? '关闭' : '开启'} ${hook.name} 的对话展示`}
+                    onChange={(showInChat) => void toggleHookVisibility(hook, showInChat)}
+                  />
+                </div>
               </div>
             </div>
           );

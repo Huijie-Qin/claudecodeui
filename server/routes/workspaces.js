@@ -219,6 +219,32 @@ export function createWorkspacesRouter({
     }
   });
 
+  router.put('/:workspaceId/hooks/:hookId/chat-visibility', (req, res) => {
+    try {
+      const workspaceId = Number(req.params.workspaceId);
+      const { workspace, accessRole } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId,
+      });
+      const availableHook = hookConfigs.listAvailableHooksForUser(req.user.id)
+        .find((hook) => hook.id === req.params.hookId);
+      if (!availableHook) {
+        const error = new Error('Hook is not available to this user');
+        error.statusCode = 403;
+        throw error;
+      }
+      const result = hookConfigs.setUserHookChatVisibility({
+        userId: req.user.id,
+        hookId: req.params.hookId,
+        showInChat: req.body?.showInChat,
+      });
+      return res.json({ workspaceId: workspace.id, accessRole, ...result });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
   router.put('/:workspaceId/sql-check/enforcement', async (req, res) => {
     try {
       if (typeof hookConfigs?.setSqlCheckEnforcement !== 'function') {

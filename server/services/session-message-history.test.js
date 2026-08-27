@@ -810,11 +810,11 @@ test('Claude session history omits execution and persisted follow-up cards for H
       getHook: () => ({
         id: 'hidden-hook',
         name: '隐藏 Hook',
-        showInChat: false,
         eventName: 'Stop',
         extensionLogic: null,
         postActions: [{ type: 'invoke_skill' }],
       }),
+      getUserHookChatVisibility: ({ userId, hookId }) => userId !== 2 || hookId !== 'hidden-hook',
     },
   });
 

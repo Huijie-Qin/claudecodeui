@@ -25,7 +25,6 @@ const resources: HookResources = {
 const draft: HookConfigDraft = {
   name: 'SQL 分析',
   description: '',
-  showInChat: true,
   eventName: 'PreToolUse',
   matcher: { mode: 'regex', value: '^mcp__database__.*$' },
   extensionLogic: null,
@@ -132,7 +131,6 @@ test('copying a Hook creates an independent draft without runtime identity or bi
   assert.equal(copy.name, 'SQL 分析（副本）');
   assert.equal('id' in copy, false);
   assert.equal('activationScope' in copy, false);
-  assert.equal(copy.showInChat, true);
   assert.deepEqual(copy.postActions, hook.postActions);
   copy.postActions[0].config.fields = { copied: true };
   assert.deepEqual(hook.postActions[0].config.fields, {});

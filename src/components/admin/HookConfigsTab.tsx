@@ -240,7 +240,6 @@ function statusVariant(status: HookConfig['status']) {
 function normalizeHookConfig(hook: HookConfig): HookConfig {
   return {
     ...hook,
-    showInChat: hook.showInChat !== false,
     boundUserCount: Number(hook.boundUserCount || 0),
     scopedUserCount: Number(hook.scopedUserCount || 0),
     boundTenantCount: Number(hook.boundTenantCount || 0),

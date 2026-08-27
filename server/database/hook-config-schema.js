@@ -108,6 +108,19 @@ CREATE TABLE IF NOT EXISTS user_hook_bindings (
 CREATE INDEX IF NOT EXISTS idx_user_hook_bindings_hook
   ON user_hook_bindings(hook_id, user_id);
 
+CREATE TABLE IF NOT EXISTS user_hook_preferences (
+  user_id INTEGER NOT NULL,
+  hook_id TEXT NOT NULL,
+  show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1)),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, hook_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_hook_preferences_hook
+  ON user_hook_preferences(hook_id, user_id);
+
 CREATE TABLE IF NOT EXISTS hook_user_scopes (
   hook_id TEXT NOT NULL,
   user_id INTEGER NOT NULL,
@@ -207,6 +220,12 @@ export function migrateHookConfigurationModel(database) {
   const hasShowInChat = columns.some((column) => column.name === 'show_in_chat');
   const hasGate = columns.some((column) => column.name === 'gate_json');
   const hasAdvancedScript = columns.some((column) => column.name === 'advanced_script_json');
+  const hasUserHookPreferences = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_preferences'")
+    .get());
+  const hasUserHookBindings = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_bindings'")
+    .get());
   const migrate = database.transaction(() => {
     if (!hasExtensionLogic) {
       database.exec(`
@@ -233,6 +252,32 @@ export function migrateHookConfigurationModel(database) {
         ADD COLUMN show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1))
       `);
     }
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS user_hook_preferences (
+        user_id INTEGER NOT NULL,
+        hook_id TEXT NOT NULL,
+        show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1)),
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, hook_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_hook_preferences_hook
+        ON user_hook_preferences(hook_id, user_id);
+    `);
+    if (hasUserHookBindings) {
+      database.prepare(`
+        INSERT OR IGNORE INTO user_hook_preferences (user_id, hook_id, show_in_chat)
+        SELECT binding.user_id, binding.hook_id, 0
+        FROM user_hook_bindings binding
+        INNER JOIN hooks hook ON hook.id = binding.hook_id
+        WHERE hook.show_in_chat = 0
+      `).run();
+    }
+    // show_in_chat was briefly exposed as an administrator-owned global flag.
+    // Preserve existing disabled bindings above, then neutralize the legacy
+    // column so new users are controlled exclusively by their own preference.
+    database.prepare('UPDATE hooks SET show_in_chat = 1 WHERE show_in_chat = 0').run();
     const extensionRows = database.prepare('SELECT id, extension_logic_json FROM hooks').all();
     const updateExtensionLogic = database.prepare(`
       UPDATE hooks SET extension_logic_json = ? WHERE id = ?
@@ -267,6 +312,7 @@ export function migrateHookConfigurationModel(database) {
     addedPostActions: !hasPostActions,
     addedClaudeResponse: !hasClaudeResponse,
     addedShowInChat: !hasShowInChat,
+    addedUserHookPreferences: !hasUserHookPreferences,
     removedGate: hasGate,
     removedAdvancedScript: hasAdvancedScript,
   };

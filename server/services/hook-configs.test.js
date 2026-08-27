@@ -71,7 +71,6 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   try {
     const created = service.createHook({ input: publishableHook(), userId: 1 });
     assert.equal(created.status, 'draft');
-    assert.equal(created.showInChat, true);
     assert.equal(created.extensionLogic.language, 'javascript');
     assert.deepEqual(created.extensionLogic.outputs, [
       { name: 'summary', type: 'string' },
@@ -81,7 +80,6 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       hookId: created.id,
       userId: 1,
       input: publishableHook({
-        showInChat: false,
         extensionLogic: {
           language: 'python',
           code: 'async def run(event, ccui):\n    await ccui.records.write("stop", event)\n    return {"output": {"summary": "done"}}',
@@ -98,7 +96,6 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       }),
     });
     assert.equal(updated.extensionLogic.language, 'python');
-    assert.equal(updated.showInChat, false);
     assert.match(updated.extensionLogic.code, /async def run/);
     assert.deepEqual(updated.claudeResponse.bindings.systemMessage, {
       source: 'template',
@@ -108,7 +105,6 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     const published = service.publishHook({ hookId: created.id, userId: 1 });
     assert.equal(published.status, 'published');
     assert.equal(published.version, 1);
-    assert.equal(published.showInChat, false);
     assert.equal(published.boundUserCount, 0);
     assert.ok(published.publishedAt);
 
@@ -130,6 +126,14 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     assert.deepEqual(service.listActiveHooksForUser(2), []);
     service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: true });
     assert.deepEqual(service.listActiveHooksForUser(1).map((hook) => hook.id), [created.id]);
+    assert.equal(service.listActiveHooksForUser(1)[0].showInChat, true);
+    service.setUserHookChatVisibility({ userId: 1, hookId: created.id, showInChat: false });
+    assert.equal(service.listAvailableHooksForUser(1)[0].showInChat, false);
+    assert.equal(service.listActiveHooksForUser(1)[0].showInChat, false);
+    assert.equal(service.getUserHookChatVisibility({ userId: 1, hookId: created.id }), false);
+    service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: false });
+    service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: true });
+    assert.equal(service.listActiveHooksForUser(1)[0].showInChat, false);
 
     database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('new-member');
     assert.deepEqual(service.listAvailableHooksForUser(3), []);
@@ -146,6 +150,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     assert.equal(service.listAvailableHooksForUser(2)[0].enabled, false);
     service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
     service.setUserHookEnabled({ userId: 3, hookId: created.id, enabled: true });
+    assert.equal(service.listActiveHooksForUser(2)[0].showInChat, true);
     assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
     assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
     database.prepare('INSERT INTO users (id, username) VALUES (4, ?)').run('later-member');
@@ -637,8 +642,13 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
     assert.equal(enabled.enabled, true);
     assert.equal(service.listAvailableHooksForUser(2)[0].enabled, true);
+    service.setUserHookChatVisibility({ userId: 2, hookId: created.id, showInChat: false });
+    assert.equal(service.listAvailableHooksForUser(2)[0].showInChat, false);
     assert.equal(service.getHook(created.id).boundUserCount, 1);
-    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => ({
+      id: hook.id,
+      showInChat: hook.showInChat,
+    })), [{ id: created.id, showInChat: false }]);
 
     const disabled = service.setSqlCheckEnforcement({ userId: 2, enabled: false });
     assert.equal(disabled.enabled, false);
@@ -1029,6 +1039,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
       addedPostActions: true,
       addedClaudeResponse: true,
       addedShowInChat: true,
+      addedUserHookPreferences: true,
       removedGate: true,
       removedAdvancedScript: true,
     });
@@ -1044,6 +1055,12 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'hook_actions'")
         .get().count,
       0,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_preferences'")
+        .get().count,
+      1,
     );
     assert.deepEqual(
       JSON.parse(
@@ -1081,6 +1098,59 @@ test('configuration migration removes legacy script output descriptions', () => 
         code: 'return {};',
         outputs: [{ name: 'result', type: 'string' }],
       },
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('configuration migration converts the legacy global chat flag into per-user preferences', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY);
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        extension_logic_json TEXT NOT NULL DEFAULT 'null',
+        post_actions_json TEXT NOT NULL DEFAULT '[]',
+        claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}',
+        show_in_chat INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE user_hook_bindings (
+        user_id INTEGER NOT NULL,
+        hook_id TEXT NOT NULL,
+        PRIMARY KEY (user_id, hook_id)
+      );
+      INSERT INTO users (id) VALUES (1), (2);
+      INSERT INTO hooks (id, show_in_chat) VALUES ('legacy-hidden', 0);
+      INSERT INTO user_hook_bindings (user_id, hook_id) VALUES (1, 'legacy-hidden');
+    `);
+
+    migrateHookConfigurationModel(database);
+    assert.equal(
+      database.prepare("SELECT show_in_chat FROM hooks WHERE id = 'legacy-hidden'").get().show_in_chat,
+      1,
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT user_id, hook_id, show_in_chat
+        FROM user_hook_preferences
+      `).all(),
+      [{ user_id: 1, hook_id: 'legacy-hidden', show_in_chat: 0 }],
+    );
+
+    database.prepare(`
+      UPDATE user_hook_preferences SET show_in_chat = 1
+      WHERE user_id = 1 AND hook_id = 'legacy-hidden'
+    `).run();
+    database.prepare("UPDATE hooks SET show_in_chat = 0 WHERE id = 'legacy-hidden'").run();
+    migrateHookConfigurationModel(database);
+    assert.equal(
+      database.prepare(`
+        SELECT show_in_chat FROM user_hook_preferences
+        WHERE user_id = 1 AND hook_id = 'legacy-hidden'
+      `).get().show_in_chat,
+      1,
     );
   } finally {
     database.close();

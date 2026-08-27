@@ -84,23 +84,24 @@ function isClaudeSyntheticMessage(message) {
   return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind);
 }
 
-function isHookActivityVisible(message, hookConfigs, hooksById) {
-  if (!isClaudeSyntheticMessage(message) || !message?.hookId) return true;
-  if (typeof hookConfigs?.getHook !== 'function') return true;
-  const hookId = String(message.hookId);
-  let hook = hooksById.get(hookId);
-  if (hook === undefined) {
-    try {
-      hook = hookConfigs.getHook(hookId) || null;
-    } catch {
-      // Older installations may restore persisted Hook activities before the
-      // Hook configuration tables have been migrated. Keep those activities
-      // visible instead of making the entire session history unavailable.
-      hook = null;
-    }
-    hooksById.set(hookId, hook);
+function getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId) {
+  if (typeof hookConfigs?.getUserHookChatVisibility !== 'function') return true;
+  if (visibilityByHookId.has(hookId)) return visibilityByHookId.get(hookId);
+  let visible = true;
+  try {
+    visible = hookConfigs.getUserHookChatVisibility({ userId, hookId }) !== false;
+  } catch {
+    // Visibility preferences should never make the session history unavailable.
+    visible = true;
   }
-  return hook?.showInChat !== false;
+  visibilityByHookId.set(hookId, visible);
+  return visible;
+}
+
+function isHookActivityVisible(message, hookConfigs, userId, visibilityByHookId) {
+  if (!isClaudeSyntheticMessage(message) || !message?.hookId) return true;
+  const hookId = String(message.hookId);
+  return getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId);
 }
 
 function getHookActivityIdentity(message) {
@@ -210,6 +211,7 @@ function listHistoricalHookActivities({
 
   try {
     const hooks = new Map();
+    const visibilityByHookId = new Map();
     return hookConfigs.listAllExecutions({
       sessionId: providerSessionId,
       userId,
@@ -221,7 +223,12 @@ function listHistoricalHookActivities({
         hook = typeof hookConfigs.getHook === 'function' ? hookConfigs.getHook(execution.hookId) : null;
         hooks.set(execution.hookId, hook || null);
       }
-      if (hook?.showInChat === false) {
+      if (!getUserHookActivityVisibility(
+        hookConfigs,
+        userId,
+        execution.hookId,
+        visibilityByHookId,
+      )) {
         hiddenHookExecutionPrefixes.add(`hook_activity_${execution.id}_`);
         return [];
       }
@@ -476,11 +483,16 @@ export function createSessionMessageHistoryService({
           userId,
           hiddenHookExecutionPrefixes,
         });
-        const hooksById = new Map();
+        const visibilityByHookId = new Map();
         const hiddenHookActivityIds = new Set();
         const persistedHookActivities = dbHistory.messages.filter(isClaudeSyntheticMessage);
         const visiblePersistedHookActivities = persistedHookActivities.filter((message) => {
-          const visible = isHookActivityVisible(message, hookConfigs, hooksById);
+          const visible = isHookActivityVisible(
+            message,
+            hookConfigs,
+            userId,
+            visibilityByHookId,
+          );
           if (!visible) {
             const identity = getHookActivityIdentity(message);
             if (identity) hiddenHookActivityIds.add(identity);

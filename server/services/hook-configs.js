@@ -490,7 +490,6 @@ function normalizeHookInput(input, { strict = false } = {}) {
       max: 1000,
       allowEmpty: true,
     }),
-    showInChat: input.showInChat !== false,
     eventName,
     matcher,
     extensionLogic: normalizeExtensionLogic(input.extensionLogic),
@@ -519,7 +518,6 @@ function mapHookRow(row) {
     id: row.id,
     name: row.name,
     description: row.description || '',
-    showInChat: row.show_in_chat !== 0,
     status: row.status,
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
@@ -1220,6 +1218,12 @@ export function createHookConfigService({
             WHERE enabled_binding.hook_id = h.id
               AND enabled_binding.user_id = ?
           ) AS user_enabled,
+          COALESCE((
+            SELECT preference.show_in_chat
+            FROM user_hook_preferences preference
+            WHERE preference.hook_id = h.id
+              AND preference.user_id = ?
+          ), 1) AS user_show_in_chat,
           EXISTS (
             SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
           ) AS has_data_records
@@ -1243,8 +1247,12 @@ export function createHookConfigService({
         ORDER BY h.updated_at DESC, h.created_at DESC
       `,
         )
-        .all(userId, userId);
-      return rows.map((row) => ({ ...mapHookRow(row), enabled: row.user_enabled === 1 }));
+        .all(userId, userId, userId);
+      return rows.map((row) => ({
+        ...mapHookRow(row),
+        enabled: row.user_enabled === 1,
+        showInChat: row.user_show_in_chat !== 0,
+      }));
     },
 
     listActiveHooksForUser: (userId) => {
@@ -1253,6 +1261,12 @@ export function createHookConfigService({
           (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
           (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
           0 AS bound_tenant_count,
+          COALESCE((
+            SELECT preference.show_in_chat
+            FROM user_hook_preferences preference
+            WHERE preference.hook_id = h.id
+              AND preference.user_id = ?
+          ), 1) AS user_show_in_chat,
           EXISTS (
             SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
           ) AS has_data_records
@@ -1271,8 +1285,11 @@ export function createHookConfigService({
             )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC
-      `).all(userId, userId);
-      return rows.map(mapHookRow);
+      `).all(userId, userId, userId);
+      return rows.map((row) => ({
+        ...mapHookRow(row),
+        showInChat: row.user_show_in_chat !== 0,
+      }));
     },
 
     getHook,
@@ -1416,6 +1433,41 @@ export function createHookConfigService({
       };
     },
 
+    setUserHookChatVisibility: ({ userId, hookId, showInChat }) => {
+      const normalizedUserId = Number(userId);
+      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+        throw createHttpError('userId must be a positive integer');
+      }
+      if (typeof showInChat !== 'boolean') throw createHttpError('showInChat must be a boolean');
+      const hook = requireHook(hookId);
+      if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
+      const eligible = hook.bindingController === 'sql_check'
+        || hook.activationScope === 'all_users'
+        || Boolean(database.prepare(`
+          SELECT 1 FROM hook_user_scopes WHERE hook_id = ? AND user_id = ?
+        `).get(hookId, normalizedUserId));
+      if (!eligible) throw createHttpError('Hook is not available to this user', 403);
+      database.prepare(`
+        INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id, hook_id) DO UPDATE SET
+          show_in_chat = excluded.show_in_chat,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(normalizedUserId, hookId, showInChat ? 1 : 0);
+      return { hookId, showInChat };
+    },
+
+    getUserHookChatVisibility: ({ userId, hookId }) => {
+      const normalizedUserId = Number(userId);
+      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0 || !hookId) return true;
+      const preference = database.prepare(`
+        SELECT show_in_chat
+        FROM user_hook_preferences
+        WHERE user_id = ? AND hook_id = ?
+      `).get(normalizedUserId, hookId);
+      return preference?.show_in_chat !== 0;
+    },
+
     getSqlCheckEnforcement,
 
     setSqlCheckEnforcement: ({ userId, enabled }) => {
@@ -1520,8 +1572,8 @@ export function createHookConfigService({
         INSERT INTO hooks (
           id, name, description, status, event_name, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json,
-          show_in_chat, binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          binding_controller, created_by, updated_by
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -1533,7 +1585,6 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
-          normalized.showInChat ? 1 : 0,
           normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
@@ -1550,7 +1601,7 @@ export function createHookConfigService({
         UPDATE hooks
         SET name = ?, description = ?, status = 'draft', event_name = ?,
             matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
-            claude_response_json = ?, show_in_chat = ?,
+            claude_response_json = ?,
             updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `,
@@ -1563,7 +1614,6 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
-          normalized.showInChat ? 1 : 0,
           userId,
           hookId,
         );

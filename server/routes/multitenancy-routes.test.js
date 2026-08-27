@@ -677,6 +677,7 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
     status: 'published',
     bindingController: 'admin',
     enabled: false,
+    showInChat: true,
     postActions: [{ type: 'invoke_skill' }],
   };
   const router = createWorkspacesRouter({
@@ -700,6 +701,10 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
         seen.push(['enable', userId, hookId, enabled]);
         return { hookId, enabled };
       },
+      setUserHookChatVisibility: ({ userId, hookId, showInChat }) => {
+        seen.push(['visibility', userId, hookId, showInChat]);
+        return { hookId, showInChat };
+      },
     },
     hookResources: {
       materializeHook: async ({ hook, workspacePath }) => {
@@ -714,15 +719,23 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
     method: 'PUT',
     body: { enabled: true },
   });
+  const hidden = await requestJson(router, '/10/hooks/notify-hook/chat-visibility', {
+    method: 'PUT',
+    body: { showInChat: false },
+  });
 
   assert.equal(listed.response.status, 200);
   assert.equal(listed.payload.hooks[0].name, '对话正常结束通知');
   assert.equal(enabled.response.status, 200);
+  assert.equal(hidden.response.status, 200);
+  assert.equal(hidden.payload.showInChat, false);
   assert.deepEqual(seen, [
     ['list', 1],
     ['list', 1],
     ['materialize', 'notify-hook', '/tmp/hook-workspace'],
     ['enable', 1, 'notify-hook', true],
+    ['list', 1],
+    ['visibility', 1, 'notify-hook', false],
   ]);
 });
 

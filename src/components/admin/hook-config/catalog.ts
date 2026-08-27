@@ -624,7 +624,6 @@ export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
   return {
     name: '',
     description: '',
-    showInChat: true,
     eventName,
     matcher: {},
     extensionLogic: null,
@@ -637,7 +636,6 @@ export function createHookCopyDraft(hook: HookConfig, name: string): HookConfigD
   return JSON.parse(JSON.stringify({
     name,
     description: hook.description,
-    showInChat: hook.showInChat,
     eventName: hook.eventName,
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,

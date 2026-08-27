@@ -431,11 +431,6 @@
     "actionCount": "{{count}} 个行为",
     "boundUserCount": "已绑定 {{count}} 个用户",
     "builtin": "内置 Hook",
-    "chatVisibility": {
-      "title": "在对话中展示 Hook",
-      "description": "开启后才会在会话中显示紫色 Hook 卡片；关闭不会影响 Hook 执行、后置行为或执行记录。",
-      "toggleLabel": "切换 Hook 对话展示"
-    },
     "businessData": {
       "label": "业务数据",
       "title": "Hook 业务数据",
