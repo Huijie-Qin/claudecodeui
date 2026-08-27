@@ -97,7 +97,169 @@ test('normalizedToChatMessages groups a Hook follow-up into its execution card',
     status: 'succeeded',
     error: undefined,
     timestamp: '2026-06-30T00:00:02.000Z',
+    messages: undefined,
   }]);
+});
+
+test('normalizedToChatMessages nests Hook recovery output under its follow-up', () => {
+  const activityId = 'hook_activity_execution-1_notify';
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'hook_activity_execution-1_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: 'hook_activity_execution-1_execution',
+      executionId: 'execution-1',
+      hookId: 'notify-on-stop',
+      hookName: '对话正常结束通知',
+      eventName: 'Stop',
+      actionTypes: ['invoke_skill'],
+    },
+    {
+      id: activityId,
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'followup',
+      status: 'succeeded',
+      jobId: activityId,
+      executionId: 'execution-1',
+      hookId: 'notify-on-stop',
+      hookName: '对话正常结束通知',
+      actionId: 'notify',
+      actionType: 'invoke_skill',
+      skillName: 'hook-notification',
+    },
+    {
+      id: 'recovery-thinking',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:03.000Z',
+      provider: 'claude',
+      kind: 'thinking',
+      content: 'Record the notification.',
+      hookActivityId: activityId,
+    },
+    {
+      id: 'recovery-result',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:04.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+      hookActivityId: activityId,
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.deepEqual(
+    chatMessages[0].hookActivity?.followups?.[0].messages?.map((message) => message.id),
+    ['recovery-thinking', 'recovery-result'],
+  );
+  assert.equal(
+    chatMessages[0].hookActivity?.followups?.[0].messages?.[1].content,
+    'HOOK_NOTIFICATION_SKILL_EXECUTED',
+  );
+});
+
+test('normalizedToChatMessages recovers a missing legacy follow-up from its activity prefix', () => {
+  const executionId = 'e412c904-92d8-4551-9e6f-b1359d7e017b';
+  const activityId = `hook_activity_${executionId}_notify-normal-stop`;
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: `hook_activity_${executionId}_execution`,
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: `hook_activity_${executionId}_execution`,
+      executionId,
+      hookName: '对话正常结束通知',
+      actionTypes: ['invoke_skill'],
+    },
+    {
+      id: 'legacy-recovery-result',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+      hookActivityId: activityId,
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0].hookActivity?.followups?.length, 1);
+  assert.equal(chatMessages[0].hookActivity?.followups?.[0].jobId, activityId);
+  assert.equal(chatMessages[0].hookActivity?.followups?.[0].actionType, 'invoke_skill');
+  assert.equal(
+    chatMessages[0].hookActivity?.followups?.[0].messages?.[0].content,
+    'HOOK_NOTIFICATION_SKILL_EXECUTED',
+  );
+});
+
+test('normalizedToChatMessages recovers pre-marker Skill output within the Stop turn boundary', () => {
+  const executionId = 'legacy-execution';
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: `hook_activity_${executionId}_execution`,
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: `hook_activity_${executionId}_execution`,
+      executionId,
+      hookName: '对话正常结束通知',
+      actionTypes: ['invoke_skill'],
+    },
+    {
+      id: 'legacy-thinking',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'thinking',
+      content: 'Record the notification.',
+    },
+    {
+      id: 'legacy-result',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:03.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'assistant',
+      content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+    },
+    {
+      id: 'next-user',
+      sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:04.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'user',
+      content: 'Next question',
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 2);
+  assert.deepEqual(
+    chatMessages[0].hookActivity?.followups?.[0].messages?.map((message) => message.id),
+    ['legacy-thinking', 'legacy-result'],
+  );
+  assert.equal(chatMessages[1].id, 'next-user');
 });
 
 test('normalizedToChatMessages groups legacy Hook activities by their shared job id prefix', () => {
@@ -148,6 +310,11 @@ test('normalizedToChatMessages preserves generic Hook execution details', () => 
     hookName: 'SQL Check 强制校验',
     eventName: 'Stop',
     actionTypes: ['call_mcp_tool'],
+    actionResults: [{
+      actionId: 'check-sql',
+      actionType: 'call_mcp_tool',
+      output: { valid: true, issueCount: 0 },
+    }],
     hasScript: true,
     summary: '校验模型返回的 SQL。',
   }]);
@@ -155,6 +322,11 @@ test('normalizedToChatMessages preserves generic Hook execution details', () => 
   assert.equal(hookMessage.hookActivity?.activityKind, 'execution');
   assert.equal(hookMessage.hookActivity?.eventName, 'Stop');
   assert.deepEqual(hookMessage.hookActivity?.actionTypes, ['call_mcp_tool']);
+  assert.deepEqual(hookMessage.hookActivity?.actionResults, [{
+    actionId: 'check-sql',
+    actionType: 'call_mcp_tool',
+    output: { valid: true, issueCount: 0 },
+  }]);
   assert.equal(hookMessage.hookActivity?.hasScript, true);
 });
 

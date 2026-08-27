@@ -10,6 +10,7 @@ export function createHookDraftSignature(hook: HookConfigDraft): string {
   return JSON.stringify({
     name: hook.name,
     description: hook.description,
+    showInChat: hook.showInChat,
     eventName: hook.eventName,
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,

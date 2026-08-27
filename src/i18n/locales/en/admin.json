@@ -477,6 +477,11 @@
     "actionCount": "{{count}} actions",
     "boundUserCount": "{{count}} users bound",
     "builtin": "Built-in Hook",
+    "chatVisibility": {
+      "title": "Show Hook in conversations",
+      "description": "Only enabled Hooks show a violet card in conversations. Turning this off does not affect execution, post-actions, or execution records.",
+      "toggleLabel": "Toggle Hook conversation visibility"
+    },
     "businessData": {
       "label": "Business data",
       "title": "Hook business data",

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   extension_logic_json TEXT NOT NULL DEFAULT 'null',
   post_actions_json TEXT NOT NULL DEFAULT '[]',
   claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}',
+  show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1)),
   version INTEGER NOT NULL DEFAULT 0,
   activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users')),
   binding_controller TEXT NOT NULL DEFAULT 'admin' CHECK (binding_controller IN ('admin', 'sql_check')),
@@ -203,6 +204,7 @@ export function migrateHookConfigurationModel(database) {
   const hasExtensionLogic = columns.some((column) => column.name === 'extension_logic_json');
   const hasPostActions = columns.some((column) => column.name === 'post_actions_json');
   const hasClaudeResponse = columns.some((column) => column.name === 'claude_response_json');
+  const hasShowInChat = columns.some((column) => column.name === 'show_in_chat');
   const hasGate = columns.some((column) => column.name === 'gate_json');
   const hasAdvancedScript = columns.some((column) => column.name === 'advanced_script_json');
   const migrate = database.transaction(() => {
@@ -223,6 +225,12 @@ export function migrateHookConfigurationModel(database) {
       database.exec(`
         ALTER TABLE hooks
         ADD COLUMN claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}'
+      `);
+    }
+    if (!hasShowInChat) {
+      database.exec(`
+        ALTER TABLE hooks
+        ADD COLUMN show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1))
       `);
     }
     const extensionRows = database.prepare('SELECT id, extension_logic_json FROM hooks').all();
@@ -258,6 +266,7 @@ export function migrateHookConfigurationModel(database) {
     addedExtensionLogic: !hasExtensionLogic,
     addedPostActions: !hasPostActions,
     addedClaudeResponse: !hasClaudeResponse,
+    addedShowInChat: !hasShowInChat,
     removedGate: hasGate,
     removedAdvancedScript: hasAdvancedScript,
   };

@@ -7,6 +7,7 @@ import {
   Code2,
   Database,
   FileCode2,
+  Eye,
   Info,
   MessageSquare,
   Plus,
@@ -1417,6 +1418,35 @@ export default function HookConfigEditor({
                   maxLength={1000}
                 />
               </label>
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/10 px-3.5 py-3 lg:col-span-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
+                  <Eye className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-foreground">{t('hooks.chatVisibility.title')}</div>
+                  <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">
+                    {t('hooks.chatVisibility.description')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={hook.showInChat}
+                  aria-label={t('hooks.chatVisibility.toggleLabel')}
+                  onClick={() => updateDraft({ showInChat: !hook.showInChat })}
+                  className="rounded-full outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+                >
+                  <span className={cn(
+                    'inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors',
+                    hook.showInChat ? 'bg-primary' : 'bg-muted-foreground/25',
+                  )}>
+                    <span className={cn(
+                      'h-5 w-5 rounded-full bg-white shadow-sm transition-transform',
+                      hook.showInChat ? 'translate-x-5' : 'translate-x-0',
+                    )} />
+                  </span>
+                </button>
+              </div>
             </div>
           </Section>
 

@@ -81,6 +81,19 @@ export interface HookFollowupActivityDetails {
   status: HookActivityStatus;
   error?: string;
   timestamp: string | number | Date;
+  messages?: ChatMessage[];
+}
+
+export interface HookExecutionActionResult {
+  actionId: string;
+  actionType: 'call_mcp_tool' | 'write_record';
+  output?: unknown;
+  record?: {
+    id: string;
+    type?: string;
+    data?: unknown;
+    createdAt?: string;
+  };
 }
 
 export interface HookActivityDetails {
@@ -93,6 +106,7 @@ export interface HookActivityDetails {
   actionType?: 'invoke_skill' | 'send_agent_message';
   eventName?: string;
   actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionResults?: HookExecutionActionResult[];
   hasScript?: boolean;
   skillName?: string;
   summary?: string;

@@ -22,6 +22,7 @@ test('createHookDraftSignature ignores persisted metadata but detects editable c
   const draft: HookConfigDraft = {
     name: 'SQL Check',
     description: 'Validate SQL',
+    showInChat: true,
     eventName: 'Stop',
     matcher: {},
     extensionLogic: null,
@@ -49,5 +50,9 @@ test('createHookDraftSignature ignores persisted metadata but detects editable c
   assert.notEqual(
     createHookDraftSignature(draft),
     createHookDraftSignature({ ...draft, description: 'Changed locally' }),
+  );
+  assert.notEqual(
+    createHookDraftSignature(draft),
+    createHookDraftSignature({ ...draft, showInChat: false }),
   );
 });

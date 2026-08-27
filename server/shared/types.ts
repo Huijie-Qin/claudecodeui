@@ -45,6 +45,7 @@ export type NormalizedMessage = {
   kind: MessageKind;
   origin?: 'hook';
   activityKind?: 'execution' | 'followup';
+  hookActivityId?: string;
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
@@ -79,6 +80,17 @@ export type NormalizedMessage = {
   actionType?: 'invoke_skill' | 'send_agent_message';
   eventName?: string;
   actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionResults?: Array<{
+    actionId: string;
+    actionType: 'call_mcp_tool' | 'write_record';
+    output?: unknown;
+    record?: {
+      id: string;
+      type?: string;
+      data?: unknown;
+      createdAt?: string;
+    };
+  }>;
   hasScript?: boolean;
   skillName?: string;
   subagentTools?: unknown;

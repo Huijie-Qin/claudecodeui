@@ -114,7 +114,10 @@ function hookExecutionActivityPrefix(message: NormalizedMessage): string | null 
     : null;
 }
 
-function toHookFollowupDetails(message: NormalizedMessage): HookFollowupActivityDetails {
+function toHookFollowupDetails(
+  message: NormalizedMessage,
+  recoveryMessages: NormalizedMessage[] = [],
+): HookFollowupActivityDetails {
   return {
     jobId: message.jobId,
     executionId: message.executionId,
@@ -126,6 +129,9 @@ function toHookFollowupDetails(message: NormalizedMessage): HookFollowupActivity
     status: normalizeHookActivityStatus(message.status),
     error: message.error,
     timestamp: message.timestamp,
+    messages: recoveryMessages.length > 0
+      ? normalizedToChatMessages(recoveryMessages)
+      : undefined,
   };
 }
 
@@ -298,6 +304,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     .filter((entry): entry is { message: NormalizedMessage; prefix: string } => Boolean(entry.prefix));
   const hookFollowupsByExecutionMessageId = new Map<string, NormalizedMessage[]>();
   const groupedHookFollowupIds = new Set<string>();
+  const hookRecoveryMessagesByActivityId = new Map<string, NormalizedMessage[]>();
+  const hookRecoveryExecutionMessageByActivityId = new Map<string, NormalizedMessage>();
+  const groupedHookRecoveryMessageIds = new Set<string>();
 
   for (const message of hookExecutionMessages) {
     if (message.executionId) {
@@ -321,6 +330,80 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     followups.push(message);
     hookFollowupsByExecutionMessageId.set(executionMessage.id, followups);
     groupedHookFollowupIds.add(message.id);
+  }
+
+  const groupedHookFollowupsByActivityId = new Map(
+    messages
+      .filter((message) => groupedHookFollowupIds.has(message.id))
+      .map((message) => [hookActivityIdentity(message), message]),
+  );
+  for (const message of messages) {
+    if (!message.hookActivityId) {
+      continue;
+    }
+    const groupedFollowup = groupedHookFollowupsByActivityId.get(message.hookActivityId);
+    const recoveredExecution = groupedFollowup
+      ? null
+      : hookExecutionPrefixes.find(({ prefix }) => (
+        message.hookActivityId?.startsWith(`${prefix}_`)
+      ))?.message || null;
+    if (!groupedFollowup && !recoveredExecution) {
+      continue;
+    }
+    if (recoveredExecution) {
+      hookRecoveryExecutionMessageByActivityId.set(message.hookActivityId, recoveredExecution);
+    }
+    const recoveryMessages = hookRecoveryMessagesByActivityId.get(message.hookActivityId) || [];
+    recoveryMessages.push(message);
+    hookRecoveryMessagesByActivityId.set(message.hookActivityId, recoveryMessages);
+    groupedHookRecoveryMessageIds.add(message.id);
+  }
+
+  const renderableLegacyRecoveryKinds = new Set([
+    'text',
+    'thinking',
+    'tool_use',
+    'tool_result',
+    'error',
+  ]);
+  for (const executionMessage of hookExecutionMessages) {
+    const alreadyHasFollowup = (hookFollowupsByExecutionMessageId.get(executionMessage.id) || []).length > 0
+      || [...hookRecoveryExecutionMessageByActivityId.values()].some((message) => (
+        message.id === executionMessage.id
+      ));
+    if (alreadyHasFollowup || !executionMessage.actionTypes?.includes('invoke_skill')) {
+      continue;
+    }
+    const executionIndex = messages.findIndex((message) => message.id === executionMessage.id);
+    const executionTime = timestampToMs(executionMessage.timestamp);
+    if (executionIndex === -1 || executionTime === null) {
+      continue;
+    }
+    const recoveryMessages: NormalizedMessage[] = [];
+    for (let index = executionIndex + 1; index < messages.length; index++) {
+      const candidate = messages[index];
+      if (candidate.kind === 'text' && candidate.role === 'user') {
+        break;
+      }
+      if (
+        groupedHookRecoveryMessageIds.has(candidate.id)
+        || candidate.kind === 'hook_activity'
+        || candidate.provider !== 'claude'
+        || !renderableLegacyRecoveryKinds.has(candidate.kind)
+        || (timestampToMs(candidate.timestamp) ?? Number.NEGATIVE_INFINITY) <= executionTime
+      ) {
+        continue;
+      }
+      recoveryMessages.push(candidate);
+    }
+    if (recoveryMessages.length === 0) {
+      continue;
+    }
+    const executionPrefix = hookExecutionActivityPrefix(executionMessage) || executionMessage.id;
+    const legacyActivityId = `${executionPrefix}_legacy-recovery`;
+    hookRecoveryExecutionMessageByActivityId.set(legacyActivityId, executionMessage);
+    hookRecoveryMessagesByActivityId.set(legacyActivityId, recoveryMessages);
+    recoveryMessages.forEach((message) => groupedHookRecoveryMessageIds.add(message.id));
   }
 
   // First pass: collect tool results for attachment
@@ -571,6 +654,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const msg = messages[messageIndex];
+    if (groupedHookRecoveryMessageIds.has(msg.id)) {
+      continue;
+    }
 
     switch (msg.kind) {
       case 'text': {
@@ -928,8 +1014,41 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           break;
         }
         const status = normalizeHookActivityStatus(msg.status);
+        const persistedFollowups = msg.activityKind === 'execution'
+          ? (hookFollowupsByExecutionMessageId.get(msg.id) || []).map((followup) => (
+            toHookFollowupDetails(
+              followup,
+              hookRecoveryMessagesByActivityId.get(hookActivityIdentity(followup)),
+            )
+          ))
+          : undefined;
+        const recoveredFollowups = msg.activityKind === 'execution'
+          ? [...hookRecoveryExecutionMessageByActivityId.entries()]
+            .filter(([, executionMessage]) => executionMessage.id === msg.id)
+            .map(([activityId]) => {
+              const recoveryMessages = hookRecoveryMessagesByActivityId.get(activityId) || [];
+              const executionPrefix = hookExecutionActivityPrefix(msg);
+              const actionTypes = msg.actionTypes || [];
+              const actionType = actionTypes.includes('invoke_skill')
+                ? 'invoke_skill'
+                : actionTypes.includes('send_agent_message')
+                  ? 'send_agent_message'
+                  : undefined;
+              return {
+                jobId: activityId,
+                executionId: msg.executionId,
+                actionId: executionPrefix && activityId.startsWith(`${executionPrefix}_`)
+                  ? activityId.slice(executionPrefix.length + 1)
+                  : undefined,
+                actionType,
+                status,
+                timestamp: recoveryMessages[0]?.timestamp || msg.timestamp,
+                messages: normalizedToChatMessages(recoveryMessages),
+              } satisfies HookFollowupActivityDetails;
+            })
+          : [];
         const followups = msg.activityKind === 'execution'
-          ? hookFollowupsByExecutionMessageId.get(msg.id)?.map(toHookFollowupDetails)
+          ? [...(persistedFollowups || []), ...recoveredFollowups]
           : undefined;
         converted.push({
           ...getMessageIdentity(msg),
@@ -947,6 +1066,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             actionType: msg.actionType,
             eventName: msg.eventName,
             actionTypes: msg.actionTypes,
+            ...(msg.actionResults && msg.actionResults.length > 0
+              ? { actionResults: msg.actionResults }
+              : {}),
             hasScript: msg.hasScript,
             skillName: msg.skillName,
             summary: msg.summary,

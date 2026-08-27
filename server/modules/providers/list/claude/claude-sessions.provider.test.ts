@@ -274,6 +274,67 @@ test('ClaudeSessionsProvider joins runtime display metadata to JSONL by user mes
   assert.equal(result.messages[0].content, '/report-skill generate report');
 });
 
+test('ClaudeSessionsProvider associates Hook recovery output until the next visible user turn', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-hook-recovery-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+
+  const sessionId = 'runtime-hook-recovery-session';
+  const messageId = '22222222-2222-4222-8222-222222222222';
+  const activityId = 'hook_activity_execution-1_notify';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const rows = [
+    {
+      type: 'user',
+      uuid: messageId,
+      sessionId,
+      timestamp: '2026-04-29T01:19:50.247Z',
+      message: { role: 'user', content: 'Internal Hook recovery prompt' },
+    },
+    {
+      type: 'assistant',
+      uuid: 'hook-recovery-output',
+      sessionId,
+      timestamp: '2026-04-29T01:19:51.247Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'HOOK_RECOVERY_DONE' }] },
+    },
+    {
+      type: 'user',
+      uuid: 'next-user-turn',
+      sessionId,
+      timestamp: '2026-04-29T01:19:52.247Z',
+      message: { role: 'user', content: 'Next question' },
+    },
+    {
+      type: 'assistant',
+      uuid: 'next-assistant-turn',
+      sessionId,
+      timestamp: '2026-04-29T01:19:53.247Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Next answer' }] },
+    },
+  ];
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(projectDirectory, `${sessionId}.jsonl`),
+    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+    'utf8',
+  );
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath: '/workspace',
+    sessionId,
+    messageId,
+    displayCommand: `<ccui-hook-recovery activity="${activityId}"></ccui-hook-recovery>`,
+    modelContent: 'Internal Hook recovery prompt',
+  });
+
+  const provider = new ClaudeSessionsProvider();
+  const result = await provider.fetchHistory(sessionId, { runtimeHomePath });
+
+  assert.equal(result.messages.find((message) => message.content === 'HOOK_RECOVERY_DONE')?.hookActivityId, activityId);
+  assert.equal(result.messages.find((message) => message.content === 'Next question')?.hookActivityId, undefined);
+  assert.equal(result.messages.find((message) => message.content === 'Next answer')?.hookActivityId, undefined);
+});
+
 test('ClaudeSessionsProvider restores nested subagent tools into the Agent history card', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(
     path.join(os.tmpdir(), 'claude-provider-subagent-history-'),

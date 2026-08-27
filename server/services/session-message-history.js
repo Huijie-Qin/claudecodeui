@@ -84,6 +84,44 @@ function isClaudeSyntheticMessage(message) {
   return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind);
 }
 
+function isHookActivityVisible(message, hookConfigs, hooksById) {
+  if (!isClaudeSyntheticMessage(message) || !message?.hookId) return true;
+  if (typeof hookConfigs?.getHook !== 'function') return true;
+  const hookId = String(message.hookId);
+  let hook = hooksById.get(hookId);
+  if (hook === undefined) {
+    try {
+      hook = hookConfigs.getHook(hookId) || null;
+    } catch {
+      // Older installations may restore persisted Hook activities before the
+      // Hook configuration tables have been migrated. Keep those activities
+      // visible instead of making the entire session history unavailable.
+      hook = null;
+    }
+    hooksById.set(hookId, hook);
+  }
+  return hook?.showInChat !== false;
+}
+
+function getHookActivityIdentity(message) {
+  if (typeof message?.jobId === 'string' && message.jobId) return message.jobId;
+  if (typeof message?.id === 'string' && message.id) return message.id;
+  return null;
+}
+
+function omitHiddenHookRecoveryMessages(
+  messages,
+  hiddenHookActivityIds,
+  hiddenHookExecutionPrefixes,
+) {
+  if (!hiddenHookActivityIds.size && !hiddenHookExecutionPrefixes.size) return messages;
+  return messages.filter((message) => {
+    if (typeof message?.hookActivityId !== 'string') return true;
+    return !hiddenHookActivityIds.has(message.hookActivityId)
+      && ![...hiddenHookExecutionPrefixes].some((prefix) => message.hookActivityId.startsWith(prefix));
+  });
+}
+
 function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
   const mergedById = new Map();
   const combined = [
@@ -95,7 +133,17 @@ function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
     const key = typeof message?.id === 'string' && message.id
       ? message.id
       : `message-without-id-${index}`;
-    mergedById.set(key, { message, index });
+    const existing = mergedById.get(key)?.message;
+    const mergedMessage = existing
+      ? {
+        ...existing,
+        ...message,
+        ...(message?.actionResults === undefined && existing?.actionResults !== undefined
+          ? { actionResults: existing.actionResults }
+          : {}),
+      }
+      : message;
+    mergedById.set(key, { message: mergedMessage, index });
   });
 
   return [...mergedById.values()]
@@ -110,7 +158,54 @@ function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
     .map(({ message }) => message);
 }
 
-function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }) {
+function buildHistoricalHookActionResults(hook, execution, records = []) {
+  const actions = execution?.actions;
+  if (!actions || typeof actions !== 'object' || Array.isArray(actions)) return [];
+  const availableRecords = [...records];
+
+  return (hook?.postActions || []).flatMap((action) => {
+    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
+    if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
+    const output = actions[action.id]?.output;
+    const result = {
+      actionId: action.id,
+      actionType: action.type,
+      output,
+    };
+    if (action.type === 'write_record' && output?.recorded === true) {
+      const recordIndex = availableRecords.findIndex((record) => (
+        (typeof output.id === 'string' && record.id === output.id)
+        || (
+          typeof output.type === 'string'
+          && record.type === output.type
+        )
+      ));
+      if (recordIndex >= 0) {
+        const [record] = availableRecords.splice(recordIndex, 1);
+        result.record = {
+          id: record.id,
+          type: record.type,
+          data: record.data,
+          createdAt: record.createdAt,
+        };
+      } else if (typeof output.id === 'string') {
+        result.record = {
+          id: output.id,
+          type: output.type,
+          data: output.data,
+        };
+      }
+    }
+    return [result];
+  });
+}
+
+function listHistoricalHookActivities({
+  hookConfigs,
+  providerSessionId,
+  userId,
+  hiddenHookExecutionPrefixes,
+}) {
   if (!providerSessionId || typeof hookConfigs?.listAllExecutions !== 'function') return [];
 
   try {
@@ -119,11 +214,16 @@ function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }
       sessionId: providerSessionId,
       userId,
       limit: 200,
-    }).map((execution) => {
+      summary: false,
+    }).flatMap((execution) => {
       let hook = hooks.get(execution.hookId);
       if (hook === undefined) {
         hook = typeof hookConfigs.getHook === 'function' ? hookConfigs.getHook(execution.hookId) : null;
         hooks.set(execution.hookId, hook || null);
+      }
+      if (hook?.showInChat === false) {
+        hiddenHookExecutionPrefixes.add(`hook_activity_${execution.id}_`);
+        return [];
       }
       const startedAt = Number(execution.startedAtMs) > 0
         ? new Date(Number(execution.startedAtMs))
@@ -131,7 +231,11 @@ function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }
       const timestamp = Number.isFinite(startedAt.getTime())
         ? startedAt.toISOString()
         : new Date(0).toISOString();
-      return {
+      const records = typeof hookConfigs.listExecutionDataRecords === 'function'
+        ? hookConfigs.listExecutionDataRecords(execution.id)
+        : [];
+      const actionResults = buildHistoricalHookActionResults(hook, execution, records);
+      return [{
         id: `hook_activity_${execution.id}_execution`,
         sessionId: providerSessionId,
         timestamp,
@@ -148,9 +252,10 @@ function listHistoricalHookActivities({ hookConfigs, providerSessionId, userId }
         hookName: execution.hookName || hook?.name || null,
         eventName: execution.eventName || hook?.eventName || null,
         actionTypes: [...new Set((hook?.postActions || []).map((action) => action.type).filter(Boolean))],
+        ...(actionResults.length > 0 ? { actionResults } : {}),
         hasScript: Boolean(hook?.extensionLogic?.code?.trim()),
         summary: String(hook?.description || '').slice(0, 8000),
-      };
+      }];
     });
   } catch (error) {
     console.warn('[SessionHistory] Failed to restore Hook execution activities:', error?.message || error);
@@ -364,13 +469,26 @@ export function createSessionMessageHistoryService({
           limit: null,
           offset: 0,
         });
+        const hiddenHookExecutionPrefixes = new Set();
         const historicalHookActivities = listHistoricalHookActivities({
           hookConfigs,
           providerSessionId,
           userId,
+          hiddenHookExecutionPrefixes,
+        });
+        const hooksById = new Map();
+        const hiddenHookActivityIds = new Set();
+        const persistedHookActivities = dbHistory.messages.filter(isClaudeSyntheticMessage);
+        const visiblePersistedHookActivities = persistedHookActivities.filter((message) => {
+          const visible = isHookActivityVisible(message, hookConfigs, hooksById);
+          if (!visible) {
+            const identity = getHookActivityIdentity(message);
+            if (identity) hiddenHookActivityIds.add(identity);
+          }
+          return visible;
         });
         const syntheticMessages = mergeClaudeSyntheticMessages(
-          dbHistory.messages.filter(isClaudeSyntheticMessage),
+          visiblePersistedHookActivities,
           historicalHookActivities,
         );
         const transcriptDbMessages = dbHistory.messages.filter((message) => !isClaudeSyntheticMessage(message));
@@ -392,7 +510,9 @@ export function createSessionMessageHistoryService({
             ? transcriptDbMessages.filter(isScheduledSlashInvocation)
             : [];
           const shouldMergeScheduledSkills = legacyScheduledSkillInvocations.length > 0;
-          const needsFullJsonlHistory = syntheticMessages.length > 0
+          const needsFullJsonlHistory = hiddenHookActivityIds.size > 0
+            || hiddenHookExecutionPrefixes.size > 0
+            || syntheticMessages.length > 0
             || shouldMergeScheduledSkills
             || (!scheduledSession && transcriptDbMessages.length > 0);
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
@@ -409,21 +529,28 @@ export function createSessionMessageHistoryService({
             ) ? offset : 0,
           });
           if (jsonlHistory.total > 0) {
+            const visibleJsonlMessages = omitHiddenHookRecoveryMessages(
+              jsonlHistory.messages,
+              hiddenHookActivityIds,
+              hiddenHookExecutionPrefixes,
+            );
             let transcriptHistory;
             if (shouldMergeScheduledSkills) {
               transcriptHistory = mergeLegacyScheduledSkillInvocations(
-                jsonlHistory.messages,
+                visibleJsonlMessages,
                 legacyScheduledSkillInvocations,
               );
             } else if (scheduledSession || transcriptDbMessages.length === 0) {
               if (syntheticMessages.length === 0) {
-                return jsonlHistory;
+                return hiddenHookActivityIds.size > 0 || hiddenHookExecutionPrefixes.size > 0
+                  ? paginateHistory(visibleJsonlMessages, limit, offset)
+                  : jsonlHistory;
               }
-              transcriptHistory = jsonlHistory.messages;
+              transcriptHistory = visibleJsonlMessages;
             } else {
               const mergedLegacyHistory = mergeLegacyClaudeHistory({
                 dbMessages: transcriptDbMessages,
-                jsonlMessages: jsonlHistory.messages,
+                jsonlMessages: visibleJsonlMessages,
                 limit: syntheticMessages.length > 0 ? null : limit,
                 offset: syntheticMessages.length > 0 ? 0 : offset,
               });
@@ -447,7 +574,7 @@ export function createSessionMessageHistoryService({
         // Transitional fallback for legacy sessions whose runtime home or JSONL
         // was removed before runtime-aware history was introduced.
         return paginateHistory(
-          mergeClaudeSyntheticMessages(dbHistory.messages, historicalHookActivities),
+          mergeClaudeSyntheticMessages(transcriptDbMessages, syntheticMessages),
           limit,
           offset,
         );

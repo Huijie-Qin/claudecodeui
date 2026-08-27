@@ -149,12 +149,14 @@ test('write_record post action persists mapped Hook data without a script API ca
       }],
       claudeResponse: { bindings: {} },
     };
+    const activities = [];
     const runtime = createHookRuntimeSession({
       hooks: [hook],
       userId: 1,
       username: 'alice',
       workspaceRoot,
       database,
+      onExecutionActivity: (activity) => activities.push(activity),
     });
 
     const output = await runtime.executeHook(hook, {
@@ -175,6 +177,16 @@ test('write_record post action persists mapped Hook data without a script API ca
     const actionOutput = JSON.parse(execution.actions_json)['record-stop'].output;
     assert.equal(actionOutput.recorded, true);
     assert.equal(actionOutput.type, 'conversation_completion');
+    assert.deepEqual(actionOutput.data, {
+      sessionId: 'session-record-1',
+      status: 'success',
+      userId: 1,
+    });
+    assert.deepEqual(activities.at(-1).actions['record-stop'].output.data, {
+      sessionId: 'session-record-1',
+      status: 'success',
+      userId: 1,
+    });
   } finally {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });

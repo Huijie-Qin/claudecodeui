@@ -78,6 +78,7 @@ export type HookClaudeResponse = {
 export type HookConfigDraft = {
   name: string;
   description: string;
+  showInChat: boolean;
   eventName: HookEventName;
   matcher: HookMatcher;
   extensionLogic: HookExtensionLogic | null;

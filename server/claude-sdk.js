@@ -116,6 +116,7 @@ function createHookActivityDescriptor({
     timestamp: queuedAt,
     hookId: hook.id,
     hookName: hook.name,
+    showInChat: hook.showInChat !== false,
     actionId,
     actionType: action?.type || 'send_agent_message',
     ...(skillName ? { skillName } : {}),
@@ -123,7 +124,35 @@ function createHookActivityDescriptor({
   };
 }
 
-function createHookExecutionActivityDescriptor({ hook, executionId, startedAt }) {
+function createHookCardActionResults(hook, actions) {
+  if (!actions || typeof actions !== 'object' || Array.isArray(actions)) return [];
+
+  return (hook.postActions || []).flatMap((action) => {
+    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
+    if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
+    const output = actions[action.id]?.output;
+    const result = {
+      actionId: action.id,
+      actionType: action.type,
+      output,
+    };
+    if (
+      action.type === 'write_record'
+      && output?.recorded === true
+      && typeof output.id === 'string'
+    ) {
+      result.record = {
+        id: output.id,
+        type: output.type,
+        data: output.data,
+      };
+    }
+    return [result];
+  });
+}
+
+function createHookExecutionActivityDescriptor({ hook, executionId, startedAt, actions }) {
+  const actionResults = createHookCardActionResults(hook, actions);
   return {
     id: `hook_activity_${executionId}_execution`,
     executionId,
@@ -131,10 +160,12 @@ function createHookExecutionActivityDescriptor({ hook, executionId, startedAt })
     timestamp: new Date(startedAt).toISOString(),
     hookId: hook.id,
     hookName: hook.name,
+    showInChat: hook.showInChat !== false,
     eventName: hook.eventName,
     actionTypes: [...new Set((hook.postActions || []).map((action) => action.type).filter(Boolean))],
     hasScript: Boolean(hook.extensionLogic?.code?.trim()),
     summary: String(hook.description || '').slice(0, 8000),
+    ...(actionResults.length > 0 ? { actionResults } : {}),
   };
 }
 
@@ -167,6 +198,7 @@ function emitHookActivity({
     skillName: activity.skillName,
     eventName: activity.eventName,
     actionTypes: activity.actionTypes,
+    actionResults: activity.actionResults,
     hasScript: activity.hasScript,
     summary: activity.summary,
     queuePosition: activity.queuePosition,
@@ -184,7 +216,9 @@ function emitHookActivity({
   } catch (persistError) {
     console.warn('[HookRuntime] Failed to persist Hook activity:', persistError?.message || persistError);
   }
-  sendWriterMessage(writer, activityMessage);
+  if (activity.showInChat !== false) {
+    sendWriterMessage(writer, activityMessage);
+  }
   return activityMessage;
 }
 
@@ -1682,6 +1716,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
               executionId,
               status,
               startedAt,
+              actions,
               error,
             }) => emitHookActivity({
               hookRecovery: {
@@ -1689,6 +1724,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
                   hook,
                   executionId,
                   startedAt,
+                  actions,
                 }),
               },
               sessionId: event?.session_id || capturedSessionId || sessionId || null,
@@ -1928,11 +1964,15 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const visibleNormalized = normalized.filter(
         (msg) => !shouldSuppressLiveUserTextMessage(msg, ws),
       );
+      const hookRecoveryActivityId = runtimeOptions.hookRecovery?.activity?.id || null;
       for (const msg of visibleNormalized) {
         // Preserve parentToolUseId from the SDK wrapper both for realtime
         // rendering and for providers that persist normalized history.
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
+        }
+        if (hookRecoveryActivityId) {
+          msg.hookActivityId = hookRecoveryActivityId;
         }
       }
       persistNormalizedMessages({
@@ -1942,8 +1982,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
         runtimeId: runtimeOptions.runtimeId,
         messages: visibleNormalized,
       });
-      for (const msg of visibleNormalized) {
-        ws.send(msg);
+      if (runtimeOptions.hookRecovery?.activity?.showInChat !== false) {
+        for (const msg of visibleNormalized) {
+          ws.send(msg);
+        }
       }
 
       if (turnBoundaryReached) {

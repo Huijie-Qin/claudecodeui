@@ -71,6 +71,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   try {
     const created = service.createHook({ input: publishableHook(), userId: 1 });
     assert.equal(created.status, 'draft');
+    assert.equal(created.showInChat, true);
     assert.equal(created.extensionLogic.language, 'javascript');
     assert.deepEqual(created.extensionLogic.outputs, [
       { name: 'summary', type: 'string' },
@@ -80,6 +81,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       hookId: created.id,
       userId: 1,
       input: publishableHook({
+        showInChat: false,
         extensionLogic: {
           language: 'python',
           code: 'async def run(event, ccui):\n    await ccui.records.write("stop", event)\n    return {"output": {"summary": "done"}}',
@@ -96,6 +98,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
       }),
     });
     assert.equal(updated.extensionLogic.language, 'python');
+    assert.equal(updated.showInChat, false);
     assert.match(updated.extensionLogic.code, /async def run/);
     assert.deepEqual(updated.claudeResponse.bindings.systemMessage, {
       source: 'template',
@@ -105,6 +108,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
     const published = service.publishHook({ hookId: created.id, userId: 1 });
     assert.equal(published.status, 'published');
     assert.equal(published.version, 1);
+    assert.equal(published.showInChat, false);
     assert.equal(published.boundUserCount, 0);
     assert.ok(published.publishedAt);
 
@@ -1024,6 +1028,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
       addedExtensionLogic: true,
       addedPostActions: true,
       addedClaudeResponse: true,
+      addedShowInChat: true,
       removedGate: true,
       removedAdvancedScript: true,
     });
@@ -1032,7 +1037,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'extension_logic_json', 'post_actions_json', 'claude_response_json'],
+      ['id', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat'],
     );
     assert.equal(
       database

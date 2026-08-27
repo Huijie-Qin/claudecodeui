@@ -43,6 +43,10 @@ function serializeForAudit(value) {
   return JSON.stringify({ truncated: true, preview: json.slice(0, MAX_AUDIT_JSON_BYTES) });
 }
 
+function toAuditValue(value) {
+  return JSON.parse(serializeForAudit(value));
+}
+
 function readPath(root, dottedPath) {
   if (typeof dottedPath !== 'string' || !dottedPath.trim()) return UNRESOLVED;
   let current = root;
@@ -233,7 +237,7 @@ function writeDataRecord(database, executionId, hook, context, event, recordType
     recordType,
     serializeForAudit(data),
   );
-  return { id, type: recordType };
+  return { id, type: recordType, data: toAuditValue(data) };
 }
 
 function buildEnvironment(context, event) {
@@ -582,7 +586,7 @@ export function createHookRuntimeSession({
         status: 'succeeded',
         startedAt,
         completedAt: Date.now(),
-        actions: references.actions,
+        actions: toAuditValue(references.actions),
       });
       return response;
     } catch (error) {
@@ -602,7 +606,7 @@ export function createHookRuntimeSession({
         status: 'failed',
         startedAt,
         completedAt: Date.now(),
-        actions: references.actions,
+        actions: toAuditValue(references.actions),
         error: error?.message || String(error),
       });
       console.error(`[Hook:${hook.id}] Runtime execution failed:`, error?.message || error);

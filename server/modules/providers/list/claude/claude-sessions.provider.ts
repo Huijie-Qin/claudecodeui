@@ -114,6 +114,14 @@ function resolveConversationRole(raw: AnyRecord): 'user' | 'assistant' | undefin
   return undefined;
 }
 
+function readHookRecoveryActivityId(displayCommand: string | null): string | null {
+  if (!displayCommand?.startsWith('<ccui-hook-recovery')) {
+    return null;
+  }
+  const match = displayCommand.match(/\bactivity=(['"])([^'"]+)\1/i);
+  return match?.[2]?.trim() || null;
+}
+
 function normalizeTaskStatus(status: unknown): string | undefined {
   if (typeof status !== 'string' || !status.trim()) {
     return undefined;
@@ -489,11 +497,24 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const normalized: NormalizedMessage[] = [];
+    let activeHookActivityId: string | null = null;
     for (const raw of rawMessages) {
       const displayCommand = typeof raw.uuid === 'string'
         ? displayCommands.get(raw.uuid) || null
         : null;
-      normalized.push(...this.normalizeMessage(raw, sessionId, displayCommand));
+      const recoveryActivityId = readHookRecoveryActivityId(displayCommand);
+      const nextMessages = this.normalizeMessage(raw, sessionId, displayCommand);
+      if (recoveryActivityId) {
+        activeHookActivityId = recoveryActivityId;
+      } else if (nextMessages.some((message) => message.kind === 'text' && message.role === 'user')) {
+        activeHookActivityId = null;
+      }
+      if (activeHookActivityId) {
+        nextMessages.forEach((message) => {
+          message.hookActivityId = activeHookActivityId || undefined;
+        });
+      }
+      normalized.push(...nextMessages);
     }
 
     for (const msg of normalized) {

@@ -624,9 +624,10 @@ test('Claude session history restores generic Hook cards from existing execution
       },
     },
     hookConfigs: {
-      listAllExecutions: ({ sessionId, userId }) => {
+      listAllExecutions: ({ sessionId, userId, summary }) => {
         assert.equal(sessionId, 's1');
         assert.equal(userId, 2);
+        assert.equal(summary, false);
         return [{
           id: 'execution-1',
           hookId: 'sql-check',
@@ -634,6 +635,21 @@ test('Claude session history restores generic Hook cards from existing execution
           eventName: 'Stop',
           status: 'succeeded',
           startedAtMs: Date.parse('2026-08-24T01:00:01.000Z'),
+          actions: {
+            'check-sql': { output: { valid: true, issueCount: 0 } },
+            'record-lines': {
+              output: { recorded: true, id: 'record-1', type: 'sql_response_metrics' },
+            },
+          },
+        }];
+      },
+      listExecutionDataRecords: (executionId) => {
+        assert.equal(executionId, 'execution-1');
+        return [{
+          id: 'record-1',
+          type: 'sql_response_metrics',
+          data: { sqlLineCount: 3 },
+          createdAt: '2026-08-24 01:00:01',
         }];
       },
       getHook: () => ({
@@ -642,7 +658,14 @@ test('Claude session history restores generic Hook cards from existing execution
         description: '校验模型返回的 SQL。',
         eventName: 'Stop',
         extensionLogic: { code: 'export async function run() {}' },
-        postActions: [{ type: 'call_mcp_tool' }],
+        postActions: [
+          { id: 'check-sql', type: 'call_mcp_tool' },
+          {
+            id: 'record-lines',
+            type: 'write_record',
+            config: { recordType: 'sql_response_metrics' },
+          },
+        ],
       }),
     },
   });
@@ -677,10 +700,137 @@ test('Claude session history restores generic Hook cards from existing execution
     hookId: 'sql-check',
     hookName: 'SQL Check 强制校验',
     eventName: 'Stop',
-    actionTypes: ['call_mcp_tool'],
+    actionTypes: ['call_mcp_tool', 'write_record'],
+    actionResults: [
+      {
+        actionId: 'check-sql',
+        actionType: 'call_mcp_tool',
+        output: { valid: true, issueCount: 0 },
+      },
+      {
+        actionId: 'record-lines',
+        actionType: 'write_record',
+        output: { recorded: true, id: 'record-1', type: 'sql_response_metrics' },
+        record: {
+          id: 'record-1',
+          type: 'sql_response_metrics',
+          data: { sqlLineCount: 3 },
+          createdAt: '2026-08-24 01:00:01',
+        },
+      },
+    ],
     hasScript: true,
     summary: '校验模型返回的 SQL。',
   });
+});
+
+test('Claude session history omits execution and persisted follow-up cards for Hooks hidden from chat', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [
+            {
+              id: 'assistant-1',
+              kind: 'text',
+              role: 'assistant',
+              content: 'Done.',
+              timestamp: '2026-08-24T01:00:00.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'hook_activity_execution-1_notify',
+              kind: 'hook_activity',
+              hookId: 'hidden-hook',
+              activityKind: 'followup',
+              timestamp: '2026-08-24T01:00:02.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+          ],
+          total: 2,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          {
+            id: 'assistant-1',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-08-24T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'hook-recovery-output',
+            kind: 'text',
+            role: 'assistant',
+            content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+            hookActivityId: 'hook_activity_execution-1_notify',
+            timestamp: '2026-08-24T01:00:03.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'legacy-hook-recovery-output',
+            kind: 'text',
+            role: 'assistant',
+            content: 'LEGACY_HOOK_NOTIFICATION_SKILL_EXECUTED',
+            hookActivityId: 'hook_activity_execution-1_legacy-notify',
+            timestamp: '2026-08-24T01:00:04.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 3,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+    hookConfigs: {
+      listAllExecutions: () => [{
+        id: 'execution-1',
+        hookId: 'hidden-hook',
+        hookName: '隐藏 Hook',
+        eventName: 'Stop',
+        status: 'succeeded',
+        startedAtMs: Date.parse('2026-08-24T01:00:01.000Z'),
+      }],
+      getHook: () => ({
+        id: 'hidden-hook',
+        name: '隐藏 Hook',
+        showInChat: false,
+        eventName: 'Stop',
+        extensionLogic: null,
+        postActions: [{ type: 'invoke_skill' }],
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+  });
+
+  assert.deepEqual(result.messages.map((message) => message.id), ['assistant-1']);
 });
 
 test('interactive Claude user and assistant messages are not persisted to the database', () => {

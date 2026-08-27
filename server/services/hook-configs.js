@@ -490,6 +490,7 @@ function normalizeHookInput(input, { strict = false } = {}) {
       max: 1000,
       allowEmpty: true,
     }),
+    showInChat: input.showInChat !== false,
     eventName,
     matcher,
     extensionLogic: normalizeExtensionLogic(input.extensionLogic),
@@ -518,6 +519,7 @@ function mapHookRow(row) {
     id: row.id,
     name: row.name,
     description: row.description || '',
+    showInChat: row.show_in_chat !== 0,
     status: row.status,
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
@@ -1465,7 +1467,10 @@ export function createHookConfigService({
       return queryExecutions({ ...filters, hookId, summary: true });
     },
 
-    listAllExecutions: (filters = {}) => queryExecutions({ ...filters, summary: true }).executions,
+    listAllExecutions: (filters = {}) => queryExecutions({
+      ...filters,
+      summary: filters.summary !== false,
+    }).executions,
 
     listAllExecutionPage: (filters = {}) => queryExecutions({ ...filters, summary: true }),
 
@@ -1481,6 +1486,15 @@ export function createHookConfigService({
         WHERE e.id = ?
       `).get(executionId);
       return mapExecutionRow(row);
+    },
+
+    listExecutionDataRecords: (executionId) => {
+      if (!hasTable(database, 'hook_data_records')) return [];
+      return database.prepare(`
+        SELECT * FROM hook_data_records
+        WHERE execution_id = ?
+        ORDER BY created_at ASC, rowid ASC
+      `).all(String(executionId || '')).map(mapDataRecordRow);
     },
 
     listDataRecords: (hookId, { limit } = {}) => {
@@ -1506,8 +1520,8 @@ export function createHookConfigService({
         INSERT INTO hooks (
           id, name, description, status, event_name, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json,
-          binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
+          show_in_chat, binding_controller, created_by, updated_by
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -1519,6 +1533,7 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
+          normalized.showInChat ? 1 : 0,
           normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
@@ -1535,7 +1550,7 @@ export function createHookConfigService({
         UPDATE hooks
         SET name = ?, description = ?, status = 'draft', event_name = ?,
             matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
-            claude_response_json = ?,
+            claude_response_json = ?, show_in_chat = ?,
             updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `,
@@ -1548,6 +1563,7 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
+          normalized.showInChat ? 1 : 0,
           userId,
           hookId,
         );
