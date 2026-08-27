@@ -549,12 +549,6 @@ async function setupProjectsWatcher() {
 
 const app = express();
 const server = http.createServer(app);
-function setFrontendHtmlHeaders(res) {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-}
 
 const ptySessionsMap = new Map();
 const activeProviderCommands = new Map();
@@ -771,7 +765,9 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) {
             // Prevent HTML caching to avoid service worker issues after builds
-            setFrontendHtmlHeaders(res);
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
         } else if (filePath.match(/\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico)$/)) {
             // Cache static assets for 1 year (they have hashed names)
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -3560,7 +3556,9 @@ app.get('*', (req, res) => {
     // Check if dist/index.html exists (production build available)
     if (fs.existsSync(indexPath)) {
         // Set no-cache headers for HTML to prevent service worker issues
-        setFrontendHtmlHeaders(res);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
         res.sendFile(indexPath);
     } else {
         // In development, redirect to Vite dev server only if dist doesn't exist

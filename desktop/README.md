@@ -4,24 +4,16 @@ This package is a small Electron shell for the hosted CloudCLI application. It d
 
 ## Configuration
 
-Production builds require four non-secret URL values and accept one optional security override. Supply them as CI environment variables or copy `.env.desktop.example` to the ignored `.env.desktop` file:
+Production builds require two URL values. Supply them as CI environment variables or copy `.env.desktop.example` to the ignored `.env.desktop` file:
 
 ```dotenv
-DESKTOP_ALLOW_INSECURE_HTTP=false
 DESKTOP_HOME_URL=https://cloudcli.example.com/
 DESKTOP_UPDATE_BASE_URL=https://cloudcli.example.com/api/desktop-updates
-DESKTOP_ALLOWED_ORIGINS=https://cloudcli.example.com
-DESKTOP_AUTH_ORIGINS=https://auth.example.com
 ```
 
-- Production URLs use HTTPS by default. Allowlist entries must be exact origins, separated by commas.
-- An unsigned internal build may set `DESKTOP_ALLOW_INSECURE_HTTP=true` to permit HTTP for `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`, `DESKTOP_ALLOWED_ORIGINS`, and `DESKTOP_AUTH_ORIGINS`. This opt-in exposes authentication, application traffic, update metadata, and installers to interception and must not be used on untrusted networks.
-- `DESKTOP_REQUIRE_SIGNING=true` rejects builds that enable insecure HTTP.
-- `DESKTOP_HOME_URL` may include an initial path. Its origin is always included in the navigation allowlist.
-- `DESKTOP_AUTH_ORIGINS` may be explicitly empty when the deployment has no cross-origin OAuth provider.
-- Application origins and OAuth origins must be disjoint; overlapping entries fail the build.
-- Only these five names are parsed from `.env.desktop`. The root `.env` is never read by the desktop build.
-- Missing production values, credentials embedded in a URL, origin paths, and insecure URLs fail the build.
+- `DESKTOP_HOME_URL` is the page opened by the desktop window.
+- `DESKTOP_UPDATE_BASE_URL` is the base URL used by the auto-updater.
+- Only these two names are parsed from `.env.desktop`. The root `.env` is never read by the desktop build.
 
 Development defaults to `http://127.0.0.1:5173/`, so run the normal web development server and the Electron shell in separate terminals:
 
@@ -39,12 +31,11 @@ DESKTOP_HOME_URL=https://cloudcli.example.com/ npm run desktop:dev
 /Applications/CloudCLI.app/Contents/MacOS/CloudCLI --desktop-home-url=https://cloudcli.example.com/
 ```
 
-The selected home origin is added to the runtime allowlist after the same URL
-security checks used by the build. The desktop application's dedicated browser
-session uses direct connections by default, so `DESKTOP_HOME_URL` and resources
-loaded in that session do not use the system proxy.
+The desktop application's dedicated browser session uses direct connections by
+default, so `DESKTOP_HOME_URL` and resources loaded in that session do not use
+the system proxy.
 
-The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL; loopback HTTP is accepted automatically in development mode, while other HTTP origins require the explicit insecure override. Packaged applications ignore `ELECTRON_RENDERER_URL` and always use the bundled, restricted offline page on load failure.
+The desktop offline renderer uses port `5174`. A local `.env.desktop` can override the remote development URL. Packaged applications ignore `ELECTRON_RENDERER_URL` and load the bundled offline page on connection failure.
 
 ## Commands
 
@@ -56,17 +47,14 @@ npm run desktop:package:mac
 npm run desktop:package:win
 ```
 
-`package:mac` produces a Universal DMG and ZIP. `package:win` produces an x64 NSIS installer. A production package is expected to be signed; CI sets `DESKTOP_REQUIRE_SIGNING=true`, which makes an absent signing identity a hard failure.
+`package:mac` produces a Universal DMG and ZIP. `package:win` produces an x64 NSIS installer.
 
-## Runtime security model
+## Runtime behavior
 
-- The main window uses a persistent `persist:cloudcli` Chromium session, sandboxing, context isolation, and no Node integration or `<webview>` support.
-- Main-frame navigation is limited to configured application origins. Configured OAuth origins use a restricted child window. Other HTTPS and `mailto:` URLs go to the system browser; unconfigured HTTP, `file:`, `data:`, `javascript:`, and unknown schemes are rejected.
-- Certificate errors fail closed. Web permissions default to denied, with notifications and clipboard access available only to the exact application origins.
-- The preload exposes only the typed notification bridge. The main process rechecks the main-frame origin and validates/rate-limits every notification.
+- The main window uses a persistent `persist:cloudcli` Chromium session.
+- The preload connects browser events to native desktop notifications.
 - Closing the main window hides it in the tray. Explicit Quit ends notifications but does not cancel cloud tasks.
-- Electron fuses disable RunAsNode, `NODE_OPTIONS`, CLI inspect flags, and non-ASAR application loading, while enabling cookie encryption and embedded ASAR integrity checks.
-- The packaged fallback page is served only through the private `cloudcli-offline://app/` protocol; `file://` receives no extra privileges.
+- The packaged fallback page is loaded from the bundled renderer files.
 
 ## Update repository
 
@@ -92,7 +80,6 @@ location /_internal/cloudcli-desktop-updates/ {
     internal;
     alias /var/lib/cloudcli/desktop-updates/;
     add_header Cache-Control "public, max-age=31536000, immutable" always;
-    add_header X-Content-Type-Options "nosniff" always;
 }
 ```
 
@@ -100,19 +87,17 @@ The prefix accepts only a restricted absolute internal URI path. It must match t
 
 ## Release secrets and variables
 
-The `desktop-release.yml` workflow expects repository variables for the four desktop settings and deployment coordinates:
+The `desktop-release.yml` workflow expects repository variables for the desktop settings and deployment coordinates:
 
-- `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`, `DESKTOP_ALLOWED_ORIGINS`, `DESKTOP_AUTH_ORIGINS`
+- `DESKTOP_HOME_URL`, `DESKTOP_UPDATE_BASE_URL`
 - `DESKTOP_DEPLOY_HOST`, `DESKTOP_DEPLOY_USER`, `DESKTOP_UPDATE_ROOT`
 
 It expects these secrets:
 
-- macOS: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
-- Windows: `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`
 - Deployment: `DESKTOP_DEPLOY_SSH_KEY`, `DESKTOP_DEPLOY_KNOWN_HOSTS`
 
-The workflow signs and notarizes/staples the macOS application before producing the signed DMG/ZIP, and signs both the Windows application and NSIS installer. CI verifies fuses, signatures, the macOS app ticket, and local/remote SHA-256 hashes. Deployment is serialized, refuses an older version or different bytes under an existing versioned filename, uploads artifacts first, and publishes both updater YAML files last with rollback on failure. The update host needs Bash, `sha256sum`, and GNU `sort -V`.
+The workflow builds both desktop targets and publishes the updater files. Deployment is serialized, uploads artifacts first, and publishes both updater YAML files last. The update host needs Bash, `sha256sum`, and GNU `sort -V`.
 
 ## Release acceptance
 
-Before enabling a version for all users, keep signed `N-1` installers and perform one installed `N-1 → N` update on both macOS and Windows. Verify signature/notarization, differential download, restart/install, persistent login state, tray behavior, notification activation, and that cloud tasks remain active across the desktop restart. A fully quit application does not promise background push delivery in V1.
+Before enabling a version for all users, keep `N-1` installers and perform one installed `N-1 → N` update on both macOS and Windows. Verify differential download, restart/install, persistent login state, tray behavior, notification activation, and that cloud tasks remain active across the desktop restart. A fully quit application does not promise background push delivery in V1.

@@ -1,12 +1,7 @@
 import type { Configuration } from 'electron-builder';
-import {
-  assertDesktopSigningPolicy,
-  loadDesktopBuildConfig,
-} from './config/desktop-env';
+import { loadDesktopBuildConfig } from './config/desktop-env';
 
 const desktopConfig = loadDesktopBuildConfig({ production: true });
-const requireSigning = process.env.DESKTOP_REQUIRE_SIGNING === 'true';
-assertDesktopSigningPolicy(desktopConfig, { requireSigning });
 const buildingWindows = process.argv.some((argument) => ['--win', '--windows', '-w'].includes(argument));
 const buildingMac = process.argv.some((argument) => ['--mac', '--macos', '-m'].includes(argument));
 const updatePlatform = buildingWindows ? 'win' : buildingMac ? 'mac'
@@ -41,8 +36,6 @@ const config: Configuration = {
       to: 'trayTemplate@2x.png',
     },
   ],
-  afterPack: './scripts/apply-fuses.cjs',
-  forceCodeSigning: requireSigning,
   publish: {
     provider: 'generic',
     url: `${desktopConfig.updateBaseUrl}/latest/${updatePlatform}/${updateArch}`,
@@ -56,19 +49,12 @@ const config: Configuration = {
     ],
     category: 'public.app-category.developer-tools',
     icon: 'build/icon.icns',
-    hardenedRuntime: true,
-    gatekeeperAssess: false,
-    notarize: requireSigning,
-  },
-  dmg: {
-    sign: requireSigning,
   },
   win: {
     target: [
       { target: 'nsis', arch: ['x64'] },
     ],
     icon: 'build/icon.ico',
-    verifyUpdateCodeSignature: true,
   },
   nsis: {
     oneClick: false,

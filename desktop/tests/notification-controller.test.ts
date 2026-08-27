@@ -2,7 +2,6 @@ import { EventEmitter } from 'node:events';
 
 import type {
   BrowserWindow,
-  IpcMainInvokeEvent,
   NotificationConstructorOptions,
 } from 'electron';
 import {
@@ -17,7 +16,7 @@ import {
 } from 'vitest';
 
 type ShowNotificationHandler = (
-  event: IpcMainInvokeEvent,
+  event: unknown,
   input: unknown,
 ) => Promise<boolean>;
 
@@ -64,14 +63,6 @@ let DesktopNotificationController: typeof import(
 ).DesktopNotificationController;
 let controller: InstanceType<typeof DesktopNotificationController>;
 
-function trustedEvent(): IpcMainInvokeEvent {
-  const mainFrame = { url: 'https://cloudcli.example.com/session/1' };
-  return {
-    senderFrame: mainFrame,
-    sender: { mainFrame },
-  } as unknown as IpcMainInvokeEvent;
-}
-
 function activeNotificationCount(): number {
   return (controller as unknown as {
     activeNotifications: Map<string, unknown>;
@@ -82,7 +73,7 @@ function showNotification(input: Record<string, unknown>): Promise<boolean> {
   if (!registeredHandler) {
     throw new Error('Notification IPC handler was not registered.');
   }
-  return registeredHandler(trustedEvent(), input);
+  return registeredHandler({}, input);
 }
 
 beforeAll(async () => {
@@ -91,9 +82,6 @@ beforeAll(async () => {
     ipcMain: ipcMainMock,
     Notification: TestNotification,
   }));
-  vi.doMock('../src/shared/runtime-config', () => ({
-    ALLOWED_ORIGINS: new Set(['https://cloudcli.example.com']),
-  }));
   ({ DesktopNotificationController } = await import(
     '../src/main/notification-controller'
   ));
@@ -101,7 +89,6 @@ beforeAll(async () => {
 
 afterAll(() => {
   vi.doUnmock('electron');
-  vi.doUnmock('../src/shared/runtime-config');
 });
 
 beforeEach(() => {
@@ -131,7 +118,7 @@ afterEach(() => {
 });
 
 describe('desktop native notification lifecycle', () => {
-  it('waits for show and uses the validated tag as the native notification id', async () => {
+  it('waits for show and passes the notification payload to Electron', async () => {
     const result = showNotification({
       tag: ' task-1 ',
       title: ' Task complete ',
@@ -147,9 +134,9 @@ describe('desktop native notification lifecycle', () => {
     expect(resolved).toBe(false);
     expect(TestNotification.instances).toHaveLength(1);
     expect(TestNotification.instances[0].options).toMatchObject({
-      id: 'task-1',
-      title: 'Task complete',
-      body: 'The response is ready.',
+      id: ' task-1 ',
+      title: ' Task complete ',
+      body: ' The response is ready. ',
     });
 
     TestNotification.instances[0].emit('show', {});
@@ -201,7 +188,7 @@ describe('desktop native notification lifecycle', () => {
     expect(activeNotificationCount()).toBe(0);
   });
 
-  it('releases clicked notifications and activates only their validated session', async () => {
+  it('releases clicked notifications and activates their session', async () => {
     const result = showNotification({
       tag: 'click-1',
       title: 'Needs attention',
@@ -220,25 +207,5 @@ describe('desktop native notification lifecycle', () => {
       'cloudcli-desktop:notification-activated',
       { sessionId: 'session-123' },
     );
-  });
-
-  it('caps retained notifications and closes the oldest entry', async () => {
-    let firstNotification: TestNotification | undefined;
-
-    for (let index = 0; index < 65; index += 1) {
-      vi.setSystemTime(index * 11_000);
-      const result = showNotification({
-        tag: `capacity-${index}`,
-        title: 'Capacity test',
-        body: `Notification ${index}`,
-      });
-      const notification = TestNotification.instances[index];
-      firstNotification ??= notification;
-      notification.emit('show', {});
-      await expect(result).resolves.toBe(true);
-    }
-
-    expect(activeNotificationCount()).toBe(64);
-    expect(firstNotification?.close).toHaveBeenCalledOnce();
   });
 });

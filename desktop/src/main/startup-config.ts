@@ -4,14 +4,10 @@ const HOME_URL_ARGUMENTS = new Set([
   '--desktop-home-url',
   '--DESKTOP_HOME_URL',
 ]);
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
-
 interface ResolveDesktopHomeUrlOptions {
   argv: readonly string[];
   environmentValue?: string;
   builtValue: string;
-  production: boolean;
-  allowInsecureHttp: boolean;
 }
 
 function commandLineHomeUrl(argv: readonly string[]): string | undefined {
@@ -51,23 +47,6 @@ export function resolveDesktopHomeUrl(options: ResolveDesktopHomeUrlOptions): st
     parsed = new URL(value);
   } catch {
     throw new Error('DESKTOP_HOME_URL must be an absolute URL.');
-  }
-
-  if (parsed.username || parsed.password) {
-    throw new Error('DESKTOP_HOME_URL must not contain credentials.');
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error('DESKTOP_HOME_URL must not contain a query or fragment.');
-  }
-
-  const developmentLoopback = !options.production
-    && parsed.protocol === 'http:'
-    && LOOPBACK_HOSTS.has(parsed.hostname);
-  const explicitlyAllowedHttp = options.allowInsecureHttp && parsed.protocol === 'http:';
-  if (parsed.protocol !== 'https:' && !developmentLoopback && !explicitlyAllowedHttp) {
-    throw new Error(
-      'DESKTOP_HOME_URL must use HTTPS unless insecure HTTP is enabled for this build.',
-    );
   }
 
   return parsed.href;

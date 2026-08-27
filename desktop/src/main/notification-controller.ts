@@ -2,20 +2,11 @@ import {
   BrowserWindow,
   ipcMain,
   Notification,
-  type IpcMainInvokeEvent,
 } from 'electron';
-import {
-  NotificationRateLimiter,
-  isTrustedNotificationSender,
-  validateNotificationInput,
-  type ValidatedNotificationInput,
-} from '../shared/notifications';
 import { IPC_CHANNELS } from '../shared/ipc-channels';
-import { ALLOWED_ORIGINS } from '../shared/runtime-config';
 
 const NOTIFICATION_SHOW_TIMEOUT_MS = 5_000;
 const NOTIFICATION_REFERENCE_TTL_MS = 10 * 60_000;
-const MAX_ACTIVE_NOTIFICATIONS = 64;
 
 interface ActiveNotification {
   notification: Notification;
@@ -23,7 +14,6 @@ interface ActiveNotification {
 }
 
 export class DesktopNotificationController {
-  private readonly limiter = new NotificationRateLimiter();
   private readonly activeNotifications = new Map<string, ActiveNotification>();
 
   constructor(private readonly getMainWindow: () => BrowserWindow | null) {}
@@ -31,7 +21,7 @@ export class DesktopNotificationController {
   register(): void {
     ipcMain.handle(
       IPC_CHANNELS.showNotification,
-      (event, input: unknown) => this.showFromRenderer(event, input),
+      (_event, input: CloudCliDesktopNotificationInput) => this.showFromRenderer(input),
     );
   }
 
@@ -43,32 +33,10 @@ export class DesktopNotificationController {
     this.activeNotifications.clear();
   }
 
-  private isTrustedSender(event: IpcMainInvokeEvent): boolean {
-    const senderFrame = event.senderFrame;
-    if (!senderFrame || senderFrame !== event.sender.mainFrame) {
-      return false;
-    }
-    return isTrustedNotificationSender(senderFrame.url, true, ALLOWED_ORIGINS);
-  }
-
   private async showFromRenderer(
-    event: IpcMainInvokeEvent,
-    input: unknown,
+    notificationInput: CloudCliDesktopNotificationInput,
   ): Promise<boolean> {
-    if (!this.isTrustedSender(event) || !Notification.isSupported()) {
-      return false;
-    }
-
-    let notificationInput: ValidatedNotificationInput;
-    try {
-      notificationInput = validateNotificationInput(input);
-    } catch (error) {
-      console.warn('[desktop] Rejected invalid notification payload.', error);
-      return false;
-    }
-
-    if (!this.limiter.allow(notificationInput.tag)) {
-      console.warn('[desktop] Notification rate limit reached.');
+    if (!Notification.isSupported()) {
       return false;
     }
 
@@ -86,13 +54,6 @@ export class DesktopNotificationController {
     }
 
     this.activeNotifications.get(notificationInput.tag)?.dispose(true);
-    while (this.activeNotifications.size >= MAX_ACTIVE_NOTIFICATIONS) {
-      const oldestNotification = this.activeNotifications.values().next().value;
-      if (!oldestNotification) {
-        break;
-      }
-      oldestNotification.dispose(true);
-    }
 
     return new Promise<boolean>((resolve) => {
       let settled = false;

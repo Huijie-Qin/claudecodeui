@@ -11,26 +11,14 @@ import {
 } from 'electron';
 import { DesktopNotificationController } from './notification-controller';
 import {
-  installOfflineProtocol,
   isOfflineDocumentUrl,
-  OFFLINE_PAGE_URL,
-  registerOfflineScheme,
   resolveOfflinePageUrl,
 } from './offline-protocol';
-import {
-  configureSessionPermissions,
-  configureWindowNavigation,
-  installApplicationSecurity,
-} from './security';
 import { DesktopUpdater } from './updater';
 import { createDirectProxyConfig, resolveDesktopHomeUrl } from './startup-config';
-import { createSecureWebPreferences } from '../shared/security-policy';
 import { IPC_CHANNELS } from '../shared/ipc-channels';
 import {
-  ALLOW_INSECURE_HTTP,
-  ALLOWED_ORIGINS,
   APP_ID,
-  AUTH_ORIGINS,
   HOME_URL as BUILT_HOME_URL,
   SESSION_PARTITION,
 } from '../shared/runtime-config';
@@ -44,19 +32,10 @@ const homeUrl = resolveDesktopHomeUrl({
   argv: process.argv,
   environmentValue: process.env.DESKTOP_HOME_URL,
   builtValue: BUILT_HOME_URL,
-  production: app.isPackaged,
-  allowInsecureHttp: ALLOW_INSECURE_HTTP,
 });
-const homeOrigin = new URL(homeUrl).origin;
-if (AUTH_ORIGINS.has(homeOrigin)) {
-  throw new Error(`DESKTOP_HOME_URL must not overlap DESKTOP_AUTH_ORIGINS: ${homeOrigin}.`);
-}
-ALLOWED_ORIGINS.add(homeOrigin);
 
-registerOfflineScheme();
 app.setName('CloudCLI');
 app.setAppUserModelId(APP_ID);
-installApplicationSecurity();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -85,16 +64,7 @@ function isOfflinePageUrl(url: string): boolean {
   if (!offlineUrl) {
     return false;
   }
-  if (offlineUrl === OFFLINE_PAGE_URL) {
-    return isOfflineDocumentUrl(url);
-  }
-  try {
-    const expected = new URL(offlineUrl);
-    const candidate = new URL(url);
-    return candidate.origin === expected.origin;
-  } catch {
-    return false;
-  }
+  return isOfflineDocumentUrl(url, offlineUrl);
 }
 
 function resolveTrayIconPath(): string {
@@ -191,16 +161,13 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: '#0f172a',
     icon: resolveAppIconPath(),
     webPreferences: {
-      ...createSecureWebPreferences(SESSION_PARTITION),
       preload: preloadPath,
+      partition: SESSION_PARTITION,
       backgroundThrottling: false,
       spellcheck: true,
     },
   });
 
-  configureWindowNavigation(window, {
-    isInternalUrl: isOfflinePageUrl,
-  });
   window.once('ready-to-show', () => {
     window.show();
   });
@@ -227,14 +194,8 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
-function retryConnection(event: Electron.IpcMainEvent): void {
-  if (
-    !mainWindow
-    || mainWindow.isDestroyed()
-    || event.sender !== mainWindow.webContents
-    || !event.senderFrame
-    || !isOfflinePageUrl(event.senderFrame.url)
-  ) {
+function retryConnection(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
   void mainWindow.loadURL(homeUrl);
@@ -260,8 +221,6 @@ if (hasSingleInstanceLock) {
     applyApplicationIcon();
     const desktopSession = session.fromPartition(SESSION_PARTITION);
     await desktopSession.setProxy(createDirectProxyConfig());
-    installOfflineProtocol(desktopSession);
-    configureSessionPermissions(desktopSession);
     mainWindow = createMainWindow();
     notifications.register();
     createTray();

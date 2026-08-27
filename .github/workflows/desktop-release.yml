@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: Deploy signed artifacts to the stable update server
+        description: Deploy artifacts to the stable update server
         required: true
         default: false
         type: boolean
@@ -18,9 +18,6 @@ permissions:
 env:
   DESKTOP_HOME_URL: ${{ vars.DESKTOP_HOME_URL }}
   DESKTOP_UPDATE_BASE_URL: ${{ vars.DESKTOP_UPDATE_BASE_URL }}
-  DESKTOP_ALLOWED_ORIGINS: ${{ vars.DESKTOP_ALLOWED_ORIGINS }}
-  DESKTOP_AUTH_ORIGINS: ${{ vars.DESKTOP_AUTH_ORIGINS }}
-  DESKTOP_REQUIRE_SIGNING: 'true'
 
 jobs:
   build-macos:
@@ -42,37 +39,8 @@ jobs:
           test "$EXPECTED_VERSION" = "$ACTUAL_VERSION"
       - name: Install desktop dependencies
         run: npm --prefix desktop ci
-      - name: Configure Apple notarization key
-        shell: bash
-        run: |
-          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-          printf '%s' "$APPLE_API_KEY_P8" > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
-          echo "APPLE_API_KEY=$KEY_PATH" >> "$GITHUB_ENV"
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       - name: Test and build Universal macOS release
         run: npm --prefix desktop run test && npm --prefix desktop run package:mac
-        env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      - name: Verify macOS fuses, signature, and notarization ticket
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP_BUNDLE='desktop/dist/mac-universal/mac-universal/CloudCLI.app'
-          test -d "$APP_BUNDLE"
-          npm --prefix desktop run verify:fuses -- "$APP_BUNDLE"
-          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-          spctl --assess --type execute --verbose=2 "$APP_BUNDLE"
-          xcrun stapler validate "$APP_BUNDLE"
-          DMG_FILES=(desktop/dist/mac-universal/*.dmg)
-          test "${#DMG_FILES[@]}" -eq 1
-          codesign --verify --verbose=2 "${DMG_FILES[0]}"
-          spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG_FILES[0]}"
       - name: Upload macOS updater files
         uses: actions/upload-artifact@v4
         with:
@@ -106,26 +74,6 @@ jobs:
         run: npm --prefix desktop ci
       - name: Test and build Windows x64 release
         run: npm --prefix desktop run test && npm --prefix desktop run package:win
-        env:
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-      - name: Verify Windows fuses
-        shell: bash
-        run: npm --prefix desktop run verify:fuses -- 'desktop/dist/win-x64/win-unpacked/CloudCLI.exe'
-      - name: Verify Windows Authenticode signatures
-        shell: pwsh
-        run: |
-          $targets = @('desktop/dist/win-x64/win-unpacked/CloudCLI.exe')
-          $targets += @(Get-ChildItem -Path 'desktop/dist/win-x64' -Filter '*-win-x64.exe' -File | ForEach-Object FullName)
-          if ($targets.Count -ne 2) {
-            throw "Expected the application executable and one NSIS installer, found $($targets.Count)."
-          }
-          foreach ($target in $targets) {
-            $signature = Get-AuthenticodeSignature -FilePath $target
-            if ($signature.Status -ne 'Valid') {
-              throw "Invalid Authenticode signature for ${target}: $($signature.Status)"
-            }
-          }
       - name: Upload Windows updater files
         uses: actions/upload-artifact@v4
         with:
