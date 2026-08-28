@@ -192,6 +192,82 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   }
 });
 
+test('mcp_loop_run is a final PostToolUse-only action with fixed inputs and equality conditions', () => {
+  const statusTool = {
+    name: 'mcp__loopdemo__get_task_status',
+    mcpServerId: 'loop-demo-server',
+    serverName: 'loopdemo',
+    toolName: 'get_task_status',
+    inputSchema: {
+      type: 'object',
+      required: ['task_id'],
+      properties: { task_id: { type: 'string' } },
+    },
+  };
+  const { database, service } = createFixture({
+    hookMcpServers: [{ id: 'loop-demo-server', name: 'loopdemo' }],
+    hookMcpTools: [statusTool],
+  });
+  try {
+    const input = publishableHook({
+      eventName: 'PostToolUse',
+      matcher: { value: statusTool.name },
+      extensionLogic: null,
+      postActions: [{
+        id: 'wait-for-task',
+        type: 'mcp_loop_run',
+        position: 0,
+        config: {
+          mcpServerId: statusTool.mcpServerId,
+          toolName: statusTool.name,
+          inputs: {
+            task_id: { source: 'reference', path: 'event.tool_input.task_id' },
+          },
+          successWhen: { field: 'status', equals: 'success' },
+          failureWhen: { field: 'status', equals: 'failed' },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    });
+    const created = service.createHook({ input, userId: 1 });
+    assert.equal(created.postActions[0].config.pollIntervalMs, 10_000);
+    assert.equal(created.postActions[0].config.perCallTimeoutMs, 15_000);
+    assert.equal(created.postActions[0].config.maxWaitMs, 2_700_000);
+    assert.deepEqual(created.postActions[0].config.inputs.task_id, {
+      source: 'reference',
+      path: 'event.tool_input.task_id',
+    });
+    assert.equal(service.publishHook({ hookId: created.id, userId: 1 }).status, 'published');
+
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: { ...input, eventName: 'Stop' },
+    }), /type is not supported/);
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: {
+        ...input,
+        postActions: [
+          ...input.postActions,
+          { id: 'after-loop', type: 'write_record', position: 1, config: { recordType: 'late', fields: {} } },
+        ],
+      },
+    }), /must be the final post action/);
+    assert.throws(() => service.createHook({
+      userId: 1,
+      input: {
+        ...input,
+        postActions: [
+          ...input.postActions,
+          { ...input.postActions[0], id: 'second-loop', position: 1 },
+        ],
+      },
+    }), /at most one mcp_loop_run/);
+  } finally {
+    database.close();
+  }
+});
+
 test('Hook execution diagnostics expose outcomes, millisecond timestamps, and global filters', () => {
   const { database, service } = createFixture();
   try {

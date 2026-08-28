@@ -132,6 +132,35 @@ test('Claude display command store records internal Hook recovery markers', asyn
   ]);
 });
 
+test('Claude display command store records internal MCP loop resume markers', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-mcp-loop',
+  });
+
+  const marker = '<ccui-mcp-loop-result job-id="loop-1"></ccui-mcp-loop-result>';
+  assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-mcp-loop',
+    messageId: 'message-mcp-loop',
+    displayCommand: marker,
+    modelContent: 'MCP loop resume payload',
+  }), true);
+
+  const commands = await readClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-mcp-loop',
+  });
+  assert.deepEqual([...commands.entries()], [
+    ['message-mcp-loop', marker],
+  ]);
+});
+
 test('Claude display command store keeps the latest command inside the session data directory', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));

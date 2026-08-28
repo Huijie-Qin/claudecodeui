@@ -12,6 +12,7 @@ const SCHEDULED_SKILL_MATCH_WINDOW_MS = 60_000;
 const SLASH_INVOCATION_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
 const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
   '<ccui-hook-recovery',
+  '<ccui-mcp-loop-result',
   '<local-command-caveat>',
   'Base directory for this skill:',
 ];
@@ -81,7 +82,8 @@ function getMessageTimestampMs(message) {
 }
 
 function isClaudeSyntheticMessage(message) {
-  return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind);
+  return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind)
+    || (message?.origin === 'hook' && message?.mcpLoopReplacement === true);
 }
 
 function getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId) {

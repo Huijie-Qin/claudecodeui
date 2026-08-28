@@ -770,6 +770,7 @@ async function executePublishedMatrixHook({
   mcpServers,
   enqueueSkillRecovery,
   enqueueAgentMessage = enqueueSkillRecovery,
+  enqueueMcpLoop = async () => ({ scheduled: true, jobId: 'matrix-loop', status: 'queued' }),
 }) {
   const runtime = createHookRuntimeSession({
     hooks: [hook],
@@ -785,6 +786,7 @@ async function executePublishedMatrixHook({
     },
     enqueueSkillRecovery,
     enqueueAgentMessage,
+    enqueueMcpLoop,
     database,
   });
   const compiled = runtime.hooks[hook.eventName];
@@ -830,6 +832,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     javascript: 0,
     python: 0,
     callMcpTool: 0,
+    mcpLoopRun: 0,
     writeRecord: 0,
     invokeSkill: 0,
     sendAgentMessage: 0,
@@ -936,6 +939,60 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           if (eventName === 'StopFailure') assert.deepEqual(output, {});
           else assert.equal(output.systemMessage, `mcp=${JSON.stringify(actionOutput)}`);
           coverage.callMcpTool += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
+
+        if (actionType === 'mcp_loop_run') {
+          let loopRequest;
+          const inputs = {
+            event_name: { source: 'reference', path: 'event.hook_event_name' },
+            payload: { source: 'literal', value: 'fixed-loop-payload' },
+            user_id: { source: 'reference', path: 'ccui.env.userId' },
+            literal: { source: 'literal', value: true },
+          };
+          const hook = publishBoundMatrixHook(service, eventName, 'action-mcp-loop', {
+            postActions: [{
+              id: 'mcp-loop',
+              type: 'mcp_loop_run',
+              position: 0,
+              config: {
+                mcpServerId: matrixMcpServerId,
+                toolName: 'mcp__matrix_server__echo',
+                inputs,
+                pollIntervalMs: 10,
+                perCallTimeoutMs: 1_000,
+                maxWaitMs: 10_000,
+                successWhen: { field: 'status', equals: 'success' },
+                failureWhen: { field: 'status', equals: 'failed' },
+                waitingLabel: 'matrix loop',
+              },
+            }],
+          });
+          const { execution, output } = await executePublishedMatrixHook({
+            database,
+            hook,
+            workspaceRoot,
+            mcpServers,
+            enqueueSkillRecovery,
+            enqueueMcpLoop: async (request) => {
+              loopRequest = request;
+              return { scheduled: true, jobId: 'matrix-loop', status: 'queued' };
+            },
+          });
+          assert.deepEqual(output, {});
+          assert.deepEqual(loopRequest.input, {
+            event_name: 'PostToolUse',
+            payload: 'fixed-loop-payload',
+            user_id: 2,
+            literal: true,
+          });
+          assert.deepEqual(JSON.parse(execution.actions_json), {
+            'mcp-loop': {
+              output: { scheduled: true, jobId: 'matrix-loop', status: 'queued' },
+            },
+          });
+          coverage.mcpLoopRun += 1;
           executedHookIds.add(hook.id);
           continue;
         }
@@ -1077,13 +1134,14 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       javascript: HOOK_EVENTS.length,
       python: HOOK_EVENTS.length,
       callMcpTool: HOOK_EVENTS.length,
+      mcpLoopRun: 1,
       writeRecord: HOOK_EVENTS.length,
       invokeSkill: 2,
       sendAgentMessage: 2,
       claudeOutputs: expectedClaudeOutputs,
     });
     assert.equal(recoveries.length, 4);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 4 + expectedClaudeOutputs);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 5 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,

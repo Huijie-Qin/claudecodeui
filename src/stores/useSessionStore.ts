@@ -76,12 +76,12 @@ export interface NormalizedMessage {
   hookId?: string;
   hookName?: string;
   actionId?: string;
-  actionType?: 'invoke_skill' | 'send_agent_message';
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
   eventName?: string;
-  actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
   actionResults?: Array<{
     actionId: string;
-    actionType: 'call_mcp_tool' | 'write_record';
+    actionType: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record';
     output?: unknown;
     record?: {
       id: string;
@@ -104,6 +104,15 @@ export interface NormalizedMessage {
   parentToolUseId?: string;
   subagentTools?: unknown[];
   isFinal?: boolean;
+  mcpLoopReplacement?: boolean;
+  mcpLoopJobId?: string;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
   // Cursor-specific ordering
   sequence?: number;
   rowid?: number;

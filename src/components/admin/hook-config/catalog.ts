@@ -718,6 +718,8 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
       path: `actions.${action.id}.output`,
       label: action.type === 'call_mcp_tool'
         ? 'MCP 工具调用结果'
+        : action.type === 'mcp_loop_run'
+          ? 'MCP 循环最终结果'
         : action.type === 'write_record'
           ? '业务数据写入结果'
           : action.type === 'invoke_skill'

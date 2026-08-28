@@ -235,7 +235,7 @@ export default function HookSettingsTab({
         ) : hooks.map((hook) => {
           const isSqlCheckManaged = hook.bindingController === 'sql_check';
           const hasSkill = hook.postActions?.some((action) => action.type === 'invoke_skill');
-          const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool');
+          const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run');
           const hasAgentMessage = hook.postActions?.some((action) => action.type === 'send_agent_message');
           return (
             <div key={hook.id} className="flex items-start gap-3 p-4">

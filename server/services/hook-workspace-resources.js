@@ -201,7 +201,7 @@ async function materializeSkill({ workspaceRoot, skill }) {
 function resolveActionMcpServerIds(hook, catalog) {
   const serverIds = new Set();
   for (const action of hook?.postActions || []) {
-    if (action.type !== 'call_mcp_tool') continue;
+    if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type)) continue;
     let serverId = String(action.config?.mcpServerId || '').trim();
     if (!serverId) {
       const toolName = String(action.config?.toolName || '');

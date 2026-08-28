@@ -65,7 +65,13 @@ const VISIBLE_EVENTS_CONFIG_KEY = 'admin_hook_visible_events';
 const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
 const MAX_SCRIPT_BYTES = 128 * 1024;
 const MAX_POST_ACTIONS = 20;
-const POST_ACTION_TYPES = Object.freeze(['call_mcp_tool', 'write_record', 'invoke_skill', 'send_agent_message']);
+const POST_ACTION_TYPES = Object.freeze([
+  'call_mcp_tool',
+  'mcp_loop_run',
+  'write_record',
+  'invoke_skill',
+  'send_agent_message',
+]);
 const AGENT_TURN_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
 const EXECUTION_OUTCOMES = new Set([
@@ -133,9 +139,10 @@ const EVENT_CLAUDE_OUTPUTS = Object.freeze({
 });
 
 function allowedPostActions(eventName) {
-  return new Set(AGENT_TURN_ACTION_EVENTS.has(eventName)
+  const actions = AGENT_TURN_ACTION_EVENTS.has(eventName)
     ? POST_ACTION_TYPES
-    : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill' && type !== 'send_agent_message'));
+    : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill' && type !== 'send_agent_message');
+  return new Set(actions.filter((type) => type !== 'mcp_loop_run' || eventName === 'PostToolUse'));
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -169,6 +176,30 @@ function requireString(value, name, { max = 200, allowEmpty = false } = {}) {
     throw createHttpError(`${name} must be ${max} characters or fewer`);
   }
   return normalized;
+}
+
+function requireInteger(value, name, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw createHttpError(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return number;
+}
+
+function normalizeEqualityCondition(value, name, { optional = false } = {}) {
+  if (value == null && optional) return null;
+  if (!isPlainObject(value)) throw createHttpError(`${name} must be an object`);
+  const field = requireString(value.field, `${name}.field`, { max: 300 });
+  if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(field)) {
+    throw createHttpError(`${name}.field must be a dot-separated field path`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, 'equals')) {
+    throw createHttpError(`${name}.equals is required`);
+  }
+  if (value.equals !== null && !['string', 'number', 'boolean'].includes(typeof value.equals)) {
+    throw createHttpError(`${name}.equals must be a string, number, boolean, or null`);
+  }
+  return { field, equals: value.equals };
 }
 
 function normalizeEventName(value) {
@@ -272,7 +303,7 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
     throw createHttpError(`postActions must contain ${MAX_POST_ACTIONS} items or fewer`);
   }
   const ids = new Set();
-  return rawActions.map((action, index) => {
+  const normalizedActions = rawActions.map((action, index) => {
     if (!isPlainObject(action)) throw createHttpError(`postActions[${index}] must be an object`);
     const id = requireString(action.id, `postActions[${index}].id`, { max: 100 });
     if (ids.has(id)) throw createHttpError(`post action ${id} is duplicated`);
@@ -310,6 +341,64 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             ? null
             : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           inputs,
+        },
+      };
+    }
+    if (action.type === 'mcp_loop_run') {
+      const rawInputs = isPlainObject(config.inputs) ? config.inputs : {};
+      const inputs = {};
+      for (const [key, binding] of Object.entries(rawInputs)) {
+        const inputName = requireString(key, `postActions[${index}].config.inputs key`, { max: 200 });
+        inputs[inputName] = normalizeBinding(binding, `postActions[${index}].config.inputs.${inputName}`);
+      }
+      const pollIntervalMs = requireInteger(
+        config.pollIntervalMs ?? 10_000,
+        `postActions[${index}].config.pollIntervalMs`,
+        { min: 10, max: 300_000 },
+      );
+      const perCallTimeoutMs = requireInteger(
+        config.perCallTimeoutMs ?? 15_000,
+        `postActions[${index}].config.perCallTimeoutMs`,
+        { min: 10, max: 300_000 },
+      );
+      const maxWaitMs = requireInteger(
+        config.maxWaitMs ?? 2_700_000,
+        `postActions[${index}].config.maxWaitMs`,
+        { min: pollIntervalMs, max: 604_800_000 },
+      );
+      return {
+        id,
+        type: 'mcp_loop_run',
+        position: index,
+        config: {
+          mcpServerId: requireString(
+            typeof config.mcpServerId === 'string' ? config.mcpServerId : '',
+            `postActions[${index}].config.mcpServerId`,
+            { max: 120, allowEmpty: true },
+          ),
+          toolName: requireString(
+            typeof config.toolName === 'string' ? config.toolName : '',
+            `postActions[${index}].config.toolName`,
+            { max: 300, allowEmpty: true },
+          ),
+          inputs,
+          pollIntervalMs,
+          perCallTimeoutMs,
+          maxWaitMs,
+          successWhen: normalizeEqualityCondition(
+            config.successWhen,
+            `postActions[${index}].config.successWhen`,
+          ),
+          failureWhen: normalizeEqualityCondition(
+            config.failureWhen,
+            `postActions[${index}].config.failureWhen`,
+            { optional: true },
+          ),
+          waitingLabel: requireString(
+            typeof config.waitingLabel === 'string' ? config.waitingLabel : '',
+            `postActions[${index}].config.waitingLabel`,
+            { max: 200, allowEmpty: true },
+          ),
         },
       };
     }
@@ -387,6 +476,14 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
     }
     throw createHttpError(`postActions[${index}].type is not supported`);
   });
+  const loopActions = normalizedActions.filter((action) => action.type === 'mcp_loop_run');
+  if (loopActions.length > 1) {
+    throw createHttpError('PostToolUse supports at most one mcp_loop_run post action');
+  }
+  if (loopActions.length === 1 && normalizedActions.at(-1)?.type !== 'mcp_loop_run') {
+    throw createHttpError('mcp_loop_run must be the final post action');
+  }
+  return normalizedActions;
 }
 
 function normalizeClaudeResponse(value) {
@@ -439,8 +536,8 @@ function validateHookReferences(hook) {
   const allActionIds = new Set(hook.postActions.map((action) => action.id));
   const precedingActionIds = new Set();
   for (const action of hook.postActions) {
-    if (action.type === 'call_mcp_tool' || action.type === 'write_record') {
-      const bindings = action.type === 'call_mcp_tool'
+    if (['call_mcp_tool', 'mcp_loop_run', 'write_record'].includes(action.type)) {
+      const bindings = action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run'
         ? [action.config.condition, ...Object.values(action.config.inputs)].filter(Boolean)
         : [action.config.condition, ...Object.values(action.config.fields)].filter(Boolean);
       for (const binding of bindings) {
@@ -695,7 +792,7 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
   const mcpTools = new Map(hookMcpCatalog.listToolResources().map((tool) => [tool.name, tool]));
   const skills = new Map((validatedSkills || []).map((skill) => [String(skill.skillId || ''), skill]));
   for (const action of hook.postActions) {
-    if (action.type === 'call_mcp_tool') {
+    if (action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run') {
       if (!action.config.toolName.startsWith('mcp__')) {
         throw createHttpError(`Post action ${action.id} must select an MCP tool`);
       }
@@ -805,7 +902,7 @@ export function createHookConfigService({
       ? hookMcpCatalog.listToolResources()
       : [];
     normalized.postActions = normalized.postActions.map((action) => {
-      if (action.type !== 'call_mcp_tool' || action.config.mcpServerId) return action;
+      if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type) || action.config.mcpServerId) return action;
       const tool = tools.find((candidate) => candidate.name === action.config.toolName);
       return tool
         ? { ...action, config: { ...action.config, mcpServerId: tool.mcpServerId } }

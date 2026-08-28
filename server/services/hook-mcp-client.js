@@ -64,7 +64,10 @@ async function resolveHeaders(serverName, config, headersHelperRunner) {
 
 function resolveHostRuntimeMcpUrl(serverName, value) {
   const url = new URL(value);
-  if (url.hostname.toLowerCase() === DOCKER_HOST_ALIAS) {
+  if (
+    serverName === 'sql-syntax-checker'
+    && url.hostname.toLowerCase() === DOCKER_HOST_ALIAS
+  ) {
     url.hostname = HOST_LOOPBACK_ADDRESS;
   }
   return url;

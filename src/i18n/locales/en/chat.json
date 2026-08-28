@@ -30,10 +30,15 @@
     "script": "Script",
     "actions": {
       "call_mcp_tool": "MCP call",
+      "mcp_loop_run": "MCP loop wait",
       "write_record": "Write record",
       "invoke_skill": "Invoke Skill",
       "send_agent_message": "Send to Agent"
     },
+    "loopAttempts": "{{count}} polls",
+    "loopResult": "Final result",
+    "cancelLoop": "Cancel wait",
+    "cancellingLoop": "Cancelling…",
     "unnamed": "Unnamed Hook",
     "skill": "Skill",
     "directMessage": "Sent to Agent",

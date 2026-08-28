@@ -9,6 +9,48 @@ const HTTP_200_RECOVERY_HOOK_NAME = 'HTTP 200 会话恢复';
 const NOTIFICATION_SKILL_ID = 'builtin:hook-notification';
 const NOTIFICATION_SKILL_NAME = 'hook-notification';
 
+export const MCP_LOOP_JOB_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS mcp_loop_jobs (
+  id TEXT PRIMARY KEY,
+  hook_id TEXT NOT NULL,
+  hook_execution_id TEXT NOT NULL,
+  action_id TEXT NOT NULL,
+  tenant_id INTEGER,
+  workspace_id INTEGER,
+  user_id INTEGER,
+  session_id TEXT NOT NULL,
+  tool_use_id TEXT NOT NULL,
+  workspace_root TEXT NOT NULL,
+  mcp_server_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  inputs_json TEXT NOT NULL DEFAULT '{}',
+  success_when_json TEXT NOT NULL,
+  failure_when_json TEXT,
+  waiting_label TEXT NOT NULL DEFAULT '',
+  poll_interval_ms INTEGER NOT NULL,
+  per_call_timeout_ms INTEGER NOT NULL,
+  max_wait_ms INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  consecutive_error_count INTEGER NOT NULL DEFAULT 0,
+  initial_result_json TEXT,
+  last_result_json TEXT,
+  error_message TEXT,
+  next_poll_at_ms INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(hook_execution_id, action_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_loop_jobs_due
+  ON mcp_loop_jobs(status, next_poll_at_ms);
+CREATE INDEX IF NOT EXISTS idx_mcp_loop_jobs_session
+  ON mcp_loop_jobs(session_id, status, created_at DESC);
+`;
+
 const HTTP_200_RECOVERY_EXTENSION = Object.freeze({
   language: 'javascript',
   code: [
@@ -210,6 +252,8 @@ CREATE INDEX IF NOT EXISTS idx_hook_data_records_execution
   ON hook_data_records(execution_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hook_data_records_hook_user_workspace_created
   ON hook_data_records(hook_id, user_id, tenant_id, workspace_id, created_at DESC);
+
+${MCP_LOOP_JOB_SCHEMA_SQL}
 `;
 
 export function migrateHookConfigurationModel(database) {

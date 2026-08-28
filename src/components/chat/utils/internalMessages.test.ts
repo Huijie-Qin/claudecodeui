@@ -10,6 +10,7 @@ test('identifies internal Hook recovery prompts', () => {
     '</ccui-hook-recovery>',
     '# Internal Skill body',
   ].join('\n')), true);
+  assert.equal(isClaudeInternalUserContent('<ccui-mcp-loop-result job-id="loop-1">{"status":"success"}</ccui-mcp-loop-result>'), true);
 });
 
 test('detects Claude skill details wrappers as internal user content', () => {

@@ -30,10 +30,15 @@
     "script": "脚本",
     "actions": {
       "call_mcp_tool": "MCP 调用",
+      "mcp_loop_run": "MCP 循环等待",
       "write_record": "写入记录",
       "invoke_skill": "调用技能",
       "send_agent_message": "发送给 Agent"
     },
+    "loopAttempts": "已轮询 {{count}} 次",
+    "loopResult": "最终结果",
+    "cancelLoop": "取消等待",
+    "cancellingLoop": "正在取消…",
     "unnamed": "未命名 Hook",
     "skill": "技能",
     "directMessage": "发送给 Agent",

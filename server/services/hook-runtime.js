@@ -316,6 +316,28 @@ async function executePostActions({
       references.actions[action.id] = { output };
       continue;
     }
+    if (action.type === 'mcp_loop_run') {
+      const input = {};
+      for (const [key, binding] of Object.entries(action.config?.inputs || {})) {
+        const value = resolveBinding(binding, references);
+        if (value === UNRESOLVED) throw new Error(`Post action ${action.id} input ${key} is unresolved`);
+        input[key] = value;
+      }
+      const schedulingResult = await context.enqueueMcpLoop({
+        hook,
+        action,
+        event,
+        executionId,
+        input,
+      });
+      references.actions[action.id] = {
+        output: {
+          scheduled: Boolean(schedulingResult?.scheduled),
+          ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
+        },
+      };
+      continue;
+    }
     if (action.type === 'write_record') {
       const condition = action.config?.condition == null
         ? true
@@ -466,6 +488,9 @@ export function createHookRuntimeSession({
   enqueueAgentMessage = async () => {
     throw new Error('Agent messaging is not available in this runtime');
   },
+  enqueueMcpLoop = async () => {
+    throw new Error('MCP loop scheduling is not available in this runtime');
+  },
   onExecutionActivity = () => {},
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
@@ -487,6 +512,7 @@ export function createHookRuntimeSession({
     skillContentLoader,
     enqueueSkillRecovery,
     enqueueAgentMessage,
+    enqueueMcpLoop,
     onExecutionActivity,
     mcpCaller,
   };

@@ -422,6 +422,115 @@ test('normalizedToChatMessages hides the internal Hook recovery prompt in the or
   assert.equal(chatMessages[0].content, 'HOOK_NOTIFICATION_SKILL_EXECUTED');
 });
 
+test('normalizedToChatMessages keeps the original MCP result on the tool card after a loop replacement', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'status-tool-use',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'tool_use',
+      toolName: 'mcp__demo__get_task_status',
+      toolId: 'toolu_status_1',
+      toolInput: { task_id: 'task-1' },
+      toolResult: {
+        content: JSON.stringify({ task_id: 'task-1', status: 'running' }),
+        isError: false,
+      },
+    },
+    {
+      id: 'original-running-result',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:00.100Z',
+      provider: 'claude',
+      kind: 'tool_result',
+      toolId: 'toolu_status_1',
+      content: JSON.stringify({ task_id: 'task-1', status: 'running' }),
+      toolUseResult: { task_id: 'task-1', status: 'running' },
+      isError: false,
+    },
+    {
+      id: 'mcp-loop-final-result',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'tool_result',
+      toolId: 'toolu_status_1',
+      content: JSON.stringify({ task_id: 'task-1', status: 'success' }),
+      toolUseResult: { task_id: 'task-1', status: 'success' },
+      isError: false,
+      mcpLoopReplacement: true,
+      mcpLoopJobId: 'loop-1',
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0].toolId, 'toolu_status_1');
+  assert.deepEqual(chatMessages[0].toolResult?.toolUseResult, {
+    task_id: 'task-1',
+    status: 'running',
+  });
+  assert.match(String(chatMessages[0].toolResult?.content || ''), /running/);
+});
+
+test('normalizedToChatMessages attaches the final MCP loop result to its Hook card', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'hook-loop-execution',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      jobId: 'hook-loop-execution',
+      executionId: 'execution-loop-1',
+      hookId: 'wait-for-task',
+      hookName: '等待异步任务完成',
+      actionTypes: ['mcp_loop_run'],
+    },
+    {
+      id: 'hook-loop-followup',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'followup',
+      status: 'succeeded',
+      jobId: 'hook-loop-followup',
+      executionId: 'execution-loop-1',
+      hookId: 'wait-for-task',
+      hookName: '等待异步任务完成',
+      actionId: 'loop-action',
+      actionType: 'mcp_loop_run',
+      loopJobId: 'loop-1',
+      loopAttemptCount: 3,
+    },
+    {
+      id: 'mcp-loop-final-result',
+      sessionId: 'session-loop',
+      timestamp: '2026-08-28T00:00:01.100Z',
+      provider: 'claude',
+      kind: 'tool_result',
+      origin: 'hook',
+      toolId: 'toolu_status_1',
+      content: JSON.stringify({ task_id: 'task-1', status: 'success' }),
+      toolUseResult: { task_id: 'task-1', status: 'success' },
+      isError: false,
+      mcpLoopReplacement: true,
+      mcpLoopJobId: 'loop-1',
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.deepEqual(chatMessages[0].hookActivity?.followups?.[0].loopResult, {
+    task_id: 'task-1',
+    status: 'success',
+  });
+});
+
 test('normalizedToChatMessages hides Claude user text immediately after a Skill tool use', () => {
   const messages: NormalizedMessage[] = [
     {

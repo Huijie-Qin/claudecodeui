@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, ChevronDown, Clock3, Loader2, Webhook, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -16,6 +16,7 @@ import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications'
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import { useWebSocket } from '../../../../contexts/WebSocketContext';
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
@@ -84,6 +85,14 @@ function formatHookRecordTimestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function formatLoopElapsed(startedAtMs?: number): string {
+  if (!startedAtMs) return '';
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 function diagnosticValue(value: unknown): string {
   if (Array.isArray(value)) {
     return redactVisibleSecretText(value.filter((entry) => entry != null && String(entry).trim()).join(' '));
@@ -149,6 +158,7 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
+  const { sendMessage, isConnected } = useWebSocket();
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -159,6 +169,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const [hookFollowupsOpen, setHookFollowupsOpen] = useState(false);
   const [hookResultsOpen, setHookResultsOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
+  const [cancellingLoopJobs, setCancellingLoopJobs] = useState<Set<string>>(() => new Set());
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
   const [permissionGrantState, setPermissionGrantState] = useState<PermissionGrantState>('idle');
   const userCopyContent = String(message.content || '');
@@ -242,8 +253,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const hookStatus = hookActivity?.status || 'running';
   const isHookExecution = hookActivity?.activityKind === 'execution';
   const hookActionResults = hookActivity?.actionResults || [];
+  const loopResult = hookActivity?.loopResult !== undefined
+    ? hookActivity.loopResult
+    : hookActivity?.followups?.find((followup) => (
+        followup.actionType === 'mcp_loop_run' && followup.loopResult !== undefined
+      ))?.loopResult;
+  const formattedLoopResult = useMemo(() => formatHookActivityValue(loopResult), [loopResult]);
   const hookActionLabels = {
     call_mcp_tool: t('hookActivity.actions.call_mcp_tool', { defaultValue: 'MCP call' }),
+    mcp_loop_run: t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' }),
     write_record: t('hookActivity.actions.write_record', { defaultValue: 'Write record' }),
     invoke_skill: t('hookActivity.actions.invoke_skill', { defaultValue: 'Invoke Skill' }),
     send_agent_message: t('hookActivity.actions.send_agent_message', { defaultValue: 'Send to Agent' }),
@@ -254,6 +272,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
     failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
   }[hookStatus];
+  const cancelMcpLoop = (jobId: string, sessionId?: string) => {
+    setCancellingLoopJobs((current) => new Set(current).add(jobId));
+    sendMessage({ type: 'cancel-mcp-loop', jobId, sessionId });
+  };
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -374,6 +396,17 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </span>
                 ) : hookActivity.actionType === 'send_agent_message' ? (
                   <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                ) : hookActivity.actionType === 'mcp_loop_run' ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <RefreshCcw className={`h-3 w-3 shrink-0 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    <span className="truncate">
+                      {hookActivity.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
+                    </span>
+                    {typeof hookActivity.loopAttemptCount === 'number' ? (
+                      <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: hookActivity.loopAttemptCount })}</span>
+                    ) : null}
+                    {hookActivity.loopStartedAtMs ? <span>{formatLoopElapsed(hookActivity.loopStartedAtMs)}</span> : null}
+                  </span>
                 ) : null}
                 {hookStatus === 'queued' && typeof hookActivity.queuePosition === 'number' && (
                   <span>
@@ -384,12 +417,38 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </span>
                 )}
                 <span className="text-[11px] text-muted-foreground/70">{formattedTime}</span>
+                {!isHookExecution && hookActivity.actionType === 'mcp_loop_run' && hookStatus === 'running' && hookActivity.loopJobId ? (
+                  <button
+                    type="button"
+                    className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
+                    disabled={!isConnected || cancellingLoopJobs.has(hookActivity.loopJobId)}
+                    onClick={() => cancelMcpLoop(hookActivity.loopJobId!)}
+                  >
+                    {cancellingLoopJobs.has(hookActivity.loopJobId)
+                      ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
+                      : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
+                  </button>
+                ) : null}
               </div>
 
               {!isHookExecution && hookActivity.summary && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
                   {redactVisibleSecretText(hookActivity.summary)}
                 </div>
+              )}
+
+              {loopResult !== undefined && (
+                <section
+                  className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2.5 py-2 dark:border-emerald-900/70 dark:bg-emerald-950/20"
+                  data-hook-loop-result
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                    {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
+                  </div>
+                  <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
+                    {formattedLoopResult || t('hookActivity.emptyResult')}
+                  </pre>
+                </section>
               )}
 
               {isHookExecution && hookActionResults.length > 0 && (
@@ -522,6 +581,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                 </span>
                               ) : followup.actionType === 'send_agent_message' ? (
                                 <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                              ) : followup.actionType === 'mcp_loop_run' ? (
+                                <span className="inline-flex min-w-0 items-center gap-1.5">
+                                  <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                  <span className="truncate">
+                                    {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
+                                  </span>
+                                  {typeof followup.loopAttemptCount === 'number' ? (
+                                    <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
+                                  ) : null}
+                                </span>
                               ) : null}
                               {followupStatus === 'queued' && typeof followup.queuePosition === 'number' && (
                                 <span>
@@ -534,6 +603,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                               <span className="text-[11px] text-muted-foreground/70">
                                 {new Date(followup.timestamp).toLocaleTimeString()}
                               </span>
+                              {followup.actionType === 'mcp_loop_run' && followupStatus === 'running' && followup.loopJobId ? (
+                                <button
+                                  type="button"
+                                  className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
+                                  disabled={!isConnected || cancellingLoopJobs.has(followup.loopJobId)}
+                                  onClick={() => cancelMcpLoop(followup.loopJobId!)}
+                                >
+                                  {cancellingLoopJobs.has(followup.loopJobId)
+                                    ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
+                                    : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
+                                </button>
+                              ) : null}
                             </div>
                             {followup.summary && (
                               <div className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground/80">

@@ -74,19 +74,27 @@ export interface HookFollowupActivityDetails {
   jobId?: string;
   executionId?: string;
   actionId?: string;
-  actionType?: 'invoke_skill' | 'send_agent_message';
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
   skillName?: string;
   summary?: string;
   queuePosition?: number;
   status: HookActivityStatus;
   error?: string;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
+  loopResult?: unknown;
   timestamp: string | number | Date;
   messages?: ChatMessage[];
 }
 
 export interface HookExecutionActionResult {
   actionId: string;
-  actionType: 'call_mcp_tool' | 'write_record';
+  actionType: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record';
   output?: unknown;
   record?: {
     id: string;
@@ -103,9 +111,17 @@ export interface HookActivityDetails {
   hookName?: string;
   activityKind?: 'execution' | 'followup';
   actionId?: string;
-  actionType?: 'invoke_skill' | 'send_agent_message';
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
   eventName?: string;
-  actionTypes?: Array<'call_mcp_tool' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
+  loopResult?: unknown;
   actionResults?: HookExecutionActionResult[];
   hasScript?: boolean;
   skillName?: string;

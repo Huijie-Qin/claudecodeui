@@ -56,6 +56,7 @@ export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOption
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<ccui-hook-recovery',
+  '<ccui-mcp-loop-result',
   '<command-name>',
   '<command-message>',
   '<command-args>',

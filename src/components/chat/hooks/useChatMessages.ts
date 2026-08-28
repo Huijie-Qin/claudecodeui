@@ -117,7 +117,11 @@ function hookExecutionActivityPrefix(message: NormalizedMessage): string | null 
 function toHookFollowupDetails(
   message: NormalizedMessage,
   recoveryMessages: NormalizedMessage[] = [],
+  mcpLoopResults: Map<string, unknown> = new Map(),
 ): HookFollowupActivityDetails {
+  const loopResult = message.loopJobId
+    ? mcpLoopResults.get(message.loopJobId)
+    : undefined;
   return {
     jobId: message.jobId,
     executionId: message.executionId,
@@ -128,6 +132,14 @@ function toHookFollowupDetails(
     queuePosition: message.queuePosition,
     status: normalizeHookActivityStatus(message.status),
     error: message.error,
+    ...(message.loopJobId ? { loopJobId: message.loopJobId } : {}),
+    ...(message.loopStatus ? { loopStatus: message.loopStatus } : {}),
+    ...(typeof message.loopAttemptCount === 'number' ? { loopAttemptCount: message.loopAttemptCount } : {}),
+    ...(typeof message.loopStartedAtMs === 'number' ? { loopStartedAtMs: message.loopStartedAtMs } : {}),
+    ...(typeof message.loopNextPollAtMs === 'number' ? { loopNextPollAtMs: message.loopNextPollAtMs } : {}),
+    ...(message.loopTargetTool ? { loopTargetTool: message.loopTargetTool } : {}),
+    ...(message.loopToolUseId ? { loopToolUseId: message.loopToolUseId } : {}),
+    ...(loopResult !== undefined ? { loopResult } : {}),
     timestamp: message.timestamp,
     messages: recoveryMessages.length > 0
       ? normalizedToChatMessages(recoveryMessages)
@@ -294,6 +306,20 @@ function readTaskNotificationMessage(msg: NormalizedMessage): ChatMessage['taskN
  */
 export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
+  const mcpLoopResults = new Map<string, unknown>();
+  for (const message of messages) {
+    if (message.mcpLoopReplacement !== true || !message.mcpLoopJobId) continue;
+    if (message.toolUseResult !== undefined) {
+      mcpLoopResults.set(message.mcpLoopJobId, message.toolUseResult);
+      continue;
+    }
+    if (typeof message.content !== 'string') continue;
+    try {
+      mcpLoopResults.set(message.mcpLoopJobId, JSON.parse(message.content));
+    } catch {
+      mcpLoopResults.set(message.mcpLoopJobId, message.content);
+    }
+  }
 
   const hookExecutionMessages = messages.filter((message) => (
     message.kind === 'hook_activity' && message.activityKind === 'execution'
@@ -406,11 +432,19 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     recoveryMessages.forEach((message) => groupedHookRecoveryMessageIds.add(message.id));
   }
 
-  // First pass: collect tool results for attachment
+  // First pass: collect the original tool results for the tool card. A later
+  // mcp_loop_run replacement is model-facing and is rendered on the Hook card.
   const toolResultMap = new Map<string, NormalizedMessage>();
   for (const msg of messages) {
     if (msg.kind === 'tool_result' && msg.toolId) {
-      toolResultMap.set(msg.toolId, msg);
+      const existing = toolResultMap.get(msg.toolId);
+      if (
+        msg.mcpLoopReplacement !== true
+        || !existing
+        || existing.mcpLoopReplacement === true
+      ) {
+        toolResultMap.set(msg.toolId, msg);
+      }
     }
   }
 
@@ -732,8 +766,13 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         }
         const mappedToolResult = msg.toolId ? toolResultMap.get(msg.toolId) : null;
         const inlineToolResult = msg.toolResult as (NonNullable<NormalizedMessage['toolResult']> & Record<string, unknown>) | undefined;
-        const tr = inlineToolResult || mappedToolResult;
-        const explicitCompletedAt = mappedToolResult?.timestamp ||
+        const displayedMappedResult = mappedToolResult?.mcpLoopReplacement === true && inlineToolResult
+          ? null
+          : mappedToolResult;
+        // The model still receives the Hook-generated replacement, while the
+        // original tool card keeps showing its first response (for example running).
+        const tr = displayedMappedResult || inlineToolResult;
+        const explicitCompletedAt = displayedMappedResult?.timestamp ||
           readTimestampField(inlineToolResult) ||
           readTimestampField((tr as any)?.toolUseResult);
         const isSubagentContainer = isSubagentToolName(msg.toolName);
@@ -1019,6 +1058,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             toHookFollowupDetails(
               followup,
               hookRecoveryMessagesByActivityId.get(hookActivityIdentity(followup)),
+              mcpLoopResults,
             )
           ))
           : undefined;
@@ -1033,6 +1073,8 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
                 ? 'invoke_skill'
                 : actionTypes.includes('send_agent_message')
                   ? 'send_agent_message'
+                  : actionTypes.includes('mcp_loop_run')
+                    ? 'mcp_loop_run'
                   : undefined;
               return {
                 jobId: activityId,
@@ -1049,6 +1091,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           : [];
         const followups = msg.activityKind === 'execution'
           ? [...(persistedFollowups || []), ...recoveredFollowups]
+          : undefined;
+        const loopResult = msg.loopJobId
+          ? mcpLoopResults.get(msg.loopJobId)
           : undefined;
         converted.push({
           ...getMessageIdentity(msg),
@@ -1075,6 +1120,14 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             queuePosition: msg.queuePosition,
             status,
             error: msg.error,
+            ...(msg.loopJobId ? { loopJobId: msg.loopJobId } : {}),
+            ...(msg.loopStatus ? { loopStatus: msg.loopStatus } : {}),
+            ...(typeof msg.loopAttemptCount === 'number' ? { loopAttemptCount: msg.loopAttemptCount } : {}),
+            ...(typeof msg.loopStartedAtMs === 'number' ? { loopStartedAtMs: msg.loopStartedAtMs } : {}),
+            ...(typeof msg.loopNextPollAtMs === 'number' ? { loopNextPollAtMs: msg.loopNextPollAtMs } : {}),
+            ...(msg.loopTargetTool ? { loopTargetTool: msg.loopTargetTool } : {}),
+            ...(msg.loopToolUseId ? { loopToolUseId: msg.loopToolUseId } : {}),
+            ...(loopResult !== undefined ? { loopResult } : {}),
             followups,
           },
         });

@@ -88,6 +88,7 @@ import {createScheduledSessionTaskService} from './services/scheduled-session-ta
 import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
 import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {mcpLoopService} from './services/mcp-loop-service.js';
 import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
 import {agentTemplateService} from './services/agent-templates.js';
@@ -2814,6 +2815,18 @@ function handleChatConnection(ws, request) {
                 console.log('[DEBUG] Abort Cursor session:', data.sessionId);
                 const success = abortCursorSession(data.sessionId);
                 writer.send(createNormalizedMessage({ kind: 'complete', exitCode: success ? 0 : 1, aborted: true, success, sessionId: data.sessionId, provider: 'cursor' }));
+            } else if (data.type === 'cancel-mcp-loop') {
+                const result = await mcpLoopService.cancel({
+                    jobId: data.jobId,
+                    userId: writer.userId,
+                });
+                writer.send({
+                    type: 'mcp-loop-cancelled',
+                    success: result.success,
+                    jobId: data.jobId || null,
+                    sessionId: result.job?.sessionId || data.sessionId || null,
+                    timestamp: new Date().toISOString(),
+                });
             } else if (data.type === 'check-session-status') {
                 // Check if a specific session is currently processing
                 const provider = data.provider || 'claude';
@@ -3784,6 +3797,7 @@ async function gracefulShutdown(signal) {
 
     runtimeSweeper.stop();
     codeHubMrPoller.stop();
+    mcpLoopService.stop();
     closeHttpServer().catch((error) => {
         console.error('[Shutdown] Failed to close HTTP server:', error);
     });
@@ -3814,6 +3828,7 @@ async function startServer() {
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
+        mcpLoopService.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3863,6 +3878,7 @@ async function startServer() {
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();
+            mcpLoopService.stop();
             await stopAllPlugins();
             process.exit(0);
         };

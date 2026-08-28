@@ -2041,7 +2041,7 @@ export default function HookConfigsTab() {
         ) : (
           <div className="grid auto-rows-fr gap-3 lg:grid-cols-2">
             {filteredHooks.map((hook) => {
-              const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool');
+              const mcpActions = hook.postActions.filter((action) => action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run');
               const unavailableSkills = resources.skillSource?.available === false
                 ? []
                 : findUnavailableHookSkills(hook, resources.skills);

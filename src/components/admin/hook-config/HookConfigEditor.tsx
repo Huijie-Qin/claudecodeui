@@ -475,6 +475,160 @@ function MpcActionEditor({
   );
 }
 
+function parseEqualityValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function equalityValueText(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+function McpLoopActionEditor({
+  action,
+  resources,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  resources: HookResources;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const toolName = typeof config.toolName === 'string' ? config.toolName : '';
+  const tool = resources.mcpTools.find((item) => item.name === toolName);
+  const inputs = asRecord(config.inputs);
+  const properties = tool?.inputSchema?.properties || {};
+  const required = new Set(tool?.inputSchema?.required || []);
+  const successWhen = asRecord(config.successWhen);
+  const failureWhen = config.failureWhen == null ? null : asRecord(config.failureWhen);
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">目标 MCP 工具</span>
+          <HookSelect
+            value={toolName}
+            options={resources.mcpTools.map((item) => ({
+              value: item.name,
+              label: `${item.serverDisplayName} · ${item.toolName}`,
+              description: item.description || item.name,
+            }))}
+            onChange={(nextToolName) => {
+              const nextTool = resources.mcpTools.find((item) => item.name === nextToolName);
+              const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => {
+                const type = propertyType(property);
+                return [key, { source: 'literal', value: literalDefault(type, property) }];
+              }));
+              onChange({
+                ...config,
+                toolName: nextToolName,
+                mcpServerId: nextTool?.mcpServerId || '',
+                inputs: nextInputs,
+              });
+            }}
+            placeholder={resources.mcpTools.length ? '选择要循环调用的 MCP 工具' : '暂无可调用的 MCP 工具'}
+            ariaLabel="选择循环调用的 MCP 工具"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">页面等待提示</span>
+          <Input
+            value={typeof config.waitingLabel === 'string' ? config.waitingLabel : ''}
+            onChange={(event) => onChange({ ...config, waitingLabel: event.target.value })}
+            placeholder="等待任务完成"
+            className="h-10 rounded-xl text-xs"
+          />
+        </label>
+      </div>
+
+      {tool && Object.keys(properties).length ? (
+        <div className="space-y-2">
+          <div>
+            <div className="text-xs font-semibold text-foreground">固定调用参数</div>
+            <div className="mt-0.5 text-[10px] text-muted-foreground">Hook 触发时解析一次，之后每轮调用都使用相同参数。</div>
+          </div>
+          {Object.entries(properties).map(([key, property]) => {
+            const type = propertyType(property);
+            const rawBinding = asRecord(inputs[key]);
+            const binding: HookValueBinding = rawBinding.source === 'reference'
+              ? { source: 'reference', path: String(rawBinding.path || '') }
+              : { source: 'literal', value: Object.prototype.hasOwnProperty.call(rawBinding, 'value') ? rawBinding.value : literalDefault(type, property) };
+            return (
+              <div key={key} className="space-y-2 rounded-xl border border-border bg-muted/10 p-3">
+                <div>
+                  <span className="text-xs font-medium text-foreground">{key}</span>
+                  {required.has(key) ? <span className="ml-1 text-destructive">*</span> : null}
+                  <span className="ml-2 text-[10px] text-muted-foreground">{property.description || property.type || 'string'}</span>
+                </div>
+                <BindingEditor
+                  binding={binding}
+                  type={type}
+                  property={property}
+                  references={references}
+                  onChange={(nextBinding) => onChange({ ...config, inputs: { ...inputs, [key]: nextBinding } })}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className="space-y-2">
+        <div className="text-xs font-semibold text-foreground">循环策略</div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground">轮询间隔（ms）</span>
+            <Input type="number" min={10} value={Number(config.pollIntervalMs ?? 10000)} onChange={(event) => onChange({ ...config, pollIntervalMs: Number(event.target.value) })} className="h-10 rounded-xl font-mono text-xs" />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground">单次超时（ms）</span>
+            <Input type="number" min={10} value={Number(config.perCallTimeoutMs ?? 15000)} onChange={(event) => onChange({ ...config, perCallTimeoutMs: Number(event.target.value) })} className="h-10 rounded-xl font-mono text-xs" />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-foreground">最长等待（ms）</span>
+            <Input type="number" min={10} value={Number(config.maxWaitMs ?? 2700000)} onChange={(event) => onChange({ ...config, maxWaitMs: Number(event.target.value) })} className="h-10 rounded-xl font-mono text-xs" />
+          </label>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="text-xs font-semibold text-foreground">终止条件</div>
+        <div className="grid gap-3 rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3 dark:border-emerald-900/70 dark:bg-emerald-950/20 md:grid-cols-[90px_1fr_110px_1fr]">
+          <div className="self-end pb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">成功</div>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">返回字段</span><Input value={String(successWhen.field || 'status')} onChange={(event) => onChange({ ...config, successWhen: { ...successWhen, field: event.target.value } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">判断</span><Input value="等于" disabled className="h-9 rounded-lg text-xs" /></label>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">目标值</span><Input value={equalityValueText(successWhen.equals ?? 'success')} onChange={(event) => onChange({ ...config, successWhen: { ...successWhen, equals: parseEqualityValue(event.target.value) } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+        </div>
+
+        <div className={`grid gap-3 rounded-xl border p-3 md:grid-cols-[90px_1fr_110px_1fr] ${failureWhen ? 'border-red-200/80 bg-red-50/50 dark:border-red-900/70 dark:bg-red-950/20' : 'border-border bg-muted/10 opacity-60'}`}>
+          <label className="flex items-center gap-2 self-end pb-2 text-xs font-semibold text-red-700 dark:text-red-300">
+            <input type="checkbox" checked={Boolean(failureWhen)} onChange={(event) => onChange({ ...config, failureWhen: event.target.checked ? { field: String(successWhen.field || 'status'), equals: 'failed' } : null })} />
+            失败
+          </label>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">返回字段</span><Input disabled={!failureWhen} value={String(failureWhen?.field || successWhen.field || 'status')} onChange={(event) => onChange({ ...config, failureWhen: { ...failureWhen, field: event.target.value } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">判断</span><Input value="等于" disabled className="h-9 rounded-lg text-xs" /></label>
+          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">目标值</span><Input disabled={!failureWhen} value={equalityValueText(failureWhen?.equals ?? 'failed')} onChange={(event) => onChange({ ...config, failureWhen: { ...failureWhen, equals: parseEqualityValue(event.target.value) } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。创建循环任务后，当前 Agent 会暂停；命中终止条件后，最后一次结果将替换原工具结果并恢复会话。
+      </div>
+    </div>
+  );
+}
+
 function SkillActionEditor({
   action,
   resources,
@@ -841,6 +995,9 @@ function PostActionsEditor({
   onChange: (actions: HookPostAction[]) => void;
 }) {
   const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const canAddMcpLoop = hook.eventName === 'PostToolUse'
+    && !hook.postActions.some((action) => action.type === 'mcp_loop_run');
+  const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const addAction = (type: HookPostAction['type']) => {
     const action: HookPostAction = {
       id: createHookItemId(),
@@ -848,6 +1005,18 @@ function PostActionsEditor({
       position: hook.postActions.length,
       config: type === 'call_mcp_tool'
         ? { toolName: '', condition: null, inputs: {} }
+        : type === 'mcp_loop_run'
+          ? {
+              toolName: '',
+              mcpServerId: '',
+              inputs: {},
+              pollIntervalMs: 10000,
+              perCallTimeoutMs: 15000,
+              maxWaitMs: 2700000,
+              successWhen: { field: 'status', equals: 'success' },
+              failureWhen: { field: 'status', equals: 'failed' },
+              waitingLabel: '等待任务完成',
+            }
         : type === 'write_record'
           ? { recordType: '', condition: null, fields: {} }
           : type === 'invoke_skill'
@@ -866,14 +1035,28 @@ function PostActionsEditor({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')}>
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')} disabled={hasMcpLoop}>
           <Wrench className="h-4 w-4" />
           调用 MCP 工具
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => addAction('write_record')}>
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('write_record')} disabled={hasMcpLoop}>
           <Database className="h-4 w-4" />
           记录数据
         </Button>
+        <Tooltip content={canAddMcpLoop ? '暂停当前 Agent，在后台用固定参数循环调用 MCP，命中终止条件后恢复。' : '循环调用仅适用于工具调用后，且一个 Hook 最多配置一次。'}>
+          <span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addAction('mcp_loop_run')}
+              disabled={!canAddMcpLoop}
+            >
+              <RefreshCcw className="h-4 w-4" />
+              循环调用 MCP
+            </Button>
+          </span>
+        </Tooltip>
         <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
           <span>
             <Button
@@ -881,7 +1064,7 @@ function PostActionsEditor({
               variant="outline"
               size="sm"
               onClick={() => addAction('invoke_skill')}
-              disabled={!canQueueAgentTurn}
+              disabled={!canQueueAgentTurn || hasMcpLoop}
             >
               <Sparkles className="h-4 w-4" />
               调用 Skill
@@ -895,7 +1078,7 @@ function PostActionsEditor({
               variant="outline"
               size="sm"
               onClick={() => addAction('send_agent_message')}
-              disabled={!canQueueAgentTurn}
+              disabled={!canQueueAgentTurn || hasMcpLoop}
             >
               <MessageSquare className="h-4 w-4" />
               发送 Agent 消息
@@ -905,7 +1088,7 @@ function PostActionsEditor({
       </div>
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加业务数据写入、MCP 工具、Skill 或 Agent 消息，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具、循环调用、Skill 或 Agent 消息，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -919,6 +1102,8 @@ function PostActionsEditor({
             <div className="flex items-center gap-2 rounded-t-xl border-b border-border bg-muted/20 px-3 py-2.5">
               {action.type === 'call_mcp_tool'
                 ? <Wrench className="h-4 w-4 text-primary" />
+                : action.type === 'mcp_loop_run'
+                  ? <RefreshCcw className="h-4 w-4 text-primary" />
                 : action.type === 'write_record'
                   ? <Database className="h-4 w-4 text-primary" />
                   : action.type === 'invoke_skill'
@@ -927,6 +1112,8 @@ function PostActionsEditor({
               <span className="text-xs font-semibold text-foreground">
                 {index + 1}. {action.type === 'call_mcp_tool'
                   ? '调用 MCP 工具'
+                  : action.type === 'mcp_loop_run'
+                    ? '循环调用 MCP（暂停并恢复）'
                   : action.type === 'write_record'
                     ? '记录数据'
                     : action.type === 'invoke_skill'
@@ -948,6 +1135,13 @@ function PostActionsEditor({
             <div className="p-4">
               {action.type === 'call_mcp_tool' ? (
                 <MpcActionEditor
+                  action={action}
+                  resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : action.type === 'mcp_loop_run' ? (
+                <McpLoopActionEditor
                   action={action}
                   resources={resources}
                   references={availableReferences}
@@ -1265,6 +1459,7 @@ export default function HookConfigEditor({
   const scriptApis = CCUI_SCRIPT_APIS.filter((api) => !api.javascript.startsWith('ccui.records.'));
   const scriptEnvironmentVariables = resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.'));
   const matcherValue = hook.matcher.value || '';
+  const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
   const matcherRegexError = useMemo(() => {
     if (!eventDefinition?.matcherField || eventDefinition.matcherKind === 'fileNames') return false;
@@ -1609,20 +1804,36 @@ export default function HookConfigEditor({
               hook={hook}
               resources={resources}
               references={references}
-              onChange={(postActions) => updateDraft({ postActions })}
+              onChange={(postActions) => updateDraft({
+                postActions,
+                ...(postActions.some((action) => action.type === 'mcp_loop_run')
+                  ? { claudeResponse: { bindings: {} } }
+                  : {}),
+              })}
             />
           </Section>
 
           <Section
             number={5}
             title="返回给 Claude"
-            description="只有这里配置的字段才会组装为 HookJSONOutput；脚本和行为输出不会自动返回。"
+            description={hasMcpLoop
+              ? '循环调用 MCP 会接管当前工具结果，普通 Hook 返回字段已停用。'
+              : '只有这里配置的字段才会组装为 HookJSONOutput；脚本和行为输出不会自动返回。'}
           >
-            <ClaudeResponseEditor
-              hook={hook}
-              references={references}
-              onChange={(bindings) => updateDraft({ claudeResponse: { bindings } })}
-            />
+            {hasMcpLoop ? (
+              <div className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm leading-6 text-muted-foreground">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <p>
+                  循环行为将自动暂停 Agent，并在结束后使用最后一次 MCP 返回结果替换原工具输出，无需配置返回字段。
+                </p>
+              </div>
+            ) : (
+              <ClaudeResponseEditor
+                hook={hook}
+                references={references}
+                onChange={(bindings) => updateDraft({ claudeResponse: { bindings } })}
+              />
+            )}
           </Section>
 
         </div>
