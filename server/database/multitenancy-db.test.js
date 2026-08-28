@@ -96,6 +96,35 @@ test('multitenancy initialization copies legacy prod_tenant_id into prod_code', 
   assert.deepEqual(tenant, { code: 'legacy', prod_code: 'prod-legacy' });
 });
 
+test('multitenancy initialization adds explicit skill market binding columns', () => {
+  const database = new Database(':memory:');
+  database.exec(DATABASE_SCHEMA_SQL);
+  database.exec(`
+    CREATE TABLE workspace_skill_market_imports (
+      workspace_id INTEGER NOT NULL,
+      skill_name TEXT NOT NULL,
+      skill_id TEXT NOT NULL,
+      remote_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      nsp_path TEXT NOT NULL DEFAULT '',
+      create_user_id TEXT,
+      version INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'skill-market-api',
+      imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (workspace_id, skill_name)
+    );
+  `);
+
+  initializeMultitenancyTables(database);
+
+  const columns = new Set(database.prepare('PRAGMA table_info(workspace_skill_market_imports)').all()
+    .map((column) => column.name));
+  assert.equal(columns.has('origin'), true);
+  assert.equal(columns.has('binding_type'), true);
+  assert.equal(columns.has('baseline_hash'), true);
+});
+
 test('multitenancy initialization removes the complete untouched legacy Claude allowlist fingerprint once', () => {
   const database = createAllowlistMigrationDb();
   try {
@@ -675,6 +704,9 @@ test('skill market imports are stored per workspace in the database', () => {
         createUserId: 'owner',
         version: 3,
         source: 'skill-market-api',
+        origin: 'local',
+        bindingType: 'published',
+        baselineHash: 'abc123',
         importedAt: '2026-05-14T00:00:00.000Z',
         updatedAt: '2026-05-14T01:00:00.000Z',
       },
@@ -691,11 +723,21 @@ test('skill market imports are stored per workspace in the database', () => {
     createUserId: 'owner',
     version: 3,
     source: 'skill-market-api',
+    origin: 'local',
+    bindingType: 'published',
+    baselineHash: 'abc123',
     importedAt: '2026-05-14T00:00:00.000Z',
     updatedAt: '2026-05-14T01:00:00.000Z',
   }]);
 
-  assert.equal(mt.skillMarketImports.deleteForWorkspace({ workspaceId: workspace.id, skillName: '中文技能' }), true);
+  assert.equal(mt.skillMarketImports.renameForWorkspace({
+    workspaceId: workspace.id,
+    currentName: '中文技能',
+    nextName: '中文技能V2',
+  }), true);
+  assert.equal(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id })[0].name, '中文技能V2');
+
+  assert.equal(mt.skillMarketImports.deleteForWorkspace({ workspaceId: workspace.id, skillName: '中文技能V2' }), true);
   assert.deepEqual(mt.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }), []);
 });
 

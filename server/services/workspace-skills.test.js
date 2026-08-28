@@ -137,6 +137,28 @@ test('parseSkillManifest reads front matter and falls back to heading plus first
   });
 });
 
+test('parseSkillManifest reports root placement and name mismatch diagnostics together', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillDirectory = path.join(workspacePath, 'CaseSkill');
+  await fs.mkdir(path.join(skillDirectory, 'docs'), { recursive: true });
+  await fs.writeFile(path.join(skillDirectory, 'docs', 'SKILL.md'), [
+    '---',
+    'name: caseskill',
+    'description: Nested by mistake.',
+    '---',
+  ].join('\n'), 'utf8');
+
+  const manifest = await parseSkillManifest(skillDirectory);
+  assert.equal(manifest.status, 'invalid');
+  assert.deepEqual(manifest.diagnostics.map((entry) => entry.code), [
+    'ROOT_MANIFEST_MISSING',
+    'NESTED_MANIFEST_FOUND',
+    'SKILL_NAME_DIRECTORY_MISMATCH',
+  ]);
+  assert.match(manifest.parseError, /docs\/SKILL\.md/);
+  assert.match(manifest.parseError, /包括大小写/);
+});
+
 test('listWorkspaceSkills classifies managed, unmanaged, and system skills', async () => {
   const workspacePath = await makeWorkspace();
   const sourceRoot = path.join(workspacePath, '.cloudcli', 'skills', 'sources');
@@ -269,10 +291,32 @@ test('listWorkspaceSkills classifies runtime skills from market import records',
     inventory.skills.map((skill) => ({ name: skill.name, origin: skill.origin, manageable: skill.manageable })),
     [
       { name: 'local-skill', origin: 'local', manageable: true },
-      { name: 'market-skill', origin: 'market', manageable: false },
+      { name: 'market-skill', origin: 'market', manageable: true },
     ],
   );
   assert.equal(inventory.skills.find((skill) => skill.name === 'market-skill').localVersion, 3);
+});
+
+test('listWorkspaceSkills keeps published local skills local and exposes their market binding', async () => {
+  const workspacePath = await makeWorkspace();
+  await writeSkill(
+    path.join(workspacePath, '.claude', 'skills'),
+    'LocalSkill',
+    '---\nname: LocalSkill\ndescription: Published locally.\n---\n',
+  );
+
+  const inventory = await listWorkspaceSkills(workspacePath, [], [{
+    name: 'LocalSkill',
+    skillId: 'remote-local',
+    version: 2,
+    origin: 'local',
+    bindingType: 'published',
+  }]);
+  assert.equal(inventory.skills[0].origin, 'local');
+  assert.equal(inventory.skills[0].bindingType, 'published');
+  assert.equal(inventory.skills[0].published, true);
+  assert.equal(inventory.skills[0].imported, true);
+  assert.equal(inventory.skills[0].manageable, true);
 });
 
 test('local workspace skill file operations preserve SKILL.md and revision safety', async () => {
@@ -343,7 +387,7 @@ test('local workspace skill file operations preserve SKILL.md and revision safet
   await assert.rejects(getWorkspaceSkillDetail({ workspacePath, name: 'local-skill' }), /was not found/);
 });
 
-test('market-installed workspace skills reject local file mutations', async () => {
+test('market-installed workspace skills allow local-only file mutations and removal', async () => {
   const workspacePath = await makeWorkspace();
   await writeSkill(
     path.join(workspacePath, '.claude', 'skills'),
@@ -352,19 +396,28 @@ test('market-installed workspace skills reject local file mutations', async () =
   );
   const marketImports = [{ name: 'market-skill', skillId: 'remote-one', version: 1 }];
 
-  await assert.rejects(
-    updateWorkspaceSkillFile({
-      workspacePath,
-      name: 'market-skill',
-      filePath: 'SKILL.md',
-      content: 'changed',
-      marketImports,
-    }),
-    (error) => error.statusCode === 403 && /read-only/.test(error.message),
+  const current = await readWorkspaceSkillFile({
+    workspacePath,
+    name: 'market-skill',
+    filePath: 'SKILL.md',
+    marketImports,
+  });
+  await updateWorkspaceSkillFile({
+    workspacePath,
+    name: 'market-skill',
+    filePath: 'SKILL.md',
+    content: '---\nname: market-skill\ndescription: Locally customized.\n---\n',
+    revision: current.revision,
+    marketImports,
+  });
+  assert.match(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'market-skill', 'SKILL.md'), 'utf8'),
+    /Locally customized/,
   );
+  await deleteLocalWorkspaceSkill({ workspacePath, name: 'market-skill', marketImports });
   await assert.rejects(
-    deleteLocalWorkspaceSkill({ workspacePath, name: 'market-skill', marketImports }),
-    (error) => error.statusCode === 403,
+    fs.access(path.join(workspacePath, '.claude', 'skills', 'market-skill')),
+    /ENOENT/,
   );
 });
 
@@ -523,7 +576,7 @@ test('previewLocalSkillUpload extracts a single uploaded skill archive into a re
 test('previewLocalSkillUpload accepts relaxed skill names', async () => {
   const workspacePath = await makeWorkspace();
   const archiveBuffer = await makeZip({
-    'relaxed-name/SKILL.md': [
+    '1 local.skill_/SKILL.md': [
       '---',
       'name: 1 local.skill_',
       'description: Uses a relaxed skill name.',
@@ -549,6 +602,109 @@ test('previewLocalSkillUpload accepts relaxed skill names', async () => {
     await fs.readFile(path.join(workspacePath, '.claude', 'skills', '1 local.skill_', 'SKILL.md'), 'utf8'),
     ['---', 'name: 1 local.skill_', 'description: Uses a relaxed skill name.', '---'].join('\n'),
   );
+});
+
+test('previewLocalSkillUpload preserves uppercase names and rejects directory mismatches', async () => {
+  const workspacePath = await makeWorkspace();
+  const validArchive = await makeZip({
+    'MySkill/SKILL.md': '---\nname: MySkill\ndescription: Preserves case.\n---\n',
+  });
+  const preview = await previewLocalSkillUpload({
+    workspacePath,
+    archiveBuffer: validArchive,
+    originalName: 'MySkill.zip',
+    idFactory: () => 'uppercase-preview',
+  });
+  assert.equal(preview.name, 'MySkill');
+  await installGithubSkill({ workspacePath, previewId: preview.previewId });
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'MySkill', 'SKILL.md'), 'utf8'),
+    '---\nname: MySkill\ndescription: Preserves case.\n---\n',
+  );
+
+  const invalidArchive = await makeZip({
+    'myskill/SKILL.md': '---\nname: MySkill\ndescription: Wrong folder case.\n---\n',
+  });
+  await assert.rejects(
+    previewLocalSkillUpload({
+      workspacePath: await makeWorkspace(),
+      archiveBuffer: invalidArchive,
+      originalName: 'myskill.zip',
+    }),
+    /包括大小写/,
+  );
+});
+
+test('updating SKILL.md can confirm an atomic skill directory rename', async () => {
+  const workspacePath = await makeWorkspace();
+  await createWorkspaceSkill({ workspacePath, name: 'Original', description: 'Original skill.' });
+  const current = await readWorkspaceSkillFile({ workspacePath, name: 'Original', filePath: 'SKILL.md' });
+  const content = '---\nname: Renamed\ndescription: Renamed skill.\n---\n';
+
+  await assert.rejects(
+    updateWorkspaceSkillFile({
+      workspacePath,
+      name: 'Original',
+      filePath: 'SKILL.md',
+      content,
+      revision: current.revision,
+    }),
+    (error) => error.code === 'SKILL_DIRECTORY_RENAME_REQUIRED'
+      && error.details?.nextName === 'Renamed',
+  );
+
+  const renames = [];
+  const updated = await updateWorkspaceSkillFile({
+    workspacePath,
+    name: 'Original',
+    filePath: 'SKILL.md',
+    content,
+    revision: current.revision,
+    renameDirectory: true,
+    onSkillRenamed: (entry) => renames.push(entry),
+  });
+  assert.equal(updated.skillName, 'Renamed');
+  assert.deepEqual(renames, [{ currentName: 'Original', nextName: 'Renamed' }]);
+  await assert.rejects(fs.access(path.join(workspacePath, '.claude', 'skills', 'Original')), /ENOENT/);
+  assert.equal(await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'Renamed', 'SKILL.md'), 'utf8'), content);
+});
+
+test('updating SKILL.md rejects duplicate names without regard to case', async () => {
+  const workspacePath = await makeWorkspace();
+  await createWorkspaceSkill({ workspacePath, name: 'Foo', description: 'First skill.' });
+  await createWorkspaceSkill({ workspacePath, name: 'Bar', description: 'Second skill.' });
+  const current = await readWorkspaceSkillFile({ workspacePath, name: 'Bar', filePath: 'SKILL.md' });
+
+  await assert.rejects(
+    updateWorkspaceSkillFile({
+      workspacePath,
+      name: 'Bar',
+      filePath: 'SKILL.md',
+      content: '---\nname: foo\ndescription: Duplicate skill.\n---\n',
+      revision: current.revision,
+      renameDirectory: false,
+    }),
+    (error) => error.code === 'SKILL_NAME_CONFLICT' && error.statusCode === 409,
+  );
+});
+
+test('declining a directory rename saves SKILL.md and exposes a parse diagnostic', async () => {
+  const workspacePath = await makeWorkspace();
+  await createWorkspaceSkill({ workspacePath, name: 'KeepFolder', description: 'Original skill.' });
+  const current = await readWorkspaceSkillFile({ workspacePath, name: 'KeepFolder', filePath: 'SKILL.md' });
+  await updateWorkspaceSkillFile({
+    workspacePath,
+    name: 'KeepFolder',
+    filePath: 'SKILL.md',
+    content: '---\nname: DifferentName\ndescription: Intentional mismatch.\n---\n',
+    revision: current.revision,
+    renameDirectory: false,
+  });
+
+  const detail = await getWorkspaceSkillDetail({ workspacePath, name: 'KeepFolder' });
+  assert.equal(detail.status, 'invalid');
+  assert.equal(detail.diagnostics[0].code, 'SKILL_NAME_DIRECTORY_MISMATCH');
+  assert.match(detail.parseError, /包括大小写/);
 });
 
 test('installGithubSkill copies source, writes metadata, and materializes enabled skills', async () => {

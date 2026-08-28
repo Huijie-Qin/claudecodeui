@@ -332,6 +332,9 @@ test('importMarketSkill downloads the mock API skill into .claude/skills and rec
       createUserId: 'j00939207',
       version: 1,
       source: 'skill-market-api',
+      origin: 'market',
+      bindingType: 'imported',
+      baselineHash: '18c91429ab1ec868ed5ba1d453f641e6fa0c7764c95ffdff5dc35d3a6a272803',
       importedAt: '2026-05-14T00:00:00.000Z',
       updatedAt: '2026-05-14T00:00:00.000Z',
     },
@@ -496,6 +499,27 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
   }
 });
 
+test('importMarketSkill protects local edits before overwriting with a market update', async () => {
+  const workspacePath = await makeWorkspace();
+  await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
+  const manifestPath = path.join(workspacePath, '.claude', 'skills', 'bug-hunter', 'SKILL.md');
+  await fs.appendFile(manifestPath, '\nLocal customization.\n', 'utf8');
+
+  await assert.rejects(
+    importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter', overwrite: true })),
+    (error) => error.code === 'SKILL_LOCAL_CHANGES' && error.statusCode === 409,
+  );
+
+  const detail = await importMarketSkill(withTenant({
+    workspacePath,
+    name: 'bug-hunter',
+    overwrite: true,
+    forceLocalChanges: true,
+  }));
+  assert.equal(detail.imported, true);
+  assert.doesNotMatch(await fs.readFile(manifestPath, 'utf8'), /Local customization/);
+});
+
 test('importMarketSkill supports skill names without ASCII letters or numbers', async () => {
   const workspacePath = await makeWorkspace();
 
@@ -636,6 +660,58 @@ test('removeMarketSkill only removes skills imported from the market', async () 
   );
   const detail = await getSkillMarketDetail(withTenant({ workspacePath, name: 'bug-hunter' }));
   assert.equal(detail.imported, false);
+  const bindings = JSON.parse(await fs.readFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+    'utf8',
+  ));
+  assert.equal(bindings.imports['bug-hunter'].id, 'bug-hunter');
+});
+
+test('removeMarketSkill removes an uploaded managed skill in one action while retaining its binding', async () => {
+  const workspacePath = await makeWorkspace();
+  const sourcePath = path.join(workspacePath, '.cloudcli', 'skills', 'sources', 'UploadedSkill');
+  const runtimePath = path.join(workspacePath, '.claude', 'skills', 'UploadedSkill');
+  const manifest = '---\nname: UploadedSkill\ndescription: Uploaded locally.\n---\n';
+  await fs.mkdir(sourcePath, { recursive: true });
+  await fs.mkdir(runtimePath, { recursive: true });
+  await fs.writeFile(path.join(sourcePath, 'SKILL.md'), manifest, 'utf8');
+  await fs.writeFile(path.join(runtimePath, 'SKILL.md'), manifest, 'utf8');
+  await fs.mkdir(path.join(workspacePath, '.cloudcli', 'skills'), { recursive: true });
+  await fs.writeFile(path.join(workspacePath, '.cloudcli', 'skills', 'metadata.json'), JSON.stringify({
+    version: 1,
+    skills: {
+      UploadedSkill: {
+        name: 'UploadedSkill',
+        enabled: true,
+        sourceType: 'local-upload',
+        managedBy: 'cloudcli',
+      },
+    },
+  }), 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'UploadedSkill', {
+    name: 'UploadedSkill',
+    skillId: 'uploaded-remote',
+    id: 'uploaded-remote',
+    skillName: 'UploadedSkill',
+    version: 1,
+    origin: 'local',
+    bindingType: 'published',
+  });
+
+  await removeMarketSkill({ workspacePath, name: 'UploadedSkill' });
+
+  await assert.rejects(fs.access(sourcePath), /ENOENT/);
+  await assert.rejects(fs.access(runtimePath), /ENOENT/);
+  const metadata = JSON.parse(await fs.readFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'metadata.json'),
+    'utf8',
+  ));
+  assert.deepEqual(metadata.skills, {});
+  const bindings = JSON.parse(await fs.readFile(
+    path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'),
+    'utf8',
+  ));
+  assert.equal(bindings.imports.UploadedSkill.bindingType, 'published');
 });
 
 test('manual same-name runtime directories are conflicts instead of removable imports', async () => {
@@ -761,6 +837,9 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill wi
   ));
   assert.equal(imports.imports.LocalAuthor.id, 'saved-local-author');
   assert.equal(imports.imports.LocalAuthor.version, 1);
+  assert.equal(imports.imports.LocalAuthor.origin, 'local');
+  assert.equal(imports.imports.LocalAuthor.bindingType, 'published');
+  assert.match(imports.imports.LocalAuthor.baselineHash, /^[a-f0-9]{64}$/);
 });
 
 test('listSkillMarket deduplicates uploaded skills by remote id when names differ', async () => {

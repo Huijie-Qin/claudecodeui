@@ -5,6 +5,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
+import { computeSkillDirectoryHash, deleteLocalWorkspaceSkill } from './workspace-skills.js';
 
 const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
@@ -199,6 +200,7 @@ export async function downloadMarketSkill({
   workspacePath,
   name,
   overwrite = false,
+  forceLocalChanges = false,
   now = () => new Date(),
   tenantCode,
   accountId,
@@ -209,6 +211,15 @@ export async function downloadMarketSkill({
   const existingStatus = existingImportEntry
     ? await getImportStatus(workspacePath, existingImportEntry.skillName, imports)
     : null;
+
+  if (overwrite && existingStatus?.imported && existingImportEntry?.metadataEntry?.baselineHash && !forceLocalChanges) {
+    const currentHash = await computeSkillDirectoryHash(getRuntimeSkillPath(workspacePath, existingStatus.skillName));
+    if (currentHash !== existingImportEntry.metadataEntry.baselineHash) {
+      throw createHttpError('该技能存在本地修改，市场更新会覆盖这些修改。', 409, 'SKILL_LOCAL_CHANGES', {
+        skillName: existingStatus.skillName,
+      });
+    }
+  }
 
   if (existingStatus?.imported && !overwrite) {
     throw createHttpError(`Skill "${existingStatus.skillName}" has already been imported`, 409);
@@ -241,6 +252,7 @@ export async function downloadMarketSkill({
     }
   }
   await writeDownloadedFiles(runtimePath, downloadedSkill.files);
+  const baselineHash = await computeSkillDirectoryHash(runtimePath);
 
   const timestamp = now().toISOString();
   const nextImports = { ...imports.imports };
@@ -261,6 +273,9 @@ export async function downloadMarketSkill({
         createUserId: remoteSkill.createUserId,
         version: remoteSkill.version,
         source: 'skill-market-api',
+        origin: nextImports[skillName]?.origin || 'market',
+        bindingType: nextImports[skillName]?.bindingType === 'published' ? 'published' : 'imported',
+        baselineHash,
         importedAt: imports.imports[skillName]?.importedAt || timestamp,
         updatedAt: timestamp,
       },
@@ -436,6 +451,7 @@ export async function publishMarketSkill({
 
   const publishedAt = now().toISOString();
   const publishedVersion = normalizeVersion(publishPayload.data?.version) ?? (remoteSkill.version + 1);
+  const baselineHash = await computeSkillDirectoryHash(runtimePath);
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
@@ -450,6 +466,9 @@ export async function publishMarketSkill({
         createUserId: remoteSkill.createUserId,
         version: publishedVersion,
         source: 'skill-market-api',
+        origin: imports.imports[importSkillName]?.origin || 'market',
+        bindingType: imports.imports[importSkillName]?.bindingType || 'imported',
+        baselineHash,
         updatedAt: publishedAt,
       },
     },
@@ -527,6 +546,7 @@ export async function uploadAndPublishLocalSkill({
   const publishedVersion = normalizeVersion(publishPayload.data?.version)
     ?? normalizeVersion(savedSkill.version)
     ?? 1;
+  const baselineHash = await computeSkillDirectoryHash(runtimePath);
 
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
@@ -541,6 +561,9 @@ export async function uploadAndPublishLocalSkill({
         createUserId: savedSkill.createUserId,
         version: publishedVersion,
         source: 'skill-market-api',
+        origin: 'local',
+        bindingType: 'published',
+        baselineHash,
         importedAt: imports.imports[skillName]?.importedAt || publishedAt,
         updatedAt: publishedAt,
       },
@@ -566,18 +589,20 @@ export async function uploadAndPublishLocalSkill({
 }
 
 export async function removeMarketSkill({ workspaceId, workspacePath, name }) {
-  const skillName = normalizeRuntimeSkillFolderName(name);
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  if (!imports.imports?.[skillName]) {
-    throw createHttpError(`Market skill "${skillName}" has not been imported`, 404);
+  const bindingPair = Object.entries(imports.imports || {}).find(([entryName]) => (
+    entryName.toLowerCase() === requestedSkillName.toLowerCase()
+  ));
+  if (!bindingPair) {
+    throw createHttpError(`Market skill "${requestedSkillName}" has not been imported`, 404);
   }
+  const skillName = bindingPair[0];
 
-  await fs.rm(getRuntimeSkillPath(workspacePath, skillName), { recursive: true, force: true });
-  const nextImports = { ...imports.imports };
-  delete nextImports[skillName];
-  await writeMarketImports({ workspaceId, workspacePath }, {
-    version: 1,
-    imports: nextImports,
+  await deleteLocalWorkspaceSkill({
+    workspacePath,
+    name: skillName,
+    marketImports: Object.values(imports.imports || {}),
   });
 
   return {
@@ -755,11 +780,13 @@ async function getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports
 }
 
 function getImportEntryForRemoteSkill(remoteSkill, imports) {
-  const namedEntry = imports.imports?.[remoteSkill.name];
-  if (namedEntry) {
+  const namedPair = Object.entries(imports.imports || {}).find(([skillName]) => (
+    skillName.toLowerCase() === String(remoteSkill.name || '').toLowerCase()
+  ));
+  if (namedPair) {
     return {
-      skillName: remoteSkill.name,
-      metadataEntry: namedEntry,
+      skillName: namedPair[0],
+      metadataEntry: namedPair[1],
     };
   }
 
@@ -1287,14 +1314,24 @@ async function writeJsonAtomic(filePath, value) {
 }
 
 async function getImportStatus(workspacePath, name, metadata) {
-  const runtimePath = getRuntimeSkillPath(workspacePath, name);
+  const metadataPair = Object.entries(metadata.imports || {}).find(([skillName]) => (
+    skillName.toLowerCase() === String(name || '').toLowerCase()
+  ));
+  const actualName = metadataPair?.[0] || name;
+  const runtimePath = getRuntimeSkillPath(workspacePath, actualName);
   const runtimeExists = await pathExists(runtimePath);
-  const metadataEntry = metadata.imports?.[name] || null;
+  const metadataEntry = metadataPair?.[1] || null;
+  const locallyModified = Boolean(
+    runtimeExists
+    && metadataEntry?.baselineHash
+    && (await computeSkillDirectoryHash(runtimePath)) !== metadataEntry.baselineHash
+  );
   return {
-    skillName: name,
+    skillName: actualName,
     imported: Boolean(metadataEntry && runtimeExists),
     runtimeExists,
     conflict: Boolean(runtimeExists && !metadataEntry),
+    locallyModified,
     importedAt: metadataEntry?.importedAt,
     updatedAt: metadataEntry?.updatedAt,
     metadataEntry,
@@ -1810,6 +1847,9 @@ function toLocalImportState(status, remoteSkill, currentUsername) {
     conflict: status.conflict,
     importedAt: status.importedAt,
     updatedAt: status.updatedAt,
+    locallyModified: status.locallyModified,
+    origin: status.metadataEntry?.origin,
+    bindingType: status.metadataEntry?.bindingType,
     importedVersion,
     updateAvailable,
     canPublish,
@@ -2033,9 +2073,11 @@ function sortPathNames(left, right) {
   return left.localeCompare(right);
 }
 
-function createHttpError(message, statusCode = 400) {
+function createHttpError(message, statusCode = 400, code, details) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (code) error.code = code;
+  if (details) error.details = details;
   return error;
 }
 

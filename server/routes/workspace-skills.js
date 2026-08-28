@@ -48,7 +48,9 @@ export function createWorkspaceSkillsRouter({
         requireEdit: false,
       });
       const imports = listMarketImports(marketImports, workspace.id);
-      const inventory = await skillsService.listWorkspaceSkills(workspace.path, [], imports);
+      const inventory = await skillsService.listWorkspaceSkills(workspace.path, [], imports, {
+        currentUsername: req.user?.username,
+      });
 
       return res.json({
         workspaceId: workspace.id,
@@ -68,6 +70,7 @@ export function createWorkspaceSkillsRouter({
         workspacePath: workspace.path,
         name: req.params.name,
         marketImports: listMarketImports(marketImports, workspace.id),
+        ...(req.user?.username ? { currentUsername: req.user.username } : {}),
       });
       return res.json({ workspaceId: workspace.id, accessRole, canManage: accessRole !== 'view', skill });
     } catch (error) {
@@ -93,14 +96,26 @@ export function createWorkspaceSkillsRouter({
   router.put('/:workspaceId/skills/:name/files', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
-      const file = await skillsService.updateWorkspaceSkillFile({
+      const imports = listMarketImports(marketImports, workspace.id);
+      const updateOptions = {
         workspacePath: workspace.path,
         name: req.params.name,
         filePath: req.body?.filePath,
         content: req.body?.content,
         revision: req.body?.revision,
-        marketImports: listMarketImports(marketImports, workspace.id),
-      });
+        marketImports: imports,
+      };
+      if (typeof req.body?.renameDirectory === 'boolean') {
+        updateOptions.renameDirectory = req.body.renameDirectory;
+      }
+      if (typeof marketImports.renameForWorkspace === 'function') {
+        updateOptions.onSkillRenamed = ({ currentName, nextName }) => marketImports.renameForWorkspace({
+          workspaceId: workspace.id,
+          currentName,
+          nextName,
+        });
+      }
+      const file = await skillsService.updateWorkspaceSkillFile(updateOptions);
       return res.json({ workspaceId: workspace.id, accessRole, canManage: true, file });
     } catch (error) {
       return handleWorkspaceError(res, error);

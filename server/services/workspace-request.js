@@ -23,7 +23,11 @@ export function getRequestUserId(req) {
 
 export function handleWorkspaceError(res, error) {
   const statusCode = error.statusCode || 500;
-  return res.status(statusCode).json({ error: error.message });
+  return res.status(statusCode).json({
+    error: error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...(error.details ? { details: error.details } : {}),
+  });
 }
 
 export function createWorkspaceRequestResolver(access = workspaceAccess) {

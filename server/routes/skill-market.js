@@ -112,6 +112,9 @@ export function createSkillMarketRouter({
         workspacePath: workspace.path,
         name: req.params.name,
         overwrite: req.body?.overwrite === true || req.query?.overwrite === 'true',
+        ...(req.body?.forceLocalChanges === true || req.query?.forceLocalChanges === 'true'
+          ? { forceLocalChanges: true }
+          : {}),
         tenantCode,
         accountId,
       });

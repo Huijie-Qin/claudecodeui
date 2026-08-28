@@ -33,6 +33,9 @@ export function initializeMultitenancyTables(database = db) {
   migrateClaudeEnvDenyRuleMatchTypes(database);
   migrateRetiredPersonalClaudeEnvDenyRules(database);
   ensureColumn(database, 'tenants', 'prod_code', 'TEXT');
+  ensureColumn(database, 'workspace_skill_market_imports', 'origin', "TEXT CHECK (origin IN ('local', 'market'))");
+  ensureColumn(database, 'workspace_skill_market_imports', 'binding_type', "TEXT CHECK (binding_type IN ('published', 'imported'))");
+  ensureColumn(database, 'workspace_skill_market_imports', 'baseline_hash', 'TEXT');
   migrateLegacyTenantProdCode(database);
 }
 
@@ -410,6 +413,9 @@ function hydrateSkillMarketImportRow(row) {
     createUserId: row.create_user_id || undefined,
     version: Number(row.version || 0),
     source: row.source || 'skill-market-api',
+    ...(row.origin ? { origin: row.origin } : {}),
+    ...(row.binding_type ? { bindingType: row.binding_type } : {}),
+    ...(row.baseline_hash ? { baselineHash: row.baseline_hash } : {}),
     importedAt: row.imported_at,
     updatedAt: row.updated_at,
   };
@@ -456,6 +462,13 @@ function normalizeSkillMarketImportEntry(skillName, entry = {}) {
     source: typeof entry.source === 'string' && entry.source.trim()
       ? entry.source.trim()
       : 'skill-market-api',
+    origin: entry.origin === 'local' || entry.origin === 'market' ? entry.origin : null,
+    bindingType: entry.bindingType === 'published' || entry.bindingType === 'imported'
+      ? entry.bindingType
+      : null,
+    baselineHash: typeof entry.baselineHash === 'string' && entry.baselineHash.trim()
+      ? entry.baselineHash.trim()
+      : null,
     importedAt: typeof entry.importedAt === 'string' && entry.importedAt.trim()
       ? entry.importedAt.trim()
       : null,
@@ -672,6 +685,9 @@ export function createMultitenancyDb(database = db) {
         create_user_id,
         version,
         source,
+        origin,
+        binding_type,
+        baseline_hash,
         imported_at,
         updated_at
       )
@@ -685,6 +701,9 @@ export function createMultitenancyDb(database = db) {
         @createUserId,
         @version,
         @source,
+        @origin,
+        @bindingType,
+        @baselineHash,
         COALESCE(@importedAt, CURRENT_TIMESTAMP),
         COALESCE(@updatedAt, CURRENT_TIMESTAMP)
       )
@@ -2304,6 +2323,31 @@ export function createMultitenancyDb(database = db) {
           requirePositiveInteger(workspaceId, 'workspaceId'),
           requireNonEmptyString(skillName, 'skillName'),
         );
+        return result.changes > 0;
+      },
+
+      renameForWorkspace: ({ workspaceId, currentName, nextName }) => {
+        const normalizedWorkspaceId = requirePositiveInteger(workspaceId, 'workspaceId');
+        const normalizedCurrentName = requireNonEmptyString(currentName, 'currentName');
+        const normalizedNextName = requireNonEmptyString(nextName, 'nextName');
+        const conflict = database.prepare(`
+          SELECT skill_name
+          FROM workspace_skill_market_imports
+          WHERE workspace_id = ?
+            AND skill_name = ? COLLATE NOCASE
+            AND skill_name != ?
+        `).get(normalizedWorkspaceId, normalizedNextName, normalizedCurrentName);
+        if (conflict) {
+          const error = new Error(`Skill "${normalizedNextName}" already exists`);
+          error.code = 'SKILL_NAME_CONFLICT';
+          throw error;
+        }
+        const result = database.prepare(`
+          UPDATE workspace_skill_market_imports
+          SET skill_name = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE workspace_id = ?
+            AND skill_name = ? COLLATE NOCASE
+        `).run(normalizedNextName, normalizedWorkspaceId, normalizedCurrentName);
         return result.changes > 0;
       },
     },
