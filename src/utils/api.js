@@ -919,10 +919,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ overwrite: false }),
       }),
-    updateImport: (workspaceId, name) =>
+    updateImport: (workspaceId, name, { forceLocalChanges = false } = {}) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/download`, workspaceId), {
         method: 'POST',
-        body: JSON.stringify({ overwrite: true }),
+        body: JSON.stringify({ overwrite: true, forceLocalChanges }),
       }),
     publishPreview: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-preview`, workspaceId)),

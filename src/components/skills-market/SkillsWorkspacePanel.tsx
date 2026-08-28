@@ -53,6 +53,9 @@ type MarketSkill = {
   conflict?: boolean;
   remoteDeleted?: boolean;
   updateAvailable?: boolean;
+  locallyModified?: boolean;
+  bindingType?: 'published' | 'imported';
+  diagnostics?: Array<{ code: string; message: string; path?: string }>;
   targetPath?: string;
   files?: Array<{ path: string; size?: number; type?: string; mimeType?: string }>;
 };
@@ -129,6 +132,8 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget | null>(null);
+  const [renameConfirmation, setRenameConfirmation] = useState<{ currentName: string; nextName: string } | null>(null);
+  const [overwriteConfirmation, setOverwriteConfirmation] = useState<{ skillName: string } | null>(null);
   const mine = useWorkspaceSkills(workspaceId);
   const canManage = !isReadOnly && mine.data?.canManage !== false;
   const dirty = editing && file?.content !== editContent;
@@ -316,7 +321,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     await Promise.all([loadMarket(1, true), mine.reload()]);
   };
 
-  const runMarketAction = async (action: 'import' | 'update') => {
+  const runMarketAction = async (action: 'import' | 'update', forceLocalChanges = false) => {
     if (!workspaceId || !detailTarget || actionLoading) return;
     setActionLoading(true);
     setMessage(null);
@@ -324,7 +329,10 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
       if (action === 'import') {
         await readPayload(await api.skillMarket.importSkill(workspaceId, detailTarget.name), '技能导入失败。');
       } else {
-        await readPayload(await api.skillMarket.updateImport(workspaceId, detailTarget.name), '技能更新失败。');
+        await readPayload(
+          await api.skillMarket.updateImport(workspaceId, detailTarget.name, { forceLocalChanges }),
+          '技能更新失败。',
+        );
       }
       notifyWorkspaceChanged(detailTarget.name, `skill-market-${action}`);
       await refreshAll();
@@ -334,13 +342,17 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         text: action === 'import' ? '技能已导入。' : '技能已更新。',
       });
     } catch (error) {
+      if (error instanceof SkillApiError && error.code === 'SKILL_LOCAL_CHANGES') {
+        setOverwriteConfirmation({ skillName: detailTarget.name });
+        return;
+      }
       setMessage({ kind: 'error', text: toErrorMessage(error, '技能操作失败。') });
     } finally {
       setActionLoading(false);
     }
   };
 
-  const persistFile = async (reloadDetail: boolean): Promise<boolean> => {
+  const persistFile = async (reloadDetail: boolean, renameDirectory?: boolean): Promise<boolean> => {
     if (!dirty) return true;
     if (!workspaceId || !detailTarget || !file) return false;
     setActionLoading(true);
@@ -351,22 +363,35 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           filePath: file.path,
           content: editContent,
           revision: file.revision,
+          ...(renameDirectory === undefined ? {} : { renameDirectory }),
         }),
         '文件保存失败。',
       );
-      const nextFile = payload.file as SkillFile;
+      const nextFile = payload.file as SkillFile & { skillName?: string };
+      const nextSkillName = nextFile.skillName || detailTarget.name;
+      const nextTarget = nextSkillName === detailTarget.name
+        ? detailTarget
+        : { ...detailTarget, name: nextSkillName };
+      if (nextTarget !== detailTarget) setDetailTarget(nextTarget);
       setFile(nextFile);
       setEditContent(nextFile.content ?? '');
       setEditing(false);
-      notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-file-update');
+      notifyWorkspaceChanged(nextSkillName, 'workspace-skill-file-update');
       if (reloadDetail) {
-        await Promise.all([mine.reload(), loadDetail(detailTarget, nextFile.path)]);
+        await Promise.all([mine.reload(), loadDetail(nextTarget, nextFile.path)]);
       } else {
         await mine.reload();
       }
       setMessage({ kind: 'success', text: '文件已保存。' });
       return true;
     } catch (error) {
+      if (error instanceof SkillApiError && error.code === 'SKILL_DIRECTORY_RENAME_REQUIRED') {
+        setRenameConfirmation({
+          currentName: String(error.details?.currentName || detailTarget.name),
+          nextName: String(error.details?.nextName || ''),
+        });
+        return false;
+      }
       setMessage({ kind: 'error', text: toErrorMessage(error, '文件保存失败。') });
       return false;
     } finally {
@@ -544,7 +569,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     updates: marketSkills.filter((skill) => skill.updateAvailable).length,
   }), [marketSkills]);
 
-  const detailEditable = detailTarget?.source === 'mine' && detail?.origin === 'local' && canManage;
+  const detailEditable = detailTarget?.source === 'mine' && canManage;
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -604,7 +629,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             <SkillPublishAction
               workspaceId={workspaceId}
               skillName={detailTarget.name}
-              disabled={!canManage || actionLoading}
+              disabled={!canManage || actionLoading || detail?.status === 'invalid'}
               beforePublish={saveFileBeforePublish}
               onError={(text) => setMessage({ kind: 'error', text })}
               onPublished={async (mode) => {
@@ -733,6 +758,39 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           onCancel={() => setRemovalTarget(null)}
           onConfirm={() => void confirmRemoval()}
           target={removalTarget}
+        />
+      ) : null}
+
+      {renameConfirmation ? (
+        <DecisionDialog
+          busy={actionLoading}
+          confirmLabel="自动重命名"
+          description={`SKILL.md.name 已修改为“${renameConfirmation.nextName}”。是否同时将技能目录从“${renameConfirmation.currentName}”重命名为“${renameConfirmation.nextName}”？`}
+          secondaryLabel="仅保存内容"
+          title="同步重命名技能目录"
+          onCancel={() => setRenameConfirmation(null)}
+          onConfirm={async () => {
+            setRenameConfirmation(null);
+            await persistFile(true, true);
+          }}
+          onSecondary={async () => {
+            setRenameConfirmation(null);
+            await persistFile(true, false);
+          }}
+        />
+      ) : null}
+
+      {overwriteConfirmation ? (
+        <DecisionDialog
+          busy={actionLoading}
+          confirmLabel="覆盖并更新"
+          description="该技能包含仅保存在当前工作区的本地修改。继续更新会使用技能市场版本覆盖这些修改，且无法恢复。"
+          title="覆盖本地修改？"
+          onCancel={() => setOverwriteConfirmation(null)}
+          onConfirm={async () => {
+            setOverwriteConfirmation(null);
+            await runMarketAction('update', true);
+          }}
         />
       ) : null}
     </section>
@@ -1139,6 +1197,42 @@ function Modal({ title, description, onClose, busy, children }: { title: string;
   );
 }
 
+function DecisionDialog({
+  busy,
+  confirmLabel,
+  description,
+  onCancel,
+  onConfirm,
+  onSecondary,
+  secondaryLabel,
+  title,
+}: {
+  busy: boolean;
+  confirmLabel: string;
+  description: string;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+  onSecondary?: () => void | Promise<void>;
+  secondaryLabel?: string;
+  title: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-[10030] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-md rounded-lg border border-border bg-background shadow-2xl">
+        <div className="border-b border-border px-5 py-4">
+          <h3 className="text-base font-semibold">{title}</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 px-5 py-4">
+          <button type="button" onClick={onCancel} disabled={busy} className="h-9 rounded-md border border-border px-3 text-sm hover:bg-accent disabled:opacity-50">取消</button>
+          {onSecondary && secondaryLabel ? <button type="button" onClick={() => void onSecondary()} disabled={busy} className="h-9 rounded-md border border-border px-3 text-sm hover:bg-accent disabled:opacity-50">{secondaryLabel}</button> : null}
+          <button type="button" onClick={() => void onConfirm()} disabled={busy} className="h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, value, onChange, placeholder, helper }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; helper?: string }) {
   return <label className="block text-sm font-medium">{label}<input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20" />{helper ? <span className="mt-1 block font-mono text-xs font-normal text-muted-foreground">{helper}</span> : null}</label>;
 }
@@ -1153,19 +1247,27 @@ function SkillBadges({ skill, source }: { skill: MarketSkill | WorkspaceSkill | 
   return (
     <>
       {source === 'mine' && origin ? <Badge tone={origin === 'market' ? 'slate' : 'blue'}>{origin === 'market' ? '市场安装' : '本地创建'}</Badge> : null}
+      {source === 'mine' && origin === 'local' && imported ? <Badge tone="green">已导入</Badge> : null}
       {source === 'market' && imported ? <Badge tone="green">已导入</Badge> : null}
       {source === 'market' && !imported && !conflict ? <Badge tone="slate">可导入</Badge> : null}
       {updateAvailable ? <Badge tone="amber">待更新</Badge> : null}
       {remoteDeleted ? <Badge tone="red">市场已下架</Badge> : null}
       {conflict ? <Badge tone="red">冲突</Badge> : null}
-      {invalid ? <Badge tone="red">解析失败</Badge> : null}
+      {'locallyModified' in skill && skill.locallyModified === true ? <Badge tone="amber">本地已修改</Badge> : null}
+      {invalid ? <Badge tone="red" title={getSkillDiagnosticText(skill)}>解析失败</Badge> : null}
     </>
   );
 }
 
-function Badge({ children, tone }: { children: ReactNode; tone: 'slate' | 'blue' | 'green' | 'amber' | 'red' }) {
+function Badge({ children, tone, title }: { children: ReactNode; tone: 'slate' | 'blue' | 'green' | 'amber' | 'red'; title?: string }) {
   const classes = { slate: 'border-border bg-muted text-muted-foreground', blue: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300', green: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300', amber: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300', red: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300' };
-  return <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${classes[tone]}`}>{children}</span>;
+  return <span title={title} className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${classes[tone]}`}>{children}</span>;
+}
+
+function getSkillDiagnosticText(skill: MarketSkill | WorkspaceSkill | SkillDetail) {
+  const diagnostics = 'diagnostics' in skill && Array.isArray(skill.diagnostics) ? skill.diagnostics : [];
+  if (diagnostics.length > 0) return diagnostics.map((entry) => entry.message).join('\n');
+  return ('parseError' in skill && skill.parseError) || '请检查 SKILL.md 的位置、frontmatter 和技能目录名称。';
 }
 
 function SubTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
@@ -1236,8 +1338,20 @@ function downloadBase64File(file: SkillFile) {
 
 async function readPayload(response: Response, fallback: string) {
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error || fallback);
+  if (!response.ok) throw new SkillApiError(payload?.error || fallback, payload?.code, payload?.details);
   return payload;
+}
+
+class SkillApiError extends Error {
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, code?: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = 'SkillApiError';
+    this.code = code;
+    this.details = details;
+  }
 }
 
 function toErrorMessage(error: unknown, fallback: string) {

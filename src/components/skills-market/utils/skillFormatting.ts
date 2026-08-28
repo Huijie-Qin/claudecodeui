@@ -18,7 +18,12 @@ export type WorkspaceSkill = {
   runtimePath?: string;
   manifestPath?: string;
   parseError?: string;
+  diagnostics?: Array<{ code: string; message: string; path?: string }>;
   origin?: 'market' | 'local';
+  bindingType?: 'published' | 'imported';
+  published?: boolean;
+  imported?: boolean;
+  locallyModified?: boolean;
   targetPath?: string;
   localVersion?: number;
   marketVersion?: number;
