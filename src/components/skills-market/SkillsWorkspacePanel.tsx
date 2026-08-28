@@ -16,8 +16,8 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { DragEvent, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
@@ -30,6 +30,7 @@ import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
 import { getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
+import { selectSkillUploadArchive } from './utils/skillUpload';
 
 type SkillsWorkspacePanelProps = {
   selectedProject: Project;
@@ -708,6 +709,11 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             setUploadPreview(null);
             setUploadError(null);
           }}
+          onArchiveError={(nextError) => {
+            setUploadArchive(null);
+            setUploadPreview(null);
+            setUploadError(nextError);
+          }}
           onClose={() => {
             if (uploadLoading) return;
             setUploadOpen(false);
@@ -1023,15 +1029,78 @@ function CreateSkillDialog({ workspaceId, onClose, onCreated }: { workspaceId?: 
   );
 }
 
-function UploadSkillDialog({ archive, error, loading, onArchiveChange, onClose, onImport, onPreview, preview }: { archive: File | null; error: string | null; loading: boolean; onArchiveChange: (file: File | null) => void; onClose: () => void; onImport: () => void; onPreview: () => void; preview: UploadPreview | null }) {
+function UploadSkillDialog({ archive, error, loading, onArchiveChange, onArchiveError, onClose, onImport, onPreview, preview }: { archive: File | null; error: string | null; loading: boolean; onArchiveChange: (file: File | null) => void; onArchiveError: (error: string) => void; onClose: () => void; onImport: () => void; onPreview: () => void; preview: UploadPreview | null }) {
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepthRef = useRef(0);
+
+  const selectArchive = (files: ArrayLike<File> | null) => {
+    const selection = selectSkillUploadArchive(files);
+    if (selection.error) {
+      onArchiveError(selection.error);
+      return;
+    }
+    if (selection.file) {
+      onArchiveChange(selection.file);
+    }
+  };
+
+  const handleDragEnter = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (loading) return;
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = loading ? 'none' : 'copy';
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (loading) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    if (loading) return;
+    selectArchive(event.dataTransfer.files);
+  };
+
   return (
     <Modal title="上传技能" description="上传包含一个技能目录和 SKILL.md 的 ZIP 文件" onClose={onClose} busy={loading}>
       <div className="space-y-4">
-        <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center transition hover:bg-muted/40">
-          <Upload className="mb-2 h-7 w-7 text-muted-foreground" />
-          <span className="text-sm font-medium">选择 ZIP 文件</span>
+        <label
+          className={`flex min-h-36 flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition ${loading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} ${dragActive ? 'border-primary bg-primary/5 text-primary' : 'border-border bg-muted/20 hover:bg-muted/40'}`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          aria-disabled={loading}
+        >
+          <Upload className={`mb-2 h-7 w-7 ${dragActive ? 'text-primary' : 'text-muted-foreground'}`} />
+          <span className="text-sm font-medium">{dragActive ? '松开以上传 ZIP' : '选择或拖入 ZIP 文件'}</span>
           <span className="mt-1 text-xs text-muted-foreground">导入后统一标记为“本地创建”</span>
-          <input type="file" accept=".zip,application/zip" className="sr-only" onChange={(event) => onArchiveChange(event.target.files?.[0] ?? null)} />
+          <input
+            type="file"
+            accept=".zip,application/zip,application/x-zip-compressed"
+            className="sr-only"
+            disabled={loading}
+            onChange={(event) => {
+              selectArchive(event.target.files);
+              event.target.value = '';
+            }}
+          />
         </label>
         {archive ? <div className="rounded-md border border-border px-3 py-2 text-sm">{archive.name}</div> : null}
         {preview ? (
