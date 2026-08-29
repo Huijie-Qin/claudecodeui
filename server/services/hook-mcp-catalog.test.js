@@ -14,10 +14,19 @@ function createConfigStore() {
   };
 }
 
+function createUsers({ username = 'admin-user', userKey = 'user-key' } = {}) {
+  return {
+    getUserById: (userId) => ({ id: userId, username }),
+    getEnvForUser: () => ({ USER_KEY: userKey }),
+  };
+}
+
 test('Hook MCP catalog creates, updates, tests, and exposes isolated runtime config', async () => {
   const probeCalls = [];
+  const probeEnvironments = [];
   const service = createHookMcpCatalogService({
     configStore: createConfigStore(),
+    users: createUsers({ username: 'hook-admin', userKey: 'hook-user-key' }),
     now: (() => {
       const values = [
         '2026-08-23T01:00:00.000Z',
@@ -28,6 +37,11 @@ test('Hook MCP catalog creates, updates, tests, and exposes isolated runtime con
     })(),
     probe: async (config) => {
       probeCalls.push(config);
+      probeEnvironments.push({
+        W3_NAME: process.env.W3_NAME,
+        TENANT_ID: process.env.TENANT_ID,
+        USER_KEY: process.env.USER_KEY,
+      });
       return {
         status: 'healthy',
         toolCount: 1,
@@ -64,7 +78,7 @@ test('Hook MCP catalog creates, updates, tests, and exposes isolated runtime con
   assert.equal(updated.displayName, '通知服务');
   assert.equal(updated.updatedByUserId, 10);
 
-  const tested = await service.testServer({ serverName: 'notify', userId: 10 });
+  const tested = await service.testServer({ serverName: 'notify', userId: 10, tenantId: 7 });
   assert.equal(tested.lastTestStatus, 'healthy');
   assert.equal(tested.toolCount, 1);
   assert.deepEqual(probeCalls, [{
@@ -74,6 +88,11 @@ test('Hook MCP catalog creates, updates, tests, and exposes isolated runtime con
     headers: {},
     headersHelper: 'node /opt/hook-mcp/auth.js',
     alwaysLoad: true,
+  }]);
+  assert.deepEqual(probeEnvironments, [{
+    W3_NAME: 'hook-admin',
+    TENANT_ID: '7',
+    USER_KEY: 'hook-user-key',
   }]);
   assert.deepEqual(await service.getRuntimeConfig(), {
     mcpServers: {
@@ -97,6 +116,7 @@ test('Hook MCP catalog keeps helper scripts private and materializes runtime-sco
   const probeConfigs = [];
   const service = createHookMcpCatalogService({
     configStore: createConfigStore(),
+    users: createUsers(),
     temporaryRoot: tempRoot,
     probe: async (config) => {
       probeConfigs.push(config);
@@ -125,7 +145,7 @@ test('Hook MCP catalog keeps helper scripts private and materializes runtime-sco
     assert.equal(uploaded.helperScript.sha256.length, 64);
     assert.equal(Object.hasOwn(uploaded.helperScript, 'content'), false);
 
-    await service.testServer({ serverName: 'notify', userId: 9 });
+    await service.testServer({ serverName: 'notify', userId: 9, tenantId: 7 });
     assert.match(probeConfigs[0].headersHelper, /^cd '.+\/notify' && set -a/);
     assert.equal(Object.hasOwn(probeConfigs[0], 'helperEnv'), false);
 

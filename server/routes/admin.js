@@ -696,6 +696,7 @@ export function createAdminRouter(
       const server = await hookMcpCatalog.testServer({
         serverName: req.params.serverName,
         userId: req.user.id,
+        tenantId: parsePositiveId(req.body?.tenantId ?? req.query?.tenantId, 'tenantId'),
       });
       return res.json(hookMcpResponse(server));
     } catch (error) {

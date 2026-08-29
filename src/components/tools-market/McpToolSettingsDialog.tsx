@@ -469,16 +469,16 @@ export default function McpToolSettingsDialog({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
-          <div className="text-xs text-muted-foreground">
+          <div className="min-w-0 flex-1 text-xs text-muted-foreground">
             {t('mcpTools.settings.footer', { file: MCP_TOOL_OVERRIDES_FILE })}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {error ? <span className="text-xs text-destructive">{error}</span> : null}
             {success ? <span className="text-xs text-emerald-600 dark:text-emerald-300">{success}</span> : null}
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition hover:bg-accent"
+              className="inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition hover:bg-accent"
             >
               取消
             </button>
@@ -486,7 +486,7 @@ export default function McpToolSettingsDialog({
               type="button"
               disabled={isSaving || !selectedTool}
               onClick={handleSave}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               保存

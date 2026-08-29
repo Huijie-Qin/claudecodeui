@@ -10,6 +10,10 @@ import {
   savePresetHelperScript,
 } from './mcp-helper-scripts.js';
 import {
+  buildMcpTestHostEnv,
+  withTemporaryProcessEnv,
+} from './mcp-test-environment.js';
+import {
   probeHttpMcpServer,
   readMcpStatus,
   readWorkspaceMcpConfig,
@@ -240,75 +244,6 @@ function summarizePresetTestEnv(env = {}) {
         }
       : { present: false },
   };
-}
-
-async function getPresetTestUserStore(users) {
-  if (users) {
-    return users;
-  }
-
-  const { userDb } = await import('../database/db.js');
-  return userDb;
-}
-
-async function getPresetTestUserContext(users, userId) {
-  const userStore = await getPresetTestUserStore(users);
-  const user = typeof userStore?.getUserById === 'function'
-    ? userStore.getUserById(userId)
-    : null;
-  const username = user?.username;
-
-  if (typeof username !== 'string' || username.trim() === '') {
-    throw createHttpError('User not found', 404);
-  }
-
-  return {
-    username: username.trim(),
-    userEnv: typeof userStore?.getEnvForUser === 'function'
-      ? userStore.getEnvForUser(userId)
-      : {},
-  };
-}
-
-async function buildPresetTestHostEnv(users, userId, tenantId) {
-  const normalizedUserId = requirePositiveInteger(userId, 'userId');
-  const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
-  const { username, userEnv } = await getPresetTestUserContext(users, normalizedUserId);
-  const env = {
-    [W3_NAME_ENV_NAME]: username,
-    [TENANT_ID_ENV_NAME]: String(normalizedTenantId),
-  };
-
-  const userKey = userEnv?.[USER_KEY_ENV_NAME];
-  if (typeof userKey === 'string' && userKey.trim() !== '') {
-    env[USER_KEY_ENV_NAME] = userKey;
-  }
-
-  return env;
-}
-
-async function withTemporaryProcessEnv(env, task) {
-  const previousValues = new Map();
-
-  for (const [key, value] of Object.entries(env)) {
-    previousValues.set(key, {
-      hadValue: Object.hasOwn(process.env, key),
-      value: process.env[key],
-    });
-    process.env[key] = String(value);
-  }
-
-  try {
-    return await task();
-  } finally {
-    for (const [key, previous] of previousValues) {
-      if (previous.hadValue) {
-        process.env[key] = previous.value;
-      } else {
-        delete process.env[key];
-      }
-    }
-  }
 }
 
 export function normalizePresetInput(input = {}) {
@@ -584,7 +519,11 @@ export function createMcpPresetService({
         hasDraftInput: Boolean(normalizedInput),
         config: summarizePresetTestConfig(baseProbeConfig),
       });
-      const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId, tenantId);
+      const probeEnv = await buildMcpTestHostEnv({
+        users,
+        userId: normalizedUserId,
+        tenantId,
+      });
       logPresetTest('env_ready', {
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),

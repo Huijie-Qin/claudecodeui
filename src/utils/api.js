@@ -551,7 +551,7 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     testHookMcpServer: (serverName) =>
-      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/test`, {
+      authenticatedFetch(withTenantParam(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/test`), {
         method: 'POST',
       }),
     uploadHookMcpHelperScript: (serverName, formData) =>

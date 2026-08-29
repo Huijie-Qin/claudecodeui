@@ -194,7 +194,7 @@ test('Hook MCP routes create, update, test, and delete managed Hook servers', as
   assert.equal(helperDeleted.response.status, 200);
   assert.equal(helperDeleted.payload.server.helperScript, null);
 
-  const tested = await requestJson(router, '/hooks/mcp-servers/notify/test', { method: 'POST' });
+  const tested = await requestJson(router, '/hooks/mcp-servers/notify/test?tenantId=7', { method: 'POST' });
   assert.equal(tested.response.status, 200);
   assert.equal(tested.payload.server.lastTestStatus, 'healthy');
   assert.equal(tested.payload.mcpTools[0].name, 'mcp__notify__send');
@@ -219,6 +219,11 @@ test('Hook MCP routes create, update, test, and delete managed Hook servers', as
     userId: 9,
     originalName: 'auth.py',
     content: 'print("secret")\n',
+  });
+  assert.deepEqual(calls[4][1], {
+    serverName: 'notify',
+    userId: 9,
+    tenantId: 7,
   });
 });
 

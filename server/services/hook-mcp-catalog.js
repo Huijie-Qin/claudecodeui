@@ -10,6 +10,10 @@ import {
   normalizeUploadedHelperScript,
 } from './mcp-helper-scripts.js';
 import {
+  buildMcpTestHostEnv,
+  withTemporaryProcessEnv,
+} from './mcp-test-environment.js';
+import {
   probeHttpMcpServer,
   rewriteLocalHttpMcpServerForDocker,
 } from './workspace-tools.js';
@@ -185,6 +189,7 @@ function toPublicServer(server) {
 
 export function createHookMcpCatalogService({
   configStore = appConfigDb,
+  users = null,
   probe = probeHttpMcpServer,
   materializeHelper = materializeMcpHelperConfig,
   fsImpl = fs,
@@ -246,7 +251,7 @@ export function createHookMcpCatalogService({
     return toPublicServer(server);
   }
 
-  async function testServer({ serverName, userId } = {}) {
+  async function testServer({ serverName, userId, tenantId } = {}) {
     const normalizedServerName = normalizeServerName(serverName);
     const servers = parseServers(configStore);
     const index = servers.findIndex((server) => server.name === normalizedServerName);
@@ -255,14 +260,17 @@ export function createHookMcpCatalogService({
     const probeDirectory = await fsImpl.mkdtemp(path.join(temporaryRoot, 'ccui-hook-mcp-probe-'));
     let result;
     try {
-      const config = await materializeHelper({
-        config: { name: normalizedServerName, ...servers[index].config },
-        helperScript: servers[index].helperScript || null,
-        hostDirectory: path.join(probeDirectory, normalizedServerName),
-        commandDirectory: path.join(probeDirectory, normalizedServerName),
-        fsImpl,
+      const probeEnv = await buildMcpTestHostEnv({ users, userId, tenantId });
+      result = await withTemporaryProcessEnv(probeEnv, async () => {
+        const config = await materializeHelper({
+          config: { name: normalizedServerName, ...servers[index].config },
+          helperScript: servers[index].helperScript || null,
+          hostDirectory: path.join(probeDirectory, normalizedServerName),
+          commandDirectory: path.join(probeDirectory, normalizedServerName),
+          fsImpl,
+        });
+        return probe(config);
       });
-      result = await probe(config);
     } finally {
       await fsImpl.rm(probeDirectory, { recursive: true, force: true }).catch(() => {});
     }
