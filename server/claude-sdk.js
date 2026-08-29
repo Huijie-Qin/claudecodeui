@@ -88,6 +88,8 @@ const pendingToolApprovals = new Map();
 const sessionExecutionQueue = createClaudeSessionExecutionQueue();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
+  parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 24 * 60 * 60 * 1000;
 const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
 const STREAM_STALL_PAUSE_POLL_MS = 5000;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
@@ -1919,7 +1921,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
       pendingInteractions.begin(requestId);
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        timeoutMs: requiresInteraction ? INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS : undefined,
         signal: context?.signal,
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
