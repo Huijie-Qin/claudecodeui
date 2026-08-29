@@ -1115,6 +1115,10 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  assert.equal(runtime.hookCommandEnv.USER_KEY, encryptedUserKey);
+  assert.equal(runtime.hookCommandEnv.TENANT_ID, '3');
+  assert.equal(runtime.hookCommandEnv.WORKSPACE_ID, '5');
+  assert.equal(Object.hasOwn(runtime.hookCommandEnv, 'DOCKER_HOST'), false);
   assert.equal(runtime.executionEnv.W3_NAME, 'alice');
   assert.equal(runtime.executionEnv.codehub_email, 'alice@example.com');
   assert.equal(runtime.executionEnv.CODEHUB_EMAIL, 'alice@example.com');

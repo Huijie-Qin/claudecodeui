@@ -48,6 +48,65 @@ test('configured Hooks are not registered for an internal Hook follow-up turn', 
   }, 7), null);
 });
 
+test('Docker Hook headersHelper receives the same per-exec USER_KEY as Claude', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const calls = [];
+  const userKey = 'A'.repeat(64);
+  const runner = claudeSdk.createHookHeadersHelperRunner({
+    mode: 'docker',
+    containerName: 'claude-runtime-1',
+    containerCwd: '/workspace',
+    hookCommandEnv: {
+      USER_KEY: userKey,
+      TENANT_ID: '3',
+    },
+  }, {}, {
+    execFileImpl: async (executable, args, options) => {
+      calls.push({ executable, args, options });
+      return { stdout: '{"Authorization":"ok"}\n', stderr: '' };
+    },
+  });
+
+  await runner({
+    command: 'python3 proxy_auth.py',
+    env: { CLAUDE_CODE_MCP_SERVER_NAME: 'private-mcp' },
+    timeoutMs: 10_000,
+  });
+
+  assert.ok(calls[0].args.includes(`USER_KEY=${userKey}`));
+  assert.ok(calls[0].args.includes('TENANT_ID=3'));
+  assert.ok(calls[0].args.includes('CLAUDE_CODE_MCP_SERVER_NAME=private-mcp'));
+  assert.deepEqual(calls[0].args.slice(-3), ['/bin/sh', '-lc', 'python3 proxy_auth.py']);
+});
+
+test('Docker Hook headersHelper errors never retain USER_KEY or the docker command', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const userKey = 'B'.repeat(64);
+  const runner = claudeSdk.createHookHeadersHelperRunner({
+    mode: 'docker',
+    containerName: 'claude-runtime-1',
+    hookCommandEnv: { USER_KEY: userKey },
+  }, {}, {
+    execFileImpl: async () => {
+      const error = new Error(`Command failed: docker exec --env USER_KEY=${userKey}`);
+      error.code = 1;
+      error.stderr = `auth_key=${userKey} is invalid`;
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    runner({ command: 'python3 proxy_auth.py', timeoutMs: 10_000 }),
+    (error) => {
+      assert.equal(error.code, 'MCP_HEADERS_HELPER_COMMAND_FAILED');
+      assert.equal(error.message.includes(userKey), false);
+      assert.equal(error.message.includes('docker exec'), false);
+      assert.match(error.message, /\[REDACTED:USER_KEY\]/);
+      return true;
+    },
+  );
+});
+
 test('mapCliOptionsToSDK makes normal sessions fully authorized for subagent inheritance', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

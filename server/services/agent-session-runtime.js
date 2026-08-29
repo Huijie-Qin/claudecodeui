@@ -1817,6 +1817,12 @@ export function createAgentSessionRuntimeManager({
         envAllowlist: buildContainerEnvAllowlist(execEnv),
         hostEnv: env,
       }),
+      // Keep the exact guest-facing environment separate from the Docker CLI
+      // host environment. Hook headers helpers run through their own docker
+      // exec and must receive the same per-exec user and tenant variables as
+      // Claude (notably USER_KEY), which are intentionally absent from the
+      // long-lived container's base environment.
+      hookCommandEnv: { ...execEnv },
       executionEnv: buildWrapperHostEnv(buildDockerHostProcessEnv(env), execEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,

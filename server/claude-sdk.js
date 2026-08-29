@@ -60,7 +60,10 @@ import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skill
 import {
   migrateLegacyWorkspaceAgentInstructions,
 } from './services/workspace-agent-instructions.js';
-import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
+import {
+  createClaudeProcessDiagnostics,
+  redactClaudeDiagnosticText,
+} from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { userDb } from './database/db.js';
 import { multitenancyDb } from './database/multitenancy-db.js';
@@ -629,25 +632,100 @@ function toHookRuntimePath(hostPath, workspacePath, runtimeMode) {
   return path.posix.join('/workspace', ...relativePath.split(path.sep));
 }
 
-function createHookHeadersHelperRunner(runtimeContext, runtimeOptions) {
+function normalizeHookCommandEnv(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([name, entry]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && entry != null)
+      .map(([name, entry]) => [name, String(entry)]),
+  );
+}
+
+function buildHeadersHelperRedactionEnv(commandEnv, explicitEnv) {
+  return {
+    ...commandEnv,
+    ...Object.fromEntries(
+      Object.entries(explicitEnv).map(([name, value]) => [`CCUI_HELPER_SECRET_${name}`, value]),
+    ),
+  };
+}
+
+function createHeadersHelperCommandError(error, {
+  env,
+  timeoutMs,
+  diagnostics = null,
+} = {}) {
+  diagnostics?.addRedactionEnv?.(env);
+  const redact = diagnostics?.redactText
+    ? (value) => diagnostics.redactText(value)
+    : (value) => redactClaudeDiagnosticText(value, env);
+  const stderr = redact(String(error?.stderr || '').trim()).slice(-4_000);
+  const timedOut = Boolean(error?.killed) || error?.code === 'ETIMEDOUT';
+  const exitCode = Number.isInteger(error?.code) ? error.code : null;
+  const message = timedOut
+    ? `MCP headersHelper command timed out after ${timeoutMs} ms`
+    : `MCP headersHelper command failed${exitCode === null ? '' : ` with exit code ${exitCode}`}`;
+  const safeError = new Error(stderr ? `${message}: ${stderr}` : message);
+  safeError.code = timedOut ? 'MCP_HEADERS_HELPER_TIMEOUT' : 'MCP_HEADERS_HELPER_COMMAND_FAILED';
+  return safeError;
+}
+
+function createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
+  diagnostics = null,
+  execFileImpl = execFileAsync,
+} = {}) {
   return async ({ command, env = {}, timeoutMs }) => {
+    const explicitEnv = normalizeHookCommandEnv(env);
     if (runtimeContext.mode === 'docker') {
-      const envArgs = Object.entries(env).flatMap(([key, value]) => ['--env', `${key}=${String(value)}`]);
-      return execFileAsync(resolveDockerCliExecutable(process.env), [
-        'exec',
-        ...envArgs,
-        runtimeContext.containerName,
-        '/bin/sh',
-        '-lc',
-        command,
-      ], { timeout: timeoutMs, maxBuffer: 64 * 1024, windowsHide: true });
+      const commandEnv = {
+        ...normalizeHookCommandEnv(runtimeContext.hookCommandEnv),
+        ...explicitEnv,
+      };
+      const redactionEnv = buildHeadersHelperRedactionEnv(commandEnv, explicitEnv);
+      diagnostics?.addRedactionEnv?.(redactionEnv);
+      const envArgs = Object.entries(commandEnv)
+        .flatMap(([key, value]) => ['--env', `${key}=${value}`]);
+      try {
+        return await execFileImpl(resolveDockerCliExecutable(process.env), [
+          'exec',
+          '-w',
+          runtimeContext.containerCwd || '/workspace',
+          '--env',
+          'HOME=/home/cloudcli',
+          ...envArgs,
+          runtimeContext.containerName,
+          '/bin/sh',
+          '-lc',
+          command,
+        ], { timeout: timeoutMs, maxBuffer: 64 * 1024, windowsHide: true });
+      } catch (error) {
+        throw createHeadersHelperCommandError(error, {
+          env: redactionEnv,
+          timeoutMs,
+          diagnostics,
+        });
+      }
     }
-    return execFileAsync('/bin/sh', ['-lc', command], {
-      timeout: timeoutMs,
-      maxBuffer: 64 * 1024,
-      env: { ...(runtimeOptions.executionEnv || process.env), ...env },
-      windowsHide: true,
-    });
+    const commandEnv = {
+      ...(runtimeOptions.executionEnv || process.env),
+      ...explicitEnv,
+    };
+    const redactionEnv = buildHeadersHelperRedactionEnv(commandEnv, explicitEnv);
+    diagnostics?.addRedactionEnv?.(redactionEnv);
+    try {
+      return await execFileImpl('/bin/sh', ['-lc', command], {
+        timeout: timeoutMs,
+        maxBuffer: 64 * 1024,
+        env: commandEnv,
+        windowsHide: true,
+      });
+    } catch (error) {
+      throw createHeadersHelperCommandError(error, {
+        env: redactionEnv,
+        timeoutMs,
+        diagnostics,
+      });
+    }
   };
 }
 
@@ -1580,7 +1658,9 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
               console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
             }
           }
-          const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions);
+          const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
+            diagnostics: processDiagnostics,
+          });
           const hookUser = userDb.getUserById(hookUserId);
           const hasSqlCheckHook = activeHooks.some((hook) => hook.bindingController === 'sql_check');
           let sqlCheckRuleIds = [];
@@ -2828,4 +2908,5 @@ export {
   createPendingInteractionTracker,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,
+  createHookHeadersHelperRunner,
 };
