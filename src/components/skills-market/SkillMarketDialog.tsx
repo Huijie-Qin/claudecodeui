@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandEvents';
 import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
@@ -674,7 +675,9 @@ export default function SkillMarketDialog({
               <SkillFilePreview
                 content={fileContent}
                 filePath={selectedFilePath}
+                files={detail?.files ?? []}
                 isLoading={fileLoading}
+                onSelectFile={selectFile}
               />
             </div>
           </main>
@@ -785,11 +788,15 @@ function CenteredState({ icon, text }: { icon: ReactNode; text: string }) {
 function SkillFilePreview({
   content,
   filePath,
+  files,
   isLoading,
+  onSelectFile,
 }: {
   content: string;
   filePath: string | null;
+  files: MarketSkillFile[];
   isLoading: boolean;
+  onSelectFile: (filePath: string) => void;
 }) {
   const { t } = useTranslation();
 
@@ -807,7 +814,11 @@ function SkillFilePreview({
     return (
       <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-gray-900">
         <div className="prose prose-sm mx-auto max-w-4xl px-8 py-6 dark:prose-invert prose-headings:font-semibold prose-a:text-blue-600 prose-code:text-sm prose-pre:bg-gray-900 prose-img:rounded-lg dark:prose-a:text-blue-400">
-          <MarkdownPreview content={content} />
+          <MarkdownPreview
+            content={content}
+            resolveLink={(href) => resolveSkillFileLink(href, filePath, files)}
+            onResolvedLinkClick={onSelectFile}
+          />
         </div>
       </div>
     );

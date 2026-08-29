@@ -240,6 +240,7 @@ function MainContent({
           projectPath={selectedProject.path}
           isReadOnly={isViewOnlyWorkspace}
           fillSpace={activeTab === 'files'}
+          onOpenFile={handleFileManagerFileOpen}
         />
       </div>
 

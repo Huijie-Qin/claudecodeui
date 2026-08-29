@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
+import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandEvents';
 import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
@@ -1007,7 +1008,9 @@ function SkillDetailView({
                     content={editing ? editContent : file.content ?? ''}
                     editing={editing}
                     file={file}
+                    files={detail.files}
                     onChange={onEditContent}
+                    onSelectFile={onSelectFile}
                     previewMode={previewMode}
                   />
                 </div>
@@ -1020,7 +1023,7 @@ function SkillDetailView({
   );
 }
 
-function FileContentView({ content, editing, file, onChange, previewMode }: { content: string; editing: boolean; file: SkillFile; onChange: (content: string) => void; previewMode: boolean }) {
+function FileContentView({ content, editing, file, files, onChange, onSelectFile, previewMode }: { content: string; editing: boolean; file: SkillFile; files: WorkspaceSkillEntry[]; onChange: (content: string) => void; onSelectFile: (path: string) => void; previewMode: boolean }) {
   if (file.isBinary) {
     if (file.mimeType?.startsWith('image/') && file.contentBase64) {
       return <div className="flex min-h-full items-center justify-center bg-muted/20 p-6"><img src={`data:${file.mimeType};base64,${file.contentBase64}`} alt={file.path} className="max-h-full max-w-full rounded-md border border-border object-contain" /></div>;
@@ -1035,7 +1038,15 @@ function FileContentView({ content, editing, file, onChange, previewMode }: { co
     );
   }
   if (!editing && previewMode && isMarkdownFile(file.path)) {
-    return <div className="prose prose-sm mx-auto max-w-4xl px-8 py-6 dark:prose-invert"><MarkdownPreview content={content} /></div>;
+    return (
+      <div className="prose prose-sm mx-auto max-w-4xl px-8 py-6 dark:prose-invert">
+        <MarkdownPreview
+          content={content}
+          resolveLink={(href) => resolveSkillFileLink(href, file.path, files)}
+          onResolvedLinkClick={onSelectFile}
+        />
+      </div>
+    );
   }
   if (editing) {
     return <CodeMirror value={content} onChange={onChange} height="100%" style={{ height: '100%', fontSize: '13px' }} basicSetup={{ lineNumbers: true, foldGutter: true, bracketMatching: true, closeBrackets: true }} />;

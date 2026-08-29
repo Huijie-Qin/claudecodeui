@@ -71,6 +71,7 @@ import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useUiPreferences } from '../../hooks/useUiPreferences';
 import type { LLMProvider, Project, ProjectScheduledTask, ProjectSession } from '../../types/app';
 import { api } from '../../utils/api';
+import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import {
   CLAUDE_MODELS,
   CODEX_MODELS,
@@ -1630,7 +1631,12 @@ function WorkspaceSkillDetail({
                   {fileLoading ? <DataAgentLoading label="正在加载文件…" /> : fileError ? (
                     <DataAgentEmpty title="文件加载失败" description={fileError} action={selectedFilePath ? <button className="da-secondary-button" onClick={() => void loadFile(selectedFilePath)}>重试</button> : undefined} />
                   ) : file ? (
-                    <WorkspaceSkillFilePreview file={file} previewMode={previewMode} />
+                    <WorkspaceSkillFilePreview
+                      file={file}
+                      files={skillFiles}
+                      onSelectFile={(filePath) => void loadFile(filePath)}
+                      previewMode={previewMode}
+                    />
                   ) : <div className="da-skill-file-empty"><FileText size={20} /><span>从左侧选择文件查看内容</span></div>}
                 </div>
               </div>
@@ -1642,7 +1648,7 @@ function WorkspaceSkillDetail({
   );
 }
 
-function WorkspaceSkillFilePreview({ file, previewMode }: { file: WorkspaceSkillFile; previewMode: boolean }) {
+function WorkspaceSkillFilePreview({ file, files, onSelectFile, previewMode }: { file: WorkspaceSkillFile; files: WorkspaceSkillEntry[]; onSelectFile: (filePath: string) => void; previewMode: boolean }) {
   if (file.isBinary) {
     if (file.mimeType?.startsWith('image/') && file.contentBase64) {
       return <div className="da-skill-image-preview"><img src={`data:${file.mimeType};base64,${file.contentBase64}`} alt={file.path} /></div>;
@@ -1652,7 +1658,15 @@ function WorkspaceSkillFilePreview({ file, previewMode }: { file: WorkspaceSkill
 
   const content = file.content ?? '';
   if (previewMode && isSkillMarkdownFile(file.path)) {
-    return <div className="da-skill-markdown-preview prose prose-sm dark:prose-invert"><MarkdownPreview content={content} /></div>;
+    return (
+      <div className="da-skill-markdown-preview prose prose-sm dark:prose-invert">
+        <MarkdownPreview
+          content={content}
+          resolveLink={(href) => resolveSkillFileLink(href, file.path, files)}
+          onResolvedLinkClick={onSelectFile}
+        />
+      </div>
+    );
   }
   return <pre className="da-skill-source-preview"><code>{content}</code></pre>;
 }
@@ -1972,6 +1986,7 @@ function DataAgentExistingWorkspacePanel({
               projectPath={selectedProject.path}
               isReadOnly={selectedProject.accessRole === 'view'}
               fillSpace
+              onOpenFile={(path) => editor.handleFileOpen(path, null, 'files')}
             />
           )}
         </div>
@@ -2077,6 +2092,7 @@ function DataAgentConversation({
           onToggleEditorExpand={editor.handleToggleEditorExpand}
           projectPath={selectedProject.path}
           isReadOnly={selectedProject.accessRole === 'view'}
+          onOpenFile={(path) => editor.handleFileOpen(path, null, 'files')}
         />
       </div>
     </section>

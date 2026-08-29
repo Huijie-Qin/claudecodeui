@@ -206,6 +206,7 @@ export default function DataAgentFileTabs({
                   isActive={active}
                   onDirtyChange={(dirty) => manager.setTabDirty(tab.id, dirty)}
                   headerVariant="tabbed"
+                  onOpenFile={manager.openFile}
                 />
               )}
             </div>

@@ -5,10 +5,13 @@ import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+
 import MarkdownCodeBlock from './MarkdownCodeBlock';
 
 type MarkdownPreviewProps = {
   content: string;
+  resolveLink?: (href: string) => string | null;
+  onResolvedLinkClick?: (resolvedLink: string) => void;
 };
 
 type ParsedFrontMatter = {
@@ -95,11 +98,6 @@ const markdownPreviewComponents: Components = {
       {children}
     </blockquote>
   ),
-  a: ({ href, children }) => (
-    <a href={href} className="text-blue-600 hover:underline dark:text-blue-400" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto">
       <table className="min-w-full border-collapse border border-gray-200 dark:border-gray-700">{children}</table>
@@ -117,10 +115,33 @@ const markdownPreviewComponents: Components = {
 const remarkGfmOptions = { singleTilde: false };
 const remarkGfmPlugin: [typeof remarkGfm, typeof remarkGfmOptions] = [remarkGfm, remarkGfmOptions];
 
-export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
+export default function MarkdownPreview({ content, resolveLink, onResolvedLinkClick }: MarkdownPreviewProps) {
   const remarkPlugins = useMemo(() => [remarkGfmPlugin, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
   const parsed = useMemo(() => extractFrontMatter(content), [content]);
+  const components = useMemo<Components>(() => ({
+    ...markdownPreviewComponents,
+    a: ({ href, children }) => {
+      const isPageFragment = href?.startsWith('#') === true;
+      const resolvedLink = href ? resolveLink?.(href) : null;
+      const isHandledLink = resolvedLink != null && onResolvedLinkClick != null;
+      return (
+        <a
+          href={href}
+          className="text-blue-600 hover:underline dark:text-blue-400"
+          target={isPageFragment || isHandledLink ? undefined : '_blank'}
+          rel={isPageFragment || isHandledLink ? undefined : 'noopener noreferrer'}
+          onClick={(event) => {
+            if (!isHandledLink) return;
+            event.preventDefault();
+            onResolvedLinkClick(resolvedLink);
+          }}
+        >
+          {children}
+        </a>
+      );
+    },
+  }), [onResolvedLinkClick, resolveLink]);
 
   return (
     <>
@@ -128,7 +149,7 @@ export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
-        components={markdownPreviewComponents}
+        components={components}
       >
         {parsed.frontMatter ? parsed.body : content}
       </ReactMarkdown>

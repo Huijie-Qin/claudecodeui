@@ -11,6 +11,7 @@ import type { CodeEditorFile } from '../types/types';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
+import { resolveWorkspaceSkillFileLink } from '../../../utils/skillMarkdownLinks';
 
 import CodeEditorFooter from './subcomponents/CodeEditorFooter';
 import CodeEditorHeader from './subcomponents/CodeEditorHeader';
@@ -34,6 +35,7 @@ type CodeEditorProps = {
   isActive?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   headerVariant?: 'default' | 'tabbed';
+  onOpenFile?: (filePath: string) => void;
 };
 
 const AUTO_SAVE_DELAY_MS = 2000;
@@ -50,6 +52,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   isActive = true,
   onDirtyChange,
   headerVariant = 'default',
+  onOpenFile,
 }: CodeEditorProps, ref) {
   const { t } = useTranslation('codeEditor');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -158,6 +161,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   }, [file.name]);
 
   const previewMode = isMarkdownFile ? 'markdown' : isHtmlFile ? 'html' : null;
+
+  const resolveMarkdownLink = useCallback(
+    (href: string) => resolveWorkspaceSkillFileLink(href, file.path),
+    [file.path],
+  );
 
   const minimapExtension = useMemo(
     () => (
@@ -355,6 +363,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
               fontSize={fontSize}
               showLineNumbers={showLineNumbers}
               extensions={extensions}
+              resolveMarkdownLink={resolveMarkdownLink}
+              onOpenMarkdownLink={onOpenFile}
             />
           </div>
 
