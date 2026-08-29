@@ -202,6 +202,55 @@ function normalizeEqualityCondition(value, name, { optional = false } = {}) {
   return { field, equals: value.equals };
 }
 
+function legacyMcpLoopTerminationScript(successWhen, failureWhen) {
+  const conditions = [
+    { outcome: 'success', condition: successWhen },
+    { outcome: 'failed', condition: failureWhen },
+  ].filter(({ condition }) => condition);
+  const lines = [
+    'import json',
+    '',
+    'async def run(event, ccui):',
+    '    result = event.get("result")',
+  ];
+  for (const { outcome, condition } of conditions) {
+    lines.push('    value = result');
+    lines.push(`    for segment in ${JSON.stringify(condition.field.split('.'))}:`);
+    lines.push('        if not isinstance(value, dict) or segment not in value:');
+    lines.push('            value = None');
+    lines.push('            break');
+    lines.push('        value = value[segment]');
+    lines.push(`    if value == json.loads(${JSON.stringify(JSON.stringify(condition.equals))}):`);
+    lines.push(`        return {"output": {"status": "${outcome}"}}`);
+  }
+  lines.push('    return {"output": {"status": "running"}}');
+  return `${lines.join('\n')}\n`;
+}
+
+function normalizeMcpLoopTerminationScript(config, name) {
+  if (typeof config.terminationScript === 'string') {
+    if (!config.terminationScript.trim()) {
+      throw createHttpError(`${name} is required`);
+    }
+    if (Buffer.byteLength(config.terminationScript, 'utf8') > MAX_SCRIPT_BYTES) {
+      throw createHttpError(`${name} is too large`);
+    }
+    return config.terminationScript;
+  }
+
+  // Convert the first-release equality fields when an existing Hook is read or
+  // saved. This keeps published loops working while moving all new edits to the
+  // Python-only termination contract.
+  if (config.successWhen == null) throw createHttpError(`${name} is required`);
+  const successWhen = normalizeEqualityCondition(config.successWhen, `${name}.legacySuccessWhen`);
+  const failureWhen = normalizeEqualityCondition(
+    config.failureWhen,
+    `${name}.legacyFailureWhen`,
+    { optional: true },
+  );
+  return legacyMcpLoopTerminationScript(successWhen, failureWhen);
+}
+
 function normalizeEventName(value) {
   const eventName = String(value || '');
   if (!EVENT_SET.has(eventName)) {
@@ -368,14 +417,9 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
           pollIntervalMs,
           perCallTimeoutMs,
           maxWaitMs,
-          successWhen: normalizeEqualityCondition(
-            config.successWhen,
-            `postActions[${index}].config.successWhen`,
-          ),
-          failureWhen: normalizeEqualityCondition(
-            config.failureWhen,
-            `postActions[${index}].config.failureWhen`,
-            { optional: true },
+          terminationScript: normalizeMcpLoopTerminationScript(
+            config,
+            `postActions[${index}].config.terminationScript`,
           ),
           waitingLabel: requireString(
             typeof config.waitingLabel === 'string' ? config.waitingLabel : '',

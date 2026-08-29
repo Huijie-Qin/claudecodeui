@@ -13,6 +13,11 @@ import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
 
+const MCP_LOOP_TERMINATION_SCRIPT = `async def run(event, ccui):
+    status = (event.get("result") or {}).get("status")
+    return {"output": {"status": status if status in ("success", "failed") else "running"}}
+`;
+
 function createFixture({ hookMcpServers = [], hookMcpTools = [] } = {}) {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');
@@ -192,7 +197,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   }
 });
 
-test('mcp_loop_run repeats the Matcher MCP with original inputs and equality conditions', () => {
+test('mcp_loop_run repeats the Matcher MCP with original inputs and a Python termination script', () => {
   const statusTool = {
     name: 'mcp__loopdemo__get_task_status',
     mcpServerId: 'loop-demo-server',
@@ -223,8 +228,7 @@ test('mcp_loop_run repeats the Matcher MCP with original inputs and equality con
           inputs: {
             task_id: { source: 'reference', path: 'event.tool_input.task_id' },
           },
-          successWhen: { field: 'status', equals: 'success' },
-          failureWhen: { field: 'status', equals: 'failed' },
+          terminationScript: MCP_LOOP_TERMINATION_SCRIPT,
         },
       }],
       claudeResponse: { bindings: {} },
@@ -233,6 +237,7 @@ test('mcp_loop_run repeats the Matcher MCP with original inputs and equality con
     assert.equal(created.postActions[0].config.pollIntervalMs, 10_000);
     assert.equal(created.postActions[0].config.perCallTimeoutMs, 15_000);
     assert.equal(created.postActions[0].config.maxWaitMs, 2_700_000);
+    assert.equal(created.postActions[0].config.terminationScript, MCP_LOOP_TERMINATION_SCRIPT);
     assert.equal(Object.hasOwn(created.postActions[0].config, 'toolName'), false);
     assert.equal(Object.hasOwn(created.postActions[0].config, 'mcpServerId'), false);
     assert.equal(Object.hasOwn(created.postActions[0].config, 'inputs'), false);
@@ -271,6 +276,47 @@ test('mcp_loop_run repeats the Matcher MCP with original inputs and equality con
         ],
       },
     }), /at most one mcp_loop_run/);
+  } finally {
+    database.close();
+  }
+});
+
+test('legacy mcp_loop_run equality conditions are converted to a Python termination script', () => {
+  const statusTool = {
+    name: 'mcp__loopdemo__get_task_status',
+    mcpServerId: 'loop-demo-server',
+    serverName: 'loopdemo',
+    toolName: 'get_task_status',
+    inputSchema: { type: 'object', properties: {} },
+  };
+  const { database, service } = createFixture({
+    hookMcpServers: [{ id: 'loop-demo-server', name: 'loopdemo' }],
+    hookMcpTools: [statusTool],
+  });
+  try {
+    const created = service.createHook({
+      userId: 1,
+      input: publishableHook({
+        eventName: 'PostToolUse',
+        matcher: { value: statusTool.name },
+        extensionLogic: null,
+        postActions: [{
+          id: 'legacy-loop',
+          type: 'mcp_loop_run',
+          position: 0,
+          config: {
+            successWhen: { field: 'data.state', equals: 3 },
+            failureWhen: { field: 'data.state', equals: -1 },
+          },
+        }],
+      }),
+    });
+    const script = created.postActions[0].config.terminationScript;
+    assert.match(script, /async def run\(event, ccui\)/);
+    assert.match(script, /\["data","state"\]/);
+    assert.match(script, /"status": "success"/);
+    assert.match(script, /"status": "failed"/);
+    assert.equal(Object.hasOwn(created.postActions[0].config, 'successWhen'), false);
   } finally {
     database.close();
   }

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS mcp_loop_jobs (
   mcp_server_id TEXT NOT NULL,
   tool_name TEXT NOT NULL,
   inputs_json TEXT NOT NULL DEFAULT '{}',
+  termination_script TEXT NOT NULL DEFAULT '',
   success_when_json TEXT NOT NULL,
   failure_when_json TEXT,
   waiting_label TEXT NOT NULL DEFAULT '',

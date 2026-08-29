@@ -12,6 +12,15 @@ import {
 } from './mcp-loop-demo-task-service.mjs';
 import { createMcpLoopDemoMcpServer } from './mcp-loop-demo-mcp.mjs';
 
+const TERMINATION_SCRIPT = `async def run(event, ccui):
+    status = (event.get("result") or {}).get("status")
+    if status == "success":
+        return {"output": {"status": "success"}}
+    if status == "failed":
+        return {"output": {"status": "failed"}}
+    return {"output": {"status": "running"}}
+`;
+
 function listen(server) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -130,8 +139,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
           pollIntervalMs: 30,
           perCallTimeoutMs: 2_000,
           maxWaitMs: 3_000,
-          successWhen: { field: 'status', equals: 'success' },
-          failureWhen: { field: 'status', equals: 'failed' },
+          terminationScript: TERMINATION_SCRIPT,
           waitingLabel: '等待 20 分钟模拟任务',
         },
       }],
@@ -205,7 +213,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
   }
 });
 
-test('mcp_loop_run terminates as failed when the configured failure value is returned', async () => {
+test('mcp_loop_run terminates as failed when the Python script returns failed', async () => {
   const { createMcpLoopService } = await import('../server/services/mcp-loop-service.js');
   const database = new Database(':memory:');
   let currentTime = 1_000;
@@ -228,8 +236,7 @@ test('mcp_loop_run terminates as failed when the configured failure value is ret
           pollIntervalMs: 10,
           perCallTimeoutMs: 1_000,
           maxWaitMs: 10_000,
-          successWhen: { field: 'status', equals: 'success' },
-          failureWhen: { field: 'status', equals: 'failed' },
+          terminationScript: TERMINATION_SCRIPT,
         },
       },
       executionId: 'failed-execution',

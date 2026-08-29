@@ -476,22 +476,16 @@ function MpcActionEditor({
   );
 }
 
-function parseEqualityValue(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
+const DEFAULT_MCP_LOOP_TERMINATION_SCRIPT = `async def run(event, ccui):
+    result = event.get("result") or {}
+    status = result.get("status")
 
-function equalityValueText(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return '';
-}
+    if status == "success":
+        return {"output": {"status": "success"}}
+    if status == "failed":
+        return {"output": {"status": "failed"}}
+    return {"output": {"status": "running"}}
+`;
 
 function McpLoopActionEditor({
   action,
@@ -503,8 +497,9 @@ function McpLoopActionEditor({
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
-  const successWhen = asRecord(config.successWhen);
-  const failureWhen = config.failureWhen == null ? null : asRecord(config.failureWhen);
+  const terminationScript = typeof config.terminationScript === 'string'
+    ? config.terminationScript
+    : DEFAULT_MCP_LOOP_TERMINATION_SCRIPT;
 
   return (
     <div className="space-y-5">
@@ -561,27 +556,44 @@ function McpLoopActionEditor({
       </div>
 
       <div className="space-y-3">
-        <div className="text-xs font-semibold text-foreground">终止条件</div>
-        <div className="grid gap-3 rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3 dark:border-emerald-900/70 dark:bg-emerald-950/20 md:grid-cols-[90px_1fr_110px_1fr]">
-          <div className="self-end pb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">成功</div>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">返回字段</span><Input value={String(successWhen.field || 'status')} onChange={(event) => onChange({ ...config, successWhen: { ...successWhen, field: event.target.value } })} className="h-9 rounded-lg font-mono text-xs" /></label>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">判断</span><Input value="等于" disabled className="h-9 rounded-lg text-xs" /></label>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">目标值</span><Input value={equalityValueText(successWhen.equals ?? 'success')} onChange={(event) => onChange({ ...config, successWhen: { ...successWhen, equals: parseEqualityValue(event.target.value) } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+        <div className="flex items-center gap-2">
+          <div className="text-xs font-semibold text-foreground">Python 终止脚本</div>
+          <Badge variant="outline">每轮执行</Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-7 text-xs"
+            onClick={() => onChange({ ...config, terminationScript: DEFAULT_MCP_LOOP_TERMINATION_SCRIPT })}
+          >
+            <RefreshCcw className="h-3.5 w-3.5" />
+            重置示例
+          </Button>
         </div>
-
-        <div className={`grid gap-3 rounded-xl border p-3 md:grid-cols-[90px_1fr_110px_1fr] ${failureWhen ? 'border-red-200/80 bg-red-50/50 dark:border-red-900/70 dark:bg-red-950/20' : 'border-border bg-muted/10 opacity-60'}`}>
-          <label className="flex items-center gap-2 self-end pb-2 text-xs font-semibold text-red-700 dark:text-red-300">
-            <input type="checkbox" checked={Boolean(failureWhen)} onChange={(event) => onChange({ ...config, failureWhen: event.target.checked ? { field: String(successWhen.field || 'status'), equals: 'failed' } : null })} />
-            失败
-          </label>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">返回字段</span><Input disabled={!failureWhen} value={String(failureWhen?.field || successWhen.field || 'status')} onChange={(event) => onChange({ ...config, failureWhen: { ...failureWhen, field: event.target.value } })} className="h-9 rounded-lg font-mono text-xs" /></label>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">判断</span><Input value="等于" disabled className="h-9 rounded-lg text-xs" /></label>
-          <label className="space-y-1.5"><span className="text-[10px] text-muted-foreground">目标值</span><Input disabled={!failureWhen} value={equalityValueText(failureWhen?.equals ?? 'failed')} onChange={(event) => onChange({ ...config, failureWhen: { ...failureWhen, equals: parseEqualityValue(event.target.value) } })} className="h-9 rounded-lg font-mono text-xs" /></label>
+        <div className="overflow-hidden rounded-xl border border-border bg-slate-950">
+          <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-slate-300">
+            <TerminalSquare className="h-4 w-4 text-sky-300" />
+            <span>termination.py</span>
+          </div>
+          <textarea
+            value={terminationScript}
+            onChange={(event) => onChange({ ...config, terminationScript: event.target.value })}
+            spellCheck={false}
+            className="min-h-[260px] w-full resize-y border-0 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none"
+          />
+        </div>
+        <div className="grid gap-2 text-[11px] leading-5 text-muted-foreground md:grid-cols-2">
+          <div className="rounded-xl border border-border bg-muted/10 px-3 py-2">
+            输入：<code>event.result</code>、<code>event.initial_result</code>、<code>event.inputs</code>、<code>event.attempt_count</code>、<code>event.elapsed_ms</code>
+          </div>
+          <div className="rounded-xl border border-border bg-muted/10 px-3 py-2">
+            返回：<code>{'{"output":{"status":"running | success | failed"}}'}</code>
+          </div>
         </div>
       </div>
 
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。它会重复调用 Matcher 命中的 MCP 工具；命中终止条件后，最后一次结果将返回给 Agent 并恢复会话。
+        <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。它会重复调用 Matcher 命中的 MCP 工具；Python 脚本返回 <code>success</code> 或 <code>failed</code> 后，最后一次结果将返回给 Agent 并恢复会话。
       </div>
     </div>
   );
@@ -971,8 +983,7 @@ function PostActionsEditor({
               pollIntervalMs: 10000,
               perCallTimeoutMs: 15000,
               maxWaitMs: 2700000,
-              successWhen: { field: 'status', equals: 'success' },
-              failureWhen: { field: 'status', equals: 'failed' },
+              terminationScript: DEFAULT_MCP_LOOP_TERMINATION_SCRIPT,
               waitingLabel: '等待任务完成',
             }
         : type === 'write_record'

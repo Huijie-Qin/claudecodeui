@@ -6,6 +6,7 @@ import { MCP_LOOP_JOB_SCHEMA_SQL } from '../database/hook-config-schema.js';
 
 import { callHookMcpTool, normalizeToolOutput } from './hook-mcp-client.js';
 import { hookMcpCatalogService } from './hook-mcp-catalog.js';
+import { executeHookScript } from './hook-script-executor.js';
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 1_000;
 const DEFAULT_MAX_CONCURRENT = 20;
@@ -52,6 +53,7 @@ function mapJob(row) {
     mcpServerId: row.mcp_server_id,
     toolName: row.tool_name,
     inputs: parseJson(row.inputs_json, {}),
+    terminationScript: row.termination_script || '',
     successWhen: parseJson(row.success_when_json, null),
     failureWhen: parseJson(row.failure_when_json, null),
     waitingLabel: row.waiting_label || '',
@@ -113,6 +115,15 @@ export function evaluateMcpLoopResult(result, { successWhen, failureWhen } = {})
   if (conditionMatches(result, successWhen)) return 'succeeded';
   if (conditionMatches(result, failureWhen)) return 'failed';
   return 'running';
+}
+
+function normalizeTerminationScriptOutcome(value) {
+  const output = isPlainObject(value?.output) ? value.output : value;
+  const status = typeof output === 'string' ? output : output?.status;
+  if (status === 'running' || status === 'continue') return 'running';
+  if (status === 'success' || status === 'succeeded') return 'succeeded';
+  if (status === 'failure' || status === 'failed') return 'failed';
+  throw new Error('MCP loop termination script must return output.status as running, success, or failed');
 }
 
 export function buildMcpLoopReplacement(job, completedAtMs = Date.now()) {
@@ -193,11 +204,17 @@ export function createMcpLoopService({
   schedulerIntervalMs = DEFAULT_SCHEDULER_INTERVAL_MS,
   maxConcurrent = DEFAULT_MAX_CONCURRENT,
   maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS,
+  scriptExecutor = executeHookScript,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
   logger = console,
 } = {}) {
   database.exec(MCP_LOOP_JOB_SCHEMA_SQL);
+  const jobColumns = new Set(database.prepare('PRAGMA table_info(mcp_loop_jobs)').all()
+    .map((column) => column.name));
+  if (!jobColumns.has('termination_script')) {
+    database.exec("ALTER TABLE mcp_loop_jobs ADD COLUMN termination_script TEXT NOT NULL DEFAULT ''");
+  }
   let timer = null;
   let runningCount = 0;
   let handlers = {
@@ -212,7 +229,7 @@ export function createMcpLoopService({
       id, hook_id, hook_execution_id, action_id,
       tenant_id, workspace_id, user_id, session_id, tool_use_id,
       workspace_root, mcp_server_id, tool_name, inputs_json,
-      success_when_json, failure_when_json, waiting_label,
+      termination_script, success_when_json, failure_when_json, waiting_label,
       poll_interval_ms, per_call_timeout_ms, max_wait_ms,
       status, attempt_count, consecutive_error_count,
       initial_result_json, last_result_json, error_message,
@@ -221,7 +238,7 @@ export function createMcpLoopService({
       @id, @hookId, @hookExecutionId, @actionId,
       @tenantId, @workspaceId, @userId, @sessionId, @toolUseId,
       @workspaceRoot, @mcpServerId, @toolName, @inputsJson,
-      @successWhenJson, @failureWhenJson, @waitingLabel,
+      @terminationScript, @successWhenJson, @failureWhenJson, @waitingLabel,
       @pollIntervalMs, @perCallTimeoutMs, @maxWaitMs,
       'queued', 0, 0,
       @initialResultJson, @initialResultJson, NULL,
@@ -302,6 +319,38 @@ export function createMcpLoopService({
     return terminalJob;
   }
 
+  async function evaluateTermination(job, result, attemptCount) {
+    if (!job.terminationScript.trim()) {
+      // Active jobs created by the equality-based first release remain
+      // resumable after an upgrade.
+      return evaluateMcpLoopResult(result, job);
+    }
+    const scriptResult = await scriptExecutor({
+      hookId: job.hookId,
+      language: 'python',
+      code: job.terminationScript,
+      event: {
+        result,
+        initial_result: job.initialResult,
+        inputs: job.inputs,
+        attempt_count: attemptCount,
+        elapsed_ms: Math.max(0, now() - job.startedAtMs),
+      },
+      env: {
+        userId: job.userId,
+        tenantId: job.tenantId,
+        workspaceId: job.workspaceId,
+        sessionId: job.sessionId,
+      },
+      workspaceRoot: job.workspaceRoot,
+      onLog: async (message, data) => {
+        logger.info?.(`[McpLoop:${job.id}] ${message}`, data ?? '');
+        return { message, data };
+      },
+    });
+    return normalizeTerminationScriptOutcome(scriptResult);
+  }
+
   async function runClaimedJob(job) {
     const currentTime = now();
     if (currentTime - job.startedAtMs >= job.maxWaitMs) {
@@ -313,7 +362,7 @@ export function createMcpLoopService({
     const attemptCount = job.attemptCount + 1;
     try {
       const result = normalizeMcpLoopResult(await callTarget(job));
-      const outcome = evaluateMcpLoopResult(result, job);
+      const outcome = await evaluateTermination(job, result, attemptCount);
       if (outcome !== 'running') {
         return transitionTerminal(job, outcome, {
           result,
@@ -398,7 +447,21 @@ export function createMcpLoopService({
       : null;
     const targetIdentity = configuredIdentity || await resolveTargetIdentity({ hook, action });
     const normalizedInitialResult = normalizeMcpLoopResult(initialResult);
-    const initialOutcome = evaluateMcpLoopResult(normalizedInitialResult, config);
+    const initialEvaluationJob = {
+      hookId: hook.id,
+      userId: Number(userId) || null,
+      tenantId: Number(tenantId) || null,
+      workspaceId: Number(workspaceId) || null,
+      sessionId: String(sessionId),
+      workspaceRoot: String(workspaceRoot),
+      inputs: isPlainObject(inputs) ? inputs : {},
+      initialResult: normalizedInitialResult,
+      terminationScript: typeof config.terminationScript === 'string' ? config.terminationScript : '',
+      successWhen: config.successWhen,
+      failureWhen: config.failureWhen,
+      startedAtMs: now(),
+    };
+    const initialOutcome = await evaluateTermination(initialEvaluationJob, normalizedInitialResult, 0);
     if (initialOutcome !== 'running') {
       return {
         scheduled: false,
@@ -423,7 +486,8 @@ export function createMcpLoopService({
       mcpServerId: String(targetIdentity.mcpServerId),
       toolName: String(targetIdentity.toolName),
       inputsJson: serializeJson(isPlainObject(inputs) ? inputs : {}),
-      successWhenJson: serializeJson(config.successWhen),
+      terminationScript: String(config.terminationScript || ''),
+      successWhenJson: serializeJson(config.successWhen || {}),
       failureWhenJson: serializeJson(config.failureWhen),
       waitingLabel: String(config.waitingLabel || hook.name || '等待 MCP 循环完成').slice(0, 200),
       pollIntervalMs: toFiniteNumber(config.pollIntervalMs),
