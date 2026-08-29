@@ -200,12 +200,18 @@ async function materializeSkill({ workspaceRoot, skill }) {
 
 function resolveActionMcpServerIds(hook, catalog) {
   const serverIds = new Set();
+  const tools = catalog.listToolResources();
   for (const action of hook?.postActions || []) {
     if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type)) continue;
+    if (action.type === 'mcp_loop_run') {
+      const matchedTool = tools.find((candidate) => candidate.name === hook?.matcher?.value);
+      if (matchedTool?.mcpServerId) serverIds.add(matchedTool.mcpServerId);
+      continue;
+    }
     let serverId = String(action.config?.mcpServerId || '').trim();
     if (!serverId) {
       const toolName = String(action.config?.toolName || '');
-      const resource = catalog.listToolResources().find((candidate) => candidate.name === toolName);
+      const resource = tools.find((candidate) => candidate.name === toolName);
       serverId = resource?.mcpServerId || '';
     }
     if (serverId) serverIds.add(serverId);

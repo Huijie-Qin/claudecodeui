@@ -30,6 +30,7 @@ import {
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  findMatchedTool,
   getClaudeOutputFields,
   inferNativeMatcherMode,
   scriptApiName,
@@ -494,53 +495,38 @@ function equalityValueText(value: unknown): string {
 
 function McpLoopActionEditor({
   action,
-  resources,
-  references,
+  matchedTool,
   onChange,
 }: {
   action: HookPostAction;
-  resources: HookResources;
-  references: FieldChoice[];
+  matchedTool?: HookResources['mcpTools'][number];
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
-  const toolName = typeof config.toolName === 'string' ? config.toolName : '';
-  const tool = resources.mcpTools.find((item) => item.name === toolName);
-  const inputs = asRecord(config.inputs);
-  const properties = tool?.inputSchema?.properties || {};
-  const required = new Set(tool?.inputSchema?.required || []);
   const successWhen = asRecord(config.successWhen);
   const failureWhen = config.failureWhen == null ? null : asRecord(config.failureWhen);
 
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="space-y-1.5">
-          <span className="text-xs font-medium text-foreground">目标 MCP 工具</span>
-          <HookSelect
-            value={toolName}
-            options={resources.mcpTools.map((item) => ({
-              value: item.name,
-              label: `${item.serverDisplayName} · ${item.toolName}`,
-              description: item.description || item.name,
-            }))}
-            onChange={(nextToolName) => {
-              const nextTool = resources.mcpTools.find((item) => item.name === nextToolName);
-              const nextInputs = Object.fromEntries(Object.entries(nextTool?.inputSchema?.properties || {}).map(([key, property]) => {
-                const type = propertyType(property);
-                return [key, { source: 'literal', value: literalDefault(type, property) }];
-              }));
-              onChange({
-                ...config,
-                toolName: nextToolName,
-                mcpServerId: nextTool?.mcpServerId || '',
-                inputs: nextInputs,
-              });
-            }}
-            placeholder={resources.mcpTools.length ? '选择要循环调用的 MCP 工具' : '暂无可调用的 MCP 工具'}
-            ariaLabel="选择循环调用的 MCP 工具"
-          />
-        </label>
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">循环目标</span>
+          {matchedTool ? (
+            <div className="flex min-h-10 items-center rounded-xl border border-border bg-muted/20 px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-medium text-foreground">
+                  {matchedTool.serverDisplayName} · {matchedTool.toolName}
+                </div>
+                <code className="block truncate text-[10px] text-muted-foreground">{matchedTool.name}</code>
+              </div>
+              <Badge variant="outline" className="ml-auto shrink-0">来自 Matcher</Badge>
+            </div>
+          ) : (
+            <div className="min-h-10 rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive">
+              Matcher 必须完整匹配一个已发布的 MCP 工具。
+            </div>
+          )}
+        </div>
         <label className="space-y-1.5">
           <span className="text-xs font-medium text-foreground">页面等待提示</span>
           <Input
@@ -552,37 +538,9 @@ function McpLoopActionEditor({
         </label>
       </div>
 
-      {tool && Object.keys(properties).length ? (
-        <div className="space-y-2">
-          <div>
-            <div className="text-xs font-semibold text-foreground">固定调用参数</div>
-            <div className="mt-0.5 text-[10px] text-muted-foreground">Hook 触发时解析一次，之后每轮调用都使用相同参数。</div>
-          </div>
-          {Object.entries(properties).map(([key, property]) => {
-            const type = propertyType(property);
-            const rawBinding = asRecord(inputs[key]);
-            const binding: HookValueBinding = rawBinding.source === 'reference'
-              ? { source: 'reference', path: String(rawBinding.path || '') }
-              : { source: 'literal', value: Object.prototype.hasOwnProperty.call(rawBinding, 'value') ? rawBinding.value : literalDefault(type, property) };
-            return (
-              <div key={key} className="space-y-2 rounded-xl border border-border bg-muted/10 p-3">
-                <div>
-                  <span className="text-xs font-medium text-foreground">{key}</span>
-                  {required.has(key) ? <span className="ml-1 text-destructive">*</span> : null}
-                  <span className="ml-2 text-[10px] text-muted-foreground">{property.description || property.type || 'string'}</span>
-                </div>
-                <BindingEditor
-                  binding={binding}
-                  type={type}
-                  property={property}
-                  references={references}
-                  onChange={(nextBinding) => onChange({ ...config, inputs: { ...inputs, [key]: nextBinding } })}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
+      <div className="rounded-xl border border-border bg-muted/10 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        每轮自动复用首次触发 Hook 的完整 MCP 调用参数，无需再次配置参数映射。
+      </div>
 
       <div className="space-y-2">
         <div className="text-xs font-semibold text-foreground">循环策略</div>
@@ -623,7 +581,7 @@ function McpLoopActionEditor({
       </div>
 
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。创建循环任务后，当前 Agent 会暂停；命中终止条件后，最后一次结果将替换原工具结果并恢复会话。
+        <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。它会重复调用 Matcher 命中的 MCP 工具；命中终止条件后，最后一次结果将返回给 Agent 并恢复会话。
       </div>
     </div>
   );
@@ -995,7 +953,10 @@ function PostActionsEditor({
   onChange: (actions: HookPostAction[]) => void;
 }) {
   const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const matchedTool = findMatchedTool(resources, hook.matcher.value, hook.matcher.mode);
+  const matchedMcpTool = resources.mcpTools.find((tool) => tool.name === matchedTool?.name);
   const canAddMcpLoop = hook.eventName === 'PostToolUse'
+    && Boolean(matchedMcpTool)
     && !hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const addAction = (type: HookPostAction['type']) => {
@@ -1007,9 +968,6 @@ function PostActionsEditor({
         ? { toolName: '', condition: null, inputs: {} }
         : type === 'mcp_loop_run'
           ? {
-              toolName: '',
-              mcpServerId: '',
-              inputs: {},
               pollIntervalMs: 10000,
               perCallTimeoutMs: 15000,
               maxWaitMs: 2700000,
@@ -1043,7 +1001,7 @@ function PostActionsEditor({
           <Database className="h-4 w-4" />
           记录数据
         </Button>
-        <Tooltip content={canAddMcpLoop ? '暂停当前 Agent，在后台用固定参数循环调用 MCP，命中终止条件后恢复。' : '循环调用仅适用于工具调用后，且一个 Hook 最多配置一次。'}>
+        <Tooltip content={canAddMcpLoop ? '暂停当前 Agent，复用首次调用参数循环调用 Matcher 命中的 MCP，命中终止条件后恢复。' : '请先让 PostToolUse Matcher 完整匹配一个已发布的 MCP 工具；一个 Hook 最多配置一次循环。'}>
           <span>
             <Button
               type="button"
@@ -1143,8 +1101,7 @@ function PostActionsEditor({
               ) : action.type === 'mcp_loop_run' ? (
                 <McpLoopActionEditor
                   action={action}
-                  resources={resources}
-                  references={availableReferences}
+                  matchedTool={matchedMcpTool}
                   onChange={(config) => updateAction(index, config)}
                 />
               ) : action.type === 'write_record' ? (

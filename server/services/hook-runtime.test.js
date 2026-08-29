@@ -306,6 +306,61 @@ test('call_mcp_tool condition skips the tool before resolving inputs', async () 
   }
 });
 
+test('mcp_loop_run reuses the complete input from the Matcher-triggering tool call', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));
+  try {
+    const hook = {
+      id: 'hook-1',
+      name: 'Wait for status',
+      version: 1,
+      eventName: 'PostToolUse',
+      matcher: { value: 'mcp__tasks__get_task_status' },
+      extensionLogic: null,
+      postActions: [{
+        id: 'wait-for-status',
+        type: 'mcp_loop_run',
+        config: {
+          pollIntervalMs: 10_000,
+          perCallTimeoutMs: 15_000,
+          maxWaitMs: 300_000,
+          successWhen: { field: 'status', equals: 'success' },
+          failureWhen: { field: 'status', equals: 'failed' },
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    let loopRequest;
+    const runtime = createHookRuntimeSession({
+      hooks: [hook],
+      userId: 1,
+      workspaceRoot,
+      database,
+      enqueueMcpLoop: async (request) => {
+        loopRequest = request;
+        return { scheduled: true, jobId: 'loop-job' };
+      },
+    });
+
+    await runtime.executeHook(hook, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-loop',
+      tool_name: 'mcp__tasks__get_task_status',
+      tool_use_id: 'tool-loop',
+      tool_input: { task_id: 'task-123', options: { verbose: true } },
+      tool_response: { status: 'running' },
+    });
+
+    assert.deepEqual(loopRequest.input, {
+      task_id: 'task-123',
+      options: { verbose: true },
+    });
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('SQL Check Hook sends the effective workspace rule IDs to its MCP tool', async () => {
   const database = createDatabase();
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-runtime-'));

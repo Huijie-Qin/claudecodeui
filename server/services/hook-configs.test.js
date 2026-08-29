@@ -192,7 +192,7 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   }
 });
 
-test('mcp_loop_run is a final PostToolUse-only action with fixed inputs and equality conditions', () => {
+test('mcp_loop_run repeats the Matcher MCP with original inputs and equality conditions', () => {
   const statusTool = {
     name: 'mcp__loopdemo__get_task_status',
     mcpServerId: 'loop-demo-server',
@@ -233,11 +233,19 @@ test('mcp_loop_run is a final PostToolUse-only action with fixed inputs and equa
     assert.equal(created.postActions[0].config.pollIntervalMs, 10_000);
     assert.equal(created.postActions[0].config.perCallTimeoutMs, 15_000);
     assert.equal(created.postActions[0].config.maxWaitMs, 2_700_000);
-    assert.deepEqual(created.postActions[0].config.inputs.task_id, {
-      source: 'reference',
-      path: 'event.tool_input.task_id',
-    });
+    assert.equal(Object.hasOwn(created.postActions[0].config, 'toolName'), false);
+    assert.equal(Object.hasOwn(created.postActions[0].config, 'mcpServerId'), false);
+    assert.equal(Object.hasOwn(created.postActions[0].config, 'inputs'), false);
     assert.equal(service.publishHook({ hookId: created.id, userId: 1 }).status, 'published');
+
+    const unmatched = service.createHook({
+      userId: 1,
+      input: { ...input, name: 'Unmatched loop', matcher: { value: '^mcp__loopdemo__.*$' } },
+    });
+    assert.throws(
+      () => service.publishHook({ hookId: unmatched.id, userId: 1 }),
+      /requires a Matcher that fully identifies an available MCP tool/,
+    );
 
     assert.throws(() => service.createHook({
       userId: 1,

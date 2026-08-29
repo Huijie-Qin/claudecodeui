@@ -345,12 +345,6 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
       };
     }
     if (action.type === 'mcp_loop_run') {
-      const rawInputs = isPlainObject(config.inputs) ? config.inputs : {};
-      const inputs = {};
-      for (const [key, binding] of Object.entries(rawInputs)) {
-        const inputName = requireString(key, `postActions[${index}].config.inputs key`, { max: 200 });
-        inputs[inputName] = normalizeBinding(binding, `postActions[${index}].config.inputs.${inputName}`);
-      }
       const pollIntervalMs = requireInteger(
         config.pollIntervalMs ?? 10_000,
         `postActions[${index}].config.pollIntervalMs`,
@@ -371,17 +365,6 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
         type: 'mcp_loop_run',
         position: index,
         config: {
-          mcpServerId: requireString(
-            typeof config.mcpServerId === 'string' ? config.mcpServerId : '',
-            `postActions[${index}].config.mcpServerId`,
-            { max: 120, allowEmpty: true },
-          ),
-          toolName: requireString(
-            typeof config.toolName === 'string' ? config.toolName : '',
-            `postActions[${index}].config.toolName`,
-            { max: 300, allowEmpty: true },
-          ),
-          inputs,
           pollIntervalMs,
           perCallTimeoutMs,
           maxWaitMs,
@@ -537,9 +520,11 @@ function validateHookReferences(hook) {
   const precedingActionIds = new Set();
   for (const action of hook.postActions) {
     if (['call_mcp_tool', 'mcp_loop_run', 'write_record'].includes(action.type)) {
-      const bindings = action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run'
+      const bindings = action.type === 'call_mcp_tool'
         ? [action.config.condition, ...Object.values(action.config.inputs)].filter(Boolean)
-        : [action.config.condition, ...Object.values(action.config.fields)].filter(Boolean);
+        : action.type === 'mcp_loop_run'
+          ? []
+          : [action.config.condition, ...Object.values(action.config.fields)].filter(Boolean);
       for (const binding of bindings) {
         for (const path of bindingReferences(binding)) {
           if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
@@ -792,7 +777,7 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
   const mcpTools = new Map(hookMcpCatalog.listToolResources().map((tool) => [tool.name, tool]));
   const skills = new Map((validatedSkills || []).map((skill) => [String(skill.skillId || ''), skill]));
   for (const action of hook.postActions) {
-    if (action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run') {
+    if (action.type === 'call_mcp_tool') {
       if (!action.config.toolName.startsWith('mcp__')) {
         throw createHttpError(`Post action ${action.id} must select an MCP tool`);
       }
@@ -805,6 +790,11 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
         if (!Object.prototype.hasOwnProperty.call(action.config.inputs, requiredName)) {
           throw createHttpError(`MCP tool ${action.config.toolName} requires input ${requiredName}`);
         }
+      }
+    } else if (action.type === 'mcp_loop_run') {
+      const tool = mcpTools.get(hook.matcher?.value);
+      if (hook.eventName !== 'PostToolUse' || !tool) {
+        throw createHttpError(`Post action ${action.id} requires a Matcher that fully identifies an available MCP tool`);
       }
     } else if (action.type === 'write_record') {
       if (!action.config.recordType) {
@@ -902,7 +892,7 @@ export function createHookConfigService({
       ? hookMcpCatalog.listToolResources()
       : [];
     normalized.postActions = normalized.postActions.map((action) => {
-      if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type) || action.config.mcpServerId) return action;
+      if (action.type !== 'call_mcp_tool' || action.config.mcpServerId) return action;
       const tool = tools.find((candidate) => candidate.name === action.config.toolName);
       return tool
         ? { ...action, config: { ...action.config, mcpServerId: tool.mcpServerId } }

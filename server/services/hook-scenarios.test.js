@@ -771,6 +771,7 @@ async function executePublishedMatrixHook({
   enqueueSkillRecovery,
   enqueueAgentMessage = enqueueSkillRecovery,
   enqueueMcpLoop = async () => ({ scheduled: true, jobId: 'matrix-loop', status: 'queued' }),
+  eventOverrides = {},
 }) {
   const runtime = createHookRuntimeSession({
     hooks: [hook],
@@ -791,8 +792,8 @@ async function executePublishedMatrixHook({
   });
   const compiled = runtime.hooks[hook.eventName];
   assert.equal(compiled.length, 1, `${hook.name} must compile one SDK callback`);
-  assert.equal(compiled[0].matcher, MATCHERS[hook.eventName] || undefined);
-  const event = createEventInput(hook.eventName, workspaceRoot);
+  assert.equal(compiled[0].matcher, hook.matcher?.value || undefined);
+  const event = { ...createEventInput(hook.eventName, workspaceRoot), ...eventOverrides };
   const output = await compiled[0].hooks[0](
     event,
     event.tool_use_id,
@@ -945,21 +946,13 @@ test('every Hook event publishes and executes every behavior allowed by its capa
 
         if (actionType === 'mcp_loop_run') {
           let loopRequest;
-          const inputs = {
-            event_name: { source: 'reference', path: 'event.hook_event_name' },
-            payload: { source: 'literal', value: 'fixed-loop-payload' },
-            user_id: { source: 'reference', path: 'ccui.env.userId' },
-            literal: { source: 'literal', value: true },
-          };
           const hook = publishBoundMatrixHook(service, eventName, 'action-mcp-loop', {
+            matcher: { value: 'mcp__matrix_server__echo' },
             postActions: [{
               id: 'mcp-loop',
               type: 'mcp_loop_run',
               position: 0,
               config: {
-                mcpServerId: matrixMcpServerId,
-                toolName: 'mcp__matrix_server__echo',
-                inputs,
                 pollIntervalMs: 10,
                 perCallTimeoutMs: 1_000,
                 maxWaitMs: 10_000,
@@ -978,6 +971,15 @@ test('every Hook event publishes and executes every behavior allowed by its capa
             enqueueMcpLoop: async (request) => {
               loopRequest = request;
               return { scheduled: true, jobId: 'matrix-loop', status: 'queued' };
+            },
+            eventOverrides: {
+              tool_name: 'mcp__matrix_server__echo',
+              tool_input: {
+                event_name: 'PostToolUse',
+                payload: 'fixed-loop-payload',
+                user_id: 2,
+                literal: true,
+              },
             },
           });
           assert.deepEqual(output, {});

@@ -317,12 +317,7 @@ async function executePostActions({
       continue;
     }
     if (action.type === 'mcp_loop_run') {
-      const input = {};
-      for (const [key, binding] of Object.entries(action.config?.inputs || {})) {
-        const value = resolveBinding(binding, references);
-        if (value === UNRESOLVED) throw new Error(`Post action ${action.id} input ${key} is unresolved`);
-        input[key] = value;
-      }
+      const input = isPlainObject(event?.tool_input) ? event.tool_input : {};
       const schedulingResult = await context.enqueueMcpLoop({
         hook,
         action,

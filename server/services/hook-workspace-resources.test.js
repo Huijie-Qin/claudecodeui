@@ -135,6 +135,22 @@ test('Hook Skill MCP selections are ignored; only MCP call actions materialize s
   }, catalog), []);
 });
 
+test('MCP loop materializes the server selected by the Hook Matcher', () => {
+  const catalog = {
+    listServers: () => [],
+    getServerById: () => null,
+    listToolResources: () => [{
+      name: 'mcp__tasks__get_task_status',
+      mcpServerId: 'tasks-server',
+    }],
+  };
+  const service = createHookWorkspaceResourcesService({ hookMcpCatalog: catalog });
+  assert.deepEqual(service.resolveActionMcpServerIds({
+    matcher: { value: 'mcp__tasks__get_task_status' },
+    postActions: [{ type: 'mcp_loop_run', config: {} }],
+  }, catalog), ['tasks-server']);
+});
+
 test('Hook Skill materialization rejects symbolic links', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-resources-link-'));
   const skillSource = path.join(root, 'skill');

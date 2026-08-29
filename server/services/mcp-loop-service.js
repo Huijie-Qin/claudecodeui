@@ -171,9 +171,23 @@ async function callDefaultTarget(job) {
   });
 }
 
+function resolveDefaultTargetIdentity({ hook }) {
+  const resource = hookMcpCatalogService.listToolResources().find((tool) => (
+    tool.name === hook?.matcher?.value
+  ));
+  if (!resource) {
+    throw new Error(`MCP loop Matcher ${hook?.matcher?.value || '(empty)'} is unavailable`);
+  }
+  return {
+    mcpServerId: resource.mcpServerId,
+    toolName: resource.name,
+  };
+}
+
 export function createMcpLoopService({
   database = db,
   callTarget = callDefaultTarget,
+  resolveTargetIdentity = resolveDefaultTargetIdentity,
   now = () => Date.now(),
   createId = () => crypto.randomUUID(),
   schedulerIntervalMs = DEFAULT_SCHEDULER_INTERVAL_MS,
@@ -379,6 +393,10 @@ export function createMcpLoopService({
     initialResult,
   }) {
     const config = action.config || {};
+    const configuredIdentity = config.mcpServerId && config.toolName
+      ? { mcpServerId: config.mcpServerId, toolName: config.toolName }
+      : null;
+    const targetIdentity = configuredIdentity || await resolveTargetIdentity({ hook, action });
     const normalizedInitialResult = normalizeMcpLoopResult(initialResult);
     const initialOutcome = evaluateMcpLoopResult(normalizedInitialResult, config);
     if (initialOutcome !== 'running') {
@@ -402,8 +420,8 @@ export function createMcpLoopService({
       sessionId: String(sessionId),
       toolUseId: String(toolUseId),
       workspaceRoot: String(workspaceRoot),
-      mcpServerId: String(config.mcpServerId),
-      toolName: String(config.toolName),
+      mcpServerId: String(targetIdentity.mcpServerId),
+      toolName: String(targetIdentity.toolName),
       inputsJson: serializeJson(isPlainObject(inputs) ? inputs : {}),
       successWhenJson: serializeJson(config.successWhen),
       failureWhenJson: serializeJson(config.failureWhen),

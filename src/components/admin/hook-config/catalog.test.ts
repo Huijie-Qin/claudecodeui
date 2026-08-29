@@ -94,6 +94,32 @@ test('reference choices include environment, script, and action outputs', () => 
   assert.equal(choices.find((field) => field.path === 'script.output.riskLevel')?.label, 'riskLevel');
 });
 
+test('an MCP Matcher exposes its tool input schema even when native matcher syntax is regex', () => {
+  const mcpResources: HookResources = {
+    ...resources,
+    mcpTools: [{
+      name: 'mcp__tasks__get_task_status',
+      mcpServerId: 'tasks-server',
+      serverName: 'tasks',
+      serverDisplayName: 'Tasks',
+      runtimeAlias: 'ccui-hook-tasks',
+      toolName: 'get_task_status',
+      description: '',
+      inputSchema: {
+        type: 'object',
+        properties: { task_id: { type: 'string', description: 'Task ID' } },
+      },
+      tenantCodes: [],
+    }],
+  };
+  const choices = buildFieldChoices({
+    ...draft,
+    eventName: 'PostToolUse',
+    matcher: { mode: 'regex', value: 'mcp__tasks__get_task_status' },
+  }, mcpResources);
+  assert.ok(choices.some((field) => field.path === 'event.tool_input.task_id'));
+});
+
 test('business data stays accessible for configured writers or historical records', () => {
   assert.equal(shouldShowBusinessData({ postActions: [], hasDataRecords: false }), false);
   assert.equal(shouldShowBusinessData({

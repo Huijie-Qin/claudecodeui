@@ -661,9 +661,9 @@ function normalizePropertyType(type?: string): FieldType {
 export function findMatchedTool(
   resources: HookResources,
   matcherValue?: string,
-  matcherMode: 'exact' | 'regex' = 'exact',
+  _matcherMode: 'exact' | 'regex' = 'exact',
 ): HookToolResource | undefined {
-  if (!matcherValue || matcherMode !== 'exact') return undefined;
+  if (!matcherValue) return undefined;
   return [...resources.builtinTools, ...resources.mcpTools].find((tool) => tool.name === matcherValue);
 }
 

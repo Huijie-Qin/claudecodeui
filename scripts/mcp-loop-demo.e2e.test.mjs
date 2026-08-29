@@ -97,6 +97,10 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
     const loopService = createMcpLoopService({
       database,
       schedulerIntervalMs: 10,
+      resolveTargetIdentity: ({ hook }) => ({
+        mcpServerId: 'loop-demo-server',
+        toolName: hook.matcher.value,
+      }),
       callTarget: (job) => callHookMcpTool({
         qualifiedToolName: qualifiedStatusTool,
         input: job.inputs,
@@ -123,11 +127,6 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
         type: 'mcp_loop_run',
         position: 0,
         config: {
-          mcpServerId: 'loop-demo-server',
-          toolName: qualifiedStatusTool,
-          inputs: {
-            task_id: { source: 'reference', path: 'event.tool_input.task_id' },
-          },
           pollIntervalMs: 30,
           perCallTimeoutMs: 2_000,
           maxWaitMs: 3_000,
