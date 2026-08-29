@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import Database from 'better-sqlite3';
 
@@ -20,6 +22,14 @@ const TERMINATION_SCRIPT = `async def run(event, ccui):
         return {"output": {"status": "failed"}}
     return {"output": {"status": "running"}}
 `;
+const execFileAsync = promisify(execFile);
+const serverModuleRoot = process.env.CCUI_TEST_DIST_SERVER === '1'
+  ? '../dist-server/server'
+  : '../server';
+
+function importServerModule(relativePath) {
+  return import(`${serverModuleRoot}/${relativePath}`);
+}
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -54,10 +64,10 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
     { createHookRuntimeSession },
     { buildMcpLoopReplacement, createMcpLoopService },
   ] = await Promise.all([
-    import('../server/database/hook-config-schema.js'),
-    import('../server/services/hook-mcp-client.js'),
-    import('../server/services/hook-runtime.js'),
-    import('../server/services/mcp-loop-service.js'),
+    importServerModule('database/hook-config-schema.js'),
+    importServerModule('services/hook-mcp-client.js'),
+    importServerModule('services/hook-runtime.js'),
+    importServerModule('services/mcp-loop-service.js'),
   ]);
 
   // Automated E2E uses the same service with an injected short duration. The
@@ -65,10 +75,38 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
   const taskServer = createMcpLoopDemoTaskServer({ durationMs: 300 });
   const taskAddress = await listen(taskServer);
   const taskServiceUrl = `http://127.0.0.1:${taskAddress.port}`;
-  const mcpServer = createMcpLoopDemoMcpServer({ taskServiceUrl });
+  const helperToken = 'loop-private-token';
+  const mcpServer = createMcpLoopDemoMcpServer({
+    taskServiceUrl,
+    requiredAuthorization: `Bearer ${helperToken}`,
+  });
   const mcpAddress = await listen(mcpServer);
   const mcpUrl = `http://127.0.0.1:${mcpAddress.port}/mcp`;
-  const mcpServers = { loopdemo: { type: 'http', url: mcpUrl } };
+  const helperPath = path.join(testRoot, 'headers-helper.py');
+  await fs.writeFile(helperPath, [
+    'import json',
+    'import os',
+    'token = os.environ["MCP_LOOP_AUTH_TOKEN"]',
+    'print(json.dumps({"Authorization": f"Bearer {token}"}))',
+    '',
+  ].join('\n'));
+  const headersHelperRunner = ({ command, env, timeoutMs }) => execFileAsync(
+    '/bin/sh',
+    ['-lc', command],
+    {
+      timeout: timeoutMs,
+      maxBuffer: 64 * 1024,
+      env: { ...process.env, ...env },
+    },
+  );
+  const mcpServers = {
+    loopdemo: {
+      type: 'http',
+      url: mcpUrl,
+      headersHelper: `python3 '${helperPath.replaceAll("'", "'\\''")}'`,
+      helperEnv: { MCP_LOOP_AUTH_TOKEN: helperToken },
+    },
+  };
   const qualifiedStatusTool = 'mcp__loopdemo__get_task_status';
 
   const database = new Database(':memory:');
@@ -89,6 +127,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
       mcpServers,
       cwd: testRoot,
       timeoutMs: 2_000,
+      headersHelperRunner,
     });
     assert.equal(submitted.status, 'running');
     assert.ok(submitted.task_id);
@@ -99,6 +138,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
       mcpServers,
       cwd: testRoot,
       timeoutMs: 2_000,
+      headersHelperRunner,
     });
     assert.equal(initialStatus.status, 'running');
 
@@ -110,12 +150,13 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
         mcpServerId: 'loop-demo-server',
         toolName: hook.matcher.value,
       }),
-      callTarget: (job) => callHookMcpTool({
+      callTarget: (job, runtimeContext) => callHookMcpTool({
         qualifiedToolName: qualifiedStatusTool,
         input: job.inputs,
         mcpServers,
         cwd: testRoot,
         timeoutMs: job.perCallTimeoutMs,
+        headersHelperRunner: runtimeContext.headersHelperRunner,
       }),
     });
     loopService.setHandlers({
@@ -163,6 +204,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
           workspaceRoot: testRoot,
           inputs: input,
           initialResult: event.tool_response,
+          runtimeContext: { headersHelperRunner },
         });
         scheduledJob = scheduled.job;
         return { scheduled: scheduled.scheduled, jobId: scheduled.job?.id, status: scheduled.job?.status };
@@ -214,7 +256,7 @@ test('PostToolUse mcp_loop_run polls get_task_status and replaces running with s
 });
 
 test('mcp_loop_run terminates as failed when the Python script returns failed', async () => {
-  const { createMcpLoopService } = await import('../server/services/mcp-loop-service.js');
+  const { createMcpLoopService } = await importServerModule('services/mcp-loop-service.js');
   const database = new Database(':memory:');
   let currentTime = 1_000;
   try {

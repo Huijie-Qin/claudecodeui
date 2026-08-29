@@ -150,7 +150,7 @@ export function buildMcpLoopReplacement(job, completedAtMs = Date.now()) {
   };
 }
 
-async function resolveDefaultTarget(job) {
+async function resolveDefaultTarget(job, runtimeContext = null) {
   const resource = hookMcpCatalogService.listToolResources().find((tool) => (
     tool.mcpServerId === job.mcpServerId
     && (tool.name === job.toolName || tool.toolName === job.toolName)
@@ -160,11 +160,16 @@ async function resolveDefaultTarget(job) {
   }
 
   const mcpRoot = path.join(job.workspaceRoot, '.cloudcli', 'hook-config', 'mcp');
+  const runtimeMode = runtimeContext?.mode === 'docker' ? 'docker' : 'local';
   const runtime = await hookMcpCatalogService.getRuntimeConfig({
     serverIds: [job.mcpServerId],
     hostDirectory: mcpRoot,
-    commandDirectory: mcpRoot,
-    runtimeMode: 'local',
+    commandDirectory: runtimeMode === 'docker'
+      ? (runtimeContext.commandMcpRoot || '/workspace/.cloudcli/hook-config/mcp')
+      : mcpRoot,
+    runtimeMode,
+    runtimeOwner: runtimeContext?.runtimeOwner || null,
+    includePrivateHelperEnv: true,
   });
   return {
     qualifiedToolName: `mcp__${resource.runtimeAlias}__${resource.toolName}`,
@@ -173,12 +178,13 @@ async function resolveDefaultTarget(job) {
   };
 }
 
-async function callDefaultTarget(job) {
-  const target = await resolveDefaultTarget(job);
+async function callDefaultTarget(job, runtimeContext = null) {
+  const target = await resolveDefaultTarget(job, runtimeContext);
   return callHookMcpTool({
     ...target,
     input: job.inputs,
     timeoutMs: job.perCallTimeoutMs,
+    headersHelperRunner: runtimeContext?.headersHelperRunner || null,
   });
 }
 
@@ -217,6 +223,7 @@ export function createMcpLoopService({
   }
   let timer = null;
   let runningCount = 0;
+  const runtimeContexts = new Map();
   let handlers = {
     onStarted: async () => {},
     onProgress: async () => {},
@@ -316,6 +323,7 @@ export function createMcpLoopService({
     const terminalJob = getJob(job.id);
     if (update.changes !== 1) return terminalJob;
     await notify('onTerminal', terminalJob);
+    runtimeContexts.delete(job.id);
     return terminalJob;
   }
 
@@ -361,7 +369,7 @@ export function createMcpLoopService({
 
     const attemptCount = job.attemptCount + 1;
     try {
-      const result = normalizeMcpLoopResult(await callTarget(job));
+      const result = normalizeMcpLoopResult(await callTarget(job, runtimeContexts.get(job.id) || null));
       const outcome = await evaluateTermination(job, result, attemptCount);
       if (outcome !== 'running') {
         return transitionTerminal(job, outcome, {
@@ -440,6 +448,7 @@ export function createMcpLoopService({
     workspaceRoot,
     inputs,
     initialResult,
+    runtimeContext = null,
   }) {
     const config = action.config || {};
     const configuredIdentity = config.mcpServerId && config.toolName
@@ -503,6 +512,9 @@ export function createMcpLoopService({
       WHERE hook_execution_id = ? AND action_id = ?
     `).get(executionId, action.id);
     const mapped = mapJob(job);
+    if (mapped && runtimeContext && typeof runtimeContext === 'object') {
+      runtimeContexts.set(mapped.id, runtimeContext);
+    }
     await notify('onStarted', mapped);
     return { scheduled: true, job: mapped };
   }
@@ -513,6 +525,7 @@ export function createMcpLoopService({
     if (result.changes !== 1) return { success: false, job: getJob(jobId) };
     const job = getJob(jobId);
     await notify('onTerminal', job);
+    runtimeContexts.delete(String(jobId));
     return { success: true, job };
   }
 

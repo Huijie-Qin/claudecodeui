@@ -1630,6 +1630,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
                 runtimeOwner: runtimeContext.mode === 'docker'
                   ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
                   : null,
+                includePrivateHelperEnv: true,
               });
               return {
                 qualifiedToolName: `mcp__${selectedTool.runtimeAlias}__${selectedTool.toolName}`,
@@ -1782,6 +1783,16 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
                 workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
                 inputs: input,
                 initialResult: event?.tool_response,
+                runtimeContext: {
+                  mode: runtimeContext.mode,
+                  commandMcpRoot: runtimeContext.mode === 'docker'
+                    ? '/workspace/.cloudcli/hook-config/mcp'
+                    : null,
+                  runtimeOwner: runtimeContext.mode === 'docker'
+                    ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+                    : null,
+                  headersHelperRunner,
+                },
               });
               if (!scheduled.scheduled) {
                 return {

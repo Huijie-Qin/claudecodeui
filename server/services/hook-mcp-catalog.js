@@ -346,6 +346,7 @@ export function createHookMcpCatalogService({
     commandDirectory = hostDirectory,
     runtimeMode = 'local',
     runtimeOwner = null,
+    includePrivateHelperEnv = false,
   } = {}) {
     const requestedIds = Array.isArray(serverIds) ? new Set(serverIds.map(String)) : null;
     const servers = parseServers(configStore).filter((server) => !requestedIds || requestedIds.has(server.id));
@@ -383,6 +384,9 @@ export function createHookMcpCatalogService({
         runtimeOwner,
         fsImpl,
       });
+      if (includePrivateHelperEnv && server.config?.helperEnv) {
+        config.helperEnv = { ...server.config.helperEnv };
+      }
       const runtimeAlias = buildHookMcpRuntimeAlias(server.id);
       runtimeConfigs.push([runtimeAlias, config]);
     }

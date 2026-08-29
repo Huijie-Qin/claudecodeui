@@ -167,6 +167,15 @@ test('Hook MCP catalog keeps helper scripts private and materializes runtime-sco
     );
     assert.equal(Object.hasOwn(runtimeServer, 'helperEnv'), false);
 
+    const directRuntime = await service.getRuntimeConfig({
+      hostDirectory,
+      commandDirectory: hostDirectory,
+      includePrivateHelperEnv: true,
+    });
+    assert.deepEqual(directRuntime.mcpServers[uploaded.runtimeAlias].helperEnv, {
+      ROOT_SECRET: 'private-key',
+    });
+
     const dockerHostDirectory = path.join(tempRoot, 'docker-runtime', 'mcp-helpers');
     const dockerRuntime = await service.getRuntimeConfig({
       hostDirectory: dockerHostDirectory,

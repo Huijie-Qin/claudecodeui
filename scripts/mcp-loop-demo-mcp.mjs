@@ -70,7 +70,10 @@ async function requestTaskService(taskServiceUrl, pathname, init) {
   return payload;
 }
 
-export function createMcpLoopDemoMcpServer({ taskServiceUrl = DEFAULT_TASK_SERVICE_URL } = {}) {
+export function createMcpLoopDemoMcpServer({
+  taskServiceUrl = DEFAULT_TASK_SERVICE_URL,
+  requiredAuthorization = null,
+} = {}) {
   const calls = [];
   const server = http.createServer(async (request, response) => {
     const pathname = new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname;
@@ -89,6 +92,10 @@ export function createMcpLoopDemoMcpServer({ taskServiceUrl = DEFAULT_TASK_SERVI
     }
     if (request.method !== 'POST') {
       sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+    if (requiredAuthorization && request.headers.authorization !== requiredAuthorization) {
+      sendJson(response, 401, { error: 'unauthorized' });
       return;
     }
 

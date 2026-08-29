@@ -38,7 +38,11 @@ async function resolveHeaders(serverName, config, headersHelperRunner) {
     : {};
   const helper = typeof config?.headersHelper === 'string' ? config.headersHelper.trim() : '';
   if (!helper) return headers;
+  const privateHelperEnvironment = isPlainObject(config?.helperEnv)
+    ? Object.fromEntries(Object.entries(config.helperEnv).map(([key, value]) => [key, String(value)]))
+    : {};
   const helperEnvironment = {
+    ...privateHelperEnvironment,
     CLAUDE_CODE_MCP_SERVER_NAME: serverName,
     CLAUDE_CODE_MCP_SERVER_URL: config.url || '',
   };
