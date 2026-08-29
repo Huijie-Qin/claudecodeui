@@ -36,6 +36,8 @@ type FileTreeNodeProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onMove?: (item: FileTreeNodeType) => void;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
@@ -112,6 +114,8 @@ export default function FileTreeNode({
   onCopyPath,
   onDownload,
   onMove,
+  onMoveSelection,
+  onDeleteSelection,
   onUpload,
   onUploadFolder,
   onRefresh,
@@ -303,6 +307,9 @@ export default function FileTreeNode({
       {hasContextMenu ? (
         <FileContextMenu
           item={item}
+          isMultiSelection={selectedPaths.size > 1 && isSelected}
+          onMoveSelection={onMoveSelection}
+          onDeleteSelection={onDeleteSelection}
           onRename={onRename}
           onDelete={onDelete}
           onNewFile={onNewFile}
@@ -376,6 +383,8 @@ export default function FileTreeNode({
               onCopyPath={onCopyPath}
               onDownload={onDownload}
               onMove={onMove}
+              onMoveSelection={onMoveSelection}
+              onDeleteSelection={onDeleteSelection}
               onUpload={onUpload}
               onUploadFolder={onUploadFolder}
               onRefresh={onRefresh}

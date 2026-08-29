@@ -456,6 +456,11 @@ export default function FileTree({
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
           onMove={isReadOnly ? undefined : operations.handleStartMove}
+          onMoveSelection={isReadOnly ? undefined : () => {
+            setBatchTargetDirectory('/workspace');
+            setBatchMoveOpen(true);
+          }}
+          onDeleteSelection={isReadOnly ? undefined : () => setBatchDeleteOpen(true)}
           onUpload={isReadOnly ? undefined : upload.openFilePicker}
           onUploadFolder={isReadOnly ? undefined : upload.openFolderPicker}
           onRefresh={refreshWorkspaceFiles}

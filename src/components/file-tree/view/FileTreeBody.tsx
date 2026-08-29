@@ -35,6 +35,8 @@ type FileTreeBodyProps = {
   onCopyPath?: (item: FileTreeNode) => void;
   onDownload?: (item: FileTreeNode) => void;
   onMove?: (item: FileTreeNode) => void;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
@@ -84,6 +86,8 @@ export default function FileTreeBody({
   onCopyPath,
   onDownload,
   onMove,
+  onMoveSelection,
+  onDeleteSelection,
   onUpload,
   onUploadFolder,
   onRefresh,
@@ -146,6 +150,8 @@ export default function FileTreeBody({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onMove={onMove}
+          onMoveSelection={onMoveSelection}
+          onDeleteSelection={onDeleteSelection}
           onUpload={onUpload}
           onUploadFolder={onUploadFolder}
           onRefresh={onRefresh}

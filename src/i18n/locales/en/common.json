@@ -439,6 +439,7 @@
       "quotaExceeded": "Upload size {{uploadSize}} MB exceeds remaining workspace space {{remainingSize}} MB. Please contact the administrator for expansion."
     },
     "context": {
+      "move": "Move",
       "rename": "Rename",
       "delete": "Delete",
       "copyPath": "Copy Path",
