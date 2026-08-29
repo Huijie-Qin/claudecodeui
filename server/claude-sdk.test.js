@@ -91,7 +91,7 @@ test('buildToolInteractionContext preserves subagent and tool identities for UI 
   assert.equal(claudeSdk.buildToolInteractionContext({}), undefined);
 });
 
-test('Claude turn completion waits for authoritative idle while a background task is active', async () => {
+test('Claude turn completion waits until an active background task is terminal', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
 
@@ -106,16 +106,16 @@ test('Claude turn completion waits for authoritative idle while a background tas
     subtype: 'task_notification',
     task_id: 'agent-1',
     status: 'completed',
-  }), null);
+  }), 'complete');
   assert.equal(lifecycle.observe({
     type: 'system',
     subtype: 'session_state_changed',
     state: 'idle',
-  }), 'complete');
+  }), null);
   assert.equal(lifecycle.flush(), false);
 });
 
-test('Claude turn completion still waits for idle after a fast task already became terminal', async () => {
+test('Claude turn completion does not require idle after a task is already terminal', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
 
@@ -131,11 +131,85 @@ test('Claude turn completion still waits for idle after a fast task already beca
     status: 'completed',
   });
 
-  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.finishResult(0), true);
   assert.equal(lifecycle.observe({
     type: 'system',
     subtype: 'session_state_changed',
     state: 'idle',
+  }), null);
+});
+
+test('Claude turn completion waits for every concurrent background task without requiring idle', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  for (const taskId of ['agent-a', 'agent-b']) {
+    lifecycle.observe({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+    });
+  }
+
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-a',
+    status: 'completed',
+  }), null);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-b',
+    status: 'completed',
+  }), 'complete');
+  assert.equal(lifecycle.flush(), false);
+});
+
+test('Claude turn completion handles concurrent tasks that finish before the result', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  for (const taskId of ['agent-a', 'agent-b']) {
+    lifecycle.observe({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+    });
+  }
+  for (const taskId of ['agent-a', 'agent-b']) {
+    assert.equal(lifecycle.observe({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: taskId,
+      status: 'completed',
+    }), null);
+  }
+
+  assert.equal(lifecycle.finishResult(0), true);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), null);
+});
+
+test('Claude turn completion accepts a terminal task update after the result', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-updated',
+  });
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_updated',
+    task_id: 'agent-updated',
+    patch: { status: 'completed' },
   }), 'complete');
 });
 

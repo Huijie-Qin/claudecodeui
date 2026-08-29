@@ -917,6 +917,12 @@ function createClaudeTurnLifecycleTracker() {
       : null
   );
 
+  const completeWaitingTurnIfTasksSettled = () => {
+    if (!isWaitingForIdle || activeTaskIds.size > 0) return null;
+    isWaitingForIdle = false;
+    return 'complete';
+  };
+
   return {
     beginTurn() {
       // A newly queued user turn supersedes completion that was waiting on an
@@ -941,15 +947,16 @@ function createClaudeTurnLifecycleTracker() {
         const status = typeof message.patch?.status === 'string'
           ? message.patch.status.trim().toLowerCase()
           : '';
-        if (taskId && ['completed', 'failed', 'killed', 'stopped'].includes(status)) {
+        if (['completed', 'failed', 'killed', 'stopped'].includes(status)) {
+          if (!taskId) return null;
           activeTaskIds.delete(taskId);
-        } else if (taskId && ['pending', 'running'].includes(status)) {
+          return completeWaitingTurnIfTasksSettled();
+        }
+        if (taskId && ['pending', 'running'].includes(status)) {
           isCurrentlyIdle = false;
           activeTaskIds.add(taskId);
         }
-        return status && ['completed', 'failed', 'killed', 'stopped'].includes(status)
-          ? null
-          : 'processing';
+        return 'processing';
       }
 
       if (message?.type === 'system' && message.subtype === 'task_progress') {
@@ -963,8 +970,9 @@ function createClaudeTurnLifecycleTracker() {
       if (message?.type === 'system' && message.subtype === 'task_notification') {
         hasSeenTaskLifecycle = true;
         const taskId = readTaskId(message);
-        if (taskId) activeTaskIds.delete(taskId);
-        return null;
+        if (!taskId) return null;
+        activeTaskIds.delete(taskId);
+        return completeWaitingTurnIfTasksSettled();
       }
 
       if (message?.type === 'system' && message.subtype === 'session_state_changed') {
@@ -995,6 +1003,13 @@ function createClaudeTurnLifecycleTracker() {
 
       isWaitingForIdle = true;
       if (hasSeenSessionState && isCurrentlyIdle && activeTaskIds.size === 0) {
+        isWaitingForIdle = false;
+        return true;
+      }
+      // The SDK may omit the trailing idle event after background task
+      // lifecycle messages. A final result with no active tasks is still a
+      // complete turn; active tasks continue to block this fallback.
+      if (hasSeenTaskLifecycle && activeTaskIds.size === 0) {
         isWaitingForIdle = false;
         return true;
       }
@@ -2055,8 +2070,6 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       const lifecycleSignal = turnLifecycle.observe(message);
       if (lifecycleSignal === 'processing' && sid) {
         markSessionProcessing(sid);
-      } else if (lifecycleSignal === 'complete') {
-        emitPendingTurnCompletion();
       }
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
@@ -2092,6 +2105,13 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
       if (turnBoundaryReached) {
         break;
+      }
+
+      // Deliver the terminal task event before the main completion event so
+      // the UI never observes the parent turn as done while its last subagent
+      // card is still running.
+      if (lifecycleSignal === 'complete') {
+        emitPendingTurnCompletion();
       }
 
       // Extract and send token budget updates from result messages
