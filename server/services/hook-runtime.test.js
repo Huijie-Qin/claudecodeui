@@ -843,6 +843,77 @@ test('Python Hook process exposes the same controlled workspace, environment, an
   }
 });
 
+test('Python Hook imports are limited to the server environment allowlist', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-python-imports-'));
+  const envName = 'CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST';
+  const previousAllowlist = process.env[envName];
+  try {
+    delete process.env[envName];
+    await assert.rejects(
+      executeHookScript({
+        hookId: 'python-import-default-deny',
+        language: 'python',
+        workspaceRoot,
+        event: {},
+        env: {},
+        code: 'import json\n\nasync def run(event, ccui):\n    return {"output": {"ok": True}}',
+      }),
+      /json is not allowed by CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST/,
+    );
+
+    process.env[envName] = 'json,re,math,datetime';
+    const result = await executeHookScript({
+      hookId: 'python-import-allowlist',
+      language: 'python',
+      workspaceRoot,
+      event: { value: 'task-42' },
+      env: {},
+      code: `import json
+import math
+import re
+from datetime import datetime
+
+async def run(event, ccui):
+    matched = re.fullmatch(r"task-\\d+", event["value"]) is not None
+    return {"output": {
+        "json": json.dumps({"matched": matched}),
+        "root": math.sqrt(81),
+        "year": datetime(2026, 1, 1).year,
+    }}`,
+    });
+    assert.deepEqual(result, {
+      output: { json: '{"matched": true}', root: 9, year: 2026 },
+    });
+
+    await assert.rejects(
+      executeHookScript({
+        hookId: 'python-import-blocked',
+        language: 'python',
+        workspaceRoot,
+        event: {},
+        env: {},
+        code: 'import os\n\nasync def run(event, ccui):\n    return {"output": {"ok": True}}',
+      }),
+      /os is not allowed by CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST/,
+    );
+    await assert.rejects(
+      executeHookScript({
+        hookId: 'python-submodule-blocked',
+        language: 'python',
+        workspaceRoot,
+        event: {},
+        env: {},
+        code: 'import json.tool\n\nasync def run(event, ccui):\n    return {"output": {"ok": True}}',
+      }),
+      /json\.tool is not allowed by CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST/,
+    );
+  } finally {
+    if (previousAllowlist === undefined) delete process.env[envName];
+    else process.env[envName] = previousAllowlist;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test('Hook MCP runner performs a real direct stdio tool call without a model turn', async () => {
   const serverCode = `
     import { Server } from '@modelcontextprotocol/sdk/server/index.js';

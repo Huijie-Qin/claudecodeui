@@ -208,8 +208,6 @@ function legacyMcpLoopTerminationScript(successWhen, failureWhen) {
     { outcome: 'failed', condition: failureWhen },
   ].filter(({ condition }) => condition);
   const lines = [
-    'import json',
-    '',
     'async def run(event, ccui):',
     '    result = event.get("result")',
   ];
@@ -220,7 +218,12 @@ function legacyMcpLoopTerminationScript(successWhen, failureWhen) {
     lines.push('            value = None');
     lines.push('            break');
     lines.push('        value = value[segment]');
-    lines.push(`    if value == json.loads(${JSON.stringify(JSON.stringify(condition.equals))}):`);
+    const expected = condition.equals === null
+      ? 'None'
+      : typeof condition.equals === 'boolean'
+        ? condition.equals ? 'True' : 'False'
+        : JSON.stringify(condition.equals);
+    lines.push(`    if value == ${expected}:`);
     lines.push(`        return {"output": {"status": "${outcome}"}}`);
   }
   lines.push('    return {"output": {"status": "running"}}');

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import Database from 'better-sqlite3';
@@ -12,6 +15,7 @@ import {
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
+import { executeHookScript } from './hook-script-executor.js';
 
 const MCP_LOOP_TERMINATION_SCRIPT = `async def run(event, ccui):
     status = (event.get("result") or {}).get("status")
@@ -281,7 +285,7 @@ test('mcp_loop_run repeats the Matcher MCP with original inputs and a Python ter
   }
 });
 
-test('legacy mcp_loop_run equality conditions are converted to a Python termination script', () => {
+test('legacy mcp_loop_run equality conditions are converted to an executable Python termination script', async () => {
   const statusTool = {
     name: 'mcp__loopdemo__get_task_status',
     mcpServerId: 'loop-demo-server',
@@ -293,6 +297,7 @@ test('legacy mcp_loop_run equality conditions are converted to a Python terminat
     hookMcpServers: [{ id: 'loop-demo-server', name: 'loopdemo' }],
     hookMcpTools: [statusTool],
   });
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-loop-termination-'));
   try {
     const created = service.createHook({
       userId: 1,
@@ -316,9 +321,19 @@ test('legacy mcp_loop_run equality conditions are converted to a Python terminat
     assert.match(script, /\["data","state"\]/);
     assert.match(script, /"status": "success"/);
     assert.match(script, /"status": "failed"/);
+    assert.doesNotMatch(script, /import /);
     assert.equal(Object.hasOwn(created.postActions[0].config, 'successWhen'), false);
+    assert.deepEqual(await executeHookScript({
+      hookId: created.id,
+      language: 'python',
+      code: script,
+      event: { result: { data: { state: 3 } } },
+      env: {},
+      workspaceRoot,
+    }), { output: { status: 'success' } });
   } finally {
     database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
 });
 

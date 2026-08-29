@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import json
+import os
 import sys
 import traceback
 
@@ -9,7 +10,34 @@ BLOCKED_NAMES = {
     "__import__", "breakpoint", "compile", "delattr", "eval", "exec", "getattr",
     "globals", "help", "input", "locals", "open", "setattr", "vars",
 }
+
+
+def configured_import_allowlist():
+    raw = os.environ.get("CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST", "")
+    values = set()
+    for comma_group in raw.replace(";", ",").split(","):
+        for item in comma_group.split():
+            name = item.strip()
+            if name and name.isidentifier():
+                values.add(name)
+    return frozenset(values)
+
+
+ALLOWED_IMPORTS = configured_import_allowlist()
+ORIGINAL_IMPORT = __import__
+
+
+def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level != 0 or name not in ALLOWED_IMPORTS:
+        raise ImportError(
+            f"Python Hook module {name or '(relative)'} is not allowed by "
+            "CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST"
+        )
+    return ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+
+
 SAFE_BUILTINS = {
+    "__import__": safe_import,
     "abs": abs,
     "all": all,
     "any": any,
@@ -44,10 +72,28 @@ SAFE_BUILTINS = {
 
 class ScriptValidator(ast.NodeVisitor):
     def visit_Import(self, node):
-        raise ValueError("Python Hook scripts cannot import modules")
+        for alias in node.names:
+            if alias.name not in ALLOWED_IMPORTS:
+                raise ValueError(
+                    f"Python Hook module {alias.name} is not allowed by "
+                    "CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST"
+                )
+            if alias.asname and (alias.asname.startswith("__") or alias.asname in BLOCKED_NAMES):
+                raise ValueError(f"Python Hook scripts cannot bind import as {alias.asname}")
 
     def visit_ImportFrom(self, node):
-        raise ValueError("Python Hook scripts cannot import modules")
+        module = node.module or ""
+        if node.level != 0 or module not in ALLOWED_IMPORTS:
+            raise ValueError(
+                f"Python Hook module {module or '(relative)'} is not allowed by "
+                "CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST"
+            )
+        for alias in node.names:
+            if alias.name == "*" or alias.name.startswith("__"):
+                raise ValueError("Python Hook scripts cannot use wildcard or dunder imports")
+            bound_name = alias.asname or alias.name
+            if bound_name.startswith("__") or bound_name in BLOCKED_NAMES:
+                raise ValueError(f"Python Hook scripts cannot bind import as {bound_name}")
 
     def visit_Global(self, node):
         raise ValueError("Python Hook scripts cannot use global declarations")

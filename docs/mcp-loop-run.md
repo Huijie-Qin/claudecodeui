@@ -44,6 +44,14 @@ async def run(event, ccui):
 `event.attempt_count` 和 `event.elapsed_ms`，并可使用受限的
 `ccui.workspace` 与 `ccui.log` API。旧版字段等值条件会在读取时自动转换为等价 Python 脚本。
 
+Python Hook 默认禁止模块导入。可通过服务端环境变量配置精确的标准库白名单：
+
+```bash
+CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST=json,re,math,datetime
+```
+
+只允许名单中的顶层模块；相对导入、子模块、通配符和未列出的模块仍会被拒绝。
+
 自动化端到端测试使用同一个任务服务，但注入 300 ms 的任务时长，避免 CI 真实等待 20 分钟：
 
 ```bash

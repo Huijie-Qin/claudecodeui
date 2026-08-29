@@ -9,6 +9,7 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 1000;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 10_000;
 const MAX_SCRIPT_RESULT_BYTES = 2 * 1024 * 1024;
+const PYTHON_IMPORT_ALLOWLIST_ENV = 'CCUI_HOOK_PYTHON_IMPORT_ALLOWLIST';
 const HOOK_SCRIPT_API_METHODS = Object.freeze([
   'workspace.readText',
   'workspace.writeText',
@@ -222,7 +223,7 @@ function runPython({ hookId, code, event, env, apiHandler, timeoutMs, signal }) 
     const child = spawn(PYTHON_EXECUTABLE, ['-I', '-S', '-u', PYTHON_RUNNER_PATH], {
       cwd: path.dirname(PYTHON_RUNNER_PATH),
       env: Object.fromEntries(
-        ['PATH', 'Path', 'SystemRoot', 'WINDIR'].flatMap((name) => (
+        ['PATH', 'Path', 'SystemRoot', 'WINDIR', PYTHON_IMPORT_ALLOWLIST_ENV].flatMap((name) => (
           process.env[name] ? [[name, process.env[name]]] : []
         )),
       ),
