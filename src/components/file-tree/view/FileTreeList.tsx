@@ -27,6 +27,8 @@ type FileTreeListProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onMove?: (item: FileTreeNodeType) => void;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
@@ -71,6 +73,8 @@ export default function FileTreeList({
   onCopyPath,
   onDownload,
   onMove,
+  onMoveSelection,
+  onDeleteSelection,
   onUpload,
   onUploadFolder,
   onRefresh,
@@ -118,6 +122,8 @@ export default function FileTreeList({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onMove={onMove}
+          onMoveSelection={onMoveSelection}
+          onDeleteSelection={onDeleteSelection}
           onUpload={onUpload}
           onUploadFolder={onUploadFolder}
           onRefresh={onRefresh}

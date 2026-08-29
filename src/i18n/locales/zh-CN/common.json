@@ -425,6 +425,7 @@
       "quotaExceeded": "当前上传大小 {{uploadSize}} MB，剩余空间 {{remainingSize}} MB，无法上传。请联系管理员进行扩容。"
     },
     "context": {
+      "move": "移动",
       "rename": "重命名",
       "delete": "删除",
       "copyPath": "复制路径",
