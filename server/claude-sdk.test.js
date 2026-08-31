@@ -48,6 +48,24 @@ test('configured Hooks are not registered for an internal Hook follow-up turn', 
   }, 7), null);
 });
 
+test('Hook execution cards omit mcp loop scheduling metadata from action results', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const results = claudeSdk.createHookCardActionResults({
+    postActions: [
+      { id: 'call-status', type: 'call_mcp_tool' },
+      { id: 'wait-status', type: 'mcp_loop_run' },
+      { id: 'audit', type: 'write_record' },
+    ],
+  }, {
+    'call-status': { output: { status: 'running' } },
+    'wait-status': { output: { scheduled: true, jobId: 'loop-1', status: 'running' } },
+    audit: { output: { recorded: true, id: 'record-1', data: { status: 'success' } } },
+  });
+
+  assert.deepEqual(results.map((result) => result.actionId), ['call-status', 'audit']);
+  assert.equal(results.some((result) => result.actionType === 'mcp_loop_run'), false);
+});
+
 test('Docker Hook headersHelper receives the same per-exec USER_KEY as Claude', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const calls = [];

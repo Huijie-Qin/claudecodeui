@@ -208,8 +208,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ filePath, content, workspaceId }),
     }),
-  getFiles: (projectName, options = {}, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files`, workspaceId), options),
+  getFiles: (projectName, options = {}, workspaceId, showInternalConfigFiles = false) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(
+      `/api/projects/${projectName}/files${showInternalConfigFiles ? '?showInternalConfigFiles=true' : ''}`,
+      workspaceId,
+    ), options),
   getFileQuota: (projectName, workspaceId, options = {}) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/quota`, workspaceId), options),
 

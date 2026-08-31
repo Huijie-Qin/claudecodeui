@@ -95,6 +95,10 @@ import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
+import {
+    parseShowInternalConfigFiles,
+    shouldHideWorkspaceInternalEntry
+} from './services/workspace-file-visibility.js';
 import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
@@ -1516,7 +1520,7 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
         }
 
         // Use existing getFileTree function with shallow depth (only direct children)
-        const fileTree = await getFileTree(resolvedPath, 1, 0, false); // maxDepth=1, showHidden=false
+        const fileTree = await getFileTree(resolvedPath, 1, 0, false); // maxDepth=1, internal config hidden
 
         // Filter only directories and format for suggestions
         const directories = fileTree
@@ -1755,7 +1759,8 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
             return res.status(404).json({ error: `Project path not found: ${actualPath}` });
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        const showInternalConfigFiles = parseShowInternalConfigFiles(req.query.showInternalConfigFiles);
+        const files = await getFileTree(actualPath, 10, 0, showInternalConfigFiles);
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
@@ -3612,7 +3617,7 @@ function permToRwx(perm) {
     return r + w + x;
 }
 
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true) {
+async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showInternalConfigFiles = false) {
     // Using fsPromises from import
     const items = [];
 
@@ -3620,6 +3625,13 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
         const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
 
         for (const entry of entries) {
+            if (shouldHideWorkspaceInternalEntry({
+                name: entry.name,
+                currentDepth,
+                showInternalConfigFiles
+            })) {
+                continue;
+            }
             // Debug: log all entries including hidden files
 
 
@@ -3656,7 +3668,7 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
                 try {
                     // Check if we can access the directory before trying to read it
                     await fsPromises.access(item.path, fs.constants.R_OK);
-                    item.children = await getFileTree(item.path, maxDepth, currentDepth + 1, showHidden);
+                    item.children = await getFileTree(item.path, maxDepth, currentDepth + 1, showInternalConfigFiles);
                 } catch (e) {
                     // Silently skip directories we can't access (permission denied, etc.)
                     item.children = [];

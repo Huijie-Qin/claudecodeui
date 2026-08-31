@@ -1173,6 +1173,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const loopResult = msg.loopJobId
           ? mcpLoopResults.get(msg.loopJobId)
           : undefined;
+        const visibleActionResults = (msg.actionResults || []).filter((result) => (
+          result.actionType !== 'mcp_loop_run'
+        ));
         converted.push({
           ...getMessageIdentity(msg),
           type: 'hook',
@@ -1189,8 +1192,8 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             actionType: msg.actionType,
             eventName: msg.eventName,
             actionTypes: msg.actionTypes,
-            ...(msg.actionResults && msg.actionResults.length > 0
-              ? { actionResults: msg.actionResults }
+            ...(visibleActionResults.length > 0
+              ? { actionResults: visibleActionResults }
               : {}),
             hasScript: msg.hasScript,
             skillName: msg.skillName,

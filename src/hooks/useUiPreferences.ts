@@ -5,6 +5,7 @@ type UiPreferences = {
   autoExpandTools: boolean;
   showRawParameters: boolean;
   showThinking: boolean;
+  showInternalConfigFiles: boolean;
   autoScrollToBottom: boolean;
   sendByCtrlEnter: boolean;
   sidebarVisible: boolean;
@@ -38,6 +39,7 @@ const DEFAULTS: UiPreferences = {
   autoExpandTools: false,
   showRawParameters: false,
   showThinking: true,
+  showInternalConfigFiles: false,
   autoScrollToBottom: true,
   sendByCtrlEnter: false,
   sidebarVisible: true,

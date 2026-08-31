@@ -144,7 +144,10 @@ function createHookCardActionResults(hook, actions) {
   if (!actions || typeof actions !== 'object' || Array.isArray(actions)) return [];
 
   return (hook.postActions || []).flatMap((action) => {
-    if (!['call_mcp_tool', 'mcp_loop_run', 'write_record'].includes(action?.type)) return [];
+    // mcp_loop_run first returns scheduling metadata (scheduled/jobId/status),
+    // not a business result. Its progress and final output belong to the loop
+    // follow-up card, so exposing it here creates a misleading duplicate result.
+    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
     if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
     const output = actions[action.id]?.output;
     const result = {
@@ -3046,4 +3049,5 @@ export {
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,
   createHookHeadersHelperRunner,
+  createHookCardActionResults,
 };

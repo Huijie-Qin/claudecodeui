@@ -8,6 +8,7 @@ import {
   subscribeProjectFilesChanged,
   type ProjectFilesChangedEvent,
 } from '../../file-tree/utils/fileTreeEvents';
+import { useUiPreferences } from '../../../hooks/useUiPreferences';
 
 interface ProjectFileNode {
   name: string;
@@ -61,6 +62,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   const [atSymbolPosition, setAtSymbolPosition] = useState(-1);
   const [refreshKey, setRefreshKey] = useState(0);
   const { latestMessage } = useWebSocket();
+  const { preferences } = useUiPreferences();
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -75,7 +77,12 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
 
 
       try {
-        const response = await api.getFiles(projectName, { signal: abortController.signal }, selectedProject?.workspaceId);
+        const response = await api.getFiles(
+          projectName,
+          { signal: abortController.signal },
+          selectedProject?.workspaceId,
+          preferences.showInternalConfigFiles,
+        );
         if (!response.ok) {
           return;
         }
@@ -95,7 +102,12 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     return () => {
       abortController.abort();
     };
-  }, [selectedProject?.name, selectedProject?.workspaceId, refreshKey]);
+  }, [
+    preferences.showInternalConfigFiles,
+    selectedProject?.name,
+    selectedProject?.workspaceId,
+    refreshKey,
+  ]);
 
   useEffect(() => {
     const matchesSelectedProject = (event: ProjectFilesChangedEvent) => {

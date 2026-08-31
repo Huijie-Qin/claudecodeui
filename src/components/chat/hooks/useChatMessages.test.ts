@@ -330,6 +330,36 @@ test('normalizedToChatMessages preserves generic Hook execution details', () => 
   assert.equal(hookMessage.hookActivity?.hasScript, true);
 });
 
+test('normalizedToChatMessages hides persisted mcp loop scheduling metadata from Hook results', () => {
+  const [hookMessage] = normalizedToChatMessages([{
+    id: 'hook_activity_execution-loop_execution',
+    sessionId: 'session-loop',
+    timestamp: '2026-08-31T00:00:00.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    activityKind: 'execution',
+    status: 'succeeded',
+    hookId: 'wait-for-task',
+    hookName: '等待异步任务完成',
+    actionTypes: ['mcp_loop_run', 'write_record'],
+    actionResults: [
+      {
+        actionId: 'wait-status',
+        actionType: 'mcp_loop_run',
+        output: { scheduled: true, jobId: 'loop-1', status: 'running' },
+      },
+      {
+        actionId: 'audit',
+        actionType: 'write_record',
+        output: { recorded: true, id: 'record-1' },
+      },
+    ],
+  }]);
+
+  assert.deepEqual(hookMessage.hookActivity?.actionResults?.map((result) => result.actionId), ['audit']);
+});
+
 test('normalizedToChatMessages preserves queued user message state', () => {
   const [queuedMessage] = normalizedToChatMessages([{
     id: 'local_supplement_followup-1',

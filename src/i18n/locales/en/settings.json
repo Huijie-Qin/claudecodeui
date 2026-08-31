@@ -132,6 +132,13 @@
       "alphabetical": "Alphabetical",
       "recentActivity": "Recent Activity"
     },
+    "files": {
+      "title": "Files",
+      "showInternalConfigFiles": {
+        "label": "Show internal config files",
+        "description": "Show .cloudcli and .mcp.json from the workspace root in the file tree and file mentions"
+      }
+    },
     "codeEditor": {
       "title": "Code Editor",
       "theme": {

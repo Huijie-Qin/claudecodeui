@@ -132,6 +132,13 @@
       "alphabetical": "按字母顺序",
       "recentActivity": "最近活动"
     },
+    "files": {
+      "title": "文件",
+      "showInternalConfigFiles": {
+        "label": "显示内部配置文件",
+        "description": "在文件树和文件提及中显示工作区根目录的 .cloudcli 和 .mcp.json"
+      }
+    },
     "codeEditor": {
       "title": "代码编辑器",
       "theme": {
