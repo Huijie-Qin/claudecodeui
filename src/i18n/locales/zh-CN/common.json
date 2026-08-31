@@ -438,6 +438,11 @@
       "overwriteCancel": "取消",
       "quotaExceeded": "当前上传大小 {{uploadSize}} MB，剩余空间 {{remainingSize}} MB，无法上传。请联系管理员进行扩容。"
     },
+    "delete": {
+      "selectedTitle": "删除所选项目",
+      "selectedWarning": "将永久删除所选的 {{count}} 个项目及所选文件夹中的全部内容。此操作不可撤销。",
+      "confirm": "删除"
+    },
     "context": {
       "move": "移动",
       "rename": "重命名",
@@ -589,5 +594,4 @@
     }
   }
 }
-
 
