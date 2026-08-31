@@ -232,21 +232,31 @@ test('buildSubagentTraces derives running, waiting, completed, and error states'
   assert.equal(traces[3]?.taskStatus, 'failed');
 });
 
-test('buildSubagentTraces treats stopped and killed lifecycle states as errors', () => {
+test('buildSubagentTraces renders stopped and killed lifecycle states as stopped', () => {
   const messages = ['stopped', 'killed'].map((status, index) => subagentMessage({
     toolId: `${status}-agent`,
     timestamp: `2026-08-17T03:10:0${index}.000Z`,
     taskNotification: notification(status, `${status} result`),
     subagentState: {
-      childTools: [],
-      currentToolIndex: -1,
+      childTools: [{
+        toolId: `${status}-read`,
+        toolName: 'Read',
+        toolInput: { file_path: '/workspace/file.ts' },
+        toolResult: null,
+        timestamp: new Date(`2026-08-17T03:10:0${index}.500Z`),
+      }],
+      currentToolIndex: 0,
       isComplete: true,
     },
   }));
 
   assert.deepEqual(
     buildSubagentTraces(messages).map((trace) => trace.status),
-    ['error', 'error'],
+    ['stopped', 'stopped'],
+  );
+  assert.deepEqual(
+    buildSubagentTraces(messages).map((trace) => trace.activities[0]?.status),
+    ['stopped', 'stopped'],
   );
 });
 

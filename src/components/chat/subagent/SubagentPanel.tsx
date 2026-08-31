@@ -17,6 +17,7 @@ import {
   Clock3,
   LoaderCircle,
   PauseCircle,
+  CircleStop,
   Sparkles,
   Wrench,
   X,
@@ -88,6 +89,12 @@ const STATUS_STYLES: Record<SubagentTraceStatus, {
     className: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300',
     dotClassName: 'bg-emerald-500',
     iconClassName: 'text-emerald-600 dark:text-emerald-400',
+  },
+  stopped: {
+    icon: CircleStop,
+    className: 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300',
+    dotClassName: 'bg-slate-500',
+    iconClassName: 'text-slate-600 dark:text-slate-400',
   },
   error: {
     icon: CircleAlert,
@@ -210,6 +217,7 @@ function getStatusDefaultLabel(status: SubagentTraceStatus): string {
     case 'running': return 'Running';
     case 'waiting': return 'Waiting';
     case 'completed': return 'Completed';
+    case 'stopped': return 'Stopped';
     case 'error': return 'Failed';
   }
 }
@@ -427,7 +435,7 @@ export function SubagentPanel({
       });
   const hasFinalResult = Boolean(
     selectedTrace &&
-    (selectedTrace.status === 'completed' || selectedTrace.status === 'error') &&
+    ['completed', 'stopped', 'error'].includes(selectedTrace.status) &&
     selectedTrace.result !== undefined &&
     selectedTrace.result !== null &&
     selectedTrace.messages.length === 0,

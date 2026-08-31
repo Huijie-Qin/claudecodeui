@@ -150,6 +150,13 @@ function isWaitingStatus(status: string | undefined): boolean {
   );
 }
 
+function isStoppedStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  return ['stopped', 'killed', 'aborted', 'interrupted', 'cancelled', 'canceled'].includes(
+    status.trim().toLowerCase().replace(/[\s-]+/g, '_'),
+  );
+}
+
 function resolveTraceStatus(
   candidates: TraceCandidate[],
   primary: TraceCandidate,
@@ -161,6 +168,16 @@ function resolveTraceStatus(
   }
 
   const statusCandidates = primaryState ? [primary] : candidates;
+  const hasStopped = statusCandidates.some(({ message }) => (
+    isStoppedStatus(
+      readString(message.taskNotification?.status) || readString(message.taskStatus),
+    )
+  )) || isStoppedStatus(taskStatus);
+
+  if (hasStopped) {
+    return 'stopped';
+  }
+
   const hasError = statusCandidates.some(({ message }) => (
     Boolean(message.toolResult?.isError) ||
     Boolean(message.taskNotification && isTaskNotificationError(message.taskNotification.status))
@@ -345,9 +362,13 @@ function buildTrace(group: TraceGroup): SubagentTrace {
   );
   const status = resolveTraceStatus(candidates, primary, taskStatus);
   const agentId = firstAgentId(candidates, primary);
-  const activities = buildActivities(candidates);
+  const activities = buildActivities(candidates).map((activity) => (
+    status === 'stopped' && activity.status === 'running'
+      ? { ...activity, status: 'stopped' as const }
+      : activity
+  ));
   const messages = buildMessages(candidates);
-  const completedAt = status === 'completed' || status === 'error'
+  const completedAt = ['completed', 'stopped', 'error'].includes(status)
     ? maxDate(candidates.map(candidateCompletedAt))
     : undefined;
 
@@ -357,7 +378,7 @@ function buildTrace(group: TraceGroup): SubagentTrace {
   }
 
   let result: unknown;
-  if (status === 'completed' || status === 'error') {
+  if (status === 'completed' || status === 'stopped' || status === 'error') {
     for (const candidate of orderedWithPrimaryFirst(candidates, primary)) {
       if (candidate.message.taskNotification?.result !== undefined) {
         result = candidate.message.taskNotification.result;

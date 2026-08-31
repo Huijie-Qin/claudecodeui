@@ -83,6 +83,7 @@ function getMessageTimestampMs(message) {
 
 function isClaudeSyntheticMessage(message) {
   return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind)
+    || (message?.kind === 'task_notification' && message?.syntheticSubagentStop === true)
     || (message?.origin === 'hook' && message?.mcpLoopReplacement === true);
 }
 

@@ -4,9 +4,9 @@ import type {
   ToolResult,
 } from '../types/types';
 
-export type SubagentTraceStatus = 'running' | 'waiting' | 'completed' | 'error';
+export type SubagentTraceStatus = 'running' | 'waiting' | 'completed' | 'stopped' | 'error';
 
-export type SubagentActivityStatus = 'running' | 'completed' | 'error';
+export type SubagentActivityStatus = 'running' | 'completed' | 'stopped' | 'error';
 
 export interface SubagentActivity {
   id: string;

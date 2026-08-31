@@ -95,6 +95,7 @@ const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
   parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 24 * 60 * 60 * 1000;
 const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
 const STREAM_STALL_PAUSE_POLL_MS = 5000;
+const SUBAGENT_STOP_TIMEOUT_MS = parseInt(process.env.CLAUDE_SUBAGENT_STOP_TIMEOUT_MS, 10) || 1500;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 const execFileAsync = promisify(execFile);
 
@@ -583,7 +584,17 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, runtimeOptions = {}, inputQueue = null) {
+function addSession(
+  sessionId,
+  queryInstance,
+  tempImagePaths = [],
+  tempDir = null,
+  writer = null,
+  runtimeOptions = {},
+  inputQueue = null,
+  turnLifecycle = null,
+  abortController = null,
+) {
   const existing = activeSessions.get(sessionId) || {};
   if (existing.idleCloseTimer) {
     clearTimeout(existing.idleCloseTimer);
@@ -603,6 +614,8 @@ function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = nul
     runtimeId: runtimeOptions.runtimeId || null,
     runtimeMode: runtimeOptions.runtimeMode || 'local',
     runtimeOptions,
+    turnLifecycle: turnLifecycle || existing.turnLifecycle || null,
+    abortController: abortController || existing.abortController || null,
   });
 }
 
@@ -983,7 +996,7 @@ class ClaudeInputQueue {
 }
 
 function createClaudeTurnLifecycleTracker() {
-  const activeTaskIds = new Set();
+  const activeTasks = new Map();
   let hasSeenSessionState = false;
   let hasSeenTaskLifecycle = false;
   let isCurrentlyIdle = false;
@@ -996,7 +1009,7 @@ function createClaudeTurnLifecycleTracker() {
   );
 
   const completeWaitingTurnIfTasksSettled = () => {
-    if (!isWaitingForIdle || activeTaskIds.size > 0) return null;
+    if (!isWaitingForIdle || activeTasks.size > 0) return null;
     isWaitingForIdle = false;
     return 'complete';
   };
@@ -1015,7 +1028,15 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenTaskLifecycle = true;
         isCurrentlyIdle = false;
         const taskId = readTaskId(message);
-        if (taskId) activeTaskIds.add(taskId);
+        if (taskId) {
+          activeTasks.set(taskId, {
+            taskId,
+            toolUseId: typeof message.tool_use_id === 'string' && message.tool_use_id.trim()
+              ? message.tool_use_id.trim()
+              : null,
+            description: typeof message.description === 'string' ? message.description : '',
+          });
+        }
         return 'processing';
       }
 
@@ -1025,14 +1046,15 @@ function createClaudeTurnLifecycleTracker() {
         const status = typeof message.patch?.status === 'string'
           ? message.patch.status.trim().toLowerCase()
           : '';
-        if (['completed', 'failed', 'killed', 'stopped'].includes(status)) {
+        if (['completed', 'failed', 'killed', 'stopped', 'aborted', 'interrupted', 'cancelled', 'canceled'].includes(status)) {
           if (!taskId) return null;
-          activeTaskIds.delete(taskId);
+          activeTasks.delete(taskId);
           return completeWaitingTurnIfTasksSettled();
         }
         if (taskId && ['pending', 'running'].includes(status)) {
           isCurrentlyIdle = false;
-          activeTaskIds.add(taskId);
+          const existing = activeTasks.get(taskId);
+          activeTasks.set(taskId, existing || { taskId, toolUseId: null, description: '' });
         }
         return 'processing';
       }
@@ -1041,7 +1063,18 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenTaskLifecycle = true;
         isCurrentlyIdle = false;
         const taskId = readTaskId(message);
-        if (taskId) activeTaskIds.add(taskId);
+        if (taskId) {
+          const existing = activeTasks.get(taskId);
+          activeTasks.set(taskId, {
+            taskId,
+            toolUseId: typeof message.tool_use_id === 'string' && message.tool_use_id.trim()
+              ? message.tool_use_id.trim()
+              : existing?.toolUseId || null,
+            description: typeof message.description === 'string'
+              ? message.description
+              : existing?.description || '',
+          });
+        }
         return 'processing';
       }
 
@@ -1049,7 +1082,7 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenTaskLifecycle = true;
         const taskId = readTaskId(message);
         if (!taskId) return null;
-        activeTaskIds.delete(taskId);
+        activeTasks.delete(taskId);
         return completeWaitingTurnIfTasksSettled();
       }
 
@@ -1057,7 +1090,7 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenSessionState = true;
         if (message.state === 'idle') {
           isCurrentlyIdle = true;
-          activeTaskIds.clear();
+          activeTasks.clear();
           if (isWaitingForIdle) {
             isWaitingForIdle = false;
             return 'complete';
@@ -1080,20 +1113,20 @@ function createClaudeTurnLifecycleTracker() {
       }
 
       isWaitingForIdle = true;
-      if (hasSeenSessionState && isCurrentlyIdle && activeTaskIds.size === 0) {
+      if (hasSeenSessionState && isCurrentlyIdle && activeTasks.size === 0) {
         isWaitingForIdle = false;
         return true;
       }
       // The SDK may omit the trailing idle event after background task
       // lifecycle messages. A final result with no active tasks is still a
       // complete turn; active tasks continue to block this fallback.
-      if (hasSeenTaskLifecycle && activeTaskIds.size === 0) {
+      if (hasSeenTaskLifecycle && activeTasks.size === 0) {
         isWaitingForIdle = false;
         return true;
       }
       // Older SDK/CLI combinations do not emit session_state_changed. Keep the
       // legacy immediate completion path when no background task was observed.
-      if (!hasSeenSessionState && !hasSeenTaskLifecycle && activeTaskIds.size === 0) {
+      if (!hasSeenSessionState && !hasSeenTaskLifecycle && activeTasks.size === 0) {
         isWaitingForIdle = false;
         return true;
       }
@@ -1104,6 +1137,16 @@ function createClaudeTurnLifecycleTracker() {
       if (!isWaitingForIdle) return false;
       isWaitingForIdle = false;
       return true;
+    },
+
+    getActiveTasks() {
+      return [...activeTasks.values()].map((task) => ({ ...task }));
+    },
+
+    stopAll() {
+      const tasks = [...activeTasks.values()].map((task) => ({ ...task }));
+      activeTasks.clear();
+      return tasks;
     },
   };
 }
@@ -1239,6 +1282,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
   // query instead of assuming that providing sessionId means it is still bound.
   let runtimeBoundToProviderSession = false;
   const pendingInteractions = createPendingInteractionTracker();
+  const queryAbortController = new AbortController();
   let initialDisplayCommandRecord = null;
   let initialDisplayCommandPersisted = false;
   const turnLifecycle = createClaudeTurnLifecycleTracker();
@@ -1451,6 +1495,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
+    sdkOptions.abortController = queryAbortController;
     sdkOptions.disallowedTools = uniqueTools([
       ...sdkOptions.disallowedTools,
       ...mcpToolAccess.disallowedTools,
@@ -2095,7 +2140,17 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+      addSession(
+        capturedSessionId,
+        queryInstance,
+        tempImagePaths,
+        tempDir,
+        ws,
+        runtimeOptions,
+        inputQueue,
+        turnLifecycle,
+        queryAbortController,
+      );
       bindRuntimeToProviderSession(capturedSessionId);
       recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
@@ -2136,7 +2191,17 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
         capturedSessionId = message.session_id;
         await persistInitialDisplayCommand(capturedSessionId);
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+        addSession(
+          capturedSessionId,
+          queryInstance,
+          tempImagePaths,
+          tempDir,
+          ws,
+          runtimeOptions,
+          inputQueue,
+          turnLifecycle,
+          queryAbortController,
+        );
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
@@ -2650,6 +2715,75 @@ mcpLoopService.setHandlers({
   },
 });
 
+function createStoppedSubagentMessage(sessionId, task, timestamp = new Date().toISOString()) {
+  return createNormalizedMessage({
+    id: `subagent_stopped_${sessionId}_${task.taskId}_${Date.parse(timestamp) || Date.now()}`,
+    kind: 'task_notification',
+    sessionId,
+    provider: 'claude',
+    taskId: task.taskId,
+    toolUseId: task.toolUseId || undefined,
+    status: 'stopped',
+    summary: task.description
+      ? `Stopped by user: ${task.description}`
+      : 'Stopped by user',
+    usage: {},
+    syntheticSubagentStop: true,
+    timestamp,
+  });
+}
+
+async function stopActiveClaudeSubagentTasks(
+  sessionId,
+  session,
+  { timeoutMs = SUBAGENT_STOP_TIMEOUT_MS } = {},
+) {
+  const activeTasks = session?.turnLifecycle?.stopAll?.() || [];
+  if (activeTasks.length === 0) return [];
+
+  const timestamp = new Date().toISOString();
+  const stoppedMessages = activeTasks.map((task) => (
+    createStoppedSubagentMessage(sessionId, task, timestamp)
+  ));
+
+  for (const message of stoppedMessages) {
+    sendWriterMessage(session.writer, message);
+  }
+  persistNormalizedMessages({
+    options: session.runtimeOptions || {},
+    provider: 'claude',
+    providerSessionId: sessionId,
+    runtimeId: session.runtimeId,
+    messages: stoppedMessages,
+  });
+
+  if (typeof session.instance?.stopTask !== 'function') {
+    return stoppedMessages;
+  }
+
+  const stopRequests = activeTasks.map(async (task) => {
+    try {
+      await session.instance.stopTask(task.taskId);
+    } catch (error) {
+      console.warn(
+        `Failed to stop Claude subagent ${task.taskId} for session ${sessionId}:`,
+        error?.message || error,
+      );
+    }
+  });
+
+  let timeoutId;
+  await Promise.race([
+    Promise.allSettled(stopRequests),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(resolve, Math.max(0, timeoutMs));
+    }),
+  ]);
+  if (timeoutId) clearTimeout(timeoutId);
+
+  return stoppedMessages;
+}
+
 /**
  * Aborts an active SDK session
  * @param {string} sessionId - Session identifier
@@ -2684,6 +2818,7 @@ async function abortClaudeSDKSession(sessionId) {
       clearTimeout(session.idleCloseTimer);
       session.idleCloseTimer = null;
     }
+    await stopActiveClaudeSubagentTasks(sessionId, session);
     session.inputQueue?.close();
 
     const interruptPromise = Promise.resolve()
@@ -2691,6 +2826,7 @@ async function abortClaudeSDKSession(sessionId) {
       .catch((error) => {
         console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
       });
+    session.abortController?.abort(new Error('Session stopped by user'));
 
     if (
       session.runtimeMode === 'docker' &&
@@ -2906,6 +3042,7 @@ export {
   buildToolInteractionContext,
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,
+  stopActiveClaudeSubagentTasks,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,
   createHookHeadersHelperRunner,

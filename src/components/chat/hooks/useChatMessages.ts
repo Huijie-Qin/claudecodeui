@@ -1060,6 +1060,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           toolResult,
           toolCompletedAt,
           isSubagentContainer,
+          taskStatus: taskNotification?.status,
           taskNotification,
           subagentState: isSubagentContainer
             ? {

@@ -315,6 +315,79 @@ test('Claude stream timeout stays paused until all concurrent interactions finis
   assert.equal(interactions.isPaused(), false);
 });
 
+test('Claude lifecycle tracker exposes active subagents for manual stop', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-a',
+    tool_use_id: 'toolu_agent_a',
+    description: 'Review API',
+  });
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-b',
+    tool_use_id: 'toolu_agent_b',
+    description: 'Review UI',
+  });
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-a',
+    status: 'completed',
+  });
+
+  assert.deepEqual(lifecycle.getActiveTasks(), [{
+    taskId: 'agent-b',
+    toolUseId: 'toolu_agent_b',
+    description: 'Review UI',
+  }]);
+  assert.deepEqual(lifecycle.stopAll().map((task) => task.taskId), ['agent-b']);
+  assert.deepEqual(lifecycle.getActiveTasks(), []);
+});
+
+test('manual session stop requests every active subagent to stop and emits stopped state', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const stoppedTaskIds = [];
+  const sent = [];
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+  for (const [taskId, toolUseId] of [['agent-a', 'toolu_agent_a'], ['agent-b', 'toolu_agent_b']]) {
+    lifecycle.observe({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      description: `Run ${taskId}`,
+    });
+  }
+
+  const messages = await claudeSdk.stopActiveClaudeSubagentTasks('session-1', {
+    instance: {
+      stopTask: async (taskId) => stoppedTaskIds.push(taskId),
+    },
+    turnLifecycle: lifecycle,
+    writer: { send: (message) => sent.push(message) },
+    runtimeOptions: {},
+    runtimeId: null,
+  }, { timeoutMs: 100 });
+
+  assert.deepEqual(stoppedTaskIds, ['agent-a', 'agent-b']);
+  assert.deepEqual(messages.map((message) => ({
+    taskId: message.taskId,
+    toolUseId: message.toolUseId,
+    status: message.status,
+    syntheticSubagentStop: message.syntheticSubagentStop,
+  })), [
+    { taskId: 'agent-a', toolUseId: 'toolu_agent_a', status: 'stopped', syntheticSubagentStop: true },
+    { taskId: 'agent-b', toolUseId: 'toolu_agent_b', status: 'stopped', syntheticSubagentStop: true },
+  ]);
+  assert.deepEqual(sent, messages);
+  assert.deepEqual(lifecycle.getActiveTasks(), []);
+});
+
 test('mapCliOptionsToSDK loads project CLAUDE.md natively without prompt duplication', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 

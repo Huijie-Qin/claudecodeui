@@ -1080,6 +1080,39 @@ test('Claude persists only synthetic Hook activity alongside its JSONL transcrip
   assert.deepEqual(persisted.map((message) => message.id), ['hook_activity_execution-1_action-1']);
 });
 
+test('Claude persists synthetic stopped subagent state for session replay', () => {
+  const persisted = [];
+  const changed = persistNormalizedMessages({
+    multitenancy: {
+      sessionMessages: {
+        upsertMessages: ({ messages }) => {
+          persisted.push(...messages);
+          return messages.length;
+        },
+      },
+    },
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [{
+      id: 'subagent-stop-agent-1',
+      sessionId: 'claude-session-1',
+      timestamp: '2026-08-31T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'task_notification',
+      taskId: 'agent-1',
+      toolUseId: 'toolu_agent_1',
+      status: 'stopped',
+      summary: 'Stopped by user',
+      syntheticSubagentStop: true,
+    }],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.id), ['subagent-stop-agent-1']);
+});
+
 test('Claude session history merges persisted Hook activity into the JSONL transcript', async () => {
   const service = createSessionMessageHistoryService({
     multitenancy: {

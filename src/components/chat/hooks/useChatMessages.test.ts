@@ -782,6 +782,31 @@ test('normalizedToChatMessages attaches a task notification to its Agent card', 
   });
 });
 
+test('normalizedToChatMessages completes a running Agent card when manual stop arrives', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'agent-tool-use', sessionId: 'session-1', timestamp: '2026-08-31T00:00:00.000Z',
+      provider: 'claude', kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_1',
+      toolInput: { description: 'Review authentication', run_in_background: true },
+      toolResult: {
+        content: 'Agent launched.', isError: false,
+        toolUseResult: { status: 'async_launched', agentId: 'agent-1' },
+      },
+    },
+    {
+      id: 'agent-stopped', sessionId: 'session-1', timestamp: '2026-08-31T00:00:05.000Z',
+      provider: 'claude', kind: 'task_notification', taskId: 'agent-1',
+      toolUseId: 'toolu_agent_1', status: 'stopped', summary: 'Stopped by user', usage: {},
+    },
+  ]);
+
+  assert.equal(chatMessages.length, 1);
+  assert.equal(chatMessages[0]?.subagentState?.isComplete, true);
+  assert.equal(chatMessages[0]?.taskStatus, 'stopped');
+  assert.equal(chatMessages[0]?.toolResult?.content, 'Stopped by user');
+  assert.equal(chatMessages[0]?.toolResult?.isError, true);
+});
+
 test('normalizedToChatMessages still recognizes the legacy Task tool as a subagent card', () => {
   const messages: NormalizedMessage[] = [
     {

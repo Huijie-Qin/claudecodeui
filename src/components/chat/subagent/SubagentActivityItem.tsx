@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleAlert,
+  CircleStop,
   FileOutput,
   FileText,
   Globe2,
@@ -40,6 +41,11 @@ const STATUS_STYLES: Record<SubagentActivityStatus, {
     icon: CheckCircle2,
     iconClassName: 'text-emerald-600 dark:text-emerald-400',
     markerClassName: 'border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/70',
+  },
+  stopped: {
+    icon: CircleStop,
+    iconClassName: 'text-slate-600 dark:text-slate-400',
+    markerClassName: 'border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-900/70',
   },
   error: {
     icon: CircleAlert,
@@ -141,7 +147,9 @@ export function SubagentActivityItem({
       ? 'Running'
       : activity.status === 'completed'
         ? 'Completed'
-        : 'Failed',
+        : activity.status === 'stopped'
+          ? 'Stopped'
+          : 'Failed',
   });
 
   return (

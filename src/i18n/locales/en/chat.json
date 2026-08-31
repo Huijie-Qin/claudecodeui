@@ -449,6 +449,7 @@
       "running": "Running",
       "waiting": "Waiting",
       "completed": "Completed",
+      "stopped": "Stopped",
       "error": "Failed"
     },
     "duration": {
