@@ -774,6 +774,15 @@ function ChatInterface({
                 mode="docked"
                 permissionRequests={selectedSubagentQuestionRequests}
                 onPermissionDecision={handlePermissionDecision}
+                createDiff={createDiff}
+                onFileOpen={onFileOpen}
+                onShowSettings={onShowSettings}
+                onGrantToolPermission={handleGrantToolPermission}
+                autoExpandTools={autoExpandTools}
+                showRawParameters={showRawParameters}
+                showThinking={showThinking}
+                selectedProject={selectedProject}
+                provider={provider}
               />
             </div>
           </div>
@@ -788,6 +797,15 @@ function ChatInterface({
             mode="drawer"
             permissionRequests={selectedSubagentQuestionRequests}
             onPermissionDecision={handlePermissionDecision}
+            createDiff={createDiff}
+            onFileOpen={onFileOpen}
+            onShowSettings={onShowSettings}
+            onGrantToolPermission={handleGrantToolPermission}
+            autoExpandTools={autoExpandTools}
+            showRawParameters={showRawParameters}
+            showThinking={showThinking}
+            selectedProject={selectedProject}
+            provider={provider}
           />
         )}
 

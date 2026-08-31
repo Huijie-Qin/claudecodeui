@@ -1002,6 +1002,64 @@ test('normalizedToChatMessages groups realtime subagent tools by parentToolUseId
   assert.equal(agentCard.subagentState?.childTools[0]?.toolResult?.content, 'export function authenticate() {}');
 });
 
+test('normalizedToChatMessages routes all realtime subagent output into its Agent panel', () => {
+  const messages: NormalizedMessage[] = [
+    {
+      id: 'agent-tool-use', sessionId: 'session-1', timestamp: '2026-06-30T00:00:00.000Z',
+      provider: 'claude', kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_1',
+      toolInput: { description: 'Inspect output' },
+    },
+    {
+      id: 'subagent-thinking', sessionId: 'session-1', timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude', kind: 'thinking', content: 'I should inspect the file.',
+      parentToolUseId: 'toolu_agent_1',
+    },
+    {
+      id: 'subagent-text', sessionId: 'session-1', timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude', kind: 'text', role: 'assistant', content: 'The issue is in auth.ts.',
+      parentToolUseId: 'toolu_agent_1',
+    },
+    {
+      id: '__streaming_session-1_toolu_agent_1_1', sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:03.000Z', provider: 'claude', kind: 'stream_delta',
+      content: 'Streaming detail', parentToolUseId: 'toolu_agent_1',
+    },
+  ];
+
+  const chatMessages = normalizedToChatMessages(messages);
+
+  assert.equal(chatMessages.length, 1);
+  assert.deepEqual(
+    chatMessages[0]?.subagentState?.messages?.map((message) => ({
+      content: message.content,
+      isThinking: message.isThinking,
+      isStreaming: message.isStreaming,
+    })),
+    [
+      { content: 'I should inspect the file.', isThinking: true, isStreaming: undefined },
+      { content: 'The issue is in auth.ts.', isThinking: undefined, isStreaming: undefined },
+      { content: 'Streaming detail', isThinking: undefined, isStreaming: true },
+    ],
+  );
+});
+
+test('normalizedToChatMessages restores the complete attached subagent transcript', () => {
+  const attached: NormalizedMessage[] = [
+    {
+      id: 'history-text', sessionId: 'session-1', timestamp: '2026-06-30T00:00:01.000Z',
+      provider: 'claude', kind: 'text', role: 'assistant', content: 'Historical answer.',
+      parentToolUseId: 'toolu_agent_1',
+    },
+  ];
+  const [agentCard] = normalizedToChatMessages([{
+    id: 'agent-tool-use', sessionId: 'session-1', timestamp: '2026-06-30T00:00:00.000Z',
+    provider: 'claude', kind: 'tool_use', toolName: 'Agent', toolId: 'toolu_agent_1',
+    toolInput: { description: 'Restore output' }, subagentMessages: attached,
+  }]);
+
+  assert.equal(agentCard?.subagentState?.messages?.[0]?.content, 'Historical answer.');
+});
+
 test('normalizedToChatMessages gives Agent sole ownership of details shared with legacy Task', () => {
   const sharedSubagentTools = [
     {

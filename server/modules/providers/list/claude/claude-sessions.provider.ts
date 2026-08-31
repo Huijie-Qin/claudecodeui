@@ -16,6 +16,7 @@ const PROVIDER: 'claude' = 'claude';
 type ClaudeToolResult = {
   content: unknown;
   isError: boolean;
+  subagentMessages?: unknown;
   subagentTools?: unknown;
   toolUseResult?: unknown;
 };
@@ -140,6 +141,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     rawMessage: unknown,
     sessionId: string | null,
     storedDisplayCommand: string | null = null,
+    includeSidechain = false,
   ): NormalizedMessage[] {
     const raw = readObjectRecord(rawMessage);
     if (!raw) {
@@ -147,14 +149,20 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (
-      raw.isSidechain === true ||
-      raw.is_sidechain === true ||
       raw.isMeta === true ||
       raw.is_meta === true ||
       raw.message?.isMeta === true ||
-      raw.message?.is_meta === true ||
+      raw.message?.is_meta === true
+    ) {
+      return [];
+    }
+
+    if (
+      !includeSidechain && (
+      raw.isSidechain === true ||
+      raw.is_sidechain === true ||
       raw.message?.isSidechain === true ||
-      raw.message?.is_sidechain === true
+      raw.message?.is_sidechain === true)
     ) {
       return [];
     }
@@ -251,6 +259,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolId: part.tool_use_id,
               content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
               isError: Boolean(part.is_error),
+              subagentMessages: raw.subagentMessages,
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
             }));
@@ -489,6 +498,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             toolResultMap.set(part.tool_use_id, {
               content: part.content,
               isError: Boolean(part.is_error),
+              subagentMessages: raw.subagentMessages,
               subagentTools: raw.subagentTools,
               toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
             });
@@ -533,6 +543,21 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           toolUseResult: toolResult.toolUseResult,
         };
         msg.subagentTools = toolResult.subagentTools;
+        if (Array.isArray(toolResult.subagentMessages)) {
+          msg.subagentMessages = toolResult.subagentMessages.flatMap((subagentRaw) => {
+            const nested = this.normalizeMessage(subagentRaw, sessionId, null, true);
+            const rawRecord = readObjectRecord(subagentRaw);
+            const nestedParentToolUseId = typeof rawRecord?.parentToolUseId === 'string'
+              ? rawRecord.parentToolUseId
+              : typeof rawRecord?.parent_tool_use_id === 'string'
+                ? rawRecord.parent_tool_use_id
+                : msg.toolId;
+            return nested.map((subagentMessage) => ({
+              ...subagentMessage,
+              parentToolUseId: subagentMessage.parentToolUseId || nestedParentToolUseId,
+            }));
+          });
+        }
       }
     }
 

@@ -1,4 +1,5 @@
 import type {
+  ChatMessage,
   TaskNotificationDetails,
   ToolResult,
 } from '../types/types';
@@ -30,6 +31,7 @@ export interface SubagentTrace {
   startedAt: Date;
   completedAt?: Date;
   activities: SubagentActivity[];
+  messages: ChatMessage[];
   result?: unknown;
   usage: TaskNotificationDetails['usage'];
   taskStatus?: string;

@@ -103,6 +103,7 @@ export interface NormalizedMessage {
   actualSessionId?: string;
   parentToolUseId?: string;
   subagentTools?: unknown[];
+  subagentMessages?: NormalizedMessage[];
   isFinal?: boolean;
   mcpLoopReplacement?: boolean;
   mcpLoopJobId?: string;
@@ -400,7 +401,7 @@ export function useSessionStore() {
     sessionId: string,
     accumulatedText: string,
     msgProvider: LLMProvider,
-    options: { id?: string; timestamp?: string } = {},
+    options: { id?: string; timestamp?: string; parentToolUseId?: string } = {},
   ) => {
     const slot = getSlot(sessionId);
     const streamId = options.id || `__streaming_${sessionId}`;
@@ -412,6 +413,7 @@ export function useSessionStore() {
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
+      ...(options.parentToolUseId ? { parentToolUseId: options.parentToolUseId } : {}),
     };
     const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
     if (idx >= 0) {

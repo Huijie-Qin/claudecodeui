@@ -31,6 +31,7 @@ function trace(id: string, agentId: string, activityId: string): SubagentTrace {
       status: 'running',
       summary: 'AskUserQuestion',
     }],
+    messages: [],
     usage: {},
   };
 }

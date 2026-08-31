@@ -94,6 +94,7 @@ export type NormalizedMessage = {
   hasScript?: boolean;
   skillName?: string;
   subagentTools?: unknown;
+  subagentMessages?: NormalizedMessage[];
   toolUseResult?: unknown;
   mcpLoopReplacement?: boolean;
   mcpLoopJobId?: string;

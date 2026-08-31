@@ -162,6 +162,7 @@ export interface ChatMessage {
   subagentState?: {
     agentId?: string;
     childTools: SubagentChildTool[];
+    messages?: ChatMessage[];
     currentToolIndex: number;
     isComplete: boolean;
     detailsOwnerToolId?: string;

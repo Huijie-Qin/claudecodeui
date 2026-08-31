@@ -24,8 +24,15 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
+import type { Project } from '../../../types/app';
 import { AskUserQuestionPanel } from '../tools/components/InteractiveRenderers';
-import type { PendingPermissionRequest } from '../types/types';
+import type {
+  ClaudePermissionSuggestion,
+  PendingPermissionRequest,
+  PermissionGrantResult,
+  Provider,
+} from '../types/types';
+import MessageComponent from '../view/subcomponents/MessageComponent';
 
 import { SubagentActivityItem } from './SubagentActivityItem';
 import type { SubagentTrace, SubagentTraceStatus } from './types';
@@ -41,6 +48,21 @@ export interface SubagentPanelProps {
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; updatedInput?: unknown },
   ) => void;
+  createDiff: (oldStr: string, newStr: string) => Array<{
+    type: string;
+    content: string;
+    lineNum: number;
+  }>;
+  onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  onShowSettings?: () => void;
+  onGrantToolPermission?: (
+    suggestion: ClaudePermissionSuggestion,
+  ) => PermissionGrantResult | null | undefined;
+  autoExpandTools?: boolean;
+  showRawParameters?: boolean;
+  showThinking?: boolean;
+  selectedProject?: Project | null;
+  provider: Provider | string;
 }
 
 const STATUS_STYLES: Record<SubagentTraceStatus, {
@@ -154,6 +176,17 @@ function getContentVersion(
       ),
     ].join(':')
   )).join('|');
+  const messageVersion = trace.messages.map((message) => [
+    message.id || message.messageId || message.toolId || message.timestamp,
+    message.type,
+    message.content,
+    message.isStreaming ? 'streaming' : 'settled',
+    observeContentRevision(
+      revisionCache,
+      `${traceKey}:${String(message.id || message.toolId || message.timestamp)}:tool-result`,
+      message.toolResult,
+    ),
+  ].join(':')).join('|');
   const usageVersion = Object.entries(trace.usage)
     .map(([name, value]) => `${name}:${String(value)}`)
     .join('|');
@@ -161,6 +194,7 @@ function getContentVersion(
   return [
     trace.status,
     activityVersion,
+    messageVersion,
     observeContentRevision(revisionCache, `${traceKey}:final-result`, trace.result),
     usageVersion,
   ].join('::');
@@ -188,6 +222,15 @@ export function SubagentPanel({
   mode,
   permissionRequests = [],
   onPermissionDecision,
+  createDiff,
+  onFileOpen,
+  onShowSettings,
+  onGrantToolPermission,
+  autoExpandTools,
+  showRawParameters,
+  showThinking,
+  selectedProject,
+  provider,
 }: SubagentPanelProps) {
   const { t } = useTranslation('chat');
   const panelTitleId = useId();
@@ -232,6 +275,9 @@ export function SubagentPanel({
     () => formatDisplayValue(selectedTrace?.result),
     [selectedTrace?.result],
   );
+  const selectedTraceUpdateCount = selectedTrace
+    ? Math.max(selectedTrace.activities.length, selectedTrace.messages.length)
+    : 0;
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = scrollContainerRef.current;
@@ -317,7 +363,7 @@ export function SubagentPanel({
 
   useLayoutEffect(() => {
     const traceId = activeTraceId ?? '';
-    const activityCount = selectedTrace?.activities.length ?? 0;
+    const activityCount = selectedTraceUpdateCount;
     const previousSnapshot = previousSnapshotRef.current;
     const isNewSelection = previousSnapshot.traceId !== traceId;
 
@@ -344,7 +390,7 @@ export function SubagentPanel({
     const addedActivities = Math.max(0, activityCount - previousSnapshot.count);
     setNewUpdateCount((count) => count + Math.max(1, addedActivities));
     return undefined;
-  }, [activeTraceId, contentVersion, scrollToBottom, selectedTrace?.activities.length]);
+  }, [activeTraceId, contentVersion, scrollToBottom, selectedTraceUpdateCount]);
 
   const handleTimelineScroll = useCallback(() => {
     const node = scrollContainerRef.current;
@@ -383,7 +429,8 @@ export function SubagentPanel({
     selectedTrace &&
     (selectedTrace.status === 'completed' || selectedTrace.status === 'error') &&
     selectedTrace.result !== undefined &&
-    selectedTrace.result !== null,
+    selectedTrace.result !== null &&
+    selectedTrace.messages.length === 0,
   );
 
   return (
@@ -564,14 +611,35 @@ export function SubagentPanel({
                       id={`${panelTitleId}-timeline-heading`}
                       className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
                     >
-                      {t('subagentPanel.timeline.title', { defaultValue: 'Activity' })}
+                      {t('subagentPanel.timeline.title', {
+                        defaultValue: selectedTrace.messages.length > 0 ? 'Conversation' : 'Activity',
+                      })}
                     </h3>
                     <span className="text-[10px] tabular-nums text-muted-foreground/70">
-                      {selectedTrace.activities.length}
+                      {selectedTrace.messages.length || selectedTrace.activities.length}
                     </span>
                   </div>
 
-                  {selectedTrace.activities.length > 0 ? (
+                  {selectedTrace.messages.length > 0 ? (
+                    <div className="space-y-3">
+                      {selectedTrace.messages.map((message, index) => (
+                        <MessageComponent
+                          key={String(message.id || message.messageId || message.toolId || `${message.timestamp}-${index}`)}
+                          message={message}
+                          prevMessage={index > 0 ? selectedTrace.messages[index - 1] || null : null}
+                          createDiff={createDiff}
+                          onFileOpen={onFileOpen}
+                          onShowSettings={onShowSettings}
+                          onGrantToolPermission={onGrantToolPermission}
+                          autoExpandTools={autoExpandTools}
+                          showRawParameters={showRawParameters}
+                          showThinking={showThinking}
+                          selectedProject={selectedProject}
+                          provider={provider}
+                        />
+                      ))}
+                    </div>
+                  ) : selectedTrace.activities.length > 0 ? (
                     <ol className="space-y-5">
                       {selectedTrace.activities.map((activity, index) => (
                         <SubagentActivityItem

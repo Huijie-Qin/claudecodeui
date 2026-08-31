@@ -307,6 +307,30 @@ function buildActivities(candidates: TraceCandidate[]): SubagentActivity[] {
     .map(({ encounterIndex: _encounterIndex, ...activity }) => activity);
 }
 
+function buildMessages(candidates: TraceCandidate[]): ChatMessage[] {
+  const messages: Array<{ index: number; message: ChatMessage }> = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    for (const message of candidate.message.subagentState?.messages || []) {
+      const identity = String(
+        message.id || message.messageId || message.toolId || message.timestamp,
+      );
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      messages.push({ index: messages.length, message });
+    }
+  }
+
+  return messages
+    .sort((left, right) => (
+      (toDate(left.message.timestamp)?.getTime() || 0) -
+        (toDate(right.message.timestamp)?.getTime() || 0) ||
+      left.index - right.index
+    ))
+    .map(({ message }) => message);
+}
+
 function buildTrace(group: TraceGroup): SubagentTrace {
   const candidates = [...group.candidates].sort((left, right) => left.index - right.index);
   const primary = pickPrimary(candidates);
@@ -322,6 +346,7 @@ function buildTrace(group: TraceGroup): SubagentTrace {
   const status = resolveTraceStatus(candidates, primary, taskStatus);
   const agentId = firstAgentId(candidates, primary);
   const activities = buildActivities(candidates);
+  const messages = buildMessages(candidates);
   const completedAt = status === 'completed' || status === 'error'
     ? maxDate(candidates.map(candidateCompletedAt))
     : undefined;
@@ -357,6 +382,7 @@ function buildTrace(group: TraceGroup): SubagentTrace {
     status,
     startedAt: minDate(candidates.map(({ message }) => toDate(message.timestamp))),
     activities,
+    messages,
     usage,
   };
 

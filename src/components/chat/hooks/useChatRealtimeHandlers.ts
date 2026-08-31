@@ -239,36 +239,55 @@ export function useChatRealtimeHandlers({
     const lifecycleSessionId = sid || pendingLifecycleSessionId;
     const shouldAffectCurrentView = isActiveViewSession || pendingTerminalMessage;
 
-    const clearStreamTimer = (sessionId: string) => {
-      const timerId = streamTimersRef.current.get(sessionId);
+    const streamScopeKey = (sessionId: string, parentToolUseId?: string) => (
+      `${sessionId}\u0000${parentToolUseId || ''}`
+    );
+
+    const clearStreamTimer = (sessionId: string, parentToolUseId?: string) => {
+      const key = streamScopeKey(sessionId, parentToolUseId);
+      const timerId = streamTimersRef.current.get(key);
       if (!timerId) return;
       clearTimeout(timerId);
-      streamTimersRef.current.delete(sessionId);
+      streamTimersRef.current.delete(key);
     };
 
-    const pushStreamSnapshot = (sessionId: string) => {
-      const streamSnapshot = streamAccumulatorRef.current.getSnapshot(sessionId);
+    const pushStreamSnapshot = (sessionId: string, parentToolUseId?: string) => {
+      const streamSnapshot = streamAccumulatorRef.current.getSnapshot(sessionId, parentToolUseId);
       if (streamSnapshot?.content) {
         sessionStore.updateStreaming(sessionId, streamSnapshot.content, provider, {
           id: streamSnapshot.id,
           timestamp: streamSnapshot.timestamp,
+          parentToolUseId: streamSnapshot.parentToolUseId,
         });
       }
     };
 
-    const finishStreamSegment = (sessionId: string) => {
-      clearStreamTimer(sessionId);
-      const streamSnapshot = streamAccumulatorRef.current.finishSnapshot(sessionId);
+    const finishStreamSegment = (sessionId: string, parentToolUseId?: string) => {
+      clearStreamTimer(sessionId, parentToolUseId);
+      const streamSnapshot = streamAccumulatorRef.current.finishSnapshot(sessionId, parentToolUseId);
       if (streamSnapshot?.content) {
         sessionStore.updateStreaming(sessionId, streamSnapshot.content, provider, {
           id: streamSnapshot.id,
           timestamp: streamSnapshot.timestamp,
+          parentToolUseId: streamSnapshot.parentToolUseId,
         });
       }
     };
 
     const flushStream = (sessionId: string) => {
-      finishStreamSegment(sessionId);
+      for (const [key, timerId] of streamTimersRef.current) {
+        if (!key.startsWith(`${sessionId}\u0000`)) continue;
+        clearTimeout(timerId);
+        streamTimersRef.current.delete(key);
+      }
+      for (const streamSnapshot of streamAccumulatorRef.current.finishSessionSnapshots(sessionId)) {
+        if (!streamSnapshot.content) continue;
+        sessionStore.updateStreaming(sessionId, streamSnapshot.content, provider, {
+          id: streamSnapshot.id,
+          timestamp: streamSnapshot.timestamp,
+          parentToolUseId: streamSnapshot.parentToolUseId,
+        });
+      }
     };
 
     const finalizeStreamFallback = (sessionId: string) => {
@@ -281,20 +300,24 @@ export function useChatRealtimeHandlers({
       if (!sid) return;
       const text = msg.content || '';
       if (!text) return;
-      streamAccumulatorRef.current.appendDelta(sid, text, msg.timestamp);
-      if (!streamTimersRef.current.has(sid)) {
+      const parentToolUseId = typeof msg.parentToolUseId === 'string'
+        ? msg.parentToolUseId
+        : undefined;
+      const key = streamScopeKey(sid, parentToolUseId);
+      streamAccumulatorRef.current.appendDelta(sid, text, msg.timestamp, parentToolUseId);
+      if (!streamTimersRef.current.has(key)) {
         const timerId = window.setTimeout(() => {
-          streamTimersRef.current.delete(sid);
-          pushStreamSnapshot(sid);
+          streamTimersRef.current.delete(key);
+          pushStreamSnapshot(sid, parentToolUseId);
         }, 100);
-        streamTimersRef.current.set(sid, timerId);
+        streamTimersRef.current.set(key, timerId);
       }
       return;
     }
 
     if (msg.kind === 'stream_end') {
       if (sid) {
-        finishStreamSegment(sid);
+        finishStreamSegment(sid, typeof msg.parentToolUseId === 'string' ? msg.parentToolUseId : undefined);
       }
       return;
     }
@@ -302,8 +325,11 @@ export function useChatRealtimeHandlers({
     // --- All other messages: route to store ---
     if (sid) {
       if (msg.kind === 'text' && msg.role === 'assistant') {
-        clearStreamTimer(sid);
-        streamAccumulatorRef.current.clear(sid);
+        const parentToolUseId = typeof msg.parentToolUseId === 'string'
+          ? msg.parentToolUseId
+          : undefined;
+        clearStreamTimer(sid, parentToolUseId);
+        streamAccumulatorRef.current.clear(sid, parentToolUseId);
       }
       sessionStore.appendRealtime(sid, { ...msg, sessionId: sid } as NormalizedMessage);
     }
@@ -388,8 +414,12 @@ export function useChatRealtimeHandlers({
 
       case 'error': {
         if (sid) {
-          clearStreamTimer(sid);
-          streamAccumulatorRef.current.clear(sid);
+          for (const [key, timerId] of streamTimersRef.current) {
+            if (!key.startsWith(`${sid}\u0000`)) continue;
+            clearTimeout(timerId);
+            streamTimersRef.current.delete(key);
+          }
+          streamAccumulatorRef.current.clearSession(sid);
         }
         if (pendingTerminalMessage) {
           addMessage?.({

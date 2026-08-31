@@ -69,3 +69,18 @@ test('draining snapshots preserves every buffered session before a lifecycle res
   assert.equal(accumulator.getSnapshot('session-1'), null);
   assert.deepEqual(accumulator.drainSnapshots(), []);
 });
+
+test('keeps main-agent and subagent stream deltas isolated within one session', () => {
+  const accumulator = createSessionStreamAccumulator();
+
+  accumulator.appendDelta('session-1', 'main', undefined);
+  accumulator.appendDelta('session-1', 'child ', undefined, 'toolu_agent_1');
+  accumulator.appendDelta('session-1', 'output', undefined, 'toolu_agent_1');
+
+  assert.equal(accumulator.get('session-1'), 'main');
+  assert.equal(accumulator.get('session-1', 'toolu_agent_1'), 'child output');
+  assert.equal(
+    accumulator.getSnapshot('session-1', 'toolu_agent_1')?.parentToolUseId,
+    'toolu_agent_1',
+  );
+});

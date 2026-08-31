@@ -137,6 +137,13 @@ test('runtime Claude history restores tools from the current nested subagent tra
     path.join(projectDir, sessionId, 'subagents', 'agent-agent-1.jsonl'),
     [
       {
+        timestamp: '2026-01-01T00:00:01.100Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Inspecting the authentication flow.' }],
+        },
+      },
+      {
         timestamp: '2026-01-01T00:00:01.200Z',
         message: {
           role: 'assistant',
@@ -172,6 +179,8 @@ test('runtime Claude history restores tools from the current nested subagent tra
     timestamp: '2026-01-01T00:00:01.200Z',
     toolResult: { content: 'source', isError: false },
   }]);
+  assert.equal(agentResult?.subagentMessages?.length, 3);
+  assert.equal(agentResult?.subagentMessages?.[0]?.message?.content?.[0]?.text, 'Inspecting the authentication flow.');
 });
 
 test('runtime Claude history keeps resumed agent generations separated by parent tool id', async () => {
@@ -245,6 +254,8 @@ test('runtime Claude history keeps resumed agent generations separated by parent
 
   assert.deepEqual(firstResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_1']);
   assert.deepEqual(secondResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_2']);
+  assert.deepEqual(firstResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_2']);
 });
 
 test('runtime Claude history time-slices legacy resumed agents without parent tool ids', async () => {
@@ -316,6 +327,8 @@ test('runtime Claude history time-slices legacy resumed agents without parent to
 
   assert.deepEqual(firstResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_1']);
   assert.deepEqual(secondResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_2']);
+  assert.deepEqual(firstResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_2']);
 });
 
 test('runtime Claude session deletion removes only the target transcript and session data directory', async () => {

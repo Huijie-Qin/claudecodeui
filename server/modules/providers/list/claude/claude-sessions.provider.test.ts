@@ -377,6 +377,14 @@ test('ClaudeSessionsProvider restores nested subagent tools into the Agent histo
   ];
   const subagentRows = [
     {
+      timestamp: '2026-08-24T01:00:00.100Z',
+      isSidechain: true,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Inspecting authentication.' }],
+      },
+    },
+    {
       timestamp: '2026-08-24T01:00:00.200Z',
       message: {
         role: 'assistant',
@@ -426,6 +434,17 @@ test('ClaudeSessionsProvider restores nested subagent tools into the Agent histo
     timestamp: '2026-08-24T01:00:00.200Z',
     toolResult: { content: 'source', isError: false },
   }]);
+  assert.deepEqual(
+    agentMessage?.subagentMessages?.map((message) => [message.kind, message.content]),
+    [
+      ['text', 'Inspecting authentication.'],
+      ['tool_use', undefined],
+      ['tool_result', 'source'],
+    ],
+  );
+  assert.ok(agentMessage?.subagentMessages?.every((message) => (
+    message.parentToolUseId === 'toolu_agent_1'
+  )));
 });
 
 test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {

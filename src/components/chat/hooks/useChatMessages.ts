@@ -561,6 +561,79 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       : toolId;
   };
 
+  const toolUseById = new Map<string, { index: number; message: NormalizedMessage }>();
+  messages.forEach((message, index) => {
+    if (message.kind === 'tool_use' && message.toolId) {
+      toolUseById.set(message.toolId, { index, message });
+    }
+  });
+
+  const resolveRootSubagentToolIdAt = (
+    parentToolUseId: string,
+    eventIndex: number,
+  ): string | undefined => {
+    const visited = new Set<string>();
+    let currentToolId: string | undefined = parentToolUseId;
+    while (currentToolId && !visited.has(currentToolId)) {
+      visited.add(currentToolId);
+      if (subagentToolIds.has(currentToolId)) {
+        return canonicalSubagentToolIdAt(currentToolId, eventIndex);
+      }
+      currentToolId = toolUseById.get(currentToolId)?.message.parentToolUseId;
+    }
+    return undefined;
+  };
+
+  const subagentTranscriptByParentToolId = new Map<string, NormalizedMessage[]>();
+  const associatedSubagentMessages = new Set<NormalizedMessage>();
+  const appendSubagentTranscript = (parentToolId: string, transcript: NormalizedMessage[]) => {
+    const existing = subagentTranscriptByParentToolId.get(parentToolId) || [];
+    existing.push(...transcript);
+    subagentTranscriptByParentToolId.set(parentToolId, existing);
+  };
+
+  // Realtime subagent events arrive in the main WebSocket stream, tagged with
+  // their parent tool. Route the whole event (not only child tools) away from
+  // the main transcript and into the owning subagent transcript.
+  messages.forEach((message, index) => {
+    if (!message.parentToolUseId) return;
+    const parentToolId = resolveRootSubagentToolIdAt(message.parentToolUseId, index);
+    if (!parentToolId) return;
+    appendSubagentTranscript(parentToolId, [message]);
+    associatedSubagentMessages.add(message);
+  });
+
+  // History restoration carries normalized rows read from
+  // <sessionId>/subagents/agent-*.jsonl on the owning Agent tool card.
+  for (const [toolId, message] of subagentToolMessageById) {
+    const mappedToolResult = toolResultMap.get(toolId);
+    const historicalMessages = [message.subagentMessages, mappedToolResult?.subagentMessages]
+      .filter((entries): entries is NormalizedMessage[] => Array.isArray(entries) && entries.length > 0)
+      .flat();
+    if (historicalMessages.length === 0) continue;
+    const parentToolId = subagentDetailsOwnerByAliasToolId.get(toolId) || toolId;
+    appendSubagentTranscript(parentToolId, historicalMessages);
+  }
+
+  const buildSubagentTranscript = (parentToolId: string): ChatMessage[] => {
+    const seen = new Set<string>();
+    const transcript = (subagentTranscriptByParentToolId.get(parentToolId) || [])
+      .filter((message) => {
+        const key = `${message.id}:${message.kind}:${message.toolId || ''}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((left, right) => (
+        (timestampToMs(left.timestamp) ?? 0) - (timestampToMs(right.timestamp) ?? 0)
+      ))
+      // These messages are already scoped to one panel. Removing parent
+      // routing metadata lets the normal renderer show every nested event in
+      // sequence instead of hiding it behind another ownership pass.
+      .map(({ parentToolUseId: _parentToolUseId, subagentMessages: _nested, ...message }) => message);
+    return transcript.length > 0 ? normalizedToChatMessages(transcript) : [];
+  };
+
   const resolveSubagentToolIdAt = ({
     eventIndex,
     taskId,
@@ -688,7 +761,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const msg = messages[messageIndex];
-    if (groupedHookRecoveryMessageIds.has(msg.id)) {
+    if (groupedHookRecoveryMessageIds.has(msg.id) || associatedSubagentMessages.has(msg)) {
       continue;
     }
 
@@ -822,6 +895,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           : [];
         const historicalChildTools = isSubagentContainer && !isSubagentDetailsAlias && msg.toolId
           ? historicalSubagentToolsByParentToolId.get(msg.toolId) || []
+          : [];
+        const subagentMessages = isSubagentContainer && !isSubagentDetailsAlias && msg.toolId
+          ? buildSubagentTranscript(msg.toolId)
           : [];
         const latestChildActivityIndex = realtimeChildToolRecords.reduce(
           (latest, record) => Math.max(latest, record.index),
@@ -989,6 +1065,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             ? {
                 agentId: subagentAgentId,
                 childTools,
+                messages: subagentMessages,
                 currentToolIndex: childTools.length > 0 ? childTools.length - 1 : -1,
                 isComplete: isSubagentComplete,
                 detailsOwnerToolId,
