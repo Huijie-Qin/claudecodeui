@@ -377,7 +377,10 @@ export default function ClaudeEnvironmentSettingsTab() {
       >
         <SettingsCard className="overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 p-4">
-            <p className="text-xs text-muted-foreground">{t('claudeEnv.personal.globalHelp')}</p>
+            <p className="text-xs text-muted-foreground">
+              <span className="block">{t('claudeEnv.personal.globalHelp')}</span>
+              <span className="block">{t('claudeEnv.personal.updateHelp')}</span>
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               {personalStatus === 'success' ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">

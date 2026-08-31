@@ -491,6 +491,7 @@
       "deleteColumn": "Delete",
       "delete": "Delete {{name}}",
       "globalHelp": "Personal values apply across all tenants. Tenant and administrator values remain separate.",
+      "updateHelp": "To update a field value, enter the same field name and save.",
       "configuredTitle": "Configured environment variables",
       "configuredDescription": "Only your saved personal environment variables are shown here. Encrypted values are never revealed.",
       "configuredEmpty": "No personal environment variables have been saved.",

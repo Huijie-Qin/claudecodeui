@@ -491,6 +491,7 @@
       "deleteColumn": "删除",
       "delete": "删除 {{name}}",
       "globalHelp": "个人变量在所有租户中生效；租户和管理员配置仍保持独立。",
+      "updateHelp": "如需更新字段值，请填写相同字段名后保存。",
       "configuredTitle": "已配置的环境变量",
       "configuredDescription": "这里仅展示你已经保存的个人环境变量。加密值不会回显。",
       "configuredEmpty": "尚未保存个人环境变量。",
