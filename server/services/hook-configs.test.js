@@ -360,6 +360,19 @@ test('Hook execution diagnostics expose outcomes, millisecond timestamps, and gl
         },
       }),
     );
+    database.prepare(`
+      INSERT INTO mcp_loop_attempts (
+        hook_execution_id, action_id, job_id, attempt_count,
+        script_status, termination_outcome, failure_stage,
+        script_input_json, script_output_json, error_message,
+        started_at_ms, completed_at_ms, duration_ms
+      ) VALUES (?, 'loop-action', NULL, 0,
+        'completed', 'running', NULL, ?, ?, NULL, 1005, 1010, 5)
+    `).run(
+      'execution-1',
+      JSON.stringify({ result: { status: 'Running' }, attempt_count: 0 }),
+      JSON.stringify({ output: { status: 'running' } }),
+    );
 
     const [execution] = service.listAllExecutions({ sessionId: 'session-1' });
     assert.equal(execution.hookName, hook.name);
@@ -373,6 +386,24 @@ test('Hook execution diagnostics expose outcomes, millisecond timestamps, and gl
     const detail = service.getExecution('execution-1');
     assert.equal(detail.id, 'execution-1');
     assert.equal(detail.input.tool_name, 'Bash');
+    assert.deepEqual(detail.mcpLoopAttempts, [{
+      id: detail.mcpLoopAttempts[0].id,
+      hookExecutionId: 'execution-1',
+      actionId: 'loop-action',
+      jobId: null,
+      jobStatus: null,
+      attemptCount: 0,
+      scriptStatus: 'completed',
+      terminationOutcome: 'running',
+      failureStage: null,
+      scriptInput: { result: { status: 'Running' }, attempt_count: 0 },
+      scriptOutput: { output: { status: 'running' } },
+      errorMessage: null,
+      startedAtMs: 1005,
+      completedAtMs: 1010,
+      durationMs: 5,
+      createdAt: detail.mcpLoopAttempts[0].createdAt,
+    }]);
   } finally {
     database.close();
   }

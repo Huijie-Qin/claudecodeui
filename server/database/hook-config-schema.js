@@ -50,6 +50,33 @@ CREATE INDEX IF NOT EXISTS idx_mcp_loop_jobs_due
   ON mcp_loop_jobs(status, next_poll_at_ms);
 CREATE INDEX IF NOT EXISTS idx_mcp_loop_jobs_session
   ON mcp_loop_jobs(session_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mcp_loop_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  hook_execution_id TEXT NOT NULL,
+  action_id TEXT NOT NULL,
+  job_id TEXT,
+  attempt_count INTEGER NOT NULL,
+  script_status TEXT NOT NULL
+    CHECK (script_status IN ('completed', 'failed', 'not_run')),
+  termination_outcome TEXT
+    CHECK (termination_outcome IS NULL OR termination_outcome IN ('running', 'succeeded', 'failed')),
+  failure_stage TEXT
+    CHECK (failure_stage IS NULL OR failure_stage IN ('mcp_call', 'termination_script')),
+  script_input_json TEXT,
+  script_output_json TEXT,
+  error_message TEXT,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(hook_execution_id, action_id, attempt_count)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_loop_attempts_execution
+  ON mcp_loop_attempts(hook_execution_id, attempt_count);
+CREATE INDEX IF NOT EXISTS idx_mcp_loop_attempts_job
+  ON mcp_loop_attempts(job_id, attempt_count);
 `;
 
 const HTTP_200_RECOVERY_EXTENSION = Object.freeze({

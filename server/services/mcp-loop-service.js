@@ -11,8 +11,10 @@ import { executeHookScript } from './hook-script-executor.js';
 const DEFAULT_SCHEDULER_INTERVAL_MS = 1_000;
 const DEFAULT_MAX_CONCURRENT = 20;
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 3;
+const MAX_ATTEMPT_LOG_BYTES = 64 * 1024;
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'timed_out', 'cancelled']);
+const SENSITIVE_LOG_KEY_PATTERN = /(?:authorization|cookie|credential|password|secret|token|api[_-]?key|user[_-]?key|auth[_-]?(?:key|token))/i;
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -30,6 +32,42 @@ function parseJson(value, fallback = null) {
 function serializeJson(value) {
   if (value === undefined) return null;
   return JSON.stringify(value);
+}
+
+function redactAttemptLogValue(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 20) return '[depth limit]';
+  if (typeof value === 'string') {
+    return value
+      .replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer [redacted]')
+      .replace(/\b[0-9a-f]{64}\b/gi, '[redacted]');
+  }
+  if (value == null || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactAttemptLogValue(entry, depth + 1, seen));
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+    key,
+    SENSITIVE_LOG_KEY_PATTERN.test(key)
+      ? '[redacted]'
+      : redactAttemptLogValue(entry, depth + 1, seen),
+  ]));
+}
+
+function formatAttemptLogValue(value) {
+  const redacted = redactAttemptLogValue(value);
+  let json;
+  try {
+    json = JSON.stringify(redacted);
+  } catch {
+    return { error: 'MCP result is not JSON serializable' };
+  }
+  if (Buffer.byteLength(json, 'utf8') <= MAX_ATTEMPT_LOG_BYTES) return redacted;
+  return {
+    truncated: true,
+    preview: json.slice(0, MAX_ATTEMPT_LOG_BYTES),
+  };
 }
 
 function toFiniteNumber(value, fallback = 0) {
@@ -291,6 +329,40 @@ export function createMcpLoopService({
     SET status = 'cancelled', completed_at_ms = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND user_id = ? AND status IN ('queued', 'running')
   `);
+  let upsertAttempt = null;
+
+  function getUpsertAttempt() {
+    if (!upsertAttempt) {
+      // The loop singleton is constructed while the database module is still
+      // initializing. Prepare this cross-Hook audit statement only when the
+      // first real Hook execution reaches the loop service.
+      upsertAttempt = database.prepare(`
+        INSERT INTO mcp_loop_attempts (
+          hook_execution_id, action_id, job_id, attempt_count,
+          script_status, termination_outcome, failure_stage,
+          script_input_json, script_output_json, error_message,
+          started_at_ms, completed_at_ms, duration_ms
+        ) VALUES (
+          @hookExecutionId, @actionId, @jobId, @attemptCount,
+          @scriptStatus, @terminationOutcome, @failureStage,
+          @scriptInputJson, @scriptOutputJson, @errorMessage,
+          @startedAtMs, @completedAtMs, @durationMs
+        )
+        ON CONFLICT(hook_execution_id, action_id, attempt_count) DO UPDATE SET
+          job_id = excluded.job_id,
+          script_status = excluded.script_status,
+          termination_outcome = excluded.termination_outcome,
+          failure_stage = excluded.failure_stage,
+          script_input_json = excluded.script_input_json,
+          script_output_json = excluded.script_output_json,
+          error_message = excluded.error_message,
+          started_at_ms = excluded.started_at_ms,
+          completed_at_ms = excluded.completed_at_ms,
+          duration_ms = excluded.duration_ms
+      `);
+    }
+    return upsertAttempt;
+  }
 
   function getJob(jobId) {
     return mapJob(selectById.get(String(jobId)));
@@ -327,23 +399,75 @@ export function createMcpLoopService({
     return terminalJob;
   }
 
-  async function evaluateTermination(job, result, attemptCount) {
+  function buildTerminationScriptInput(job, result, attemptCount) {
+    return {
+      result,
+      initial_result: job.initialResult,
+      inputs: job.inputs,
+      attempt_count: attemptCount,
+      elapsed_ms: Math.max(0, now() - job.startedAtMs),
+    };
+  }
+
+  function saveAttempt({
+    job,
+    jobId = job.id || null,
+    attemptCount,
+    scriptStatus,
+    terminationOutcome = null,
+    failureStage = null,
+    scriptInput = null,
+    scriptOutput = null,
+    error = null,
+    startedAtMs,
+    completedAtMs,
+  }) {
+    getUpsertAttempt().run({
+      hookExecutionId: job.hookExecutionId,
+      actionId: job.actionId,
+      jobId,
+      attemptCount,
+      scriptStatus,
+      terminationOutcome,
+      failureStage,
+      scriptInputJson: scriptInput == null ? null : serializeJson(scriptInput),
+      scriptOutputJson: scriptOutput == null ? null : serializeJson(scriptOutput),
+      errorMessage: error ? String(error).slice(0, 8_000) : null,
+      startedAtMs,
+      completedAtMs,
+      durationMs: Math.max(0, completedAtMs - startedAtMs),
+    });
+  }
+
+  function trySaveAttempt(details) {
+    try {
+      saveAttempt(details);
+    } catch (error) {
+      logger.error?.(
+        `[McpLoop:${details.jobId || details.job?.id || 'initial'}] failed to persist attempt ${details.attemptCount}:`,
+        error?.message || error,
+      );
+    }
+  }
+
+  async function evaluateTermination(job, scriptInput) {
     if (!job.terminationScript.trim()) {
       // Active jobs created by the equality-based first release remain
       // resumable after an upgrade.
-      return evaluateMcpLoopResult(result, job);
+      const outcome = evaluateMcpLoopResult(scriptInput.result, job);
+      return {
+        outcome,
+        scriptOutput: {
+          output: { status: outcome === 'succeeded' ? 'success' : outcome },
+          legacyEqualityCondition: true,
+        },
+      };
     }
     const scriptResult = await scriptExecutor({
       hookId: job.hookId,
       language: 'python',
       code: job.terminationScript,
-      event: {
-        result,
-        initial_result: job.initialResult,
-        inputs: job.inputs,
-        attempt_count: attemptCount,
-        elapsed_ms: Math.max(0, now() - job.startedAtMs),
-      },
+      event: scriptInput,
       env: {
         userId: job.userId,
         tenantId: job.tenantId,
@@ -356,7 +480,10 @@ export function createMcpLoopService({
         return { message, data };
       },
     });
-    return normalizeTerminationScriptOutcome(scriptResult);
+    return {
+      outcome: normalizeTerminationScriptOutcome(scriptResult),
+      scriptOutput: scriptResult,
+    };
   }
 
   async function runClaimedJob(job) {
@@ -368,12 +495,49 @@ export function createMcpLoopService({
     }
 
     const attemptCount = job.attemptCount + 1;
+    const attemptStartedAtMs = now();
+    let attemptResult;
+    let hasAttemptResult = false;
+    let attemptStage = 'mcp_call';
+    let scriptInput = null;
+    let scriptOutput = null;
     try {
-      const result = normalizeMcpLoopResult(await callTarget(job, runtimeContexts.get(job.id) || null));
-      const outcome = await evaluateTermination(job, result, attemptCount);
+      attemptResult = normalizeMcpLoopResult(await callTarget(job, runtimeContexts.get(job.id) || null));
+      hasAttemptResult = true;
+      attemptStage = 'termination_script';
+      scriptInput = buildTerminationScriptInput(job, attemptResult, attemptCount);
+      const evaluation = await evaluateTermination(job, scriptInput);
+      const { outcome } = evaluation;
+      scriptOutput = evaluation.scriptOutput;
+      const attemptCompletedAtMs = now();
+      trySaveAttempt({
+        job,
+        attemptCount,
+        scriptStatus: 'completed',
+        terminationOutcome: outcome,
+        scriptInput,
+        scriptOutput,
+        startedAtMs: attemptStartedAtMs,
+        completedAtMs: attemptCompletedAtMs,
+      });
+      logger.info?.(`[McpLoop:${job.id}] attempt_completed`, {
+        jobId: job.id,
+        hookId: job.hookId,
+        hookExecutionId: job.hookExecutionId,
+        sessionId: job.sessionId,
+        mcpServerId: job.mcpServerId,
+        toolName: job.toolName,
+        attemptCount,
+        startedAtMs: attemptStartedAtMs,
+        completedAtMs: attemptCompletedAtMs,
+        durationMs: Math.max(0, attemptCompletedAtMs - attemptStartedAtMs),
+        terminationOutcome: outcome,
+        result: formatAttemptLogValue(attemptResult),
+        scriptOutput: formatAttemptLogValue(scriptOutput),
+      });
       if (outcome !== 'running') {
         return transitionTerminal(job, outcome, {
-          result,
+          result: attemptResult,
           attemptCount,
           consecutiveErrorCount: 0,
           error: null,
@@ -385,7 +549,7 @@ export function createMcpLoopService({
         id: job.id,
         attemptCount,
         consecutiveErrorCount: 0,
-        lastResultJson: serializeJson(result),
+        lastResultJson: serializeJson(attemptResult),
         errorMessage: null,
         nextPollAtMs,
       });
@@ -395,6 +559,35 @@ export function createMcpLoopService({
       return pendingJob;
     } catch (error) {
       const consecutiveErrorCount = job.consecutiveErrorCount + 1;
+      const attemptCompletedAtMs = now();
+      trySaveAttempt({
+        job,
+        attemptCount,
+        scriptStatus: attemptStage === 'mcp_call' ? 'not_run' : 'failed',
+        failureStage: attemptStage,
+        scriptInput,
+        scriptOutput,
+        error: error?.message || String(error),
+        startedAtMs: attemptStartedAtMs,
+        completedAtMs: attemptCompletedAtMs,
+      });
+      logger.info?.(`[McpLoop:${job.id}] attempt_failed`, {
+        jobId: job.id,
+        hookId: job.hookId,
+        hookExecutionId: job.hookExecutionId,
+        sessionId: job.sessionId,
+        mcpServerId: job.mcpServerId,
+        toolName: job.toolName,
+        attemptCount,
+        startedAtMs: attemptStartedAtMs,
+        completedAtMs: attemptCompletedAtMs,
+        durationMs: Math.max(0, attemptCompletedAtMs - attemptStartedAtMs),
+        consecutiveErrorCount,
+        willRetry: consecutiveErrorCount < maxConsecutiveErrors,
+        failureStage: attemptStage,
+        ...(hasAttemptResult ? { result: formatAttemptLogValue(attemptResult) } : {}),
+        error: formatAttemptLogValue(error?.message || String(error)),
+      });
       if (consecutiveErrorCount >= maxConsecutiveErrors) {
         return transitionTerminal(job, 'failed', {
           attemptCount,
@@ -458,6 +651,8 @@ export function createMcpLoopService({
     const normalizedInitialResult = normalizeMcpLoopResult(initialResult);
     const initialEvaluationJob = {
       hookId: hook.id,
+      hookExecutionId: executionId,
+      actionId: action.id,
       userId: Number(userId) || null,
       tenantId: Number(tenantId) || null,
       workspaceId: Number(workspaceId) || null,
@@ -470,8 +665,44 @@ export function createMcpLoopService({
       failureWhen: config.failureWhen,
       startedAtMs: now(),
     };
-    const initialOutcome = await evaluateTermination(initialEvaluationJob, normalizedInitialResult, 0);
+    const initialAttemptStartedAtMs = now();
+    const initialScriptInput = buildTerminationScriptInput(
+      initialEvaluationJob,
+      normalizedInitialResult,
+      0,
+    );
+    let initialEvaluation;
+    try {
+      initialEvaluation = await evaluateTermination(initialEvaluationJob, initialScriptInput);
+    } catch (error) {
+      const initialAttemptCompletedAtMs = now();
+      trySaveAttempt({
+        job: initialEvaluationJob,
+        jobId: null,
+        attemptCount: 0,
+        scriptStatus: 'failed',
+        failureStage: 'termination_script',
+        scriptInput: initialScriptInput,
+        error: error?.message || String(error),
+        startedAtMs: initialAttemptStartedAtMs,
+        completedAtMs: initialAttemptCompletedAtMs,
+      });
+      throw error;
+    }
+    const initialOutcome = initialEvaluation.outcome;
     if (initialOutcome !== 'running') {
+      const initialAttemptCompletedAtMs = now();
+      trySaveAttempt({
+        job: initialEvaluationJob,
+        jobId: null,
+        attemptCount: 0,
+        scriptStatus: 'completed',
+        terminationOutcome: initialOutcome,
+        scriptInput: initialScriptInput,
+        scriptOutput: initialEvaluation.scriptOutput,
+        startedAtMs: initialAttemptStartedAtMs,
+        completedAtMs: initialAttemptCompletedAtMs,
+      });
       return {
         scheduled: false,
         status: initialOutcome,
@@ -515,6 +746,18 @@ export function createMcpLoopService({
     if (mapped && runtimeContext && typeof runtimeContext === 'object') {
       runtimeContexts.set(mapped.id, runtimeContext);
     }
+    const initialAttemptCompletedAtMs = now();
+    trySaveAttempt({
+      job: initialEvaluationJob,
+      jobId: mapped?.id || null,
+      attemptCount: 0,
+      scriptStatus: 'completed',
+      terminationOutcome: initialOutcome,
+      scriptInput: initialScriptInput,
+      scriptOutput: initialEvaluation.scriptOutput,
+      startedAtMs: initialAttemptStartedAtMs,
+      completedAtMs: initialAttemptCompletedAtMs,
+    });
     await notify('onStarted', mapped);
     return { scheduled: true, job: mapped };
   }

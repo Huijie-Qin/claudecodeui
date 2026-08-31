@@ -783,6 +783,27 @@ function mapDataRecordRow(row) {
   };
 }
 
+function mapMcpLoopAttemptRow(row) {
+  return {
+    id: Number(row.id),
+    hookExecutionId: row.hook_execution_id,
+    actionId: row.action_id,
+    jobId: row.job_id || null,
+    jobStatus: row.job_status || null,
+    attemptCount: Number(row.attempt_count || 0),
+    scriptStatus: row.script_status,
+    terminationOutcome: row.termination_outcome || null,
+    failureStage: row.failure_stage || null,
+    scriptInput: parseJson(row.script_input_json, null),
+    scriptOutput: parseJson(row.script_output_json, null),
+    errorMessage: row.error_message || null,
+    startedAtMs: Number(row.started_at_ms || 0),
+    completedAtMs: Number(row.completed_at_ms || 0),
+    durationMs: Number(row.duration_ms || 0),
+    createdAt: row.created_at || null,
+  };
+}
+
 function listMcpToolCatalog(database) {
   if (!hasTable(database, 'mcp_server_presets')) return [];
   const rows = database
@@ -1671,7 +1692,18 @@ export function createHookConfigService({
         LEFT JOIN users ON users.id = e.user_id
         WHERE e.id = ?
       `).get(executionId);
-      return mapExecutionRow(row);
+      const execution = mapExecutionRow(row);
+      if (!execution) return null;
+      const mcpLoopAttempts = hasTable(database, 'mcp_loop_attempts')
+        ? database.prepare(`
+          SELECT attempts.*, jobs.status AS job_status
+          FROM mcp_loop_attempts attempts
+          LEFT JOIN mcp_loop_jobs jobs ON jobs.id = attempts.job_id
+          WHERE attempts.hook_execution_id = ?
+          ORDER BY attempts.attempt_count ASC, attempts.id ASC
+        `).all(String(executionId)).map(mapMcpLoopAttemptRow)
+        : [];
+      return { ...execution, mcpLoopAttempts };
     },
 
     listExecutionDataRecords: (executionId) => {

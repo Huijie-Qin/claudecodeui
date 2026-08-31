@@ -505,6 +505,30 @@
       "actions": "Post-actions",
       "response": "Response to Claude",
       "logs": "Runtime logs",
+      "loopAttempts": {
+        "title": "Loop script attempts ({{count}})",
+        "description": "Attempt 0 evaluates the initial MCP result; later attempts come from background polling. Expand an attempt to inspect its actual script input and output.",
+        "initialAttempt": "Attempt 0 · Initial evaluation",
+        "attempt": "Attempt {{count}}",
+        "failureStage": "Failure stage",
+        "error": "Attempt error",
+        "scriptInput": "Attempt script input event",
+        "scriptOutput": "Attempt script output",
+        "outcomes": {
+          "running": "Continue polling",
+          "succeeded": "Succeeded",
+          "failed": "Failed"
+        },
+        "scriptStatuses": {
+          "completed": "Script completed",
+          "failed": "Script failed",
+          "not_run": "Script not run"
+        },
+        "stages": {
+          "mcp_call": "MCP call",
+          "termination_script": "Termination script"
+        }
+      },
       "failOpenWarning": "This Hook returned an empty result after failing, so the Agent or tool call may have continued.",
       "failOpenSideEffect": "The same parallel event contains a failed Hook and completed post-actions. A failure does not undo sibling Hook side effects.",
       "search": "Search Hook, user, session, tool, or Tool Use ID",

@@ -459,6 +459,30 @@
       "actions": "后置动作",
       "response": "返回 Claude",
       "logs": "运行日志",
+      "loopAttempts": {
+        "title": "循环脚本轮次（{{count}}）",
+        "description": "第 0 轮是首次 MCP 返回后的判断；后续轮次来自后台轮询。展开可查看该轮脚本的真实输入和输出。",
+        "initialAttempt": "第 0 轮 · 首次判断",
+        "attempt": "第 {{count}} 轮",
+        "failureStage": "失败阶段",
+        "error": "本轮错误",
+        "scriptInput": "本轮脚本输入 event",
+        "scriptOutput": "本轮脚本输出",
+        "outcomes": {
+          "running": "继续轮询",
+          "succeeded": "判断成功",
+          "failed": "判断失败"
+        },
+        "scriptStatuses": {
+          "completed": "脚本已执行",
+          "failed": "脚本异常",
+          "not_run": "脚本未执行"
+        },
+        "stages": {
+          "mcp_call": "MCP 调用",
+          "termination_script": "终止脚本"
+        }
+      },
       "failOpenWarning": "此 Hook 执行失败后返回了空结果，Agent 或工具调用仍可能继续。",
       "failOpenSideEffect": "同一次并行事件中存在失败 Hook 和已执行的后置动作；失败不会自动撤销其他 Hook 的副作用。",
       "search": "搜索 Hook、用户、会话、工具或 Tool Use ID",

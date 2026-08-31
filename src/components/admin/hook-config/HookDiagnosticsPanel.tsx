@@ -21,7 +21,13 @@ import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '
 import { api } from '../../../utils/api';
 
 import { groupHookExecutions, likelyWinningUpdatedInput, paginationWindow } from './diagnostics';
-import type { HookConfig, HookExecution, HookExecutionOutcome, HookExecutionPage } from './types';
+import type {
+  HookConfig,
+  HookExecution,
+  HookExecutionOutcome,
+  HookExecutionPage,
+  McpLoopAttempt,
+} from './types';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
@@ -77,14 +83,82 @@ function JsonSection({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function loopAttemptVariant(attempt: McpLoopAttempt) {
+  if (attempt.scriptStatus === 'failed' || attempt.terminationOutcome === 'failed') return 'destructive' as const;
+  if (attempt.terminationOutcome === 'succeeded') return 'outline' as const;
+  return 'secondary' as const;
+}
+
+function McpLoopAttemptsSection({ attempts }: { attempts: McpLoopAttempt[] }) {
+  const { t, i18n } = useTranslation('admin');
+  if (attempts.length === 0) return null;
+  return (
+    <section className="overflow-hidden rounded-xl border border-border">
+      <div className="border-b border-border bg-muted/20 px-3 py-2">
+        <h4 className="text-xs font-semibold text-foreground">
+          {t('hooks.diagnostics.loopAttempts.title', { count: attempts.length })}
+        </h4>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {t('hooks.diagnostics.loopAttempts.description')}
+        </p>
+      </div>
+      <div className="divide-y divide-border">
+        {attempts.map((attempt, index) => {
+          const outcomeLabel = attempt.terminationOutcome
+            ? t(`hooks.diagnostics.loopAttempts.outcomes.${attempt.terminationOutcome}`)
+            : t(`hooks.diagnostics.loopAttempts.scriptStatuses.${attempt.scriptStatus}`);
+          return (
+            <details key={attempt.id} open={index === attempts.length - 1} className="group bg-background">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-3 py-3 hover:bg-muted/20">
+                <span className="text-xs font-semibold text-foreground">
+                  {attempt.attemptCount === 0
+                    ? t('hooks.diagnostics.loopAttempts.initialAttempt')
+                    : t('hooks.diagnostics.loopAttempts.attempt', { count: attempt.attemptCount })}
+                </span>
+                <Badge variant={loopAttemptVariant(attempt)}>{outcomeLabel}</Badge>
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {formatTimestamp(attempt.startedAtMs, i18n.language)} · {attempt.durationMs}ms
+                </span>
+              </summary>
+              <div className="space-y-3 border-t border-border bg-muted/5 p-3">
+                {attempt.failureStage ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t('hooks.diagnostics.loopAttempts.failureStage')}: {t(`hooks.diagnostics.loopAttempts.stages.${attempt.failureStage}`)}
+                  </p>
+                ) : null}
+                {attempt.errorMessage ? (
+                  <section className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                    <h5 className="text-[11px] font-semibold text-destructive">
+                      {t('hooks.diagnostics.loopAttempts.error')}
+                    </h5>
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-destructive">
+                      {attempt.errorMessage}
+                    </pre>
+                  </section>
+                ) : null}
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <JsonSection title={t('hooks.diagnostics.loopAttempts.scriptInput')} value={attempt.scriptInput} />
+                  <JsonSection title={t('hooks.diagnostics.loopAttempts.scriptOutput')} value={attempt.scriptOutput} />
+                </div>
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function HookExecutionDetail({
   execution,
   loading,
   onClose,
+  onRefresh,
 }: {
   execution: HookExecution | null;
   loading: boolean;
   onClose: () => void;
+  onRefresh: () => void;
 }) {
   const { t, i18n } = useTranslation('admin');
   return (
@@ -122,6 +196,10 @@ function HookExecutionDetail({
                     {execution.eventName}{execution.toolName ? ` · ${execution.toolName}` : ''} · v{execution.hookVersion}
                   </p>
                 </div>
+                <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+                  <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+                  {t('common.refresh')}
+                </Button>
               </div>
               <div className="mt-3 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
                 <span>{t('hooks.diagnostics.startedAt')}: {formatTimestamp(execution.startedAtMs, i18n.language)}</span>
@@ -152,6 +230,7 @@ function HookExecutionDetail({
                   </pre>
                 </section>
               ) : null}
+              <McpLoopAttemptsSection attempts={execution.mcpLoopAttempts || []} />
               <JsonSection title={t('hooks.diagnostics.input')} value={execution.input} />
               <JsonSection title={t('hooks.diagnostics.scriptOutput')} value={execution.scriptOutput} />
               <JsonSection title={t('hooks.diagnostics.actions')} value={execution.actions} />
@@ -545,6 +624,9 @@ export default function HookDiagnosticsPanel({
       <HookExecutionDetail
         execution={selected}
         loading={detailLoading}
+        onRefresh={() => {
+          if (selected) void openExecution(selected);
+        }}
         onClose={() => {
           setSelected(null);
           setDetailLoading(false);

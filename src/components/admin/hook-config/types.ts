@@ -114,6 +114,25 @@ export type HookExecutionOutcome =
   | 'post_action'
   | 'additional_context';
 
+export type McpLoopAttempt = {
+  id: number;
+  hookExecutionId: string;
+  actionId: string;
+  jobId: string | null;
+  jobStatus: 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled' | null;
+  attemptCount: number;
+  scriptStatus: 'completed' | 'failed' | 'not_run';
+  terminationOutcome: 'running' | 'succeeded' | 'failed' | null;
+  failureStage: 'mcp_call' | 'termination_script' | null;
+  scriptInput: unknown;
+  scriptOutput: unknown;
+  errorMessage: string | null;
+  startedAtMs: number;
+  completedAtMs: number;
+  durationMs: number;
+  createdAt: string | null;
+};
+
 export type HookExecution = {
   id: string;
   hookId: string;
@@ -140,6 +159,7 @@ export type HookExecution = {
   completedAtMs: number | null;
   startedAt: string | null;
   completedAt: string | null;
+  mcpLoopAttempts?: McpLoopAttempt[];
   diagnostics: {
     outcome: HookExecutionOutcome;
     effects: string[];
