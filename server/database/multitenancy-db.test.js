@@ -117,12 +117,14 @@ test('multitenancy initialization adds explicit skill market binding columns', (
   `);
 
   initializeMultitenancyTables(database);
+  initializeMultitenancyTables(database);
 
   const columns = new Set(database.prepare('PRAGMA table_info(workspace_skill_market_imports)').all()
     .map((column) => column.name));
   assert.equal(columns.has('origin'), true);
   assert.equal(columns.has('binding_type'), true);
   assert.equal(columns.has('baseline_hash'), true);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM workspace_skill_market_imports').get().count, 0);
 });
 
 test('multitenancy initialization removes the complete untouched legacy Claude allowlist fingerprint once', () => {

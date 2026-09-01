@@ -105,16 +105,6 @@ export function createWorkspaceSkillsRouter({
         revision: req.body?.revision,
         marketImports: imports,
       };
-      if (typeof req.body?.renameDirectory === 'boolean') {
-        updateOptions.renameDirectory = req.body.renameDirectory;
-      }
-      if (typeof marketImports.renameForWorkspace === 'function') {
-        updateOptions.onSkillRenamed = ({ currentName, nextName }) => marketImports.renameForWorkspace({
-          workspaceId: workspace.id,
-          currentName,
-          nextName,
-        });
-      }
       const file = await skillsService.updateWorkspaceSkillFile(updateOptions);
       return res.json({ workspaceId: workspace.id, accessRole, canManage: true, file });
     } catch (error) {
@@ -155,6 +145,29 @@ export function createWorkspaceSkillsRouter({
     }
   });
 
+  router.patch('/:workspaceId/skills/:name/directory', async (req, res) => {
+    try {
+      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      const imports = listMarketImports(marketImports, workspace.id);
+      const skill = await skillsService.renameLocalWorkspaceSkillDirectory({
+        workspacePath: workspace.path,
+        name: req.params.name,
+        nextName: req.body?.nextName,
+        marketImports: imports,
+        onSkillRenamed: typeof marketImports.renameForWorkspace === 'function'
+          ? ({ currentName, nextName }) => marketImports.renameForWorkspace({
+              workspaceId: workspace.id,
+              currentName,
+              nextName,
+            })
+          : undefined,
+      });
+      return res.json({ workspaceId: workspace.id, accessRole, canManage: true, skill });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
   router.delete('/:workspaceId/skills/:name/entries', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
@@ -170,25 +183,10 @@ export function createWorkspaceSkillsRouter({
     }
   });
 
-  router.post('/:workspaceId/skills/local', async (req, res) => {
-    try {
-      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
-      const skill = await skillsService.createWorkspaceSkill({
-        workspacePath: workspace.path,
-        name: req.body?.name,
-        displayName: req.body?.displayName,
-        description: req.body?.description,
-        content: req.body?.content,
-      });
-      return res.status(201).json({ workspaceId: workspace.id, accessRole, canManage: true, skill });
-    } catch (error) {
-      return handleWorkspaceError(res, error);
-    }
-  });
-
   router.delete('/:workspaceId/skills/:name/local', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      requireYesConfirmation(req.body?.confirmation);
       const result = await skillsService.deleteLocalWorkspaceSkill({
         workspacePath: workspace.path,
         name: req.params.name,
@@ -309,6 +307,7 @@ export function createWorkspaceSkillsRouter({
   router.delete('/:workspaceId/skills/:name', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      requireYesConfirmation(req.body?.confirmation);
       await skillsService.uninstallManagedSkill({
         workspacePath: workspace.path,
         name: req.params.name,
@@ -354,6 +353,15 @@ export function createWorkspaceSkillsRouter({
   });
 
   return router;
+}
+
+function requireYesConfirmation(value) {
+  if (value !== 'yes') {
+    const error = new Error('Type yes to confirm this operation');
+    error.statusCode = 400;
+    error.code = 'CONFIRMATION_REQUIRED';
+    throw error;
+  }
 }
 
 function listMarketImports(marketImports, workspaceId) {

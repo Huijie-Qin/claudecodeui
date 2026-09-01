@@ -31,7 +31,10 @@ import {
   AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
-import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import {
+  migrateSkillMarketImportBindingColumns,
+  MULTITENANCY_SCHEMA_SQL,
+} from './multitenancy-schema.js';
 import {
   HOOK_CONFIG_SCHEMA_SQL,
   migrateHookActivationModel,
@@ -211,6 +214,7 @@ const runMigrations = () => {
 
 function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
+  migrateSkillMarketImportBindingColumns(db);
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
   migrateAgentTemplateSnapshotsToHistoricalReferences();
   db.exec(`

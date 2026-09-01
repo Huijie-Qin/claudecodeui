@@ -1,6 +1,5 @@
 import {
   AlertCircle,
-  AlertTriangle,
   CheckCircle2,
   FileText,
   Folder,
@@ -95,6 +94,8 @@ export default function SkillMarketDialog({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [removeTargetName, setRemoveTargetName] = useState<string | null>(null);
+  const [removeConfirmation, setRemoveConfirmation] = useState('');
+  const [nameConflict, setNameConflict] = useState<{ name: string } | null>(null);
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const nextPageRef = useRef(1);
   const hasNextPageRef = useRef(false);
@@ -250,6 +251,8 @@ export default function SkillMarketDialog({
       setNotice(null);
       setFileContent('');
       setRemoveTargetName(null);
+      setRemoveConfirmation('');
+      setNameConflict(null);
       hasNextPageRef.current = false;
       listLoadingRef.current = false;
       loadingMoreRef.current = false;
@@ -355,6 +358,10 @@ export default function SkillMarketDialog({
       setNotice(t('skillMarketDialog.imported', 'Imported to Files/.claude/skills.'));
       await refreshAfterMutation(importedSkill.name, `.claude/skills/${importedSkill.name}`, 'skill-market-import');
     } catch (error) {
+      if (error instanceof SkillMarketDialogApiError && error.code === 'SKILL_NAME_CONFLICT') {
+        setNameConflict({ name: String(error.details?.name || detail?.displayName || skillName) });
+        return;
+      }
       setError(error instanceof Error ? error.message : t('skillMarketDialog.importFailed', 'Failed to import skill.'));
     } finally {
       setActionLoading(false);
@@ -388,11 +395,12 @@ export default function SkillMarketDialog({
     if (!selectedName || actionLoading) return;
     setError(null);
     setNotice(null);
+    setRemoveConfirmation('');
     setRemoveTargetName(selectedName);
   };
 
   const removeSkill = async () => {
-    if (!removeTargetName || !workspaceId) return;
+    if (!removeTargetName || !workspaceId || removeConfirmation !== 'yes') return;
     const skillName = removeTargetName;
 
     setActionLoading(true);
@@ -405,6 +413,7 @@ export default function SkillMarketDialog({
       );
       setNotice(t('skillMarketDialog.removed', 'Removed from Files/.claude/skills.'));
       setRemoveTargetName(null);
+      setRemoveConfirmation('');
       dispatchProjectFilesChanged({
         projectName: selectedProject.name,
         workspaceId,
@@ -419,6 +428,7 @@ export default function SkillMarketDialog({
       await loadSkills(query, { reset: true });
     } catch (error) {
       setRemoveTargetName(null);
+      setRemoveConfirmation('');
       setError(error instanceof Error ? error.message : t('skillMarketDialog.removeFailed', 'Failed to remove skill.'));
     } finally {
       setActionLoading(false);
@@ -507,7 +517,7 @@ export default function SkillMarketDialog({
                           </div>
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{skill.description}</p>
                         </div>
-                        {skill.conflict ? <ConflictWarningIcon /> : <SkillStatusBadge skill={skill} />}
+                        <SkillStatusBadge skill={skill} />
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                         {typeof skill.version === 'number' ? <span>v{skill.version}</span> : null}
@@ -605,7 +615,7 @@ export default function SkillMarketDialog({
                   <button
                     type="button"
                     onClick={() => void importSkill()}
-                    disabled={!canWrite || !detail || detail.imported || detail.conflict || actionLoading}
+                    disabled={!canWrite || !detail || detail.imported || actionLoading}
                     className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackagePlus className="h-4 w-4" />}
@@ -632,11 +642,6 @@ export default function SkillMarketDialog({
                 </div>
               </div>
 
-              {detail?.conflict ? (
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  {t('skillMarketDialog.conflict', '同名skill目录已存在，不可导入')}
-                </div>
-              ) : null}
               {detail?.remoteDeleted ? (
                 <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   {t('skillMarketDialog.remoteDeleted', 'This skill was deleted from the remote market. The local files are still available in Files/.claude/skills.')}
@@ -709,13 +714,26 @@ export default function SkillMarketDialog({
                 <div className="mt-3 truncate rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
                   .claude/skills/{removeTargetName}
                 </div>
+                <label className="mt-3 block text-sm font-medium text-foreground">
+                  输入 <span className="font-mono">yes</span> 确认移除
+                  <input
+                    value={removeConfirmation}
+                    onChange={(event) => setRemoveConfirmation(event.target.value)}
+                    disabled={actionLoading}
+                    autoFocus
+                    className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-50"
+                  />
+                </label>
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setRemoveTargetName(null)}
-                disabled={actionLoading}
+                onClick={() => {
+                  setRemoveTargetName(null);
+                  setRemoveConfirmation('');
+                }}
+                disabled={actionLoading || removeConfirmation !== 'yes'}
                 className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {t('common.cancel', 'Cancel')}
@@ -729,6 +747,20 @@ export default function SkillMarketDialog({
                 {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                 {t('skillMarketDialog.removeDialog.confirm', 'Remove')}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {nameConflict ? (
+        <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="技能名称重复">
+          <div className="w-full max-w-md rounded-lg border border-border bg-background shadow-2xl">
+            <div className="border-b border-border px-5 py-4">
+              <h3 className="text-base font-semibold">技能名称重复</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">工作区已存在名为“{nameConflict.name}”的技能，无法重复导入。</p>
+            </div>
+            <div className="flex justify-end px-5 py-4">
+              <button type="button" onClick={() => setNameConflict(null)} className="h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">知道了</button>
             </div>
           </div>
         </div>
@@ -753,23 +785,6 @@ function SkillStatusBadge({ skill }: { skill: MarketSkillSummary }) {
   return (
     <span className={`shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium ${tone}`}>
       {label}
-    </span>
-  );
-}
-
-function ConflictWarningIcon() {
-  const { t } = useTranslation();
-  const message = t(
-    'skillMarketDialog.conflict',
-    '同名skill目录已存在，不可导入',
-  );
-
-  return (
-    <span
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-700"
-      aria-label={message}
-    >
-      <AlertTriangle className="h-4 w-4" />
     </span>
   );
 }
@@ -910,7 +925,19 @@ function getSkillListKey(skill: MarketSkillSummary) {
 async function readApiPayload(response: Response, fallbackMessage: string) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error || fallbackMessage);
+    throw new SkillMarketDialogApiError(payload?.error || fallbackMessage, payload?.code, payload?.details);
   }
   return payload;
+}
+
+class SkillMarketDialogApiError extends Error {
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, code?: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = 'SkillMarketDialogApiError';
+    this.code = code;
+    this.details = details;
+  }
 }

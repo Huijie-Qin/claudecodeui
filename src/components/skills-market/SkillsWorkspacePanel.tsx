@@ -126,15 +126,14 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const [previewMode, setPreviewMode] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadArchive, setUploadArchive] = useState<File | null>(null);
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [removalTarget, setRemovalTarget] = useState<RemovalTarget | null>(null);
-  const [renameConfirmation, setRenameConfirmation] = useState<{ currentName: string; nextName: string } | null>(null);
   const [overwriteConfirmation, setOverwriteConfirmation] = useState<{ skillName: string } | null>(null);
+  const [nameConflict, setNameConflict] = useState<{ name: string } | null>(null);
   const mine = useWorkspaceSkills(workspaceId);
   const canManage = !isReadOnly && mine.data?.canManage !== false;
   const dirty = editing && file?.content !== editContent;
@@ -327,17 +326,23 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     setActionLoading(true);
     setMessage(null);
     try {
+      let importedSkillName = detailTarget.name;
       if (action === 'import') {
-        await readPayload(await api.skillMarket.importSkill(workspaceId, detailTarget.name), '技能导入失败。');
+        const payload = await readPayload(await api.skillMarket.importSkill(workspaceId, detailTarget.name), '技能导入失败。');
+        importedSkillName = String(payload.skill?.name || detailTarget.name);
       } else {
         await readPayload(
           await api.skillMarket.updateImport(workspaceId, detailTarget.name, { forceLocalChanges }),
           '技能更新失败。',
         );
       }
-      notifyWorkspaceChanged(detailTarget.name, `skill-market-${action}`);
+      const nextTarget = action === 'import'
+        ? { source: 'market' as const, name: importedSkillName }
+        : detailTarget;
+      if (action === 'import') setDetailTarget(nextTarget);
+      notifyWorkspaceChanged(nextTarget.name, `skill-market-${action}`);
       await refreshAll();
-      await loadDetail(detailTarget, selectedFilePath);
+      await loadDetail(nextTarget, selectedFilePath);
       setMessage({
         kind: 'success',
         text: action === 'import' ? '技能已导入。' : '技能已更新。',
@@ -347,13 +352,17 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         setOverwriteConfirmation({ skillName: detailTarget.name });
         return;
       }
+      if (error instanceof SkillApiError && error.code === 'SKILL_NAME_CONFLICT') {
+        setNameConflict({ name: String(error.details?.name || detail?.displayName || detailTarget.name) });
+        return;
+      }
       setMessage({ kind: 'error', text: toErrorMessage(error, '技能操作失败。') });
     } finally {
       setActionLoading(false);
     }
   };
 
-  const persistFile = async (reloadDetail: boolean, renameDirectory?: boolean): Promise<boolean> => {
+  const persistFile = async (reloadDetail: boolean): Promise<boolean> => {
     if (!dirty) return true;
     if (!workspaceId || !detailTarget || !file) return false;
     setActionLoading(true);
@@ -364,16 +373,12 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           filePath: file.path,
           content: editContent,
           revision: file.revision,
-          ...(renameDirectory === undefined ? {} : { renameDirectory }),
         }),
         '文件保存失败。',
       );
-      const nextFile = payload.file as SkillFile & { skillName?: string };
-      const nextSkillName = nextFile.skillName || detailTarget.name;
-      const nextTarget = nextSkillName === detailTarget.name
-        ? detailTarget
-        : { ...detailTarget, name: nextSkillName };
-      if (nextTarget !== detailTarget) setDetailTarget(nextTarget);
+      const nextFile = payload.file as SkillFile;
+      const nextSkillName = detailTarget.name;
+      const nextTarget = detailTarget;
       setFile(nextFile);
       setEditContent(nextFile.content ?? '');
       setEditing(false);
@@ -386,13 +391,6 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
       setMessage({ kind: 'success', text: '文件已保存。' });
       return true;
     } catch (error) {
-      if (error instanceof SkillApiError && error.code === 'SKILL_DIRECTORY_RENAME_REQUIRED') {
-        setRenameConfirmation({
-          currentName: String(error.details?.currentName || detailTarget.name),
-          nextName: String(error.details?.nextName || ''),
-        });
-        return false;
-      }
       setMessage({ kind: 'error', text: toErrorMessage(error, '文件保存失败。') });
       return false;
     } finally {
@@ -474,6 +472,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         ? '这会移除当前工作区中已导入的 Skill，远端技能市场中的内容不会被删除。'
         : '这会移除该本地 Skill 及其中的全部内容，此操作无法撤销。',
       path: `.claude/skills/${detailTarget.name}`,
+      requiresYes: true,
     });
   };
 
@@ -560,7 +559,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   };
 
   const mineSkills = useMemo(() => (mine.data?.skills ?? [])
-    .filter((skill) => skill.kind !== 'system' && skill.enabled !== false)
+    .filter((skill) => skill.kind !== 'system')
     .filter((skill) => originFilter === 'all' || skill.origin === originFilter)
     .filter((skill) => matchesSkillQuery(skill, query)), [mine.data?.skills, originFilter, query]);
 
@@ -581,10 +580,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         </div>
         <div className="flex items-center gap-2">
           {view === 'mine' && !detailTarget ? (
-            <>
-              <ActionButton icon={Upload} label="上传技能" onClick={() => setUploadOpen(true)} disabled={!canManage} />
-              <ActionButton icon={Plus} label="新建技能" primary onClick={() => setCreateOpen(true)} disabled={!canManage} />
-            </>
+            <ActionButton icon={Upload} label="上传技能" primary onClick={() => setUploadOpen(true)} disabled={!canManage} />
           ) : null}
           <button
             type="button"
@@ -633,11 +629,19 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
               disabled={!canManage || actionLoading || detail?.status === 'invalid'}
               beforePublish={saveFileBeforePublish}
               onError={(text) => setMessage({ kind: 'error', text })}
-              onPublished={async (mode) => {
-                notifyWorkspaceChanged(detailTarget.name, mode === 'upload' ? 'workspace-skill-publish' : 'workspace-skill-publish-update');
+              onPublished={async (mode, publishedSkillName) => {
+                const nextTarget = { source: 'mine' as const, name: publishedSkillName };
+                notifyWorkspaceChanged(publishedSkillName, mode === 'upload' ? 'workspace-skill-publish' : 'workspace-skill-publish-update');
                 await refreshAll();
-                await loadDetail(detailTarget, selectedFilePath);
+                await loadDetail(nextTarget, selectedFilePath);
                 setMessage({ kind: 'success', text: mode === 'upload' ? '技能已发布到技能市场。' : '技能更新已发布。' });
+              }}
+              onUnpublished={async (unpublishedSkillName) => {
+                const nextTarget = { source: 'mine' as const, name: unpublishedSkillName };
+                notifyWorkspaceChanged(unpublishedSkillName, 'workspace-skill-unpublish');
+                await refreshAll();
+                await loadDetail(nextTarget, selectedFilePath);
+                setMessage({ kind: 'success', text: '技能已从技能市场下架，本地 Skill 保持不变。' });
               }}
             />
           ) : null}
@@ -656,7 +660,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
           <SummaryStrip
             items={view === 'market'
               ? [['全部', marketSummary.total], ['已导入', marketSummary.installed], ['待更新', marketSummary.updates]]
-              : [['全部', (mine.data?.skills ?? []).filter((skill) => skill.kind !== 'system' && skill.enabled !== false).length], ['市场安装', mine.data?.summary.market ?? 0], ['本地创建', mine.data?.summary.local ?? 0]]}
+              : [['全部', (mine.data?.skills ?? []).filter((skill) => skill.kind !== 'system').length], ['市场安装', mine.data?.summary.market ?? 0], ['本地创建', mine.data?.summary.local ?? 0]]}
           />
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
             <div className="relative min-w-[220px] flex-1">
@@ -709,22 +713,6 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         </div>
       )}
 
-      {createOpen ? (
-        <CreateSkillDialog
-          workspaceId={workspaceId}
-          onClose={() => setCreateOpen(false)}
-          onCreated={async (name) => {
-            notifyWorkspaceChanged(name, 'workspace-skill-create');
-            await mine.reload();
-            setCreateOpen(false);
-            setView('mine');
-            await loadDetail({ source: 'mine', name });
-            setEditing(true);
-            setPreviewMode(false);
-          }}
-        />
-      ) : null}
-
       {uploadOpen ? (
         <UploadSkillDialog
           archive={uploadArchive}
@@ -762,25 +750,6 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         />
       ) : null}
 
-      {renameConfirmation ? (
-        <DecisionDialog
-          busy={actionLoading}
-          confirmLabel="自动重命名"
-          description={`SKILL.md.name 已修改为“${renameConfirmation.nextName}”。是否同时将技能目录从“${renameConfirmation.currentName}”重命名为“${renameConfirmation.nextName}”？`}
-          secondaryLabel="仅保存内容"
-          title="同步重命名技能目录"
-          onCancel={() => setRenameConfirmation(null)}
-          onConfirm={async () => {
-            setRenameConfirmation(null);
-            await persistFile(true, true);
-          }}
-          onSecondary={async () => {
-            setRenameConfirmation(null);
-            await persistFile(true, false);
-          }}
-        />
-      ) : null}
-
       {overwriteConfirmation ? (
         <DecisionDialog
           busy={actionLoading}
@@ -792,6 +761,14 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             setOverwriteConfirmation(null);
             await runMarketAction('update', true);
           }}
+        />
+      ) : null}
+
+      {nameConflict ? (
+        <InfoDialog
+          description={`工作区已存在名为“${nameConflict.name}”的技能，无法重复导入。`}
+          onClose={() => setNameConflict(null)}
+          title="技能名称重复"
         />
       ) : null}
     </section>
@@ -828,7 +805,7 @@ function SkillList({
       <div className="overflow-hidden rounded-lg border border-border bg-background">
         {skills.map((skill) => (
           <button
-            key={`${source}-${skill.name}`}
+            key={`${source}-${'id' in skill && skill.id ? skill.id : skill.name}`}
             type="button"
             onClick={() => onSelect(skill.name)}
             className="flex w-full min-w-0 items-center gap-3 border-b border-border/70 px-4 py-3 text-left transition last:border-b-0 hover:bg-accent/40"
@@ -842,6 +819,7 @@ function SkillList({
                 <SkillBadges skill={skill} source={source} />
               </div>
               <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{skill.description || skill.name}</p>
+              {source === 'market' && 'createUserId' in skill && skill.createUserId ? <p className="mt-1 text-xs text-muted-foreground">创建者 {skill.createUserId}</p> : null}
             </div>
             <div className="hidden shrink-0 text-right text-xs text-muted-foreground sm:block">
               {'version' in skill && typeof skill.version === 'number' ? <div>市场 v{skill.version}</div> : null}
@@ -942,7 +920,7 @@ function SkillDetailView({
           <span className="truncate text-sm text-muted-foreground">{detail.displayName || detail.name}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {source === 'market' && !marketInstalled ? <ActionButton icon={Plus} label="导入" primary onClick={() => onMarketAction('import')} disabled={!canManage || detail.conflict || actionLoading} /> : null}
+          {source === 'market' && !marketInstalled ? <ActionButton icon={Plus} label="导入" primary onClick={() => onMarketAction('import')} disabled={!canManage || actionLoading} /> : null}
           {marketInstalled && updateAvailable ? <ActionButton icon={RefreshCw} label="更新" primary onClick={() => onMarketAction('update')} disabled={!canManage || actionLoading} /> : null}
           {source === 'mine' ? publishAction : null}
           {marketInstalled ? <ActionButton icon={Trash2} label="移除" onClick={() => onMarketAction('remove')} disabled={!canManage || actionLoading} danger /> : null}
@@ -1054,50 +1032,6 @@ function FileContentView({ content, editing, file, files, onChange, onSelectFile
   return <pre className="min-h-full overflow-auto p-4 font-mono text-xs leading-6 text-foreground"><code>{content}</code></pre>;
 }
 
-function CreateSkillDialog({ workspaceId, onClose, onCreated }: { workspaceId?: number; onClose: () => void; onCreated: (name: string) => Promise<void> }) {
-  const [name, setName] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [description, setDescription] = useState('');
-  const [content, setContent] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const generatedContent = content || ['---', `name: ${JSON.stringify(displayName || name || 'my-skill')}`, `description: ${JSON.stringify(description || '描述这个技能适用的场景。')}`, '---', '', `# ${displayName || name || 'My Skill'}`, ''].join('\n');
-
-  const submit = async () => {
-    if (!workspaceId || !name.trim() || !description.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await readPayload(await api.workspaceSkills.createLocal(workspaceId, { name, displayName, description, content: generatedContent }), '技能创建失败。');
-      await onCreated(name.trim());
-    } catch (error) {
-      setError(toErrorMessage(error, '技能创建失败。'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal title="新建技能" description="创建到当前 workspace 的 .claude/skills 目录" onClose={onClose} busy={loading}>
-      <div className="space-y-4">
-        <Field label="技能目录名" value={name} onChange={setName} placeholder="my-skill" helper={`目标路径：.claude/skills/${name || '<name>'}/`} />
-        <Field label="展示名称" value={displayName} onChange={setDisplayName} placeholder="我的技能" />
-        <Field label="描述" value={description} onChange={setDescription} placeholder="说明什么时候应该使用这个技能" />
-        <label className="block text-sm font-medium">初始 SKILL.md
-          <textarea value={generatedContent} onChange={(event) => setContent(event.target.value)} className="mt-2 min-h-48 w-full rounded-md border border-input bg-background p-3 font-mono text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring/20" />
-        </label>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <div className="flex justify-end gap-2 border-t border-border pt-4">
-          <button type="button" onClick={onClose} disabled={loading} className="h-9 rounded-md border border-border px-4 text-sm hover:bg-accent">取消</button>
-          <button type="button" onClick={() => void submit()} disabled={loading || !name.trim() || !description.trim()} className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50">
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 创建
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 function UploadSkillDialog({ archive, error, loading, onArchiveChange, onArchiveError, onClose, onImport, onPreview, preview }: { archive: File | null; error: string | null; loading: boolean; onArchiveChange: (file: File | null) => void; onArchiveError: (error: string) => void; onClose: () => void; onImport: () => void; onPreview: () => void; preview: UploadPreview | null }) {
   const [dragActive, setDragActive] = useState(false);
   const dragDepthRef = useRef(0);
@@ -1159,7 +1093,7 @@ function UploadSkillDialog({ archive, error, loading, onArchiveChange, onArchive
         >
           <Upload className={`mb-2 h-7 w-7 ${dragActive ? 'text-primary' : 'text-muted-foreground'}`} />
           <span className="text-sm font-medium">{dragActive ? '松开以上传 ZIP' : '选择或拖入 ZIP 文件'}</span>
-          <span className="mt-1 text-xs text-muted-foreground">导入后统一标记为“本地创建”</span>
+          <span className="mt-1 text-xs text-muted-foreground">ZIP 须包含一个顶层文件夹及其根 SKILL.md；安装目录使用 SKILL.md.name，顶层文件夹名会被忽略</span>
           <input
             type="file"
             accept=".zip,application/zip,application/x-zip-compressed"
@@ -1244,26 +1178,36 @@ function DecisionDialog({
   );
 }
 
-function Field({ label, value, onChange, placeholder, helper }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; helper?: string }) {
-  return <label className="block text-sm font-medium">{label}<input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20" />{helper ? <span className="mt-1 block font-mono text-xs font-normal text-muted-foreground">{helper}</span> : null}</label>;
+function InfoDialog({ description, onClose, title }: { description: string; onClose: () => void; title: string }) {
+  return (
+    <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-md rounded-lg border border-border bg-background shadow-2xl">
+        <div className="border-b border-border px-5 py-4">
+          <h3 className="text-base font-semibold">{title}</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+        </div>
+        <div className="flex justify-end px-5 py-4">
+          <button type="button" onClick={onClose} className="h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">知道了</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SkillBadges({ skill, source }: { skill: MarketSkill | WorkspaceSkill | SkillDetail; source: DetailSource }) {
   const origin = 'origin' in skill ? skill.origin : undefined;
   const updateAvailable = 'updateAvailable' in skill && skill.updateAvailable === true;
   const remoteDeleted = 'remoteDeleted' in skill && skill.remoteDeleted === true;
-  const conflict = 'conflict' in skill && skill.conflict === true;
   const imported = 'imported' in skill && skill.imported === true;
   const invalid = 'status' in skill && skill.status === 'invalid';
   return (
     <>
       {source === 'mine' && origin ? <Badge tone={origin === 'market' ? 'slate' : 'blue'}>{origin === 'market' ? '市场安装' : '本地创建'}</Badge> : null}
-      {source === 'mine' && origin === 'local' && imported ? <Badge tone="green">已导入</Badge> : null}
+      {source === 'mine' && origin === 'local' && imported ? <Badge tone="green">{'bindingType' in skill && skill.bindingType === 'published' ? '已发布' : '已导入'}</Badge> : null}
       {source === 'market' && imported ? <Badge tone="green">已导入</Badge> : null}
-      {source === 'market' && !imported && !conflict ? <Badge tone="slate">可导入</Badge> : null}
+      {source === 'market' && !imported ? <Badge tone="slate">可导入</Badge> : null}
       {updateAvailable ? <Badge tone="amber">待更新</Badge> : null}
       {remoteDeleted ? <Badge tone="red">市场已下架</Badge> : null}
-      {conflict ? <Badge tone="red">冲突</Badge> : null}
       {'locallyModified' in skill && skill.locallyModified === true ? <Badge tone="amber">本地已修改</Badge> : null}
       {invalid ? <Badge tone="red" title={getSkillDiagnosticText(skill)}>解析失败</Badge> : null}
     </>
@@ -1278,7 +1222,7 @@ function Badge({ children, tone, title }: { children: ReactNode; tone: 'slate' |
 function getSkillDiagnosticText(skill: MarketSkill | WorkspaceSkill | SkillDetail) {
   const diagnostics = 'diagnostics' in skill && Array.isArray(skill.diagnostics) ? skill.diagnostics : [];
   if (diagnostics.length > 0) return diagnostics.map((entry) => entry.message).join('\n');
-  return ('parseError' in skill && skill.parseError) || '请检查 SKILL.md 的位置、frontmatter 和技能目录名称。';
+  return ('parseError' in skill && skill.parseError) || '请检查 SKILL.md 的位置和 frontmatter。';
 }
 
 function SubTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
@@ -1330,8 +1274,9 @@ function matchesSkillQuery(skill: WorkspaceSkill, query: string) {
 }
 
 function mergeMarketSkills(current: MarketSkill[], next: MarketSkill[]) {
-  const merged = new Map(current.map((skill) => [skill.name, skill]));
-  next.forEach((skill) => merged.set(skill.name, skill));
+  const getIdentity = (skill: MarketSkill) => skill.id || skill.skillId || skill.name;
+  const merged = new Map(current.map((skill) => [getIdentity(skill), skill]));
+  next.forEach((skill) => merged.set(getIdentity(skill), skill));
   return Array.from(merged.values());
 }
 

@@ -5,6 +5,7 @@ import {
   migrateClaudeEnvDenyRuleMatchTypes,
   migrateLegacyDefaultClaudeEnvAllowlist,
   migrateRetiredPersonalClaudeEnvDenyRules,
+  migrateSkillMarketImportBindingColumns,
   MULTITENANCY_SCHEMA_SQL,
 } from './multitenancy-schema.js';
 
@@ -33,9 +34,7 @@ export function initializeMultitenancyTables(database = db) {
   migrateClaudeEnvDenyRuleMatchTypes(database);
   migrateRetiredPersonalClaudeEnvDenyRules(database);
   ensureColumn(database, 'tenants', 'prod_code', 'TEXT');
-  ensureColumn(database, 'workspace_skill_market_imports', 'origin', "TEXT CHECK (origin IN ('local', 'market'))");
-  ensureColumn(database, 'workspace_skill_market_imports', 'binding_type', "TEXT CHECK (binding_type IN ('published', 'imported'))");
-  ensureColumn(database, 'workspace_skill_market_imports', 'baseline_hash', 'TEXT');
+  migrateSkillMarketImportBindingColumns(database);
   migrateLegacyTenantProdCode(database);
 }
 

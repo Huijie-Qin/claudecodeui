@@ -478,6 +478,7 @@ test('DELETE /:workspaceId/skills/:name uninstalls a managed skill and returns n
 
   const { response, payload } = await requestJson(router, '/10/skills/grill-me?tenantId=2', {
     method: 'DELETE',
+    body: { confirmation: 'yes' },
   });
 
   assert.equal(response.status, 200);

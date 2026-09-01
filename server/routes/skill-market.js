@@ -140,6 +140,9 @@ export function createSkillMarketRouter({
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
+        ...(req.body?.localContentHash !== undefined
+          ? { expectedLocalContentHash: req.body.localContentHash }
+          : {}),
         tenantCode,
         accountId,
       });
@@ -218,6 +221,9 @@ export function createSkillMarketRouter({
         workspacePath: workspace.path,
         name: req.params.name,
         currentUsername: accountId,
+        ...(req.body?.localContentHash !== undefined
+          ? { expectedLocalContentHash: req.body.localContentHash }
+          : {}),
         tenantCode,
         accountId,
       });
@@ -258,9 +264,35 @@ export function createSkillMarketRouter({
     }
   });
 
+  router.post('/skills/:name/unpublish', async (req, res) => {
+    try {
+      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      const tenantCode = resolveTenantCode(req, tenants);
+      const accountId = resolveAccountId(req, users);
+      const result = await marketService.reserveUnpublishMarketSkill({
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        name: req.params.name,
+        currentUsername: accountId,
+        confirmation: req.body?.confirmation,
+        tenantCode,
+        accountId,
+      });
+      return res.json({
+        workspaceId: workspace.id,
+        accessRole,
+        canManage: true,
+        ...result,
+      });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
   router.delete('/skills/:name/import', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: true });
+      requireYesConfirmation(req.body?.confirmation);
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.removeMarketSkill({
@@ -289,6 +321,15 @@ export function createSkillMarketRouter({
   });
 
   return router;
+}
+
+function requireYesConfirmation(value) {
+  if (value !== 'yes') {
+    const error = new Error('Type yes to confirm this operation');
+    error.statusCode = 400;
+    error.code = 'CONFIRMATION_REQUIRED';
+    throw error;
+  }
 }
 
 function resolveWorkspace(req, access, { requireEdit }) {

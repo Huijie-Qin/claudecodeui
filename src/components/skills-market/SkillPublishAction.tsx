@@ -1,10 +1,10 @@
-import { CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
+import { CheckCircle2, Loader2, Trash2, UploadCloud } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../utils/api';
 
-import { getSkillPublishMode, type SkillPublishMode } from './utils/skillPublish';
+import { canUnpublishSkill, getSkillPublishMode, type SkillPublishMode } from './utils/skillPublish';
 
 type MarketSkillPublishChange = {
   path: string;
@@ -20,12 +20,14 @@ type MarketSkillPublishPreview = {
     displayName?: string;
     version?: number;
   };
+  localContentHash: string;
   changes: MarketSkillPublishChange[];
 };
 
 type MarketSkillSubmitState = {
   mode: SkillPublishMode | null;
   visible: boolean;
+  canUnpublish: boolean;
   updateAvailable: boolean;
   importedVersion: number | null;
   remoteVersion: number | null;
@@ -33,8 +35,10 @@ type MarketSkillSubmitState = {
   submitting: boolean;
   success: boolean;
   confirmOpen: boolean;
+  unpublishOpen: boolean;
   updateWarningOpen: boolean;
   confirmation: string;
+  unpublishConfirmation: string;
   preview: MarketSkillPublishPreview | null;
 };
 
@@ -44,13 +48,15 @@ type SkillPublishActionProps = {
   disabled?: boolean;
   beforePublish?: () => Promise<boolean>;
   onError?: (message: string) => void;
-  onPublished?: (mode: SkillPublishMode) => void | Promise<void>;
+  onPublished?: (mode: SkillPublishMode, skillName: string) => void | Promise<void>;
+  onUnpublished?: (skillName: string) => void | Promise<void>;
 };
 
 function createInitialState(loading = false): MarketSkillSubmitState {
   return {
     mode: null,
     visible: false,
+    canUnpublish: false,
     updateAvailable: false,
     importedVersion: null,
     remoteVersion: null,
@@ -58,8 +64,10 @@ function createInitialState(loading = false): MarketSkillSubmitState {
     submitting: false,
     success: false,
     confirmOpen: false,
+    unpublishOpen: false,
     updateWarningOpen: false,
     confirmation: '',
+    unpublishConfirmation: '',
     preview: null,
   };
 }
@@ -71,6 +79,7 @@ export default function SkillPublishAction({
   beforePublish,
   onError,
   onPublished,
+  onUnpublished,
 }: SkillPublishActionProps) {
   const { t } = useTranslation('codeEditor');
   const [state, setState] = useState<MarketSkillSubmitState>(() => createInitialState(Boolean(workspaceId)));
@@ -94,6 +103,7 @@ export default function SkillPublishAction({
         setState({
           mode,
           visible: mode !== null,
+          canUnpublish: canUnpublishSkill(payload),
           updateAvailable: payload.skill?.updateAvailable === true,
           importedVersion: typeof payload.skill?.importedVersion === 'number' ? payload.skill.importedVersion : null,
           remoteVersion: typeof payload.skill?.version === 'number' ? payload.skill.version : null,
@@ -101,8 +111,10 @@ export default function SkillPublishAction({
           submitting: false,
           success: false,
           confirmOpen: false,
+          unpublishOpen: false,
           updateWarningOpen: false,
           confirmation: '',
+          unpublishConfirmation: '',
           preview: null,
         });
       })
@@ -127,13 +139,21 @@ export default function SkillPublishAction({
     }
   }, [beforePublish, onError]);
 
-  const notifyPublished = useCallback(async (mode: SkillPublishMode) => {
+  const notifyPublished = useCallback(async (mode: SkillPublishMode, publishedSkillName: string) => {
     try {
-      await onPublished?.(mode);
+      await onPublished?.(mode, publishedSkillName);
     } catch (error) {
       onError?.(`技能已发布，但页面刷新失败：${toErrorMessage(error, '请手动刷新后查看最新状态。')}`);
     }
   }, [onError, onPublished]);
+
+  const notifyUnpublished = useCallback(async (unpublishedSkillName: string) => {
+    try {
+      await onUnpublished?.(unpublishedSkillName);
+    } catch (error) {
+      onError?.(`技能已从市场下架，但页面刷新失败：${toErrorMessage(error, '请手动刷新后查看最新状态。')}`);
+    }
+  }, [onError, onUnpublished]);
 
   const handlePublish = useCallback(async () => {
     if (!workspaceId || !skillName || !state.mode || disabled) return;
@@ -171,13 +191,14 @@ export default function SkillPublishAction({
         setState((current) => ({
           ...current,
           mode: 'update',
+          canUnpublish: true,
           submitting: false,
           success: true,
           confirmOpen: false,
           confirmation: '',
           preview: null,
         }));
-        await notifyPublished('upload');
+        await notifyPublished('upload', skillName);
         window.setTimeout(() => setState((current) => ({ ...current, success: false })), 2000);
         return;
       }
@@ -206,8 +227,9 @@ export default function SkillPublishAction({
 
     setState((current) => ({ ...current, submitting: true }));
     try {
+      const publishName = state.preview?.skill?.name || skillName;
       await readApiPayload(
-        await api.skillMarket.publishSkill(workspaceId, skillName),
+        await api.skillMarket.publishSkill(workspaceId, publishName, state.preview?.localContentHash),
         t('skillMarket.publishFailed', 'Failed to publish skill update.'),
       );
       setState((current) => ({
@@ -218,14 +240,47 @@ export default function SkillPublishAction({
         confirmation: '',
         preview: null,
       }));
-      await notifyPublished('update');
+      await notifyPublished('update', publishName);
       window.setTimeout(() => setState((current) => ({ ...current, success: false })), 2000);
     } catch (error) {
-      const message = toErrorMessage(error, '发布更新失败。');
-      setState((current) => ({ ...current, submitting: false, success: false }));
+      const previewStale = error instanceof SkillMarketApiError && error.code === 'SKILL_PUBLISH_PREVIEW_STALE';
+      const message = previewStale
+        ? '技能文件在预览后发生了变化，请重新点击“发布更新”并确认最新差异。'
+        : toErrorMessage(error, '发布更新失败。');
+      setState((current) => ({
+        ...current,
+        submitting: false,
+        success: false,
+        ...(previewStale ? { confirmOpen: false, confirmation: '', preview: null } : {}),
+      }));
       onError?.(message);
     }
-  }, [notifyPublished, onError, skillName, state.confirmation, t, workspaceId]);
+  }, [notifyPublished, onError, skillName, state.confirmation, state.preview?.localContentHash, state.preview?.skill?.name, t, workspaceId]);
+
+  const handleConfirmUnpublish = useCallback(async () => {
+    if (!workspaceId || !skillName || state.unpublishConfirmation !== 'yes' || disabled) return;
+
+    setState((current) => ({ ...current, submitting: true }));
+    try {
+      await readApiPayload(
+        await api.skillMarket.unpublishSkill(workspaceId, skillName),
+        '技能下架失败。',
+      );
+      setState((current) => ({
+        ...current,
+        mode: 'upload',
+        canUnpublish: false,
+        submitting: false,
+        success: false,
+        unpublishOpen: false,
+        unpublishConfirmation: '',
+      }));
+      await notifyUnpublished(skillName);
+    } catch (error) {
+      setState((current) => ({ ...current, submitting: false }));
+      onError?.(toErrorMessage(error, '技能下架失败。'));
+    }
+  }, [disabled, notifyUnpublished, onError, skillName, state.unpublishConfirmation, workspaceId]);
 
   if (!state.visible || !state.mode) return null;
 
@@ -237,21 +292,34 @@ export default function SkillPublishAction({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => void handlePublish()}
-        disabled={disabled || state.loading || state.submitting}
-        className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-600 dark:hover:bg-emerald-500"
-      >
-        {state.success ? (
-          <CheckCircle2 className="h-4 w-4" />
-        ) : state.submitting ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <UploadCloud className="h-4 w-4" />
-        )}
-        {buttonLabel}
-      </button>
+      <div className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void handlePublish()}
+          disabled={disabled || state.loading || state.submitting}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+        >
+          {state.success ? (
+            <CheckCircle2 className="h-4 w-4" />
+          ) : state.submitting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <UploadCloud className="h-4 w-4" />
+          )}
+          {buttonLabel}
+        </button>
+        {state.canUnpublish ? (
+          <button
+            type="button"
+            onClick={() => setState((current) => ({ ...current, unpublishOpen: true, unpublishConfirmation: '' }))}
+            disabled={disabled || state.loading || state.submitting}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-sm font-medium text-destructive transition hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            下架
+          </button>
+        ) : null}
+      </div>
 
       {state.confirmOpen && state.preview ? (
         <PublishSkillDialog
@@ -271,16 +339,85 @@ export default function SkillPublishAction({
           onClose={() => setState((current) => ({ ...current, updateWarningOpen: false }))}
         />
       ) : null}
+
+      {state.unpublishOpen ? (
+        <UnpublishSkillDialog
+          confirmation={state.unpublishConfirmation}
+          submitting={state.submitting}
+          onConfirmationChange={(unpublishConfirmation) => setState((current) => ({ ...current, unpublishConfirmation }))}
+          onCancel={() => setState((current) => ({ ...current, unpublishOpen: false, unpublishConfirmation: '' }))}
+          onConfirm={() => void handleConfirmUnpublish()}
+        />
+      ) : null}
     </>
+  );
+}
+
+function UnpublishSkillDialog({
+  confirmation,
+  submitting,
+  onConfirmationChange,
+  onCancel,
+  onConfirm,
+}: {
+  confirmation: string;
+  submitting: boolean;
+  onConfirmationChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="skill-unpublish-title">
+      <div className="w-full max-w-md overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
+        <div className="border-b border-border px-5 py-4">
+          <h3 id="skill-unpublish-title" className="text-base font-semibold text-foreground">下架 Skill</h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            下架后该 Skill 将不再显示在技能市场。请确认需要保留的 Skill 已经导入并保存在本地；本页面不提供保存功能。当前工作区的本地 Skill 文件不会被删除。
+          </p>
+        </div>
+        <div className="px-5 py-4">
+          <label className="block text-sm font-medium text-foreground" htmlFor="skill-unpublish-confirmation">
+            输入 <span className="font-mono">yes</span> 确认下架
+          </label>
+          <input
+            id="skill-unpublish-confirmation"
+            value={confirmation}
+            onChange={(event) => onConfirmationChange(event.target.value)}
+            disabled={submitting}
+            autoFocus
+            className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-50"
+          />
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
+          <button type="button" onClick={onCancel} disabled={submitting} className="h-9 rounded-md border border-border px-3 text-sm hover:bg-accent disabled:opacity-50">取消</button>
+          <button type="button" onClick={onConfirm} disabled={submitting || confirmation !== 'yes'} className="inline-flex h-9 items-center gap-2 rounded-md bg-destructive px-3 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50">
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            确认下架
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 async function readApiPayload(response: Response, fallbackMessage: string) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error || fallbackMessage);
+    throw new SkillMarketApiError(payload?.error || fallbackMessage, payload?.code, payload?.details);
   }
   return payload;
+}
+
+class SkillMarketApiError extends Error {
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, code?: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = 'SkillMarketApiError';
+    this.code = code;
+    this.details = details;
+  }
 }
 
 function toErrorMessage(error: unknown, fallback: string) {

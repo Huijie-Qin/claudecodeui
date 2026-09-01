@@ -48,6 +48,7 @@ function createRouter({
   downloadMarketSkill,
   getMarketSkillPublishPreview,
   publishMarketSkill,
+  reserveUnpublishMarketSkill,
   submitMarketSkill,
   tenants,
   users,
@@ -96,6 +97,11 @@ function createRouter({
         submittedFileCount: 2,
         publishedAt: '2026-05-14T00:00:00.000Z',
         publishedVersion: 2,
+      })),
+      reserveUnpublishMarketSkill: reserveUnpublishMarketSkill || (async () => ({
+        unpublished: 'bug-hunter',
+        remoteSkillId: 'bug-hunter-id',
+        localFilesRetained: true,
       })),
       removeMarketSkill: removeMarketSkill || (async () => ({ removed: 'bug-hunter' })),
     },
@@ -273,7 +279,7 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
 
   const { response, payload } = await requestJson(router, '/skills/bug-hunter/submit?tenantId=2&workspaceId=10', {
     method: 'POST',
-    body: {},
+    body: { localContentHash: 'a'.repeat(64) },
   });
 
   assert.equal(response.status, 200);
@@ -282,10 +288,40 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
     currentUsername: TEST_USERNAME,
+    expectedLocalContentHash: 'a'.repeat(64),
     tenantCode: TEST_TENANT_CODE,
     accountId: TEST_USERNAME,
   });
   assert.equal(payload.submittedFileCount, 3);
+});
+
+test('POST /skills/:name/publish forwards the confirmed local content hash', async () => {
+  let publishArgs;
+  const router = createRouter({
+    accessRole: 'owner',
+    publishMarketSkill: async (args) => {
+      publishArgs = args;
+      return { publishedVersion: 2 };
+    },
+  });
+
+  const localContentHash = 'b'.repeat(64);
+  const { response, payload } = await requestJson(router, '/skills/bug-hunter/publish?tenantId=2&workspaceId=10', {
+    method: 'POST',
+    body: { localContentHash },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(publishArgs, {
+    workspaceId: 10,
+    workspacePath: '/tmp/workspace',
+    name: 'bug-hunter',
+    currentUsername: TEST_USERNAME,
+    expectedLocalContentHash: localContentHash,
+    tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
+  });
+  assert.equal(payload.publishedVersion, 2);
 });
 
 test('DELETE /skills/:name/import removes the imported runtime skill and refreshes inventory', async () => {
@@ -304,6 +340,7 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
 
   const { response, payload } = await requestJson(router, '/skills/bug-hunter/import?tenantId=2&workspaceId=10', {
     method: 'DELETE',
+    body: { confirmation: 'yes' },
   });
 
   assert.equal(response.status, 200);
@@ -321,6 +358,37 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
   });
   assert.equal(payload.removed, 'bug-hunter');
   assert.deepEqual(payload.skills, [{ name: 'bug-hunter' }]);
+});
+
+test('POST /skills/:name/unpublish forwards identity and exact confirmation to the creator-only service', async () => {
+  let seenArgs;
+  const router = createRouter({
+    accessRole: 'edit',
+    reserveUnpublishMarketSkill: async (args) => {
+      seenArgs = args;
+      return {
+        unpublished: 'my-skill',
+        remoteSkillId: 'my-skill-id',
+        localFilesRetained: true,
+      };
+    },
+  });
+  const { response, payload } = await requestJson(router, '/skills/my-skill/unpublish?tenantId=2&workspaceId=10', {
+    method: 'POST',
+    body: { confirmation: 'yes' },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(payload.unpublished, 'my-skill');
+  assert.equal(payload.localFilesRetained, true);
+  assert.deepEqual(seenArgs, {
+    workspaceId: 10,
+    workspacePath: '/tmp/workspace',
+    name: 'my-skill',
+    currentUsername: TEST_USERNAME,
+    confirmation: 'yes',
+    tenantCode: TEST_TENANT_CODE,
+    accountId: TEST_USERNAME,
+  });
 });
 
 test('POST /skills/:name/download serializes view-only edit denial', async () => {

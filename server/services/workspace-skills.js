@@ -77,13 +77,6 @@ export async function parseSkillManifest(skillDirectory) {
     const name = manifestName || readFirstHeading(content) || fallbackName;
     const description = manifestDescription || readFirstParagraph(content);
 
-    if (manifestName && manifestName !== fallbackName) {
-      diagnostics.push(createSkillDiagnostic(
-        'SKILL_NAME_DIRECTORY_MISMATCH',
-        `SKILL.md.name 为 "${manifestName}"，但技能目录名为 "${fallbackName}"，两者必须完全一致（包括大小写）。`,
-        'SKILL.md',
-      ));
-    }
     return pruneUndefined({
       name,
       description,
@@ -106,15 +99,7 @@ export async function parseSkillManifest(skillDirectory) {
         ));
         try {
           matter.clearCache();
-          const nested = matter(await fs.readFile(path.join(skillDirectory, ...nestedPath.split('/')), 'utf8'));
-          const nestedName = firstString(nested.data?.name);
-          if (nestedName && nestedName !== fallbackName) {
-            diagnostics.push(createSkillDiagnostic(
-              'SKILL_NAME_DIRECTORY_MISMATCH',
-              `${nestedPath} 中的 name 为 "${nestedName}"，但技能目录名为 "${fallbackName}"，两者必须完全一致（包括大小写）。`,
-              nestedPath,
-            ));
-          }
+          matter(await fs.readFile(path.join(skillDirectory, ...nestedPath.split('/')), 'utf8'));
         } catch (nestedError) {
           diagnostics.push(createSkillDiagnostic(
             'MANIFEST_PARSE_ERROR',
@@ -226,13 +211,10 @@ export async function listUnmanagedRuntimeSkills(workspacePath) {
 }
 
 export async function listWorkspaceSkills(workspacePath, availableSystemSkills = [], marketImports = [], options = {}) {
-  const [managed, unmanaged] = await Promise.all([
-    listManagedSkills(workspacePath),
-    listUnmanagedRuntimeSkills(workspacePath),
-  ]);
+  const runtimeSkills = await listRuntimeWorkspaceSkills(workspacePath);
   const system = normalizeSystemSkills(availableSystemSkills);
   const importsByName = createMarketImportsByName(marketImports);
-  const skills = sortSkills(await Promise.all([...managed, ...unmanaged, ...system].map(async (skill) => {
+  const skills = sortSkills(await Promise.all([...runtimeSkills, ...system].map(async (skill) => {
     const marketImport = importsByName.get(skill.name.toLowerCase());
     const origin = resolveSkillOrigin(skill, marketImport, options.currentUsername);
     const bindingType = resolveBindingType(origin, marketImport);
@@ -260,6 +242,43 @@ export async function listWorkspaceSkills(workspacePath, availableSystemSkills =
       local: skills.filter((skill) => skill.kind !== 'system' && skill.enabled !== false && skill.origin === 'local').length,
     },
   };
+}
+
+async function listRuntimeWorkspaceSkills(workspacePath) {
+  const metadata = await readSkillsMetadata(workspacePath);
+  const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const directories = await listDirectories(runtimeRoot);
+
+  return Promise.all(directories.map(async (directory) => {
+    const managedKey = Object.keys(metadata.skills || {}).find((entryName) => (
+      entryName.toLowerCase() === directory.name.toLowerCase()
+    ));
+    const managedEntry = managedKey ? metadata.skills[managedKey] : null;
+    const manifest = await parseSkillManifest(directory.path);
+    const invalid = manifest.status === 'invalid';
+    return pruneUndefined({
+      name: directory.name,
+      displayName: invalid ? directory.name : manifest.name,
+      description: invalid ? '' : manifest.description,
+      kind: managedEntry ? 'managed' : 'unmanaged',
+      status: invalid ? 'invalid' : managedEntry ? 'enabled' : 'available',
+      enabled: true,
+      manageable: true,
+      sourceType: firstString(managedEntry?.sourceType) || 'workspace-runtime',
+      sourceUrl: firstString(managedEntry?.sourceUrl),
+      resolvedCommit: firstString(managedEntry?.resolvedCommit),
+      sourceSubdir: firstString(managedEntry?.sourceSubdir),
+      sourceFileName: firstString(managedEntry?.sourceFileName),
+      installedAt: firstString(managedEntry?.installedAt),
+      updatedAt: firstString(managedEntry?.updatedAt),
+      managedBy: firstString(managedEntry?.managedBy),
+      sourcePath: managedEntry ? path.join(sourceRoot, managedKey) : undefined,
+      runtimePath: directory.path,
+      manifestPath: manifest.manifestPath,
+      parseError: invalid ? manifest.parseError : undefined,
+      diagnostics: invalid ? manifest.diagnostics : undefined,
+    });
+  }));
 }
 
 export async function getWorkspaceSkillDetail({ workspacePath, name, marketImports = [], currentUsername }) {
@@ -396,8 +415,6 @@ export async function updateWorkspaceSkillFile({
   filePath,
   content,
   revision,
-  renameDirectory,
-  onSkillRenamed,
   marketImports = [],
 }) {
   const context = await requireEditableWorkspaceSkill({ workspacePath, name, marketImports });
@@ -420,24 +437,13 @@ export async function updateWorkspaceSkillFile({
   }
   const normalizedFilePath = normalizeSkillRelativePath(filePath);
   if (normalizedFilePath === 'SKILL.md') {
-    const manifest = validateSkillManifestContent(nextContent, context.name, { allowNameMismatch: true });
-    if (manifest.name !== context.name) {
-      const conflict = await findWorkspaceSkillNameConflict(workspacePath, manifest.name, context.name);
-      if (conflict) {
-        throw createHttpError(`Skill "${manifest.name}" already exists`, 409, 'SKILL_NAME_CONFLICT', {
-          currentName: context.name,
-          nextName: manifest.name,
-        });
-      }
-      if (renameDirectory === undefined || renameDirectory === null) {
-        throw createHttpError('SKILL.md.name 与技能目录名不一致，是否同步重命名目录？', 409, 'SKILL_DIRECTORY_RENAME_REQUIRED', {
-          currentName: context.name,
-          nextName: manifest.name,
-        });
-      }
-      if (renameDirectory === true) {
-        await renameWorkspaceSkillDirectory({ context, workspacePath, nextName: manifest.name, onSkillRenamed });
-      }
+    const currentManifest = tryParseSkillManifestContent(currentBuffer.toString('utf8'));
+    const nextManifest = validateSkillManifestContent(nextContent);
+    if (currentManifest?.name && nextManifest.name !== currentManifest.name) {
+      throw createHttpError('SKILL.md.name 不可修改', 409, 'SKILL_MANIFEST_NAME_IMMUTABLE', {
+        currentName: currentManifest.name,
+        nextName: nextManifest.name,
+      });
     }
   }
   const finalTargetPath = path.join(context.rootPath, ...normalizedFilePath.split('/'));
@@ -477,6 +483,36 @@ export async function renameWorkspaceSkillEntry({
   await fs.rename(sourcePath, destinationPath);
   await syncManagedSkillAfterMutation(context, workspacePath);
   return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
+}
+
+export async function renameLocalWorkspaceSkillDirectory({
+  workspacePath,
+  name,
+  nextName,
+  marketImports = [],
+  onSkillRenamed,
+}) {
+  const context = await requireEditableWorkspaceSkill({ workspacePath, name, marketImports });
+  const normalizedNextName = normalizeWorkspaceSkillName(nextName);
+  const conflict = await findWorkspaceSkillNameConflict(workspacePath, normalizedNextName, context.name);
+  if (conflict) {
+    throw createHttpError(
+      `Skill directory "${conflict}" already exists`,
+      409,
+      'SKILL_NAME_CONFLICT',
+      { name: normalizedNextName, existingName: conflict },
+    );
+  }
+  await renameWorkspaceSkillDirectory({ context, workspacePath, nextName: normalizedNextName, onSkillRenamed });
+  return getWorkspaceSkillDetail({
+    workspacePath,
+    name: normalizedNextName,
+    marketImports: (marketImports || []).map((entry) => (
+      String(entry?.name || '').toLowerCase() === String(name || '').toLowerCase()
+        ? { ...entry, name: normalizedNextName }
+        : entry
+    )),
+  });
 }
 
 export async function deleteWorkspaceSkillEntry({ workspacePath, name, entryPath, marketImports = [] }) {
@@ -590,23 +626,19 @@ export async function previewLocalSkillUpload({
   const selectedDirectory = path.join(previewDirectory, 'skill');
 
   try {
+    await validateLocalSkillArchiveStructure(archiveBuffer);
     await fs.mkdir(archiveDirectory, { recursive: true });
     await extractGithubArchive(archiveBuffer, archiveDirectory);
 
-    const manifestPaths = await findSkillManifestPaths(archiveDirectory);
-    if (manifestPaths.length !== 1) {
-      throw createHttpError('Uploaded archive must contain exactly one skill directory with SKILL.md', 400);
-    }
+    const skillDirectory = await resolveSingleExtractedRoot(archiveDirectory);
 
-    const skillDirectory = path.dirname(manifestPaths[0]);
     const manifest = await parseSkillManifest(skillDirectory);
     if (manifest.status === 'invalid') {
       throw createHttpError(`Uploaded skill has an invalid SKILL.md: ${manifest.parseError}`, 400);
     }
 
-    const skillName = sanitizeSkillName(manifest.name);
-    await ensureValidSkillName(skillName);
-    const conflict = await getSkillInstallConflict(workspacePath, skillName);
+    const skillName = normalizeWorkspaceSkillName(manifest.name);
+    const conflict = await getSkillInstallConflict(workspacePath, skillName, { allowExactManaged: false });
     const files = await listRelativeFiles(skillDirectory);
     await fs.cp(skillDirectory, selectedDirectory, { recursive: true });
 
@@ -644,7 +676,9 @@ export async function installGithubSkill({ workspacePath, previewId, enable = tr
   const name = sanitizeSkillName(preview?.name);
   await ensureValidSkillName(name);
 
-  const conflict = await getSkillInstallConflict(workspacePath, name);
+  const conflict = await getSkillInstallConflict(workspacePath, name, {
+    allowExactManaged: preview?.sourceType !== 'local-upload',
+  });
   if (conflict.blocking) {
     const message = conflict.type === 'unmanaged' && !conflict.existingName
       ? `Skill "${name}" already exists as an unmanaged runtime skill`
@@ -1013,6 +1047,40 @@ async function extractGithubArchive(archiveBuffer, destinationDirectory) {
   }
 }
 
+async function validateLocalSkillArchiveStructure(archiveBuffer) {
+  const zip = await JSZip.loadAsync(archiveBuffer);
+  const entries = Object.values(zip.files)
+    .map((entry) => ({ entry, normalizedPath: normalizeArchivePath(entry.name) }))
+    .filter(({ normalizedPath }) => normalizedPath);
+  const topLevelNames = new Set(entries.map(({ normalizedPath }) => normalizedPath.split('/')[0]));
+  const rootFiles = entries
+    .filter(({ entry, normalizedPath }) => !entry.dir && !normalizedPath.includes('/'))
+    .map(({ normalizedPath }) => normalizedPath);
+  const topLevelName = topLevelNames.size === 1 ? Array.from(topLevelNames)[0] : null;
+  const manifestPaths = entries
+    .filter(({ entry, normalizedPath }) => !entry.dir && normalizedPath.split('/').pop() === 'SKILL.md')
+    .map(({ normalizedPath }) => normalizedPath);
+  const expectedManifestPath = topLevelName ? `${topLevelName}/SKILL.md` : null;
+
+  if (
+    topLevelNames.size !== 1
+    || rootFiles.length > 0
+    || manifestPaths.length !== 1
+    || manifestPaths[0] !== expectedManifestPath
+  ) {
+    throw createHttpError(
+      'Uploaded ZIP must contain exactly one top-level directory with one direct SKILL.md and no root files',
+      400,
+      'SKILL_UPLOAD_STRUCTURE_INVALID',
+      {
+        topLevelEntries: Array.from(topLevelNames).sort(),
+        rootFiles,
+        manifestPaths,
+      },
+    );
+  }
+}
+
 async function resolveSingleExtractedRoot(archiveDirectory) {
   const directories = await listDirectories(archiveDirectory);
   if (directories.length !== 1) {
@@ -1049,21 +1117,25 @@ async function findSkillManifestPaths(rootDirectory) {
   return manifestPaths.sort((left, right) => left.localeCompare(right));
 }
 
-async function getSkillInstallConflict(workspacePath, name) {
+async function getSkillInstallConflict(workspacePath, name, { allowExactManaged = true } = {}) {
   const metadata = await readSkillsMetadata(workspacePath);
-  const normalizedName = firstString(name).toLowerCase();
-  const managedName = Object.keys(metadata.skills || {}).find((entryName) => entryName.toLowerCase() === normalizedName);
+  const normalizedName = normalizeWorkspaceSkillIdentityKey(name);
+  const managedName = Object.keys(metadata.skills || {}).find((entryName) => (
+    normalizeWorkspaceSkillIdentityKey(entryName) === normalizedName
+  ));
   if (managedName) {
     return pruneUndefined({
       type: 'managed',
-      blocking: managedName !== name,
-      existingName: managedName !== name ? managedName : undefined,
+      blocking: !allowExactManaged || managedName !== name,
+      existingName: managedName,
     });
   }
 
   const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const runtimeDirectories = await listDirectories(runtimeRoot);
-  const runtimeDirectory = runtimeDirectories.find((entry) => entry.name.toLowerCase() === normalizedName);
+  const runtimeDirectory = runtimeDirectories.find((entry) => (
+    normalizeWorkspaceSkillIdentityKey(entry.name) === normalizedName
+  ));
   if (runtimeDirectory) {
     return pruneUndefined({
       type: 'unmanaged',
@@ -1072,7 +1144,52 @@ async function getSkillInstallConflict(workspacePath, name) {
     });
   }
 
+  const manifestConflict = await findWorkspaceManifestNameConflict(workspacePath, normalizedName, metadata, runtimeDirectories);
+  if (manifestConflict) {
+    return {
+      type: manifestConflict.managed ? 'managed' : 'unmanaged',
+      blocking: true,
+      existingName: manifestConflict.directoryName,
+    };
+  }
+
   return { type: 'none', blocking: false };
+}
+
+async function findWorkspaceManifestNameConflict(workspacePath, normalizedName, metadata, runtimeDirectories) {
+  const { sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const managedNames = Object.keys(metadata.skills || {});
+  const candidates = [
+    ...runtimeDirectories.map((entry) => ({
+      directoryName: entry.name,
+      directoryPath: entry.path,
+      managed: managedNames.some((name) => (
+        normalizeWorkspaceSkillIdentityKey(name) === normalizeWorkspaceSkillIdentityKey(entry.name)
+      )),
+    })),
+    ...managedNames.map((directoryName) => ({
+      directoryName,
+      directoryPath: path.join(sourceRoot, directoryName),
+      managed: true,
+    })),
+  ];
+  const visited = new Set();
+  for (const candidate of candidates) {
+    const candidatePath = path.resolve(candidate.directoryPath);
+    if (visited.has(candidatePath)) continue;
+    visited.add(candidatePath);
+    let parsed;
+    try {
+      parsed = tryParseSkillManifestContent(await fs.readFile(path.join(candidatePath, 'SKILL.md'), 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (parsed && normalizeWorkspaceSkillIdentityKey(parsed.name) === normalizedName) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 async function materializeManagedSkill(sourcePath, runtimePath, workspacePath) {
@@ -1165,7 +1282,9 @@ async function resolveWorkspaceSkillContext({ workspacePath, name, marketImports
   const managedEntry = managedKey ? metadata.skills[managedKey] : null;
   const { sourceRoot, runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const actualName = managedKey || skillName;
-  const rootPath = managedEntry ? path.join(sourceRoot, actualName) : path.join(runtimeRoot, actualName);
+  const runtimePath = path.join(runtimeRoot, actualName);
+  const sourcePath = path.join(sourceRoot, actualName);
+  const rootPath = await pathExists(runtimePath) ? runtimePath : sourcePath;
   await assertDirectoryExists(rootPath, `Workspace skill "${skillName}" was not found`);
   const rootStat = await fs.lstat(rootPath);
   if (rootStat.isSymbolicLink()) {
@@ -1248,6 +1367,10 @@ function normalizeWorkspaceSkillName(name) {
   return skillName;
 }
 
+function normalizeWorkspaceSkillIdentityKey(name) {
+  return firstString(name).normalize('NFC').toLowerCase();
+}
+
 function normalizeSkillRelativePath(entryPath) {
   const rawPath = firstString(entryPath).replace(/\\/g, '/');
   if (!rawPath || rawPath.startsWith('/') || rawPath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
@@ -1288,13 +1411,40 @@ async function resolveSkillEntryPath(rootPath, entryPath, { mustExist }) {
 
 async function syncManagedSkillAfterMutation(context, workspacePath) {
   if (!context.managedEntry || context.managedEntry.enabled === false) return;
-  const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
-  await materializeManagedSkill(context.rootPath, path.join(runtimeRoot, context.name), workspacePath);
+  const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const runtimePath = path.join(runtimeRoot, context.name);
+  const sourcePath = path.join(sourceRoot, context.name);
+  if (path.resolve(context.rootPath) === path.resolve(runtimePath)) {
+    await replaceSkillDirectory(runtimePath, sourcePath);
+  } else {
+    await materializeManagedSkill(sourcePath, runtimePath, workspacePath);
+  }
+}
+
+async function replaceSkillDirectory(sourcePath, destinationPath) {
+  const stagePath = `${destinationPath}.${process.pid}.${Date.now()}.stage`;
+  const backupPath = `${destinationPath}.${process.pid}.${Date.now()}.backup`;
+  let backedUp = false;
+  try {
+    await fs.rm(stagePath, { recursive: true, force: true });
+    await fs.cp(sourcePath, stagePath, { recursive: true });
+    if (await pathExists(destinationPath)) {
+      await fs.rename(destinationPath, backupPath);
+      backedUp = true;
+    }
+    await fs.rename(stagePath, destinationPath);
+    await fs.rm(backupPath, { recursive: true, force: true });
+  } catch (error) {
+    await fs.rm(stagePath, { recursive: true, force: true });
+    await fs.rm(destinationPath, { recursive: true, force: true });
+    if (backedUp) await fs.rename(backupPath, destinationPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function findWorkspaceSkillNameConflict(workspacePath, candidateName, currentName = '') {
-  const normalizedCandidate = normalizeWorkspaceSkillName(candidateName).toLowerCase();
-  const normalizedCurrent = firstString(currentName).toLowerCase();
+  const normalizedCandidate = normalizeWorkspaceSkillIdentityKey(normalizeWorkspaceSkillName(candidateName));
+  const normalizedCurrent = normalizeWorkspaceSkillIdentityKey(currentName);
   const metadata = await readSkillsMetadata(workspacePath);
   const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const names = new Set([
@@ -1302,8 +1452,8 @@ async function findWorkspaceSkillNameConflict(workspacePath, candidateName, curr
     ...(await listDirectories(runtimeRoot)).map((entry) => entry.name),
   ]);
   return Array.from(names).find((entryName) => (
-    entryName.toLowerCase() === normalizedCandidate
-    && entryName.toLowerCase() !== normalizedCurrent
+    normalizeWorkspaceSkillIdentityKey(entryName) === normalizedCandidate
+    && normalizeWorkspaceSkillIdentityKey(entryName) !== normalizedCurrent
   ));
 }
 
@@ -1359,7 +1509,7 @@ async function renameWorkspaceSkillDirectory({ context, workspacePath, nextName,
   context.rootPath = context.managedEntry ? path.join(sourceRoot, nextName) : path.join(runtimeRoot, nextName);
 }
 
-function validateSkillManifestContent(content, expectedDirectoryName, { allowNameMismatch = false } = {}) {
+function validateSkillManifestContent(content) {
   try {
     matter.clearCache();
     const parsed = matter(String(content ?? ''));
@@ -1367,11 +1517,7 @@ function validateSkillManifestContent(content, expectedDirectoryName, { allowNam
     const description = firstString(parsed.data?.description);
     if (!manifestName) throw new Error('frontmatter name is required');
     if (!description) throw new Error('frontmatter description is required');
-    normalizeWorkspaceSkillName(expectedDirectoryName);
     normalizeWorkspaceSkillName(manifestName);
-    if (!allowNameMismatch && manifestName !== expectedDirectoryName) {
-      throw new Error(`frontmatter name must exactly match directory name "${expectedDirectoryName}"`);
-    }
     return { name: manifestName, description };
   } catch (error) {
     throw createHttpError(
@@ -1379,6 +1525,17 @@ function validateSkillManifestContent(content, expectedDirectoryName, { allowNam
       400,
       'SKILL_MANIFEST_INVALID',
     );
+  }
+}
+
+function tryParseSkillManifestContent(content) {
+  try {
+    matter.clearCache();
+    const parsed = matter(String(content ?? ''));
+    const name = firstString(parsed.data?.name);
+    return name ? { name } : null;
+  } catch {
+    return null;
   }
 }
 

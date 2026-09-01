@@ -5,7 +5,7 @@
 
 ## 背景
 
-系统已经预留 `POST /api/skill-market/skills/:name/unpublish`，能够校验小写 `yes`、本地发布绑定和创建者身份，但因为此前不知道上游接口，只返回 `501 SKILL_MARKET_UNPUBLISH_UNAVAILABLE`。现已确认上游接口为：
+系统服务层已经预留下架入口，能够校验小写 `yes`、本地发布绑定和创建者身份，但因为此前不知道上游接口，只返回 `501 SKILL_MARKET_UNPUBLISH_UNAVAILABLE`。现已确认上游接口为：
 
 ```text
 POST /data-agent/portal/skill/delete

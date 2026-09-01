@@ -15,6 +15,7 @@ import {
   importMarketSkill,
   listSkillMarket,
   removeMarketSkill,
+  reserveUnpublishMarketSkill,
   submitMarketSkill,
   uploadAndPublishLocalSkill,
   viewMarketSkillFile,
@@ -112,6 +113,16 @@ const TEST_SKILLS = [
     createUserId: 'j00939207',
     files: {
       'SKILL.md': '# 中文技能\n',
+    },
+  },
+  {
+    id: 'unicode-skill',
+    skillName: 'Café',
+    description: 'Validate Unicode-normalized skill names.',
+    nspPath: 'mock://skills/unicode-skill',
+    createUserId: 'j00939207',
+    files: {
+      'SKILL.md': '---\nname: Café\ndescription: Unicode normalization test.\n---\n\n# Café\n',
     },
   },
 ];
@@ -408,9 +419,11 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
 
   const previousApiUrl = process.env.SKILL_MARKET_API_URL;
   const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  const previousLogLevel = process.env.SKILL_MARKET_LOG_LEVEL;
   try {
     delete process.env.SKILL_MARKET_BASE_URL;
     process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    process.env.SKILL_MARKET_LOG_LEVEL = 'silent';
 
     const marketList = await listSkillMarket(withTenant({ workspacePath }));
     assert.equal(marketList[0].name, displayName);
@@ -493,6 +506,7 @@ test('importMarketSkill uses the downloaded skill archive root as the local dire
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    restoreEnv('SKILL_MARKET_LOG_LEVEL', previousLogLevel);
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -726,13 +740,355 @@ test('manual same-name runtime directories are conflicts instead of removable im
   assert.equal(detail.conflict, true);
   await assert.rejects(
     importMarketSkill(withTenant({ workspacePath, name: 'frontend-polisher' })),
-    /already exists/,
+    (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, 'SKILL_NAME_CONFLICT');
+      assert.deepEqual(error.details, {
+        name: 'frontend-polisher',
+        existingName: 'frontend-polisher',
+        existingDirectory: 'frontend-polisher',
+      });
+      return true;
+    },
   );
   await assert.rejects(
     removeMarketSkill({ workspacePath, name: 'frontend-polisher' }),
     /has not been imported/,
   );
   assert.equal(await fs.readFile(path.join(manualPath, 'SKILL.md'), 'utf8'), '# Manual Skill');
+});
+
+test('importMarketSkill appends a suffix when a different skill uses the package directory', async () => {
+  const workspacePath = await makeWorkspace();
+  const remoteSkills = [
+    { id: 'shared-root-one', skillName: 'First Skill', nspPath: 'mock://first', createUserId: 'creator-one', version: 1, published: true },
+    { id: 'shared-root-two', skillName: 'Second Skill', nspPath: 'mock://second', createUserId: 'creator-two', version: 1, published: true },
+  ];
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    const body = parseJson(bodyBuffer.toString('utf8'));
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      const query = String(body?.data?.searchContent || '').toLowerCase();
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: remoteSkills.filter((skill) => !query || [skill.id, skill.skillName].some((value) => value.toLowerCase().includes(query))),
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: { files: [{ path: 'shared-root/SKILL.md', content: `# ${body?.data?.id}\n` }] },
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    await importMarketSkill(withTenant({ workspacePath, name: 'First Skill' }));
+    const second = await importMarketSkill(withTenant({ workspacePath, name: 'Second Skill' }));
+    assert.equal(second.name, 'shared-root_2');
+    assert.equal(second.targetPath, '.claude/skills/shared-root_2');
+    assert.equal(
+      await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'shared-root', 'SKILL.md'), 'utf8'),
+      '# shared-root-one\n',
+    );
+    assert.equal(
+      await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'shared-root_2', 'SKILL.md'), 'utf8'),
+      '# shared-root-two\n',
+    );
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('importMarketSkill blocks canonically equivalent manifest names without rewriting Unicode', async () => {
+  const workspacePath = await makeWorkspace();
+  const existingDirectory = path.join(workspacePath, '.claude', 'skills', 'existing-cafe');
+  await fs.mkdir(existingDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(existingDirectory, 'SKILL.md'),
+    '---\nname: Cafe\u0301\ndescription: Existing decomposed name.\n---\n',
+    'utf8',
+  );
+
+  await assert.rejects(
+    importMarketSkill(withTenant({ workspacePath, name: 'Café' })),
+    (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, 'SKILL_NAME_CONFLICT');
+      assert.equal(error.details.name, 'Café');
+      assert.equal(error.details.existingName, 'Cafe\u0301');
+      assert.equal(error.details.existingDirectory, 'existing-cafe');
+      return true;
+    },
+  );
+  await assert.rejects(fs.access(path.join(workspacePath, '.claude', 'skills', 'Café')), /ENOENT/);
+});
+
+test('importMarketSkill keeps a Chinese name while suffixing an occupied directory', async () => {
+  const workspacePath = await makeWorkspace();
+  const occupiedDirectory = path.join(workspacePath, '.claude', 'skills', '中文技能');
+  await fs.mkdir(occupiedDirectory, { recursive: true });
+  await fs.writeFile(
+    path.join(occupiedDirectory, 'SKILL.md'),
+    '---\nname: 其他技能\ndescription: Occupies only the preferred directory.\n---\n',
+    'utf8',
+  );
+
+  const imported = await importMarketSkill(withTenant({ workspacePath, name: '中文技能' }));
+
+  assert.equal(imported.name, '中文技能_2');
+  assert.equal(imported.displayName, '中文技能');
+  assert.equal(imported.targetPath, '.claude/skills/中文技能_2');
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', '中文技能_2', 'SKILL.md'), 'utf8'),
+    '# 中文技能\n',
+  );
+  assert.match(
+    await fs.readFile(path.join(occupiedDirectory, 'SKILL.md'), 'utf8'),
+    /name: 其他技能/,
+  );
+});
+
+test('uploadAndPublishLocalSkill suffixes only the market archive directory when it is occupied', async () => {
+  const workspacePath = await makeWorkspace();
+  await fs.mkdir(path.join(workspacePath, '.claude', 'skills', 'shared-name'), { recursive: true });
+  await fs.writeFile(path.join(workspacePath, '.claude', 'skills', 'shared-name', 'SKILL.md'), '# Local\n', 'utf8');
+  await fs.mkdir(path.join(workspacePath, '.claude', 'skills', 'shared-name_2'), { recursive: true });
+  await fs.writeFile(path.join(workspacePath, '.claude', 'skills', 'shared-name_2', 'SKILL.md'), '# Existing\n', 'utf8');
+  let savedArchiveName = null;
+  let savedFiles = null;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [{ id: 'market-shared', skillName: 'Market Shared', nspPath: 'mock://shared', createUserId: 'another-user', version: 1, published: true }],
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, { code: 0, message: 'success', data: { files: [{ path: 'shared-name/SKILL.md', content: '# Market\n' }] } });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/save') {
+      const { files } = parseMultipartParts(bodyBuffer, req.headers['content-type']);
+      savedArchiveName = files.file?.filename;
+      savedFiles = await readZipMultipartFile(files.file?.content);
+      sendJson(res, { code: 0, message: 'success', data: 'saved-shared-name' });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/publish') {
+      sendJson(res, { code: 0, message: 'success', data: { version: 1 } });
+      return;
+    }
+    res.writeHead(404);
+    res.end(bodyBuffer);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    const result = await uploadAndPublishLocalSkill(withTenant({
+      workspacePath,
+      name: 'shared-name',
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+    assert.equal(result.marketDirectoryName, 'shared-name_2');
+    assert.equal(savedArchiveName, 'shared-name_2.zip');
+    assert.deepEqual(savedFiles, { 'SKILL.md': '# Local\n' });
+    assert.equal(await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'shared-name', 'SKILL.md'), 'utf8'), '# Local\n');
+    assert.equal(await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'shared-name_2', 'SKILL.md'), 'utf8'), '# Existing\n');
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('reserveUnpublishMarketSkill calls the portal delete API, clears the binding, and retains local files', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'published-local');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Published Local\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'published-local', {
+    name: 'published-local',
+    skillId: 'published-local-id',
+    id: 'published-local-id',
+    skillName: 'Published Local',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'published',
+    origin: 'local',
+    version: 1,
+  });
+
+  let deletePayload = null;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    assert.equal(endpoint, '/dataagent-mirror/data-agent/portal/skill/delete');
+    assert.equal(req.method, 'POST');
+    assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
+    assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+    deletePayload = parseJson(bodyBuffer.toString('utf8'));
+    sendJson(res, { code: 0, message: 'success' });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  let result;
+  try {
+    process.env.SKILL_MARKET_BASE_URL = `http://127.0.0.1:${server.address().port}/dataagent-mirror`;
+    delete process.env.SKILL_MARKET_API_URL;
+    result = await reserveUnpublishMarketSkill(withTenant({
+      workspacePath,
+      name: 'published-local',
+      currentUsername: TEST_ACCOUNT_ID,
+      confirmation: 'yes',
+    }));
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+
+  assert.deepEqual(deletePayload, { data: { id: 'published-local-id' } });
+  assert.deepEqual(result, {
+    unpublished: 'published-local',
+    remoteSkillId: 'published-local-id',
+    localFilesRetained: true,
+  });
+  const imports = JSON.parse(await fs.readFile(path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'), 'utf8'));
+  assert.deepEqual(imports.imports, {});
+  assert.equal(await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Published Local\n');
+});
+
+test('reserveUnpublishMarketSkill leaves the binding and local files unchanged when the portal delete fails', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'failed-unpublish');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Failed Unpublish\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'failed-unpublish', {
+    name: 'failed-unpublish',
+    skillId: 'failed-unpublish-id',
+    id: 'failed-unpublish-id',
+    skillName: 'Failed Unpublish',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'published',
+    origin: 'local',
+    version: 1,
+  });
+
+  const server = http.createServer(async (req, res) => {
+    await readRequestBuffer(req);
+    sendJson(res, { code: 500, message: 'delete failed' });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    await assert.rejects(
+      reserveUnpublishMarketSkill(withTenant({
+        workspacePath,
+        name: 'failed-unpublish',
+        currentUsername: TEST_ACCOUNT_ID,
+        confirmation: 'yes',
+      })),
+      /delete failed/,
+    );
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+
+  const imports = JSON.parse(await fs.readFile(path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'), 'utf8'));
+  assert.equal(imports.imports['failed-unpublish'].bindingType, 'published');
+  assert.equal(await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Failed Unpublish\n');
+});
+
+test('reserveUnpublishMarketSkill validates confirmation, binding type, creator, and remote id before calling the portal', async () => {
+  const workspacePath = await makeWorkspace();
+  await writeLegacyMarketImport(workspacePath, 'guarded-unpublish', {
+    name: 'guarded-unpublish',
+    id: 'guarded-unpublish-id',
+    skillName: 'Guarded Unpublish',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'published',
+    origin: 'local',
+  });
+
+  await assert.rejects(
+    reserveUnpublishMarketSkill(withTenant({
+      workspacePath,
+      name: 'guarded-unpublish',
+      currentUsername: TEST_ACCOUNT_ID,
+      confirmation: 'YES',
+    })),
+    (error) => error.statusCode === 400 && error.code === 'CONFIRMATION_REQUIRED',
+  );
+  await assert.rejects(
+    reserveUnpublishMarketSkill(withTenant({
+      workspacePath,
+      name: 'guarded-unpublish',
+      currentUsername: 'another-user',
+      confirmation: 'yes',
+    })),
+    (error) => error.statusCode === 403 && error.code === 'SKILL_UNPUBLISH_NOT_ALLOWED',
+  );
+
+  await writeLegacyMarketImport(workspacePath, 'guarded-unpublish', {
+    name: 'guarded-unpublish',
+    id: 'guarded-unpublish-id',
+    skillName: 'Guarded Unpublish',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'imported',
+    origin: 'market',
+  });
+  await assert.rejects(
+    reserveUnpublishMarketSkill(withTenant({
+      workspacePath,
+      name: 'guarded-unpublish',
+      currentUsername: TEST_ACCOUNT_ID,
+      confirmation: 'yes',
+    })),
+    (error) => error.statusCode === 403 && error.code === 'SKILL_UNPUBLISH_NOT_ALLOWED',
+  );
+
+  await writeLegacyMarketImport(workspacePath, 'guarded-unpublish', {
+    name: 'guarded-unpublish',
+    skillName: 'Guarded Unpublish',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'published',
+    origin: 'local',
+  });
+  await assert.rejects(
+    reserveUnpublishMarketSkill(withTenant({
+      workspacePath,
+      name: 'guarded-unpublish',
+      currentUsername: TEST_ACCOUNT_ID,
+      confirmation: 'yes',
+    })),
+    (error) => error.statusCode === 409 && error.code === 'SKILL_UNPUBLISH_BINDING_INVALID',
+  );
 });
 
 test('uploadAndPublishLocalSkill saves and publishes a local non-market skill with uppercase name', async () => {
@@ -761,6 +1117,11 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill wi
 
     assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
+
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, { code: 0, message: 'success', data: [] });
+      return;
+    }
 
     if (endpoint === '/data-agent/api/skill/save') {
       assert.equal(req.method, 'POST');
@@ -840,6 +1201,65 @@ test('uploadAndPublishLocalSkill saves and publishes a local non-market skill wi
   assert.equal(imports.imports.LocalAuthor.origin, 'local');
   assert.equal(imports.imports.LocalAuthor.bindingType, 'published');
   assert.match(imports.imports.LocalAuthor.baselineHash, /^[a-f0-9]{64}$/);
+});
+
+test('uploadAndPublishLocalSkill serializes concurrent first-publish requests per workspace', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'concurrent-publish');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Concurrent Publish\n', 'utf8');
+
+  let saveCount = 0;
+  let published = false;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: published ? [{
+          id: 'concurrent-publish-id',
+          skillName: 'concurrent-publish',
+          nspPath: 'mock://skills/concurrent-publish-id',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+          published: true,
+        }] : [],
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/save') {
+      saveCount += 1;
+      sendJson(res, { code: 0, message: 'success', data: 'concurrent-publish-id' });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/publish') {
+      published = true;
+      sendJson(res, { code: 0, message: 'success', data: { version: 1 } });
+      return;
+    }
+    res.writeHead(404);
+    res.end(bodyBuffer);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    const results = await Promise.allSettled([
+      uploadAndPublishLocalSkill(withTenant({ workspacePath, name: 'concurrent-publish', currentUsername: TEST_ACCOUNT_ID })),
+      uploadAndPublishLocalSkill(withTenant({ workspacePath, name: 'concurrent-publish', currentUsername: TEST_ACCOUNT_ID })),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.equal(saveCount, 1);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test('listSkillMarket deduplicates uploaded skills by remote id when names differ', async () => {
@@ -1037,12 +1457,170 @@ test('getMarketSkillPublishPreview strips uploaded archive root before diffing f
         newContent: '# Local Folder\nchanged\n',
       },
     ]);
+    assert.match(preview.localContentHash, /^[a-f0-9]{64}$/);
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+});
+
+test('submitMarketSkill preserves the remote archive root when the local directory has a suffix', async () => {
+  const workspacePath = await makeWorkspace();
+  const localName = 'remote-root_2';
+  const skillPath = path.join(workspacePath, '.claude', 'skills', localName);
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Updated Local Skill\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, localName, {
+    name: localName,
+    skillId: 'remote-root-id',
+    id: 'remote-root-id',
+    skillName: 'Remote Root',
+    nspPath: 'mock://skills/remote-root-id',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 1,
+    source: 'skill-market-api',
+  });
+
+  let updateArchiveName = null;
+  let updatedFiles = null;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [{
+          id: 'remote-root-id',
+          skillName: 'Remote Root',
+          nspPath: 'mock://skills/remote-root-id',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+          published: true,
+        }],
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: { files: [{ path: 'remote-root/SKILL.md', content: '# Remote Skill\n' }] },
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/update') {
+      const { files } = parseMultipartParts(bodyBuffer, req.headers['content-type']);
+      updateArchiveName = files.file?.filename;
+      updatedFiles = await readZipMultipartFile(files.file?.content);
+      sendJson(res, { code: 0, message: 'success' });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/publish') {
+      sendJson(res, { code: 0, message: 'success', data: { version: 2 } });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    const result = await submitMarketSkill(withTenant({
+      workspacePath,
+      name: localName,
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+    assert.equal(result.marketDirectoryName, 'remote-root');
+    assert.equal(updateArchiveName, 'remote-root.zip');
+    assert.deepEqual(updatedFiles, { 'SKILL.md': '# Updated Local Skill\n' });
+    assert.equal(result.skill.name, localName);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('submitMarketSkill rejects a stale publish preview before uploading files', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'preview-stale');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Initial Local Skill\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, 'preview-stale', {
+    name: 'preview-stale',
+    skillId: 'preview-stale-id',
+    id: 'preview-stale-id',
+    skillName: 'Preview Stale',
+    nspPath: 'mock://skills/preview-stale-id',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 1,
+    source: 'skill-market-api',
+  });
+
+  let updateCalled = false;
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: [{
+          id: 'preview-stale-id',
+          skillName: 'Preview Stale',
+          nspPath: 'mock://skills/preview-stale-id',
+          createUserId: TEST_ACCOUNT_ID,
+          version: 1,
+          published: true,
+        }],
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: { files: [{ path: 'preview-stale/SKILL.md', content: '# Remote Skill\n' }] },
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/update') updateCalled = true;
+    res.writeHead(404);
+    res.end(bodyBuffer);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    const preview = await getMarketSkillPublishPreview(withTenant({
+      workspacePath,
+      name: 'preview-stale',
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+    await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Changed After Preview\n', 'utf8');
+    await assert.rejects(
+      submitMarketSkill(withTenant({
+        workspacePath,
+        name: 'preview-stale',
+        currentUsername: TEST_ACCOUNT_ID,
+        expectedLocalContentHash: preview.localContentHash,
+      })),
+      (error) => error.statusCode === 409 && error.code === 'SKILL_PUBLISH_PREVIEW_STALE',
+    );
+    assert.equal(updateCalled, false);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
@@ -1223,7 +1801,7 @@ test('uploadAndPublishLocalSkill can republish a local skill whose remote bindin
   assert.equal(imports.imports['deleted-remote'].id, 'new-deleted-remote');
   assert.equal(imports.imports['deleted-remote'].importedAt, '2026-05-14T00:00:00.000Z');
   assert.equal(imports.imports['deleted-remote'].version, 1);
-  assert.deepEqual(seenSearchContents, ['old-deleted-remote']);
+  assert.deepEqual(seenSearchContents, ['old-deleted-remote', '']);
 });
 
 test('submitMarketSkill signs update requests without an auth body', async () => {
@@ -1326,6 +1904,14 @@ test('submitMarketSkill signs update requests without an auth body', async () =>
             isDirectory: false,
           }],
         },
+      });
+      return;
+    }
+    if (endpoint === '/data-agent/api/skill/download') {
+      sendJson(res, {
+        code: 0,
+        message: 'success',
+        data: { files: [{ path: 'auth-skill/SKILL.md', content: '# Remote Auth Skill\n' }] },
       });
       return;
     }

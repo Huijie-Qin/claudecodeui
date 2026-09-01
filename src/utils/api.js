@@ -870,19 +870,20 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(payload),
       }),
+    renameDirectory: (workspaceId, name, nextName) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/directory`), {
+        method: 'PATCH',
+        body: JSON.stringify({ nextName }),
+      }),
     deleteEntry: (workspaceId, name, path) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
         method: 'DELETE',
         body: JSON.stringify({ path }),
       }),
-    createLocal: (workspaceId, payload) =>
-      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/local`), {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      }),
     deleteLocal: (workspaceId, name) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/local`), {
         method: 'DELETE',
+        body: JSON.stringify({ confirmation: 'yes' }),
       }),
     previewGithub: (workspaceId, url) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/preview`), {
@@ -931,21 +932,29 @@ export const api = {
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-preview`, workspaceId)),
     publishState: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-state`, workspaceId)),
-    publishSkill: (workspaceId, name) =>
+    publishSkill: (workspaceId, name, localContentHash) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
         method: 'POST',
+        body: JSON.stringify({ localContentHash }),
       }),
     uploadAndPublishSkill: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/upload-publish`, workspaceId), {
         method: 'POST',
       }),
-    submitSkill: (workspaceId, name) =>
+    unpublishSkill: (workspaceId, name) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/unpublish`, workspaceId), {
+        method: 'POST',
+        body: JSON.stringify({ confirmation: 'yes' }),
+      }),
+    submitSkill: (workspaceId, name, localContentHash) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
         method: 'POST',
+        body: JSON.stringify({ localContentHash }),
       }),
     remove: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/import`, workspaceId), {
         method: 'DELETE',
+        body: JSON.stringify({ confirmation: 'yes' }),
       }),
   },
 

@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import JSZip from 'jszip';
 
+import { parseFrontmatter } from '../utils/frontmatter.js';
+
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 import { computeSkillDirectoryHash, deleteLocalWorkspaceSkill } from './workspace-skills.js';
 
@@ -15,6 +17,9 @@ const MARKET_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
 const MARKET_ENDPOINT_PREFIX = '/data-agent';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 const ACCOUNT_ID_HEADER = 'X-Account-Id';
+const MARKET_DIRECTORY_CACHE = new Map();
+const WORKSPACE_SKILL_OPERATION_LOCKS = new Map();
+const MAX_SKILL_DIRECTORY_NAME_CODE_POINTS = 80;
 const MARKET_LOG_LEVELS = {
   silent: 0,
   error: 1,
@@ -195,7 +200,12 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
   };
 }
 
-export async function downloadMarketSkill({
+export async function downloadMarketSkill(options) {
+  const workspacePath = options?.workspacePath;
+  return withWorkspaceSkillOperationLock(workspacePath, () => downloadMarketSkillUnlocked(options));
+}
+
+async function downloadMarketSkillUnlocked({
   workspaceId,
   workspacePath,
   name,
@@ -226,70 +236,157 @@ export async function downloadMarketSkill({
   }
 
   const downloadedSkill = await downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
-  const skillName = downloadedSkill.skillName || existingImportEntry?.skillName || remoteSkill.name;
-  const previousSkillName = existingImportEntry?.skillName && existingImportEntry.skillName !== skillName
-    ? existingImportEntry.skillName
-    : null;
-  const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
-  const status = existingStatus?.skillName === skillName
-    ? existingStatus
-    : await getImportStatus(workspacePath, skillName, imports);
+  const preferredSkillName = downloadedSkill.skillName || remoteSkill.name;
+  const previousSkillName = existingImportEntry?.skillName;
+  const previousMetadataEntry = existingImportEntry?.metadataEntry;
+  const updatingExistingImport = Boolean(overwrite && existingStatus?.imported);
 
-  if (previousSkillName && existingStatus?.imported && !overwrite) {
-    throw createHttpError(`Skill "${previousSkillName}" has already been imported`, 409);
-  }
-  if (status.imported && !overwrite) {
-    throw createHttpError(`Skill "${skillName}" has already been imported`, 409);
-  }
-  if (status.runtimeExists && !status.imported) {
-    throw createHttpError(`A .claude/skills/${skillName} directory already exists`, 409);
-  }
-
-  if (overwrite) {
-    await fs.rm(runtimePath, { recursive: true, force: true });
-    if (previousSkillName && existingStatus?.imported) {
-      await fs.rm(getRuntimeSkillPath(workspacePath, previousSkillName), { recursive: true, force: true });
+  if (!updatingExistingImport) {
+    const incomingName = getDownloadedSkillLogicalName(downloadedSkill.files, remoteSkill);
+    const nameConflict = await findWorkspaceManifestNameConflict(workspacePath, incomingName);
+    if (nameConflict) {
+      throw createHttpError(
+        `Skill name "${incomingName}" already exists in the workspace`,
+        409,
+        'SKILL_NAME_CONFLICT',
+        {
+          name: incomingName,
+          existingName: nameConflict.name,
+          existingDirectory: nameConflict.directoryName,
+        },
+      );
     }
   }
-  await writeDownloadedFiles(runtimePath, downloadedSkill.files);
-  const baselineHash = await computeSkillDirectoryHash(runtimePath);
+
+  let skillName = await findAvailableRuntimeSkillName(workspacePath, preferredSkillName, {
+    imports,
+    excludeImportName: previousSkillName,
+    excludeDirectoryName: updatingExistingImport ? previousSkillName : undefined,
+  });
+  const runtimeRoot = getSkillMarketPaths(workspacePath).runtimeRoot;
+  const stagePath = path.join(runtimeRoot, `.skill-market-import.${process.pid}.${Date.now()}.stage`);
+  let runtimePath = getRuntimeSkillPath(workspacePath, skillName);
+  let backupPath = path.join(runtimeRoot, `.${skillName}.${process.pid}.${Date.now()}.backup`);
+  let backedUp = false;
+  let previousBackedUp = false;
+  let metadataWritten = false;
+  let runtimeInstalled = false;
+  await fs.rm(stagePath, { recursive: true, force: true });
+  await writeDownloadedFiles(stagePath, downloadedSkill.files);
+  const baselineHash = await computeSkillDirectoryHash(stagePath);
+
+  skillName = await findAvailableRuntimeSkillName(workspacePath, preferredSkillName, {
+    imports,
+    excludeImportName: previousSkillName,
+    excludeDirectoryName: updatingExistingImport ? previousSkillName : undefined,
+  });
+  runtimePath = getRuntimeSkillPath(workspacePath, skillName);
+  backupPath = path.join(runtimeRoot, `.${skillName}.${process.pid}.${Date.now()}.backup`);
+  const previousRuntimePath = previousSkillName && previousSkillName !== skillName
+    ? getRuntimeSkillPath(workspacePath, previousSkillName)
+    : null;
+  const previousBackupPath = previousRuntimePath
+    ? path.join(path.dirname(previousRuntimePath), `.${previousSkillName}.${process.pid}.${Date.now()}.previous`)
+    : null;
 
   const timestamp = now().toISOString();
-  const nextImports = { ...imports.imports };
-  if (previousSkillName) {
-    delete nextImports[previousSkillName];
+  try {
+    if (await pathExists(runtimePath)) {
+      if (!updatingExistingImport || normalizeSkillIdentityKey(previousSkillName) !== normalizeSkillIdentityKey(skillName)) {
+        throw createHttpError(
+          `Directory .claude/skills/${skillName} became occupied during import`,
+          409,
+          'SKILL_DIRECTORY_CONFLICT',
+          { directoryName: skillName },
+        );
+      }
+      await fs.rm(backupPath, { recursive: true, force: true });
+      await fs.rename(runtimePath, backupPath);
+      backedUp = true;
+    }
+    await fs.rename(stagePath, runtimePath);
+    runtimeInstalled = true;
+    const nextImports = { ...imports.imports };
+    if (previousSkillName && previousSkillName !== skillName) {
+      delete nextImports[previousSkillName];
+    }
+    nextImports[skillName] = {
+      ...previousMetadataEntry,
+      ...nextImports[skillName],
+      name: skillName,
+      skillId: remoteSkill.skillId,
+      id: remoteSkill.id,
+      skillName: remoteSkill.displayName,
+      nspPath: remoteSkill.nspPath,
+      createUserId: remoteSkill.createUserId,
+      version: remoteSkill.version,
+      source: 'skill-market-api',
+      origin: previousMetadataEntry?.origin || nextImports[skillName]?.origin || 'market',
+      bindingType: previousMetadataEntry?.bindingType === 'published'
+        || nextImports[skillName]?.bindingType === 'published'
+        ? 'published'
+        : 'imported',
+      baselineHash,
+      importedAt: previousMetadataEntry?.importedAt || nextImports[skillName]?.importedAt || timestamp,
+      updatedAt: timestamp,
+    };
+    await writeMarketImports({ workspaceId, workspacePath }, {
+      version: 1,
+      imports: nextImports,
+    });
+    metadataWritten = true;
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspacePath,
+      targetPaths: [runtimePath],
+      recursive: true,
+      reason: 'skill_market_import',
+      context: { workspaceId: workspaceId || null, skillName },
+    });
+    if (previousRuntimePath && previousBackupPath && await pathExists(previousRuntimePath)) {
+      await fs.rm(previousBackupPath, { recursive: true, force: true });
+      await fs.rename(previousRuntimePath, previousBackupPath);
+      previousBackedUp = true;
+    }
+    await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {});
+    if (previousBackupPath) await fs.rm(previousBackupPath, { recursive: true, force: true }).catch(() => {});
+  } catch (error) {
+    await fs.rm(stagePath, { recursive: true, force: true });
+    if (runtimeInstalled) await fs.rm(runtimePath, { recursive: true, force: true });
+    if (backedUp) await fs.rename(backupPath, runtimePath).catch(() => {});
+    if (previousBackedUp && previousRuntimePath && previousBackupPath) {
+      await fs.rename(previousBackupPath, previousRuntimePath).catch(() => {});
+    }
+    if (metadataWritten) {
+      await writeMarketImports({ workspaceId, workspacePath }, imports).catch((rollbackError) => {
+        console.error('[skill-market] Failed to roll back import metadata:', rollbackError?.message || rollbackError);
+      });
+    }
+    throw error;
   }
-  await writeMarketImports({ workspaceId, workspacePath }, {
-    version: 1,
-    imports: {
-      ...nextImports,
-      [skillName]: {
-        ...nextImports[skillName],
-        name: skillName,
-        skillId: remoteSkill.skillId,
-        id: remoteSkill.id,
-        skillName: remoteSkill.displayName,
-        nspPath: remoteSkill.nspPath,
-        createUserId: remoteSkill.createUserId,
-        version: remoteSkill.version,
-        source: 'skill-market-api',
-        origin: nextImports[skillName]?.origin || 'market',
-        bindingType: nextImports[skillName]?.bindingType === 'published' ? 'published' : 'imported',
-        baselineHash,
-        importedAt: imports.imports[skillName]?.importedAt || timestamp,
-        updatedAt: timestamp,
-      },
-    },
-  });
-  await applyWorkspaceOwnership({
-    workspaceRoot: workspacePath,
-    targetPaths: [runtimePath],
-    recursive: true,
-    reason: 'skill_market_import',
-    context: { workspaceId: workspaceId || null, skillName },
-  });
 
-  return getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
+  try {
+    return await getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
+  } catch (error) {
+    console.error('[skill-market] Import committed but detail refresh failed:', error?.message || error);
+    const localFiles = await readSkillDirectoryFiles(runtimePath);
+    return {
+      ...remoteSkill,
+      name: skillName,
+      imported: true,
+      runtimeExists: true,
+      conflict: false,
+      importedAt: previousMetadataEntry?.importedAt || timestamp,
+      updatedAt: timestamp,
+      locallyModified: false,
+      origin: previousMetadataEntry?.origin || 'market',
+      bindingType: previousMetadataEntry?.bindingType === 'published' ? 'published' : 'imported',
+      importedVersion: remoteSkill.version,
+      updateAvailable: false,
+      targetPath: path.join('.claude', 'skills', skillName).split(path.sep).join('/'),
+      directoryTree: buildDirectoryTreeFromFiles(localFiles),
+      files: summarizeSkillFiles(localFiles),
+    };
+  }
 }
 
 export async function getMarketSkillPublishPreview({ workspaceId, workspacePath, name, currentUsername, tenantCode, accountId }) {
@@ -321,7 +418,6 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
   const downloadedRemoteSkill = await downloadRemoteSkillFiles(remoteSkill, {
     tenantCode,
     accountId: remoteAccountId,
-    skillRootName: status.skillName,
   });
   const remoteFiles = Object.entries(downloadedRemoteSkill.files).map(([filePath, fileContent]) => {
     const rawContent = Buffer.isBuffer(fileContent)
@@ -345,6 +441,7 @@ export async function getMarketSkillPublishPreview({ workspaceId, workspacePath,
       displayName: remoteSkill.displayName,
       version: remoteSkill.version,
     },
+    localContentHash: computeSkillFilesHash(localFiles),
     changes,
   };
 }
@@ -397,11 +494,17 @@ export async function getMarketSkillPublishState({ workspaceId, workspacePath, n
   };
 }
 
-export async function publishMarketSkill({
+export async function publishMarketSkill(options) {
+  const workspacePath = options?.workspacePath;
+  return withWorkspaceSkillOperationLock(workspacePath, () => publishMarketSkillUnlocked(options));
+}
+
+async function publishMarketSkillUnlocked({
   workspaceId,
   workspacePath,
   name,
   currentUsername,
+  expectedLocalContentHash,
   now = () => new Date(),
   tenantCode,
   accountId,
@@ -430,9 +533,21 @@ export async function publishMarketSkill({
   ensurePublishAllowed(remoteSkill, status, currentUsername);
 
   const importSkillName = status.skillName || remoteSkill.name;
+  const remoteDirectoryName = await resolveRemoteMarketDirectory(remoteSkill, {
+    tenantCode,
+    accountId: remoteAccountId,
+  });
+  const marketDirectoryName = await resolveAvailableMarketDirectory({
+    preferredDirectoryName: remoteDirectoryName,
+    excludeRemoteIds: [remoteSkill.id, remoteSkill.skillId],
+    tenantCode,
+    accountId: remoteAccountId,
+  });
   const runtimePath = getRuntimeSkillPath(workspacePath, importSkillName);
   const files = await readSkillDirectoryFiles(runtimePath);
-  const updateForm = await buildSkillUpdateForm(remoteSkill, files, importSkillName);
+  const localContentHash = computeSkillFilesHash(files);
+  assertPublishPreviewCurrent(expectedLocalContentHash, localContentHash);
+  const updateForm = await buildSkillUpdateForm(remoteSkill, files, marketDirectoryName);
   await requestMarketForm('/api/skill/update', updateForm, {
     tenantCode,
     accountId: remoteAccountId,
@@ -451,7 +566,6 @@ export async function publishMarketSkill({
 
   const publishedAt = now().toISOString();
   const publishedVersion = normalizeVersion(publishPayload.data?.version) ?? (remoteSkill.version + 1);
-  const baselineHash = await computeSkillDirectoryHash(runtimePath);
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
@@ -468,7 +582,7 @@ export async function publishMarketSkill({
         source: 'skill-market-api',
         origin: imports.imports[importSkillName]?.origin || 'market',
         bindingType: imports.imports[importSkillName]?.bindingType || 'imported',
-        baselineHash,
+        baselineHash: localContentHash,
         updatedAt: publishedAt,
       },
     },
@@ -486,12 +600,18 @@ export async function publishMarketSkill({
     publishedAt,
     publishedVersion,
     submittedFileCount: files.length,
+    marketDirectoryName,
   };
 }
 
 export const submitMarketSkill = publishMarketSkill;
 
-export async function uploadAndPublishLocalSkill({
+export async function uploadAndPublishLocalSkill(options) {
+  const workspacePath = options?.workspacePath;
+  return withWorkspaceSkillOperationLock(workspacePath, () => uploadAndPublishLocalSkillUnlocked(options));
+}
+
+async function uploadAndPublishLocalSkillUnlocked({
   workspaceId,
   workspacePath,
   name,
@@ -519,8 +639,14 @@ export async function uploadAndPublishLocalSkill({
   }
 
   const runtimePath = getRuntimeSkillPath(workspacePath, skillName);
+  const marketDirectoryName = await resolveAvailableMarketDirectory({
+    preferredDirectoryName: skillName,
+    tenantCode,
+    accountId: remoteAccountId,
+  });
   const files = await readSkillDirectoryFiles(runtimePath);
-  const savePayload = await requestMarketForm('/api/skill/save', await buildSkillSaveForm(skillName, files), {
+  const localContentHash = computeSkillFilesHash(files);
+  const savePayload = await requestMarketForm('/api/skill/save', await buildSkillSaveForm(marketDirectoryName, files), {
     tenantCode,
     accountId: remoteAccountId,
   });
@@ -546,7 +672,6 @@ export async function uploadAndPublishLocalSkill({
   const publishedVersion = normalizeVersion(publishPayload.data?.version)
     ?? normalizeVersion(savedSkill.version)
     ?? 1;
-  const baselineHash = await computeSkillDirectoryHash(runtimePath);
 
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
@@ -563,7 +688,7 @@ export async function uploadAndPublishLocalSkill({
         source: 'skill-market-api',
         origin: 'local',
         bindingType: 'published',
-        baselineHash,
+        baselineHash: localContentHash,
         importedAt: imports.imports[skillName]?.importedAt || publishedAt,
         updatedAt: publishedAt,
       },
@@ -585,6 +710,7 @@ export async function uploadAndPublishLocalSkill({
     publishedAt,
     publishedVersion,
     submittedFileCount: files.length,
+    marketDirectoryName,
   };
 }
 
@@ -607,6 +733,86 @@ export async function removeMarketSkill({ workspaceId, workspacePath, name }) {
 
   return {
     removed: skillName,
+  };
+}
+
+export async function reserveUnpublishMarketSkill(options) {
+  const workspacePath = options?.workspacePath;
+  return withWorkspaceSkillOperationLock(workspacePath, () => unpublishMarketSkillUnlocked(options));
+}
+
+async function unpublishMarketSkillUnlocked({
+  workspaceId,
+  workspacePath,
+  name,
+  currentUsername,
+  confirmation,
+  tenantCode,
+  accountId,
+}) {
+  if (confirmation !== 'yes') {
+    throw createHttpError('Type yes to confirm this operation', 400, 'CONFIRMATION_REQUIRED');
+  }
+  const requestedSkillName = normalizeRuntimeSkillFolderName(name);
+  const imports = await readMarketImports({ workspaceId, workspacePath });
+  const bindingPair = Object.entries(imports.imports || {}).find(([entryName]) => (
+    normalizeSkillIdentityKey(entryName) === normalizeSkillIdentityKey(requestedSkillName)
+  ));
+  if (!bindingPair) {
+    throw createHttpError(`Published skill "${requestedSkillName}" was not found`, 404);
+  }
+  const binding = bindingPair[1];
+  if (binding.bindingType !== 'published') {
+    throw createHttpError('Only a locally published skill can be unpublished', 403, 'SKILL_UNPUBLISH_NOT_ALLOWED');
+  }
+  if (!binding.createUserId || String(binding.createUserId) !== String(currentUsername || '')) {
+    throw createHttpError('Only the skill creator can unpublish this skill', 403, 'SKILL_UNPUBLISH_NOT_ALLOWED');
+  }
+  const remoteSkillId = firstNonEmptyString(binding.id, binding.skillId);
+  if (!remoteSkillId) {
+    throw createHttpError(
+      'Published skill binding does not include a remote skill id',
+      409,
+      'SKILL_UNPUBLISH_BINDING_INVALID',
+    );
+  }
+
+  const remoteAccountId = accountId ?? currentUsername;
+  await requestMarketJson('/portal/skill/delete', {
+    method: 'POST',
+    tenantCode,
+    accountId: remoteAccountId,
+    body: {
+      data: {
+        id: remoteSkillId,
+      },
+    },
+  });
+
+  const nextImports = { ...imports.imports };
+  delete nextImports[bindingPair[0]];
+  try {
+    await writeMarketImports({ workspaceId, workspacePath }, {
+      version: 1,
+      imports: nextImports,
+    });
+  } catch {
+    throw createHttpError(
+      'Skill was unpublished from the market, but the local market binding could not be cleared',
+      500,
+      'SKILL_UNPUBLISH_BINDING_CLEANUP_FAILED',
+      {
+        remoteUnpublished: true,
+        skillName: bindingPair[0],
+        remoteSkillId,
+      },
+    );
+  }
+
+  return {
+    unpublished: bindingPair[0],
+    remoteSkillId,
+    localFilesRetained: true,
   };
 }
 
@@ -649,6 +855,74 @@ async function fetchRemoteSkillPage({
       total: getSkillListTotal(payload),
     }),
   };
+}
+
+async function resolveAvailableMarketDirectory({
+  preferredDirectoryName,
+  excludeRemoteIds = [],
+  tenantCode,
+  accountId,
+}) {
+  const inventory = await getMarketDirectoryInventory({ tenantCode, accountId });
+  const excluded = new Set(excludeRemoteIds
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean));
+  const directoryName = normalizeRuntimeSkillFolderName(preferredDirectoryName);
+  const normalizedDirectory = normalizeSkillIdentityKey(directoryName);
+  const conflict = inventory.find((entry) => {
+    const ids = [entry.skill.id, entry.skill.skillId]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    return normalizeSkillIdentityKey(entry.directoryName) === normalizedDirectory
+      && !ids.some((id) => excluded.has(id));
+  });
+  if (!conflict) return directoryName;
+
+  const occupied = new Set(inventory.flatMap((entry) => {
+    const ids = [entry.skill.id, entry.skill.skillId]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    return ids.some((id) => excluded.has(id))
+      ? []
+      : [normalizeSkillIdentityKey(entry.directoryName)];
+  }));
+  return findAvailableDirectoryName(directoryName, occupied);
+}
+
+async function getMarketDirectoryInventory({ tenantCode, accountId }) {
+  const skills = [];
+  let page = 1;
+  while (page <= 100) {
+    const result = await fetchRemoteSkillPage({ page, pageSize: 100, tenantCode, accountId });
+    skills.push(...result.skills);
+    if (!result.pageInfo?.hasNextPage || result.skills.length === 0) break;
+    page += 1;
+  }
+
+  return Promise.all(skills.map(async (skill) => ({
+    skill,
+    directoryName: await resolveRemoteMarketDirectory(skill, { tenantCode, accountId }),
+  })));
+}
+
+async function resolveRemoteMarketDirectory(remoteSkill, { tenantCode, accountId }) {
+  const cacheKey = [getMarketApiUrl(), tenantCode, accountId, remoteSkill.id || remoteSkill.skillId, remoteSkill.version]
+    .map((value) => String(value ?? ''))
+    .join(':');
+  if (MARKET_DIRECTORY_CACHE.has(cacheKey)) return MARKET_DIRECTORY_CACHE.get(cacheKey);
+  const downloaded = await downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+  const directoryName = normalizeRuntimeSkillFolderName(downloaded.skillName || remoteSkill.name);
+  MARKET_DIRECTORY_CACHE.set(cacheKey, directoryName);
+  return directoryName;
+}
+
+function findAvailableDirectoryName(directoryName, occupied) {
+  const baseName = normalizeRuntimeSkillFolderName(directoryName);
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const candidate = appendSkillDirectorySuffix(baseName, suffix);
+    if (!occupied.has(normalizeSkillIdentityKey(candidate))) return candidate;
+  }
+  throw createHttpError('Unable to find an available skill directory name', 409);
 }
 
 function createSkillListRequestBody({ searchContent = '', page = 1, pageSize = DEFAULT_LIST_PAGE_SIZE } = {}) {
@@ -780,16 +1054,6 @@ async function getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports
 }
 
 function getImportEntryForRemoteSkill(remoteSkill, imports) {
-  const namedPair = Object.entries(imports.imports || {}).find(([skillName]) => (
-    skillName.toLowerCase() === String(remoteSkill.name || '').toLowerCase()
-  ));
-  if (namedPair) {
-    return {
-      skillName: namedPair[0],
-      metadataEntry: namedPair[1],
-    };
-  }
-
   const remoteIds = new Set(
     [remoteSkill.id, remoteSkill.skillId]
       .map((value) => String(value || '').trim().toLowerCase())
@@ -809,7 +1073,28 @@ function getImportEntryForRemoteSkill(remoteSkill, imports) {
     }
   }
 
+  const namedPair = Object.entries(imports.imports || {}).find(([skillName]) => (
+    skillName.toLowerCase() === String(remoteSkill.name || '').toLowerCase()
+  ));
+  if (namedPair) {
+    return {
+      skillName: namedPair[0],
+      metadataEntry: namedPair[1],
+    };
+  }
+
   return null;
+}
+
+function isImportEntryForRemoteSkill(metadataEntry, remoteSkill) {
+  if (!metadataEntry) return false;
+  const remoteIds = new Set([remoteSkill?.id, remoteSkill?.skillId]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean));
+  return [metadataEntry.id, metadataEntry.skillId]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .some((value) => remoteIds.has(value));
 }
 
 function matchesSkillSearch(skill, searchContent = '') {
@@ -1825,6 +2110,34 @@ function createContentDigest(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
+function computeSkillFilesHash(files) {
+  const digest = crypto.createHash('sha256');
+  [...files]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .forEach((file) => {
+      digest.update(file.path);
+      digest.update('\0');
+      digest.update(file.rawContent ?? Buffer.from(file.content ?? '', 'utf8'));
+      digest.update('\0');
+    });
+  return digest.digest('hex');
+}
+
+function assertPublishPreviewCurrent(expectedHash, actualHash) {
+  if (expectedHash === undefined || expectedHash === null || expectedHash === '') return;
+  const normalizedExpectedHash = String(expectedHash).trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalizedExpectedHash)) {
+    throw createHttpError('Invalid publish preview hash', 400, 'SKILL_PUBLISH_PREVIEW_INVALID');
+  }
+  if (normalizedExpectedHash !== actualHash) {
+    throw createHttpError(
+      'Local skill files changed after the publish preview. Review the latest diff before publishing.',
+      409,
+      'SKILL_PUBLISH_PREVIEW_STALE',
+    );
+  }
+}
+
 function getFileContentDigest(file) {
   if (file.digest) return file.digest;
   if (Buffer.isBuffer(file.rawContent)) return createContentDigest(file.rawContent);
@@ -1909,6 +2222,133 @@ function getRuntimeSkillPath(workspacePath, name) {
   return path.join(runtimeRoot, normalizeRuntimeSkillFolderName(name));
 }
 
+async function withWorkspaceSkillOperationLock(workspacePath, operation) {
+  if (!workspacePath) return operation();
+  const lockKey = path.resolve(workspacePath);
+  const previous = WORKSPACE_SKILL_OPERATION_LOCKS.get(lockKey) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  WORKSPACE_SKILL_OPERATION_LOCKS.set(lockKey, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (WORKSPACE_SKILL_OPERATION_LOCKS.get(lockKey) === tail) {
+      WORKSPACE_SKILL_OPERATION_LOCKS.delete(lockKey);
+    }
+  }
+}
+
+function getDownloadedSkillLogicalName(files, remoteSkill) {
+  const manifestContent = files?.['SKILL.md'];
+  const manifestName = tryReadFrontmatterSkillName(manifestContent);
+  const fallbackName = firstNonEmptyString(remoteSkill?.displayName, remoteSkill?.name);
+  const name = manifestName || fallbackName;
+  if (!name) {
+    throw createHttpError('Skill name is required', 400, 'SKILL_MANIFEST_INVALID');
+  }
+  return name;
+}
+
+async function findWorkspaceManifestNameConflict(workspacePath, candidateName) {
+  const candidateKey = normalizeSkillIdentityKey(candidateName);
+  if (!candidateKey) {
+    throw createHttpError('Skill name is required', 400, 'SKILL_MANIFEST_INVALID');
+  }
+  const { runtimeRoot } = getSkillMarketPaths(workspacePath);
+  let directories;
+  try {
+    directories = (await fs.readdir(runtimeRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+
+  for (const directory of directories) {
+    const manifestPath = path.join(runtimeRoot, directory.name, 'SKILL.md');
+    let manifestName = null;
+    try {
+      manifestName = tryReadFrontmatterSkillName(await fs.readFile(manifestPath, 'utf8'));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    const existingName = manifestName || directory.name;
+    if (normalizeSkillIdentityKey(existingName) === candidateKey) {
+      return { name: existingName, directoryName: directory.name };
+    }
+  }
+  return null;
+}
+
+async function findAvailableRuntimeSkillName(
+  workspacePath,
+  preferredName,
+  { imports, excludeImportName, excludeDirectoryName } = {},
+) {
+  const baseName = normalizeRuntimeSkillFolderName(preferredName);
+  const excludedKey = normalizeSkillIdentityKey(excludeImportName);
+  const excludedDirectoryKey = normalizeSkillIdentityKey(excludeDirectoryName);
+  const occupied = new Set();
+  const { runtimeRoot } = getSkillMarketPaths(workspacePath);
+  try {
+    const directories = await fs.readdir(runtimeRoot, { withFileTypes: true });
+    directories.filter((entry) => entry.isDirectory())
+      .forEach((entry) => {
+        const entryKey = normalizeSkillIdentityKey(entry.name);
+        if (entryKey && entryKey !== excludedDirectoryKey) occupied.add(entryKey);
+      });
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  Object.keys(imports?.imports || {}).forEach((entryName) => {
+    const entryKey = normalizeSkillIdentityKey(entryName);
+    if (entryKey && entryKey !== excludedKey) occupied.add(entryKey);
+  });
+
+  if (!occupied.has(normalizeSkillIdentityKey(baseName))) return baseName;
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const candidate = appendSkillDirectorySuffix(baseName, suffix);
+    if (!occupied.has(normalizeSkillIdentityKey(candidate))) return candidate;
+  }
+  throw createHttpError('Unable to find an available skill directory name', 409, 'SKILL_DIRECTORY_CONFLICT');
+}
+
+function tryReadFrontmatterSkillName(content) {
+  if (typeof content !== 'string' && !Buffer.isBuffer(content)) return null;
+  try {
+    const parsed = parseFrontmatter(Buffer.isBuffer(content) ? content.toString('utf8') : content);
+    return firstNonEmptyString(parsed?.data?.name);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSkillIdentityKey(value) {
+  const text = firstNonEmptyString(value);
+  return text ? text.normalize('NFC').toLowerCase() : '';
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function appendSkillDirectorySuffix(baseName, suffix) {
+  const suffixText = `_${suffix}`;
+  const availableLength = Math.max(1, MAX_SKILL_DIRECTORY_NAME_CODE_POINTS - Array.from(suffixText).length);
+  const truncatedBase = Array.from(baseName).slice(0, availableLength).join('').replace(/[.\s-]+$/, '') || 'skill';
+  return normalizeRuntimeSkillFolderName(`${truncatedBase}${suffixText}`);
+}
+
 function resolveSkillFilePath(skillDirectory, filePath) {
   const normalized = normalizeRelativeFilePath(filePath);
   const targetPath = path.resolve(skillDirectory, normalized);
@@ -1948,18 +2388,19 @@ function normalizeRuntimeSkillFolderName(value) {
 
 function safeNormalizeSkillFolderName(value, { preserveCase = false } = {}) {
   const raw = String(value || '')
-    .trim();
+    .trim()
+    .normalize('NFC');
   const normalized = (preserveCase ? raw : raw.toLowerCase())
     .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^[.\s-]+/, '')
-    .replace(/[.\s-]+$/, '')
-    .slice(0, 80);
-  if (normalized === '.' || normalized === '..') {
+    .replace(/[.\s-]+$/, '');
+  const truncated = Array.from(normalized).slice(0, MAX_SKILL_DIRECTORY_NAME_CODE_POINTS).join('');
+  if (truncated === '.' || truncated === '..') {
     return null;
   }
-  return normalized || null;
+  return truncated || null;
 }
 
 function normalizeVersion(value) {

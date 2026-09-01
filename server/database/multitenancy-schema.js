@@ -710,3 +710,17 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_task
 CREATE INDEX IF NOT EXISTS idx_scheduled_task_logs_scope
   ON scheduled_task_logs(tenant_id, workspace_id, user_id, id DESC);
 `;
+
+export function migrateSkillMarketImportBindingColumns(database) {
+  ensureSchemaColumn(database, 'workspace_skill_market_imports', 'origin', "TEXT CHECK (origin IN ('local', 'market'))");
+  ensureSchemaColumn(database, 'workspace_skill_market_imports', 'binding_type', "TEXT CHECK (binding_type IN ('published', 'imported'))");
+  ensureSchemaColumn(database, 'workspace_skill_market_imports', 'baseline_hash', 'TEXT');
+}
+
+function ensureSchemaColumn(database, tableName, columnName, columnDefinition) {
+  const exists = database.prepare(`PRAGMA table_info(${tableName})`).all()
+    .some((column) => column.name === columnName);
+  if (!exists) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+  }
+}
