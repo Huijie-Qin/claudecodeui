@@ -1262,6 +1262,68 @@ test('uploadAndPublishLocalSkill serializes concurrent first-publish requests pe
   }
 });
 
+test('listSkillMarket omits remotely deleted imports without changing local files or metadata', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillName = 'remote-deleted-import';
+  const skillPath = path.join(workspacePath, '.claude', 'skills', skillName);
+  const importsPath = path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json');
+  await fs.mkdir(skillPath, { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Local Skill Still Exists\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, skillName, {
+    name: skillName,
+    skillId: 'remote-deleted-id',
+    id: 'remote-deleted-id',
+    skillName: 'Remote Deleted Import',
+    nspPath: 'mock://skills/remote-deleted-id',
+    createUserId: TEST_ACCOUNT_ID,
+    version: 2,
+    source: 'skill-market-api',
+    origin: 'market',
+    bindingType: 'imported',
+  });
+  const metadataBefore = await fs.readFile(importsPath, 'utf8');
+  const seenSearchContents = [];
+  const server = http.createServer(async (req, res) => {
+    const bodyBuffer = await readRequestBuffer(req);
+    const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (endpoint === '/data-agent/api/skill/skillList') {
+      const body = parseJson(bodyBuffer.toString('utf8'));
+      seenSearchContents.push(body?.data?.searchContent);
+      sendJson(res, { code: 0, message: 'success', data: [] });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  try {
+    delete process.env.SKILL_MARKET_BASE_URL;
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const skills = await listSkillMarket(withTenant({
+      workspacePath,
+      currentUsername: TEST_ACCOUNT_ID,
+    }));
+
+    assert.deepEqual(skills, []);
+    assert.equal(
+      await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'),
+      '# Local Skill Still Exists\n',
+    );
+    assert.equal(await fs.readFile(importsPath, 'utf8'), metadataBefore);
+    assert.deepEqual(seenSearchContents, ['', 'remote-deleted-id']);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test('listSkillMarket deduplicates uploaded skills by remote id when names differ', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'local-folder');

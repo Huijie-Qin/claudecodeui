@@ -1018,11 +1018,6 @@ async function listImportedSkillSummariesMissingFromRemotePage({
       }
       continue;
     }
-
-    const deletedSummary = toRemoteDeletedLocalImportState(skillName, status);
-    if (matchesSkillSearch(deletedSummary, searchContent)) {
-      summaries.push(deletedSummary);
-    }
   }
 
   return summaries.sort((left, right) => sortPathNames(left.name, right.name));
