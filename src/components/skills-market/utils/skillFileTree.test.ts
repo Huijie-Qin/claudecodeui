@@ -4,12 +4,14 @@ import test from 'node:test';
 import type { WorkspaceSkillEntry } from './skillFormatting';
 import {
   buildChildPath,
+  buildMovedPath,
   buildRenamedPath,
   createSkillTreeNodes,
   getNewEntryParentPath,
   getSkillDirectoryPaths,
   getVisibleSkillTreeNodes,
   validateSkillEntryName,
+  validateSkillEntryMove,
 } from './skillFileTree';
 
 const entries: WorkspaceSkillEntry[] = [
@@ -66,4 +68,18 @@ test('validateSkillEntryName rejects unsafe names', () => {
   assert.equal(validateSkillEntryName('nested\\file.md'), '名称不能包含路径分隔符。');
   assert.equal(validateSkillEntryName('bad\u0000name'), '名称不能包含控制字符。');
   assert.equal(validateSkillEntryName('valid-name.md'), null);
+});
+
+test('buildMovedPath preserves the basename and changes only the parent directory', () => {
+  assert.equal(buildMovedPath('references/checklist.md', 'scripts'), 'scripts/checklist.md');
+  assert.equal(buildMovedPath('references/nested', ''), 'nested');
+});
+
+test('validateSkillEntryMove rejects protected, unchanged, and descendant moves', () => {
+  assert.equal(validateSkillEntryMove('SKILL.md', 'file', 'references'), 'SKILL.md 不能移动。');
+  assert.equal(validateSkillEntryMove('references/checklist.md', 'file', 'references'), '文件已经位于该目录。');
+  assert.equal(validateSkillEntryMove('references', 'directory', 'references'), '文件夹不能移动到自身或其子目录。');
+  assert.equal(validateSkillEntryMove('references', 'directory', 'references/nested'), '文件夹不能移动到自身或其子目录。');
+  assert.equal(validateSkillEntryMove('references', 'directory', 'scripts'), null);
+  assert.equal(validateSkillEntryMove('references/checklist.md', 'file', ''), null);
 });

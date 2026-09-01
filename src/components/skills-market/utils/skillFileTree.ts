@@ -60,12 +60,32 @@ export function buildRenamedPath(path: string, name: string): string {
   return buildChildPath(parts.join('/'), name);
 }
 
+export function buildMovedPath(path: string, parentPath: string): string {
+  const parts = path.split('/').filter(Boolean);
+  return buildChildPath(parentPath, parts.at(-1) ?? '');
+}
+
 export function validateSkillEntryName(value: string): string | null {
   const name = value.trim();
   if (!name) return '名称不能为空。';
   if (name === '.' || name === '..') return '名称不能是 . 或 ..。';
   if (/[\\/]/.test(name)) return '名称不能包含路径分隔符。';
   if (/[\u0000-\u001f\u007f]/.test(name)) return '名称不能包含控制字符。';
+  return null;
+}
+
+export function validateSkillEntryMove(
+  path: string,
+  type: 'directory' | 'file',
+  parentPath: string,
+): string | null {
+  if (path === 'SKILL.md') return 'SKILL.md 不能移动。';
+  if (type === 'directory' && (parentPath === path || parentPath.startsWith(`${path}/`))) {
+    return '文件夹不能移动到自身或其子目录。';
+  }
+  if (buildMovedPath(path, parentPath) === path) {
+    return type === 'directory' ? '文件夹已经位于该目录。' : '文件已经位于该目录。';
+  }
   return null;
 }
 

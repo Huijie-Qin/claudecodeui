@@ -103,6 +103,10 @@ export function getSkillDetailDisplayVersions(detail: SkillDetailVersionFields):
   };
 }
 
+export function canEditSkillDetailEntries(source: 'market' | 'mine', canManage: boolean): boolean {
+  return source === 'mine' && canManage;
+}
+
 function getSkillSearchText(skill: WorkspaceSkill): string {
   return [
     skill.name,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  canEditSkillDetailEntries,
   filterWorkspaceSkills,
   getSkillDetailDisplayVersions,
   getSkillKindLabelKey,
@@ -86,4 +87,10 @@ test('getSkillDetailDisplayVersions falls back to compatible version fields', ()
     marketVersion: undefined,
     localVersion: undefined,
   });
+});
+
+test('all manageable skills opened from My Skills allow local file tree edits', () => {
+  assert.equal(canEditSkillDetailEntries('mine', true), true);
+  assert.equal(canEditSkillDetailEntries('mine', false), false);
+  assert.equal(canEditSkillDetailEntries('market', true), false);
 });

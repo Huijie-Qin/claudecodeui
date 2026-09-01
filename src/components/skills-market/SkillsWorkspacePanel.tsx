@@ -30,7 +30,7 @@ import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirm
 import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
-import { getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
+import { canEditSkillDetailEntries, getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
 import { selectSkillUploadArchive } from './utils/skillUpload';
 
 type SkillsWorkspacePanelProps = {
@@ -402,7 +402,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const saveFileBeforePublish = () => persistFile(false);
 
   const createEntry = async (entryPath: string, type: 'file' | 'directory'): Promise<boolean> => {
-    if (!workspaceId || !detailTarget || detail?.origin !== 'local') return false;
+    if (!workspaceId || !detailTarget || !canEditSkillDetailEntries(detailTarget.source, canManage)) return false;
     setActionLoading(true);
     setMessage(null);
     try {
@@ -423,29 +423,40 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     }
   };
 
-  const renameEntry = async (entryPath: string, nextPath: string): Promise<boolean> => {
+  const changeEntryPath = async (
+    entryPath: string,
+    nextPath: string,
+    operation: 'move' | 'rename',
+  ): Promise<boolean> => {
     if (!workspaceId || !detailTarget || entryPath === 'SKILL.md' || nextPath === entryPath) return false;
     setActionLoading(true);
     setMessage(null);
     try {
       await readPayload(
         await api.workspaceSkills.renameEntry(workspaceId, detailTarget.name, { path: entryPath, nextPath }),
-        '重命名失败。',
+        operation === 'move' ? '移动失败。' : '重命名失败。',
       );
-      notifyWorkspaceChanged(detailTarget.name, 'workspace-skill-entry-rename');
+      notifyWorkspaceChanged(detailTarget.name, `workspace-skill-entry-${operation}`);
       const preferredFile = selectedFilePath && (selectedFilePath === entryPath || selectedFilePath.startsWith(`${entryPath}/`))
         ? `${nextPath}${selectedFilePath.slice(entryPath.length)}`
         : selectedFilePath;
       await loadDetail(detailTarget, preferredFile);
       setSelectedEntryPath(nextPath);
-      setMessage({ kind: 'success', text: '已重命名。' });
+      setMessage({ kind: 'success', text: operation === 'move' ? '已移动。' : '已重命名。' });
       return true;
     } catch (error) {
-      setMessage({ kind: 'error', text: toErrorMessage(error, '重命名失败。') });
+      setMessage({ kind: 'error', text: toErrorMessage(error, operation === 'move' ? '移动失败。' : '重命名失败。') });
       return false;
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const renameEntry = (entryPath: string, nextPath: string) => changeEntryPath(entryPath, nextPath, 'rename');
+
+  const moveEntry = (entryPath: string, nextPath: string): Promise<boolean> => {
+    if (!guardUnsaved()) return Promise.resolve(false);
+    return changeEntryPath(entryPath, nextPath, 'move');
   };
 
   const requestEntryRemoval = (entryPath: string) => {
@@ -569,7 +580,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     updates: marketSkills.filter((skill) => skill.updateAvailable).length,
   }), [marketSkills]);
 
-  const detailEditable = detailTarget?.source === 'mine' && canManage;
+  const detailEditable = detailTarget ? canEditSkillDetailEntries(detailTarget.source, canManage) : false;
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -646,6 +657,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             />
           ) : null}
           onPreviewModeChange={setPreviewMode}
+          onMoveEntry={moveEntry}
           onRenameEntry={renameEntry}
           onSave={saveFile}
           onSelectFile={selectFile}
@@ -861,6 +873,7 @@ function SkillDetailView({
   onEditContent,
   onEditingChange,
   onMarketAction,
+  onMoveEntry,
   onPreviewModeChange,
   onRenameEntry,
   onSave,
@@ -889,6 +902,7 @@ function SkillDetailView({
   onEditContent: (content: string) => void;
   onEditingChange: (editing: boolean) => void;
   onMarketAction: (action: 'import' | 'update' | 'remove') => void;
+  onMoveEntry: (path: string, nextPath: string) => Promise<boolean>;
   onPreviewModeChange: (preview: boolean) => void;
   onRenameEntry: (path: string, nextPath: string) => Promise<boolean>;
   onSave: () => Promise<boolean>;
@@ -934,6 +948,7 @@ function SkillDetailView({
           editable={detailEditable}
           entries={detail.files}
           onCreateEntry={onCreateEntry}
+          onMoveEntry={onMoveEntry}
           onRenameEntry={onRenameEntry}
           onRequestRemove={onDeleteEntry}
           onSelectEntry={onSelectEntry}

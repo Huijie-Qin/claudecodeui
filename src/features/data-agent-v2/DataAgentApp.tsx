@@ -1609,6 +1609,7 @@ function WorkspaceSkillDetail({
                 editable={false}
                 entries={skillFiles}
                 onCreateEntry={async () => false}
+                onMoveEntry={async () => false}
                 onRenameEntry={async () => false}
                 onRequestRemove={() => undefined}
                 onSelectEntry={setSelectedEntryPath}
