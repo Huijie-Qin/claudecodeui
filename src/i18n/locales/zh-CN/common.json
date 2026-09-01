@@ -24,6 +24,7 @@
     "codehub": "CodeHub",
     "mcpTools": "MCP Tools",
     "sqlCheck": "SQL Check",
+    "agentGraph": "Agent Graph",
     "skills": "技能",
     "tools": "工具",
     "git": "源代码管理",
@@ -116,6 +117,17 @@
     "selectedCount": "已选 {{count}} 条",
     "configuredRules": "已配置规则",
     "effectiveConfig": "当前生效 SQL Check",
+    "enforcement": {
+      "title": "强制校验",
+      "description": "开启后将为当前用户绑定 SQL Check Hook，模型返回 SQL 时自动执行校验。",
+      "unavailable": "SQL Check Hook 尚未发布，暂不可开启。",
+      "loading": "正在读取强制校验状态...",
+      "saving": "正在保存",
+      "enabled": "已开启",
+      "disabled": "未开启",
+      "enabledSaved": "已开启 SQL 强制校验。",
+      "disabledSaved": "已关闭 SQL 强制校验。"
+    },
     "summary": {
       "tenant": "租户规则",
       "custom": "自定义规则"
@@ -128,6 +140,7 @@
       "loadRules": "加载 SQL Check 规则失败。",
       "loadConfig": "加载 SQL Check 配置失败。",
       "saveConfig": "保存 SQL Check 配置失败。",
+      "saveEnforcement": "保存 SQL 强制校验状态失败。",
       "workspaceUnavailable": "当前 workspace 不支持 SQL Check。"
     }
   },
@@ -343,6 +356,28 @@
     "removeSuccess": "{{name}} 已从当前 workspace 移除。",
     "appliesOnNextTurn": "下一次 Agent turn 生效",
     "toolCount": "{{count}} 个工具",
+    "settings": {
+      "action": "设置",
+      "menuLabel": "打开 {{name}} 的更多操作",
+      "requiresInstall": "安装后才能配置",
+      "description": "勾选允许当前用户使用的 MCP Tool；右侧可将参数设为默认值或强制值。",
+      "selectAll": "全选",
+      "enabled": "允许",
+      "configuredCount": "已配置 {{count}} 项",
+      "valueStrategy": "取值策略",
+      "strategy": {
+        "none": "不设置",
+        "default": "默认值",
+        "force": "强制值"
+      },
+      "strategyHelp": {
+        "default": "仅当 Agent 未提供该参数时使用此值。",
+        "force": "始终使用此值，并覆盖 Agent 提供的参数。"
+      },
+      "footer": "工具权限和参数策略会一起保存，并在下一次 Agent turn 生效。默认值只补齐缺失参数，强制值始终覆盖；配置写入 {{file}}。",
+      "saveSuccess": "MCP Tool 设置已保存，将在下一次 Agent turn 生效。",
+      "saveFailed": "保存 MCP Tool 设置失败。"
+    },
     "cardAriaLabel": "{{name}} MCP Server，双击查看详情。",
     "summary": {
       "available": "可用",
@@ -403,7 +438,13 @@
       "overwriteCancel": "取消",
       "quotaExceeded": "当前上传大小 {{uploadSize}} MB，剩余空间 {{remainingSize}} MB，无法上传。请联系管理员进行扩容。"
     },
+    "delete": {
+      "selectedTitle": "删除所选项目",
+      "selectedWarning": "将永久删除所选的 {{count}} 个项目及所选文件夹中的全部内容。此操作不可撤销。",
+      "confirm": "删除"
+    },
     "context": {
+      "move": "移动",
       "rename": "重命名",
       "delete": "删除",
       "copyPath": "复制路径",
@@ -553,7 +594,4 @@
     }
   }
 }
-
-
-
 

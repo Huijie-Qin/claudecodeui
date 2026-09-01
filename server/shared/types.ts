@@ -27,7 +27,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'hook_activity';
 
 /**
  * Provider-neutral message event emitted over REST and realtime transports.
@@ -42,8 +43,14 @@ export type NormalizedMessage = {
   timestamp: string;
   provider: LLMProvider;
   kind: MessageKind;
+  origin?: 'hook';
+  activityKind?: 'execution' | 'followup';
+  hookActivityId?: string;
   role?: 'user' | 'assistant';
   content?: string;
+  clientMessageId?: string;
+  queueStatus?: 'queued' | 'processing' | 'failed';
+  queuePosition?: number;
   images?: unknown;
   toolName?: string;
   toolInput?: unknown;
@@ -65,8 +72,39 @@ export type NormalizedMessage = {
   status?: string;
   summary?: string;
   tokenBudget?: unknown;
+  jobId?: string;
+  executionId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionResults?: Array<{
+    actionId: string;
+    actionType: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record';
+    output?: unknown;
+    record?: {
+      id: string;
+      type?: string;
+      data?: unknown;
+      createdAt?: string;
+    };
+  }>;
+  hasScript?: boolean;
+  skillName?: string;
   subagentTools?: unknown;
+  subagentMessages?: NormalizedMessage[];
   toolUseResult?: unknown;
+  mcpLoopReplacement?: boolean;
+  mcpLoopJobId?: string;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
   sequence?: number;
   rowid?: number;
   [key: string]: unknown;

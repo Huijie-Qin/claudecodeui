@@ -33,7 +33,15 @@ process.stdin.on('end', () => {
     const mergedInput = { ...toolInput };
 
     for (const [key, entry] of Object.entries(params)) {
-      if (!entry || entry.custom !== true) continue;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+
+      const mode = entry.mode === 'default' || entry.mode === 'force'
+        ? entry.mode
+        : entry.custom === true
+          ? 'force'
+          : null;
+      if (!mode) continue;
+      if (mode === 'default' && Object.prototype.hasOwnProperty.call(mergedInput, key)) continue;
 
       mergedInput[key] = entry.value;
     }

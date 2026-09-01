@@ -102,6 +102,24 @@ export const api = {
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   projects: () => authenticatedFetch(withTenantParam('/api/projects')),
+  workspaceHooks: (workspaceId) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks`,
+  )),
+  workspaceHookExecutions: (workspaceId, hookId, filters = {}) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`,
+  )),
+  updateWorkspaceHook: (workspaceId, hookId, enabled) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}`,
+  ), {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  }),
+  updateWorkspaceHookChatVisibility: (workspaceId, hookId, showInChat) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/chat-visibility`,
+  ), {
+    method: 'PUT',
+    body: JSON.stringify({ showInChat }),
+  }),
   checkProjectAgentList: (projectName, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/agent-list-check`, workspaceId), {
       method: 'POST',
@@ -127,8 +145,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ displayName }),
     }),
+  projectSettings: (projectName, workspaceId) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId)),
+  updateProjectSettings: (projectName, { displayName, claudeMarkdown, expectedRevision, workspaceId }) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/settings`, workspaceId), {
+      method: 'PUT',
+      body: JSON.stringify({ displayName, claudeMarkdown, expectedRevision }),
+    }),
   deleteSession: (projectName, sessionId, provider = 'claude', workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/sessions/${sessionId}`, workspaceId), {
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/sessions/${encodeURIComponent(sessionId)}`, workspaceId), {
       method: 'DELETE',
       body: JSON.stringify({ provider }),
     }),
@@ -155,7 +180,7 @@ export const api = {
     if (force) params.set('force', 'true');
     if (deleteData) params.set('deleteData', 'true');
     const qs = params.toString();
-    const url = withTenantAndWorkspaceParam(`/api/projects/${projectName}${qs ? `?${qs}` : ''}`, workspaceId);
+    const url = withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}${qs ? `?${qs}` : ''}`, workspaceId);
     return authenticatedFetch(url, {
       method: 'DELETE',
     });
@@ -173,6 +198,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(workspaceData),
     }),
+  agentTemplates: () => authenticatedFetch(withTenantParam('/api/agent-templates')),
   readFile: (projectName, filePath, workspaceId) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId)),
   readFileBlob: (projectName, filePath, workspaceId) =>
@@ -182,8 +208,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ filePath, content, workspaceId }),
     }),
-  getFiles: (projectName, options = {}, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files`, workspaceId), options),
+  getFiles: (projectName, options = {}, workspaceId, showInternalConfigFiles = false) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(
+      `/api/projects/${projectName}/files${showInternalConfigFiles ? '?showInternalConfigFiles=true' : ''}`,
+      workspaceId,
+    ), options),
   getFileQuota: (projectName, workspaceId, options = {}) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/quota`, workspaceId), options),
 
@@ -295,6 +324,35 @@ export const api = {
       authenticatedFetch('/api/user/complete-onboarding', {
         method: 'POST',
       }),
+    claudePersonalEnv: () => authenticatedFetch('/api/settings/claude-env/personal'),
+    updateClaudePersonalEnv: (payload) =>
+      authenticatedFetch('/api/settings/claude-env/personal', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    claudeEffectiveEnv: (tenantId) => {
+      const params = new URLSearchParams();
+      if (tenantId != null && tenantId !== '') {
+        params.set('tenantId', String(tenantId));
+      }
+      const query = params.toString();
+      return authenticatedFetch(`/api/settings/claude-env/effective${query ? `?${query}` : ''}`);
+    },
+    claudeEnvDenyRules: () => authenticatedFetch('/api/settings/claude-env/deny-rules'),
+    createClaudeEnvDenyRule: (payload) =>
+      authenticatedFetch('/api/settings/claude-env/deny-rules', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateClaudeEnvDenyRule: (ruleId, payload) =>
+      authenticatedFetch(`/api/settings/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    deleteClaudeEnvDenyRule: (ruleId) =>
+      authenticatedFetch(`/api/settings/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'DELETE',
+      }),
   },
 
   codehub: {
@@ -339,11 +397,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    remoteBranches: (workspaceId, repoId) =>
-      authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches`)),
-    submissionCommits: (workspaceId, repoId, targetBranch) => {
-      const params = targetBranch ? `?targetBranch=${encodeURIComponent(targetBranch)}` : '';
-      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submission-commits${params}`));
+    remoteBranches: (workspaceId, repoId, repository = 'personal') => {
+      const params = new URLSearchParams({ repository });
+      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/remote-branches?${params.toString()}`));
+    },
+    submissionCommits: (workspaceId, repoId, targetBranch, mrTargetRepository = 'personal', sourceBranch = '') => {
+      const params = new URLSearchParams();
+      if (sourceBranch) params.set('sourceBranch', sourceBranch);
+      if (targetBranch) params.set('targetBranch', targetBranch);
+      params.set('mrTargetRepository', mrTargetRepository);
+      return authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/submission-commits?${params.toString()}`));
     },
     syncFork: (workspaceId, repoId, payload) =>
       authenticatedFetch(withTenantParam(`/api/codehub/workspaces/${encodeURIComponent(String(workspaceId))}/repositories/${encodeURIComponent(String(repoId))}/sync-fork`), {
@@ -390,8 +453,132 @@ export const api = {
       }),
   },
 
+  featureFlags: () => authenticatedFetch('/api/settings/feature-flags'),
+
   admin: {
     tenants: () => authenticatedFetch('/api/admin/tenants'),
+    agentTemplates: (tenantId) => authenticatedFetch(
+      tenantId
+        ? `/api/admin/agent-templates?tenantId=${encodeURIComponent(String(tenantId))}`
+        : '/api/admin/agent-templates',
+    ),
+    agentTemplatePresetCatalog: (tenantId) =>
+      authenticatedFetch(`/api/admin/agent-templates/preset-catalog?tenantId=${encodeURIComponent(String(tenantId))}`),
+    createAgentTemplate: (payload) =>
+      authenticatedFetch('/api/admin/agent-templates', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateAgentTemplate: (templateId, payload) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    publishAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}/publish`, {
+        method: 'POST',
+      }),
+    disableAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}/disable`, {
+        method: 'POST',
+      }),
+    deleteAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}`, {
+        method: 'DELETE',
+      }),
+    agentTemplateCategories: () => authenticatedFetch('/api/admin/agent-template-categories'),
+    createAgentTemplateCategory: (name) => authenticatedFetch('/api/admin/agent-template-categories', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+    deleteAgentTemplateCategory: (categoryId) => authenticatedFetch(
+      `/api/admin/agent-template-categories/${encodeURIComponent(String(categoryId))}`,
+      { method: 'DELETE' },
+    ),
+    hooks: () => authenticatedFetch('/api/admin/hooks'),
+    hook: (hookId) => authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`),
+    createHook: (payload) =>
+      authenticatedFetch('/api/admin/hooks', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    hookExamples: () => authenticatedFetch('/api/admin/hooks/examples'),
+    createHookExamples: (exampleIds) =>
+      authenticatedFetch('/api/admin/hooks/examples', {
+        method: 'POST',
+        body: JSON.stringify({ exampleIds }),
+      }),
+    updateHook: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    publishHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/publish`, {
+        method: 'POST',
+      }),
+    hookBindings: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`),
+    updateHookBindings: (hookId, payload) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    deleteHook: (hookId) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}`, {
+        method: 'DELETE',
+      }),
+    hookDataRecords: (hookId, limit = 50) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/data-records?limit=${encodeURIComponent(String(limit))}`),
+    hookExecutions: (hookId, filters = {}) =>
+      authenticatedFetch(`/api/admin/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`),
+    allHookExecutions: (filters = {}) =>
+      authenticatedFetch(`/api/admin/hook-executions${buildQueryString(filters)}`),
+    hookExecution: (executionId) =>
+      authenticatedFetch(`/api/admin/hook-executions/${encodeURIComponent(String(executionId))}`),
+    hookSettings: () => authenticatedFetch('/api/admin/hooks/settings'),
+    updateHookSettings: (payload) =>
+      authenticatedFetch('/api/admin/hooks/settings', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    hookResources: () => authenticatedFetch('/api/admin/hooks/resources'),
+    createHookMcpServer: (payload) =>
+      authenticatedFetch('/api/admin/hooks/mcp-servers', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateHookMcpServer: (serverName, payload) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    testHookMcpServer: (serverName) =>
+      authenticatedFetch(withTenantParam(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/test`), {
+        method: 'POST',
+      }),
+    uploadHookMcpHelperScript: (serverName, formData) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/helper-script`, {
+        method: 'POST',
+        body: formData,
+      }),
+    deleteHookMcpHelperScript: (serverName) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}/helper-script`, {
+        method: 'DELETE',
+      }),
+    deleteHookMcpServer: (serverName) =>
+      authenticatedFetch(`/api/admin/hooks/mcp-servers/${encodeURIComponent(String(serverName))}`, {
+        method: 'DELETE',
+      }),
+    uploadHookSkill: (formData) =>
+      authenticatedFetch('/api/admin/hooks/skills', {
+        method: 'POST',
+        body: formData,
+      }),
+    deleteHookSkill: (skillId) =>
+      authenticatedFetch(`/api/admin/hooks/skills/${encodeURIComponent(String(skillId))}`, {
+        method: 'DELETE',
+      }),
     analytics: (days = 30, tenantIds = []) => {
       const params = new URLSearchParams({ days: String(days) });
       if (Array.isArray(tenantIds) && tenantIds.length > 0) {
@@ -497,6 +684,8 @@ export const api = {
       }),
     runtimes: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes${buildRuntimeQueryString(filters)}`),
+    scheduledTaskLogs: (filters = {}) =>
+      authenticatedFetch(`/api/admin/scheduled-task-logs${buildQueryString(filters)}`),
     runtimeSummary: (filters = {}) =>
       authenticatedFetch(`/api/admin/runtimes/summary${buildRuntimeQueryString(filters)}`),
     stopRuntime: (runtimeId) =>
@@ -544,6 +733,40 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     claudeEnvUsers: () => authenticatedFetch('/api/admin/users/claude-env'),
+    tenantClaudeEnv: (tenantId) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/claude-env`),
+    updateTenantClaudeEnv: (tenantId, payload) =>
+      authenticatedFetch(`/api/admin/tenants/${encodeURIComponent(String(tenantId))}/claude-env`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    tenantClaudeEnvOverview: () => authenticatedFetch('/api/admin/tenants/claude-env'),
+    updateTenantClaudeEnvBatch: (payload) =>
+      authenticatedFetch('/api/admin/tenants/claude-env', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    claudeEnvAllowlist: () => authenticatedFetch('/api/admin/claude-env/personal-allowlist'),
+    updateClaudeEnvAllowlist: (payload) =>
+      authenticatedFetch('/api/admin/claude-env/personal-allowlist', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    claudeEnvDenyRules: () => authenticatedFetch('/api/admin/claude-env/deny-rules'),
+    createClaudeEnvDenyRule: (payload) =>
+      authenticatedFetch('/api/admin/claude-env/deny-rules', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    updateClaudeEnvDenyRule: (ruleId, payload) =>
+      authenticatedFetch(`/api/admin/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    deleteClaudeEnvDenyRule: (ruleId) =>
+      authenticatedFetch(`/api/admin/claude-env/deny-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'DELETE',
+      }),
     users: () => authenticatedFetch('/api/admin/users'),
     memberships: () => authenticatedFetch('/api/admin/memberships'),
     createUserActivationLink: (userId) =>
@@ -590,6 +813,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(payload),
       }),
+    updateEnforcement: (workspaceId, enabled) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${encodeURIComponent(String(workspaceId))}/sql-check/enforcement`), {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
   },
 
   workspaceShare: {
@@ -621,6 +849,42 @@ export const api = {
 
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
+    detail: (workspaceId, name) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}`)),
+    file: (workspaceId, name, filePath) =>
+      authenticatedFetch(withTenantParam(
+        `/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/files?filePath=${encodeURIComponent(filePath)}`,
+      )),
+    saveFile: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/files`), {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    createEntry: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    renameEntry: (workspaceId, name, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    renameDirectory: (workspaceId, name, nextName) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/directory`), {
+        method: 'PATCH',
+        body: JSON.stringify({ nextName }),
+      }),
+    deleteEntry: (workspaceId, name, path) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/entries`), {
+        method: 'DELETE',
+        body: JSON.stringify({ path }),
+      }),
+    deleteLocal: (workspaceId, name) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/local`), {
+        method: 'DELETE',
+        body: JSON.stringify({ confirmation: 'yes' }),
+      }),
     previewGithub: (workspaceId, url) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/preview`), {
         method: 'POST',
@@ -659,30 +923,38 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ overwrite: false }),
       }),
-    updateImport: (workspaceId, name) =>
+    updateImport: (workspaceId, name, { forceLocalChanges = false } = {}) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/download`, workspaceId), {
         method: 'POST',
-        body: JSON.stringify({ overwrite: true }),
+        body: JSON.stringify({ overwrite: true, forceLocalChanges }),
       }),
     publishPreview: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-preview`, workspaceId)),
     publishState: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish-state`, workspaceId)),
-    publishSkill: (workspaceId, name) =>
+    publishSkill: (workspaceId, name, localContentHash) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
         method: 'POST',
+        body: JSON.stringify({ localContentHash }),
       }),
     uploadAndPublishSkill: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/upload-publish`, workspaceId), {
         method: 'POST',
       }),
-    submitSkill: (workspaceId, name) =>
+    unpublishSkill: (workspaceId, name, remoteSkillId) =>
+      authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/unpublish`, workspaceId), {
+        method: 'POST',
+        body: JSON.stringify({ confirmation: 'yes', remoteSkillId }),
+      }),
+    submitSkill: (workspaceId, name, localContentHash) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {
         method: 'POST',
+        body: JSON.stringify({ localContentHash }),
       }),
     remove: (workspaceId, name) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/import`, workspaceId), {
         method: 'DELETE',
+        body: JSON.stringify({ confirmation: 'yes' }),
       }),
   },
 
@@ -718,6 +990,54 @@ export const api = {
     remove: (workspaceId, presetId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}`), {
         method: 'DELETE',
+      }),
+    updateToolPreference: (workspaceId, presetId, allowedToolNames) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/tool-preference`), {
+        method: 'PUT',
+        body: JSON.stringify({ allowedToolNames }),
+      }),
+  },
+
+  agentGraphs: {
+    list: (workspaceId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs`)),
+    create: (workspaceId, graph) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs`), {
+        method: 'POST',
+        body: JSON.stringify(graph),
+      }),
+    update: (workspaceId, graphId, graph) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}`), {
+        method: 'PUT',
+        body: JSON.stringify(graph),
+      }),
+    remove: (workspaceId, graphId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}`), {
+        method: 'DELETE',
+      }),
+    startTopSkillJob: (workspaceId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/top-skill-jobs`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    getTopSkillJob: (workspaceId, jobId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/top-skill-jobs/${encodeURIComponent(jobId)}`)),
+    startRun: (workspaceId, graphId, payload) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs`), {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    listRuns: (workspaceId, graphId, limit = 20) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs?limit=${encodeURIComponent(String(limit))}`)),
+    getRun: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}`)),
+    listRunArtifacts: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts`)),
+    readRunArtifact: (workspaceId, graphId, runId, artifactId, offset = 0, limit = 16000) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`)),
+    cancelRun: (workspaceId, graphId, runId) =>
+      authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/agent-graphs/${encodeURIComponent(graphId)}/runs/${encodeURIComponent(runId)}/cancel`), {
+        method: 'POST',
       }),
   },
 

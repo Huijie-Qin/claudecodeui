@@ -138,6 +138,56 @@ test('workspace mcp tools catalog lists only published presets and redacts confi
   assert.equal(Object.hasOwn(catalog.presets[0], 'config'), false);
 });
 
+test('workspace mcp tools catalog defaults to all tools and returns the current user selection', async () => {
+  const database = createTestDb();
+  const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
+  const service = createWorkspaceMcpToolsService({ multitenancy });
+  multitenancy.mcpPresets.recordPresetTest({
+    tenantId: tenant.id,
+    presetId: published.id,
+    status: 'healthy',
+    error: null,
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+    dockerCompatible: true,
+    updatedByUserId: userId,
+  });
+
+  const defaultCatalog = await service.listWorkspaceMcpPresetCatalog({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    workspacePath: '/tmp/unused',
+  });
+  assert.equal(defaultCatalog.presets[0].toolSelectionConfigured, false);
+  assert.deepEqual(defaultCatalog.presets[0].allowedToolNames, ['search_docs', 'delete_docs']);
+
+  multitenancy.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: published.id,
+    installedByUserId: userId,
+    probeStatus: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+  });
+  service.updateWorkspaceMcpToolPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    presetId: published.id,
+    allowedToolNames: ['search_docs'],
+  });
+
+  const selectedCatalog = await service.listWorkspaceMcpPresetCatalog({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    workspacePath: '/tmp/unused',
+  });
+  assert.equal(selectedCatalog.presets[0].toolSelectionConfigured, true);
+  assert.deepEqual(selectedCatalog.presets[0].allowedToolNames, ['search_docs']);
+});
+
 test('workspace mcp tools catalog probes installed presets and records connection state', async () => {
   const database = createTestDb();
   const { workspacePath, cleanup } = await createWorkspacePath();
@@ -283,6 +333,7 @@ test('workspace mcp tools catalog resolves uploaded helper scripts before probin
           headersHelper: config.headersHelper,
           W3_NAME: process.env.W3_NAME,
           USER_KEY: process.env.USER_KEY,
+          TENANT_ID: process.env.TENANT_ID,
         });
         return {
           status: 'healthy',
@@ -325,6 +376,7 @@ test('workspace mcp tools catalog resolves uploaded helper scripts before probin
     assert.match(seen[0].headersHelper, /python3 auth\.py/);
     assert.equal(seen[0].W3_NAME, 'alice');
     assert.equal(seen[0].USER_KEY, 'security:test-user-key');
+    assert.equal(seen[0].TENANT_ID, String(tenant.id));
   } finally {
     await cleanup();
   }

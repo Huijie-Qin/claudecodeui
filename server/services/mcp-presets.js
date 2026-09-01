@@ -10,6 +10,10 @@ import {
   savePresetHelperScript,
 } from './mcp-helper-scripts.js';
 import {
+  buildMcpTestHostEnv,
+  withTemporaryProcessEnv,
+} from './mcp-test-environment.js';
+import {
   probeHttpMcpServer,
   readMcpStatus,
   readWorkspaceMcpConfig,
@@ -23,6 +27,7 @@ export const MCP_CONTAINER_CONFIG_PATH = '/workspace/.mcp.json';
 const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const MCP_PREINSTALL_SCOPES = new Set(['none', 'all_workspaces']);
 const W3_NAME_ENV_NAME = 'W3_NAME';
+const TENANT_ID_ENV_NAME = 'TENANT_ID';
 
 function createHttpError(message, statusCode = 400, code = undefined) {
   const error = new Error(message);
@@ -89,6 +94,15 @@ function normalizeHeadersHelper(headersHelper) {
     throw createHttpError('headersHelper must be a string', 400);
   }
   return headersHelper.trim() || undefined;
+}
+
+function normalizeTimeout(timeout) {
+  if (timeout == null || timeout === '') return undefined;
+  const timeoutMs = Number(timeout);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw createHttpError('timeout must be a positive integer in milliseconds', 400);
+  }
+  return timeoutMs;
 }
 
 function normalizeHelperEnv(helperEnv) {
@@ -220,6 +234,7 @@ function summarizePresetTestEnv(env = {}) {
   const userKey = env[USER_KEY_ENV_NAME];
   return {
     W3_NAME: env[W3_NAME_ENV_NAME] || null,
+    TENANT_ID: env[TENANT_ID_ENV_NAME] || null,
     USER_KEY: userKey
       ? {
           present: true,
@@ -229,73 +244,6 @@ function summarizePresetTestEnv(env = {}) {
         }
       : { present: false },
   };
-}
-
-async function getPresetTestUserStore(users) {
-  if (users) {
-    return users;
-  }
-
-  const { userDb } = await import('../database/db.js');
-  return userDb;
-}
-
-async function getPresetTestUserContext(users, userId) {
-  const userStore = await getPresetTestUserStore(users);
-  const user = typeof userStore?.getUserById === 'function'
-    ? userStore.getUserById(userId)
-    : null;
-  const username = user?.username;
-
-  if (typeof username !== 'string' || username.trim() === '') {
-    throw createHttpError('User not found', 404);
-  }
-
-  return {
-    username: username.trim(),
-    userEnv: typeof userStore?.getEnvForUser === 'function'
-      ? userStore.getEnvForUser(userId)
-      : {},
-  };
-}
-
-async function buildPresetTestHostEnv(users, userId) {
-  const normalizedUserId = requirePositiveInteger(userId, 'userId');
-  const { username, userEnv } = await getPresetTestUserContext(users, normalizedUserId);
-  const env = {
-    [W3_NAME_ENV_NAME]: username,
-  };
-
-  const userKey = userEnv?.[USER_KEY_ENV_NAME];
-  if (typeof userKey === 'string' && userKey.trim() !== '') {
-    env[USER_KEY_ENV_NAME] = userKey;
-  }
-
-  return env;
-}
-
-async function withTemporaryProcessEnv(env, task) {
-  const previousValues = new Map();
-
-  for (const [key, value] of Object.entries(env)) {
-    previousValues.set(key, {
-      hadValue: Object.hasOwn(process.env, key),
-      value: process.env[key],
-    });
-    process.env[key] = String(value);
-  }
-
-  try {
-    return await task();
-  } finally {
-    for (const [key, previous] of previousValues) {
-      if (previous.hadValue) {
-        process.env[key] = previous.value;
-      } else {
-        delete process.env[key];
-      }
-    }
-  }
 }
 
 export function normalizePresetInput(input = {}) {
@@ -316,6 +264,7 @@ export function normalizePresetInput(input = {}) {
       headers: normalizeHeaders(config.headers),
       headersHelper: normalizeHeadersHelper(config.headersHelper),
       helperEnv: normalizeHelperEnv(config.helperEnv),
+      timeout: normalizeTimeout(config.timeout),
     }),
   };
 }
@@ -570,7 +519,11 @@ export function createMcpPresetService({
         hasDraftInput: Boolean(normalizedInput),
         config: summarizePresetTestConfig(baseProbeConfig),
       });
-      const probeEnv = await buildPresetTestHostEnv(users, normalizedUserId);
+      const probeEnv = await buildMcpTestHostEnv({
+        users,
+        userId: normalizedUserId,
+        tenantId,
+      });
       logPresetTest('env_ready', {
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),

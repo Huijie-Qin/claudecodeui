@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeSearchToolResult, TOOL_CONFIGS } from './toolConfigs';
+import { normalizeSearchToolResult, shouldHideToolResult, TOOL_CONFIGS } from './toolConfigs';
 
 test('normalizeSearchToolResult prefers discovered filenames over a stale zero count', () => {
   assert.deepEqual(
@@ -73,4 +73,41 @@ test('Grep result title uses normalized search result count', () => {
       : title,
     'Found 1 file',
   );
+});
+
+test('Bash command and output use collapsed standard tool displays', () => {
+  assert.equal(TOOL_CONFIGS.Bash.input.type, 'collapsible');
+  assert.equal(TOOL_CONFIGS.Bash.input.title, 'Command');
+  assert.equal(TOOL_CONFIGS.Bash.input.defaultOpen, false);
+  assert.equal(TOOL_CONFIGS.Bash.input.stickyHeader, false);
+  assert.deepEqual(
+    TOOL_CONFIGS.Bash.input.getContentProps?.({ command: 'npm run build' }),
+    {
+      content: 'npm run build',
+      format: 'code',
+    },
+  );
+
+  assert.equal(TOOL_CONFIGS.Bash.result?.type, 'collapsible');
+  assert.equal(TOOL_CONFIGS.Bash.result?.title, 'Output');
+  assert.equal(TOOL_CONFIGS.Bash.result?.defaultOpen, false);
+  assert.equal(TOOL_CONFIGS.Bash.result?.stickyHeader, false);
+
+  const getContentProps = TOOL_CONFIGS.Bash.result?.getContentProps;
+  assert.deepEqual(
+    getContentProps?.({
+      content: 'duplicate stdout',
+      toolUseResult: {
+        stdout: '\u001b[32mnormal stdout\u001b[0m\n',
+        stderr: 'normal stderr\n',
+      },
+    }),
+    {
+      content: 'normal stdout\nnormal stderr',
+      format: 'code',
+    },
+  );
+
+  assert.equal(shouldHideToolResult('Bash', { content: '' }), true);
+  assert.equal(shouldHideToolResult('Bash', { content: 'output' }), false);
 });

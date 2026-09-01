@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { Sparkles } from 'lucide-react';
 
 import type { MainContentHeaderProps } from '../../types/types';
 
@@ -16,9 +14,8 @@ export default function MainContentHeader({
   disabledTabs,
   isMobile,
   onMenuClick,
-  onSkillMarketClick,
+  agentGraphEnabled,
 }: MainContentHeaderProps) {
-  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -64,21 +61,13 @@ export default function MainContentHeader({
               activeTab={activeTab}
               setActiveTab={setActiveTab}
               disabledTabs={disabledTabs}
+              agentGraphEnabled={agentGraphEnabled}
             />
           </div>
           {canScrollRight && (
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-background to-transparent" />
           )}
         </div>
-        <button
-          type="button"
-          onClick={onSkillMarketClick}
-          disabled={!selectedProject.workspaceId}
-          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Sparkles className="h-4 w-4" />
-          <span className="hidden sm:inline">{t('mainContent.skillMarket', 'Skill Market')}</span>
-        </button>
       </div>
     </div>
   );

@@ -43,6 +43,11 @@ export const persistStarredProjects = (starredProjects: Set<string>) => {
 
 export const isSessionFavorited = (session: SessionWithProvider): boolean => session.isFavorited === true;
 
+export const getWorkspaceDeleteRequest = (sessionCount: number) => ({
+  force: sessionCount > 0,
+  deleteData: true,
+});
+
 export const getSessionDate = (session: SessionWithProvider): Date => {
   if (session.__provider === 'cursor') {
     return parseTimestamp(session.createdAt || 0);
@@ -85,17 +90,12 @@ export const getSessionTime = (session: SessionWithProvider): string => {
 
 export const createSessionViewModel = (
   session: SessionWithProvider,
-  currentTime: Date,
   t: TFunction,
 ): SessionViewModel => {
-  const sessionDate = getSessionDate(session);
-  const diffInMinutes = Math.floor((currentTime.getTime() - sessionDate.getTime()) / (1000 * 60));
-
   return {
     isCursorSession: session.__provider === 'cursor',
     isCodexSession: session.__provider === 'codex',
     isGeminiSession: session.__provider === 'gemini',
-    isActive: diffInMinutes < 10,
     sessionName: getSessionName(session, t),
     sessionTime: getSessionTime(session),
     messageCount: Number(session.messageCount || 0),
@@ -245,6 +245,7 @@ export const normalizeProjectForSettings = (project: Project): SettingsProject =
 
   return {
     name: project.name,
+    workspaceId: project.workspaceId,
     displayName:
       typeof project.displayName === 'string' && project.displayName.trim().length > 0
         ? project.displayName

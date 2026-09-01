@@ -1,13 +1,31 @@
+import crypto from 'node:crypto';
 import path from 'path';
+
 import { scheduledTasksDb } from '../database/db.js';
 
 export function slugifyWorkspaceName(value) {
-  return String(value || '')
+  const normalizedName = String(value || '')
     .trim()
-    .toLowerCase()
+    .normalize('NFKC')
+    .toLowerCase();
+  const asciiSlug = normalizedName
     .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 63);
+    .replace(/^-+|-+$/g, '');
+  const containsNonAsciiLetterOrNumber = /[^\x00-\x7F]/.test(normalizedName)
+    && /[\p{L}\p{N}]/u.test(normalizedName.replace(/[\x00-\x7F]/g, ''));
+
+  if (!containsNonAsciiLetterOrNumber) {
+    return asciiSlug.slice(0, 63);
+  }
+
+  const readablePrefix = asciiSlug || 'agent';
+  const nameHash = crypto
+    .createHash('sha256')
+    .update(normalizedName)
+    .digest('hex')
+    .slice(0, 8);
+
+  return `${readablePrefix.slice(0, 54)}-${nameHash}`;
 }
 
 export function sanitizePathSegment(value, fallback = 'x') {

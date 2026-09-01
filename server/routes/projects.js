@@ -6,13 +6,26 @@ import os from 'os';
 import express from 'express';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { userDb } from '../database/db.js';
+import { tenantContext } from '../middleware/tenant-context.js';
 import { checkOpenApiAgentList } from '../services/openapi-agent.js';
+import { agentTemplateService } from '../services/agent-templates.js';
 import { skillPresetService } from '../services/skill-presets.js';
+import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { workspaceAccess } from '../services/workspace-access.js';
 import { applyWorkspaceOwnership } from '../services/workspace-ownership.js';
+import {
+  readWorkspaceAgentInstructions,
+  writeWorkspaceAgentInstructions,
+} from '../services/workspace-agent-instructions.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
 
 const router = express.Router();
+const MAX_AGENT_MARKDOWN_BYTES = 1024 * 1024;
+const workspaceMcpTools = createWorkspaceMcpToolsService({
+  multitenancy: multitenancyDb,
+  users: userDb,
+});
 
 function sanitizeGitError(message, token) {
   if (!message || !token) return message;
@@ -88,6 +101,211 @@ async function installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, 
     return { installed: [], errors: [{ error: error instanceof Error ? error.message : String(error) }] };
   }
 }
+
+async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, user }) {
+  if (templateId == null || templateId === '') return null;
+
+  const snapshot = agentTemplateService.resolveTemplateSnapshot({
+    templateId: Number(templateId),
+    tenantId: tenant.id,
+  });
+  const appliedSkills = [];
+  const appliedMcps = [];
+  const warnings = [...(snapshot.unavailableCapabilities || [])];
+
+  const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
+  if (instructions) {
+    // CLAUDE.md is the project memory source loaded natively by Claude Code SDK.
+    await writeWorkspaceAgentInstructions(workspace.path, `${instructions}\n`);
+  }
+
+  const installedSkillPresetIds = new Set(
+    (multitenancyDb.skillPresetInstalls?.listInstallsForWorkspace?.({ workspaceId: workspace.id }) || [])
+      .map((install) => Number(install.preset_id)),
+  );
+  for (const preset of snapshot.skills) {
+    if (installedSkillPresetIds.has(preset.id)) {
+      appliedSkills.push(preset);
+      continue;
+    }
+    try {
+      const sourceTenant = multitenancyDb.tenants.getTenantById(preset.tenantId);
+      await skillPresetService.installWorkspaceSkillPreset({
+        tenantId: preset.tenantId,
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        presetId: preset.id,
+        userId: user.id,
+        tenantCode: sourceTenant?.prod_code || sourceTenant?.code,
+        accountId: user.username,
+      });
+      appliedSkills.push(preset);
+    } catch (error) {
+      warnings.push({
+        type: 'skill',
+        id: preset.id,
+        name: preset.name,
+        unavailableReason: error instanceof Error ? error.message : '安装失败',
+      });
+    }
+  }
+
+  for (const preset of snapshot.mcps) {
+    try {
+      await workspaceMcpTools.installWorkspaceMcpPreset({
+        tenantId: preset.tenantId,
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        workspaceDisplayName: workspace.display_name,
+        presetId: preset.id,
+        userId: user.id,
+      });
+      agentTemplateService.markTemplateMcpInstall({
+        workspaceId: workspace.id,
+        presetId: preset.id,
+        templateId: snapshot.template.id,
+      });
+      appliedMcps.push(preset);
+    } catch (error) {
+      warnings.push({
+        type: 'mcp',
+        id: preset.id,
+        name: preset.name,
+        unavailableReason: error instanceof Error ? error.message : '安装失败',
+      });
+    }
+  }
+
+  agentTemplateService.saveWorkspaceSnapshot({
+    workspaceId: workspace.id,
+    userId: user.id,
+    snapshot: { ...snapshot, skills: appliedSkills, mcps: appliedMcps },
+  });
+
+  if (warnings.length > 0) {
+    console.warn('Agent template applied with unavailable capabilities:', {
+      templateId: snapshot.template.id,
+      workspaceId: workspace.id,
+      warnings,
+    });
+  }
+
+  return {
+    id: snapshot.template.id,
+    name: snapshot.template.name,
+    guideText: snapshot.template.guideText,
+  };
+}
+
+function resolveProjectSettingsWorkspace(req, { requireEdit = false } = {}) {
+  const tenantId = Number(req.tenant?.id);
+  const workspaceId = Number(req.query.workspaceId || req.body?.workspaceId);
+  const userId = req.user?.id ?? req.user?.userId;
+  if (!tenantId || !workspaceId || !userId) {
+    const error = new Error('tenantId and workspaceId are required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const resolved = workspaceAccess.requireWorkspace({
+    tenantId,
+    userId,
+    workspaceId,
+    requireEdit,
+  });
+  if (resolved.workspace.slug !== req.params.projectName) {
+    const error = new Error('Workspace not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return resolved;
+}
+
+router.get('/:projectName/settings', tenantContext, async (req, res) => {
+  try {
+    const { workspace, accessRole } = resolveProjectSettingsWorkspace(req);
+    const instructions = await readWorkspaceAgentInstructions(workspace.path);
+
+    return res.json({
+      workspaceId: workspace.id,
+      displayName: workspace.display_name,
+      claudeMarkdown: instructions.content,
+      claudeMarkdownSource: instructions.source,
+      // Compatibility aliases for clients that have not migrated yet.
+      agentMarkdown: instructions.content,
+      agentMarkdownSource: instructions.source,
+      revision: instructions.revision,
+      customInstructions: instructions.customInstructions,
+      accessRole,
+      canEdit: accessRole === 'owner' || accessRole === 'edit',
+    });
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+      return res.status(404).json({ error: 'Workspace path not found' });
+    }
+    return res.status(error?.statusCode || 500).json({ error: error?.message || 'Failed to load project settings' });
+  }
+});
+
+router.put('/:projectName/settings', tenantContext, async (req, res) => {
+  try {
+    const { displayName, expectedRevision } = req.body || {};
+    const claudeMarkdown = req.body?.claudeMarkdown ?? req.body?.agentMarkdown;
+    if (typeof displayName !== 'string' || !displayName.trim()) {
+      return res.status(400).json({ error: 'Display name is required' });
+    }
+    if (typeof claudeMarkdown !== 'string') {
+      return res.status(400).json({ error: 'CLAUDE.md content is required' });
+    }
+    if (typeof expectedRevision !== 'string' || !expectedRevision) {
+      return res.status(400).json({ error: 'Project settings revision is required' });
+    }
+    if (displayName.trim().length > 120) {
+      return res.status(400).json({ error: 'Display name must not exceed 120 characters' });
+    }
+    if (Buffer.byteLength(claudeMarkdown, 'utf8') > MAX_AGENT_MARKDOWN_BYTES) {
+      return res.status(413).json({ error: 'CLAUDE.md content must not exceed 1 MB' });
+    }
+
+    const { workspace } = resolveProjectSettingsWorkspace(req, { requireEdit: true });
+    const currentInstructions = await readWorkspaceAgentInstructions(workspace.path);
+    if (currentInstructions.revision !== expectedRevision) {
+      return res.status(409).json({
+        error: 'CLAUDE.md changed after this editor was opened. Reload and try again.',
+        code: 'PROJECT_SETTINGS_CONFLICT',
+      });
+    }
+    const written = await writeWorkspaceAgentInstructions(workspace.path, claudeMarkdown);
+    await applyWorkspaceOwnership({
+      workspaceRoot: workspace.path,
+      targetPaths: written.paths,
+      reason: 'project_settings_update',
+      context: { workspaceId: workspace.id },
+    });
+    const updatedWorkspace = multitenancyDb.workspaces.updateDisplayName({
+      workspaceId: workspace.id,
+      displayName: displayName.trim(),
+    });
+
+    return res.json({
+      success: true,
+      workspaceId: workspace.id,
+      displayName: updatedWorkspace.display_name,
+      claudeMarkdown: written.content,
+      agentMarkdown: written.content,
+      revision: written.revision,
+      updatedFiles: ['CLAUDE.md'],
+      removedLegacyFiles: written.migration.removed ? ['Agent.md'] : [],
+      customInstructions: written.customInstructions,
+    });
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+      return res.status(404).json({ error: 'Workspace path not found' });
+    }
+    return res.status(error?.statusCode || 500).json({ error: error?.message || 'Failed to save project settings' });
+  }
+});
 
 router.post('/:projectName/agent-list-check', async (req, res) => {
   try {
@@ -255,7 +473,14 @@ export async function validateWorkspacePath(requestedPath) {
  */
 router.post('/create-workspace', async (req, res) => {
   try {
-    const { workspaceType, path: workspacePath, githubUrl, githubTokenId, newGithubToken } = req.body;
+    const {
+      workspaceType,
+      path: workspacePath,
+      githubUrl,
+      githubTokenId,
+      newGithubToken,
+      templateId = null,
+    } = req.body;
 
     // Validate required fields
     if (!workspaceType || !workspacePath) {
@@ -282,6 +507,9 @@ router.post('/create-workspace', async (req, res) => {
 
     if (!['existing', 'new'].includes(workspaceType)) {
       return res.status(400).json({ error: 'workspaceType must be "existing" or "new"' });
+    }
+    if (templateId != null && templateId !== '' && workspaceType !== 'new') {
+      return res.status(400).json({ error: 'Agent templates can only be used for new workspaces' });
     }
 
     const {
@@ -410,6 +638,12 @@ router.post('/create-workspace', async (req, res) => {
           path: clonePath,
         });
         await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+        const agentTemplate = await applyAgentTemplateToWorkspace({
+          templateId,
+          tenant,
+          workspace,
+          user: req.user,
+        });
         await applyWorkspaceOwnership({
           workspaceRoot: workspace.path,
           targetPaths: [workspace.path],
@@ -422,6 +656,7 @@ router.post('/create-workspace', async (req, res) => {
         return res.json({
           success: true,
           project: createWorkspaceProject(workspace),
+          agentTemplate,
           message: 'New workspace created and repository cloned successfully'
         });
       }
@@ -436,6 +671,12 @@ router.post('/create-workspace', async (req, res) => {
         path: absolutePath,
       });
       await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+      const agentTemplate = await applyAgentTemplateToWorkspace({
+        templateId,
+        tenant,
+        workspace,
+        user: req.user,
+      });
       await applyWorkspaceOwnership({
         workspaceRoot: workspace.path,
         targetPaths: [workspace.path],
@@ -448,13 +689,14 @@ router.post('/create-workspace', async (req, res) => {
       return res.json({
         success: true,
         project: createWorkspaceProject(workspace),
+        agentTemplate,
         message: 'New workspace created successfully'
       });
     }
 
   } catch (error) {
     console.error('Error creating workspace:', error);
-    res.status(500).json({
+    res.status(error?.statusCode || 500).json({
       error: error.message || 'Failed to create workspace',
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });

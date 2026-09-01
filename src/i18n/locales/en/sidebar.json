@@ -2,7 +2,7 @@
   "projects": {
     "title": "Projects",
     "newProject": "New Project",
-    "deleteProject": "Remove Project",
+    "deleteProject": "Delete Workspace",
     "renameProject": "Rename Project",
     "noProjects": "No projects found",
     "loadingProjects": "Loading projects...",
@@ -18,6 +18,25 @@
     "noMatchingProjects": "No matching projects",
     "tryDifferentSearch": "Try adjusting your search term",
     "runClaudeCli": "Run Claude CLI in a project directory to get started"
+  },
+  "projectEdit": {
+    "title": "Edit project",
+    "projectName": "Project name",
+    "projectNamePlaceholder": "Enter a project name",
+    "favorite": "Favorite project",
+    "favoriteHint": "Favorite projects appear first in the project list.",
+    "syncTarget": "Project memory",
+    "agentPlaceholder": "# Project Memory\n\nRecord project context, conventions, and the Agent's working style…",
+    "agentHint": "CLAUDE.md is the project memory file. Changes made here or in Files are loaded by the Claude Code SDK in new sessions.",
+    "customInstructionsWarning": "Other instruction files detected: {{files}}. Claude Code may load them too; avoid conflicts with the project CLAUDE.md.",
+    "readOnlyHint": "This project is read-only. You can only change its favorite status.",
+    "loading": "Loading project settings…",
+    "save": "Save",
+    "nameRequired": "Enter a project name.",
+    "workspaceUnavailable": "Workspace information is missing, so project settings cannot be loaded or saved.",
+    "loadFailed": "Failed to load project settings.",
+    "saveFailed": "Failed to save project settings.",
+    "conflict": "CLAUDE.md changed elsewhere. Close and reopen this editor before trying again."
   },
   "app": {
     "title": "CloudCLI",
@@ -41,7 +60,7 @@
     "createProject": "Create new project",
     "refresh": "Refresh projects and sessions (Ctrl+R)",
     "renameProject": "Rename project (F2)",
-    "deleteProject": "Remove project from sidebar (Delete)",
+    "deleteProject": "Delete workspace (Delete)",
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
     "editSessionName": "Manually edit session name",
@@ -105,14 +124,14 @@
     "deleteSuccess": "Deleted successfully",
     "errorOccurred": "An error occurred",
     "deleteSessionConfirm": "Are you sure you want to delete this session? This action cannot be undone.",
-    "deleteProjectConfirm": "Remove this project from the sidebar? Your project files, memories, and session data will not be deleted.",
+    "deleteProjectConfirm": "Permanently delete this workspace and its associated data? This action cannot be undone.",
     "enterProjectPath": "Please enter a project path",
     "deleteSessionFailed": "Failed to delete session. Please try again.",
     "deleteSessionError": "Error deleting session. Please try again.",
     "renameSessionFailed": "Failed to rename session. Please try again.",
     "renameSessionError": "Error renaming session. Please try again.",
-    "deleteProjectFailed": "Failed to remove project. Please try again.",
-    "deleteProjectError": "Error removing project. Please try again.",
+    "deleteProjectFailed": "Failed to delete workspace. Please try again.",
+    "deleteProjectError": "Error deleting workspace. Please try again.",
     "createProjectFailed": "Failed to create project. Please try again.",
     "createProjectError": "Error creating project. Please try again."
   },
@@ -132,14 +151,13 @@
     "projectsScanned_other": "{{count}} projects scanned"
   },
   "deleteConfirmation": {
-    "deleteProject": "Remove Project",
+    "deleteProject": "Delete Workspace",
     "deleteSession": "Delete Session",
-    "confirmDelete": "What would you like to do with",
-    "sessionCount_one": "This project contains {{count}} conversation.",
-    "sessionCount_other": "This project contains {{count}} conversations.",
-    "removeFromSidebar": "Remove from sidebar only",
-    "deleteAllData": "Delete all data permanently",
-    "allConversationsDeleted": "The project will be removed from the sidebar. Your files, memories, and session data will be preserved.",
-    "cannotUndo": "You can re-add the project later."
+    "confirmDelete": "Permanently delete workspace \"{{name}}\"?",
+    "sessionCount_one": "This workspace contains {{count}} conversation.",
+    "sessionCount_other": "This workspace contains {{count}} conversations.",
+    "deleteWorkspace": "Delete workspace",
+    "workspaceDeletionWarning": "The workspace and its associated runtime, memory, and session data will be permanently deleted.",
+    "cannotUndo": "This action cannot be undone."
   }
 }

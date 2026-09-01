@@ -1,26 +1,12 @@
-import { expandLeadingSkillCommand } from './skill-command-expander.js';
-
 const VALID_SESSION_MODES = new Set(['new', 'merge']);
 const SCHEDULED_TASK_TIME_ZONE = 'Asia/Shanghai';
 
 export async function resolveScheduledTaskPrompts({
-  provider,
   prompt,
-  workspacePath,
-  expandSkillCommand = expandLeadingSkillCommand,
 }) {
-  const displayPrompt = prompt;
-  if (provider !== 'claude') {
-    return { displayPrompt, modelPrompt: prompt };
-  }
-
-  const expanded = await expandSkillCommand({
-    prompt,
-    workspacePath,
-  });
   return {
-    displayPrompt,
-    modelPrompt: expanded.prompt,
+    displayPrompt: prompt,
+    modelPrompt: prompt,
   };
 }
 
@@ -38,7 +24,6 @@ export function resolveScheduledTaskResumeSession({
   sessionMode,
   sessionId,
   isResumable = () => true,
-  canResume = () => true,
 }) {
   const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
   const storedSessionMode = sessionMode == null || String(sessionMode).trim() === ''
@@ -48,7 +33,6 @@ export function resolveScheduledTaskResumeSession({
     normalizeScheduledTaskSessionMode(storedSessionMode) !== 'merge'
     || !normalizedSessionId
     || !isResumable(normalizedSessionId)
-    || !canResume(normalizedSessionId)
   ) {
     return null;
   }

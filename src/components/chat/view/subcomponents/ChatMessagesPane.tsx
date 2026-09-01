@@ -40,6 +40,7 @@ interface ChatMessagesPaneProps {
   allMessagesLoaded: boolean;
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  onOpenSubagent?: (toolId: string) => void;
   onShowSettings?: () => void;
   onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   autoExpandTools?: boolean;
@@ -80,6 +81,7 @@ function ChatMessagesPane({
   allMessagesLoaded,
   createDiff,
   onFileOpen,
+  onOpenSubagent,
   onShowSettings,
   onGrantToolPermission,
   autoExpandTools,
@@ -137,6 +139,7 @@ function ChatMessagesPane({
           isTaskMasterInstalled={isTaskMasterInstalled}
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
+          agentTemplate={selectedProject.agentTemplate}
         />
       ) : (
         <>
@@ -171,6 +174,7 @@ function ChatMessagesPane({
                 prevMessage={prevMessage}
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}
+                onOpenSubagent={onOpenSubagent}
                 onShowSettings={onShowSettings}
                 onGrantToolPermission={onGrantToolPermission}
                 autoExpandTools={autoExpandTools}
@@ -188,4 +192,3 @@ function ChatMessagesPane({
 }
 
 export default memo(ChatMessagesPane);
-

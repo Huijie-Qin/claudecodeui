@@ -599,6 +599,240 @@ test('Claude session history falls back to legacy DB when runtime JSONL is unava
   assert.equal(result.messages[0].id, 'legacy-msg');
 });
 
+test('Claude session history restores generic Hook cards from existing execution audits', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => null,
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{
+            id: 'assistant-1',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-08-24T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    hookConfigs: {
+      listAllExecutions: ({ sessionId, userId, summary }) => {
+        assert.equal(sessionId, 's1');
+        assert.equal(userId, 2);
+        assert.equal(summary, false);
+        return [{
+          id: 'execution-1',
+          hookId: 'sql-check',
+          hookName: 'SQL Check 强制校验',
+          eventName: 'Stop',
+          status: 'succeeded',
+          startedAtMs: Date.parse('2026-08-24T01:00:01.000Z'),
+          actions: {
+            'check-sql': { output: { valid: true, issueCount: 0 } },
+            'record-lines': {
+              output: { recorded: true, id: 'record-1', type: 'sql_response_metrics' },
+            },
+          },
+        }];
+      },
+      listExecutionDataRecords: (executionId) => {
+        assert.equal(executionId, 'execution-1');
+        return [{
+          id: 'record-1',
+          type: 'sql_response_metrics',
+          data: { sqlLineCount: 3 },
+          createdAt: '2026-08-24 01:00:01',
+        }];
+      },
+      getHook: () => ({
+        id: 'sql-check',
+        name: 'SQL Check 强制校验',
+        description: '校验模型返回的 SQL。',
+        eventName: 'Stop',
+        extensionLogic: { code: 'export async function run() {}' },
+        postActions: [
+          { id: 'check-sql', type: 'call_mcp_tool' },
+          {
+            id: 'record-lines',
+            type: 'write_record',
+            config: { recordType: 'sql_response_metrics' },
+          },
+        ],
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+  });
+
+  assert.deepEqual(result.messages.map((message) => message.id), [
+    'assistant-1',
+    'hook_activity_execution-1_execution',
+  ]);
+  assert.deepEqual(result.messages[1], {
+    id: 'hook_activity_execution-1_execution',
+    sessionId: 's1',
+    timestamp: '2026-08-24T01:00:01.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    activityKind: 'execution',
+    status: 'succeeded',
+    jobId: 'hook_activity_execution-1_execution',
+    executionId: 'execution-1',
+    hookId: 'sql-check',
+    hookName: 'SQL Check 强制校验',
+    eventName: 'Stop',
+    actionTypes: ['call_mcp_tool', 'write_record'],
+    actionResults: [
+      {
+        actionId: 'check-sql',
+        actionType: 'call_mcp_tool',
+        output: { valid: true, issueCount: 0 },
+      },
+      {
+        actionId: 'record-lines',
+        actionType: 'write_record',
+        output: { recorded: true, id: 'record-1', type: 'sql_response_metrics' },
+        record: {
+          id: 'record-1',
+          type: 'sql_response_metrics',
+          data: { sqlLineCount: 3 },
+          createdAt: '2026-08-24 01:00:01',
+        },
+      },
+    ],
+    hasScript: true,
+    summary: '校验模型返回的 SQL。',
+  });
+});
+
+test('Claude session history omits execution and persisted follow-up cards for Hooks hidden from chat', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [
+            {
+              id: 'assistant-1',
+              kind: 'text',
+              role: 'assistant',
+              content: 'Done.',
+              timestamp: '2026-08-24T01:00:00.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+            {
+              id: 'hook_activity_execution-1_notify',
+              kind: 'hook_activity',
+              hookId: 'hidden-hook',
+              activityKind: 'followup',
+              timestamp: '2026-08-24T01:00:02.000Z',
+              provider: 'claude',
+              sessionId: 's1',
+            },
+          ],
+          total: 2,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          {
+            id: 'assistant-1',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-08-24T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'hook-recovery-output',
+            kind: 'text',
+            role: 'assistant',
+            content: 'HOOK_NOTIFICATION_SKILL_EXECUTED',
+            hookActivityId: 'hook_activity_execution-1_notify',
+            timestamp: '2026-08-24T01:00:03.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'legacy-hook-recovery-output',
+            kind: 'text',
+            role: 'assistant',
+            content: 'LEGACY_HOOK_NOTIFICATION_SKILL_EXECUTED',
+            hookActivityId: 'hook_activity_execution-1_legacy-notify',
+            timestamp: '2026-08-24T01:00:04.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 3,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+    hookConfigs: {
+      listAllExecutions: () => [{
+        id: 'execution-1',
+        hookId: 'hidden-hook',
+        hookName: '隐藏 Hook',
+        eventName: 'Stop',
+        status: 'succeeded',
+        startedAtMs: Date.parse('2026-08-24T01:00:01.000Z'),
+      }],
+      getHook: () => ({
+        id: 'hidden-hook',
+        name: '隐藏 Hook',
+        eventName: 'Stop',
+        extensionLogic: null,
+        postActions: [{ type: 'invoke_skill' }],
+      }),
+      getUserHookChatVisibility: ({ userId, hookId }) => userId !== 2 || hookId !== 'hidden-hook',
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+  });
+
+  assert.deepEqual(result.messages.map((message) => message.id), ['assistant-1']);
+});
+
 test('interactive Claude user and assistant messages are not persisted to the database', () => {
   const persisted = [];
   const multitenancy = {
@@ -801,4 +1035,156 @@ test('Claude meta and sidechain messages are not persisted into durable session 
 
   assert.equal(changed, 0);
   assert.deepEqual(persisted, []);
+});
+
+test('Claude persists only synthetic Hook activity alongside its JSONL transcript', () => {
+  const persisted = [];
+  const multitenancy = {
+    sessionMessages: {
+      upsertMessages: ({ messages }) => {
+        persisted.push(...messages);
+        return messages.length;
+      },
+    },
+  };
+
+  const changed = persistNormalizedMessages({
+    multitenancy,
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [
+      {
+        id: 'assistant-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:01.000Z',
+        provider: 'claude',
+        kind: 'text',
+        role: 'assistant',
+        content: 'Done',
+      },
+      {
+        id: 'hook_activity_execution-1_action-1',
+        sessionId: 'claude-session-1',
+        timestamp: '2026-04-26T00:00:02.000Z',
+        provider: 'claude',
+        kind: 'hook_activity',
+        status: 'running',
+        jobId: 'hook_activity_execution-1_action-1',
+      },
+    ],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.id), ['hook_activity_execution-1_action-1']);
+});
+
+test('Claude persists synthetic stopped subagent state for session replay', () => {
+  const persisted = [];
+  const changed = persistNormalizedMessages({
+    multitenancy: {
+      sessionMessages: {
+        upsertMessages: ({ messages }) => {
+          persisted.push(...messages);
+          return messages.length;
+        },
+      },
+    },
+    options: { tenantId: 1, workspaceId: 3, userId: 2 },
+    provider: 'claude',
+    providerSessionId: 'claude-session-1',
+    runtimeId: 'runtime-1',
+    messages: [{
+      id: 'subagent-stop-agent-1',
+      sessionId: 'claude-session-1',
+      timestamp: '2026-08-31T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'task_notification',
+      taskId: 'agent-1',
+      toolUseId: 'toolu_agent_1',
+      status: 'stopped',
+      summary: 'Stopped by user',
+      syntheticSubagentStop: true,
+    }],
+  });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(persisted.map((message) => message.id), ['subagent-stop-agent-1']);
+});
+
+test('Claude session history merges persisted Hook activity into the JSONL transcript', async () => {
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }),
+      },
+      sessionMessages: {
+        listMessages: () => ({
+          messages: [{
+            id: 'hook_activity_execution-1_action-1',
+            kind: 'hook_activity',
+            timestamp: '2026-07-29T01:00:02.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+            status: 'succeeded',
+            hookId: 'notify-on-stop',
+            hookName: '对话正常结束通知',
+          }],
+          total: 1,
+          hasMore: false,
+          offset: 0,
+          limit: null,
+        }),
+      },
+    },
+    providerSessions: {
+      fetchHistory: async () => ({
+        messages: [
+          {
+            id: 'jsonl-user',
+            kind: 'text',
+            role: 'user',
+            content: 'Run the check.',
+            timestamp: '2026-07-29T01:00:00.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+          {
+            id: 'jsonl-assistant',
+            kind: 'text',
+            role: 'assistant',
+            content: 'Done.',
+            timestamp: '2026-07-29T01:00:01.000Z',
+            provider: 'claude',
+            sessionId: 's1',
+          },
+        ],
+        total: 2,
+        hasMore: false,
+        offset: 0,
+        limit: null,
+      }),
+    },
+  });
+
+  const result = await service.fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 's1',
+    ownedSession: {
+      workspace_id: 3,
+      workspace_slug: 'repo',
+      workspace_path: '/tmp/repo',
+    },
+    limit: 20,
+    offset: 0,
+  });
+
+  assert.deepEqual(
+    result.messages.map((message) => message.id),
+    ['jsonl-user', 'jsonl-assistant', 'hook_activity_execution-1_action-1'],
+  );
+  assert.equal(result.messages[2].status, 'succeeded');
 });

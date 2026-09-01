@@ -1,13 +1,18 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
+import { hookConfigService } from './hook-configs.js';
+
 function generateUserPromptMessageId() {
   return `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 const TRANSIENT_MESSAGE_KINDS = new Set(['stream_delta', 'stream_end']);
+const CLAUDE_SYNTHETIC_MESSAGE_KINDS = new Set(['hook_activity']);
 const SCHEDULED_SKILL_MATCH_WINDOW_MS = 60_000;
 const SLASH_INVOCATION_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
 const CLAUDE_INTERNAL_CONTENT_PREFIXES = [
+  '<ccui-hook-recovery',
+  '<ccui-mcp-loop-result',
   '<local-command-caveat>',
   'Base directory for this skill:',
 ];
@@ -74,6 +79,198 @@ function getMessageTimestampMs(message) {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isClaudeSyntheticMessage(message) {
+  return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind)
+    || (message?.kind === 'task_notification' && message?.syntheticSubagentStop === true)
+    || (message?.origin === 'hook' && message?.mcpLoopReplacement === true);
+}
+
+function getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId) {
+  if (typeof hookConfigs?.getUserHookChatVisibility !== 'function') return true;
+  if (visibilityByHookId.has(hookId)) return visibilityByHookId.get(hookId);
+  let visible = true;
+  try {
+    visible = hookConfigs.getUserHookChatVisibility({ userId, hookId }) !== false;
+  } catch {
+    // Visibility preferences should never make the session history unavailable.
+    visible = true;
+  }
+  visibilityByHookId.set(hookId, visible);
+  return visible;
+}
+
+function isHookActivityVisible(message, hookConfigs, userId, visibilityByHookId) {
+  if (!isClaudeSyntheticMessage(message) || !message?.hookId) return true;
+  const hookId = String(message.hookId);
+  return getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId);
+}
+
+function getHookActivityIdentity(message) {
+  if (typeof message?.jobId === 'string' && message.jobId) return message.jobId;
+  if (typeof message?.id === 'string' && message.id) return message.id;
+  return null;
+}
+
+function omitHiddenHookRecoveryMessages(
+  messages,
+  hiddenHookActivityIds,
+  hiddenHookExecutionPrefixes,
+) {
+  if (!hiddenHookActivityIds.size && !hiddenHookExecutionPrefixes.size) return messages;
+  return messages.filter((message) => {
+    if (typeof message?.hookActivityId !== 'string') return true;
+    return !hiddenHookActivityIds.has(message.hookActivityId)
+      && ![...hiddenHookExecutionPrefixes].some((prefix) => message.hookActivityId.startsWith(prefix));
+  });
+}
+
+function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
+  const mergedById = new Map();
+  const combined = [
+    ...(Array.isArray(transcriptMessages) ? transcriptMessages : []),
+    ...(Array.isArray(syntheticMessages) ? syntheticMessages : []),
+  ];
+
+  combined.forEach((message, index) => {
+    const key = typeof message?.id === 'string' && message.id
+      ? message.id
+      : `message-without-id-${index}`;
+    const existing = mergedById.get(key)?.message;
+    const mergedMessage = existing
+      ? {
+        ...existing,
+        ...message,
+        ...(message?.actionResults === undefined && existing?.actionResults !== undefined
+          ? { actionResults: existing.actionResults }
+          : {}),
+      }
+      : message;
+    mergedById.set(key, { message: mergedMessage, index });
+  });
+
+  return [...mergedById.values()]
+    .sort((left, right) => {
+      const leftTimestamp = getMessageTimestampMs(left.message);
+      const rightTimestamp = getMessageTimestampMs(right.message);
+      if (leftTimestamp === null && rightTimestamp === null) return left.index - right.index;
+      if (leftTimestamp === null) return 1;
+      if (rightTimestamp === null) return -1;
+      return leftTimestamp - rightTimestamp || left.index - right.index;
+    })
+    .map(({ message }) => message);
+}
+
+function buildHistoricalHookActionResults(hook, execution, records = []) {
+  const actions = execution?.actions;
+  if (!actions || typeof actions !== 'object' || Array.isArray(actions)) return [];
+  const availableRecords = [...records];
+
+  return (hook?.postActions || []).flatMap((action) => {
+    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
+    if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
+    const output = actions[action.id]?.output;
+    const result = {
+      actionId: action.id,
+      actionType: action.type,
+      output,
+    };
+    if (action.type === 'write_record' && output?.recorded === true) {
+      const recordIndex = availableRecords.findIndex((record) => (
+        (typeof output.id === 'string' && record.id === output.id)
+        || (
+          typeof output.type === 'string'
+          && record.type === output.type
+        )
+      ));
+      if (recordIndex >= 0) {
+        const [record] = availableRecords.splice(recordIndex, 1);
+        result.record = {
+          id: record.id,
+          type: record.type,
+          data: record.data,
+          createdAt: record.createdAt,
+        };
+      } else if (typeof output.id === 'string') {
+        result.record = {
+          id: output.id,
+          type: output.type,
+          data: output.data,
+        };
+      }
+    }
+    return [result];
+  });
+}
+
+function listHistoricalHookActivities({
+  hookConfigs,
+  providerSessionId,
+  userId,
+  hiddenHookExecutionPrefixes,
+}) {
+  if (!providerSessionId || typeof hookConfigs?.listAllExecutions !== 'function') return [];
+
+  try {
+    const hooks = new Map();
+    const visibilityByHookId = new Map();
+    return hookConfigs.listAllExecutions({
+      sessionId: providerSessionId,
+      userId,
+      limit: 200,
+      summary: false,
+    }).flatMap((execution) => {
+      let hook = hooks.get(execution.hookId);
+      if (hook === undefined) {
+        hook = typeof hookConfigs.getHook === 'function' ? hookConfigs.getHook(execution.hookId) : null;
+        hooks.set(execution.hookId, hook || null);
+      }
+      if (!getUserHookActivityVisibility(
+        hookConfigs,
+        userId,
+        execution.hookId,
+        visibilityByHookId,
+      )) {
+        hiddenHookExecutionPrefixes.add(`hook_activity_${execution.id}_`);
+        return [];
+      }
+      const startedAt = Number(execution.startedAtMs) > 0
+        ? new Date(Number(execution.startedAtMs))
+        : new Date(execution.startedAt);
+      const timestamp = Number.isFinite(startedAt.getTime())
+        ? startedAt.toISOString()
+        : new Date(0).toISOString();
+      const records = typeof hookConfigs.listExecutionDataRecords === 'function'
+        ? hookConfigs.listExecutionDataRecords(execution.id)
+        : [];
+      const actionResults = buildHistoricalHookActionResults(hook, execution, records);
+      return [{
+        id: `hook_activity_${execution.id}_execution`,
+        sessionId: providerSessionId,
+        timestamp,
+        provider: 'claude',
+        kind: 'hook_activity',
+        origin: 'hook',
+        activityKind: 'execution',
+        status: ['running', 'succeeded', 'failed'].includes(execution.status)
+          ? execution.status
+          : 'failed',
+        jobId: `hook_activity_${execution.id}_execution`,
+        executionId: execution.id,
+        hookId: execution.hookId,
+        hookName: execution.hookName || hook?.name || null,
+        eventName: execution.eventName || hook?.eventName || null,
+        actionTypes: [...new Set((hook?.postActions || []).map((action) => action.type).filter(Boolean))],
+        ...(actionResults.length > 0 ? { actionResults } : {}),
+        hasScript: Boolean(hook?.extensionLogic?.code?.trim()),
+        summary: String(hook?.description || '').slice(0, 8000),
+      }];
+    });
+  } catch (error) {
+    console.warn('[SessionHistory] Failed to restore Hook execution activities:', error?.message || error);
+    return [];
+  }
 }
 
 function isScheduledSlashInvocation(message) {
@@ -257,6 +454,7 @@ export function shouldSuppressLiveUserTextMessage(message, writer) {
 export function createSessionMessageHistoryService({
   multitenancy = multitenancyDb,
   providerSessions = null,
+  hookConfigs = hookConfigService,
 } = {}) {
   return {
     async fetchHistory({
@@ -281,6 +479,34 @@ export function createSessionMessageHistoryService({
           limit: null,
           offset: 0,
         });
+        const hiddenHookExecutionPrefixes = new Set();
+        const historicalHookActivities = listHistoricalHookActivities({
+          hookConfigs,
+          providerSessionId,
+          userId,
+          hiddenHookExecutionPrefixes,
+        });
+        const visibilityByHookId = new Map();
+        const hiddenHookActivityIds = new Set();
+        const persistedHookActivities = dbHistory.messages.filter(isClaudeSyntheticMessage);
+        const visiblePersistedHookActivities = persistedHookActivities.filter((message) => {
+          const visible = isHookActivityVisible(
+            message,
+            hookConfigs,
+            userId,
+            visibilityByHookId,
+          );
+          if (!visible) {
+            const identity = getHookActivityIdentity(message);
+            if (identity) hiddenHookActivityIds.add(identity);
+          }
+          return visible;
+        });
+        const syntheticMessages = mergeClaudeSyntheticMessages(
+          visiblePersistedHookActivities,
+          historicalHookActivities,
+        );
+        const transcriptDbMessages = dbHistory.messages.filter((message) => !isClaudeSyntheticMessage(message));
         const runtimeLookup = {
           ...historyLookup,
         };
@@ -296,50 +522,77 @@ export function createSessionMessageHistoryService({
         if (runtime?.runtime_home_path && providerSessions) {
           const scheduledSession = isScheduledSession(ownedSession);
           const legacyScheduledSkillInvocations = scheduledSession
-            ? dbHistory.messages.filter(isScheduledSlashInvocation)
+            ? transcriptDbMessages.filter(isScheduledSlashInvocation)
             : [];
           const shouldMergeScheduledSkills = legacyScheduledSkillInvocations.length > 0;
+          const needsFullJsonlHistory = hiddenHookActivityIds.size > 0
+            || hiddenHookExecutionPrefixes.size > 0
+            || syntheticMessages.length > 0
+            || shouldMergeScheduledSkills
+            || (!scheduledSession && transcriptDbMessages.length > 0);
           const jsonlHistory = await providerSessions.fetchHistory(provider, providerSessionId, {
             projectName: ownedSession.workspace_slug || '',
             projectPath: ownedSession.workspace_path || '',
             runtimeHomePath: runtime.runtime_home_path,
             limit: (
-              (scheduledSession && !shouldMergeScheduledSkills)
-              || dbHistory.total === 0
+              !needsFullJsonlHistory
+              && (scheduledSession || transcriptDbMessages.length === 0)
             ) ? limit : null,
             offset: (
-              (scheduledSession && !shouldMergeScheduledSkills)
-              || dbHistory.total === 0
+              !needsFullJsonlHistory
+              && (scheduledSession || transcriptDbMessages.length === 0)
             ) ? offset : 0,
           });
           if (jsonlHistory.total > 0) {
+            const visibleJsonlMessages = omitHiddenHookRecoveryMessages(
+              jsonlHistory.messages,
+              hiddenHookActivityIds,
+              hiddenHookExecutionPrefixes,
+            );
+            let transcriptHistory;
             if (shouldMergeScheduledSkills) {
-              return paginateHistory(
-                mergeLegacyScheduledSkillInvocations(
-                  jsonlHistory.messages,
-                  legacyScheduledSkillInvocations,
-                ),
-                limit,
-                offset,
+              transcriptHistory = mergeLegacyScheduledSkillInvocations(
+                visibleJsonlMessages,
+                legacyScheduledSkillInvocations,
               );
+            } else if (scheduledSession || transcriptDbMessages.length === 0) {
+              if (syntheticMessages.length === 0) {
+                return hiddenHookActivityIds.size > 0 || hiddenHookExecutionPrefixes.size > 0
+                  ? paginateHistory(visibleJsonlMessages, limit, offset)
+                  : jsonlHistory;
+              }
+              transcriptHistory = visibleJsonlMessages;
+            } else {
+              const mergedLegacyHistory = mergeLegacyClaudeHistory({
+                dbMessages: transcriptDbMessages,
+                jsonlMessages: visibleJsonlMessages,
+                limit: syntheticMessages.length > 0 ? null : limit,
+                offset: syntheticMessages.length > 0 ? 0 : offset,
+              });
+              if (syntheticMessages.length === 0) {
+                return mergedLegacyHistory;
+              }
+              transcriptHistory = mergedLegacyHistory.messages;
             }
 
-            if (scheduledSession || dbHistory.total === 0) {
-              return jsonlHistory;
+            if (syntheticMessages.length === 0) {
+              return paginateHistory(transcriptHistory, limit, offset);
             }
-
-            return mergeLegacyClaudeHistory({
-              dbMessages: dbHistory.messages,
-              jsonlMessages: jsonlHistory.messages,
+            return paginateHistory(
+              mergeClaudeSyntheticMessages(transcriptHistory, syntheticMessages),
               limit,
               offset,
-            });
+            );
           }
         }
 
         // Transitional fallback for legacy sessions whose runtime home or JSONL
         // was removed before runtime-aware history was introduced.
-        return paginateHistory(dbHistory.messages, limit, offset);
+        return paginateHistory(
+          mergeClaudeSyntheticMessages(transcriptDbMessages, syntheticMessages),
+          limit,
+          offset,
+        );
       }
 
       const dbHistory = multitenancy.sessionMessages.listMessages({
@@ -379,23 +632,24 @@ export function persistNormalizedMessages({
   runtimeId,
   messages,
 }) {
-  // Claude Code already persists the canonical transcript in runtime JSONL.
-  if (provider === 'claude') {
-    return 0;
-  }
+  // Claude Code persists its canonical transcript in runtime JSONL. Synthetic
+  // CCUI-only events still need the database so they survive a page refresh.
+  const candidateMessages = provider === 'claude'
+    ? messages?.filter(isClaudeSyntheticMessage)
+    : messages;
 
   if (
     !runtimeId ||
     !options.tenantId ||
     !options.workspaceId ||
     !options.userId ||
-    !Array.isArray(messages) ||
-    messages.length === 0
+    !Array.isArray(candidateMessages) ||
+    candidateMessages.length === 0
   ) {
     return 0;
   }
 
-  const persistableMessages = messages.filter(isPersistableMessage);
+  const persistableMessages = candidateMessages.filter(isPersistableMessage);
   if (persistableMessages.length === 0) {
     return 0;
   }

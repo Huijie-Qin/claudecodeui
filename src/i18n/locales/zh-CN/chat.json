@@ -20,6 +20,47 @@
     "codex": "Codex",
     "gemini": "Gemini"
   },
+  "messageQueue": {
+    "queued": "队列中",
+    "failed": "入队失败"
+  },
+  "hookActivity": {
+    "title": "后置消息",
+    "executionTitle": "Hook 执行",
+    "script": "脚本",
+    "actions": {
+      "call_mcp_tool": "MCP 调用",
+      "mcp_loop_run": "MCP 循环等待",
+      "write_record": "写入记录",
+      "invoke_skill": "调用技能",
+      "send_agent_message": "发送给 Agent"
+    },
+    "loopAttempts": "已轮询 {{count}} 次",
+    "loopResult": "最终结果",
+    "cancelLoop": "取消等待",
+    "cancellingLoop": "正在取消…",
+    "unnamed": "未命名 Hook",
+    "skill": "技能",
+    "directMessage": "发送给 Agent",
+    "followupCount": "后置行为 {{count}}",
+    "expandFollowups": "展开后置行为",
+    "collapseFollowups": "收起后置行为",
+    "resultCount": "执行结果 {{count}}",
+    "expandResults": "展开执行结果",
+    "collapseResults": "收起执行结果",
+    "recordInfo": "记录信息",
+    "returnInfo": "返回信息",
+    "recordId": "记录 ID",
+    "emptyResult": "无返回内容",
+    "recoveryProcess": "执行过程",
+    "queuePosition": "队列第 {{position}} 位",
+    "status": {
+      "queued": "等待中",
+      "running": "执行中",
+      "succeeded": "已完成",
+      "failed": "失败"
+    }
+  },
   "tools": {
     "settings": "工具设置",
     "error": "工具错误",
@@ -113,6 +154,8 @@
     "attachImages": "附加图片",
     "send": "发送",
     "stop": "停止",
+    "sendSupplement": "排队发送",
+    "supplementPlaceholder": "在 DataAgent 运行时补充附加信息",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
       "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令"
@@ -164,6 +207,9 @@
   "providerSelection": {
     "title": "选择您的 AI 助手",
     "description": "选择一个供应商以开始新对话",
+    "templateGuide": "{{name}} 引导语",
+    "defaultAgentName": "Agent",
+    "guideNotSent": "仅作为开始对话的提示，不会自动发送给模型。",
     "selectModel": "选择模型",
     "providerInfo": {
       "anthropic": "由 Anthropic 提供",
@@ -369,5 +415,55 @@
       "firstRunInvalid": "首次运行时间必须是有效日期时间",
       "startAfterInvalid": "开始时间必须是有效日期时间"
     }
+  },
+  "subagent": {
+    "resizePanel": "调整子代理活动面板宽度"
+  },
+  "subagentPanel": {
+    "title": "子代理活动",
+    "agentCount": "{{count}} 个子代理",
+    "agentCount_other": "{{count}} 个子代理",
+    "close": "关闭子代理侧栏",
+    "open": "在侧栏中打开",
+    "selectAgent": "选择子代理",
+    "noAgents": "暂无子代理",
+    "status": {
+      "running": "运行中",
+      "waiting": "等待中",
+      "completed": "已完成",
+      "stopped": "已停止",
+      "error": "失败"
+    },
+    "duration": {
+      "seconds": "{{count}} 秒",
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒"
+    },
+    "toolCount": "{{count}} 次工具调用",
+    "toolCount_other": "{{count}} 次工具调用",
+    "empty": {
+      "title": "暂无子代理活动",
+      "description": "子代理开始执行后，调用过程会显示在这里。"
+    },
+    "prompt": {
+      "title": "任务提示词"
+    },
+    "timeline": {
+      "ariaLabel": "子代理执行时间线",
+      "title": "调用过程",
+      "waiting": "正在等待首次工具调用…",
+      "noActivity": "没有记录到工具调用。"
+    },
+    "activity": {
+      "ariaLabel": "{{toolName}} 工具调用",
+      "parameters": "参数",
+      "result": "结果"
+    },
+    "finalResult": "最终结果",
+    "usage": "用量",
+    "pendingQuestion": "子代理正在等待你的回答",
+    "questionWaiting": "有子代理正在等待你的回答，请从对应的子代理工具调用中打开侧栏。",
+    "locatingQuestion": "正在连接子代理的问题…",
+    "newUpdates": "{{count}} 条新动态 · 回到最新",
+    "newUpdates_other": "{{count}} 条新动态 · 回到最新"
   }
 }

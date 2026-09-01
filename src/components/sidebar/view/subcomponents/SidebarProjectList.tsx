@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
+
 import type { LoadingProgress, Project, ProjectScheduledTask, ProjectSession, LLMProvider } from '../../../../types/app';
 import type {
   LoadingSessionsByProject,
   MCPServerStatus,
   SessionWithProvider,
 } from '../../types/types';
+
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
 
@@ -14,11 +16,10 @@ export type SidebarProjectListProps = {
   filteredProjects: Project[];
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
+  processingSessions: ReadonlyMap<string, number>;
   isLoading: boolean;
   loadingProgress: LoadingProgress | null;
   expandedProjects: Set<string>;
-  editingProject: string | null;
-  editingName: string;
   loadingSessions: LoadingSessionsByProject;
   initialSessionsLoaded: Set<string>;
   currentTime: Date;
@@ -29,14 +30,10 @@ export type SidebarProjectListProps = {
   mcpServerStatus: MCPServerStatus;
   getProjectSessions: (project: Project) => SessionWithProvider[];
   isProjectStarred: (projectName: string) => boolean;
-  onEditingNameChange: (value: string) => void;
   onToggleProject: (projectName: string) => void;
   onProjectSelect: (project: Project) => void;
   onShareProject: (project: Project) => void;
-  onToggleStarProject: (projectName: string) => void;
-  onStartEditingProject: (project: Project) => void;
-  onCancelEditingProject: () => void;
-  onSaveProjectName: (project: Project) => void;
+  onEditProject: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   onSessionSelect: (session: SessionWithProvider, projectName: string) => void;
   onScheduledTaskOpen?: (project: Project, task: ProjectScheduledTask) => void;
@@ -62,11 +59,10 @@ export default function SidebarProjectList({
   filteredProjects,
   selectedProject,
   selectedSession,
+  processingSessions,
   isLoading,
   loadingProgress,
   expandedProjects,
-  editingProject,
-  editingName,
   loadingSessions,
   initialSessionsLoaded,
   currentTime,
@@ -77,14 +73,10 @@ export default function SidebarProjectList({
   mcpServerStatus,
   getProjectSessions,
   isProjectStarred,
-  onEditingNameChange,
   onToggleProject,
   onProjectSelect,
   onShareProject,
-  onToggleStarProject,
-  onStartEditingProject,
-  onCancelEditingProject,
-  onSaveProjectName,
+  onEditProject,
   onDeleteProject,
   onSessionSelect,
   onScheduledTaskOpen,
@@ -130,11 +122,10 @@ export default function SidebarProjectList({
               project={project}
               selectedProject={selectedProject}
               selectedSession={selectedSession}
+              processingSessions={processingSessions}
               isExpanded={expandedProjects.has(project.name)}
               isDeleting={deletingProjects.has(project.name)}
               isStarred={isProjectStarred(project.name)}
-              editingProject={editingProject}
-              editingName={editingName}
               sessions={getProjectSessions(project)}
               initialSessionsLoaded={initialSessionsLoaded.has(project.name)}
               isLoadingSessions={Boolean(loadingSessions[project.name])}
@@ -143,14 +134,10 @@ export default function SidebarProjectList({
               editingSessionName={editingSessionName}
               tasksEnabled={tasksEnabled}
               mcpServerStatus={mcpServerStatus}
-              onEditingNameChange={onEditingNameChange}
               onToggleProject={onToggleProject}
               onProjectSelect={onProjectSelect}
               onShareProject={onShareProject}
-              onToggleStarProject={onToggleStarProject}
-              onStartEditingProject={onStartEditingProject}
-              onCancelEditingProject={onCancelEditingProject}
-              onSaveProjectName={onSaveProjectName}
+              onEditProject={onEditProject}
               onDeleteProject={onDeleteProject}
               onSessionSelect={onSessionSelect}
               onScheduledTaskOpen={onScheduledTaskOpen}

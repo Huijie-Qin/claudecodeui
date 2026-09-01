@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, Download, FileText, FolderPlus, FolderUp, MoveRight, Pencil, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-react';
+
 import { cn } from '../../../lib/utils';
 
 type FileContextItem = {
@@ -56,6 +57,9 @@ export default function FileContextMenu({
   onMove,
   onUpload,
   onUploadFolder,
+  isMultiSelection = false,
+  onMoveSelection,
+  onDeleteSelection,
   isLoading = false,
   className = '',
 }: {
@@ -71,6 +75,9 @@ export default function FileContextMenu({
   onMove?: (item: FileContextItem) => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
+  isMultiSelection?: boolean;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   isLoading?: boolean;
   className?: string;
 }) {
@@ -97,6 +104,24 @@ export default function FileContextMenu({
   }, [closeContextMenu]);
 
   const menuActions = useMemo<ContextMenuAction[]>(() => {
+    if (isMultiSelection) {
+      return [
+        {
+          key: 'moveSelection',
+          icon: MoveRight,
+          label: t('fileTree.context.move', 'Move'),
+          onSelect: onMoveSelection,
+        },
+        {
+          key: 'deleteSelection',
+          icon: Trash2,
+          label: t('fileTree.context.delete', 'Delete'),
+          onSelect: onDeleteSelection,
+          isDanger: true,
+        },
+      ];
+    }
+
     if (item?.type === 'file') {
       return [
         {
@@ -229,7 +254,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onMove, onNewFile, onNewFolder, onRefresh, onRename, onUpload, onUploadFolder, t]);
+  }, [isMultiSelection, item, onCopyPath, onDelete, onDeleteSelection, onDownload, onMove, onMoveSelection, onNewFile, onNewFolder, onRefresh, onRename, onUpload, onUploadFolder, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

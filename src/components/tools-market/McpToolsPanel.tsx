@@ -1,6 +1,7 @@
 import {
   CheckCircle2,
   Loader2,
+  MoreVertical,
   RefreshCw,
   Search,
   Server,
@@ -10,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { Project } from '../../types/app';
@@ -49,6 +50,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
     reload,
     installPreset,
     removePreset,
+    updateToolPreference,
   } = useWorkspaceMcpTools(selectedProject.workspaceId);
   const canManage = !isReadOnly && data?.canManage !== false;
 
@@ -225,6 +227,7 @@ export default function McpToolsPanel({ selectedProject, isReadOnly }: McpToolsP
         <McpToolSettingsDialog
           canManage={canManage}
           onClose={() => setSettingsPresetId(null)}
+          onSaveToolPreference={(allowedToolNames) => updateToolPreference(settingsPreset.id, allowedToolNames)}
           preset={settingsPreset}
           selectedProject={selectedProject}
         />
@@ -266,7 +269,26 @@ function PresetCard({
   preset: WorkspaceMcpPreset;
 }) {
   const { t } = useTranslation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const badges = getPresetCardBadges(preset, (count) => t('mcpTools.toolCount', { count }));
+
+  useEffect(() => {
+    if (!isMenuOpen) return undefined;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setIsMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMenuOpen]);
 
   return (
     <div
@@ -290,7 +312,46 @@ function PresetCard({
           <div className="truncate text-sm font-semibold text-foreground">{preset.displayName}</div>
           <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{preset.description}</p>
         </div>
-        <StatusBadge preset={preset} />
+        <div className="flex shrink-0 items-start gap-2">
+          <StatusBadge preset={preset} />
+          <div ref={menuRef} className="relative">
+            <button
+              type="button"
+              aria-label={t('mcpTools.settings.menuLabel', { name: preset.displayName })}
+              aria-haspopup="menu"
+              aria-expanded={isMenuOpen}
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsMenuOpen((current) => !current);
+              }}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+            {isMenuOpen ? (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-30 mt-1 min-w-[140px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!preset.installed}
+                  title={!preset.installed ? t('mcpTools.settings.requiresInstall') : undefined}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onOpenSettings(preset);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm transition hover:bg-accent focus:bg-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Settings className="h-4 w-4" />
+                  {t('mcpTools.settings.action')}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {badges.map((badge) => (
@@ -300,18 +361,6 @@ function PresetCard({
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">{t('mcpTools.appliesOnNextTurn')}</span>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!canManage || !preset.installed}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenSettings(preset);
-            }}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground shadow-sm transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Settings className="h-4 w-4" />
-            设置
-          </button>
           {preset.installed ? (
             <button
               type="button"

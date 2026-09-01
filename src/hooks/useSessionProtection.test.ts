@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   replaceTemporaryActiveSessionIds,
   replaceTemporaryProcessingSessions,
+  reconcileProcessingSessions,
 } from './useSessionProtection';
 
 test('replaceTemporaryActiveSessionIds transfers temporary sessions to the real id', () => {
@@ -42,4 +43,19 @@ test('replaceTemporaryProcessingSessions leaves sessions unchanged when no tempo
   const sessions = new Map([['session-existing', 30]]);
 
   assert.equal(replaceTemporaryProcessingSessions(sessions, 'session-real'), sessions);
+});
+
+test('reconcileProcessingSessions keeps only server-reported running sessions', () => {
+  const sessions = new Map([
+    ['still-running', 10],
+    ['finished', 20],
+  ]);
+
+  assert.deepEqual(
+    [...reconcileProcessingSessions(sessions, ['still-running', 'new-running'], 30)],
+    [
+      ['still-running', 10],
+      ['new-running', 30],
+    ],
+  );
 });

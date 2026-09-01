@@ -26,7 +26,9 @@ import {
     getProjects,
     getSessions,
     renameProject,
-    searchConversations
+    searchConversations,
+    validateClaudeProjectName,
+    validateClaudeSessionId
 } from './projects.js';
 import {
     abortClaudeSDKSession,
@@ -52,6 +54,9 @@ import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
+import agentGraphsRoutes from './routes/agent-graphs.js';
+import agentGraphDemoDataRoutes from './routes/agent-graph-demo-data.js';
+import agentTemplateRoutes from './routes/agent-templates.js';
 import cursorRoutes from './routes/cursor.js';
 import taskmasterRoutes from './routes/taskmaster.js';
 import mcpUtilsRoutes from './routes/mcp-utils.js';
@@ -65,12 +70,14 @@ import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
+import desktopUpdatesRoutes from './routes/desktop-updates.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
 import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
+import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
 import {authenticateToken, authenticateWebSocket, validateApiKey} from './middleware/auth.js';
 import {noApiCache} from './middleware/no-api-cache.js';
 import {resolveTenantIdFromRequest, resolveWebSocketTenant, tenantContext} from './middleware/tenant-context.js';
@@ -78,11 +85,20 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
+import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
+import {mcpLoopService} from './services/mcp-loop-service.js';
+import {handleSqlSyntaxMcpRequest, SQL_SYNTAX_MCP_PATH} from './services/sql-syntax-mcp-server.js';
 import {mapWorkspaceRowsToProjects} from './services/workspace-projects.js';
+import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
+import {
+    parseShowInternalConfigFiles,
+    shouldHideWorkspaceInternalEntry
+} from './services/workspace-file-visibility.js';
 import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
@@ -443,20 +459,45 @@ async function setupProjectsWatcher() {
                 // Get updated projects list
                 const updatedProjects = await getProjects(broadcastProgress);
 
-                // Notify all connected clients about the project changes
-                const updateMessage = JSON.stringify({
-                    type: 'projects_updated',
-                    projects: updatedProjects,
-                    timestamp: new Date().toISOString(),
-                    changeType: eventType,
-                    changedFile: path.relative(rootPath, filePath),
-                    watchProvider: provider
-                });
-
+                // Tenant clients must receive the database-backed workspace list. The
+                // legacy provider scan reads the service account's home and can be empty
+                // even when the tenant has active Docker-backed workspaces.
+                const tenantProjects = new Map();
                 connectedClients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(updateMessage);
+                    if (client.readyState !== WebSocket.OPEN) return;
+
+                    const tenantId = Number(client.tenantId) || null;
+                    const userId = Number(client.userId) || null;
+                    let clientProjects = updatedProjects;
+
+                    if (tenantId && userId) {
+                        const cacheKey = `${tenantId}:${userId}`;
+                        if (!tenantProjects.has(cacheKey)) {
+                            const rows = multitenancyDb.workspaces.listVisibleWorkspaces({ tenantId, userId });
+                            const projects = mapWorkspaceRowsToProjects(rows, {
+                                tenantId,
+                                userId,
+                                listSessions: multitenancyDb.sessions.listSessions,
+                            }).map((project) => {
+                                const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                                    workspaceId: project.workspaceId,
+                                });
+                                return agentTemplate ? {...project, agentTemplate} : project;
+                            });
+                            tenantProjects.set(cacheKey, projects);
+                        }
+                        clientProjects = tenantProjects.get(cacheKey);
                     }
+
+                    client.send(JSON.stringify({
+                        type: 'projects_updated',
+                        projects: clientProjects,
+                        tenantId,
+                        timestamp: new Date().toISOString(),
+                        changeType: eventType,
+                        changedFile: path.relative(rootPath, filePath),
+                        watchProvider: provider
+                    }));
                 });
 
             } catch (error) {
@@ -581,7 +622,13 @@ const wss = new WebSocketServer({
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
-const scheduledSessionTasks = createScheduledSessionTaskService({clients: connectedClients});
+const scheduledTaskLogger = createScheduledTaskLogger({
+    onEntry: (entry) => scheduledTaskLogStore.append(entry)
+});
+const scheduledSessionTasks = createScheduledSessionTaskService({
+    clients: connectedClients,
+    logger: scheduledTaskLogger
+});
 app.locals.scheduledSessionTasks = scheduledSessionTasks;
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
@@ -597,6 +644,10 @@ app.use(express.json({
     }
 }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Public, side-effect-free simulated MCP endpoint used by the SQL response Hook.
+// It only validates the supplied text and never executes SQL or reads application data.
+app.all(SQL_SYNTAX_MCP_PATH, handleSqlSyntaxMcpRequest);
 
 // Public health check endpoint (no authentication required)
 app.get('/health', (req, res) => {
@@ -629,20 +680,30 @@ app.get('/health/active-work', (req, res) => {
     });
 });
 
+// Desktop update artifacts are intentionally public so electron-updater can
+// check for and download releases before a user has authenticated in the app.
+app.use('/api/desktop-updates', desktopUpdatesRoutes);
+
 // Dynamic API responses must always reflect current state.
 app.use('/api', noApiCache, validateApiKey);
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
 
+// Public synthetic demo datasets used by Agent Graph test skills. The route is
+// completely hidden when the Agent Graph feature flag is disabled.
+app.use('/api/demo-data', agentGraphDemoDataRoutes);
+
 // Multitenancy routes (protected)
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
+app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
+app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectsRoutes);
@@ -807,6 +868,11 @@ app.get('/api/projects', authenticateToken, tenantContext, async (req, res) => {
             tenantId: req.tenant.id,
             userId: req.user.id,
             listSessions: multitenancyDb.sessions.listSessions,
+        }).map((project) => {
+            const agentTemplate = agentTemplateService.getWorkspaceTemplateInfo({
+                workspaceId: project.workspaceId,
+            });
+            return agentTemplate ? {...project, agentTemplate} : project;
         });
         res.json(projects);
     } catch (error) {
@@ -976,9 +1042,13 @@ app.put('/api/projects/:projectName/rename', authenticateToken, attachTenantCont
 // Delete session endpoint
 app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
+        const projectName = validateClaudeProjectName(req.params.projectName);
+        const provider = req.body?.provider || 'claude';
+        const sessionId = provider === 'claude'
+            ? validateClaudeSessionId(req.params.sessionId)
+            : req.params.sessionId;
+
         if (req.tenant) {
-            const { projectName, sessionId } = req.params;
-            const provider = req.body?.provider || 'claude';
             console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
 
             const resolvedWorkspace = resolveEditableWorkspace(req, { projectName });
@@ -1009,6 +1079,10 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                     workspaceHostPath: workspace.path,
                 });
                 if (runtime?.runtime_home_path) {
+                    await deleteClaudeDisplayCommands({
+                        runtimeHomePath: runtime.runtime_home_path,
+                        sessionId,
+                    });
                     await deleteSessionFromProjectsRoot(
                         path.join(runtime.runtime_home_path, '.claude', 'projects'),
                         sessionId,
@@ -1031,8 +1105,6 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
             return;
         }
 
-        const { projectName, sessionId } = req.params;
-        const provider = req.body?.provider || 'claude';
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         if (provider === 'claude') {
             await abortClaudeSDKSession(sessionId);
@@ -1115,7 +1187,7 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, attachTenantContex
 // Platform workspaces always remove their Docker runtimes and workspace filesystem.
 app.delete('/api/projects/:projectName', authenticateToken, attachTenantContextIfNeeded, async (req, res) => {
     try {
-        const { projectName } = req.params;
+        const projectName = validateClaudeProjectName(req.params.projectName);
         const resolvedWorkspace = resolveWorkspaceDeleteContext(req, { projectName });
         const { workspace } = resolvedWorkspace ?? {};
         if (req.tenant && !workspace) {
@@ -1448,7 +1520,7 @@ app.get('/api/browse-filesystem', authenticateToken, async (req, res) => {
         }
 
         // Use existing getFileTree function with shallow depth (only direct children)
-        const fileTree = await getFileTree(resolvedPath, 1, 0, false); // maxDepth=1, showHidden=false
+        const fileTree = await getFileTree(resolvedPath, 1, 0, false); // maxDepth=1, internal config hidden
 
         // Filter only directories and format for suggestions
         const directories = fileTree
@@ -1687,7 +1759,8 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
             return res.status(404).json({ error: `Project path not found: ${actualPath}` });
         }
 
-        const files = await getFileTree(actualPath, 10, 0, true);
+        const showInternalConfigFiles = parseShowInternalConfigFiles(req.query.showInternalConfigFiles);
+        const files = await getFileTree(actualPath, 10, 0, showInternalConfigFiles);
         res.json(files);
     } catch (error) {
         console.error('[ERROR] File tree error:', error.message);
@@ -2532,8 +2605,8 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
-    // Claude keeps its SDK stream alive while idle for fast follow-up turns.
-    // Tie the concurrency lease to processing, not to that reusable stream.
+    // Queued Claude follow-ups stay inside this command chain. The lease remains
+    // held across those turn boundaries and is released after the final turn.
     const acquireConcurrencyLease = () => {
         if (lease) return;
         lease = sessionConcurrencyLimiter.acquire({
@@ -2616,34 +2689,11 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
-                if (data.options?.sessionId) {
-                    const pushedToExistingSession = pushClaudeSupplement({
-                        sessionId: data.options.sessionId,
-                        content: data.command,
-                        displayContent: data.options.displayCommand,
-                        clientMessageId: data.clientMessageId,
-                        mode: 'now',
-                        writer,
-                    });
-                    if (pushedToExistingSession.success) {
-                        logChatSessionEvent('pushed_to_existing_stream', logContext);
-                        return;
-                    }
-                    if (pushedToExistingSession.code === 'SESSION_LIMIT_EXCEEDED') {
-                        writer.send(createNormalizedMessage({
-                            kind: 'error',
-                            content: createSessionLimitExceededMessage(pushedToExistingSession),
-                            code: pushedToExistingSession.code,
-                            provider: 'claude',
-                            sessionId: data.options.sessionId,
-                            currentConcurrentRequests: pushedToExistingSession.activeCount,
-                            sessionLimit: pushedToExistingSession.limit,
-                        }));
-                        return;
-                    }
-                }
-
-                // Use Claude Agents SDK
+                // A regular composer submission is a new query turn. Reusing a completed
+                // SDK input stream can omit Stop hooks on later turns, so resume the
+                // provider session through a fresh query with a freshly registered Hook
+                // runtime. Running-message submissions use `claude-supplement` below,
+                // which queues a fresh turn behind the active Stop Hook boundary.
                 void runLimitedProviderCommand({
                     data,
                     provider: 'claude',
@@ -2674,6 +2724,7 @@ function handleChatConnection(ws, request) {
                         clientMessageId: data.clientMessageId || null,
                         status: 'failed',
                         error: result.error,
+                        content: data.content || '',
                         timestamp: new Date().toISOString(),
                     });
                     writer.send(createNormalizedMessage({
@@ -2769,6 +2820,18 @@ function handleChatConnection(ws, request) {
                 console.log('[DEBUG] Abort Cursor session:', data.sessionId);
                 const success = abortCursorSession(data.sessionId);
                 writer.send(createNormalizedMessage({ kind: 'complete', exitCode: success ? 0 : 1, aborted: true, success, sessionId: data.sessionId, provider: 'cursor' }));
+            } else if (data.type === 'cancel-mcp-loop') {
+                const result = await mcpLoopService.cancel({
+                    jobId: data.jobId,
+                    userId: writer.userId,
+                });
+                writer.send({
+                    type: 'mcp-loop-cancelled',
+                    success: result.success,
+                    jobId: data.jobId || null,
+                    sessionId: result.job?.sessionId || data.sessionId || null,
+                    timestamp: new Date().toISOString(),
+                });
             } else if (data.type === 'check-session-status') {
                 // Check if a specific session is currently processing
                 const provider = data.provider || 'claude';
@@ -3554,7 +3617,7 @@ function permToRwx(perm) {
     return r + w + x;
 }
 
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden = true) {
+async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showInternalConfigFiles = false) {
     // Using fsPromises from import
     const items = [];
 
@@ -3562,6 +3625,13 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
         const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
 
         for (const entry of entries) {
+            if (shouldHideWorkspaceInternalEntry({
+                name: entry.name,
+                currentDepth,
+                showInternalConfigFiles
+            })) {
+                continue;
+            }
             // Debug: log all entries including hidden files
 
 
@@ -3598,7 +3668,7 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
                 try {
                     // Check if we can access the directory before trying to read it
                     await fsPromises.access(item.path, fs.constants.R_OK);
-                    item.children = await getFileTree(item.path, maxDepth, currentDepth + 1, showHidden);
+                    item.children = await getFileTree(item.path, maxDepth, currentDepth + 1, showInternalConfigFiles);
                 } catch (e) {
                     // Silently skip directories we can't access (permission denied, etc.)
                     item.children = [];
@@ -3739,6 +3809,7 @@ async function gracefulShutdown(signal) {
 
     runtimeSweeper.stop();
     codeHubMrPoller.stop();
+    mcpLoopService.stop();
     closeHttpServer().catch((error) => {
         console.error('[Shutdown] Failed to close HTTP server:', error);
     });
@@ -3769,6 +3840,7 @@ async function startServer() {
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
+        mcpLoopService.start();
 
         // Configure Web Push (VAPID keys)
         configureWebPush();
@@ -3818,6 +3890,7 @@ async function startServer() {
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();
+            mcpLoopService.stop();
             await stopAllPlugins();
             process.exit(0);
         };

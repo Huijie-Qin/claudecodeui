@@ -23,6 +23,7 @@ interface ToolRendererProps {
   toolId?: string;
   mode: 'input' | 'result';
   onFileOpen?: (filePath: string, diffInfo?: any) => void;
+  onOpenSubagent?: (toolId: string) => void;
   createDiff?: (oldStr: string, newStr: string) => DiffLine[];
   selectedProject?: Project | null;
   autoExpandTools?: boolean;
@@ -32,6 +33,7 @@ interface ToolRendererProps {
   isSubagentContainer?: boolean;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {
+    agentId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
@@ -42,7 +44,6 @@ interface ToolRendererProps {
 function getToolCategory(toolName: string): string {
   if (['Edit', 'Write', 'ApplyPatch'].includes(toolName)) return 'edit';
   if (['Grep', 'Glob'].includes(toolName)) return 'search';
-  if (toolName === 'Bash') return 'bash';
   if (['TodoWrite', 'TodoRead'].includes(toolName)) return 'todo';
   if (['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolName)) return 'task';
   if (toolName === 'Task' || toolName === 'Agent') return 'agent';
@@ -73,6 +74,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
   toolId,
   mode,
   onFileOpen,
+  onOpenSubagent,
   createDiff,
   selectedProject,
   autoExpandTools = false,
@@ -121,11 +123,13 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
     if (mode === 'result') return null;
     return (
       <SubagentContainer
+        toolId={toolId}
         toolInput={toolInput}
         toolResult={toolResult}
         completionTime={completionTime}
         subagentState={subagentState}
         taskNotification={taskNotification}
+        onOpenSubagent={onOpenSubagent}
       />
     );
   }
@@ -147,7 +151,6 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         secondary={secondary}
         action={displayConfig.action}
         onAction={handleAction}
-        style={displayConfig.style}
         wrapText={displayConfig.wrapText}
         colorScheme={displayConfig.colorScheme}
         resultId={mode === 'input' ? `tool-result-${toolId}` : undefined}
@@ -291,6 +294,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         toolId={toolId}
         title={title}
         defaultOpen={defaultOpen}
+        stickyHeader={displayConfig.stickyHeader}
         onTitleClick={handleTitleClick}
         badge={badgeElement}
         showRawParameters={mode === 'input' && showRawParameters}

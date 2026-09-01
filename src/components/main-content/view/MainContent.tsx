@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { Suspense, useEffect, useMemo } from 'react';
 
 import ChatInterface from '../../chat/view/ChatInterface';
 import CodeHubPanel from '../../codehub/CodeHubPanel';
 import FileTree from '../../file-tree/view/FileTree';
-import SkillMarketDialog from '../../skills-market/SkillMarketDialog';
+import SkillsWorkspacePanel from '../../skills-market/SkillsWorkspacePanel';
 import McpToolsPanel from '../../tools-market/McpToolsPanel';
 import SqlCheckPanel from '../../sql-check/SqlCheckPanel';
 import type { MainContentProps } from '../types/types';
@@ -13,10 +13,13 @@ import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { AppTab, Project } from '../../../types/app';
 import { getWorkspaceDisabledTabs, resolveAllowedWorkspaceTab } from '../utils/mainContentAccess';
+import { useAgentGraphFeatureEnabled } from '../../../features/agent-graph/agentGraphFeature';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+
+const AgentGraphStudio = React.lazy(() => import('../../../features/agent-graph/AgentGraphStudio'));
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -45,7 +48,7 @@ function MainContent({
   onShowSettings,
   externalMessageUpdate,
 }: MainContentProps) {
-  const [showSkillMarket, setShowSkillMarket] = React.useState(false);
+  const agentGraphEnabled = useAgentGraphFeatureEnabled();
   const { preferences } = useUiPreferences();
   const { hideToolMessages, autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
@@ -115,11 +118,11 @@ function MainContent({
   }, [selectedProject, currentProject?.name, setCurrentProject]);
 
   useEffect(() => {
-    const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs);
+    const allowedTab = resolveAllowedWorkspaceTab(activeTab, disabledTabs, agentGraphEnabled);
     if (allowedTab !== activeTab) {
       handleActiveTabChange(allowedTab);
     }
-  }, [activeTab, disabledTabs, handleActiveTabChange]);
+  }, [activeTab, agentGraphEnabled, disabledTabs, handleActiveTabChange]);
 
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
@@ -139,7 +142,7 @@ function MainContent({
         disabledTabs={disabledTabs}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
-        onSkillMarketClick={() => setShowSkillMarket(true)}
+        agentGraphEnabled={agentGraphEnabled}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -200,9 +203,25 @@ function MainContent({
             </div>
           )}
 
+          {activeTab === 'skills' && (
+            <div className="h-full overflow-hidden">
+              <SkillsWorkspacePanel selectedProject={selectedProject} isReadOnly={isViewOnlyWorkspace} />
+            </div>
+          )}
+
           {activeTab === 'sql-check' && (
             <div className="h-full overflow-hidden">
               <SqlCheckPanel selectedProject={selectedProject} />
+            </div>
+          )}
+
+          {agentGraphEnabled && activeTab === 'agent-graph' && (
+            <div className="h-full overflow-hidden">
+              <ErrorBoundary showDetails>
+                <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading Agent Graph Studio...</div>}>
+                  <AgentGraphStudio selectedProject={selectedProject} readOnly={isViewOnlyWorkspace} />
+                </Suspense>
+              </ErrorBoundary>
             </div>
           )}
         </div>
@@ -221,17 +240,10 @@ function MainContent({
           projectPath={selectedProject.path}
           isReadOnly={isViewOnlyWorkspace}
           fillSpace={activeTab === 'files'}
+          onOpenFile={handleFileManagerFileOpen}
         />
       </div>
 
-      {showSkillMarket && (
-        <SkillMarketDialog
-          open={showSkillMarket}
-          selectedProject={selectedProject}
-          isReadOnly={isViewOnlyWorkspace}
-          onClose={() => setShowSkillMarket(false)}
-        />
-      )}
     </div>
   );
 }

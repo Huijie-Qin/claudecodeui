@@ -3,6 +3,84 @@ import type { NormalizedMessage } from './useSessionStore';
 const OPTIMISTIC_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const OPTIMISTIC_USER_CLOCK_SKEW_MS = 2_000;
 const FINALIZED_STREAM_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+const HOOK_ACTIVITY_STATUS_RANK: Record<string, number> = {
+  queued: 0,
+  running: 1,
+  succeeded: 2,
+  failed: 2,
+};
+
+export function upsertRealtimeMessages(
+  current: NormalizedMessage[],
+  incoming: NormalizedMessage[],
+): NormalizedMessage[] {
+  const updated = [...current];
+  for (const message of incoming) {
+    const existingIndex = updated.findIndex((candidate) => candidate.id === message.id);
+    if (existingIndex >= 0) {
+      const existing = updated[existingIndex];
+      if (existing.queueStatus === 'queued' && message.queueStatus === 'processing') {
+        updated.splice(existingIndex, 1);
+        updated.push(message);
+      } else {
+        updated[existingIndex] = message;
+      }
+    } else {
+      updated.push(message);
+    }
+  }
+  return updated;
+}
+
+function pinQueuedUserMessagesToEnd(messages: NormalizedMessage[]): NormalizedMessage[] {
+  const queued = messages.filter(message =>
+    message.kind === 'text' &&
+    message.role === 'user' &&
+    message.queueStatus === 'queued'
+  );
+  if (queued.length === 0) return messages;
+
+  const queuedIds = new Set(queued.map(message => message.id));
+  const settled = messages.filter(message => !queuedIds.has(message.id));
+  return [...settled, ...queued];
+}
+
+function shouldUseRealtimeHookActivity(
+  serverMessage: NormalizedMessage,
+  realtimeMessage: NormalizedMessage,
+): boolean {
+  if (serverMessage.kind !== 'hook_activity' || realtimeMessage.kind !== 'hook_activity') return false;
+  const serverRank = HOOK_ACTIVITY_STATUS_RANK[serverMessage.status || ''] ?? -1;
+  const realtimeRank = HOOK_ACTIVITY_STATUS_RANK[realtimeMessage.status || ''] ?? -1;
+  return realtimeRank >= serverRank;
+}
+
+function isRealtimeHookActivityAhead(
+  serverMessage: NormalizedMessage,
+  realtimeMessage: NormalizedMessage,
+): boolean {
+  if (serverMessage.kind !== 'hook_activity' || realtimeMessage.kind !== 'hook_activity') return false;
+  const serverRank = HOOK_ACTIVITY_STATUS_RANK[serverMessage.status || ''] ?? -1;
+  const realtimeRank = HOOK_ACTIVITY_STATUS_RANK[realtimeMessage.status || ''] ?? -1;
+  return realtimeRank > serverRank;
+}
+
+function applySameIdRealtimeLifecycleUpdates(
+  server: NormalizedMessage[],
+  realtime: NormalizedMessage[],
+): NormalizedMessage[] {
+  const realtimeById = new Map(realtime.map(message => [message.id, message]));
+  let changed = false;
+  const merged = server.map((serverMessage) => {
+    const realtimeMessage = realtimeById.get(serverMessage.id);
+    if (!realtimeMessage || !shouldUseRealtimeHookActivity(serverMessage, realtimeMessage)) {
+      return serverMessage;
+    }
+    changed = true;
+    return realtimeMessage;
+  });
+  return changed ? merged : server;
+}
 
 function isLocalOptimisticUserText(message: NormalizedMessage): boolean {
   return message.id.startsWith('local_') &&
@@ -127,6 +205,13 @@ function isAssistantText(message: NormalizedMessage): boolean {
   return message.kind === 'text' && message.role === 'assistant';
 }
 
+function isSameAgentStreamScope(
+  message: NormalizedMessage,
+  streamingPlaceholder: NormalizedMessage,
+): boolean {
+  return (message.parentToolUseId || '') === (streamingPlaceholder.parentToolUseId || '');
+}
+
 function isSupersedingAssistantText(
   message: NormalizedMessage,
   streamingPlaceholder: NormalizedMessage,
@@ -134,6 +219,11 @@ function isSupersedingAssistantText(
   if (!isAssistantText(message)) return false;
   if (message.sessionId !== streamingPlaceholder.sessionId) return false;
   if (message.provider !== streamingPlaceholder.provider) return false;
+  if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  // A canonical assistant event can briefly lag behind the accumulated stream.
+  // Never discard a richer realtime snapshot in favor of a shorter copy, or
+  // the tail disappears until the persisted transcript is fetched again.
+  if ((message.content?.length || 0) < (streamingPlaceholder.content?.length || 0)) return false;
 
   const messageTime = getMessageTime(message);
   const streamTime = getMessageTime(streamingPlaceholder);
@@ -142,10 +232,34 @@ function isSupersedingAssistantText(
   return messageTime >= streamTime;
 }
 
-function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
+function isStaleAssistantPrefixOfStream(
+  message: NormalizedMessage,
+  streamingPlaceholder: NormalizedMessage,
+): boolean {
+  if (!isAssistantText(message) || !isStreamingPlaceholder(streamingPlaceholder)) return false;
+  if (message.sessionId !== streamingPlaceholder.sessionId) return false;
+  if (message.provider !== streamingPlaceholder.provider) return false;
+  if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  const messageContent = message.content || '';
+  const streamContent = streamingPlaceholder.content || '';
+  if (!messageContent || messageContent.length >= streamContent.length) return false;
+  if (!streamContent.startsWith(messageContent)) return false;
+
+  const messageTime = getMessageTime(message);
+  const streamTime = getMessageTime(streamingPlaceholder);
+  if (messageTime === null || streamTime === null) return true;
+  return messageTime >= streamTime;
+}
+
+export function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
   const filtered = messages.filter((message) => {
-    if (!isStreamingPlaceholder(message)) return true;
-    return !messages.some(candidate => isSupersedingAssistantText(candidate, message));
+    if (isStreamingPlaceholder(message)) {
+      return !messages.some(candidate => isSupersedingAssistantText(candidate, message));
+    }
+    if (isAssistantText(message)) {
+      return !messages.some(candidate => isStaleAssistantPrefixOfStream(message, candidate));
+    }
+    return true;
   });
 
   return filtered.length === messages.length ? messages : filtered;
@@ -206,17 +320,19 @@ function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessag
 
 /**
  * Compute merged messages: server + realtime, deduped by id.
- * Server messages take priority (they're the persisted source of truth).
- * Realtime messages that aren't yet in server stay (in-flight streaming).
+ * Persisted messages normally take priority. Same-id Hook activity lifecycle
+ * updates are the exception: a newer realtime state must remain visible while
+ * the asynchronously persisted copy is still queued or running.
  */
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   const realtimeUnique = dropSupersededStreamingPlaceholders(dedupeRealtimeMessages(realtime));
   if (realtimeUnique.length === 0) return server;
-  if (server.length === 0) return realtimeUnique;
-  const serverIds = new Set(server.map(m => m.id));
-  const extra = dropPersistedRealtimeCopies(server, realtimeUnique, serverIds);
-  if (extra.length === 0) return server;
-  return extra.reduce(insertByTimestamp, server);
+  if (server.length === 0) return pinQueuedUserMessagesToEnd(realtimeUnique);
+  const serverWithLifecycleUpdates = applySameIdRealtimeLifecycleUpdates(server, realtimeUnique);
+  const serverIds = new Set(serverWithLifecycleUpdates.map(m => m.id));
+  const extra = dropPersistedRealtimeCopies(serverWithLifecycleUpdates, realtimeUnique, serverIds);
+  if (extra.length === 0) return serverWithLifecycleUpdates;
+  return pinQueuedUserMessagesToEnd(extra.reduce(insertByTimestamp, serverWithLifecycleUpdates));
 }
 
 /**
@@ -235,7 +351,10 @@ export function reconcileRealtimeAfterServerRefresh(
   const claimedServerIndexes = new Set<number>();
 
   return realtime.filter((realtimeMessage) => {
-    if (serverIds.has(realtimeMessage.id)) return false;
+    if (serverIds.has(realtimeMessage.id)) {
+      const serverMessage = server.find(message => message.id === realtimeMessage.id);
+      return Boolean(serverMessage && isRealtimeHookActivityAhead(serverMessage, realtimeMessage));
+    }
 
     for (let serverIndex = 0; serverIndex < server.length; serverIndex++) {
       if (claimedServerIndexes.has(serverIndex)) continue;

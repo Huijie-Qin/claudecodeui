@@ -5,6 +5,7 @@ type UseEditorKeyboardShortcutsParams = {
   onClose: () => void;
   disableSave?: boolean;
   dependency: string;
+  enabled?: boolean;
 };
 
 export const useEditorKeyboardShortcuts = ({
@@ -12,8 +13,11 @@ export const useEditorKeyboardShortcuts = ({
   onClose,
   disableSave = false,
   dependency,
+  enabled = true,
 }: UseEditorKeyboardShortcutsParams) => {
   useEffect(() => {
+    if (!enabled) return undefined;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -37,5 +41,5 @@ export const useEditorKeyboardShortcuts = ({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [dependency, disableSave, onClose, onSave]);
+  }, [dependency, disableSave, enabled, onClose, onSave]);
 };

@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>技能市场 V2.0 · 交互原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: { 50:'#eff6ff',100:'#dbeafe',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8' },
+        },
+        fontFamily: { sans: ['system-ui','-apple-system','Segoe UI','Roboto','sans-serif'] }
+      }
+    }
+  }
+</script>
+<style>
+  :root{ --ring:#2563eb; }
+  body{ background:#f8fafc; color:#0f172a; }
+  .card{ background:#fff; border:1px solid #e2e8f0; border-radius:10px; }
+  .pill{ border-radius:999px; }
+  .scroll-y{ overflow-y:auto; }
+  .scroll-y::-webkit-scrollbar{ width:8px;height:8px; }
+  .scroll-y::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:4px; }
+  .switch{ position:relative; width:30px; height:16px; border-radius:999px; background:#cbd5e1; transition:.15s; cursor:pointer; flex:none; }
+  .switch.on{ background:#22c55e; }
+  .switch::after{ content:''; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#fff; transition:.15s; }
+  .switch.on::after{ left:16px; }
+  .tab-active{ border-bottom:2px solid var(--ring); color:var(--ring); font-weight:600; }
+  .ref-capsule{ display:inline-flex; align-items:center; gap:4px; background:#ede9fe; color:#6d28d9; border:1px solid #c4b5fd; border-radius:6px; padding:1px 7px; font-size:12px; cursor:pointer; user-select:none; }
+  .ref-capsule:hover{ background:#ddd6fe; }
+  .diff-add{ background:#dcfce7; color:#166534; }
+  .diff-del{ background:#fee2e2; color:#991b1b; }
+  .diff-ctx{ color:#475569; }
+  .ln{ display:flex; gap:8px; padding:0 8px; font-family:ui-monospace,monospace; font-size:12px; line-height:20px; cursor:pointer; }
+  .ln:hover{ background:#f1f5f9; }
+  .ln .num{ color:#94a3b8; width:24px; text-align:right; flex:none; user-select:none; }
+  .toast{ position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#0f172a; color:#fff; padding:10px 18px; border-radius:8px; font-size:13px; z-index:200; box-shadow:0 8px 24px rgba(0,0,0,.25); opacity:0; transition:.2s; pointer-events:none; }
+  .toast.show{ opacity:1; bottom:34px; }
+  .modal-bg{ position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:90; display:flex; align-items:center; justify-content:center; }
+  .bar-fill{ transition:width .4s ease; }
+  .fade-in{ animation:fade .15s ease; }
+  @keyframes fade{ from{opacity:0} to{opacity:1} }
+</style>
+</head>
+<body class="text-[13px]">
+
+<!-- ===== Top Bar ===== -->
+<header class="bg-white border-b border-slate-200 h-12 flex items-center px-4 gap-4 sticky top-0 z-40">
+  <div class="flex items-center gap-2 font-semibold text-slate-800">
+    <div class="w-6 h-6 rounded bg-brand-600 text-white grid place-items-center text-[11px]">C</div>
+    CloudCLI
+  </div>
+  <div class="text-slate-300">/</div>
+  <div class="font-medium text-slate-700">技能市场 <span class="text-slate-400 font-normal">V2.0</span></div>
+  <div class="ml-auto flex items-center gap-3 text-slate-500">
+    <span class="text-xs">workspace: <b class="text-slate-700">demo-ws</b></span>
+    <span class="text-xs">租户: <b class="text-slate-700">acme</b></span>
+    <span class="text-xs">用户: <b class="text-slate-700">bob</b></span>
+    <div class="w-7 h-7 rounded-full bg-slate-200 grid place-items-center text-[11px] text-slate-600">B</div>
+  </div>
+</header>
+
+<!-- ===== Sub Nav ===== -->
+<nav class="bg-white border-b border-slate-200 px-4 flex items-center gap-1 sticky top-12 z-30" id="subnav"></nav>
+
+<!-- ===== Content ===== -->
+<main id="content" class="p-4"></main>
+
+<!-- ===== Modal ===== -->
+<div id="modal"></div>
+
+<!-- ===== Toast ===== -->
+<div id="toast" class="toast"></div>
+
+<script>
+/* =========================================================
+   MOCK DATA
+   ========================================================= */
+const CATEGORIES = [
+  { code:'common',    name:'通用能力', color:'#2563eb', areas:['代码与开发','调试与诊断','文档与写作'] },
+  { code:'industry',  name:'行业能力', color:'#8b5cf6', areas:['广告数据','电商','游戏'] },
+  { code:'capability',name:'经营能力', color:'#16a34a', areas:['部署运维','数据导出','监控告警'] },
+];
+
+const SKILLS = [
+  { id:'s1', name:'code-review',     display:'代码评审与改进建议', summary:'对代码改动给出结构化评审与可执行改进建议', group:'common', area:'代码与开发', status:'published', version:4, owner:'alice', passRate:98, installed:true, enabled:true, pinned:true, isCompiled:false, recall:0.91,
+    quality:{trigger:96,assembly:100,safety:100,quality:95,efficiency:88},
+    desc:{summary:'对代码改动给出结构化评审与可执行改进建议', triggers:['评审代码','review','code review','看看这段代码'], notFor:['写新代码','架构设计'], capabilities:['diff分析','安全检查','风格建议'], keywords:['review','评审','审查']} },
+  { id:'s2', name:'bug-diagnose',    display:'Bug 根因诊断', summary:'根据报错与复现路径定位根因并给出修复方向', group:'common', area:'调试与诊断', status:'published', version:3, owner:'alice', passRate:92, installed:true, enabled:true, pinned:false, isCompiled:false, recall:0.86,
+    quality:{trigger:90,assembly:95,safety:100,quality:88,efficiency:79},
+    desc:{summary:'根据报错与复现路径定位根因并给出修复方向', triggers:['bug','报错','异常','为什么失败'], notFor:['性能优化'], capabilities:['堆栈分析','复现路径','根因假设'], keywords:['bug','诊断','debug']} },
+  { id:'s3', name:'refactor-helper', display:'重构助手', summary:'识别坏味道并给出安全的重构步骤', group:'common', area:'代码与开发', status:'published', version:2, owner:'bob', passRate:89, installed:true, enabled:false, pinned:false, isCompiled:false, recall:0.74,
+    quality:{trigger:85,assembly:90,safety:95,quality:86,efficiency:82},
+    desc:{summary:'识别坏味道并给出安全的重构步骤', triggers:['重构','refactor','优化结构'], notFor:['重写'], capabilities:['坏味道识别','步骤拆解'], keywords:['refactor','重构']} },
+  { id:'s4', name:'ad-revenue',      display:'广告收入异动分析', summary:'拆解广告收入波动并归因到供给/竞价/转化', group:'industry', area:'广告数据', status:'published', version:5, owner:'carol', passRate:87, installed:true, enabled:true, pinned:true, isCompiled:false, updateAvailable:true, recall:0.83,
+    quality:{trigger:88,assembly:92,safety:100,quality:84,efficiency:76},
+    desc:{summary:'拆解广告收入波动并归因到供给/竞价/转化', triggers:['广告收入','收入异动','arpu下降'], notFor:['个人收入'], capabilities:['指标拆解','归因分析'], keywords:['广告','收入','revenue']} },
+  { id:'s5', name:'ad-revenue-wf',   display:'广告收入分析(编译版)', summary:'广告收入异动分析的确定性 workflow 版本', group:'industry', area:'广告数据', status:'published', version:1, owner:'carol', passRate:94, installed:false, enabled:false, pinned:false, isCompiled:true, sourceSkill:'ad-revenue', compileScore:88, recall:0.81,
+    quality:{trigger:92,assembly:100,safety:100,quality:90,efficiency:95},
+    desc:{summary:'广告收入异动分析的确定性 workflow 版本', triggers:['广告收入','收入异动'], notFor:[], capabilities:['确定性归因'], keywords:['广告','收入','workflow']} },
+  { id:'s6', name:'deploy-helper',   display:'一键部署与回滚', summary:'生成部署步骤并在失败时安全回滚', group:'capability', area:'部署运维', status:'published', version:6, owner:'dave', passRate:95, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.79,
+    quality:{trigger:93,assembly:88,safety:97,quality:94,efficiency:85},
+    desc:{summary:'生成部署步骤并在失败时安全回滚', triggers:['部署','deploy','上线','回滚'], notFor:['本地调试'], capabilities:['步骤生成','回滚保护'], keywords:['deploy','部署','回滚']} },
+  { id:'s7', name:'data-export',     display:'数据导出与校验', summary:'按规范导出数据并做完整性校验', group:'capability', area:'数据导出', status:'published', version:2, owner:'dave', passRate:91, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.69,
+    quality:{trigger:86,assembly:90,safety:95,quality:90,efficiency:88},
+    desc:{summary:'按规范导出数据并做完整性校验', triggers:['导出数据','export','下载报表'], notFor:['数据采集'], capabilities:['格式转换','校验'], keywords:['export','导出']} },
+  { id:'s8', name:'monitor-alert',   display:'监控告警归因', summary:'对告警进行分类并给出处置建议', group:'capability', area:'监控告警', status:'published', version:1, owner:'dave', passRate:78, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.62,
+    quality:{trigger:74,assembly:85,safety:90,quality:76,efficiency:80},
+    desc:{summary:'对告警进行分类并给出处置建议', triggers:['告警','报警','alert','宕机'], notFor:['日志查询'], capabilities:['告警分类','处置建议'], keywords:['alert','告警']} },
+  { id:'s9', name:'doc-writer',      display:'技术文档生成', summary:'根据代码或变更生成技术文档', group:'common', area:'文档与写作', status:'published', version:3, owner:'bob', passRate:85, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.71,
+    quality:{trigger:82,assembly:90,safety:100,quality:84,efficiency:87},
+    desc:{summary:'根据代码或变更生成技术文档', triggers:['写文档','生成文档','README'], notFor:['业务文档'], capabilities:['文档结构','示例生成'], keywords:['doc','文档']} },
+  { id:'s10', name:'ecom-analysis',  display:'电商经营分析', summary:'电商 GMV 拆解与品类归因', group:'industry', area:'电商', status:'in_review', version:1, owner:'bob', passRate:80, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.66, prId:'pr1',
+    quality:{trigger:78,assembly:84,safety:100,quality:80,efficiency:78},
+    desc:{summary:'电商 GMV 拆解与品类归因', triggers:['电商','GMV','品类'], notFor:[], capabilities:['GMV拆解','品类归因'], keywords:['ecom','电商']} },
+  { id:'s11', name:'game-monetization', display:'游戏变现分析', summary:'游戏内购与广告变现效率分析', group:'industry', area:'游戏', status:'draft', version:0, owner:'bob', passRate:60, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0.45,
+    quality:{trigger:55,assembly:70,safety:100,quality:58,efficiency:60},
+    desc:{summary:'游戏内购与广告变现效率分析', triggers:['游戏变现','内购'], notFor:[], capabilities:['变现效率'], keywords:['game','游戏']} },
+  { id:'s12', name:'sql-guard',      display:'SQL 安全约束', summary:'强制 SQL 带 LIMIT、禁危险操作', group:'common', area:'代码与开发', status:'published', version:4, owner:'alice', passRate:96, installed:true, enabled:true, pinned:false, isCompiled:false, recall:0.88,
+    quality:{trigger:94,assembly:100,safety:100,quality:96,efficiency:92},
+    desc:{summary:'强制 SQL 带 LIMIT、禁危险操作', triggers:['写SQL','查询数据','query'], notFor:['非SQL'], capabilities:['SQL约束','危险拦截'], keywords:['sql','查询']} },
+  { id:'s13', name:'pdf-extractor', display:'PDF 表格抽取', summary:'从 PDF 中抽取表格为结构化数据', group:'common', area:'文档与写作', status:'draft', version:0, owner:'bob', passRate:0, installed:false, enabled:false, pinned:false, isCompiled:false, recall:0,
+    quality:{trigger:0,assembly:0,safety:0,quality:0,efficiency:0},
+    desc:{summary:'从 PDF 中抽取表格为结构化数据', triggers:['抽取PDF','提取表格','pdf表格'], notFor:[], capabilities:['表格识别','结构化输出'], keywords:['pdf','表格']} },
+];
+
+// workspace `.claude/skills` 本地技能来源：market(从市场安装) / created(本地创建) / uploaded(文件 tab 上传)
+const LOCAL_SOURCES = { s1:'market', s2:'market', s3:'created', s4:'market', s9:'created', s10:'created', s11:'created', s12:'market', s13:'uploaded' };
+SKILLS.forEach(s=>{
+  if(LOCAL_SOURCES[s.id]){ s.local=true; s.source=LOCAL_SOURCES[s.id]; }
+  // 市场视角的“已安装” = 本地存在且已发布
+  s.installed = !!(s.local && s.status==='published');
+});
+const SOURCE_LABEL = { market:['市场安装','#64748b'], created:['本地创建','#2563eb'], uploaded:['文件上传','#8b5cf6'] };
+
+const SNIPPETS = [
+  { id:'sn1', title:'SQL 必须带 LIMIT', type:'constraint', version:3, usedBy:5, content:'所有 SELECT 语句必须包含 LIMIT 子句，禁止全表扫描。', upgradeAvailable:false },
+  { id:'sn2', title:'JSON Schema 输出规范', type:'output-format', version:2, usedBy:8, content:'输出必须为符合 {{schema}} 的 JSON，字段缺失时用 null。', upgradeAvailable:false },
+  { id:'sn3', title:'搜索-读取-总结 模式', type:'tool-usage', version:1, usedBy:3, content:'先 WebSearch 定位，再 WebFetch 读取，最后结构化总结。', upgradeAvailable:false },
+  { id:'sn4', title:'发布前自检清单', type:'checklist', version:4, usedBy:6, content:'1. 通过测评 2. description 已结构化 3. 引用版本已固定 4. 无 TODO。', upgradeAvailable:true, newVersion:5 },
+  { id:'sn5', title:'严谨客观语气', type:'prompt', version:2, usedBy:4, content:'以严谨、客观、无夸张的语气陈述；不确定处显式标注。', upgradeAvailable:false },
+  { id:'sn6', title:'危险操作拦截', type:'constraint', version:1, usedBy:7, content:'禁止执行 rm -rf、DROP、DELETE 无 WHERE 等不可逆操作。', upgradeAvailable:false },
+];
+const SNIPPET_TYPE_LABEL = { constraint:'约束规则', 'output-format':'输出格式', 'tool-usage':'工具调用', checklist:'检查清单', prompt:'Prompt片段' };
+
+const TEMPLATES = [
+  { id:'t1', title:'代码评审 skill', level:'高阶', group:'common', area:'代码与开发', icon:'🔍', usedBy:24,
+    desc:'结构化评审改动、安全检查、改进建议',
+    variables:[{key:'focus',label:'评审重点',default:'安全与可维护性'},{key:'lang',label:'主要语言',default:'TypeScript'}],
+    includes:['sql-guard','发布前自检清单'], triggerExamples:['帮我评审这段代码','review 这个 PR'] },
+  { id:'t2', title:'Bug 诊断 skill', level:'高阶', group:'common', area:'调试与诊断', icon:'🐛', usedBy:18,
+    desc:'堆栈分析、复现路径、根因假设',
+    variables:[{key:'stacktrace',label:'是否提供堆栈',default:'是'}],
+    includes:['严谨客观语气'], triggerExamples:['这个 bug 怎么回事','为什么报错'] },
+  { id:'t3', title:'技术文档 skill', level:'标准', group:'common', area:'文档与写作', icon:'📄', usedBy:31,
+    desc:'根据代码生成结构化技术文档',
+    variables:[{key:'format',label:'文档格式',default:'Markdown'}],
+    includes:['JSON Schema 输出规范'], triggerExamples:['给这个模块写文档','生成 README'] },
+  { id:'t4', title:'空白 skill', level:'标准', group:'common', area:'代码与开发', icon:'✨', usedBy:12,
+    desc:'从零开始，仅提供 SKILL.md 骨架',
+    variables:[{key:'name',label:'技能名称',default:'my-skill'}],
+    includes:[], triggerExamples:[] },
+];
+
+const PRS = [
+  { id:'pr1', skillId:'s10', title:'ecom-analysis: 新增电商 GMV 品类归因', author:'bob', reviewer:'carol', status:'open', evalPassed:true, baseVersion:1, targetVersion:2, createdAt:'2026-08-04',
+    desc:'增加品类维度归因，复用 ad-revenue 的拆解逻辑。',
+    files:[{path:'SKILL.md',lines:diffLines1()}] },
+  { id:'pr2', skillId:'s1', title:'code-review: 增加安全检查维度', author:'carol', reviewer:'alice', status:'open', evalPassed:false, baseVersion:4, targetVersion:5, createdAt:'2026-08-05',
+    desc:'新增 SQL 注入与密钥泄露检查，但安全测评用例未通过。',
+    files:[{path:'SKILL.md',lines:diffLines2()}] },
+  { id:'pr3', skillId:'s6', title:'deploy-helper: 修复回滚顺序 bug', author:'dave', reviewer:'alice', status:'merged', evalPassed:true, baseVersion:5, targetVersion:6, createdAt:'2026-08-01',
+    desc:'回滚时先停服务再还原配置，避免脏读。',
+    files:[{path:'SKILL.md',lines:diffLines3()}] },
+];
+function diffLines1(){
+  return [
+    {t:'ctx', n:1, s:'# 电商经营分析'},
+    {t:'ctx', n:2, s:''},
+    {t:'del', n:3, s:'对 GMV 进行流量×转化拆解。'},
+    {t:'add', n:3, s:'对 GMV 进行 流量×转化×品类 拆解。'},
+    {t:'add', n:4, s:'新增品类归因：按一级类目归因到供给/价格/活动。'},
+    {t:'ctx', n:5, s:'引用指标：GMV、访客数、转化率。'},
+  ];
+}
+function diffLines2(){
+  return [
+    {t:'ctx', n:1, s:'## 评审维度'},
+    {t:'ctx', n:2, s:'1. 正确性'},
+    {t:'ctx', n:3, s:'2. 可维护性'},
+    {t:'add', n:4, s:'3. 安全性：SQL 注入、密钥泄露、越权'},
+    {t:'add', n:5, s:'4. 执行 DROP/DELETE 类操作的拦截'},
+    {t:'ctx', n:6, s:'## 输出'},
+  ];
+}
+function diffLines3(){
+  return [
+    {t:'ctx', n:1, s:'## 回滚流程'},
+    {t:'del', n:2, s:'1. 还原配置 2. 停服务 3. 重启'},
+    {t:'add', n:2, s:'1. 停服务 2. 还原配置 3. 重启'},
+    {t:'ctx', n:3, s:'避免还原过程中脏读。'},
+  ];
+}
+
+const TESTCASES = [
+  { id:'tc1', cat:'触发路由', title:'应触发：帮我评审这段代码', status:'passed', dur:'1.2s', detail:'命中 triggers[评审代码]' },
+  { id:'tc2', cat:'触发路由', title:'不应触发：今天天气怎么样', status:'passed', dur:'0.8s', detail:'无命中，正确静默' },
+  { id:'tc3', cat:'引用装配', title:'依赖 MCP tools 完整加载', status:'passed', dur:'0.9s', detail:'3/3 引用加载成功' },
+  { id:'tc4', cat:'安全合规', title:'不执行删除类操作', status:'passed', dur:'1.1s', detail:'拦截 DELETE 无 WHERE' },
+  { id:'tc5', cat:'结果质量', title:'给出可执行改进建议', status:'passed', dur:'2.3s', detail:'建议含步骤与示例' },
+  { id:'tc6', cat:'效率', title:'单次评审 token ≤ 4k', status:'failed', dur:'3.1s', detail:'实际 5.2k，超限' },
+];
+
+const BADCASES = [
+  { id:'b1', skillId:'s1', type:'未触发', desc:'用户说“看看这个函数”未触发 code-review', confidence:'high', status:'pending' },
+  { id:'b2', skillId:'s4', type:'误触发', desc:'用户问“个人收入报税”误触发 ad-revenue', confidence:'medium', status:'pending' },
+  { id:'b3', skillId:'s8', type:'结果质量差', desc:'告警归因建议过于笼统', confidence:'low', status:'pending' },
+];
+
+const VERSIONS = {
+  s1: [
+    { v:4, at:'2026-08-03', by:'alice', note:'增加效率用例阈值' },
+    { v:3, at:'2026-07-20', by:'alice', note:'补充安全检查' },
+    { v:2, at:'2026-07-05', by:'bob', note:'重构评审维度' },
+    { v:1, at:'2026-06-18', by:'alice', note:'初始发布' },
+  ]
+};
+
+/* =========================================================
+   STATE
+   ========================================================= */
+const state = {
+  view: 'market',
+  search: '',
+  groupFilter: null,
+  statusFilter: 'all',
+  skills: SKILLS,
+  snippets: SNIPPETS,
+  prs: PRS,
+  badcases: BADCASES,
+  categories: JSON.parse(JSON.stringify(CATEGORIES)),
+  selectedSkillId: null,
+  detailTab: 'edit',
+  evalRunning: false,
+  currentUser: 'bob',
+};
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
+const $ = (s)=>document.querySelector(s);
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1800); }
+function skillById(id){ return state.skills.find(s=>s.id===id); }
+function catByCode(code){ return state.categories.find(c=>c.code===code); }
+function statusBadge(s){
+  const m={published:['已发布','#16a34a','#dcfce7'], in_review:['评审中','#d97706','#fef3c7'], draft:['草稿','#64748b','#f1f5f9'], deprecated:['已废弃','#dc2626','#fee2e2']};
+  const [t,c,bg]=m[s.status]||m.draft;
+  return `<span class="pill px-2 py-0.5 text-[11px]" style="background:${bg};color:${c}">${t}</span>`;
+}
+function passBar(p){
+  const c = p>=90?'#16a34a':p>=80?'#d97706':'#dc2626';
+  return `<div class="flex items-center gap-1.5"><div class="w-10 h-1.5 rounded bg-slate-200 overflow-hidden"><div class="bar-fill h-full" style="width:${p}%;background:${c}"></div></div><span style="color:${c}" class="text-[11px] font-medium">${p}%</span></div>`;
+}
+function dot(color){ return `<span class="inline-block w-2 h-2 rounded-full" style="background:${color}"></span>`; }
+function statCard(label,val,color){
+  return `<div class="card p-3"><div class="text-[11px] text-slate-500">${label}</div><div class="text-2xl font-semibold mt-0.5" style="color:${color}">${val}</div></div>`;
+}
+// 技能市场 / 我的技能 共用的列表头部：标题栏 + 筛选卡（同一套样式）
+function listHeader(o){
+  return `<div class="card p-4 mb-3 flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <div class="font-medium">${o.title}</div>
+        <div class="text-[12px] text-slate-500">${o.subtitle}</div>
+      </div>
+      <div class="flex items-center gap-2 flex-none">${o.right||''}</div>
+    </div>
+    <div class="card p-4 mb-3">
+      <input id="search" oninput="onSearch(this.value)" value="${state.search}" placeholder="${o.placeholder}" class="w-full px-3 py-1.5 border border-slate-300 rounded-md text-[13px] focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 mb-2" />
+      <div class="flex items-center gap-2 flex-wrap">${o.groupStrip}${state.groupFilter?`<button onclick="toggleGroup(null)" class="text-[12px] text-slate-400 hover:text-slate-600">清除筛选 ✕</button>`:''}</div>
+      ${o.statusStrip||''}
+    </div>`;
+}
+
+/* =========================================================
+   SUB NAV
+   ========================================================= */
+const NAV = [
+  {k:'market',    label:'技能市场'},
+  {k:'mine',      label:'我的技能'},
+  {k:'templates', label:'模板中心'},
+  {k:'snippets',  label:'片段库'},
+  {k:'prs',       label:'贡献(PR)'},
+  {k:'eval',      label:'测评'},
+  {k:'admin',     label:'管理'},
+];
+function renderSubnav(){
+  $('#subnav').innerHTML = NAV.map(n=>`
+    <button onclick="setView('${n.k}')" class="px-3 py-2.5 text-[13px] ${state.view===n.k?'tab-active text-brand-700':'text-slate-600 hover:text-slate-900'}">${n.label}</button>
+  `).join('');
+}
+function setView(v){
+  state.view=v;
+  state.selectedSkillId=null;
+  state.detailTab='edit';
+  state.search='';
+  state.groupFilter=null;
+  state.statusFilter='all';
+  renderSubnav();
+  render();
+}
+
+/* =========================================================
+   列表 + 详情子页面（递进导航）
+   ========================================================= */
+function applyFilters(base){
+  let list = base.filter(s=>{
+    if(state.statusFilter!=='all' && s.status!==state.statusFilter) return false;
+    if(state.groupFilter && s.group!==state.groupFilter) return false;
+    if(state.search){
+      const q=state.search.toLowerCase();
+      const d=s.desc;
+      const hay=[s.name,s.display,d.summary,(d.triggers||[]).join(','),(d.keywords||[]).join(','),s.area].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  // 市场：已安装置顶，再按 pin；我的技能保持原序
+  if(state.view!=='mine') list.sort((a,b)=> (b.installed?1:0)-(a.installed?1:0) || (b.pinned?1:0)-(a.pinned?1:0));
+  return list;
+}
+
+function renderMarket(){ state.selectedSkillId&&skillById(state.selectedSkillId)?renderSkillPage():renderListPage(); }
+function renderMine(){ state.selectedSkillId&&skillById(state.selectedSkillId)?renderSkillPage():renderListPage(); }
+
+function renderListPage(){
+  const view = state.view;
+  let base, showStatus, showInstall, showSource;
+  if(view==='market'){ base=state.skills.filter(s=>s.status==='published'); showStatus=false; showInstall=true; showSource=false; }
+  else { base=state.skills.filter(s=>s.local); showStatus=true; showInstall=false; showSource=true; }
+  const list = applyFilters(base);
+  const installed = state.skills.filter(s=>s.installed);
+  const upd = state.skills.filter(s=>s.updateAvailable).length;
+
+  const groupStrip = state.categories.map(c=>{
+    const cnt = base.filter(s=>s.group===c.code).length;
+    const active = state.groupFilter===c.code;
+    return `<button onclick="toggleGroup('${c.code}')" class="flex items-center gap-1.5 pill px-2.5 py-1 text-[12px] border ${active?'border-brand-500 bg-brand-50 text-brand-700':'border-slate-200 text-slate-600 hover:bg-slate-50'}">${dot(c.color)} ${c.name} <span class="text-slate-400">${cnt}</span></button>`;
+  }).join('');
+
+  const statusStrip = view==='mine' ? `<div class="flex items-center gap-3 mt-2 text-[12px] text-slate-500">状态：${['all','published','in_review','draft'].map(st=>`<button onclick="setStatus('${st}')" class="${state.statusFilter===st?'text-brand-700 font-medium':'hover:text-slate-700'}">${st==='all'?'全部':({published:'已发布',in_review:'评审中',draft:'草稿'}[st])}</button>`).join('')}</div>` : '';
+
+  let header;
+  if(view==='market'){
+    header = listHeader({
+      title:'技能市场',
+      subtitle:'浏览已发布技能，安装 / 卸载到当前 workspace',
+      placeholder:'搜索技能名 / 触发词 / 关键词…',
+      right:`<div class="flex items-center gap-2 text-[12px] text-slate-500">
+          <span>已发布 <b class="text-brand-600">${base.length}</b></span><span class="text-slate-300">·</span>
+          <span>已安装 <b class="text-emerald-600">${installed.length}</b></span><span class="text-slate-300">·</span>
+          <span>待更新 <b class="text-amber-600">${upd}</b></span>
+        </div>`,
+      groupStrip,
+    });
+  } else {
+    header = listHeader({
+      title:'我的技能',
+      subtitle:'workspace <span class="font-mono">.claude/skills</span> 下的全部技能（本地创建 / 文件上传 / 从市场安装），支持编辑、调试、测评',
+      placeholder:'搜索我的技能…',
+      right:`<button onclick="openUploadSkill()" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px] hover:bg-slate-50">↑ 上传技能</button>
+        <button onclick="openCreate('t4')" class="px-3 py-1.5 bg-brand-600 text-white rounded-md text-[13px] hover:bg-brand-700">+ 新建技能</button>`,
+      groupStrip, statusStrip,
+    });
+  }
+
+  $('#content').innerHTML = `${header}
+    <div class="mb-2 text-[12px] text-slate-400">共 ${list.length} 个</div>
+    <div class="card divide-y divide-slate-50">${list.length?list.map(s=>skillRowWide(s,showStatus,showInstall,showSource)).join(''):'<div class="p-8 text-center text-slate-400 text-[13px]">无匹配技能</div>'}</div>
+  `;
+}
+
+function skillRowWide(s, showStatus, showInstall, showSource){
+  const c = catByCode(s.group);
+  const actionBtn = !showInstall ? '' :
+    s.local
+      ? `<button onclick="event.stopPropagation();uninstallSkill('${s.id}')" class="text-[11px] px-2 py-1 border border-slate-300 rounded text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-300 flex-none">卸载</button>`
+      : `<button onclick="event.stopPropagation();installSkill('${s.id}')" class="text-[11px] px-2 py-1 bg-brand-600 text-white rounded hover:bg-brand-700 flex-none">安装</button>`;
+  const src = (showSource && s.source) ? (()=>{ const [t,col]=SOURCE_LABEL[s.source]; return `<span class="pill px-1.5 py-0 text-[10px]" style="background:${col}14;color:${col}">${t}</span>`; })() : '';
+  return `
+  <div onclick="openDetail('${s.id}')" class="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 cursor-pointer fade-in">
+    ${dot(c.color)}
+    <div class="w-52 flex-none">
+      <div class="flex items-center gap-1.5">
+        <span class="font-medium text-slate-800">${s.display}</span>
+        ${s.isCompiled?'<span class="pill px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700" title="由长 SOP 编译为确定性 Workflow 的产物">编译</span>':''}
+        ${s.updateAvailable?'<span class="pill px-1.5 py-0 text-[10px] bg-blue-100 text-blue-700">待更新</span>':''}
+        ${src}
+      </div>
+      <div class="text-[11px] text-slate-400 font-mono">${s.name} · v${s.version}</div>
+    </div>
+    <div class="w-24 flex-none text-[11px] text-slate-500">${c.name}<div class="text-slate-400">${s.area}</div></div>
+    <div class="flex-1 truncate text-slate-600 text-[12px]">${s.desc.summary}</div>
+    ${showStatus?`<div class="w-16 flex-none">${statusBadge(s)}</div>`:''}
+    ${actionBtn}
+    <div class="flex-none text-slate-300 text-lg">›</div>
+  </div>`;
+}
+
+function onSearch(v){ state.search=v; renderListPage(); }
+function toggleGroup(code){ state.groupFilter = state.groupFilter===code?null:code; renderListPage(); }
+function setStatus(st){ state.statusFilter=st; renderListPage(); }
+function installSkill(id){
+  const s=skillById(id); s.local=true; s.source='market'; s.installed=(s.status==='published'); s.pinned=true;
+  toast(`已安装 ${s.display}（下个 turn 生效）`);
+  render();
+}
+
+function uninstallSkill(id){
+  const s=skillById(id); s.local=false; s.installed=false; s.pinned=false;
+  toast(`已卸载 ${s.display}`);
+  render();
+}
+
+/* =========================================================
+   SKILL DETAIL PAGE (递进：列表 -> 详情子页面)
+   ========================================================= */
+function openDetail(id){
+  state.selectedSkillId=id;
+  state.detailTab='edit';
+  render();
+}
+function backToList(){
+  state.selectedSkillId=null;
+  render();
+}
+
+function renderSkillPage(){
+  const s = skillById(state.selectedSkillId);
+  if(!s){ renderListPage(); return; }
+  const c=catByCode(s.group);
+  const preview = state.view==='market';
+  const crumb = ({market:'技能市场',mine:'我的技能'})[state.view] || '技能市场';
+  const allTabs = preview
+    ? [['overview','概览'],['eval','测评'],['version','版本']]
+    : [['edit','编辑'],['debug','调试'],['eval','测评'],['version','版本'],['setting','设置']];
+  if(!allTabs.find(t=>t[0]===state.detailTab)) state.detailTab=allTabs[0][0];
+  const tabs=allTabs;
+  const headActions = preview
+    ? (s.local
+        ? `<button onclick="uninstallSkill('${s.id}')" class="text-[12px] px-2.5 py-1 border border-slate-300 rounded text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-300">卸载</button>`
+        : `<button onclick="installSkill('${s.id}')" class="text-[12px] px-2.5 py-1 bg-brand-600 text-white rounded hover:bg-brand-700">安装</button>`)
+    : `<button onclick="toast('从草稿分支提 PR（base v${s.version}）')" class="text-[12px] px-2.5 py-1 border border-slate-300 rounded hover:bg-slate-50">提 PR</button>`;
+  $('#content').innerHTML=`
+    <div class="flex items-center gap-2 text-[12px] text-slate-500 mb-3">
+      <button onclick="backToList()" class="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 hover:text-slate-800">← 返回</button>
+      <span class="text-slate-300">/</span>
+      <button onclick="backToList()" class="hover:text-slate-800">${crumb}</button>
+      <span class="text-slate-300">/</span>
+      <span class="text-slate-700 font-medium">${s.display}</span>
+      <span class="text-slate-400 font-mono text-[11px]">${s.name}</span>
+      ${preview?'<span class="pill px-1.5 py-0 text-[10px] bg-slate-100 text-slate-500 ml-1">只读预览</span>':''}
+    </div>
+    <div class="card flex flex-col" style="height:calc(100vh - 162px)">
+      <div class="p-4 border-b border-slate-200 flex items-start justify-between gap-3 flex-none">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            ${dot(c.color)}
+            <span class="font-semibold text-slate-800 text-[15px]">${s.display}</span>
+            ${s.isCompiled?'<span class="pill px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700">编译产物</span>':''}
+            ${!preview?statusBadge(s):''}
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">${s.name} · v${s.version} · owner ${s.owner} · ${c.name}/${s.area} · 召回 ${Math.round(s.recall*100)}%</div>
+        </div>
+        <div class="flex items-center gap-2 flex-none">
+          ${headActions}
+        </div>
+      </div>
+      <div class="px-4 border-b border-slate-200 flex gap-1 flex-none">
+        ${tabs.map(t=>`<button onclick="setTab('${t[0]}')" class="px-3 py-2.5 text-[13px] ${state.detailTab===t[0]?'tab-active text-brand-700':'text-slate-600 hover:text-slate-900'}">${t[1]}</button>`).join('')}
+      </div>
+      <div class="flex-1 scroll-y p-4 min-h-0" id="drawerBody"></div>
+    </div>`;
+  renderDetailBody();
+}
+
+function setTab(t){ state.detailTab=t; renderSkillPage(); }
+function scrollRef(id){
+  const el=document.getElementById('ref-'+id);
+  if(el){
+    el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    el.classList.add('ring-2','ring-violet-400');
+    setTimeout(()=>el.classList.remove('ring-2','ring-violet-400'),1200);
+  } else {
+    const sn=SNIPPETS.find(x=>x.id===id);
+    toast('引用：'+(sn?sn.title+' · v'+sn.version:id));
+  }
+}
+
+// 当前技能 SKILL.md 引用的片段（mock：与胶囊一致；实际应从 frontmatter 引用块解析）
+const SKILL_REFS = [
+  { id:'sn1', title:'SQL 必须带 LIMIT', version:3 },
+  { id:'sn6', title:'危险操作拦截', version:1 },
+  { id:'sn2', title:'JSON Schema 输出规范', version:2 },
+];
+function renderRefCards(){
+  return SKILL_REFS.map(r=>{
+    const sn = SNIPPETS.find(x=>x.id===r.id);
+    const content = sn ? sn.content : '（片段内容暂不可用）';
+    const typeLabel = sn ? (SNIPPET_TYPE_LABEL[sn.type]||sn.type) : '片段';
+    return `<div id="ref-${r.id}" class="card p-3 border-l-2 border-l-violet-400 transition-shadow">
+      <div class="flex items-center gap-2 mb-1.5">
+        <span class="pill px-1.5 py-0 text-[10px] bg-violet-100 text-violet-700">${typeLabel}</span>
+        <span class="font-medium text-[13px] text-slate-800">${r.title}</span>
+        <span class="text-[11px] text-slate-400">v${r.version}</span>
+        <span class="text-[10px] text-slate-400">· 原子引用（版本固定，只读）</span>
+      </div>
+      <pre class="text-[12px] font-mono leading-5 text-slate-700 whitespace-pre-wrap bg-slate-50 rounded p-2">${content}</pre>
+    </div>`;
+  }).join('');
+}
+
+function deprecate(id){
+  if(!confirm('废弃该技能？')) return;
+  const s=skillById(id); s.status='deprecated';
+  toast('已废弃'); render();
+}
+
+function renderDetailBody(){
+  const s=skillById(state.selectedSkillId); if(!s) return;
+  const c=catByCode(s.group);
+  const preview = state.view==='market';
+  const el=$('#drawerBody'); if(!el) return;
+
+  if(state.detailTab==='overview'){
+    const refCards = renderRefCards();
+    el.innerHTML=`
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-1 space-y-3">
+          <div class="card p-3">
+            <div class="text-[11px] text-slate-400 mb-1">摘要</div>
+            <div class="text-[13px] text-slate-700">${s.desc.summary}</div>
+          </div>
+          <div class="card p-3">
+            <div class="text-[11px] text-slate-400 mb-1">触发词</div>
+            <div class="flex flex-wrap gap-1">${s.desc.triggers.map(t=>`<span class="pill px-1.5 py-0 text-[11px] bg-slate-100 text-slate-600">${t}</span>`).join('')}</div>
+          </div>
+          <div class="card p-3">
+            <div class="text-[11px] text-slate-400 mb-1">能力</div>
+            <div class="flex flex-wrap gap-1">${s.desc.capabilities.map(t=>`<span class="pill px-1.5 py-0 text-[11px] bg-brand-50 text-brand-700">${t}</span>`).join('')}</div>
+          </div>
+        </div>
+        <div class="col-span-2 card p-3 flex flex-col">
+          <div class="text-[11px] text-slate-400 mb-2">SKILL.md <span class="float-right text-slate-400">只读预览 · 点击引用胶囊可定位片段内容</span></div>
+          <pre class="text-[12px] font-mono leading-5 text-slate-700 whitespace-pre-wrap">---
+name: ${s.name}
+description: ${s.desc.summary}
+domainGroup: ${c.code}
+area: ${s.area}
+---
+
+# ${s.display}
+
+## 适用场景
+${s.desc.triggers.map(t=>'• '+t).join('\n')}
+
+## 约束
+本技能遵守 <span class="ref-capsule" onclick="scrollRef('sn1')">🔗 SQL 必须带 LIMIT v3</span> 与
+<span class="ref-capsule" onclick="scrollRef('sn6')">🔗 危险操作拦截 v1</span>。
+
+## 输出
+遵循 <span class="ref-capsule" onclick="scrollRef('sn2')">🔗 JSON 输出规范 v2</span>。
+</pre>
+          <div class="mt-2 text-[11px] text-amber-600">⚠ 市场为只读预览，编辑请在「我的技能」中操作本地副本。</div>
+        </div>
+      </div>
+      <div class="mt-3">
+        <div class="text-[11px] text-slate-400 mb-2">引用的片段（${SKILL_REFS.length}）· 展开查看完整内容</div>
+        <div class="space-y-2">${refCards}</div>
+      </div>`;
+  } else if(state.detailTab==='edit'){
+    el.innerHTML=`
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-1 card p-2">
+          <div class="text-[11px] text-slate-400 px-1 mb-1">文件树</div>
+          ${['SKILL.md','references/','  snippets/','  scripts/','  tests/trigger.json','  tests/eval.json'].map(f=>`<div class="px-2 py-1 text-[12px] rounded ${f==='SKILL.md'?'bg-brand-50 text-brand-700 font-medium':'text-slate-600 hover:bg-slate-50'}">${f}</div>`).join('')}
+        </div>
+        <div class="col-span-2 card p-3">
+          <div class="text-[11px] text-slate-400 mb-2">SKILL.md <span class="float-right">引用以胶囊显示，只读保护 · 点击可定位片段内容</span></div>
+          <pre class="text-[12px] font-mono leading-5 text-slate-700 whitespace-pre-wrap">---
+name: ${s.name}
+description: ${s.desc.summary}
+domainGroup: ${c.code}
+area: ${s.area}
+---
+
+# ${s.display}
+
+## 适用场景
+${s.desc.triggers.map(t=>'• '+t).join('\n')}
+
+## 约束
+本技能遵守 <span class="ref-capsule" onclick="scrollRef('sn1')">🔗 SQL 必须带 LIMIT v3</span> 与
+<span class="ref-capsule" onclick="scrollRef('sn6')">🔗 危险操作拦截 v1</span>。
+
+## 输出
+遵循 <span class="ref-capsule" onclick="scrollRef('sn2')">🔗 JSON 输出规范 v2</span>。
+</pre>
+          <div class="mt-2 flex gap-2">
+            <button onclick="toast('已打开插入片段面板')" class="text-[11px] px-2 py-1 border border-slate-300 rounded">+ 插入片段</button>
+            <button onclick="toast('已打开插入引用资源面板')" class="text-[11px] px-2 py-1 border border-slate-300 rounded">+ 插入引用</button>
+            <button onclick="toast('frontmatter 校验通过')" class="text-[11px] px-2 py-1 border border-slate-300 rounded">校验</button>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3">
+        <div class="text-[11px] text-slate-400 mb-2">引用的片段（${SKILL_REFS.length}）· 只读，编辑片段请到「片段库」</div>
+        <div class="space-y-2">${renderRefCards()}</div>
+      </div>`;
+  } else if(state.detailTab==='debug'){
+    el.innerHTML=`
+      <div class="grid grid-cols-2 gap-3 h-full">
+        <div class="card p-3 flex flex-col">
+          <div class="text-[11px] text-slate-400 mb-2">Playground</div>
+          <div class="flex-1 scroll-y space-y-2 text-[12px]">
+            <div class="bg-slate-100 rounded p-2 ml-8">帮我评审这段代码：function f(a){return a}</div>
+            <div class="bg-brand-50 rounded p-2 mr-8">已触发 <b>${s.name}</b>。建议：函数名过短、缺少类型注解、无返回值校验。</div>
+          </div>
+          <div class="flex gap-2 mt-2"><input placeholder="输入测试 prompt…" class="flex-1 px-2 py-1 border border-slate-300 rounded text-[12px]"><button onclick="toast('已发送（模拟）')" class="px-2 py-1 bg-brand-600 text-white rounded text-[12px]">发送</button></div>
+        </div>
+        <div class="card p-3">
+          <div class="text-[11px] text-slate-400 mb-2">执行轨迹</div>
+          ${['① 触发判断：命中 triggers[评审代码] ✓','② 引用装配：3/3 加载 ✓','③ 工具调用：Read(file) -> Grep(pattern)','④ 答案生成：结构化建议','⑤ 输出校验：符合 JSON 规范 ✓'].map(x=>`<div class="text-[12px] text-slate-600 py-1 border-l-2 border-brand-500 pl-2 mb-1">${x}</div>`).join('')}
+        </div>
+      </div>`;
+  } else if(state.detailTab==='eval'){
+    el.innerHTML=`
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-3">
+          <div class="text-2xl font-semibold ${s.passRate>=90?'text-emerald-600':s.passRate>=80?'text-amber-600':'text-red-600'}">${s.passRate}%</div>
+          <div class="text-[11px] text-slate-500">综合通过率 · 召回 ${Math.round(s.recall*100)}%</div>
+        </div>
+        ${preview?'':`<button onclick="runEval()" class="px-3 py-1.5 bg-brand-600 text-white rounded text-[12px] hover:bg-brand-700">${state.evalRunning?'运行中…':'运行测评'}</button>`}
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div class="card p-3 grid place-items-center">${radar(s.quality)}</div>
+        <div class="card p-3">
+          <div class="text-[11px] text-slate-400 mb-2">维度得分</div>
+          ${Object.entries(s.quality).map(([k,v])=>`<div class="flex items-center gap-2 py-0.5"><span class="w-16 text-[12px] text-slate-600">${({trigger:'触发路由',assembly:'引用装配',safety:'安全合规',quality:'结果质量',efficiency:'效率'})[k]}</span><div class="flex-1 h-1.5 rounded bg-slate-100 overflow-hidden"><div class="bar-fill h-full" style="width:${v}%;background:${v>=90?'#16a34a':v>=80?'#d97706':'#dc2626'}"></div></div><span class="text-[11px] w-8 text-right">${v}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <div class="px-3 py-2 border-b border-slate-100 text-[12px] font-medium text-slate-600">测试用例（${TESTCASES.length}）</div>
+        ${TESTCASES.map(tc=>`<div class="flex items-center gap-2 px-3 py-2 border-b border-slate-50">
+          <span class="pill px-1.5 py-0 text-[10px] bg-slate-100 text-slate-500 flex-none">${tc.cat}</span>
+          <span class="flex-1 text-[12px] text-slate-700">${tc.title}</span>
+          <span class="text-[11px] text-slate-400">${tc.dur}</span>
+          <span class="pill px-1.5 py-0 text-[10px] ${tc.status==='passed'?'bg-emerald-100 text-emerald-700':'bg-red-100 text-red-700'}">${tc.status==='passed'?'通过':'失败'}</span>
+        </div>`).join('')}
+      </div>`;
+  } else if(state.detailTab==='version'){
+    const vs=VERSIONS[s.id]||[{v:s.version,at:'2026-08-06',by:s.owner,note:'当前版本'}];
+    el.innerHTML=`
+      <div class="card p-4">
+        <div class="text-[12px] font-medium text-slate-600 mb-3">版本历史（发布即快照，引用按版本固定）</div>
+        ${vs.map((v,i)=>`
+          <div class="flex gap-3 ${i<vs.length-1?'border-l-2 border-slate-200 ml-[5px] pl-4 pb-3':'pl-4 ml-[5px]'} relative">
+            <div class="absolute -left-[5px] top-0 w-[11px] h-[11px] rounded-full ${i===0?'bg-brand-600':'bg-slate-300'} border-2 border-white"></div>
+            <div class="flex-1">
+              <div class="flex items-center gap-2"><span class="font-medium text-slate-800">v${v.v}</span>${i===0?'<span class="pill px-1.5 py-0 text-[10px] bg-brand-100 text-brand-700">当前</span>':''}<span class="text-[11px] text-slate-400">${v.at} · ${v.by}</span></div>
+              <div class="text-[12px] text-slate-600 mt-0.5">${v.note}</div>
+              ${i<vs.length-1?`<div class="mt-1 flex gap-3"><button onclick="toast('查看 v${v.v} 与上一版的 diff')" class="text-[11px] text-brand-600">查看 diff</button>${preview?'':`<button onclick="toast('回滚 = 基于旧版本发起新 merge')" class="text-[11px] text-slate-500">回滚</button>`}</div>`:''}
+            </div>
+          </div>`).join('')}
+      </div>`;
+  } else if(state.detailTab==='setting'){
+    el.innerHTML=`
+      <div class="card p-4 space-y-4">
+        <div><div class="text-[12px] font-medium text-slate-600 mb-1">负责人</div><div class="flex items-center gap-2"><span class="pill px-2 py-0.5 bg-slate-100 text-slate-700">${s.owner}</span><button onclick="toast('转移 ownership')" class="text-[12px] text-brand-600">转移</button></div></div>
+        <div><div class="text-[12px] font-medium text-slate-600 mb-1">协作者</div><div class="flex gap-2 flex-wrap items-center">${['bob','carol'].map(u=>`<span class="pill px-2 py-0.5 bg-slate-100 text-slate-700 flex items-center gap-1">${u}<button onclick="toast('已移除 ${u}')" class="text-slate-400">✕</button></span>`).join('')}<button onclick="toast('添加协作者')" class="text-[12px] text-brand-600">+ 添加</button></div></div>
+        <div><div class="text-[12px] font-medium text-slate-600 mb-1">分类</div><div class="flex items-center gap-2">${dot(c.color)}${c.name} / ${s.area}<button onclick="toast('重新归类')" class="text-[12px] text-brand-600 ml-2">修改</button></div></div>
+        ${s.isCompiled?`<div class="bg-amber-50 border border-amber-200 rounded p-2 text-[12px] text-amber-800">编译产物 · 源技能 <b>${skillById(s.sourceSkill)?.display||s.sourceSkill}</b> · 可编译度 ${s.compileScore}%<br><button onclick="toast('重新编译（走 PR + 测评）')" class="text-brand-600 underline mt-1">重新编译</button></div>`:''}
+        <div class="pt-2 border-t border-slate-100"><button onclick="deprecate('${s.id}')" class="text-[12px] text-red-500 hover:text-red-700">废弃技能…</button></div>
+      </div>`;
+  }
+}
+
+function runEval(){
+  if(state.evalRunning) return;
+  state.evalRunning=true; renderDetailBody();
+  let p=0; const id=state.selectedSkillId;
+  const iv=setInterval(()=>{
+    p+=12+Math.random()*18;
+    if(p>=100){
+      p=100; clearInterval(iv);
+      state.evalRunning=false;
+      const s=skillById(id);
+      s.passRate=Math.min(100, s.passRate+Math.floor(Math.random()*3));
+      toast('测评完成，结果已写入质量分');
+      renderDetailBody();
+    }
+  },300);
+}
+
+/* Radar chart (SVG) */
+function radar(q){
+  const axes=[['触发',q.trigger],['装配',q.assembly],['安全',q.safety],['质量',q.quality],['效率',q.efficiency]];
+  const cx=80,cy=80,R=60,n=axes.length;
+  const pts=axes.map((a,i)=>{ const ang=-Math.PI/2+i*2*Math.PI/n; const r=R*a[1]/100; return [cx+r*Math.cos(ang),cy+r*Math.sin(ang)]; });
+  const poly=pts.map(p=>p.join(',')).join(' ');
+  const labels=axes.map((a,i)=>{ const ang=-Math.PI/2+i*2*Math.PI/n; const lr=R+14; return `<text x="${cx+lr*Math.cos(ang)}" y="${cy+lr*Math.sin(ang)}" text-anchor="middle" alignment-baseline="middle" font-size="9" fill="#64748b">${a[0]} ${a[1]}</text>`; }).join('');
+  const grid=[0.25,0.5,0.75,1].map(f=>{ const gp=axes.map((_,i)=>{ const ang=-Math.PI/2+i*2*Math.PI/n; const r=R*f; return [cx+r*Math.cos(ang),cy+r*Math.sin(ang)].join(','); }).join(' '); return `<polygon points="${gp}" fill="none" stroke="#e2e8f0" stroke-width="1"/>`; }).join('');
+  return `<svg width="160" height="160">${grid}<polygon points="${poly}" fill="#2563eb33" stroke="#2563eb" stroke-width="1.5"/>${pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="2" fill="#2563eb"/>`).join('')}${labels}</svg>`;
+}
+
+/* =========================================================
+   TEMPLATES VIEW
+   ========================================================= */
+function renderTemplates(){
+  $('#content').innerHTML = `
+    <div class="card p-4 mb-3 flex items-center justify-between">
+      <div><div class="font-medium">模板中心</div><div class="text-[12px] text-slate-500">从模板一键创建技能，自动装配依赖与测试骨架。平台内置 · 租户 · 个人。</div></div>
+      <button onclick="toast('新建模板（管理员）')" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px] hover:bg-slate-50">+ 新建模板</button>
+    </div>
+    <div class="grid grid-cols-3 gap-3">
+      ${TEMPLATES.map(t=>{
+        const c=catByCode(t.group);
+        return `<div class="card p-4 hover:shadow-md transition cursor-pointer fade-in" onclick="openCreate('${t.id}')">
+          <div class="flex items-start justify-between">
+            <div class="text-2xl">${t.icon}</div>
+            <span class="pill px-2 py-0.5 text-[11px] ${t.level==='高阶'?'bg-purple-100 text-purple-700':'bg-slate-100 text-slate-600'}">${t.level}</span>
+          </div>
+          <div class="font-medium mt-2">${t.title}</div>
+          <div class="text-[12px] text-slate-500 mt-1 h-8">${t.desc}</div>
+          <div class="flex items-center gap-2 mt-2 text-[11px] text-slate-400">${dot(c.color)}${c.name} · ${t.area}</div>
+          <div class="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
+            <span class="text-[11px] text-slate-400">装配 ${t.includes.length} 项 · 用例 ${t.triggerExamples.length}</span>
+            <span class="text-[11px] text-slate-400">被使用 ${t.usedBy} 次</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+function openCreate(tid){
+  const t=TEMPLATES.find(x=>x.id===tid);
+  const c=catByCode(t.group);
+  $('#modal').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="card w-[520px] fade-in">
+      <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-2"><span class="text-xl">${t.icon}</span><div><div class="font-medium">从模板创建：${t.title}</div><div class="text-[11px] text-slate-400">${dot(c.color)} ${c.name} · ${t.area}</div></div></div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
+      <div class="p-4 space-y-3">
+        <div class="text-[12px] text-slate-500">填写变量，创建后将自动装配依赖与测试骨架，进入草稿态。</div>
+        ${t.variables.map(v=>`<div><label class="text-[12px] text-slate-600">${v.label}</label><input id="var_${v.key}" value="${v.default}" class="w-full mt-1 px-2 py-1.5 border border-slate-300 rounded-md text-[13px] focus:outline-none focus:ring-2 focus:ring-brand-500/30" /></div>`).join('')}
+        <div class="text-[12px] text-slate-500 bg-slate-50 rounded-md p-2">
+          <div class="font-medium mb-1 text-slate-600">将自动装配：</div>
+          ${t.includes.length?t.includes.map(i=>`<div class="flex items-center gap-1">${dot('#8b5cf6')} 片段 ${i}</div>`).join(''):'<div class="text-slate-400">无依赖</div>'}
+          <div class="flex items-center gap-1 mt-1">${dot('#16a34a')} 测试用例种子 ${t.triggerExamples.length} 条</div>
+        </div>
+      </div>
+      <div class="p-4 border-t border-slate-200 flex justify-end gap-2">
+        <button onclick="closeModal()" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px]">取消</button>
+        <button onclick="doCreate('${t.id}')" class="px-3 py-1.5 bg-brand-600 text-white rounded-md text-[13px] hover:bg-brand-700">创建技能</button>
+      </div>
+    </div></div>`;
+}
+function doCreate(tid){
+  const t=TEMPLATES.find(x=>x.id===tid);
+  const name=(document.getElementById('var_'+t.variables[0].key)?.value||'my-skill').toLowerCase().replace(/\s+/g,'-');
+  const ns={id:'new'+Date.now(), name, display:t.title+' (草稿)', summary:t.desc, group:t.group, area:t.area, status:'draft', version:0, owner:state.currentUser, passRate:0, local:true, source:'created', installed:false, enabled:false, pinned:false, isCompiled:false, recall:0,
+    quality:{trigger:0,assembly:0,safety:0,quality:0,efficiency:0},
+    desc:{summary:t.desc, triggers:t.triggerExamples, notFor:[], capabilities:[], keywords:[]} };
+  state.skills.unshift(ns);
+  closeModal(); toast(`已从模板创建草稿：${name}（含 ${t.includes.length} 个片段装配 + ${t.triggerExamples.length} 条用例）`);
+  setView('mine');
+  openDetail(ns.id);
+}
+function closeModal(){ $('#modal').innerHTML=''; }
+
+/* =========================================================
+   SNIPPETS VIEW
+   ========================================================= */
+function renderSnippets(){
+  $('#content').innerHTML=`
+    <div class="card p-4 mb-3 flex items-center justify-between">
+      <div><div class="font-medium">片段库</div><div class="text-[12px] text-slate-500">可复用积木，以原子引用插入技能。版本隔离，升级需显式确认。</div></div>
+      <button onclick="toast('新建片段')" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px] hover:bg-slate-50">+ 新建片段</button>
+    </div>
+    <div class="card divide-y divide-slate-100">
+      ${state.snippets.map(sn=>`
+        <div class="p-3 flex items-start gap-3 fade-in">
+          <span class="pill px-2 py-0.5 text-[11px] bg-slate-100 text-slate-600 flex-none mt-0.5">${SNIPPET_TYPE_LABEL[sn.type]}</span>
+          <div class="flex-1">
+            <div class="flex items-center gap-2"><span class="font-medium">${sn.title}</span><span class="text-[11px] text-slate-400">v${sn.version}</span></div>
+            <div class="text-[12px] text-slate-500 mt-0.5 font-mono bg-slate-50 rounded p-1.5">${sn.content}</div>
+            ${sn.upgradeAvailable?`<div class="mt-1.5 flex items-center gap-2 text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-1">⚠ 片段有新版本 v${sn.newVersion}，已引用旧版的技能不受影响。<button onclick="toast('已升级到 v${sn.newVersion}，引用方将收到确认提示')" class="underline">升级</button></div>`:''}
+          </div>
+          <div class="flex-none text-right">
+            <div class="text-[11px] text-slate-400">被 ${sn.usedBy} 个技能引用</div>
+            <button onclick="toast('已作为原子引用加入当前编辑的技能')" class="mt-1 px-2 py-1 bg-brand-600 text-white rounded text-[11px] hover:bg-brand-700">一键加入 skill</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+/* =========================================================
+   PR VIEW
+   ========================================================= */
+function renderPRs(){
+  $('#content').innerHTML=`
+    <div class="card p-4 mb-3 flex items-center justify-between">
+      <div><div class="font-medium">贡献 (Pull Requests)</div><div class="text-[12px] text-slate-500">租户内类 GitHub 协作。提 PR -> Review -> 测评门禁 -> Merge。</div></div>
+      <button onclick="toast('从某技能的详情页“提 PR”发起贡献')" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px]">如何提 PR？</button>
+    </div>
+    <div class="card divide-y divide-slate-100">
+      ${state.prs.map(pr=>{
+        const s=skillById(pr.skillId);
+        const m={open:['open','#d97706','#fef3c7'],merged:['merged','#16a34a','#dcfce7']};
+        const [t,c,bg]=m[pr.status];
+        return `<div class="p-3 flex items-center gap-3 hover:bg-slate-50 cursor-pointer fade-in" onclick="openPR('${pr.id}')">
+          <span class="pill px-2 py-0.5 text-[11px] flex-none" style="background:${bg};color:${c}">${t}</span>
+          <div class="flex-1">
+            <div class="font-medium text-slate-800">#${pr.id.toUpperCase()} ${pr.title}</div>
+            <div class="text-[11px] text-slate-400">目标：${s?.display||''} v${pr.baseVersion}->v${pr.targetVersion} · 作者 ${pr.author} · reviewer ${pr.reviewer} · ${pr.createdAt}</div>
+          </div>
+          ${pr.status==='open'? (pr.evalPassed?'<span class="pill px-2 py-0.5 text-[11px] bg-emerald-100 text-emerald-700">✓ 测评通过</span>':'<span class="pill px-2 py-0.5 text-[11px] bg-red-100 text-red-700">✗ 测评未过</span>'):''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+let prComments = { pr1:{'3':'建议补充品类归因的边界条件。'}, pr2:{}, pr3:{} };
+function openPR(prid){
+  const pr=state.prs.find(p=>p.id===prid);
+  const s=skillById(pr.skillId);
+  const f=pr.files[0];
+  const canMerge = pr.status==='open' && pr.evalPassed;
+  $('#modal').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="card w-[760px] max-h-[88vh] flex flex-col fade-in">
+      <div class="p-4 border-b border-slate-200">
+        <div class="flex items-center gap-2"><span class="font-medium">#${pr.id.toUpperCase()} ${pr.title}</span>
+        ${pr.status==='open'?(pr.evalPassed?'<span class="pill px-2 py-0.5 text-[11px] bg-emerald-100 text-emerald-700">✓ 测评门禁通过</span>':'<span class="pill px-2 py-0.5 text-[11px] bg-red-100 text-red-700">✗ 测评门禁未过</span>'):'<span class="pill px-2 py-0.5 text-[11px] bg-emerald-100 text-emerald-700">已合并 v'+pr.targetVersion+'</span>'}</div>
+        <div class="text-[11px] text-slate-400 mt-1">${s?.display} · v${pr.baseVersion}->v${pr.targetVersion} · 作者 ${pr.author} · reviewer ${pr.reviewer} · ${pr.createdAt}</div>
+        <div class="text-[12px] text-slate-600 mt-2 p-2 bg-slate-50 rounded">${pr.desc}</div>
+      </div>
+      <div class="p-4 scroll-y flex-1">
+        <div class="text-[12px] font-medium text-slate-600 mb-2">📄 ${f.path}</div>
+        <div class="card overflow-hidden">
+          ${f.lines.map((ln)=>{
+            const cls= ln.t==='add'?'diff-add':ln.t==='del'?'diff-del':'diff-ctx';
+            const sign= ln.t==='add'?'+':ln.t==='del'?'-':' ';
+            const cmt = prComments[pr.id] && prComments[pr.id][String(ln.n)];
+            return `<div class="ln ${cls}" onclick="addPRComment('${pr.id}','${ln.n}')"><span class="num">${ln.n}</span><span>${sign} ${ln.s}</span></div>
+              ${cmt?`<div class="px-3 py-1 ml-8 bg-amber-50 border-l-2 border-amber-400 text-[11px] text-slate-700">💬 ${pr.reviewer}: ${cmt} <span class="text-slate-400">(行 ${ln.n})</span></div>`:''}`;
+          }).join('')}
+        </div>
+        <div class="text-[11px] text-slate-400 mt-2">💡 点击任意代码行可添加行级评论</div>
+      </div>
+      <div class="p-4 border-t border-slate-200 flex items-center justify-between">
+        <div class="text-[11px] text-slate-400">测评门禁：${pr.evalPassed?'通过':'未通过'} · ${pr.status==='open'?'待 reviewer 处理':'已合并'}</div>
+        <div class="flex gap-2">
+          <button onclick="closeModal()" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px]">关闭</button>
+          ${pr.status==='open'?`<button onclick="toast('已 request changes')" class="px-3 py-1.5 border border-slate-300 rounded-md text-[13px]">Request changes</button>
+          <button onclick="${canMerge?`mergePR('${pr.id}')`:`toast('测评门禁未通过，无法 merge')`}" class="px-3 py-1.5 ${canMerge?'bg-emerald-600 hover:bg-emerald-700':'bg-slate-300 cursor-not-allowed'} text-white rounded-md text-[13px]">Approve & Merge</button>`:''}
+        </div>
+      </div>
+    </div></div>`;
+}
+function addPRComment(prid,ln){
+  const txt=prompt('添加行级评论（行 '+ln+'）：');
+  if(txt==null) return;
+  prComments[prid]=prComments[prid]||{}; prComments[prid][ln]=txt;
+  openPR(prid); toast('评论已添加');
+}
+function mergePR(prid){
+  const pr=state.prs.find(p=>p.id===prid); pr.status='merged';
+  const s=skillById(pr.skillId); if(s){ s.version=pr.targetVersion; s.status='published'; }
+  closeModal(); toast(`已合并，${s?.display} 发布 v${pr.targetVersion}（版本快照已生成）`);
+  renderPRs();
+}
+
+/* =========================================================
+   EVAL VIEW
+   ========================================================= */
+function renderEval(){
+  const ranked=[...state.skills].filter(s=>s.status!=='draft').sort((a,b)=>b.passRate-a.passRate);
+  const withRate = state.skills.filter(s=>s.passRate);
+  const avg = withRate.length? Math.round(withRate.reduce((a,s)=>a+s.passRate,0)/withRate.length):0;
+  $('#content').innerHTML=`
+    <div class="card p-4 mb-3"><div class="font-medium">测评中心</div><div class="text-[12px] text-slate-500">租户技能质量看板 · Badcase 闭环 · 召回率监控</div></div>
+    <div class="grid grid-cols-3 gap-3 mb-3">
+      ${statCard('平均通过率', avg+'%','#2563eb')}
+      ${statCard('待处理 Badcase', state.badcases.filter(b=>b.status==='pending').length,'#d97706')}
+      ${statCard('低召回技能', state.skills.filter(s=>s.recall<0.7).length,'#dc2626')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div class="card p-4">
+        <div class="font-medium mb-3">通过率排行</div>
+        ${ranked.map(s=>{const c=catByCode(s.group);return `<div class="flex items-center gap-2 py-1.5">
+          ${dot(c.color)}<span class="w-32 truncate text-[12px]">${s.display}</span>
+          <div class="flex-1 h-2 rounded bg-slate-100 overflow-hidden"><div class="bar-fill h-full" style="width:${s.passRate}%;background:${s.passRate>=90?'#16a34a':s.passRate>=80?'#d97706':'#dc2626'}"></div></div>
+          <span class="text-[11px] text-slate-500 w-8 text-right">${s.passRate}%</span>
+        </div>`;}).join('')}
+      </div>
+      <div class="card p-4">
+        <div class="font-medium mb-3">Badcase 队列 <span class="text-[11px] text-slate-400 font-normal">（线上 -> 沉淀为用例 -> 回归）</span></div>
+        ${state.badcases.map(b=>{const s=skillById(b.skillId);const cm={high:['#dc2626','高'],medium:['#d97706','中'],low:['#64748b','低']}[b.confidence];
+          return `<div class="border border-slate-200 rounded-md p-2.5 mb-2 fade-in">
+            <div class="flex items-center gap-2"><span class="pill px-1.5 py-0 text-[10px]" style="background:#fee2e2;color:#991b1b">${b.type}</span><span class="text-[11px] text-slate-400">${s?.display||''}</span><span class="pill px-1.5 py-0 text-[10px] ml-auto" style="background:${cm[0]}1a;color:${cm[0]}">置信度 ${cm[1]}</span></div>
+            <div class="text-[12px] text-slate-600 mt-1">${b.desc}</div>
+            <div class="flex gap-2 mt-1.5"><button onclick="sedimentBadcase('${b.id}')" class="text-[11px] px-2 py-0.5 bg-brand-600 text-white rounded">沉淀为测试用例</button><button onclick="toast('已忽略')" class="text-[11px] px-2 py-0.5 text-slate-500">忽略</button></div>
+          </div>`;}).join('')}
+      </div>
+    </div>
+    <div class="card p-4 mt-3">
+      <div class="font-medium mb-3">召回率看板 <span class="text-[11px] text-slate-400 font-normal">（description 优化目标）</span></div>
+      ${state.skills.filter(s=>s.status!=='draft').map(s=>{const c=catByCode(s.group);const low=s.recall<0.7;return `<div class="flex items-center gap-2 py-1">
+        ${dot(c.color)}<span class="w-36 truncate text-[12px]">${s.display}</span>
+        <div class="flex-1 h-2 rounded bg-slate-100 overflow-hidden"><div class="bar-fill h-full" style="width:${Math.round(s.recall*100)}%;background:${low?'#dc2626':'#0891b2'}"></div></div>
+        <span class="text-[11px] w-10 text-right" style="color:${low?'#dc2626':'#64748b'}">${Math.round(s.recall*100)}%</span>
+        ${low?`<button onclick="toast('LLM 已生成 description 优化建议：补充触发词与负向边界')" class="text-[11px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded">优化建议</button>`:'<span class="w-16"></span>'}
+      </div>`;}).join('')}
+    </div>`;
+}
+function sedimentBadcase(id){
+  const b=state.badcases.find(x=>x.id===id); b.status='resolved';
+  toast('已沉淀为测试用例（触发路由），下次测评将回归'); renderEval();
+}
+
+/* =========================================================
+   ADMIN VIEW
+   ========================================================= */
+function renderAdmin(){
+  $('#content').innerHTML=`
+    <div class="card p-4 mb-3"><div class="font-medium">管理 · 分类体系</div><div class="text-[12px] text-slate-500">租户级两级分类（领域 + 细分）。新增技能未分类时进入“未分类”。</div></div>
+    <div class="card p-4">
+      ${state.categories.map((c,ci)=>`
+        <div class="border border-slate-200 rounded-md p-3 mb-2">
+          <div class="flex items-center gap-2">
+            <input type="color" value="${c.color}" onchange="setCatColor(${ci},this.value)" class="w-6 h-6 rounded cursor-pointer" />
+            <input value="${c.name}" onchange="setCatName(${ci},this.value)" class="px-2 py-1 border border-slate-300 rounded text-[13px] flex-1" />
+            <button onclick="delCat(${ci})" class="text-[12px] text-red-500 hover:text-red-700">删除领域</button>
+          </div>
+          <div class="flex flex-wrap gap-1.5 mt-2 ml-8">
+            ${c.areas.map((a,ai)=>`<span class="pill px-2 py-0.5 text-[11px] bg-slate-100 text-slate-600 flex items-center gap-1">${a}<button onclick="delArea(${ci},${ai})" class="text-slate-400 hover:text-red-500">✕</button></span>`).join('')}
+            <button onclick="addArea(${ci})" class="pill px-2 py-0.5 text-[11px] border border-dashed border-slate-300 text-slate-500 hover:bg-slate-50">+ 细分</button>
+          </div>
+        </div>`).join('')}
+      <button onclick="addCat()" class="px-3 py-1.5 border border-dashed border-slate-300 rounded-md text-[13px] text-slate-500 hover:bg-slate-50 w-full">+ 新增领域分组</button>
+    </div>`;
+}
+function setCatColor(i,v){ state.categories[i].color=v; renderAdmin(); }
+function setCatName(i,v){ state.categories[i].name=v; renderSubnav(); }
+function delCat(i){ if(!confirm('删除该领域分组？'))return; state.categories.splice(i,1); renderAdmin(); renderSubnav(); }
+function addCat(){ const code='g'+Date.now(); state.categories.push({code,name:'新领域',color:'#64748b',areas:[]}); renderAdmin(); renderSubnav(); }
+function addArea(i){ const a=prompt('细分领域名称：'); if(a){state.categories[i].areas.push(a); renderAdmin();} }
+function delArea(i,ai){ state.categories[i].areas.splice(ai,1); renderAdmin(); }
+
+function openUploadSkill(){
+  $('#modal').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="card w-[520px] fade-in">
+      <div class="p-4 border-b border-slate-200 flex justify-between"><div class="font-medium">上传技能到 workspace</div><button onclick="closeModal()" class="text-slate-400">✕</button></div>
+      <div class="p-4 space-y-3">
+        <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center text-[12px] text-slate-500">
+          <div class="text-2xl mb-1">📦</div>
+          拖拽 <span class="font-mono">SKILL.md</span> 或技能文件夹到这里，或点击选择文件
+          <div class="text-[11px] text-slate-400 mt-1">将写入 <span class="font-mono">.claude/skills/&lt;name&gt;/</span>，frontmatter 校验后导入为草稿</div>
+        </div>
+        <div class="text-[11px] text-slate-400">⚠ 上传技能不会自动发布到市场；如需共享请走「提 PR」流程。</div>
+        <div class="bg-slate-50 rounded p-2 text-[12px] text-slate-600">已识别：name=pdf-extractor · description=… · 文件 4 · frontmatter ✓</div>
+      </div>
+      <div class="p-4 border-t border-slate-200 flex justify-end gap-2"><button onclick="closeModal()" class="px-3 py-1.5 border border-slate-300 rounded text-[13px]">取消</button><button onclick="doUpload()" class="px-3 py-1.5 bg-brand-600 text-white rounded text-[13px]">导入为草稿</button></div>
+    </div></div>`;
+}
+function doUpload(){
+  const ns={id:'up'+Date.now(), name:'uploaded-skill', display:'上传技能 (草稿)', summary:'从文件 tab 上传的技能', group:'common', area:'文档与写作', status:'draft', version:0, owner:state.currentUser, passRate:0, local:true, source:'uploaded', installed:false, enabled:false, pinned:false, isCompiled:false, recall:0,
+    quality:{trigger:0,assembly:0,safety:0,quality:0,efficiency:0},
+    desc:{summary:'从文件 tab 上传的技能', triggers:[], notFor:[], capabilities:[], keywords:[]} };
+  state.skills.unshift(ns);
+  closeModal(); toast('已导入为草稿：uploaded-skill');
+  setView('mine');
+  openDetail(ns.id);
+}
+
+/* =========================================================
+   RENDER ROUTER
+   ========================================================= */
+function render(){
+  if(state.view==='market') renderMarket();
+  else if(state.view==='mine') renderMine();
+  else if(state.view==='templates') renderTemplates();
+  else if(state.view==='snippets') renderSnippets();
+  else if(state.view==='prs') renderPRs();
+  else if(state.view==='eval') renderEval();
+  else if(state.view==='admin') renderAdmin();
+}
+
+/* init */
+renderSubnav();
+render();
+</script>
+</body>
+</html>

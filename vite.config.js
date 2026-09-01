@@ -18,7 +18,6 @@ export default defineConfig(({ mode }) => {
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
   const sqlCheckBaseUrl = env.SQL_CHECK_BASE_URL || ''
-
   return {
     plugins: [react()],
     define: {

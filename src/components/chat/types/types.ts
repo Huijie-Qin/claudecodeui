@@ -66,10 +66,80 @@ export interface TaskNotificationDetails {
   raw: string;
 }
 
+export type UserQueueStatus = 'queued' | 'processing' | 'failed';
+
+export type HookActivityStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface HookFollowupActivityDetails {
+  jobId?: string;
+  executionId?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
+  skillName?: string;
+  summary?: string;
+  queuePosition?: number;
+  status: HookActivityStatus;
+  error?: string;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
+  loopResult?: unknown;
+  timestamp: string | number | Date;
+  messages?: ChatMessage[];
+}
+
+export interface HookExecutionActionResult {
+  actionId: string;
+  actionType: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record';
+  output?: unknown;
+  record?: {
+    id: string;
+    type?: string;
+    data?: unknown;
+    createdAt?: string;
+  };
+}
+
+export interface HookActivityDetails {
+  jobId?: string;
+  executionId?: string;
+  hookId?: string;
+  hookName?: string;
+  activityKind?: 'execution' | 'followup';
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
+  loopResult?: unknown;
+  actionResults?: HookExecutionActionResult[];
+  hasScript?: boolean;
+  skillName?: string;
+  summary?: string;
+  queuePosition?: number;
+  status: HookActivityStatus;
+  error?: string;
+  followups?: HookFollowupActivityDetails[];
+}
+
 export interface ChatMessage {
+  id?: string;
   type: string;
   content?: string;
   timestamp: string | number | Date;
+  clientMessageId?: string;
+  queueStatus?: UserQueueStatus;
+  queuePosition?: number;
   images?: ChatImage[];
   reasoning?: string;
   isThinking?: boolean;
@@ -85,10 +155,14 @@ export interface ChatMessage {
   toolCompletedAt?: string | number | Date;
   isSubagentContainer?: boolean;
   isTaskNotification?: boolean;
+  isHookActivity?: boolean;
+  hookActivity?: HookActivityDetails;
   taskStatus?: string;
   taskNotification?: TaskNotificationDetails;
   subagentState?: {
+    agentId?: string;
     childTools: SubagentChildTool[];
+    messages?: ChatMessage[];
     currentToolIndex: number;
     isComplete: boolean;
     detailsOwnerToolId?: string;
@@ -161,6 +235,14 @@ export interface ChatInterfaceProps {
   autoScrollToBottom?: boolean;
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
+  initialUserMessage?: {
+    sessionId: string;
+    provider: LLMProvider;
+    content: string;
+    timestamp: number;
+  };
+  onOpenCapabilities?: () => void;
   onTaskClick?: (...args: unknown[]) => void;
   onShowAllTasks?: (() => void) | null;
+  workspaceTerminology?: 'workspace' | 'expert';
 }

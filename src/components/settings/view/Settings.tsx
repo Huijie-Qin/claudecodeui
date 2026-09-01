@@ -5,14 +5,16 @@ import { Button } from '../../../shared/view/ui';
 import SettingsSidebar from '../view/SettingsSidebar';
 import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
+import ClaudeEnvironmentSettingsTab from '../view/tabs/claude-env-settings/ClaudeEnvironmentSettingsTab';
 import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
+import HookSettingsTab from '../view/tabs/HookSettingsTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import type { SettingsProps } from '../types/types';
 
-function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects = [], initialTab = 'appearance', workspaceTerminology = 'workspace' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const {
     activeTab,
@@ -35,7 +37,7 @@ function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps)
 
   return (
     <div className="modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm md:p-4">
-      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[90vh] md:max-w-4xl md:rounded-xl">
+      <div className="flex h-full w-full flex-col overflow-hidden border border-border bg-background shadow-2xl md:h-[90vh] md:max-w-5xl md:rounded-xl">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-3 md:px-5">
           <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
@@ -59,7 +61,7 @@ function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps)
           <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} />
 
           {/* Content */}
-          <main className="flex-1 overflow-y-auto">
+          <main className="min-w-0 flex-1 overflow-y-auto">
             <div key={activeTab} className="settings-content-enter space-y-6 p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-6">
               {activeTab === 'appearance' && (
                 <AppearanceSettingsTab
@@ -86,6 +88,10 @@ function Settings({ isOpen, onClose, initialTab = 'appearance' }: SettingsProps)
             )}
 
               {activeTab === 'api' && <CredentialsSettingsTab />}
+
+              {activeTab === 'claudeEnv' && <ClaudeEnvironmentSettingsTab />}
+
+              {activeTab === 'hooks' && <HookSettingsTab projects={projects} workspaceTerminology={workspaceTerminology} />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
             </div>

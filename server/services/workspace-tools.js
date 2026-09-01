@@ -927,7 +927,7 @@ function isRunningInsideContainer() {
   }
 }
 
-function rewriteLocalHttpMcpServerForDocker(serverConfig) {
+export function rewriteLocalHttpMcpServerForDocker(serverConfig) {
   const record = readPlainObject(serverConfig);
   const url = firstString(record?.url);
   if (!record || !url) {

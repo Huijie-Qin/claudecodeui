@@ -1,4 +1,4 @@
-import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, UploadCloud, X } from 'lucide-react';
+import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, X } from 'lucide-react';
 
 import type { CodeEditorFile } from '../../types/types';
 
@@ -13,16 +13,13 @@ type CodeEditorHeaderProps = {
   saving: boolean;
   saveSuccess: boolean;
   isReadOnly?: boolean;
-  skillSubmitting?: boolean;
-  skillSubmitSuccess?: boolean;
-  skillSubmitDisabled?: boolean;
   onTogglePreview: () => void;
   onOpenSettings: () => void;
   onDownload: () => void;
   onSave: () => void;
-  onSubmitSkill?: () => void;
   onToggleFullscreen: () => void;
   onClose: () => void;
+  tabbed?: boolean;
   labels: {
     showingChanges: string;
     editMarkdown: string;
@@ -34,9 +31,6 @@ type CodeEditorHeaderProps = {
     save: string;
     saving: string;
     saved: string;
-    submitSkill: string;
-    submittingSkill: string;
-    skillSubmitted: string;
     fullscreen: string;
     exitFullscreen: string;
     close: string;
@@ -52,24 +46,16 @@ export default function CodeEditorHeader({
   saving,
   saveSuccess,
   isReadOnly = false,
-  skillSubmitting = false,
-  skillSubmitSuccess = false,
-  skillSubmitDisabled = false,
   onTogglePreview,
   onOpenSettings,
   onDownload,
   onSave,
-  onSubmitSkill,
   onToggleFullscreen,
   onClose,
+  tabbed = false,
   labels,
 }: CodeEditorHeaderProps) {
   const saveTitle = isReadOnly ? 'Read-only' : saveSuccess ? labels.saved : saving ? labels.saving : labels.save;
-  const submitSkillTitle = skillSubmitSuccess
-    ? labels.skillSubmitted
-    : skillSubmitting
-      ? labels.submittingSkill
-      : labels.submitSkill;
   const previewTitle = previewMode === 'markdown'
     ? previewEnabled ? labels.editMarkdown : labels.previewMarkdown
     : previewMode === 'html'
@@ -125,18 +111,14 @@ export default function CodeEditorHeader({
     <div className="flex min-w-0 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1.5">
       {/* File info - can shrink */}
       <div className="flex min-w-0 flex-1 shrink items-center gap-2">
-        <div className="min-w-0 shrink">
-          <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>
-            {file.diffInfo && (
-              <span className="shrink-0 whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
-                {labels.showingChanges}
-              </span>
-            )}
-          </div>
-          <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-            {displayedPath}
-          </p>
+        <div className="flex min-w-0 shrink items-center gap-2">
+          {!tabbed && <h3 className="truncate text-sm font-medium text-gray-900 dark:text-white">{file.name}</h3>}
+          <p className="truncate text-xs text-gray-500 dark:text-gray-400">{displayedPath}</p>
+          {file.diffInfo && (
+            <span className="shrink-0 whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900 dark:text-blue-300">
+              {labels.showingChanges}
+            </span>
+          )}
         </div>
       </div>
 
@@ -195,29 +177,6 @@ export default function CodeEditorHeader({
           )}
         </button>
 
-        {onSubmitSkill ? (
-          <button
-            type="button"
-            onClick={onSubmitSkill}
-            disabled={skillSubmitting || skillSubmitDisabled || isReadOnly}
-            className={`flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:opacity-50 ${
-              skillSubmitSuccess
-                ? 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-            }`}
-            title={submitSkillTitle}
-          >
-            {skillSubmitSuccess ? (
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            ) : (
-              <UploadCloud className={`h-4 w-4 ${skillSubmitting ? 'animate-pulse' : ''}`} />
-            )}
-            <span>{submitSkillTitle}</span>
-          </button>
-        ) : null}
-
         {!isSidebar && (
           <button
             type="button"
@@ -229,14 +188,16 @@ export default function CodeEditorHeader({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-          title={labels.close}
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!tabbed && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center justify-center rounded-md p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            title={labels.close}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );

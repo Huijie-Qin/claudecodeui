@@ -12,6 +12,8 @@ export type ProjectFilesChangedEvent = {
   workspaceId?: number | string | null;
   changedPath?: string | null;
   reason?: ProjectFilesChangedReason | string;
+  pathChanges?: Array<{ oldPath: string; newPath: string }>;
+  deletedPaths?: string[];
 };
 
 type ProjectFilesChangedListener = (event: ProjectFilesChangedEvent) => void;

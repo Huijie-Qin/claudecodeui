@@ -20,6 +20,49 @@
     "codex": "Codex",
     "gemini": "Gemini"
   },
+  "messageQueue": {
+    "queued": "Queued",
+    "failed": "Failed to queue"
+  },
+  "hookActivity": {
+    "title": "Follow-up message",
+    "executionTitle": "Hook execution",
+    "script": "Script",
+    "actions": {
+      "call_mcp_tool": "MCP call",
+      "mcp_loop_run": "MCP loop wait",
+      "write_record": "Write record",
+      "invoke_skill": "Invoke Skill",
+      "send_agent_message": "Send to Agent"
+    },
+    "loopAttempts": "{{count}} polls",
+    "loopResult": "Final result",
+    "cancelLoop": "Cancel wait",
+    "cancellingLoop": "Cancelling…",
+    "unnamed": "Unnamed Hook",
+    "skill": "Skill",
+    "directMessage": "Sent to Agent",
+    "followupCount": "{{count}} post-action",
+    "followupCount_other": "{{count}} post-actions",
+    "expandFollowups": "Expand post-actions",
+    "collapseFollowups": "Collapse post-actions",
+    "resultCount": "{{count}} execution result",
+    "resultCount_other": "{{count}} execution results",
+    "expandResults": "Expand execution results",
+    "collapseResults": "Collapse execution results",
+    "recordInfo": "Record details",
+    "returnInfo": "Return details",
+    "recordId": "Record ID",
+    "emptyResult": "No return value",
+    "recoveryProcess": "Execution details",
+    "queuePosition": "Queue position {{position}}",
+    "status": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Completed",
+      "failed": "Failed"
+    }
+  },
   "tools": {
     "settings": "Tool Settings",
     "error": "Tool Error",
@@ -131,6 +174,8 @@
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
+    "sendSupplement": "Queue follow-up",
+    "supplementPlaceholder": "Add supplementary information while DataAgent is running",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands"
@@ -182,6 +227,9 @@
   "providerSelection": {
     "title": "Choose Your AI Assistant",
     "description": "Select a provider to start a new conversation",
+    "templateGuide": "{{name}} guide",
+    "defaultAgentName": "Agent",
+    "guideNotSent": "This is a prompt for starting the conversation and is not sent to the model automatically.",
     "selectModel": "Select Model",
     "providerInfo": {
       "anthropic": "by Anthropic",
@@ -384,6 +432,59 @@
       "firstRunInvalid": "First run must be a valid date/time",
       "startAfterInvalid": "Start after must be a valid date/time"
     }
+  },
+  "subagent": {
+    "resizePanel": "Resize agent activity panel"
+  },
+  "subagentPanel": {
+    "title": "Subagent activity",
+    "agentCount": "{{count}} agents",
+    "agentCount_one": "{{count}} agent",
+    "agentCount_other": "{{count}} agents",
+    "close": "Close subagent panel",
+    "open": "Open in side panel",
+    "selectAgent": "Select subagent",
+    "noAgents": "No subagents",
+    "status": {
+      "running": "Running",
+      "waiting": "Waiting",
+      "completed": "Completed",
+      "stopped": "Stopped",
+      "error": "Failed"
+    },
+    "duration": {
+      "seconds": "{{count}}s",
+      "minutesSeconds": "{{minutes}}m {{seconds}}s"
+    },
+    "toolCount": "{{count}} tools",
+    "toolCount_one": "{{count}} tool",
+    "toolCount_other": "{{count}} tools",
+    "empty": {
+      "title": "No subagent activity",
+      "description": "Subagent calls will appear here as they run."
+    },
+    "prompt": {
+      "title": "Task prompt"
+    },
+    "timeline": {
+      "ariaLabel": "Subagent execution timeline",
+      "title": "Activity",
+      "waiting": "Waiting for the first tool call…",
+      "noActivity": "No tool activity was recorded."
+    },
+    "activity": {
+      "ariaLabel": "{{toolName}} tool activity",
+      "parameters": "Parameters",
+      "result": "Result"
+    },
+    "finalResult": "Final result",
+    "usage": "Usage",
+    "pendingQuestion": "Subagent question awaiting your answer",
+    "questionWaiting": "A subagent is waiting for your answer. Open its tool call to respond.",
+    "locatingQuestion": "Connecting a subagent question…",
+    "newUpdates": "{{count}} new updates · Back to latest",
+    "newUpdates_one": "{{count}} new update · Back to latest",
+    "newUpdates_other": "{{count}} new updates · Back to latest"
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"

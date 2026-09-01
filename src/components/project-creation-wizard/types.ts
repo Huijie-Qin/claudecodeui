@@ -24,11 +24,17 @@ export type CreateFolderResponse = {
 export type CreateWorkspacePayload = {
   workspaceType: WorkspaceType;
   path: string;
+  templateId?: number | null;
 };
 
 export type CreateWorkspaceResponse = {
   success?: boolean;
   project?: Record<string, unknown>;
+  agentTemplate?: {
+    id: number;
+    name: string;
+    guideText: string;
+  } | null;
   error?: string;
   details?: string;
 };
@@ -36,4 +42,21 @@ export type CreateWorkspaceResponse = {
 export type WizardFormState = {
   workspaceType: WorkspaceType;
   workspacePath: string;
+  templateId: number | null;
+};
+
+export type AgentTemplateCapability = {
+  id: number;
+  name: string;
+};
+
+export type AgentTemplateOption = {
+  id: number;
+  name: string;
+  category?: string;
+  summary: string;
+  guideText?: string;
+  skills: AgentTemplateCapability[];
+  mcps: AgentTemplateCapability[];
+  updatedAt?: string;
 };

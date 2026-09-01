@@ -92,6 +92,10 @@ export function isTaskNotificationError(status: string): boolean {
     'canceled',
     'timed_out',
     'timeout',
+    'stopped',
+    'killed',
+    'aborted',
+    'interrupted',
   ].includes(normalizedStatus);
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "音乐 App 报表查询"
+  short_description: "查询安装、新增、卸载、留存及活跃报表"
+  default_prompt: "Use $query-music-app-reports to compare music app installs, new users, uninstalls, and retention."

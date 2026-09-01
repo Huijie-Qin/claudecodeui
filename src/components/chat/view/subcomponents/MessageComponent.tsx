@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { CheckCircle2, ChevronDown, Clock3, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -15,6 +16,7 @@ import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications'
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
+import { useWebSocket } from '../../../../contexts/WebSocketContext';
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
@@ -30,6 +32,7 @@ type MessageComponentProps = {
   prevMessage: ChatMessage | null;
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  onOpenSubagent?: (toolId: string) => void;
   onShowSettings?: () => void;
   onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
   autoExpandTools?: boolean;
@@ -46,6 +49,7 @@ type InteractiveOption = {
 };
 
 type PermissionGrantState = 'idle' | 'granted' | 'error';
+type PreviewImage = { src: string; alt: string };
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
 function redactVisibleSecretText(value: unknown): string {
@@ -53,6 +57,40 @@ function redactVisibleSecretText(value: unknown): string {
     .replace(/(Authorization\s*[:=]\s*Bearer\s+)[^\s"'`]+/gi, '$1[REDACTED]')
     .replace(/((?:api[_-]?key|auth[_-]?token|private[_-]?token|user[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]')
     .replace(/([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PRIVATE)[A-Z0-9_]*\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]');
+}
+
+function formatHookActivityValue(value: unknown): string {
+  if (value === undefined) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    try {
+      return redactVisibleSecretText(JSON.stringify(JSON.parse(trimmed), null, 2));
+    } catch {
+      return redactVisibleSecretText(trimmed);
+    }
+  }
+  try {
+    return redactVisibleSecretText(JSON.stringify(value, null, 2));
+  } catch {
+    return redactVisibleSecretText(String(value ?? ''));
+  }
+}
+
+function formatHookRecordTimestamp(value: string): string {
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatLoopElapsed(startedAtMs?: number): string {
+  if (!startedAtMs) return '';
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function diagnosticValue(value: unknown): string {
@@ -118,8 +156,9 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
   return sections.join('\n\n');
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
+  const { sendMessage, isConnected } = useWebSocket();
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -127,6 +166,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       (prevMessage.type === 'error'));
   const messageRef = useRef<HTMLDivElement | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [hookFollowupsOpen, setHookFollowupsOpen] = useState(false);
+  const [hookResultsOpen, setHookResultsOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
+  const [cancellingLoopJobs, setCancellingLoopJobs] = useState<Set<string>>(() => new Set());
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
   const [permissionGrantState, setPermissionGrantState] = useState<PermissionGrantState>('idle');
   const userCopyContent = String(message.content || '');
@@ -141,6 +184,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
+  const isQueuedUserMessage = message.type === 'user' && message.queueStatus === 'queued';
+  const isFailedQueuedUserMessage = message.type === 'user' && message.queueStatus === 'failed';
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse &&
@@ -150,6 +195,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   useEffect(() => {
     setPermissionGrantState('idle');
   }, [permissionSuggestion?.entry, message.toolId]);
+
+  useEffect(() => {
+    if (!previewImage) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [previewImage]);
 
   useEffect(() => {
     const node = messageRef.current;
@@ -192,6 +249,33 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const diagnosticRows = useMemo(() => buildDiagnosticRows(errorDiagnostics), [errorDiagnostics]);
   const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
+  const hookActivity = message.hookActivity;
+  const hookStatus = hookActivity?.status || 'running';
+  const isHookExecution = hookActivity?.activityKind === 'execution';
+  const hookActionResults = hookActivity?.actionResults || [];
+  const loopResult = hookActivity?.loopResult !== undefined
+    ? hookActivity.loopResult
+    : hookActivity?.followups?.find((followup) => (
+        followup.actionType === 'mcp_loop_run' && followup.loopResult !== undefined
+      ))?.loopResult;
+  const formattedLoopResult = useMemo(() => formatHookActivityValue(loopResult), [loopResult]);
+  const hookActionLabels = {
+    call_mcp_tool: t('hookActivity.actions.call_mcp_tool', { defaultValue: 'MCP call' }),
+    mcp_loop_run: t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' }),
+    write_record: t('hookActivity.actions.write_record', { defaultValue: 'Write record' }),
+    invoke_skill: t('hookActivity.actions.invoke_skill', { defaultValue: 'Invoke Skill' }),
+    send_agent_message: t('hookActivity.actions.send_agent_message', { defaultValue: 'Send to Agent' }),
+  };
+  const hookStatusLabel = {
+    queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
+    running: t('hookActivity.status.running', { defaultValue: 'Running' }),
+    succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
+    failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+  }[hookStatus];
+  const cancelMcpLoop = (jobId: string, sessionId?: string) => {
+    setCancellingLoopJobs((current) => new Set(current).add(jobId));
+    sendMessage({ type: 'cancel-mcp-loop', jobId, sessionId });
+  };
 
   if (shouldHideThinkingMessage) {
     return null;
@@ -201,12 +285,18 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
+      data-queue-status={message.queueStatus || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
       {message.type === 'user' ? (
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="group flex-1 rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4">
+          <div className={`group flex-1 rounded-2xl rounded-br-md px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4 ${isQueuedUserMessage
+            ? 'border border-dashed border-blue-300/80 bg-blue-600/75'
+            : isFailedQueuedUserMessage
+              ? 'border border-red-300/80 bg-red-600/85'
+              : 'bg-blue-600'
+            }`}>
             <div className="whitespace-pre-wrap break-words text-sm">
               {message.content}
             </div>
@@ -218,12 +308,27 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     src={img.data}
                     alt={img.name}
                     className="h-auto max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
-                    onClick={() => window.open(img.data, '_blank')}
+                    onClick={() => setPreviewImage({
+                      src: img.data,
+                      alt: img.name || t('imagePreview', { defaultValue: 'Attached image' }),
+                    })}
                   />
                 ))}
               </div>
             )}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+              {isQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium" data-queued-message-indicator>
+                  <Clock3 className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.queued', { defaultValue: 'Queued' })}
+                </span>
+              )}
+              {isFailedQueuedUserMessage && (
+                <span className="mr-auto inline-flex items-center gap-1 font-medium text-red-100">
+                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                  {t('messageQueue.failed', { defaultValue: 'Failed to queue' })}
+                </span>
+              )}
               {shouldShowUserCopyControl && (
                 <MessageCopyControl content={userCopyContent} messageType="user" />
               )}
@@ -235,6 +340,336 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               U
             </div>
           )}
+        </div>
+      ) : message.isHookActivity && hookActivity ? (
+        <div
+          className="w-full rounded-lg border border-l-4 border-violet-200/80 border-l-violet-500 bg-violet-50/60 px-3 py-2.5 dark:border-violet-900/70 dark:border-l-violet-400 dark:bg-violet-950/20"
+          data-hook-activity={hookActivity.jobId || hookActivity.hookId || 'hook'}
+          data-hook-status={hookStatus}
+        >
+          <div className="flex min-w-0 items-start gap-2.5">
+            <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
+              <Webhook className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                {!isHookExecution && (
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                    {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                  </span>
+                )}
+                <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                  {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
+                </span>
+                <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${hookStatus === 'failed'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                  : hookStatus === 'succeeded'
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
+                  }`}
+                >
+                  {hookStatus === 'failed' ? (
+                    <XCircle className="h-3 w-3" aria-hidden="true" />
+                  ) : hookStatus === 'succeeded' ? (
+                    <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  ) : (
+                    <Loader2 className={`h-3 w-3 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  )}
+                  {hookStatusLabel}
+                </span>
+              </div>
+
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                {isHookExecution ? (
+                  <>
+                    {hookActivity.eventName ? <span>{hookActivity.eventName}</span> : null}
+                    {hookActivity.hasScript ? (
+                      <span>{t('hookActivity.script', { defaultValue: 'Script' })}</span>
+                    ) : null}
+                    {hookActivity.actionTypes?.map((actionType) => (
+                      <span key={actionType}>{hookActionLabels[actionType]}</span>
+                    ))}
+                  </>
+                ) : hookActivity.skillName ? (
+                  <span className="truncate">
+                    {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{hookActivity.skillName}</code>
+                  </span>
+                ) : hookActivity.actionType === 'send_agent_message' ? (
+                  <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                ) : hookActivity.actionType === 'mcp_loop_run' ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <RefreshCcw className={`h-3 w-3 shrink-0 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    <span className="truncate">
+                      {hookActivity.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
+                    </span>
+                    {typeof hookActivity.loopAttemptCount === 'number' ? (
+                      <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: hookActivity.loopAttemptCount })}</span>
+                    ) : null}
+                    {hookActivity.loopStartedAtMs ? <span>{formatLoopElapsed(hookActivity.loopStartedAtMs)}</span> : null}
+                  </span>
+                ) : null}
+                {hookStatus === 'queued' && typeof hookActivity.queuePosition === 'number' && (
+                  <span>
+                    {t('hookActivity.queuePosition', {
+                      defaultValue: 'Queue position {{position}}',
+                      position: hookActivity.queuePosition,
+                    })}
+                  </span>
+                )}
+                <span className="text-[11px] text-muted-foreground/70">{formattedTime}</span>
+                {!isHookExecution && hookActivity.actionType === 'mcp_loop_run' && hookStatus === 'running' && hookActivity.loopJobId ? (
+                  <button
+                    type="button"
+                    className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
+                    disabled={!isConnected || cancellingLoopJobs.has(hookActivity.loopJobId)}
+                    onClick={() => cancelMcpLoop(hookActivity.loopJobId!)}
+                  >
+                    {cancellingLoopJobs.has(hookActivity.loopJobId)
+                      ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
+                      : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
+                  </button>
+                ) : null}
+              </div>
+
+              {!isHookExecution && hookActivity.summary && (
+                <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
+                  {redactVisibleSecretText(hookActivity.summary)}
+                </div>
+              )}
+
+              {loopResult !== undefined && (
+                <section
+                  className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2.5 py-2 dark:border-emerald-900/70 dark:bg-emerald-950/20"
+                  data-hook-loop-result
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                    {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
+                  </div>
+                  <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
+                    {formattedLoopResult || t('hookActivity.emptyResult')}
+                  </pre>
+                </section>
+              )}
+
+              {isHookExecution && hookActionResults.length > 0 && (
+                <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-900/70">
+                  <button
+                    type="button"
+                    aria-expanded={hookResultsOpen}
+                    aria-label={t(hookResultsOpen ? 'hookActivity.collapseResults' : 'hookActivity.expandResults')}
+                    data-hook-result-toggle
+                    onClick={() => setHookResultsOpen((current) => !current)}
+                    className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-violet-700 outline-none transition-colors hover:bg-violet-100/70 focus-visible:ring-2 focus-visible:ring-violet-400/60 dark:text-violet-300 dark:hover:bg-violet-900/30"
+                  >
+                    <span>{t('hookActivity.resultCount', { count: hookActionResults.length })}</span>
+                    <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                      {t(hookResultsOpen ? 'hookActivity.collapseResults' : 'hookActivity.expandResults')}
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 transition-transform ${hookResultsOpen ? 'rotate-180' : ''}`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  {hookResultsOpen ? (
+                    <div className="mt-2 space-y-2" data-hook-result-list>
+                      {hookActionResults.map((result) => {
+                        const isRecord = result.actionType === 'write_record';
+                        const value = isRecord && result.record
+                          ? result.record.data
+                          : result.output;
+                        const formattedValue = formatHookActivityValue(value);
+                        return (
+                          <section
+                            key={`${result.actionId}-${result.actionType}`}
+                            className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
+                            data-hook-action-result={result.actionId}
+                            data-hook-action-type={result.actionType}
+                          >
+                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                                {t(isRecord ? 'hookActivity.recordInfo' : 'hookActivity.returnInfo')}
+                              </span>
+                              {isRecord && result.record?.type ? (
+                                <code className="truncate text-[11px] text-muted-foreground">{result.record.type}</code>
+                              ) : null}
+                              <code className="ml-auto max-w-full truncate text-[10px] text-muted-foreground/70" title={result.actionId}>
+                                {result.actionId}
+                              </code>
+                            </div>
+                            {isRecord && result.record?.id ? (
+                              <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-[10px] text-muted-foreground">
+                                <span>{t('hookActivity.recordId')}</span>
+                                <code className="truncate" title={result.record.id}>{result.record.id}</code>
+                                {result.record.createdAt ? (
+                                  <span className="ml-auto">{formatHookRecordTimestamp(result.record.createdAt)}</span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
+                              {formattedValue || t('hookActivity.emptyResult')}
+                            </pre>
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {isHookExecution && hookActivity.followups && hookActivity.followups.length > 0 && (
+                <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-900/70">
+                  <button
+                    type="button"
+                    aria-expanded={hookFollowupsOpen}
+                    aria-label={t(hookFollowupsOpen ? 'hookActivity.collapseFollowups' : 'hookActivity.expandFollowups')}
+                    data-hook-followup-toggle
+                    onClick={() => setHookFollowupsOpen((current) => !current)}
+                    className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-violet-700 outline-none transition-colors hover:bg-violet-100/70 focus-visible:ring-2 focus-visible:ring-violet-400/60 dark:text-violet-300 dark:hover:bg-violet-900/30"
+                  >
+                    <span>{t('hookActivity.followupCount', { count: hookActivity.followups.length })}</span>
+                    <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                      {t(hookFollowupsOpen ? 'hookActivity.collapseFollowups' : 'hookActivity.expandFollowups')}
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 transition-transform ${hookFollowupsOpen ? 'rotate-180' : ''}`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  {hookFollowupsOpen ? (
+                    <div className="mt-2 space-y-2" data-hook-followup-list>
+                      {hookActivity.followups.map((followup) => {
+                        const followupStatus = followup.status || 'running';
+                        const followupStatusLabel = {
+                          queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
+                          running: t('hookActivity.status.running', { defaultValue: 'Running' }),
+                          succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
+                          failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+                        }[followupStatus];
+
+                        return (
+                          <div
+                            key={followup.jobId || followup.actionId || String(followup.timestamp)}
+                            className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
+                            data-hook-followup={followup.jobId || followup.actionId || 'followup'}
+                            data-hook-status={followupStatus}
+                          >
+                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                                {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                              </span>
+                              <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupStatus === 'failed'
+                                ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                                : followupStatus === 'succeeded'
+                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                  : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
+                                }`}
+                              >
+                                {followupStatus === 'failed' ? (
+                                  <XCircle className="h-3 w-3" aria-hidden="true" />
+                                ) : followupStatus === 'succeeded' ? (
+                                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                                ) : (
+                                  <Loader2 className={`h-3 w-3 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                )}
+                                {followupStatusLabel}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                              {followup.skillName ? (
+                                <span className="truncate">
+                                  {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{followup.skillName}</code>
+                                </span>
+                              ) : followup.actionType === 'send_agent_message' ? (
+                                <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                              ) : followup.actionType === 'mcp_loop_run' ? (
+                                <span className="inline-flex min-w-0 items-center gap-1.5">
+                                  <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                  <span className="truncate">
+                                    {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
+                                  </span>
+                                  {typeof followup.loopAttemptCount === 'number' ? (
+                                    <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                              {followupStatus === 'queued' && typeof followup.queuePosition === 'number' && (
+                                <span>
+                                  {t('hookActivity.queuePosition', {
+                                    defaultValue: 'Queue position {{position}}',
+                                    position: followup.queuePosition,
+                                  })}
+                                </span>
+                              )}
+                              <span className="text-[11px] text-muted-foreground/70">
+                                {new Date(followup.timestamp).toLocaleTimeString()}
+                              </span>
+                              {followup.actionType === 'mcp_loop_run' && followupStatus === 'running' && followup.loopJobId ? (
+                                <button
+                                  type="button"
+                                  className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
+                                  disabled={!isConnected || cancellingLoopJobs.has(followup.loopJobId)}
+                                  onClick={() => cancelMcpLoop(followup.loopJobId!)}
+                                >
+                                  {cancellingLoopJobs.has(followup.loopJobId)
+                                    ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
+                                    : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
+                                </button>
+                              ) : null}
+                            </div>
+                            {followup.summary && (
+                              <div className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground/80">
+                                {redactVisibleSecretText(followup.summary)}
+                              </div>
+                            )}
+                            {followup.error && (
+                              <div className="mt-2 whitespace-pre-wrap break-words rounded bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                                {redactVisibleSecretText(followup.error)}
+                              </div>
+                            )}
+                            {followup.messages && followup.messages.length > 0 && (
+                              <div className="mt-2 border-t border-violet-100 pt-2 dark:border-violet-900/60" data-hook-recovery-list>
+                                <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                  {t('hookActivity.recoveryProcess')}
+                                </div>
+                                <div className="space-y-1 rounded-md bg-background/70 py-1.5" data-hook-recovery-messages>
+                                  {followup.messages.map((recoveryMessage, recoveryIndex) => (
+                                    <div key={recoveryMessage.id || `${followup.jobId || 'recovery'}-${recoveryIndex}`} data-hook-recovery-message>
+                                      <MessageComponent
+                                        message={recoveryMessage}
+                                        prevMessage={recoveryIndex > 0
+                                          ? followup.messages?.[recoveryIndex - 1] || recoveryMessage
+                                          : recoveryMessage}
+                                        createDiff={createDiff}
+                                        onFileOpen={onFileOpen}
+                                        onOpenSubagent={onOpenSubagent}
+                                        onShowSettings={onShowSettings}
+                                        onGrantToolPermission={onGrantToolPermission}
+                                        autoExpandTools={autoExpandTools}
+                                        showRawParameters={showRawParameters}
+                                        showThinking={showThinking}
+                                        selectedProject={selectedProject}
+                                        provider={provider}
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {hookActivity.error && (
+                <div className="mt-2 whitespace-pre-wrap break-words rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                  {redactVisibleSecretText(hookActivity.error)}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       ) : message.isTaskNotification ? (
         /* Compact task notification on the left */
@@ -290,7 +725,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
           <div className="w-full">
 
             {message.isToolUse ? (
-              <>
+              <div className={message.toolName === 'Bash'
+                ? 'my-2 rounded-r-md border-l-2 border-green-500/50 bg-muted/20 py-1.5 pl-2.5 pr-1 dark:border-green-400/40 dark:bg-muted/10'
+                : undefined}
+              >
                 <div className="flex flex-col">
                   <div className="flex flex-col">
                     <Markdown className="prose prose-sm max-w-none dark:prose-invert">
@@ -306,6 +744,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   toolId={message.toolId}
                   mode="input"
                   onFileOpen={onFileOpen}
+                  onOpenSubagent={onOpenSubagent}
                   createDiff={createDiff}
                   selectedProject={selectedProject}
                   autoExpandTools={autoExpandTools}
@@ -400,6 +839,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         toolId={message.toolId}
                         mode="result"
                         onFileOpen={onFileOpen}
+                        onOpenSubagent={onOpenSubagent}
                         createDiff={createDiff}
                         selectedProject={selectedProject}
                         autoExpandTools={autoExpandTools}
@@ -408,7 +848,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     </div>
                   )
                 )}
-              </>
+              </div>
             ) : message.isInteractivePrompt ? (
               // Special handling for interactive prompts
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
@@ -649,6 +1089,30 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
           </div>
+        </div>
+      )}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('imagePreview', { defaultValue: 'Image preview' })}
+          onClick={() => setPreviewImage(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/70 text-2xl text-white hover:bg-black"
+            aria-label={t('closeImagePreview', { defaultValue: 'Close image preview' })}
+            onClick={() => setPreviewImage(null)}
+          >
+            ×
+          </button>
+          <img
+            src={previewImage.src}
+            alt={previewImage.alt}
+            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
         </div>
       )}
     </div>

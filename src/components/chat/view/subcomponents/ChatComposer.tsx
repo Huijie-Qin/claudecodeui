@@ -11,7 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { ArrowDownIcon, Clock3Icon, MessageSquareIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, Clock3Icon, SparklesIcon, TerminalSquareIcon, XIcon } from 'lucide-react';
 
 import {
   PromptInput,
@@ -64,6 +64,7 @@ interface ChatComposerProps {
   tokenBudget: { used?: number; total?: number } | null;
   slashCommandsCount: number;
   onToggleCommandMenu: () => void;
+  onOpenCapabilities?: () => void;
   hasInput: boolean;
   onClearInput: () => void;
   isUserScrolledUp: boolean;
@@ -115,6 +116,7 @@ export default function ChatComposer({
   provider,
   slashCommandsCount,
   onToggleCommandMenu,
+  onOpenCapabilities,
   hasInput,
   onClearInput,
   isUserScrolledUp,
@@ -183,7 +185,7 @@ export default function ChatComposer({
   };
 
   const submitLabel = isLoading && hasInput
-    ? t('input.sendSupplement', { defaultValue: 'Send supplemental info' })
+    ? t('input.sendSupplement', { defaultValue: 'Queue follow-up' })
     : canAbortCurrentSession
       ? t('input.stopGeneration', { defaultValue: 'Stop generation' })
       : t('input.sendMessage', { defaultValue: 'Send message' });
@@ -322,6 +324,19 @@ export default function ChatComposer({
             />
         </PromptInputBody>
 
+        {onOpenCapabilities && (
+          <div className="da-capability-strip">
+            <button
+              type="button"
+              className="da-capability-chip"
+              onClick={onOpenCapabilities}
+            >
+              <SparklesIcon size={12} />
+              添加能力
+            </button>
+          </div>
+        )}
+
         <PromptInputFooter>
           <PromptInputTools>
             <PromptInputButton
@@ -329,7 +344,7 @@ export default function ChatComposer({
               onClick={onToggleCommandMenu}
               className="relative"
             >
-              <MessageSquareIcon />
+              <TerminalSquareIcon />
               {slashCommandsCount > 0 && (
                 <span
                   className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"

@@ -9,6 +9,7 @@ interface CollapsibleDisplayProps {
   toolId?: string;
   title: string;
   defaultOpen?: boolean;
+  stickyHeader?: boolean;
   meta?: React.ReactNode;
   action?: React.ReactNode;
   badge?: React.ReactNode;
@@ -23,7 +24,6 @@ interface CollapsibleDisplayProps {
 const borderColorMap: Record<string, string> = {
   edit: 'border-l-amber-500 dark:border-l-amber-400',
   search: 'border-l-muted-foreground/40',
-  bash: 'border-l-green-500 dark:border-l-green-400',
   todo: 'border-l-violet-500 dark:border-l-violet-400',
   task: 'border-l-violet-500 dark:border-l-violet-400',
   agent: 'border-l-purple-500 dark:border-l-purple-400',
@@ -36,6 +36,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
   toolName,
   title,
   defaultOpen = false,
+  stickyHeader = true,
   meta,
   action,
   badge,
@@ -54,6 +55,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
         title={title}
         toolName={toolName}
         open={defaultOpen}
+        stickyHeader={stickyHeader}
         meta={meta}
         action={action}
         badge={badge}

@@ -4,6 +4,7 @@ import type { Project } from '../../../types/app';
 import type { FileTreeNode } from '../types/types';
 import { useWebSocket } from '../../../contexts/WebSocketContext';
 import { subscribeProjectFilesChanged, type ProjectFilesChangedEvent } from '../utils/fileTreeEvents';
+import { useUiPreferences } from '../../../hooks/useUiPreferences';
 
 type UseFileTreeDataResult = {
   files: FileTreeNode[];
@@ -17,6 +18,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   const [refreshKey, setRefreshKey] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const { latestMessage } = useWebSocket();
+  const { preferences } = useUiPreferences();
 
   const refreshFiles = useCallback(() => {
     setRefreshKey((prev) => prev + 1);
@@ -49,6 +51,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
           projectName,
           { signal: abortControllerRef.current!.signal },
           selectedProject?.workspaceId,
+          preferences.showInternalConfigFiles,
         );
 
         if (!response.ok) {
@@ -86,7 +89,12 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
       isActive = false;
       abortControllerRef.current?.abort();
     };
-  }, [selectedProject?.name, selectedProject?.workspaceId, refreshKey]);
+  }, [
+    preferences.showInternalConfigFiles,
+    selectedProject?.name,
+    selectedProject?.workspaceId,
+    refreshKey,
+  ]);
 
   useEffect(() => {
     const matchesSelectedProject = (event: ProjectFilesChangedEvent) => {

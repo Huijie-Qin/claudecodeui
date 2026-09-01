@@ -13,7 +13,10 @@
  */
 
 import crypto from 'crypto';
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'fs';
+import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
@@ -45,7 +48,7 @@ import {
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { recordProviderSession } from './services/session-ownership.js';
-import { agentSessionRuntimeManager } from './services/agent-session-runtime.js';
+import { agentSessionRuntimeManager, resolveDockerCliExecutable } from './services/agent-session-runtime.js';
 import {
   bindRuntimeMessagesToProviderSession,
   persistNormalizedMessages,
@@ -54,24 +57,200 @@ import {
 } from './services/session-message-history.js';
 import { savePlanMarkdownToWorkspaceRoot } from './services/workspace-file-operations.js';
 import { reconcileWorkspaceSkillsForAgentTurn } from './services/workspace-skills.js';
-import { createClaudeProcessDiagnostics } from './services/claude-sdk-diagnostics.js';
+import {
+  migrateLegacyWorkspaceAgentInstructions,
+} from './services/workspace-agent-instructions.js';
+import {
+  createClaudeProcessDiagnostics,
+  redactClaudeDiagnosticText,
+} from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
+import { userDb } from './database/db.js';
+import { multitenancyDb } from './database/multitenancy-db.js';
+import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
+import { hookConfigService } from './services/hook-configs.js';
+import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
+import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
+import { hookWorkspaceResourcesService } from './services/hook-workspace-resources.js';
+import { buildMcpLoopReplacement, mcpLoopService } from './services/mcp-loop-service.js';
+import {
+  completeClaudeTurnBoundary,
+  enqueueClaudeFollowupTurn,
+} from './services/claude-turn-boundary.js';
+import {
+  buildClaudeSessionExecutionKey,
+  createClaudeSessionExecutionQueue,
+} from './services/claude-session-execution.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
 const abortedSessions = new Set();
+const mcpLoopSuspensionsBySession = new Map();
+const mcpLoopContextsByJob = new Map();
 const pendingToolApprovals = new Map();
+const sessionExecutionQueue = createClaudeSessionExecutionQueue();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
+  parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 24 * 60 * 60 * 1000;
+const INTERACTIVE_STREAM_CLOSE_GRACE_MS = 60 * 1000;
 const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
 const STREAM_STALL_PAUSE_POLL_MS = 5000;
+const TURN_COMPLETION_GRACE_MS = parseInt(process.env.CLAUDE_TURN_COMPLETION_GRACE_MS, 10) || 500;
+const SUBAGENT_STOP_TIMEOUT_MS = parseInt(process.env.CLAUDE_SUBAGENT_STOP_TIMEOUT_MS, 10) || 1500;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
+const execFileAsync = promisify(execFile);
 
 const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const CLAUDE_SESSION_IDLE_CLOSE_MS = parseInt(process.env.CLAUDE_SESSION_IDLE_CLOSE_MS, 10) || 5 * 60 * 1000;
+const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
+
+function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
+  if (runtimeOptions.hookRecovery) {
+    return null;
+  }
+
+  const hookUserId = Number(runtimeOptions.userId ?? writerUserId);
+  return Number.isInteger(hookUserId) && hookUserId > 0 ? hookUserId : null;
+}
+
+function createHookActivityDescriptor({
+  hook,
+  action,
+  executionId,
+  summary,
+  skillName = null,
+  loop = null,
+  queuedAt,
+}) {
+  const actionId = String(action?.id || 'follow-up');
+  return {
+    id: `hook_activity_${executionId}_${actionId}`,
+    executionId,
+    activityKind: 'followup',
+    timestamp: queuedAt,
+    hookId: hook.id,
+    hookName: hook.name,
+    showInChat: hook.showInChat !== false,
+    actionId,
+    actionType: action?.type || 'send_agent_message',
+    ...(skillName ? { skillName } : {}),
+    ...(loop ? { loop } : {}),
+    summary: String(summary || '').slice(0, 8000),
+  };
+}
+
+function createHookCardActionResults(hook, actions) {
+  if (!actions || typeof actions !== 'object' || Array.isArray(actions)) return [];
+
+  return (hook.postActions || []).flatMap((action) => {
+    // mcp_loop_run first returns scheduling metadata (scheduled/jobId/status),
+    // not a business result. Its progress and final output belong to the loop
+    // follow-up card, so exposing it here creates a misleading duplicate result.
+    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
+    if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
+    const output = actions[action.id]?.output;
+    const result = {
+      actionId: action.id,
+      actionType: action.type,
+      output,
+    };
+    if (
+      action.type === 'write_record'
+      && output?.recorded === true
+      && typeof output.id === 'string'
+    ) {
+      result.record = {
+        id: output.id,
+        type: output.type,
+        data: output.data,
+      };
+    }
+    return [result];
+  });
+}
+
+function createHookExecutionActivityDescriptor({ hook, executionId, startedAt, actions }) {
+  const actionResults = createHookCardActionResults(hook, actions);
+  return {
+    id: `hook_activity_${executionId}_execution`,
+    executionId,
+    activityKind: 'execution',
+    timestamp: new Date(startedAt).toISOString(),
+    hookId: hook.id,
+    hookName: hook.name,
+    showInChat: hook.showInChat !== false,
+    eventName: hook.eventName,
+    actionTypes: [...new Set((hook.postActions || []).map((action) => action.type).filter(Boolean))],
+    hasScript: Boolean(hook.extensionLogic?.code?.trim()),
+    summary: String(hook.description || '').slice(0, 8000),
+    ...(actionResults.length > 0 ? { actionResults } : {}),
+  };
+}
+
+function emitHookActivity({
+  hookRecovery,
+  sessionId,
+  status,
+  runtimeOptions,
+  writer,
+  error = null,
+}) {
+  const activity = hookRecovery?.activity;
+  if (!activity?.id || !sessionId) return null;
+
+  const activityMessage = createNormalizedMessage({
+    kind: 'hook_activity',
+    id: activity.id,
+    timestamp: activity.timestamp,
+    sessionId,
+    provider: 'claude',
+    origin: 'hook',
+    activityKind: activity.activityKind || 'followup',
+    status,
+    jobId: activity.id,
+    executionId: activity.executionId,
+    hookId: activity.hookId,
+    hookName: activity.hookName,
+    actionId: activity.actionId,
+    actionType: activity.actionType,
+    skillName: activity.skillName,
+    eventName: activity.eventName,
+    actionTypes: activity.actionTypes,
+    actionResults: activity.actionResults,
+    hasScript: activity.hasScript,
+    summary: activity.summary,
+    queuePosition: activity.queuePosition,
+    ...(activity.loop ? {
+      loopJobId: activity.loop.jobId,
+      loopStatus: activity.loop.status,
+      loopAttemptCount: activity.loop.attemptCount,
+      loopStartedAtMs: activity.loop.startedAtMs,
+      loopNextPollAtMs: activity.loop.nextPollAtMs,
+      loopTargetTool: activity.loop.targetTool,
+      loopToolUseId: activity.loop.toolUseId,
+    } : {}),
+    ...(error ? { error: String(error).slice(0, 8000) } : {}),
+  });
+
+  try {
+    persistNormalizedMessages({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: sessionId,
+      runtimeId: runtimeOptions.runtimeId,
+      messages: [activityMessage],
+    });
+  } catch (persistError) {
+    console.warn('[HookRuntime] Failed to persist Hook activity:', persistError?.message || persistError);
+  }
+  if (activity.showInChat !== false) {
+    sendWriterMessage(writer, activityMessage);
+  }
+  return activityMessage;
+}
 
 class StreamStalledError extends Error {
   constructor(provider, timeoutMs) {
@@ -210,6 +389,17 @@ function getToolInteractionMessage(toolName) {
   return 'Claude requires your attention.';
 }
 
+function buildToolInteractionContext(context) {
+  const toolUseId = typeof context?.toolUseID === 'string' && context.toolUseID.trim()
+    ? context.toolUseID.trim()
+    : undefined;
+  const agentId = typeof context?.agentID === 'string' && context.agentID.trim()
+    ? context.agentID.trim()
+    : undefined;
+
+  return toolUseId || agentId ? { toolUseId, agentId } : undefined;
+}
+
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -286,6 +476,17 @@ function resolveClaudeModel(options = {}) {
   return runtimeEnvModel || envModel || options.model || CLAUDE_MODELS.DEFAULT;
 }
 
+function resolveInteractiveStreamCloseTimeoutMs(
+  env = {},
+  approvalTimeoutMs = INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS,
+) {
+  const configuredTimeoutMs = Number.parseInt(env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT, 10);
+  const minimumTimeoutMs = approvalTimeoutMs + INTERACTIVE_STREAM_CLOSE_GRACE_MS;
+  return Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? Math.max(configuredTimeoutMs, minimumTimeoutMs)
+    : minimumTimeoutMs;
+}
+
 /**
  * Maps CLI options to SDK-compatible options format
  * @param {Object} options - CLI options
@@ -309,6 +510,11 @@ function mapCliOptionsToSDK(options = {}) {
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = applyClaudeNativeSchedulingEnvironmentPolicy(
     executionEnv ? { ...executionEnv } : { ...process.env },
+  );
+  // Tool approval requests travel over the CLI's structured-input stream. Keep
+  // that stream alive for at least as long as the UI may wait for the user.
+  sdkOptions.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(
+    resolveInteractiveStreamCloseTimeoutMs(sdkOptions.env),
   );
 
   // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
@@ -377,7 +583,7 @@ function mapCliOptionsToSDK(options = {}) {
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
     type: 'preset',
-    preset: 'claude_code'  // Required to use CLAUDE.md
+    preset: 'claude_code', // Required to use CLAUDE.md
   };
 
   // Map setting sources for CLAUDE.md loading
@@ -399,7 +605,17 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null, runtimeOptions = {}, inputQueue = null) {
+function addSession(
+  sessionId,
+  queryInstance,
+  tempImagePaths = [],
+  tempDir = null,
+  writer = null,
+  runtimeOptions = {},
+  inputQueue = null,
+  turnLifecycle = null,
+  abortController = null,
+) {
   const existing = activeSessions.get(sessionId) || {};
   if (existing.idleCloseTimer) {
     clearTimeout(existing.idleCloseTimer);
@@ -414,10 +630,13 @@ function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = nul
     tempDir,
     writer,
     inputQueue: inputQueue || existing.inputQueue || null,
+    queuedTurns: Array.isArray(existing.queuedTurns) ? existing.queuedTurns : [],
     idleCloseTimer: null,
     runtimeId: runtimeOptions.runtimeId || null,
     runtimeMode: runtimeOptions.runtimeMode || 'local',
     runtimeOptions,
+    turnLifecycle: turnLifecycle || existing.turnLifecycle || null,
+    abortController: abortController || existing.abortController || null,
   });
 }
 
@@ -438,6 +657,112 @@ function getSession(sessionId) {
   return activeSessions.get(sessionId);
 }
 
+function toHookRuntimePath(hostPath, workspacePath, runtimeMode) {
+  if (runtimeMode !== 'docker') return hostPath;
+  const relativePath = path.relative(path.resolve(workspacePath), path.resolve(hostPath));
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Hook resource path is outside the active workspace');
+  }
+  return path.posix.join('/workspace', ...relativePath.split(path.sep));
+}
+
+function normalizeHookCommandEnv(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([name, entry]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && entry != null)
+      .map(([name, entry]) => [name, String(entry)]),
+  );
+}
+
+function buildHeadersHelperRedactionEnv(commandEnv, explicitEnv) {
+  return {
+    ...commandEnv,
+    ...Object.fromEntries(
+      Object.entries(explicitEnv).map(([name, value]) => [`CCUI_HELPER_SECRET_${name}`, value]),
+    ),
+  };
+}
+
+function createHeadersHelperCommandError(error, {
+  env,
+  timeoutMs,
+  diagnostics = null,
+} = {}) {
+  diagnostics?.addRedactionEnv?.(env);
+  const redact = diagnostics?.redactText
+    ? (value) => diagnostics.redactText(value)
+    : (value) => redactClaudeDiagnosticText(value, env);
+  const stderr = redact(String(error?.stderr || '').trim()).slice(-4_000);
+  const timedOut = Boolean(error?.killed) || error?.code === 'ETIMEDOUT';
+  const exitCode = Number.isInteger(error?.code) ? error.code : null;
+  const message = timedOut
+    ? `MCP headersHelper command timed out after ${timeoutMs} ms`
+    : `MCP headersHelper command failed${exitCode === null ? '' : ` with exit code ${exitCode}`}`;
+  const safeError = new Error(stderr ? `${message}: ${stderr}` : message);
+  safeError.code = timedOut ? 'MCP_HEADERS_HELPER_TIMEOUT' : 'MCP_HEADERS_HELPER_COMMAND_FAILED';
+  return safeError;
+}
+
+function createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
+  diagnostics = null,
+  execFileImpl = execFileAsync,
+} = {}) {
+  return async ({ command, env = {}, timeoutMs }) => {
+    const explicitEnv = normalizeHookCommandEnv(env);
+    if (runtimeContext.mode === 'docker') {
+      const commandEnv = {
+        ...normalizeHookCommandEnv(runtimeContext.hookCommandEnv),
+        ...explicitEnv,
+      };
+      const redactionEnv = buildHeadersHelperRedactionEnv(commandEnv, explicitEnv);
+      diagnostics?.addRedactionEnv?.(redactionEnv);
+      const envArgs = Object.entries(commandEnv)
+        .flatMap(([key, value]) => ['--env', `${key}=${value}`]);
+      try {
+        return await execFileImpl(resolveDockerCliExecutable(process.env), [
+          'exec',
+          '-w',
+          runtimeContext.containerCwd || '/workspace',
+          '--env',
+          'HOME=/home/cloudcli',
+          ...envArgs,
+          runtimeContext.containerName,
+          '/bin/sh',
+          '-lc',
+          command,
+        ], { timeout: timeoutMs, maxBuffer: 64 * 1024, windowsHide: true });
+      } catch (error) {
+        throw createHeadersHelperCommandError(error, {
+          env: redactionEnv,
+          timeoutMs,
+          diagnostics,
+        });
+      }
+    }
+    const commandEnv = {
+      ...(runtimeOptions.executionEnv || process.env),
+      ...explicitEnv,
+    };
+    const redactionEnv = buildHeadersHelperRedactionEnv(commandEnv, explicitEnv);
+    diagnostics?.addRedactionEnv?.(redactionEnv);
+    try {
+      return await execFileImpl('/bin/sh', ['-lc', command], {
+        timeout: timeoutMs,
+        maxBuffer: 64 * 1024,
+        env: commandEnv,
+        windowsHide: true,
+      });
+    } catch (error) {
+      throw createHeadersHelperCommandError(error, {
+        env: redactionEnv,
+        timeoutMs,
+        diagnostics,
+      });
+    }
+  };
+}
+
 function updateSessionWriter(sessionId, writer) {
   const session = getSession(sessionId);
   if (!session || !writer) {
@@ -456,23 +781,6 @@ function markSessionProcessing(sessionId) {
   }
   session.status = 'processing';
   return true;
-}
-
-function scheduleSessionIdleClose(sessionId) {
-  const session = getSession(sessionId);
-  if (!session) return;
-  session.status = 'idle';
-  if (session.idleCloseTimer) {
-    clearTimeout(session.idleCloseTimer);
-  }
-  session.idleCloseTimer = setTimeout(() => {
-    const latest = getSession(sessionId);
-    if (!latest || latest.status !== 'idle') {
-      return;
-    }
-    latest.inputQueue?.close();
-    latest.instance?.close?.();
-  }, CLAUDE_SESSION_IDLE_CLOSE_MS);
 }
 
 /**
@@ -645,11 +953,12 @@ function logChatSessionTokenUsage({ requestId, provider, sessionId, model, token
 }
 
 class ClaudeInputQueue {
-  constructor() {
+  constructor({ onQueryPushed = null } = {}) {
     this.items = [];
     this.waiters = [];
     this.closed = false;
     this.pendingQueryTurns = 0;
+    this.onQueryPushed = typeof onQueryPushed === 'function' ? onQueryPushed : null;
   }
 
   push(message) {
@@ -658,6 +967,7 @@ class ClaudeInputQueue {
     }
     if (message?.shouldQuery !== false) {
       this.pendingQueryTurns += 1;
+      this.onQueryPushed?.(this.pendingQueryTurns);
     }
 
     const waiter = this.waiters.shift();
@@ -704,6 +1014,218 @@ class ClaudeInputQueue {
     this.pendingQueryTurns = Math.max(0, this.pendingQueryTurns - 1);
     return this.pendingQueryTurns;
   }
+}
+
+function createClaudeTurnLifecycleTracker() {
+  const activeTasks = new Map();
+  let hasSeenSessionState = false;
+  let hasSeenTaskLifecycle = false;
+  let isCurrentlyIdle = false;
+  let isWaitingForIdle = false;
+
+  const readTaskId = (message) => (
+    typeof message?.task_id === 'string' && message.task_id.trim()
+      ? message.task_id.trim()
+      : null
+  );
+
+  const completeWaitingTurnIfTasksSettled = () => {
+    if (!isWaitingForIdle || activeTasks.size > 0) return null;
+    // Once this SDK session has exposed session-state events, idle is the
+    // authoritative turn boundary. A terminal background-task notification
+    // can arrive before the parent assistant has flushed its held-back result,
+    // so completing here would drop the parent's trailing realtime output.
+    if (hasSeenSessionState) return null;
+    isWaitingForIdle = false;
+    return 'complete';
+  };
+
+  return {
+    beginTurn() {
+      // A newly queued user turn supersedes completion that was waiting on an
+      // earlier background agent's idle event.
+      isWaitingForIdle = false;
+      isCurrentlyIdle = false;
+      hasSeenTaskLifecycle = false;
+    },
+
+    observe(message) {
+      if (message?.type === 'system' && message.subtype === 'task_started') {
+        hasSeenTaskLifecycle = true;
+        isCurrentlyIdle = false;
+        const taskId = readTaskId(message);
+        if (taskId) {
+          activeTasks.set(taskId, {
+            taskId,
+            toolUseId: typeof message.tool_use_id === 'string' && message.tool_use_id.trim()
+              ? message.tool_use_id.trim()
+              : null,
+            description: typeof message.description === 'string' ? message.description : '',
+          });
+        }
+        return 'processing';
+      }
+
+      if (message?.type === 'system' && message.subtype === 'task_updated') {
+        hasSeenTaskLifecycle = true;
+        const taskId = readTaskId(message);
+        const status = typeof message.patch?.status === 'string'
+          ? message.patch.status.trim().toLowerCase()
+          : '';
+        if (['completed', 'failed', 'killed', 'stopped', 'aborted', 'interrupted', 'cancelled', 'canceled'].includes(status)) {
+          if (!taskId) return null;
+          activeTasks.delete(taskId);
+          return completeWaitingTurnIfTasksSettled();
+        }
+        if (taskId && ['pending', 'running'].includes(status)) {
+          isCurrentlyIdle = false;
+          const existing = activeTasks.get(taskId);
+          activeTasks.set(taskId, existing || { taskId, toolUseId: null, description: '' });
+        }
+        return 'processing';
+      }
+
+      if (message?.type === 'system' && message.subtype === 'task_progress') {
+        hasSeenTaskLifecycle = true;
+        isCurrentlyIdle = false;
+        const taskId = readTaskId(message);
+        if (taskId) {
+          const existing = activeTasks.get(taskId);
+          activeTasks.set(taskId, {
+            taskId,
+            toolUseId: typeof message.tool_use_id === 'string' && message.tool_use_id.trim()
+              ? message.tool_use_id.trim()
+              : existing?.toolUseId || null,
+            description: typeof message.description === 'string'
+              ? message.description
+              : existing?.description || '',
+          });
+        }
+        return 'processing';
+      }
+
+      if (message?.type === 'system' && message.subtype === 'task_notification') {
+        hasSeenTaskLifecycle = true;
+        const taskId = readTaskId(message);
+        if (!taskId) return null;
+        activeTasks.delete(taskId);
+        return completeWaitingTurnIfTasksSettled();
+      }
+
+      if (message?.type === 'system' && message.subtype === 'session_state_changed') {
+        hasSeenSessionState = true;
+        if (message.state === 'idle') {
+          isCurrentlyIdle = true;
+          activeTasks.clear();
+          if (isWaitingForIdle) {
+            isWaitingForIdle = false;
+            return 'complete';
+          }
+          return null;
+        }
+        if (message.state === 'running' || message.state === 'requires_action') {
+          isCurrentlyIdle = false;
+          return 'processing';
+        }
+      }
+
+      return null;
+    },
+
+    finishResult(remainingQueryTurns) {
+      if (remainingQueryTurns > 0) {
+        isWaitingForIdle = false;
+        return false;
+      }
+
+      isWaitingForIdle = true;
+      if (hasSeenSessionState && isCurrentlyIdle && activeTasks.size === 0) {
+        isWaitingForIdle = false;
+        return true;
+      }
+      // Older SDK/CLI combinations may omit session-state events entirely.
+      // In that mode, a final result with no active tasks is the safest
+      // available boundary; active tasks continue to block this fallback.
+      if (!hasSeenSessionState && hasSeenTaskLifecycle && activeTasks.size === 0) {
+        isWaitingForIdle = false;
+        return true;
+      }
+      // Older SDK/CLI combinations do not emit session_state_changed. Keep the
+      // legacy immediate completion path when no background task was observed.
+      if (!hasSeenSessionState && !hasSeenTaskLifecycle && activeTasks.size === 0) {
+        isWaitingForIdle = false;
+        return true;
+      }
+      return false;
+    },
+
+    flush() {
+      if (!isWaitingForIdle) return false;
+      isWaitingForIdle = false;
+      return true;
+    },
+
+    getActiveTasks() {
+      return [...activeTasks.values()].map((task) => ({ ...task }));
+    },
+
+    stopAll() {
+      const tasks = [...activeTasks.values()].map((task) => ({ ...task }));
+      activeTasks.clear();
+      return tasks;
+    },
+  };
+}
+
+function createPendingInteractionTracker() {
+  const requestIds = new Set();
+
+  return {
+    begin(requestId) {
+      requestIds.add(requestId);
+    },
+    end(requestId) {
+      requestIds.delete(requestId);
+    },
+    isPaused() {
+      return requestIds.size > 0;
+    },
+  };
+}
+
+function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions) {
+  return Boolean(pendingCompletion) && !pendingInteractions?.isPaused?.();
+}
+
+function createClaudeTurnCompletionScheduler({
+  delayMs = TURN_COMPLETION_GRACE_MS,
+  onComplete,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+} = {}) {
+  let timer = null;
+
+  const cancel = () => {
+    if (timer === null) return false;
+    clearTimeoutFn(timer);
+    timer = null;
+    return true;
+  };
+
+  return {
+    schedule() {
+      cancel();
+      timer = setTimeoutFn(() => {
+        timer = null;
+        onComplete?.();
+      }, delayMs);
+      timer.unref?.();
+    },
+    cancel,
+    isScheduled() {
+      return Boolean(timer);
+    },
+  };
 }
 
 /**
@@ -800,7 +1322,7 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @param {Object} ws - WebSocket connection
  * @returns {Promise<void>}
  */
-async function queryClaudeSDK(command, options = {}, ws) {
+async function queryClaudeSDKInternal(command, options = {}, ws) {
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
@@ -814,11 +1336,45 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let tempDir = null;
   let runtimeOptions = options;
   let runtimeContext = null;
-  let runtimeBoundToProviderSession = Boolean(sessionId);
-  let streamStallTimeoutPaused = false;
+  // Runtime ownership has a single current provider-session binding. A normal
+  // chat turn between scheduled runs can move that binding to another session,
+  // even though the scheduled transcript still exists in the same runtime
+  // home. Always restore the actual session binding after preparing a resumed
+  // query instead of assuming that providing sessionId means it is still bound.
+  let runtimeBoundToProviderSession = false;
+  const pendingInteractions = createPendingInteractionTracker();
+  const queryAbortController = new AbortController();
   let initialDisplayCommandRecord = null;
   let initialDisplayCommandPersisted = false;
-  const inputQueue = new ClaudeInputQueue();
+  const turnLifecycle = createClaudeTurnLifecycleTracker();
+  let pendingTurnCompletion = null;
+  let queuedFollowupTurn = null;
+  let hookActivityTerminalSent = false;
+  let turnBoundaryReached = false;
+  let turnCompletionScheduler = null;
+  const inputQueue = new ClaudeInputQueue({
+    onQueryPushed: () => {
+      turnCompletionScheduler?.cancel();
+      pendingTurnCompletion = null;
+      turnLifecycle.beginTurn();
+    },
+  });
+
+  const updateHookActivity = (status, error = null) => {
+    if (hookActivityTerminalSent) return null;
+    const message = emitHookActivity({
+      hookRecovery: runtimeOptions.hookRecovery,
+      sessionId: capturedSessionId || sessionId || null,
+      status,
+      runtimeOptions,
+      writer: ws,
+      error,
+    });
+    if (message && HOOK_ACTIVITY_TERMINAL_STATUSES.has(status)) {
+      hookActivityTerminalSent = true;
+    }
+    return message;
+  };
 
   const persistInitialDisplayCommand = async (providerSessionId) => {
     if (initialDisplayCommandPersisted || !initialDisplayCommandRecord) {
@@ -867,6 +1423,86 @@ async function queryClaudeSDK(command, options = {}, ws) {
     runtimeBoundToProviderSession = true;
   };
 
+  const emitPendingTurnCompletion = () => {
+    // Closing the completed turn also closes the structured-input stream used
+    // to answer AskUserQuestion. A result/idle event can race with that answer,
+    // so leave the completion pending until every interaction has settled.
+    if (!shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions)) {
+      return false;
+    }
+    const completion = pendingTurnCompletion;
+    pendingTurnCompletion = null;
+
+    const completedSession = completion.sessionId ? getSession(completion.sessionId) : null;
+    if (completedSession) {
+      const boundary = completeClaudeTurnBoundary(completedSession);
+      queuedFollowupTurn = boundary.nextTurn;
+      for (const closeError of boundary.closeErrors) {
+        console.warn(
+          `[ClaudeTurnBoundary] Failed to close completed stream ${completion.sessionId}:`,
+          closeError?.message || closeError,
+        );
+      }
+      if (queuedFollowupTurn) {
+        console.info('[ClaudeTurnBoundary] Advancing queued follow-up after completed Stop boundary', {
+          sessionId: completion.sessionId,
+          queuedAt: queuedFollowupTurn.queuedAt || null,
+          remainingTurns: boundary.remainingTurns,
+        });
+      }
+    }
+
+    recordProviderSession({
+      options: runtimeOptions,
+      provider: 'claude',
+      providerSessionId: completion.sessionId,
+      status: 'completed',
+    });
+
+    updateHookActivity('succeeded');
+
+    if (!queuedFollowupTurn) {
+      runtimeOptions.onConcurrencyIdle?.();
+      ws.send(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 0,
+        isNewSession: !sessionId && !!command,
+        sessionId: completion.sessionId,
+        provider: 'claude',
+        aborted: false,
+        success: true,
+      }));
+      notifyRunStopped({
+        userId: ws?.userId || null,
+        provider: 'claude',
+        sessionId: completion.sessionId,
+        sessionName: sessionSummary,
+        stopReason: 'completed',
+      });
+    }
+    turnBoundaryReached = true;
+    return true;
+  };
+
+  turnCompletionScheduler = createClaudeTurnCompletionScheduler({
+    onComplete: emitPendingTurnCompletion,
+  });
+
+  const schedulePendingTurnCompletion = () => {
+    if (
+      !pendingTurnCompletion ||
+      turnBoundaryReached ||
+      pendingInteractions.isPaused()
+    ) {
+      return false;
+    }
+    // Idle/result can be delivered before already-buffered trailing assistant
+    // messages. Complete only after the SDK stream has stayed quiet briefly;
+    // every subsequent event restarts this grace period.
+    turnCompletionScheduler.schedule();
+    return true;
+  };
+
   try {
     runtimeContext = await agentSessionRuntimeManager.prepareClaudeRuntime(options);
     runtimeOptions = {
@@ -897,9 +1533,29 @@ async function queryClaudeSDK(command, options = {}, ws) {
     processDiagnostics.addRedactionEnv(runtimeOptions.executionEnv || process.env);
     runtimeOptions.spawnClaudeCodeProcess = processDiagnostics.createSpawn(runtimeContext.spawnClaudeCodeProcess);
 
+    updateHookActivity('running');
+
     await reconcileWorkspaceSkillsForAgentTurn({
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
     });
+
+    // CLAUDE.md is the project memory loaded natively by Claude Code. Migrate
+    // the former platform-managed Agent.md only for managed workspaces.
+    if (runtimeOptions.workspaceId) {
+      const hostWorkspacePath = runtimeContext.hostWorkspacePath || options.cwd || options.projectPath;
+      if (hostWorkspacePath) {
+        try {
+          const migration = await migrateLegacyWorkspaceAgentInstructions(hostWorkspacePath);
+          if (migration.migrated || migration.removed) {
+            console.info('[ClaudeMemory] Migrated legacy Agent.md', {
+              workspaceId: runtimeOptions.workspaceId,
+            });
+          }
+        } catch (error) {
+          console.warn('[ClaudeMemory] Could not migrate legacy Agent.md:', error?.message || error);
+        }
+      }
+    }
 
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
@@ -910,7 +1566,6 @@ async function queryClaudeSDK(command, options = {}, ws) {
       displayCommand,
       modelContent: command,
     };
-
     persistUserPromptMessage({
       options: runtimeOptions,
       provider: 'claude',
@@ -919,17 +1574,51 @@ async function queryClaudeSDK(command, options = {}, ws) {
       command: displayCommand,
     });
 
+    const mcpToolAccess = resolveUserWorkspaceMcpToolAccess({
+      tenantId: runtimeOptions.tenantId,
+      workspaceId: runtimeOptions.workspaceId,
+      userId: runtimeOptions.userId ?? ws?.userId,
+    });
+
     // Map CLI options to SDK format
     const sdkOptions = mapCliOptionsToSDK(runtimeOptions);
+    sdkOptions.abortController = queryAbortController;
+    sdkOptions.disallowedTools = uniqueTools([
+      ...sdkOptions.disallowedTools,
+      ...mcpToolAccess.disallowedTools,
+    ]);
 
     // Load MCP configuration
-    const mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
+    let mcpServers = await loadMcpConfig(runtimeOptions.cwd, {
       includeHostConfig: !runtimeContext.disableHostMcpConfig,
       tenantId: runtimeOptions.tenantId,
       workspaceId: runtimeOptions.workspaceId,
       runtimeMode: runtimeContext.mode,
       runtimeHomePath: runtimeContext.runtimeHomePath,
+      runtimeOwner: runtimeContext.mode === 'docker'
+        ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+        : null,
     });
+    let hookRecoveryToolNames = [];
+    if (Array.isArray(runtimeOptions.hookRecovery?.mcpServerIds)
+        && runtimeOptions.hookRecovery.mcpServerIds.length > 0) {
+      const workspacePath = runtimeContext.hostWorkspacePath || options.cwd || options.projectPath;
+      const hostMcpRoot = path.join(workspacePath, '.cloudcli', 'hook-config', 'mcp');
+      const commandMcpRoot = runtimeContext.mode === 'docker'
+        ? '/workspace/.cloudcli/hook-config/mcp'
+        : hostMcpRoot;
+      const hookMcpRuntime = await hookMcpCatalogService.getRuntimeConfig({
+        serverIds: runtimeOptions.hookRecovery.mcpServerIds,
+        hostDirectory: hostMcpRoot,
+        commandDirectory: commandMcpRoot,
+        runtimeMode: runtimeContext.mode,
+        runtimeOwner: runtimeContext.mode === 'docker'
+          ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+          : null,
+      });
+      mcpServers = { ...mcpServers, ...hookMcpRuntime.mcpServers };
+      hookRecoveryToolNames = hookMcpRuntime.toolNames;
+    }
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
@@ -1024,12 +1713,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // bypassPermissions skips canUseTool for auto-approved calls, so MCP input
     // mutation must happen in PreToolUse to affect the actual server request.
-    sdkOptions.hooks = {
+    const builtinSdkHooks = {
       PreToolUse: [{
         matcher: 'mcp__.*',
         hooks: [async (input) => {
           if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
             return {};
+          }
+
+          if (!hookRecoveryToolNames.includes(input.tool_name) && !mcpToolAccess.isAllowed(input.tool_name)) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: `${input.tool_name} is not enabled in MCP Tool settings`,
+              },
+            };
           }
 
           const config = await readRuntimeMcpToolOverridesConfig();
@@ -1070,6 +1769,320 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }]
     };
 
+    // A Hook-created follow-up is an internal continuation of the original
+    // turn. Registering configured Hooks again would make its terminal Stop
+    // event execute every user Hook a second time.
+    const hookUserId = resolveConfiguredHookUserId(runtimeOptions, ws?.userId);
+    let configuredSdkHooks = {};
+    if (hookUserId !== null) {
+      try {
+        const activeHooks = hookConfigService.listActiveHooksForUser(hookUserId);
+        if (activeHooks.length > 0) {
+          const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
+          const materializedByHookId = new Map();
+          for (const hook of activeHooks) {
+            try {
+              materializedByHookId.set(hook.id, await hookWorkspaceResourcesService.materializeHook({
+                hook,
+                workspacePath,
+              }));
+            } catch (error) {
+              console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
+            }
+          }
+          const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
+            diagnostics: processDiagnostics,
+          });
+          const hookUser = userDb.getUserById(hookUserId);
+          const hasSqlCheckHook = activeHooks.some((hook) => hook.bindingController === 'sql_check');
+          let sqlCheckRuleIds = [];
+          if (hasSqlCheckHook && runtimeOptions.tenantId && runtimeOptions.workspaceId) {
+            try {
+              const sqlCheckConfig = multitenancyDb.sqlCheck.resolveUserConfig({
+                tenantId: runtimeOptions.tenantId,
+                workspaceId: runtimeOptions.workspaceId,
+                userId: hookUserId,
+              });
+              sqlCheckRuleIds = Array.isArray(sqlCheckConfig.effectiveRuleIds)
+                ? sqlCheckConfig.effectiveRuleIds
+                : [];
+            } catch (error) {
+              console.warn('[HookRuntime] Failed to resolve SQL Check rules:', error?.message || error);
+            }
+          }
+          const hookRuntime = createHookRuntimeSession({
+            hooks: activeHooks,
+            userId: hookUserId,
+            username: hookUser?.username || null,
+            tenantId: runtimeOptions.tenantId || null,
+            workspaceId: runtimeOptions.workspaceId || null,
+            sqlCheckRuleIds,
+            workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
+            sessionId: () => capturedSessionId || sessionId || null,
+            suppressSkillRecovery: Boolean(runtimeOptions.hookRecovery),
+            headersHelperRunner,
+            resolveMcpAction: async ({ action }) => {
+              const toolResources = hookMcpCatalogService.listToolResources();
+              const selectedTool = toolResources.find((tool) => (
+                tool.name === action.config?.toolName
+                && (!action.config?.mcpServerId || tool.mcpServerId === action.config.mcpServerId)
+              ));
+              if (!selectedTool) {
+                throw new Error(`Hook MCP tool ${action.config?.toolName || '(empty)'} is unavailable`);
+              }
+              const hostMcpRoot = path.join(workspacePath, '.cloudcli', 'hook-config', 'mcp');
+              const commandMcpRoot = runtimeContext.mode === 'docker'
+                ? '/workspace/.cloudcli/hook-config/mcp'
+                : hostMcpRoot;
+              const runtimeMcp = await hookMcpCatalogService.getRuntimeConfig({
+                serverIds: [selectedTool.mcpServerId],
+                hostDirectory: hostMcpRoot,
+                commandDirectory: commandMcpRoot,
+                runtimeMode: runtimeContext.mode,
+                runtimeOwner: runtimeContext.mode === 'docker'
+                  ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+                  : null,
+                includePrivateHelperEnv: true,
+              });
+              return {
+                qualifiedToolName: `mcp__${selectedTool.runtimeAlias}__${selectedTool.toolName}`,
+                mcpServers: runtimeMcp.mcpServers,
+              };
+            },
+            enqueueSkillRecovery: async ({
+              hook,
+              action,
+              event,
+              executionId,
+              argumentsText,
+              modelContent,
+            }) => {
+              let resources = materializedByHookId.get(hook.id);
+              if (!resources) {
+                resources = await hookWorkspaceResourcesService.materializeHook({ hook, workspacePath });
+                materializedByHookId.set(hook.id, resources);
+              }
+              const skill = resources.skills.find((candidate) => candidate.skillId === action.config?.skillId);
+              if (!skill) throw new Error(`Hook Skill ${action.config?.skillName || '(empty)'} was not materialized`);
+              const runtimeSkillDirectory = toHookRuntimePath(
+                skill.hostDirectory,
+                workspacePath,
+                runtimeContext.mode,
+              );
+              const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
+              const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
+              if (!activeSession) throw new Error('Original Claude session is unavailable for Hook recovery');
+              const recoveryContent = [
+                '<ccui-hook-recovery>',
+                `Hook: ${hook.name} (${hook.id})`,
+                `Execution: ${executionId}`,
+                `Skill root: ${runtimeSkillDirectory}`,
+                'Continue in this original session with its complete conversation context.',
+                'Treat the Skill root above as the base directory for every relative reference and script path in SKILL.md.',
+                'Do not search the normal user Skill directories for this Hook Skill.',
+                '</ccui-hook-recovery>',
+                '',
+                modelContent,
+              ].join('\n');
+              const queuedAt = new Date().toISOString();
+              const activity = createHookActivityDescriptor({
+                hook,
+                action,
+                executionId,
+                summary: `/${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                skillName: action.config?.skillName || null,
+                queuedAt,
+              });
+              const hookRecovery = {
+                hookId: hook.id,
+                executionId,
+                skillId: action.config?.skillId,
+                activity,
+              };
+              const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
+                content: recoveryContent,
+                displayContent: `Hook · /${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                mode: 'hook_recovery',
+                priority: 'next',
+                writer: ws,
+                queuedAt,
+                runtimeOptions: {
+                  hookRecovery,
+                },
+              });
+              hookRecovery.activity.queuePosition = queuePosition;
+              emitHookActivity({
+                hookRecovery,
+                sessionId: recoverySessionId,
+                status: 'queued',
+                runtimeOptions,
+                writer: ws,
+              });
+              return { queued: true, queuePosition, sessionId: recoverySessionId };
+            },
+            enqueueAgentMessage: async ({
+              hook,
+              action,
+              event,
+              executionId,
+              messageText,
+            }) => {
+              const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
+              const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
+              if (!activeSession) throw new Error('Original Claude session is unavailable for Hook Agent message');
+              const queuedAt = new Date().toISOString();
+              const activity = createHookActivityDescriptor({
+                hook,
+                action,
+                executionId,
+                summary: messageText,
+                queuedAt,
+              });
+              const hookRecovery = {
+                hookId: hook.id,
+                executionId,
+                activity,
+              };
+              const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
+                content: messageText,
+                displayContent: messageText,
+                mode: 'hook_recovery',
+                priority: 'next',
+                writer: ws,
+                queuedAt,
+                runtimeOptions: {
+                  hookRecovery,
+                },
+              });
+              hookRecovery.activity.queuePosition = queuePosition;
+              emitHookActivity({
+                hookRecovery,
+                sessionId: recoverySessionId,
+                status: 'queued',
+                runtimeOptions,
+                writer: ws,
+              });
+              return { queued: true, queuePosition, sessionId: recoverySessionId };
+            },
+            enqueueMcpLoop: async ({
+              hook,
+              action,
+              event,
+              executionId,
+              input,
+            }) => {
+              if (event?.agent_id) {
+                throw new Error('mcp_loop_run is only supported for the main Claude session');
+              }
+              const loopSessionId = event?.session_id || capturedSessionId || sessionId;
+              const activeSession = loopSessionId ? getSession(loopSessionId) : null;
+              if (!activeSession) {
+                throw new Error('Original Claude session is unavailable for mcp_loop_run');
+              }
+              if (mcpLoopService.listActiveForSession(loopSessionId).length > 0) {
+                throw new Error('This Claude session already has an active MCP loop');
+              }
+
+              const scheduled = await mcpLoopService.enqueue({
+                hook,
+                action,
+                executionId,
+                tenantId: runtimeOptions.tenantId,
+                workspaceId: runtimeOptions.workspaceId,
+                userId: runtimeOptions.userId ?? ws?.userId,
+                sessionId: loopSessionId,
+                toolUseId: event?.tool_use_id,
+                workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
+                inputs: input,
+                initialResult: event?.tool_response,
+                runtimeContext: {
+                  mode: runtimeContext.mode,
+                  commandMcpRoot: runtimeContext.mode === 'docker'
+                    ? '/workspace/.cloudcli/hook-config/mcp'
+                    : null,
+                  runtimeOwner: runtimeContext.mode === 'docker'
+                    ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
+                    : null,
+                  headersHelperRunner,
+                },
+              });
+              if (!scheduled.scheduled) {
+                return {
+                  scheduled: false,
+                  status: scheduled.status,
+                  initialResult: scheduled.initialResult,
+                };
+              }
+
+              const job = scheduled.job;
+              const activity = createHookActivityDescriptor({
+                hook,
+                action,
+                executionId,
+                summary: job.waitingLabel || `等待 ${job.toolName}`,
+                loop: {
+                  jobId: job.id,
+                  status: job.status,
+                  attemptCount: job.attemptCount,
+                  startedAtMs: job.startedAtMs,
+                  nextPollAtMs: job.nextPollAtMs,
+                  targetTool: job.toolName,
+                  toolUseId: job.toolUseId,
+                },
+                queuedAt: new Date(job.startedAtMs).toISOString(),
+              });
+              const loopContext = {
+                jobId: job.id,
+                sessionId: loopSessionId,
+                runtimeOptions,
+                writer: ws,
+                activity,
+                suspended: false,
+              };
+              mcpLoopContextsByJob.set(job.id, loopContext);
+              emitMcpLoopActivity(loopContext, job, 'running');
+              setImmediate(() => {
+                void suspendClaudeSDKSessionForMcpLoop(loopSessionId, job.id);
+              });
+              return {
+                scheduled: true,
+                jobId: job.id,
+                status: job.status,
+              };
+            },
+            onExecutionActivity: ({
+              hook,
+              event,
+              executionId,
+              status,
+              startedAt,
+              actions,
+              error,
+            }) => emitHookActivity({
+              hookRecovery: {
+                activity: createHookExecutionActivityDescriptor({
+                  hook,
+                  executionId,
+                  startedAt,
+                  actions,
+                }),
+              },
+              sessionId: event?.session_id || capturedSessionId || sessionId || null,
+              status,
+              runtimeOptions,
+              writer: ws,
+              error,
+            }),
+          });
+          configuredSdkHooks = hookRuntime.hooks;
+          console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);
+        }
+      } catch (error) {
+        console.error('[HookRuntime] Failed to load configured Hooks:', error?.message || error);
+      }
+    }
+    sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, configuredSdkHooks);
+
     sdkOptions.canUseTool = async (toolName, input, context) => {
       if (isClaudeNativeSchedulingDisabled(sdkOptions.env) && CLAUDE_NATIVE_SCHEDULING_TOOLS.has(toolName)) {
         return {
@@ -1082,6 +2095,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
         return {
           behavior: 'deny',
           message: `${toolName} is disabled by configuration`,
+        };
+      }
+
+      if (!hookRecoveryToolNames.includes(toolName) && !mcpToolAccess.isAllowed(toolName)) {
+        return {
+          behavior: 'deny',
+          message: `${toolName} is not enabled in MCP Tool settings`,
         };
       }
 
@@ -1116,11 +2136,13 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       const requestId = createRequestId();
       const interactionMessage = getToolInteractionMessage(toolName);
+      const interactionContext = buildToolInteractionContext(context);
       ws.send(createNormalizedMessage({
         kind: 'permission_request',
         requestId,
         toolName,
         input: effectiveInput,
+        context: interactionContext,
         sessionId: capturedSessionId || sessionId || null,
         provider: 'claude'
       }));
@@ -1135,21 +2157,22 @@ async function queryClaudeSDK(command, options = {}, ws) {
         dedupeKey: `claude:interaction:${capturedSessionId || sessionId || 'none'}:${requestId}`
       }));
 
-      streamStallTimeoutPaused = true;
+      pendingInteractions.begin(requestId);
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        timeoutMs: requiresInteraction ? INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS : undefined,
         signal: context?.signal,
         metadata: {
           _sessionId: capturedSessionId || sessionId || null,
           _toolName: toolName,
           _input: effectiveInput,
+          _context: interactionContext,
           _receivedAt: new Date(),
         },
         onCancel: (reason) => {
           ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
       }).finally(() => {
-        streamStallTimeoutPaused = false;
+        pendingInteractions.end(requestId);
       });
       if (!decision) {
         return { behavior: 'deny', message: 'Tool interaction timed out' };
@@ -1174,37 +2197,51 @@ async function queryClaudeSDK(command, options = {}, ws) {
       return { behavior: 'deny', message: decision.message ?? 'User declined tool interaction' };
     };
 
-    // Set stream-close timeout for interactive tools (Query constructor reads it synchronously). Claude Agent SDK has a default of 5s and this overrides it
+    // The SDK host reads this value synchronously, while the spawned CLI reads
+    // sdkOptions.env. Set both to the same approval-aware timeout.
     const prevStreamTimeout = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
-    process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
+    process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = sdkOptions.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
 
     let queryInstance;
     try {
-      queryInstance = query({
-        prompt: inputQueue,
-        options: sdkOptions
-      });
-    } catch (hookError) {
-      // Older/newer SDK versions may not accept hook shapes yet.
-      // Keep notification behavior operational via runtime events even if hook registration fails.
-      console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
-      delete sdkOptions.hooks;
-      queryInstance = query({
-        prompt: inputQueue,
-        options: sdkOptions
-      });
-    }
-
-    // Restore immediately — Query constructor already captured the value
-    if (prevStreamTimeout !== undefined) {
-      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
-    } else {
-      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      try {
+        queryInstance = query({
+          prompt: inputQueue,
+          options: sdkOptions
+        });
+      } catch (hookError) {
+        // Older/newer SDK versions may not accept hook shapes yet.
+        // Keep notification behavior operational via runtime events even if hook registration fails.
+        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        delete sdkOptions.hooks;
+        queryInstance = query({
+          prompt: inputQueue,
+          options: sdkOptions
+        });
+      }
+    } finally {
+      // Query construction has captured the host value; avoid leaking it into
+      // unrelated requests after either initialization attempt.
+      if (prevStreamTimeout !== undefined) {
+        process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
+      } else {
+        delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      }
     }
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+      addSession(
+        capturedSessionId,
+        queryInstance,
+        tempImagePaths,
+        tempDir,
+        ws,
+        runtimeOptions,
+        inputQueue,
+        turnLifecycle,
+        queryAbortController,
+      );
       bindRuntimeToProviderSession(capturedSessionId);
       recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
     }
@@ -1220,7 +2257,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
         shouldPauseTimeout: () => {
           const activeSessionId = capturedSessionId || sessionId || null;
           const activeSession = activeSessionId ? getSession(activeSessionId) : null;
-          return streamStallTimeoutPaused || activeSession?.status === 'idle';
+          return pendingInteractions.isPaused() || activeSession?.status === 'idle';
         },
         onTimeout: () => {
           const activeSessionId = capturedSessionId || sessionId || null;
@@ -1240,12 +2277,25 @@ async function queryClaudeSDK(command, options = {}, ws) {
       }
 
       const message = next.value;
+      if (pendingTurnCompletion) {
+        turnCompletionScheduler.cancel();
+      }
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
         await persistInitialDisplayCommand(capturedSessionId);
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws, runtimeOptions, inputQueue);
+        addSession(
+          capturedSessionId,
+          queryInstance,
+          tempImagePaths,
+          tempDir,
+          ws,
+          runtimeOptions,
+          inputQueue,
+          turnLifecycle,
+          queryAbortController,
+        );
         bindRuntimeToProviderSession(capturedSessionId);
         recordProviderSession({ options: runtimeOptions, provider: 'claude', providerSessionId: capturedSessionId, status: 'active' });
 
@@ -1267,6 +2317,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const transformedMessage = transformMessage(message);
       const sid = capturedSessionId || sessionId || null;
       const persistenceSessionId = sid || pendingProviderSessionId;
+      const lifecycleSignal = turnLifecycle.observe(message);
+      if (lifecycleSignal === 'processing' && sid) {
+        markSessionProcessing(sid);
+      }
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = await applyRuntimeMcpToolOverridesToMessages(
@@ -1275,6 +2329,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
       const visibleNormalized = normalized.filter(
         (msg) => !shouldSuppressLiveUserTextMessage(msg, ws),
       );
+      const hookRecoveryActivityId = runtimeOptions.hookRecovery?.activity?.id || null;
+      for (const msg of visibleNormalized) {
+        // Preserve parentToolUseId from the SDK wrapper both for realtime
+        // rendering and for providers that persist normalized history.
+        if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
+          msg.parentToolUseId = transformedMessage.parentToolUseId;
+        }
+        if (hookRecoveryActivityId) {
+          msg.hookActivityId = hookRecoveryActivityId;
+        }
+      }
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',
@@ -1282,12 +2347,21 @@ async function queryClaudeSDK(command, options = {}, ws) {
         runtimeId: runtimeOptions.runtimeId,
         messages: visibleNormalized,
       });
-      for (const msg of visibleNormalized) {
-        // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
-        if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
-          msg.parentToolUseId = transformedMessage.parentToolUseId;
+      if (runtimeOptions.hookRecovery?.activity?.showInChat !== false) {
+        for (const msg of visibleNormalized) {
+          ws.send(msg);
         }
-        ws.send(msg);
+      }
+
+      if (turnBoundaryReached) {
+        break;
+      }
+
+      // Deliver the terminal task event before the main completion event so
+      // the UI never observes the parent turn as done while its last subagent
+      // card is still running.
+      if (lifecycleSignal === 'complete') {
+        schedulePendingTurnCompletion();
       }
 
       // Extract and send token budget updates from result messages
@@ -1328,53 +2402,92 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
         const completedSessionId = capturedSessionId || sessionId || null;
         if (remainingQueryTurns > 0) {
+          pendingTurnCompletion = null;
+          turnLifecycle.finishResult(remainingQueryTurns);
           if (completedSessionId) {
             markSessionProcessing(completedSessionId);
           }
           continue;
         }
 
-        if (completedSessionId) {
-          scheduleSessionIdleClose(completedSessionId);
-          runtimeOptions.onConcurrencyIdle?.();
+        pendingTurnCompletion = { sessionId: completedSessionId };
+        if (turnLifecycle.finishResult(remainingQueryTurns)) {
+          schedulePendingTurnCompletion();
         }
+        if (turnBoundaryReached) {
+          break;
+        }
+      }
 
-        recordProviderSession({
-          options: runtimeOptions,
-          provider: 'claude',
-          providerSessionId: completedSessionId,
-          status: 'completed',
-        });
-
-        ws.send(createNormalizedMessage({
-          kind: 'complete',
-          exitCode: 0,
-          isNewSession: !sessionId && !!command,
-          sessionId: completedSessionId,
-          provider: 'claude',
-          aborted: false,
-          success: true,
-        }));
-        notifyRunStopped({
-          userId: ws?.userId || null,
-          provider: 'claude',
-          sessionId: completedSessionId,
-          sessionName: sessionSummary,
-          stopReason: 'completed'
-        });
+      if (pendingTurnCompletion) {
+        schedulePendingTurnCompletion();
       }
     }
 
+    turnCompletionScheduler.cancel();
+    if (turnLifecycle.flush()) {
+      emitPendingTurnCompletion();
+    }
+    emitPendingTurnCompletion();
+
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
 
-    // Clean up session on completion
-    if (finalSessionId) {
+    // Keep the lightweight session entry while transitioning so additional
+    // running-message follow-ups remain queued behind the next independent turn.
+    if (finalSessionId && (!queuedFollowupTurn || wasAborted)) {
       removeSession(finalSessionId);
     }
 
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
+
+    if (loopSuspension) {
+      agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
+      recordProviderSession({
+        options: runtimeOptions,
+        provider: 'claude',
+        providerSessionId: finalSessionId,
+        status: 'completed',
+      });
+      runtimeOptions.onConcurrencyIdle?.();
+      ws.send(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 0,
+        sessionId: finalSessionId,
+        provider: 'claude',
+        suspended: true,
+        waitJobId: loopSuspension.jobId,
+        success: true,
+      }));
+      return;
+    }
+
+    if (queuedFollowupTurn && !wasAborted && finalSessionId) {
+      const followupWriter = queuedFollowupTurn.writer || ws;
+      sendWriterMessage(followupWriter, {
+        type: 'claude-supplement-ack',
+        sessionId: finalSessionId,
+        clientMessageId: queuedFollowupTurn.clientMessageId || null,
+        status: 'processing',
+        mode: queuedFollowupTurn.mode || 'now',
+        content: queuedFollowupTurn.displayContent || queuedFollowupTurn.content,
+        timestamp: new Date().toISOString(),
+      });
+      const followupDisplayCommand = queuedFollowupTurn.mode === 'hook_recovery'
+        ? `<ccui-hook-recovery activity="${queuedFollowupTurn.runtimeOptions?.hookRecovery?.activity?.id || ''}"></ccui-hook-recovery>`
+        : queuedFollowupTurn.displayContent || queuedFollowupTurn.content;
+      return queryClaudeSDKInternal(queuedFollowupTurn.content, {
+        ...runtimeOptions,
+        ...(queuedFollowupTurn.runtimeOptions || {}),
+        hookRecovery: queuedFollowupTurn.runtimeOptions?.hookRecovery || null,
+        sessionId: finalSessionId,
+        displayCommand: followupDisplayCommand,
+        images: [],
+      }, followupWriter);
+    }
+
     agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
     recordProviderSession({
       options: runtimeOptions,
@@ -1384,6 +2497,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     });
 
     if (wasAborted) {
+      updateHookActivity('failed', 'Hook follow-up was stopped');
       ws.send(createNormalizedMessage({
         kind: 'complete',
         exitCode: 0,
@@ -1404,9 +2518,17 @@ async function queryClaudeSDK(command, options = {}, ws) {
     // Complete
 
   } catch (error) {
+    turnCompletionScheduler?.cancel();
     console.error('SDK query error:', error);
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+    if (!loopSuspension) {
+      updateHookActivity(
+        'failed',
+        wasAborted ? 'Hook follow-up was stopped' : processDiagnostics.redactText(error?.message || String(error)),
+      );
+    }
 
     // Clean up session on error
     if (finalSessionId) {
@@ -1415,6 +2537,27 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
+
+    if (loopSuspension) {
+      agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
+      recordProviderSession({
+        options: runtimeOptions,
+        provider: 'claude',
+        providerSessionId: finalSessionId,
+        status: 'completed',
+      });
+      runtimeOptions.onConcurrencyIdle?.();
+      ws.send(createNormalizedMessage({
+        kind: 'complete',
+        exitCode: 0,
+        sessionId: finalSessionId,
+        provider: 'claude',
+        suspended: true,
+        waitJobId: loopSuspension.jobId,
+        success: true,
+      }));
+      return;
+    }
 
     if (wasAborted) {
       agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
@@ -1525,6 +2668,223 @@ async function queryClaudeSDK(command, options = {}, ws) {
   }
 }
 
+async function queryClaudeSDK(command, options = {}, ws) {
+  const suspendedLoop = options.sessionId
+    ? mcpLoopSuspensionsBySession.get(options.sessionId)
+    : null;
+  if (suspendedLoop && options.mcpLoopResume !== true) {
+    const error = new Error('This Claude session is waiting for an MCP loop to finish');
+    error.code = 'MCP_LOOP_WAITING';
+    throw error;
+  }
+  const executionKey = buildClaudeSessionExecutionKey(options);
+  return sessionExecutionQueue.run(
+    executionKey,
+    () => {
+      options.onSessionExecutionStart?.();
+      return queryClaudeSDKInternal(command, options, ws);
+    },
+  );
+}
+
+function emitMcpLoopActivity(context, job, status, error = null) {
+  if (!context?.activity || !job) return null;
+  context.activity.loop = {
+    jobId: job.id,
+    status: job.status,
+    attemptCount: job.attemptCount,
+    startedAtMs: job.startedAtMs,
+    nextPollAtMs: job.nextPollAtMs,
+    targetTool: job.toolName,
+    toolUseId: job.toolUseId,
+  };
+  return emitHookActivity({
+    hookRecovery: { activity: context.activity },
+    sessionId: job.sessionId,
+    status,
+    runtimeOptions: context.runtimeOptions,
+    writer: context.writer,
+    error,
+  });
+}
+
+async function suspendClaudeSDKSessionForMcpLoop(sessionId, jobId) {
+  const context = mcpLoopContextsByJob.get(jobId);
+  const session = getSession(sessionId);
+  if (!context || !session || context.suspended) return false;
+
+  context.suspended = true;
+  session.status = 'waiting_external';
+  session.inputQueue?.close();
+  mcpLoopSuspensionsBySession.set(sessionId, context);
+  try {
+    await Promise.resolve(session.instance.interrupt());
+    return true;
+  } catch (error) {
+    console.warn(`[McpLoop] Failed to suspend Claude session ${sessionId}:`, error?.message || error);
+    return false;
+  }
+}
+
+async function resumeClaudeSessionAfterMcpLoop(job) {
+  const context = mcpLoopContextsByJob.get(job.id);
+  if (!context) {
+    console.warn(`[McpLoop] Resume context is unavailable for completed job ${job.id}`);
+    return;
+  }
+
+  if (context.skipResume) {
+    emitMcpLoopActivity(context, job, 'failed', 'MCP loop was stopped with the Agent session');
+    mcpLoopSuspensionsBySession.delete(job.sessionId);
+    mcpLoopContextsByJob.delete(job.id);
+    return;
+  }
+
+  const replacement = buildMcpLoopReplacement(job);
+  const replacementPayload = replacement.payload;
+  const replacementMessage = createNormalizedMessage({
+    id: `mcp_loop_replacement_${job.id}`,
+    kind: 'tool_result',
+    sessionId: job.sessionId,
+    provider: 'claude',
+    origin: 'hook',
+    toolId: replacement.toolId,
+    content: replacement.content,
+    toolUseResult: replacement.toolUseResult,
+    isError: replacement.isError,
+    mcpLoopReplacement: true,
+    mcpLoopJobId: job.id,
+  });
+  persistNormalizedMessages({
+    options: context.runtimeOptions,
+    provider: 'claude',
+    providerSessionId: job.sessionId,
+    runtimeId: context.runtimeOptions.runtimeId,
+    messages: [replacementMessage],
+  });
+  sendWriterMessage(context.writer, replacementMessage);
+
+  const activityStatus = job.status === 'succeeded' ? 'succeeded' : 'failed';
+  emitMcpLoopActivity(context, job, activityStatus, job.error);
+  const modelContent = [
+    `<ccui-mcp-loop-result job-id="${job.id}" tool-use-id="${job.toolUseId}" status="${job.status}">`,
+    JSON.stringify(replacementPayload),
+    '</ccui-mcp-loop-result>',
+    '',
+    'The payload above replaces the original MCP tool result for the referenced tool-use-id.',
+    'Continue the original user request using this final result.',
+    'Do not repeat the completed MCP loop or call the same status tool again unless the user explicitly asks.',
+  ].join('\n');
+
+  try {
+    sendWriterMessage(context.writer, createNormalizedMessage({
+      kind: 'status',
+      text: 'Processing',
+      sessionId: job.sessionId,
+      provider: 'claude',
+      canInterrupt: true,
+    }));
+    await queryClaudeSDK(modelContent, {
+      ...context.runtimeOptions,
+      sessionId: job.sessionId,
+      resume: true,
+      backgroundTask: true,
+      mcpLoopResume: true,
+      onSessionExecutionStart: () => context.runtimeOptions.onConcurrencyResume?.(),
+      hookRecovery: null,
+      displayCommand: `<ccui-mcp-loop-result job-id="${job.id}"></ccui-mcp-loop-result>`,
+      images: [],
+    }, context.writer);
+  } catch (error) {
+    console.error(`[McpLoop] Failed to resume Claude session ${job.sessionId}:`, error);
+    emitMcpLoopActivity(context, job, 'failed', `Agent resume failed: ${error?.message || error}`);
+  } finally {
+    mcpLoopSuspensionsBySession.delete(job.sessionId);
+    mcpLoopContextsByJob.delete(job.id);
+  }
+}
+
+mcpLoopService.setHandlers({
+  onProgress: async (job) => {
+    const context = mcpLoopContextsByJob.get(job.id);
+    if (context) emitMcpLoopActivity(context, job, 'running', job.error);
+  },
+  onTerminal: async (job) => {
+    // The scheduler slot only covers the MCP call. Agent resume continues via
+    // the per-session execution queue without occupying loop concurrency.
+    void resumeClaudeSessionAfterMcpLoop(job);
+  },
+});
+
+function createStoppedSubagentMessage(sessionId, task, timestamp = new Date().toISOString()) {
+  return createNormalizedMessage({
+    id: `subagent_stopped_${sessionId}_${task.taskId}_${Date.parse(timestamp) || Date.now()}`,
+    kind: 'task_notification',
+    sessionId,
+    provider: 'claude',
+    taskId: task.taskId,
+    toolUseId: task.toolUseId || undefined,
+    status: 'stopped',
+    summary: task.description
+      ? `Stopped by user: ${task.description}`
+      : 'Stopped by user',
+    usage: {},
+    syntheticSubagentStop: true,
+    timestamp,
+  });
+}
+
+async function stopActiveClaudeSubagentTasks(
+  sessionId,
+  session,
+  { timeoutMs = SUBAGENT_STOP_TIMEOUT_MS } = {},
+) {
+  const activeTasks = session?.turnLifecycle?.stopAll?.() || [];
+  if (activeTasks.length === 0) return [];
+
+  const timestamp = new Date().toISOString();
+  const stoppedMessages = activeTasks.map((task) => (
+    createStoppedSubagentMessage(sessionId, task, timestamp)
+  ));
+
+  for (const message of stoppedMessages) {
+    sendWriterMessage(session.writer, message);
+  }
+  persistNormalizedMessages({
+    options: session.runtimeOptions || {},
+    provider: 'claude',
+    providerSessionId: sessionId,
+    runtimeId: session.runtimeId,
+    messages: stoppedMessages,
+  });
+
+  if (typeof session.instance?.stopTask !== 'function') {
+    return stoppedMessages;
+  }
+
+  const stopRequests = activeTasks.map(async (task) => {
+    try {
+      await session.instance.stopTask(task.taskId);
+    } catch (error) {
+      console.warn(
+        `Failed to stop Claude subagent ${task.taskId} for session ${sessionId}:`,
+        error?.message || error,
+      );
+    }
+  });
+
+  let timeoutId;
+  await Promise.race([
+    Promise.allSettled(stopRequests),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(resolve, Math.max(0, timeoutMs));
+    }),
+  ]);
+  if (timeoutId) clearTimeout(timeoutId);
+
+  return stoppedMessages;
+}
+
 /**
  * Aborts an active SDK session
  * @param {string} sessionId - Session identifier
@@ -1534,6 +2894,15 @@ async function abortClaudeSDKSession(sessionId) {
   const session = getSession(sessionId);
 
   if (!session) {
+    const waitingLoop = mcpLoopSuspensionsBySession.get(sessionId);
+    if (waitingLoop) {
+      waitingLoop.skipResume = true;
+      const result = await mcpLoopService.cancel({
+        jobId: waitingLoop.jobId,
+        userId: waitingLoop.runtimeOptions?.userId ?? waitingLoop.writer?.userId,
+      });
+      return result.success;
+    }
     console.log(`Session ${sessionId} not found`);
     return false;
   }
@@ -1550,6 +2919,7 @@ async function abortClaudeSDKSession(sessionId) {
       clearTimeout(session.idleCloseTimer);
       session.idleCloseTimer = null;
     }
+    await stopActiveClaudeSubagentTasks(sessionId, session);
     session.inputQueue?.close();
 
     const interruptPromise = Promise.resolve()
@@ -1557,6 +2927,7 @@ async function abortClaudeSDKSession(sessionId) {
       .catch((error) => {
         console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
       });
+    session.abortController?.abort(new Error('Session stopped by user'));
 
     if (
       session.runtimeMode === 'docker' &&
@@ -1597,7 +2968,7 @@ async function abortClaudeSDKSession(sessionId) {
  */
 function isClaudeSDKSessionActive(sessionId) {
   const session = getSession(sessionId);
-  return Boolean(session && session.status === 'processing');
+  return Boolean((session && session.status === 'processing') || mcpLoopSuspensionsBySession.has(sessionId));
 }
 
 /**
@@ -1605,7 +2976,7 @@ function isClaudeSDKSessionActive(sessionId) {
  * @returns {Array<string>} Array of active session IDs
  */
 function getActiveClaudeSDKSessions() {
-  return getAllSessions();
+  return [...new Set([...getAllSessions(), ...mcpLoopSuspensionsBySession.keys()])];
 }
 
 /**
@@ -1639,8 +3010,10 @@ function getPendingApprovalsForSession(sessionId) {
  */
 function reconnectSessionWriter(sessionId, newRawWs) {
   const session = getSession(sessionId);
-  if (!session?.writer?.updateWebSocket) return false;
-  session.writer.updateWebSocket(newRawWs);
+  const waitingLoop = mcpLoopSuspensionsBySession.get(sessionId);
+  const writer = session?.writer || waitingLoop?.writer;
+  if (!writer?.updateWebSocket) return false;
+  writer.updateWebSocket(newRawWs);
   console.log(`[RECONNECT] Writer swapped for session ${sessionId}`);
   return true;
 }
@@ -1662,6 +3035,21 @@ function sendWriterMessage(writer, message) {
   writer.send(message);
 }
 
+function resolveClaudeSupplementPayload({ sessionId, content, displayContent = null } = {}) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const modelContent = typeof content === 'string' ? content : '';
+  const visibleContent = typeof displayContent === 'string' && displayContent.trim()
+    ? displayContent
+    : modelContent;
+
+  return {
+    sessionId: normalizedSessionId,
+    content: modelContent,
+    displayContent: visibleContent,
+    valid: Boolean(normalizedSessionId && modelContent.trim()),
+  };
+}
+
 function pushClaudeSupplement({
   sessionId,
   content,
@@ -1670,98 +3058,58 @@ function pushClaudeSupplement({
   mode = 'now',
   writer = null,
 } = {}) {
-  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-  const normalizedContent = typeof content === 'string' ? content.trim() : '';
-  const normalizedDisplayContent =
-    typeof displayContent === 'string' && displayContent.trim()
-      ? displayContent.trim()
-      : normalizedContent;
-  if (!normalizedSessionId || !normalizedContent) {
+  const supplement = resolveClaudeSupplementPayload({ sessionId, content, displayContent });
+  if (!supplement.valid) {
     return { success: false, error: 'sessionId and content are required' };
   }
+  const normalizedSessionId = supplement.sessionId;
+  const normalizedContent = supplement.content;
+  const normalizedDisplayContent = supplement.displayContent;
 
   const session = getSession(normalizedSessionId);
-  if (!session?.inputQueue) {
+  if (!session?.inputQueue || !['processing', 'transitioning'].includes(session.status)) {
     return { success: false, error: 'Claude session is not accepting supplemental input' };
   }
 
   const { priority, shouldQuery } = normalizeSupplementMode(mode);
-  if (shouldQuery) {
-    try {
-      session.runtimeOptions?.onConcurrencyResume?.();
-    } catch (error) {
-      if (error?.code === 'SESSION_LIMIT_EXCEEDED') {
-        return {
-          success: false,
-          error: error.message,
-          code: error.code,
-          activeCount: error.activeCount,
-          limit: error.limit,
-          source: error.source,
-          userId: error.userId,
-        };
-      }
-      throw error;
-    }
-  }
-
   updateSessionWriter(normalizedSessionId, writer);
 
   const timestamp = new Date().toISOString();
-  const messageId = typeof clientMessageId === 'string' && clientMessageId.trim()
-    ? `supplement_${clientMessageId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120)}`
-    : null;
-  const persistedMessage = createNormalizedMessage({
-    kind: 'text',
-    role: 'user',
-    content: normalizedDisplayContent,
-    sessionId: normalizedSessionId,
-    provider: 'claude',
-    timestamp,
-    ...(messageId ? { id: messageId } : {}),
-    isSupplement: true,
-    supplementMode: mode,
-  });
-
-  persistNormalizedMessages({
-    options: session.runtimeOptions,
-    provider: 'claude',
-    providerSessionId: normalizedSessionId,
-    runtimeId: session.runtimeId,
-    messages: [persistedMessage],
-  });
-
-  markSessionProcessing(normalizedSessionId);
-  const claudeMessageId = createRequestId();
-  void appendClaudeDisplayCommand({
-    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
-    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
-    sessionId: normalizedSessionId,
-    messageId: claudeMessageId,
-    displayCommand: normalizedDisplayContent,
-    modelContent: normalizedContent,
-    uid: session.runtimeOptions?.runtimeUid,
-    gid: session.runtimeOptions?.runtimeGid,
-  }).catch((error) => {
-    console.warn(
-      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
-      error?.message || error,
-    );
-  });
-  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
-    uuid: claudeMessageId,
-    priority,
-    shouldQuery,
-    timestamp,
-  }));
+  let queuePosition = 0;
+  if (shouldQuery) {
+    queuePosition = enqueueClaudeFollowupTurn(session, {
+      content: normalizedContent,
+      displayContent: normalizedDisplayContent,
+      clientMessageId,
+      mode,
+      priority,
+      writer: writer || session.writer,
+      queuedAt: timestamp,
+    });
+    console.info('[ClaudeTurnBoundary] Queued running-message follow-up', {
+      sessionId: normalizedSessionId,
+      queuePosition,
+      mode,
+    });
+  } else {
+    const claudeMessageId = createRequestId();
+    session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+      uuid: claudeMessageId,
+      priority,
+      shouldQuery: false,
+      timestamp,
+    }));
+  }
 
   const targetWriter = writer || session.writer;
   sendWriterMessage(targetWriter, {
     type: 'claude-supplement-ack',
     sessionId: normalizedSessionId,
     clientMessageId,
-    status: 'injected',
+    status: shouldQuery ? 'queued' : 'injected',
     mode,
+    content: normalizedDisplayContent,
+    ...(shouldQuery ? { queuePosition } : {}),
     timestamp,
   });
   if (shouldQuery) {
@@ -1786,10 +3134,21 @@ export {
   mapCliOptionsToSDK,
   resolveToolApproval,
   resolveClaudeModel,
+  resolveInteractiveStreamCloseTimeoutMs,
   loadMcpConfig,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
   pushClaudeSupplement,
   createClaudePromptFactory,
   buildClaudeUserMessage,
+  buildToolInteractionContext,
+  createClaudeTurnLifecycleTracker,
+  createPendingInteractionTracker,
+  shouldEmitClaudeTurnCompletion,
+  createClaudeTurnCompletionScheduler,
+  stopActiveClaudeSubagentTasks,
+  resolveClaudeSupplementPayload,
+  resolveConfiguredHookUserId,
+  createHookHeadersHelperRunner,
+  createHookCardActionResults,
 };

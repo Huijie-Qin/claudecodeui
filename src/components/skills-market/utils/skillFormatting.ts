@@ -18,6 +18,33 @@ export type WorkspaceSkill = {
   runtimePath?: string;
   manifestPath?: string;
   parseError?: string;
+  diagnostics?: Array<{ code: string; message: string; path?: string }>;
+  origin?: 'market' | 'local';
+  bindingType?: 'published' | 'imported';
+  published?: boolean;
+  imported?: boolean;
+  locallyModified?: boolean;
+  targetPath?: string;
+  localVersion?: number;
+  marketVersion?: number;
+  updateAvailable?: boolean;
+  remoteDeleted?: boolean;
+  createUserId?: string;
+  files?: WorkspaceSkillEntry[];
+};
+
+export type WorkspaceSkillEntry = {
+  path: string;
+  type: 'directory' | 'file' | 'symlink';
+  size?: number;
+  mimeType?: string;
+};
+
+export type SkillDetailVersionFields = {
+  importedVersion?: number;
+  localVersion?: number;
+  marketVersion?: number;
+  version?: number;
 };
 
 const KIND_ORDER: Record<WorkspaceSkillKind, number> = {
@@ -47,7 +74,8 @@ export function filterWorkspaceSkills(skills: WorkspaceSkill[], query: string): 
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return skills;
 
-  return skills.filter((skill) => getSkillSearchText(skill).includes(normalizedQuery));
+  return skills.filter((skill) => getSkillSearchFields(skill)
+    .some((value) => value.toLowerCase().includes(normalizedQuery)));
 }
 
 export function getSkillKindLabelKey(skill: WorkspaceSkill): string {
@@ -62,21 +90,31 @@ export function getSkillDisplayName(skill: WorkspaceSkill): string {
   return skill.displayName || skill.name;
 }
 
-function getSkillSearchText(skill: WorkspaceSkill): string {
+export function getSkillDetailDisplayVersions(detail: SkillDetailVersionFields): {
+  localVersion?: number;
+  marketVersion?: number;
+} {
+  return {
+    marketVersion: typeof detail.marketVersion === 'number'
+      ? detail.marketVersion
+      : typeof detail.version === 'number' ? detail.version : undefined,
+    localVersion: typeof detail.localVersion === 'number'
+      ? detail.localVersion
+      : typeof detail.importedVersion === 'number' ? detail.importedVersion : undefined,
+  };
+}
+
+export function canEditSkillDetailEntries(source: 'market' | 'mine', canManage: boolean): boolean {
+  return source === 'mine' && canManage;
+}
+
+function getSkillSearchFields(skill: WorkspaceSkill): string[] {
   return [
     skill.name,
     skill.displayName,
     skill.description,
-    skill.kind,
-    skill.status,
-    skill.sourceType,
-    skill.sourceUrl,
-    skill.resolvedCommit,
-    skill.sourceSubdir,
-    skill.sourceFileName,
-    skill.parseError,
+    skill.createUserId,
   ]
     .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+    .map(String);
 }

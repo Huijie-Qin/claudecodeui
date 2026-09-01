@@ -10,10 +10,18 @@ import {
 import { codeHubService } from '../services/codehub.js';
 import { getPublicKey } from '../services/vapid-keys.js';
 import { createNotificationEvent, notifyUserIfEnabled } from '../services/notification-orchestrator.js';
+import { featureFlagsService, getFeatureFlagsForUser } from '../services/feature-flags.js';
 
 import { createPersonalKeyHandler } from './personal-key.js';
+import { createPersonalClaudeEnvRouter } from './claude-env.js';
 
 const router = express.Router();
+
+router.use('/claude-env', createPersonalClaudeEnvRouter());
+
+router.get('/feature-flags', (req, res) => {
+  res.json({ features: getFeatureFlagsForUser(featureFlagsService, req.user) });
+});
 
 function broadcastModelResponseHookConfig(clients, userId, config) {
   if (!clients || !userId) {

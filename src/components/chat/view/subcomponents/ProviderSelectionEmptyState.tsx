@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useServerPlatform } from "../../../../hooks/useServerPlatform";
@@ -10,7 +10,7 @@ import {
   CODEX_MODELS,
   GEMINI_MODELS,
 } from "../../../../../shared/modelConstants";
-import type { ProjectSession, LLMProvider } from "../../../../types/app";
+import type { ProjectAgentTemplate, ProjectSession, LLMProvider } from "../../../../types/app";
 import { NextTaskBanner } from "../../../task-master";
 import {
   Dialog,
@@ -44,6 +44,7 @@ type ProviderSelectionEmptyStateProps = {
   isTaskMasterInstalled: boolean | null;
   onShowAllTasks?: (() => void) | null;
   setInput: React.Dispatch<React.SetStateAction<string>>;
+  agentTemplate?: ProjectAgentTemplate | null;
 };
 
 type ProviderGroup = {
@@ -104,10 +105,12 @@ export default function ProviderSelectionEmptyState({
   isTaskMasterInstalled,
   onShowAllTasks,
   setInput,
+  agentTemplate,
 }: ProviderSelectionEmptyStateProps) {
   const { t } = useTranslation("chat");
   const { isWindowsServer } = useServerPlatform();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const guideText = agentTemplate?.guideText?.trim() || '';
 
   const visibleProviderGroups = useMemo(
     () => (isWindowsServer ? PROVIDER_GROUPS.filter((p) => p.id !== "cursor") : PROVIDER_GROUPS),
@@ -183,6 +186,27 @@ export default function ProviderSelectionEmptyState({
               {t("providerSelection.description")}
             </p>
           </div>
+
+          {guideText ? (
+            <div className="mb-5 rounded-xl border border-primary/25 bg-primary/5 p-4 text-left">
+              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Sparkles className="h-3.5 w-3.5" />
+                </span>
+                <span>
+                  {t("providerSelection.templateGuide", {
+                    name: agentTemplate?.name || t("providerSelection.defaultAgentName"),
+                  })}
+                </span>
+              </div>
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+                {guideText}
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground/70">
+                {t("providerSelection.guideNotSent")}
+              </p>
+            </div>
+          ) : null}
 
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>

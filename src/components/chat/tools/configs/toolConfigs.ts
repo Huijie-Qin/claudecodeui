@@ -3,6 +3,8 @@
  * Defines display behavior for all tool types 
  */
 
+import { normalizeBashOutput } from '../utils/bashOutput';
+
 export interface ToolDisplayConfig {
   input: {
     type: 'one-line' | 'collapsible' | 'plan' | 'hidden';
@@ -12,7 +14,6 @@ export interface ToolDisplayConfig {
     getValue?: (input: any) => string;
     getSecondary?: (input: any) => string | undefined;
     action?: 'copy' | 'open-file' | 'jump-to-results' | 'none';
-    style?: string;
     wrapText?: boolean;
     colorScheme?: {
       primary?: string;
@@ -24,6 +25,7 @@ export interface ToolDisplayConfig {
     // Collapsible config
     title?: string | ((input: any) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task' | 'question-answer';
     getContentProps?: (input: any, helpers?: any) => any;
     actionButton?: 'file-button' | 'none';
@@ -31,9 +33,11 @@ export interface ToolDisplayConfig {
   result?: {
     hidden?: boolean;
     hideOnSuccess?: boolean;
+    hideWhen?: (result: any) => boolean;
     type?: 'one-line' | 'collapsible' | 'plan' | 'special';
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     // Special result handlers
     contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task' | 'question-answer';
     getMessage?: (result: any) => string;
@@ -352,24 +356,30 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
 
   Bash: {
     input: {
-      type: 'one-line',
-      icon: 'terminal',
-      getValue: (input) => input.command,
-      getSecondary: (input) => input.description,
-      action: 'copy',
-      style: 'terminal',
-      wrapText: true,
-      colorScheme: {
-        primary: 'text-green-400 font-mono',
-        secondary: 'text-gray-400',
-        background: '',
-        border: 'border-green-500 dark:border-green-400',
-        icon: 'text-green-500 dark:text-green-400'
-      }
+      type: 'collapsible',
+      title: 'Command',
+      defaultOpen: false,
+      stickyHeader: false,
+      contentType: 'text',
+      getContentProps: (input) => ({
+        content: String(input?.command || ''),
+        format: 'code'
+      })
     },
     result: {
-      hideOnSuccess: true,
-      type: 'special'
+      type: 'collapsible',
+      title: 'Output',
+      defaultOpen: false,
+      stickyHeader: false,
+      contentType: 'text',
+      hideWhen: (result) => !normalizeBashOutput(result).hasOutput,
+      getContentProps: (result) => {
+        const { stdout, stderr } = normalizeBashOutput(result);
+        return {
+          content: [stdout, stderr].filter(Boolean).join('\n'),
+          format: 'code'
+        };
+      }
     }
   },
 
@@ -873,6 +883,10 @@ export function shouldHideToolResult(toolName: string, toolResult: any): boolean
 
   // Hide on success only
   if (config.result.hideOnSuccess && toolResult && !toolResult.isError) {
+    return true;
+  }
+
+  if (config.result.hideWhen?.(toolResult)) {
     return true;
   }
 

@@ -96,6 +96,241 @@ test('runtime Claude history keeps newest-first pagination semantics', async () 
   assert.equal(older.hasMore, false);
 });
 
+test('runtime Claude history restores tools from the current nested subagent transcript layout', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-subagent-history-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-subagent';
+  await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [
+    {
+      sessionId,
+      uuid: 'agent-use',
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_agent_1',
+          name: 'Agent',
+          input: { description: 'Inspect history' },
+        }],
+      },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result',
+      type: 'user',
+      timestamp: '2026-01-01T00:00:02.000Z',
+      tool_use_result: { status: 'async_launched', agentId: 'agent-1' },
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_agent_1',
+          content: 'Agent launched.',
+        }],
+      },
+    },
+  ]);
+  await writeJsonl(
+    path.join(projectDir, sessionId, 'subagents', 'agent-agent-1.jsonl'),
+    [
+      {
+        timestamp: '2026-01-01T00:00:01.100Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Inspecting the authentication flow.' }],
+        },
+      },
+      {
+        timestamp: '2026-01-01T00:00:01.200Z',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'toolu_read_1',
+            name: 'Read',
+            input: { file_path: '/workspace/auth.ts' },
+          }],
+        },
+      },
+      {
+        timestamp: '2026-01-01T00:00:01.300Z',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_read_1',
+            content: 'source',
+          }],
+        },
+      },
+    ],
+  );
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+  const agentResult = result.messages.find((message) => message.uuid === 'agent-result');
+
+  assert.deepEqual(agentResult?.subagentTools, [{
+    toolId: 'toolu_read_1',
+    toolName: 'Read',
+    toolInput: { file_path: '/workspace/auth.ts' },
+    timestamp: '2026-01-01T00:00:01.200Z',
+    toolResult: { content: 'source', isError: false },
+  }]);
+  assert.equal(agentResult?.subagentMessages?.length, 3);
+  assert.equal(agentResult?.subagentMessages?.[0]?.message?.content?.[0]?.text, 'Inspecting the authentication flow.');
+});
+
+test('runtime Claude history keeps resumed agent generations separated by parent tool id', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-resumed-agent-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-resumed-agent';
+  await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [
+    {
+      sessionId,
+      uuid: 'agent-use-1',
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:01.000Z',
+      message: { role: 'assistant', content: [{
+        type: 'tool_use', id: 'toolu_agent_1', name: 'Agent', input: { description: 'First pass' },
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result-1',
+      type: 'user',
+      timestamp: '2026-01-01T00:00:01.100Z',
+      toolUseResult: { status: 'async_launched', agentId: 'agent-shared' },
+      message: { role: 'user', content: [{
+        type: 'tool_result', tool_use_id: 'toolu_agent_1', content: 'First launch.',
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-use-2',
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:02.000Z',
+      message: { role: 'assistant', content: [{
+        type: 'tool_use', id: 'toolu_agent_2', name: 'Agent', input: { resume: 'agent-shared' },
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result-2',
+      type: 'user',
+      timestamp: '2026-01-01T00:00:02.100Z',
+      toolUseResult: { status: 'async_launched', agentId: 'agent-shared' },
+      message: { role: 'user', content: [{
+        type: 'tool_result', tool_use_id: 'toolu_agent_2', content: 'Second launch.',
+      }] },
+    },
+  ]);
+  await writeJsonl(
+    path.join(projectDir, sessionId, 'subagents', 'agent-agent-shared.jsonl'),
+    [
+      {
+        timestamp: '2026-01-01T00:00:01.200Z',
+        parent_tool_use_id: 'toolu_agent_1',
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id: 'toolu_read_1', name: 'Read', input: { file_path: '/workspace/first.ts' },
+        }] },
+      },
+      {
+        timestamp: '2026-01-01T00:00:02.200Z',
+        parent_tool_use_id: 'toolu_agent_2',
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id: 'toolu_read_2', name: 'Read', input: { file_path: '/workspace/second.ts' },
+        }] },
+      },
+    ],
+  );
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+  const firstResult = result.messages.find((message) => message.uuid === 'agent-result-1');
+  const secondResult = result.messages.find((message) => message.uuid === 'agent-result-2');
+
+  assert.deepEqual(firstResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_2']);
+  assert.deepEqual(firstResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_2']);
+});
+
+test('runtime Claude history time-slices legacy resumed agents without parent tool ids', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-legacy-resumed-agent-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-legacy-resumed-agent';
+  await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [
+    {
+      sessionId,
+      uuid: 'agent-use-1',
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:01.000Z',
+      message: { role: 'assistant', content: [{
+        type: 'tool_use', id: 'toolu_agent_1', name: 'Agent', input: { description: 'First pass' },
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result-1',
+      type: 'user',
+      timestamp: '2026-01-01T00:00:01.500Z',
+      toolUseResult: { status: 'async_launched', agentId: 'agent-shared' },
+      message: { role: 'user', content: [{
+        type: 'tool_result', tool_use_id: 'toolu_agent_1', content: 'First launch.',
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-use-2',
+      type: 'assistant',
+      timestamp: '2026-01-01T00:00:02.000Z',
+      message: { role: 'assistant', content: [{
+        type: 'tool_use', id: 'toolu_agent_2', name: 'Agent', input: { resume: 'agent-shared' },
+      }] },
+    },
+    {
+      sessionId,
+      uuid: 'agent-result-2',
+      type: 'user',
+      timestamp: '2026-01-01T00:00:02.500Z',
+      toolUseResult: { status: 'async_launched', agentId: 'agent-shared' },
+      message: { role: 'user', content: [{
+        type: 'tool_result', tool_use_id: 'toolu_agent_2', content: 'Second launch.',
+      }] },
+    },
+  ]);
+  await writeJsonl(
+    path.join(projectDir, sessionId, 'subagents', 'agent-agent-shared.jsonl'),
+    [
+      {
+        timestamp: '2026-01-01T00:00:01.200Z',
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id: 'toolu_read_1', name: 'Read', input: { file_path: '/workspace/first.ts' },
+        }] },
+      },
+      {
+        timestamp: '2026-01-01T00:00:02.200Z',
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id: 'toolu_read_2', name: 'Read', input: { file_path: '/workspace/second.ts' },
+        }] },
+      },
+    ],
+  );
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+  const firstResult = result.messages.find((message) => message.uuid === 'agent-result-1');
+  const secondResult = result.messages.find((message) => message.uuid === 'agent-result-2');
+
+  assert.deepEqual(firstResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentTools?.map((tool) => tool.toolId), ['toolu_read_2']);
+  assert.deepEqual(firstResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_1']);
+  assert.deepEqual(secondResult?.subagentMessages?.map((message) => message.message.content[0].id), ['toolu_read_2']);
+});
+
 test('runtime Claude session deletion removes only the target transcript and session data directory', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-history-delete-'));
   const projectsRoot = path.join(root, '.claude', 'projects');

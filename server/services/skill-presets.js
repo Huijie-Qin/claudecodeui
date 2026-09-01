@@ -45,6 +45,25 @@ function compactObject(value) {
   );
 }
 
+function normalizedIdentityRef(value) {
+  return firstString(value).toLowerCase();
+}
+
+function isSameSkillPresetSource(existing, normalized) {
+  const existingRefs = new Set([
+    existing?.remote_id,
+    existing?.skill_id,
+    existing?.source?.id,
+    existing?.source?.skillId,
+  ].map(normalizedIdentityRef).filter(Boolean));
+  return [
+    normalized?.remoteId,
+    normalized?.skillId,
+    normalized?.source?.id,
+    normalized?.source?.skillId,
+  ].map(normalizedIdentityRef).filter(Boolean).some((ref) => existingRefs.has(ref));
+}
+
 function normalizeSkillFolderName(value) {
   const normalized = String(value || '')
     .trim()
@@ -188,20 +207,50 @@ function isPathInside(rootPath, targetPath) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function resolveSkillFilePath(skillDirectory, filePath) {
-  const normalized = String(filePath || '')
-    .replace(/\\/g, '/')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
-  if (!normalized || normalized.startsWith('../') || /^[a-zA-Z]:/.test(normalized) || path.isAbsolute(normalized)) {
+function normalizeDownloadedFilePath(filePath) {
+  const rawPath = String(filePath || '').replace(/\\/g, '/');
+  if (!rawPath || rawPath.startsWith('/') || /^[a-zA-Z]:/.test(rawPath)) {
     throw createHttpError('Skill file path is invalid', 400);
   }
+  const parts = rawPath.split('/').filter((part) => part && part !== '.');
+  if (parts.length === 0 || parts.some((part) => part === '..')) {
+    throw createHttpError('Skill file path is invalid', 400);
+  }
+  return parts.join('/');
+}
+
+function resolveSkillFilePath(skillDirectory, filePath) {
+  const normalized = normalizeDownloadedFilePath(filePath);
   const targetPath = path.resolve(skillDirectory, normalized);
   if (!isPathInside(skillDirectory, targetPath)) {
     throw createHttpError('Skill file path must stay inside the skill directory', 403);
   }
   return targetPath;
+}
+
+function normalizeDownloadedSkillPackage(downloadedSkill = {}) {
+  const entries = Object.entries(downloadedSkill.files || {}).map(([filePath, content]) => ({
+    path: normalizeDownloadedFilePath(filePath),
+    content,
+  }));
+  const rootManifest = entries.find((entry) => entry.path === 'SKILL.md');
+  if (!rootManifest) {
+    const nestedManifests = entries
+      .filter((entry) => entry.path.endsWith('/SKILL.md'))
+      .map((entry) => entry.path);
+    if (nestedManifests.length > 0) {
+      const paths = nestedManifests.map((manifestPath) => `"${manifestPath}"`).join(', ');
+      throw createHttpError(
+        `Selected skill package is invalid: SKILL.md must be located at the package root; found at ${paths}`,
+        400,
+      );
+    }
+    throw createHttpError(
+      'Selected skill package is invalid: SKILL.md is required at the package root',
+      400,
+    );
+  }
+  return { ...downloadedSkill, files: Object.fromEntries(entries.map((entry) => [entry.path, entry.content])) };
 }
 
 async function writeDownloadedFiles(skillDirectory, files) {
@@ -221,7 +270,8 @@ async function writeDownloadedFiles(skillDirectory, files) {
 async function validateDownloadedSkill(downloadedSkill) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-preset-'));
   try {
-    await writeDownloadedFiles(tempRoot, downloadedSkill.files);
+    const normalizedPackage = normalizeDownloadedSkillPackage(downloadedSkill);
+    await writeDownloadedFiles(tempRoot, normalizedPackage.files);
     const manifest = await parseSkillManifest(tempRoot);
     if (manifest.status === 'invalid') {
       throw createHttpError(`Selected skill has an invalid SKILL.md: ${manifest.parseError}`, 400);
@@ -303,6 +353,7 @@ async function installDownloadedPresetSkill({
   allowExistingRuntime = false,
   now = () => new Date(),
 }) {
+  const normalizedPackage = normalizeDownloadedSkillPackage(downloadedSkill);
   const metadata = await readSkillsMetadata(workspacePath);
   const { sourceRoot, runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const sourcePath = path.join(sourceRoot, skillName);
@@ -326,7 +377,7 @@ async function installDownloadedPresetSkill({
   let runtimeBackedUp = false;
   let runtimeInstalled = false;
   try {
-    await writeDownloadedFiles(stagePath, downloadedSkill.files);
+    await writeDownloadedFiles(stagePath, normalizedPackage.files);
     const manifest = await parseSkillManifest(stagePath);
     if (manifest.status === 'invalid') {
       throw createHttpError(`Selected skill has an invalid SKILL.md: ${manifest.parseError}`, 400);
@@ -485,7 +536,9 @@ export function createSkillPresetService({
         preset.remote_id || preset.skill_id || preset.name,
         { tenantCode, accountId },
       );
-      const downloadedSkill = await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+      const downloadedSkill = normalizeDownloadedSkillPackage(
+        await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
+      );
       attemptedSkillName = resolveRemoteSkillPresetName(remoteSkill, downloadedSkill);
       const skill = await installDownloadedPresetSkill({
         workspacePath,
@@ -567,21 +620,48 @@ export function createSkillPresetService({
     },
 
     createPreset: async ({ tenantId, userId, input, tenantCode, accountId }) => {
+      const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
-      const downloadedSkill = await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+      const downloadedSkill = normalizeDownloadedSkillPackage(
+        await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
+      );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
-      const preset = multitenancy.skillPresets.createPreset({
-        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
-        ...normalized,
-        createdByUserId: requirePositiveInteger(userId, 'userId'),
+      const findExisting = () => multitenancy.skillPresets.findPresetByName({
+        tenantId: normalizedTenantId,
+        name: normalized.name,
       });
-      return toAdminSkillPreset(preset);
+      const existing = findExisting();
+      if (existing) {
+        if (isSameSkillPresetSource(existing, normalized)) return toAdminSkillPreset(existing);
+        throw createHttpError(`Skill preset name "${normalized.name}" is already in use`, 409, 'SKILL_PRESET_NAME_CONFLICT');
+      }
+
+      try {
+        const preset = multitenancy.skillPresets.createPreset({
+          tenantId: normalizedTenantId,
+          ...normalized,
+          createdByUserId: requirePositiveInteger(userId, 'userId'),
+        });
+        return toAdminSkillPreset(preset);
+      } catch (error) {
+        const isUniqueConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE'
+          || error?.code === 'SQLITE_CONSTRAINT';
+        if (!isUniqueConstraint) throw error;
+        const concurrentlyCreated = findExisting();
+        if (!concurrentlyCreated) throw error;
+        if (!isSameSkillPresetSource(concurrentlyCreated, normalized)) {
+          throw createHttpError(`Skill preset name "${normalized.name}" is already in use`, 409, 'SKILL_PRESET_NAME_CONFLICT');
+        }
+        return toAdminSkillPreset(concurrentlyCreated);
+      }
     },
 
     updatePreset: async ({ tenantId, presetId, userId, input, tenantCode, accountId }) => {
       const existing = getExistingPreset({ tenantId, presetId });
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
-      const downloadedSkill = await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+      const downloadedSkill = normalizeDownloadedSkillPackage(
+        await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
+      );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
       const preset = multitenancy.skillPresets.updatePreset({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
@@ -600,7 +680,9 @@ export function createSkillPresetService({
           preset.remote_id || preset.skill_id || preset.name,
           { tenantCode, accountId },
         );
-        const downloadedSkill = await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId });
+        const downloadedSkill = normalizeDownloadedSkillPackage(
+          await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
+        );
         const manifest = await validateDownloadedSkill(downloadedSkill);
         const validated = multitenancy.skillPresets.recordValidation({
           tenantId: requirePositiveInteger(tenantId, 'tenantId'),

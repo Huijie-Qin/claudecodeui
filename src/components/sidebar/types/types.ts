@@ -24,6 +24,7 @@ export type SessionDeleteConfirmation = {
 
 export type SidebarProps = {
   projects: Project[];
+  processingSessions: ReadonlyMap<string, number>;
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   onProjectSelect: (project: Project) => void;
@@ -53,7 +54,6 @@ export type SessionViewModel = {
   isCursorSession: boolean;
   isCodexSession: boolean;
   isGeminiSession: boolean;
-  isActive: boolean;
   sessionName: string;
   sessionTime: string;
   messageCount: number;
@@ -64,4 +64,4 @@ export type MCPServerStatus = {
   isConfigured?: boolean;
 } | null;
 
-export type SettingsProject = Pick<Project, 'name' | 'displayName' | 'fullPath' | 'path'>;
+export type SettingsProject = Pick<Project, 'name' | 'displayName' | 'fullPath' | 'path' | 'workspaceId'>;

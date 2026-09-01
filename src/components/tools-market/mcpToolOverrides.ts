@@ -2,8 +2,12 @@ import type { WorkspaceMcpPreset, WorkspaceMcpTool } from './hooks/useWorkspaceM
 
 export const MCP_TOOL_OVERRIDES_FILE = '.claude/mcp-tool-overrides.local.json';
 
+export type McpToolOverrideMode = 'default' | 'force';
+
 export type McpToolOverrideParam = {
-  custom: boolean;
+  mode?: McpToolOverrideMode;
+  /** Legacy entries used custom=true for what is now the force strategy. */
+  custom?: boolean;
   value?: unknown;
 };
 
@@ -106,6 +110,13 @@ export function getToolOverrideParams(
   toolName: string,
 ): Record<string, McpToolOverrideParam> {
   return config.mcpServers?.[preset.name]?.tools?.[toolName]?.params ?? {};
+}
+
+export function getMcpToolOverrideMode(
+  entry: McpToolOverrideParam | undefined,
+): McpToolOverrideMode | 'none' {
+  if (entry?.mode === 'default' || entry?.mode === 'force') return entry.mode;
+  return entry?.custom === true ? 'force' : 'none';
 }
 
 export function withToolOverrideParams(

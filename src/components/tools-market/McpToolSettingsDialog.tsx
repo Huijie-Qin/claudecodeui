@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Maximize2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { Dialog, DialogContent, DialogTitle } from '../../shared/view/ui';
 import type { Project } from '../../types/app';
@@ -9,11 +10,13 @@ import type { WorkspaceMcpPreset, WorkspaceMcpTool } from './hooks/useWorkspaceM
 import {
   MCP_TOOL_OVERRIDES_FILE,
   createEmptyOverridesConfig,
+  getMcpToolOverrideMode,
   getToolOverrideParams,
   getToolParameterFields,
   normalizeOverridesConfig,
   withToolOverrideParams,
   type McpToolOverrideParam,
+  type McpToolOverrideMode,
   type McpToolOverridesConfig,
   type McpToolParameterField,
 } from './mcpToolOverrides';
@@ -23,10 +26,11 @@ type McpToolSettingsDialogProps = {
   selectedProject: Project;
   canManage: boolean;
   onClose: () => void;
+  onSaveToolPreference: (allowedToolNames: string[]) => Promise<unknown>;
 };
 
 type ParameterFormState = Record<string, {
-  custom: boolean;
+  mode: McpToolOverrideMode | 'none';
   rawValue: string;
 }>;
 
@@ -88,7 +92,7 @@ function getInitialFormState(
     return [
       field.key,
       {
-        custom: override?.custom === true,
+        mode: getMcpToolOverrideMode(override),
         rawValue: stringifyOverrideValue(field, override?.value),
       },
     ];
@@ -129,7 +133,9 @@ export default function McpToolSettingsDialog({
   selectedProject,
   canManage,
   onClose,
+  onSaveToolPreference,
 }: McpToolSettingsDialogProps) {
+  const { t } = useTranslation();
   const tools = useMemo(
     () => (preset.tools ?? []).filter((tool) => tool.name.trim().length > 0),
     [preset.tools],
@@ -142,10 +148,32 @@ export default function McpToolSettingsDialog({
   const fields = useMemo(() => getToolParameterFields(selectedTool), [selectedTool]);
   const [config, setConfig] = useState<McpToolOverridesConfig>(() => createEmptyOverridesConfig());
   const [formState, setFormState] = useState<ParameterFormState>({});
+  const [allowedToolNames, setAllowedToolNames] = useState<Set<string>>(() => new Set(
+    preset.toolSelectionConfigured
+      ? (preset.allowedToolNames ?? [])
+      : tools.map((tool) => tool.name),
+  ));
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const allToolsAllowed = tools.length > 0 && tools.every((tool) => allowedToolNames.has(tool.name));
+  const someToolsAllowed = tools.some((tool) => allowedToolNames.has(tool.name));
+
+  useEffect(() => {
+    setAllowedToolNames(new Set(
+      preset.toolSelectionConfigured
+        ? (preset.allowedToolNames ?? [])
+        : tools.map((tool) => tool.name),
+    ));
+  }, [preset.id, preset.toolSelectionConfigured, preset.allowedToolNames, tools]);
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someToolsAllowed && !allToolsAllowed;
+    }
+  }, [allToolsAllowed, someToolsAllowed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,7 +207,7 @@ export default function McpToolSettingsDialog({
     setFormState((current) => ({
       ...current,
       [key]: {
-        ...(current[key] ?? { custom: false, rawValue: '' }),
+        ...(current[key] ?? { mode: 'none', rawValue: '' }),
         ...patch,
       },
     }));
@@ -192,34 +220,40 @@ export default function McpToolSettingsDialog({
     setSuccess(null);
     try {
       const params = Object.fromEntries(fields.flatMap((field) => {
-        const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
-        if (!state.custom) {
+        const state = formState[field.key] ?? { mode: 'none', rawValue: readDefaultValue(field) };
+        if (state.mode === 'none') {
           return [];
         }
 
         return [[
           field.key,
           {
-            custom: true,
+            mode: state.mode,
             value: parseFieldValue(field, state.rawValue),
           },
         ]];
       }));
-      const nextConfig = withToolOverrideParams(config, preset, selectedTool.name, params);
-      await ensureOverridesDirectory(selectedProject);
-      const response = await api.saveFile(
-        selectedProject.name,
-        MCP_TOOL_OVERRIDES_FILE,
-        JSON.stringify(nextConfig, null, 2),
-        selectedProject.workspaceId,
-      );
-      if (!response.ok) {
-        throw new Error(`Failed to save ${MCP_TOOL_OVERRIDES_FILE}: ${response.status}`);
+      let nextConfig = config;
+      if (canManage) {
+        nextConfig = withToolOverrideParams(config, preset, selectedTool.name, params);
+        await ensureOverridesDirectory(selectedProject);
+        const response = await api.saveFile(
+          selectedProject.name,
+          MCP_TOOL_OVERRIDES_FILE,
+          JSON.stringify(nextConfig, null, 2),
+          selectedProject.workspaceId,
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to save ${MCP_TOOL_OVERRIDES_FILE}: ${response.status}`);
+        }
       }
+      await onSaveToolPreference(
+        tools.filter((tool) => allowedToolNames.has(tool.name)).map((tool) => tool.name),
+      );
       setConfig(nextConfig);
-      setSuccess('Saved MCP tool overrides.');
+      setSuccess(t('mcpTools.settings.saveSuccess'));
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Failed to save MCP tool overrides.';
+      const message = caught instanceof Error ? caught.message : t('mcpTools.settings.saveFailed');
       setError(message);
     } finally {
       setIsSaving(false);
@@ -244,9 +278,7 @@ export default function McpToolSettingsDialog({
             <h2 id="mcp-tool-settings-title" className="truncate text-lg font-semibold text-foreground">
               {preset.displayName} 设置
             </h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              左侧选择 MCP 暴露的 Tool；右侧显示所选 Tool 的参数、参数描述和自定义值。
-            </p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">{t('mcpTools.settings.description')}</p>
           </div>
           <button
             type="button"
@@ -260,7 +292,25 @@ export default function McpToolSettingsDialog({
 
         <div className="grid min-h-0 flex-1 grid-cols-[360px_minmax(0,1fr)]">
           <aside className="min-h-0 overflow-auto border-r border-border bg-muted/30 p-4">
-            <div className="mb-3 text-sm font-semibold text-foreground">Tools</div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-foreground">Tools</div>
+              {tools.length > 0 ? (
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allToolsAllowed}
+                    onChange={(event) => setAllowedToolNames(
+                      event.target.checked
+                        ? new Set(tools.map((tool) => tool.name))
+                        : new Set(),
+                    )}
+                    className="h-4 w-4 rounded border-input accent-primary"
+                  />
+                  {t('mcpTools.settings.selectAll')}
+                </label>
+              ) : null}
+            </div>
             {tools.length === 0 ? (
               <div className="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
                 No tools discovered for this MCP.
@@ -271,33 +321,53 @@ export default function McpToolSettingsDialog({
                   const isSelected = selectedTool?.name === tool.name;
                   const toolFields = getToolParameterFields(tool);
                   const overrides = getToolOverrideParams(config, preset, tool.name);
-                  const customCount = Object.values(overrides).filter((entry) => entry?.custom === true).length;
+                  const configuredCount = Object.values(overrides)
+                    .filter((entry) => getMcpToolOverrideMode(entry) !== 'none')
+                    .length;
                   return (
-                    <button
+                    <div
                       key={tool.name}
-                      type="button"
-                      onClick={() => setSelectedToolName(tool.name)}
-                      className={`rounded-md border p-3 text-left transition ${
+                      className={`relative rounded-md border transition ${
                         isSelected
                           ? 'border-primary bg-primary/10 ring-1 ring-primary/20'
                           : 'border-border bg-background hover:border-primary/40 hover:bg-accent/30'
                       }`}
                     >
-                      <div className="break-words font-mono text-xs font-semibold text-foreground">{getToolLabel(tool)}</div>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                        {tool.description || 'No description.'}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <span className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground">
-                          {toolFields.length} 参数
-                        </span>
-                        {customCount > 0 ? (
-                          <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                            {customCount} 自定义
+                      <label className="absolute right-3 top-3 z-10 flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={allowedToolNames.has(tool.name)}
+                          onChange={(event) => setAllowedToolNames((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(tool.name);
+                            else next.delete(tool.name);
+                            return next;
+                          })}
+                          className="h-4 w-4 rounded border-input accent-primary"
+                        />
+                        {t('mcpTools.settings.enabled')}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedToolName(tool.name)}
+                        className="w-full p-3 pr-24 text-left"
+                      >
+                        <div className="break-words font-mono text-xs font-semibold text-foreground">{getToolLabel(tool)}</div>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                          {tool.description || 'No description.'}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground">
+                            {toolFields.length} 参数
                           </span>
-                        ) : null}
-                      </div>
-                    </button>
+                          {configuredCount > 0 ? (
+                            <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                              {t('mcpTools.settings.configuredCount', { count: configuredCount })}
+                            </span>
+                          ) : null}
+                        </div>
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -325,7 +395,7 @@ export default function McpToolSettingsDialog({
                   <div className="grid grid-cols-[160px_minmax(260px,1fr)_260px] bg-muted text-xs font-semibold uppercase text-muted-foreground">
                     <div className="border-r border-border px-3 py-2">参数</div>
                     <div className="border-r border-border px-3 py-2">参数描述</div>
-                    <div className="px-3 py-2">自定义值</div>
+                    <div className="px-3 py-2">{t('mcpTools.settings.valueStrategy')}</div>
                   </div>
                   {isLoading ? (
                     <div className="flex min-h-[260px] items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -338,7 +408,7 @@ export default function McpToolSettingsDialog({
                     </div>
                   ) : (
                     fields.map((field) => {
-                      const state = formState[field.key] ?? { custom: false, rawValue: readDefaultValue(field) };
+                      const state = formState[field.key] ?? { mode: 'none', rawValue: readDefaultValue(field) };
                       const exampleValue = formatExampleValue(field);
                       return (
                         <div key={field.key} className="grid min-h-[76px] grid-cols-[160px_minmax(260px,1fr)_260px] border-t border-border">
@@ -354,29 +424,39 @@ export default function McpToolSettingsDialog({
                             </div>
                           </div>
                           <div className="px-3 py-3">
-                            <label className="mb-2 flex items-center justify-end gap-2 text-xs font-medium text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                checked={state.custom}
+                            <label className="mb-2 block text-xs font-medium text-muted-foreground">
+                              <span className="sr-only">{t('mcpTools.settings.valueStrategy')}</span>
+                              <select
+                                aria-label={`${field.key} ${t('mcpTools.settings.valueStrategy')}`}
+                                value={state.mode}
                                 disabled={!canManage}
                                 onChange={(event) => {
-                                  const custom = event.target.checked;
+                                  const mode = event.target.value as ParameterFormState[string]['mode'];
                                   updateField(field.key, {
-                                    custom,
-                                    ...(custom && state.rawValue.length === 0 && exampleValue
+                                    mode,
+                                    ...(mode !== 'none' && state.rawValue.length === 0 && exampleValue
                                       ? { rawValue: exampleValue }
                                       : {}),
                                   });
                                 }}
-                              />
-                              自定义
+                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+                              >
+                                <option value="none">{t('mcpTools.settings.strategy.none')}</option>
+                                <option value="default">{t('mcpTools.settings.strategy.default')}</option>
+                                <option value="force">{t('mcpTools.settings.strategy.force')}</option>
+                              </select>
                             </label>
                             <ParameterInput
                               field={field}
-                              disabled={!canManage || !state.custom}
+                              disabled={!canManage || state.mode === 'none'}
                               value={state.rawValue}
                               onChange={(rawValue) => updateField(field.key, { rawValue })}
                             />
+                            {state.mode !== 'none' ? (
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                {t(`mcpTools.settings.strategyHelp.${state.mode}`)}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -389,24 +469,24 @@ export default function McpToolSettingsDialog({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
-          <div className="text-xs text-muted-foreground">
-            勾选“自定义”后才能输入参数值；未勾选时使用该 Tool 的默认参数。保存后写入 {MCP_TOOL_OVERRIDES_FILE}。
+          <div className="min-w-0 flex-1 text-xs text-muted-foreground">
+            {t('mcpTools.settings.footer', { file: MCP_TOOL_OVERRIDES_FILE })}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {error ? <span className="text-xs text-destructive">{error}</span> : null}
             {success ? <span className="text-xs text-emerald-600 dark:text-emerald-300">{success}</span> : null}
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition hover:bg-accent"
+              className="inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition hover:bg-accent"
             >
               取消
             </button>
             <button
               type="button"
-              disabled={!canManage || isSaving || !selectedTool}
+              disabled={isSaving || !selectedTool}
               onClick={handleSave}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               保存

@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { NormalizedMessage } from './useSessionStore';
-import { computeMerged } from './sessionMerge';
+import {
+  computeMerged,
+  dropSupersededStreamingPlaceholders,
+  reconcileRealtimeAfterServerRefresh,
+  upsertRealtimeMessages,
+} from './sessionMerge';
 
 const makeUserText = (fields: Partial<NormalizedMessage>): NormalizedMessage => ({
   id: fields.id || 'msg-1',
@@ -12,6 +17,9 @@ const makeUserText = (fields: Partial<NormalizedMessage>): NormalizedMessage => 
   kind: 'text',
   role: 'user',
   content: fields.content || '你能联网查询当前的热点资讯吗',
+  clientMessageId: fields.clientMessageId,
+  queueStatus: fields.queueStatus,
+  queuePosition: fields.queuePosition,
 });
 
 const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessage => ({
@@ -22,6 +30,121 @@ const makeAssistantText = (fields: Partial<NormalizedMessage>): NormalizedMessag
   kind: 'text',
   role: 'assistant',
   content: fields.content || '可以。',
+  parentToolUseId: fields.parentToolUseId,
+});
+
+const makeHookActivity = (
+  status: 'queued' | 'running' | 'succeeded' | 'failed',
+): NormalizedMessage => ({
+  id: 'hook_activity_execution-1_action-1',
+  sessionId: 'session-1',
+  timestamp: '2026-04-26T10:31:35.000Z',
+  provider: 'claude',
+  kind: 'hook_activity',
+  origin: 'hook',
+  status,
+  jobId: 'hook_activity_execution-1_action-1',
+});
+
+test('upsertRealtimeMessages updates one Hook follow-up card in place', () => {
+  const messages = upsertRealtimeMessages(
+    [makeHookActivity('queued')],
+    [makeHookActivity('running'), makeHookActivity('succeeded')],
+  );
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].status, 'succeeded');
+});
+
+test('computeMerged keeps a realtime Hook terminal state over stale persisted state', () => {
+  const merged = computeMerged(
+    [makeHookActivity('running')],
+    [makeHookActivity('succeeded')],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'succeeded');
+});
+
+test('computeMerged does not regress a persisted Hook terminal state', () => {
+  const merged = computeMerged(
+    [makeHookActivity('succeeded')],
+    [makeHookActivity('running')],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'succeeded');
+});
+
+test('server refresh retains a newer realtime Hook state until persistence catches up', () => {
+  assert.deepEqual(
+    reconcileRealtimeAfterServerRefresh(
+      [makeHookActivity('running')],
+      [makeHookActivity('succeeded')],
+    ),
+    [makeHookActivity('succeeded')],
+  );
+  assert.deepEqual(
+    reconcileRealtimeAfterServerRefresh(
+      [makeHookActivity('succeeded')],
+      [makeHookActivity('succeeded')],
+    ),
+    [],
+  );
+});
+
+test('computeMerged pins running-message follow-ups below the active response', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-26T10:31:34.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Current response',
+  };
+  const queuedFollowup = makeUserText({
+    id: 'local_supplement_followup-1',
+    timestamp: '2026-04-26T10:31:35.000Z',
+    content: 'Handle this next',
+    queueStatus: 'queued',
+    clientMessageId: 'followup-1',
+  });
+  const completedResponse = makeAssistantText({
+    id: 'assistant-current-turn',
+    timestamp: '2026-04-26T10:31:36.000Z',
+    content: 'Current response',
+  });
+
+  const merged = computeMerged([], [streamingPlaceholder, queuedFollowup, completedResponse]);
+
+  assert.deepEqual(merged, [completedResponse, queuedFollowup]);
+});
+
+test('processing a queued follow-up moves it before later queued messages', () => {
+  const firstQueued = makeUserText({
+    id: 'local_supplement_followup-1',
+    content: 'First follow-up',
+    queueStatus: 'queued',
+  });
+  const secondQueued = makeUserText({
+    id: 'local_supplement_followup-2',
+    content: 'Second follow-up',
+    queueStatus: 'queued',
+  });
+  const completedResponse = makeAssistantText({ id: 'assistant-current-turn' });
+  const firstProcessing = {
+    ...firstQueued,
+    timestamp: '2026-04-26T10:31:37.000Z',
+    queueStatus: 'processing' as const,
+  };
+
+  const realtime = upsertRealtimeMessages(
+    [firstQueued, secondQueued, completedResponse],
+    [firstProcessing],
+  );
+  const merged = computeMerged([], realtime);
+
+  assert.deepEqual(merged, [completedResponse, firstProcessing, secondQueued]);
 });
 
 test('computeMerged drops local optimistic user message after the server copy arrives', () => {
@@ -215,4 +338,92 @@ test('computeMerged hides segmented streaming placeholders once canonical assist
   const merged = computeMerged([], [streamingPlaceholder, canonicalAssistant]);
 
   assert.deepEqual(merged, [canonicalAssistant]);
+});
+
+test('a shorter canonical assistant message cannot hide the realtime stream tail', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1_2',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:19.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'The complete parent response, including its final paragraph.',
+  };
+  const staleCanonicalAssistant = makeAssistantText({
+    id: 'msg_stale_canonical_assistant',
+    timestamp: '2026-04-28T19:01:19.500Z',
+    content: 'The complete parent response,',
+  });
+
+  assert.deepEqual(
+    dropSupersededStreamingPlaceholders([streamingPlaceholder, staleCanonicalAssistant]),
+    [streamingPlaceholder],
+  );
+});
+
+test('a subagent assistant message does not supersede the main-agent stream', () => {
+  const mainStream: NormalizedMessage = {
+    id: '__streaming_session-1_1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:17.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Main answer still streaming',
+  };
+  const subagentAssistant = makeAssistantText({
+    id: 'subagent-assistant',
+    timestamp: '2026-04-28T19:01:17.500Z',
+    content: 'Child result',
+    parentToolUseId: 'toolu_agent_1',
+  });
+
+  assert.deepEqual(
+    dropSupersededStreamingPlaceholders([mainStream, subagentAssistant]),
+    [mainStream, subagentAssistant],
+  );
+});
+
+test('a main-agent assistant message does not supersede a subagent stream', () => {
+  const subagentStream: NormalizedMessage = {
+    id: '__streaming_session-1_toolu_agent_1_1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:17.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Child answer still streaming',
+    parentToolUseId: 'toolu_agent_1',
+  };
+  const mainAssistant = makeAssistantText({
+    id: 'main-assistant',
+    timestamp: '2026-04-28T19:01:17.500Z',
+    content: 'Main result',
+  });
+
+  assert.deepEqual(
+    dropSupersededStreamingPlaceholders([subagentStream, mainAssistant]),
+    [subagentStream, mainAssistant],
+  );
+});
+
+test('canonical assistant text only supersedes a stream in the same agent scope', () => {
+  const subagentStream: NormalizedMessage = {
+    id: '__streaming_session-1_toolu_agent_1_1',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:17.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'Partial child output',
+    parentToolUseId: 'toolu_agent_1',
+  };
+  const subagentAssistant = makeAssistantText({
+    id: 'subagent-assistant',
+    timestamp: '2026-04-28T19:01:17.500Z',
+    content: 'Complete child output',
+    parentToolUseId: 'toolu_agent_1',
+  });
+
+  assert.deepEqual(
+    dropSupersededStreamingPlaceholders([subagentStream, subagentAssistant]),
+    [subagentAssistant],
+  );
 });

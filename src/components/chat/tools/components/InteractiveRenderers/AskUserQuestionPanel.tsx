@@ -144,6 +144,13 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
 
   // Keyboard handler for number keys and navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Escape always skips, including while the "Other" input is focused.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      handleSkip();
+      return;
+    }
+
     // Don't capture keys when typing in the "Other" input
     if (e.target instanceof HTMLInputElement) return;
 
@@ -176,12 +183,6 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
       return;
     }
 
-    // Escape to skip
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      handleSkip();
-      return;
-    }
   }, [currentStep, questions, toggleOption, toggleOther, handleSubmit, handleSkip]);
 
   if (questions.length === 0) return null;
@@ -365,7 +366,10 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                     value={otherTexts.get(currentStep) || ''}
                     onChange={(e) => setOtherText(currentStep, e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        handleSkip();
+                      } else if (e.key === 'Enter') {
                         e.preventDefault();
                         if (isLast) handleSubmit();
                         else setCurrentStep(s => s + 1);

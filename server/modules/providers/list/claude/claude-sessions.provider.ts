@@ -11,11 +11,12 @@ import {
 
 import { readClaudeDisplayCommands } from './claude-display-command-store.js';
 
-const PROVIDER = 'claude';
+const PROVIDER: 'claude' = 'claude';
 
 type ClaudeToolResult = {
   content: unknown;
   isError: boolean;
+  subagentMessages?: unknown;
   subagentTools?: unknown;
   toolUseResult?: unknown;
 };
@@ -55,6 +56,8 @@ export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOption
  * Those are useful for the CLI but should not appear in the user-facing chat.
  */
 const INTERNAL_CONTENT_PREFIXES = [
+  '<ccui-hook-recovery',
+  '<ccui-mcp-loop-result',
   '<command-name>',
   '<command-message>',
   '<command-args>',
@@ -98,7 +101,7 @@ function resolveVisibleUserText(
   storedDisplayCommand: string | null = null,
 ): string | null {
   if (storedDisplayCommand) {
-    return storedDisplayCommand;
+    return isInternalContent(storedDisplayCommand) ? null : storedDisplayCommand;
   }
 
   return isInternalContent(text) ? null : text;
@@ -113,6 +116,22 @@ function resolveConversationRole(raw: AnyRecord): 'user' | 'assistant' | undefin
   return undefined;
 }
 
+function readHookRecoveryActivityId(displayCommand: string | null): string | null {
+  if (!displayCommand?.startsWith('<ccui-hook-recovery')) {
+    return null;
+  }
+  const match = displayCommand.match(/\bactivity=(['"])([^'"]+)\1/i);
+  return match?.[2]?.trim() || null;
+}
+
+function normalizeTaskStatus(status: unknown): string | undefined {
+  if (typeof status !== 'string' || !status.trim()) {
+    return undefined;
+  }
+  const normalized = status.trim().toLowerCase();
+  return normalized === 'killed' ? 'stopped' : normalized;
+}
+
 export class ClaudeSessionsProvider implements IProviderSessions {
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
@@ -122,6 +141,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     rawMessage: unknown,
     sessionId: string | null,
     storedDisplayCommand: string | null = null,
+    includeSidechain = false,
   ): NormalizedMessage[] {
     const raw = readObjectRecord(rawMessage);
     if (!raw) {
@@ -129,14 +149,20 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (
-      raw.isSidechain === true ||
-      raw.is_sidechain === true ||
       raw.isMeta === true ||
       raw.is_meta === true ||
       raw.message?.isMeta === true ||
-      raw.message?.is_meta === true ||
+      raw.message?.is_meta === true
+    ) {
+      return [];
+    }
+
+    if (
+      !includeSidechain && (
+      raw.isSidechain === true ||
+      raw.is_sidechain === true ||
       raw.message?.isSidechain === true ||
-      raw.message?.is_sidechain === true
+      raw.message?.is_sidechain === true)
     ) {
       return [];
     }
@@ -159,6 +185,65 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const baseId = raw.uuid || generateMessageId('claude');
     const conversationRole = resolveConversationRole(raw);
 
+    if (raw.type === 'system' && typeof raw.subtype === 'string') {
+      const taskId = typeof raw.task_id === 'string' ? raw.task_id : undefined;
+      const toolUseId = typeof raw.tool_use_id === 'string' ? raw.tool_use_id : undefined;
+      const commonTaskFields = {
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'task_notification' as const,
+        taskId,
+        toolUseId,
+      };
+
+      if (raw.subtype === 'task_started') {
+        return [createNormalizedMessage({
+          ...commonTaskFields,
+          status: 'running',
+          summary: typeof raw.description === 'string' ? raw.description : 'Background task started',
+        })];
+      }
+
+      if (raw.subtype === 'task_progress') {
+        return [createNormalizedMessage({
+          ...commonTaskFields,
+          status: 'running',
+          summary: typeof raw.summary === 'string'
+            ? raw.summary
+            : typeof raw.description === 'string'
+              ? raw.description
+              : 'Background task is running',
+          usage: readObjectRecord(raw.usage) || {},
+        })];
+      }
+
+      if (raw.subtype === 'task_updated') {
+        const patch = readObjectRecord(raw.patch);
+        return [createNormalizedMessage({
+          ...commonTaskFields,
+          status: normalizeTaskStatus(patch?.status) || 'running',
+          summary: typeof patch?.error === 'string'
+            ? patch.error
+            : typeof patch?.description === 'string'
+              ? patch.description
+              : 'Background task updated',
+        })];
+      }
+
+      if (raw.subtype === 'task_notification') {
+        return [createNormalizedMessage({
+          ...commonTaskFields,
+          status: normalizeTaskStatus(raw.status) || 'completed',
+          summary: typeof raw.summary === 'string' ? raw.summary : 'Background task finished',
+          outputFile: typeof raw.output_file === 'string' ? raw.output_file : undefined,
+          result: typeof raw.result === 'string' ? raw.result : undefined,
+          usage: readObjectRecord(raw.usage) || {},
+        })];
+      }
+    }
+
     if (conversationRole === 'user' && raw.message?.content) {
       if (Array.isArray(raw.message.content)) {
         let didUseStoredDisplayCommand = false;
@@ -174,8 +259,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolId: part.tool_use_id,
               content: typeof part.content === 'string' ? part.content : JSON.stringify(part.content),
               isError: Boolean(part.is_error),
+              subagentMessages: raw.subagentMessages,
               subagentTools: raw.subagentTools,
-              toolUseResult: raw.toolUseResult,
+              toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
             }));
           } else if (part.type === 'text') {
             if (storedDisplayCommand && didUseStoredDisplayCommand) {
@@ -412,8 +498,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             toolResultMap.set(part.tool_use_id, {
               content: part.content,
               isError: Boolean(part.is_error),
+              subagentMessages: raw.subagentMessages,
               subagentTools: raw.subagentTools,
-              toolUseResult: raw.toolUseResult,
+              toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
             });
           }
         }
@@ -421,11 +508,24 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const normalized: NormalizedMessage[] = [];
+    let activeHookActivityId: string | null = null;
     for (const raw of rawMessages) {
       const displayCommand = typeof raw.uuid === 'string'
         ? displayCommands.get(raw.uuid) || null
         : null;
-      normalized.push(...this.normalizeMessage(raw, sessionId, displayCommand));
+      const recoveryActivityId = readHookRecoveryActivityId(displayCommand);
+      const nextMessages = this.normalizeMessage(raw, sessionId, displayCommand);
+      if (recoveryActivityId) {
+        activeHookActivityId = recoveryActivityId;
+      } else if (nextMessages.some((message) => message.kind === 'text' && message.role === 'user')) {
+        activeHookActivityId = null;
+      }
+      if (activeHookActivityId) {
+        nextMessages.forEach((message) => {
+          message.hookActivityId = activeHookActivityId || undefined;
+        });
+      }
+      normalized.push(...nextMessages);
     }
 
     for (const msg of normalized) {
@@ -443,6 +543,21 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           toolUseResult: toolResult.toolUseResult,
         };
         msg.subagentTools = toolResult.subagentTools;
+        if (Array.isArray(toolResult.subagentMessages)) {
+          msg.subagentMessages = toolResult.subagentMessages.flatMap((subagentRaw) => {
+            const nested = this.normalizeMessage(subagentRaw, sessionId, null, true);
+            const rawRecord = readObjectRecord(subagentRaw);
+            const nestedParentToolUseId = typeof rawRecord?.parentToolUseId === 'string'
+              ? rawRecord.parentToolUseId
+              : typeof rawRecord?.parent_tool_use_id === 'string'
+                ? rawRecord.parent_tool_use_id
+                : msg.toolId;
+            return nested.map((subagentMessage) => ({
+              ...subagentMessage,
+              parentToolUseId: subagentMessage.parentToolUseId || nestedParentToolUseId,
+            }));
+          });
+        }
       }
     }
 

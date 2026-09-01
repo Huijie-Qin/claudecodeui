@@ -25,6 +25,16 @@ test('scheduled tasks resume the last session only in merge mode', () => {
   assert.equal(sessionId, 'previous-session');
 });
 
+test('merge mode does not depend on the runtime current-session binding', () => {
+  const sessionId = resolveScheduledTaskResumeSession({
+    sessionMode: 'merge',
+    sessionId: 'scheduled-session',
+    canResume: () => false,
+  });
+
+  assert.equal(sessionId, 'scheduled-session');
+});
+
 test('legacy scheduled tasks without a session mode start a new session', () => {
   const sessionId = resolveScheduledTaskResumeSession({
     sessionId: 'legacy-session',

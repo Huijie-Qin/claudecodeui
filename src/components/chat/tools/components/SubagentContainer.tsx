@@ -1,4 +1,6 @@
 import React from 'react';
+import { PanelRightOpen } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../../shared/view/ui';
 import type { SubagentChildTool, TaskNotificationDetails, ToolResult } from '../../types/types';
@@ -10,11 +12,14 @@ import {
 import { CollapsibleSection } from './CollapsibleSection';
 
 interface SubagentContainerProps {
+  toolId?: string;
   toolInput: unknown;
   toolResult?: ToolResult | null;
   completionTime?: React.ReactNode;
   taskNotification?: TaskNotificationDetails;
+  onOpenSubagent?: (toolId: string) => void;
   subagentState: {
+    agentId?: string;
     childTools: SubagentChildTool[];
     currentToolIndex: number;
     isComplete: boolean;
@@ -53,12 +58,15 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
 };
 
 export const SubagentContainer: React.FC<SubagentContainerProps> = ({
+  toolId,
   toolInput,
   toolResult,
   completionTime,
   taskNotification,
+  onOpenSubagent,
   subagentState,
 }) => {
+  const { t } = useTranslation('chat');
   const parsedInput = typeof toolInput === 'string' ? (() => {
     try { return JSON.parse(toolInput); } catch { return {}; }
   })() : (toolInput || {});
@@ -67,6 +75,10 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   const description = parsedInput?.description || 'Running task';
   const prompt = parsedInput?.prompt || '';
   const { childTools, currentToolIndex, isComplete, detailsOwnerToolId } = subagentState;
+  const canonicalToolId = detailsOwnerToolId ?? toolId;
+  const handleOpenSubagent = canonicalToolId && onOpenSubagent
+    ? () => onOpenSubagent(canonicalToolId)
+    : undefined;
   const isDetailsAlias = Boolean(detailsOwnerToolId);
   const currentTool = currentToolIndex >= 0 ? childTools[currentToolIndex] : null;
   const hasTaskOutputHistory = childTools.some(
@@ -89,6 +101,21 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         toolName="Task"
         open={false}
         meta={completionTime}
+        onTitleClick={handleOpenSubagent}
+        action={handleOpenSubagent ? (
+          <button
+            type="button"
+            aria-label={t('subagentPanel.open', { defaultValue: 'Open in side panel' })}
+            title={t('subagentPanel.open', { defaultValue: 'Open in side panel' })}
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleOpenSubagent();
+            }}
+          >
+            <PanelRightOpen aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        ) : undefined}
       >
         {/* Prompt/request to the subagent */}
         {prompt && !isDetailsAlias && (

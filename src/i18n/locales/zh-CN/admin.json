@@ -6,9 +6,13 @@
     "users": "用户",
     "tenants": "租户权限",
     "claudeEnv": "Claude 环境",
+    "agentTemplates": "Agent 模板",
     "mcpPresets": "MCP Server 预置",
+    "skillPresets": "Skill 预置",
+    "hooks": "Hooks",
     "sqlCheck": "SQL Check",
-    "runtimes": "运行时监控"
+    "runtimes": "运行时监控",
+    "scheduledTaskLogs": "定时任务日志"
   },
   "common": {
     "select": "选择",
@@ -174,7 +178,12 @@
     "usernamesHint": "粘贴用户名，可用换行、空格、逗号或分号分隔；也可以在下方手动选择用户。",
     "missingUsers": "未找到用户（{{count}}）：{{usernames}}",
     "selectAll": "选择全部用户",
-    "clearSelection": "清空选择"
+    "clearSelection": "清空选择",
+    "encryptedValue": "已加密 / 已隐藏",
+    "deleteConfigured": "从 {{username}} 删除 {{name}}",
+    "confirmDeleteConfigured": "确定从 {{username}} 删除 {{name}} 吗？",
+    "deleteConfiguredSuccess": "已从 {{username}} 删除 {{name}}",
+    "deleteConfiguredFailed": "删除用户环境变量失败"
   },
   "tenants": {
     "createTitle": "创建租户",
@@ -306,6 +315,9 @@
       "descriptionPlaceholder": "搜索内部知识库和项目文档。",
       "httpUrl": "HTTP URL",
       "httpUrlPlaceholder": "https://mcp.internal/knowledge",
+      "timeout": "超时时间（毫秒）",
+      "timeoutPlaceholder": "使用 Claude 默认值",
+      "timeoutHelp": "可选的原生 MCP timeout；留空时保持 Claude 默认行为。",
       "staticHeaders": "静态 Header JSON 或键值行",
       "headersHelper": "Header helper 命令",
       "headersHelperHelp": "可选的 Claude Code headersHelper。可通过文件名使用已上传的私有脚本，例如 python3 auth.py。",
@@ -349,7 +361,8 @@
     },
     "validationErrors": {
       "headersFormat": "Header 必须是 JSON，或每行一个键值对",
-      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法"
+      "helperEnvSyntax": "Helper 环境变量名称必须使用 shell 安全语法",
+      "timeoutFormat": "超时时间必须是正整数毫秒值"
     },
     "tools": {
       "title": "已发现工具",
@@ -366,6 +379,798 @@
       "deleteHelper": "删除 helper 脚本失败",
       "disable": "禁用 MCP 预置失败",
       "delete": "删除 MCP 预置失败"
+    }
+  },
+  "hooks": {
+    "title": "Hook 配置",
+    "description": "配置 Claude Code Hook 事件、Matcher、扩展逻辑、后置行为与返回结果；发布后可按用户、租户或全部用户绑定。",
+    "noScript": "{{count}} 个后置行为",
+    "create": "新建 Hook",
+    "newHook": "新建 Hook",
+    "examples": {
+      "create": "创建预置 Hook",
+      "dialogTitle": "选择预置 Hook",
+      "dialogDescription": "选择需要创建的预置 Hook 草稿，不会覆盖已经存在的配置。",
+      "loading": "正在加载预置 Hook...",
+      "loadError": "加载预置 Hook 失败",
+      "exists": "已存在",
+      "selectedCount": "已选择 {{count}} 个",
+      "createSelected": "创建所选预置",
+      "created": "已创建 {{count}} 个预置 Hook 草稿，请确认 MCP Tool 和 Skill 可用后发布",
+      "alreadyExists": "所选预置 Hook 均已存在，未覆盖现有配置",
+      "error": "创建预置 Hook 失败"
+    },
+    "moreEvents": "更多事件",
+    "backToList": "返回列表",
+    "saveDraft": "保存草稿",
+    "publish": "发布",
+    "start": "绑定用户",
+    "stop": "清空绑定",
+    "started": "已绑定用户",
+    "partiallyStarted": "已绑定用户",
+    "stopped": "未绑定用户",
+    "delete": "删除",
+    "edit": "编辑",
+    "copy": "复制",
+    "copySuffix": "（副本）",
+    "copySuffixNumbered": "（副本 {{number}}）",
+    "save": "保存",
+    "cancel": "取消",
+    "close": "关闭",
+    "unsaved": {
+      "title": "放弃未保存的修改？",
+      "description": "当前 Hook 配置已修改但尚未保存。返回列表会丢失这些修改。",
+      "continueEditing": "继续编辑",
+      "discard": "放弃修改"
+    },
+    "search": "搜索 Hook",
+    "loading": "正在加载 Hook 配置...",
+    "empty": "暂无 Hook 配置",
+    "noMatches": "没有匹配的 Hook",
+    "noDescription": "暂无功能说明",
+    "actionCount": "{{count}} 个行为",
+    "boundUserCount": "已绑定 {{count}} 个用户",
+    "builtin": "内置 Hook",
+    "businessData": {
+      "label": "业务数据",
+      "title": "Hook 业务数据",
+      "description": "业务数据保存在 CCUI SQLite 中；这里显示最近 50 条：",
+      "loading": "正在加载业务数据",
+      "empty": "暂无业务数据。Hook 执行“记录数据”后会显示在这里。",
+      "loadError": "加载 Hook 业务数据失败",
+      "close": "关闭业务数据"
+    },
+    "diagnostics": {
+      "title": "Hook 运行诊断",
+      "hookTitle": "{{name}} 执行记录",
+      "description": "查看 Hook 的真实输入、输出、动作、异常和并行冲突；诊断不会改变 Hook 执行行为。",
+      "configTab": "Hook 配置",
+      "diagnosticsTab": "运行诊断",
+      "executionRecords": "执行记录",
+      "detailTitle": "Hook 执行详情",
+      "copy": "复制",
+      "startedAt": "开始时间",
+      "duration": "耗时",
+      "user": "用户",
+      "session": "会话",
+      "error": "执行错误",
+      "input": "事件输入",
+      "scriptOutput": "脚本输出",
+      "actions": "后置动作",
+      "response": "返回 Claude",
+      "logs": "运行日志",
+      "loopAttempts": {
+        "title": "循环脚本轮次（{{count}}）",
+        "description": "第 0 轮是首次 MCP 返回后的判断；后续轮次来自后台轮询。展开可查看该轮脚本的真实输入和输出。",
+        "initialAttempt": "第 0 轮 · 首次判断",
+        "attempt": "第 {{count}} 轮",
+        "failureStage": "失败阶段",
+        "error": "本轮错误",
+        "scriptInput": "本轮脚本输入 event",
+        "scriptOutput": "本轮脚本输出",
+        "outcomes": {
+          "running": "继续轮询",
+          "succeeded": "判断成功",
+          "failed": "判断失败"
+        },
+        "scriptStatuses": {
+          "completed": "脚本已执行",
+          "failed": "脚本异常",
+          "not_run": "脚本未执行"
+        },
+        "stages": {
+          "mcp_call": "MCP 调用",
+          "termination_script": "终止脚本"
+        }
+      },
+      "failOpenWarning": "此 Hook 执行失败后返回了空结果，Agent 或工具调用仍可能继续。",
+      "failOpenSideEffect": "同一次并行事件中存在失败 Hook 和已执行的后置动作；失败不会自动撤销其他 Hook 的副作用。",
+      "search": "搜索 Hook、用户、会话、工具或 Tool Use ID",
+      "allHooks": "全部 Hook",
+      "allKinds": "全部类型",
+      "customHook": "自定义 Hook",
+      "allEvents": "全部事件",
+      "allStatuses": "全部状态",
+      "allOutcomes": "全部诊断结果",
+      "loading": "正在加载 Hook 执行记录...",
+      "loadError": "加载 Hook 执行记录失败",
+      "loadingDetail": "正在加载完整执行详情...",
+      "loadDetailError": "加载 Hook 执行详情失败",
+      "empty": "暂无匹配的 Hook 执行记录",
+      "parallelCount": "{{count}} 个并行 Hook",
+      "noSession": "无会话 ID",
+      "updatedInputConflict": "多个 Hook 同时返回 updatedInput，官方运行时使用最后完成者；本次可能由“{{name}}”生效。",
+      "permissionConflict": "检测到多个不同的权限决定；最终按 deny > defer > ask > allow 合并。",
+      "pagination": {
+        "summary": "共 {{groups}} 个事件组，{{executions}} 条执行记录",
+        "pageSize": "每页事件数",
+        "pageOf": "第 {{page}} / {{total}} 页",
+        "previous": "上一页",
+        "next": "下一页",
+        "goToPage": "前往第 {{page}} 页"
+      },
+      "statuses": {
+        "succeeded": "执行完成",
+        "failed": "执行失败",
+        "running": "执行中"
+      },
+      "outcomes": {
+        "succeeded": "成功",
+        "failed": "异常",
+        "denied": "拒绝",
+        "stopped": "停止",
+        "ask": "请求确认",
+        "defer": "延后",
+        "modified_input": "修改输入",
+        "modified_output": "修改输出",
+        "post_action": "执行后置动作",
+        "additional_context": "追加上下文"
+      }
+    },
+    "bindings": {
+      "title": "设置用户可见范围",
+      "manage": "用户范围",
+      "boundCountShort": "{{count}} 人可见",
+      "boundTenantCountShort": "{{count}} 个租户（动态）",
+      "allUsersShort": "全部用户可见",
+      "unbound": "无用户可见",
+      "sqlCheckManaged": "由用户在 SQL Check 开启",
+      "sqlCheckManagedCount": "{{count}} 人已开启强制校验",
+      "scopes": {
+        "users": "指定用户",
+        "tenants": "按租户",
+        "all_users": "全部用户"
+      },
+      "scopeHints": {
+        "users": "只有选中的用户能在设置中看到此 Hook；是否启用由用户自己决定。",
+        "tenants": "对所选租户的全部有效成员生效；以后加入租户的新用户会自动生效。",
+        "all_users": "全部有效用户都能在设置中看到此 Hook；是否启用由用户自己决定。"
+      },
+      "search": "搜索用户名",
+      "searchTenant": "搜索租户名称或编码",
+      "loading": "正在加载用户范围",
+      "noUsers": "暂无可选用户",
+      "noTenants": "暂无可绑定租户",
+      "noMatches": "没有匹配的用户",
+      "admin": "管理员",
+      "inactive": "已停用",
+      "tenantUsers": "{{count}} 名成员",
+      "allUsersTitle": "对全部用户可见",
+      "allUsersDescription": "当前 {{count}} 名有效用户都可以在设置中选择是否开启此 Hook；以后新增并激活的用户也可看到。",
+      "selectionSummary": {
+        "users": "已选择 {{count}} 人",
+        "tenants": "已选择 {{count}} 个租户",
+        "all_users": "当前覆盖 {{count}} 名有效用户"
+      },
+      "clear": "清空选择",
+      "save": "保存范围",
+      "savedScopes": {
+        "users": "已保存指定用户可见范围",
+        "tenants": "已保存租户动态绑定",
+        "all_users": "已设为全部用户可见"
+      },
+      "loadError": "加载 Hook 用户范围失败",
+      "saveError": "保存 Hook 用户范围失败"
+    },
+    "deleteTitle": "删除 Hook",
+    "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",
+    "hookMcp": {
+      "title": "Hook 专用 MCP 管理",
+      "description": "这些 MCP 属于 Hook 配置；用户开启 Hook 时缓存到工作区专用目录，并仅供“调用 MCP 工具”后置行为使用。",
+      "create": "配置 MCP",
+      "createTitle": "配置 Hook MCP",
+      "editTitle": "编辑 Hook MCP",
+      "test": "测试",
+      "delete": "删除",
+      "deleteTitle": "删除 Hook MCP",
+      "confirmDelete": "删除 Hook MCP“{{name}}”？引用它的 Hook 将无法继续调用。",
+      "empty": "暂无 Hook 专用 MCP",
+      "untested": "未测试",
+      "healthy": "正常 · {{count}} 个工具",
+      "failed": "连接失败",
+      "saved": "Hook MCP 配置已保存",
+      "helperUploaded": "Helper 脚本“{{name}}”已上传",
+      "helperDeleted": "Helper 脚本已删除",
+      "helperSaveFirst": "请先保存 Hook MCP 配置，再上传 helper 脚本。",
+      "helperScriptTitle": "Hook MCP helper 脚本",
+      "helperScriptDescription": "用户开启引用此 MCP 的 Hook 后，脚本会复制到工作区 .cloudcli/hook-config。脚本本身不得包含密钥；敏感值请配置在静态 Header 或 helper 环境变量中。",
+      "deleted": "Hook MCP“{{name}}”已删除",
+      "testHealthy": "MCP 连接正常，发现 {{count}} 个工具",
+      "fields": {
+        "displayName": "显示名称",
+        "name": "Server 名称",
+        "description": "说明",
+        "url": "HTTP MCP 地址",
+        "headers": "静态 Headers（JSON）",
+        "headersHint": "Header 可能包含密钥，仅系统管理员可在 Hook 页面查看和修改。",
+        "headersHelper": "Headers Helper 命令",
+        "headersHelperHint": "可选。可直接引用已上传的脚本文件名，例如 python3 auth.py；命令需向标准输出写入 JSON Header 对象。"
+      },
+      "errors": {
+        "headers": "Headers 必须是 JSON 对象",
+        "save": "保存 Hook MCP 失败",
+        "test": "测试 Hook MCP 失败",
+        "delete": "删除 Hook MCP 失败"
+      }
+    },
+    "builtinSkills": {
+      "title": "内置 Hook Skill 管理",
+      "description": "管理员可直接上传 Skill 文件；文件会原样持久化，并立即加入 Hook Skill 下拉框。同名 Skill 会更新。",
+      "upload": "上传 Skill 文件夹",
+      "uploading": "正在上传",
+      "dropHint": "将 Skill 文件夹拖到这里上传",
+      "dropActive": "松开后上传 Skill 文件夹",
+      "search": "搜索 Skill",
+      "empty": "暂无内置 Hook Skill",
+      "noMatches": "没有匹配的 Skill",
+      "details": "详情",
+      "collapse": "收起",
+      "versionLabel": "版本",
+      "idLabel": "标识",
+      "descriptionLabel": "说明",
+      "delete": "删除",
+      "deleteTitle": "删除内置 Skill",
+      "confirmDelete": "删除内置 Skill“{{name}}”？引用它的 Hook 会保留配置并显示不可用提示。",
+      "unavailableTitle": "内置 Hook Skill 不可用",
+      "unavailableDescription": "未找到：{{skills}}。请编辑 Hook 并重新选择内置 Skill。",
+      "formatHint": "不校验扩展名、大小、frontmatter 字段或正文内容。名称优先读取 frontmatter.name，否则使用文件名；请管理员自行保证文件可用。"
+    },
+    "triggerEvent": "触发位置",
+    "selectEvent": "选择触发位置",
+    "insertVariable": "变量",
+    "slashHint": "输入 / 可选择当前运行时变量。",
+    "selectValue": "选择值",
+    "fixedValue": "固定值",
+    "sections": {
+      "basic": "基本信息与触发位置",
+      "matcher": "匹配条件",
+      "script": "高级脚本（可选）",
+      "gate": "Hook 执行统一门槛",
+      "actions": "基础行为"
+    },
+    "codeFlow": {
+      "eventTitle": "选择 Hook 事件",
+      "eventDescription": "事件决定 Claude Code 何时回调，以及扩展逻辑能获得哪些参数。",
+      "matcherTitle": "定义 Matcher",
+      "matcherDescription": "文本会直接编译为 Claude Code 原生 Matcher；留空或 * 表示匹配全部。",
+      "logicTitle": "编写扩展逻辑",
+      "logicDescription": "模板按当前事件生成。代码接收 Claude 回调参数和受控的 CCUI API，并返回当前事件支持的结果。",
+      "apiTitle": "使用 CCUI 功能 API",
+      "apiDescription": "这些对象由运行时按当前用户、租户和工作空间注入；脚本不能获得工作空间之外的文件路径。",
+      "runtimePending": "当前版本先保存真实运行时契约；脚本沙箱、文件 API、记录 API 和 Claude 回调执行器将在 Hook 运行时接入阶段实现。"
+    },
+    "fields": {
+      "name": "名称",
+      "namePlaceholder": "例如：回答异常后通知用户",
+      "description": "功能说明",
+      "descriptionPlaceholder": "说明这个 Hook 要解决什么问题。",
+      "trigger": "触发方式",
+      "source": "来源",
+      "model": "模型",
+      "agentType": "Agent 类型",
+      "stopHookActive": "已处于 Stop Hook 循环",
+      "lastAssistantMessage": "模型最后一条消息",
+      "error": "错误类型",
+      "errorDetails": "错误详情",
+      "reason": "原因",
+      "prompt": "用户问题",
+      "sessionTitle": "会话标题",
+      "expansionType": "展开类型",
+      "commandName": "命令名称",
+      "commandArgs": "命令参数",
+      "title": "标题",
+      "message": "消息内容",
+      "notificationType": "通知类型",
+      "toolName": "工具名称",
+      "toolInput": "工具输入",
+      "toolResponse": "工具输出",
+      "toolUseId": "工具调用 ID",
+      "isInterrupt": "是否被中断",
+      "permissionSuggestions": "权限建议",
+      "agentId": "Agent ID",
+      "teammateName": "成员名称",
+      "teamName": "团队名称",
+      "taskId": "任务 ID",
+      "taskSubject": "任务标题",
+      "taskDescription": "任务说明",
+      "customInstructions": "压缩指令",
+      "compactSummary": "压缩摘要",
+      "mcpServerName": "MCP Server",
+      "mode": "模式",
+      "requestedSchema": "表单结构",
+      "url": "URL",
+      "action": "操作",
+      "content": "内容",
+      "filePath": "文件路径",
+      "memoryType": "指令类型",
+      "loadReason": "加载原因",
+      "oldCwd": "原工作目录",
+      "newCwd": "新工作目录",
+      "changeType": "变化类型",
+      "worktreePath": "Worktree 路径",
+      "session_id": "会话 ID",
+      "transcript_path": "会话转录文件",
+      "cwd": "当前工作目录",
+      "permission_mode": "权限模式",
+      "agent_id": "Agent ID",
+      "agent_type": "Agent 类型",
+      "hook_event_name": "Hook 事件名称",
+      "stop_hook_active": "已处于 Stop Hook 循环",
+      "last_assistant_message": "模型最后一条消息",
+      "error_details": "错误详情",
+      "session_title": "会话标题",
+      "expansion_type": "展开类型",
+      "command_name": "命令名称",
+      "command_args": "命令参数",
+      "command_source": "命令来源",
+      "notification_type": "通知类型",
+      "tool_name": "工具名称",
+      "tool_input": "工具输入",
+      "tool_response": "工具输出",
+      "tool_use_id": "工具调用 ID",
+      "is_interrupt": "是否被中断",
+      "permission_suggestions": "权限建议",
+      "agent_transcript_path": "子 Agent 转录文件",
+      "teammate_name": "成员名称",
+      "team_name": "团队名称",
+      "task_id": "任务 ID",
+      "task_subject": "任务标题",
+      "task_description": "任务说明",
+      "custom_instructions": "压缩指令",
+      "compact_summary": "压缩摘要",
+      "mcp_server_name": "MCP Server 名称",
+      "elicitation_id": "MCP 询问 ID",
+      "requested_schema": "请求表单结构",
+      "file_path": "文件路径",
+      "memory_type": "指令类型",
+      "load_reason": "加载原因",
+      "globs": "路径匹配规则",
+      "trigger_file_path": "触发加载的文件",
+      "parent_file_path": "父级指令文件",
+      "old_cwd": "原工作目录",
+      "new_cwd": "新工作目录",
+      "event": "文件变化类型",
+      "worktree_path": "Worktree 路径"
+    },
+    "variables": {
+      "userId": "当前用户 ID",
+      "username": "当前用户名",
+      "tenantId": "当前租户 ID",
+      "workspaceId": "当前工作空间 ID",
+      "sessionId": "当前会话 ID",
+      "projectId": "当前项目 ID"
+    },
+    "fieldGroups": {
+      "event": "事件数据",
+      "environment": "运行时环境",
+      "script": "高级脚本输出",
+      "action": "前序行为输出",
+      "value": "值"
+    },
+    "matcher": {
+      "mode": "匹配方式",
+      "exact": "精确匹配",
+      "regex": "正则匹配",
+      "selectTool": "选择工具",
+      "allTools": "全部工具",
+      "scope": "范围",
+      "claudeTools": "Claude Code 工具",
+      "mcpTools": "MCP 工具",
+      "specificToolHint": "选择具体工具后，才能配置可修改的输入字段。",
+      "regexPlaceholder": "例如：^mcp__data_.*__query$",
+      "invalidRegex": "正则表达式格式不正确",
+      "optional": "留空表示全部匹配",
+      "notNeeded": "该触发位置不需要额外的匹配条件。",
+      "nativePlaceholder": "例如 Bash|Read 或 mcp__database__.*；留空匹配全部",
+      "allEventCallbacks": "当前事件回调",
+      "unsupported": "该事件不支持 Matcher",
+      "unsupportedPlaceholder": "Claude Code 会在每次该事件发生时回调",
+      "fileNamesPlaceholder": "例如 .envrc|.env",
+      "detected": {
+        "all": "匹配全部",
+        "exact": "精确匹配",
+        "regex": "正则匹配",
+        "fileNames": "文件名列表"
+      }
+    },
+    "matcherFields": {
+      "trigger": "触发方式",
+      "source": "来源",
+      "error": "错误类型",
+      "reason": "结束原因",
+      "commandName": "命令名称",
+      "notificationType": "通知类型",
+      "agentType": "Agent 类型",
+      "mcpServerName": "MCP Server 名称",
+      "loadReason": "加载原因",
+      "fileName": "文件名称",
+      "command_name": "命令名称",
+      "notification_type": "通知类型",
+      "agent_type": "Agent 类型",
+      "mcp_server_name": "MCP Server 名称",
+      "load_reason": "加载原因",
+      "tool_name": "工具名称",
+      "file_path": "文件名称"
+    },
+    "script": {
+      "enable": "启用高级脚本",
+      "optional": "只有基础行为无法表达需求时再启用。",
+      "outputsCount": "{{count}} 个输出字段",
+      "availableInputs": "脚本可用输入",
+      "workspaceFiles": "当前用户工作空间文件（只读）",
+      "returnFields": "返回字段",
+      "noOutputs": "使用 @output 声明返回字段。",
+      "regenerate": "重新生成模板",
+      "callbackInputs": "Claude 回调参数",
+      "claudeOutputs": "可返回给 Claude Code",
+      "noClaudeOutputs": "该事件忽略返回值，仅执行记录、文件处理等副作用。"
+    },
+    "gate": {
+      "add": "添加条件",
+      "mode": "条件关系",
+      "all": "全部满足",
+      "any": "任一满足",
+      "field": "选择数据",
+      "operator": "选择判断方式",
+      "value": "比较值",
+      "remove": "删除条件",
+      "always": "未设置门槛，每次匹配到该触发位置都会执行基础行为。"
+    },
+    "operators": {
+      "equals": "等于",
+      "not_equals": "不等于",
+      "contains": "包含",
+      "not_contains": "不包含",
+      "starts_with": "开头是",
+      "ends_with": "结尾是",
+      "matches_regex": "匹配正则",
+      "greater_than": "大于",
+      "less_than": "小于",
+      "is_true": "为是",
+      "is_false": "为否",
+      "is_empty": "为空",
+      "is_not_empty": "不为空"
+    },
+    "boolean": {
+      "true": "是",
+      "false": "否"
+    },
+    "outcomes": {
+      "continue": "继续",
+      "block": "阻止",
+      "allow": "允许",
+      "deny": "拒绝",
+      "ask": "询问用户"
+    },
+    "actions": {
+      "selectToolFirst": "请先在匹配条件中选择具体工具",
+      "empty": "选择上方行为并在这里完成配置。",
+      "tool": "MCP 工具",
+      "selectMcpTool": "选择 MCP 工具",
+      "noMcpTools": "暂无已发布且连接正常的 MCP 工具",
+      "toolInputs": "工具参数",
+      "valueSource": "参数来源",
+      "toolNoInputs": "该工具没有输入参数。",
+      "contextTemplate": "追加内容",
+      "contextPlaceholder": "输入要追加给模型的上下文，输入 / 插入变量。",
+      "skill": "Skill",
+      "selectSkill": "选择 Skill",
+      "noSkills": "暂无已发布 Skill",
+      "maxTurns": "最大回合数",
+      "skillArguments": "Skill 参数",
+      "skillArgumentsPlaceholder": "例如：给用户发送执行失败通知，用户为 /",
+      "decision": "决策结果",
+      "selectDecision": "选择决策",
+      "reason": "原因",
+      "reasonPlaceholder": "输入返回给模型或用户的原因",
+      "wholeToolOutput": "完整工具输出",
+      "toolTextContent": "工具文本内容",
+      "toolStructuredContent": "工具结构化内容",
+      "fieldToChange": "修改字段",
+      "selectFieldToChange": "选择要修改的字段",
+      "changeTo": "修改为",
+      "selectNewValue": "选择新值来源",
+      "newValue": "新值",
+      "moveUp": "上移行为",
+      "moveDown": "下移行为",
+      "remove": "删除行为",
+      "types": {
+        "record_data": {
+          "label": "记录数据",
+          "description": "选择需要保存的事件或处理结果。"
+        },
+        "call_tool": {
+          "label": "调用工具",
+          "description": "直接调用已连接的 MCP 工具。"
+        },
+        "append_context": {
+          "label": "追加模型上下文",
+          "description": "把文本和运行时变量添加到模型上下文。"
+        },
+        "invoke_skill_recovery": {
+          "label": "发起恢复回合",
+          "description": "异常结束后启动新回合执行 Skill。"
+        },
+        "decision": {
+          "label": "流程决策",
+          "description": "允许、阻止或要求当前流程继续。"
+        },
+        "update_input": {
+          "label": "修改输入",
+          "description": "修改具体工具实际收到的输入字段。"
+        },
+        "update_output": {
+          "label": "修改输出",
+          "description": "修改工具返回给模型的结果。"
+        }
+      }
+    },
+    "eventGroups": {
+      "session": "会话与回答",
+      "prompt": "用户输入与通知",
+      "tool": "工具与权限",
+      "agent": "Agent 与任务",
+      "context": "上下文压缩",
+      "mcp": "MCP 交互",
+      "workspace": "配置与工作区"
+    },
+    "events": {
+      "Setup": {
+        "label": "初始化环境",
+        "description": "Claude Code 初始化或维护环境时。"
+      },
+      "SessionStart": {
+        "label": "会话开始",
+        "description": "新建、恢复或压缩后恢复会话时。"
+      },
+      "Stop": {
+        "label": "回答结束",
+        "description": "模型准备结束本轮回答时。"
+      },
+      "StopFailure": {
+        "label": "回答异常结束",
+        "description": "本轮因 API 或模型错误结束时。"
+      },
+      "SessionEnd": {
+        "label": "会话结束",
+        "description": "会话退出、清空或注销时。"
+      },
+      "UserPromptSubmit": {
+        "label": "用户提交问题",
+        "description": "问题正式交给模型前。"
+      },
+      "UserPromptExpansion": {
+        "label": "命令展开",
+        "description": "Slash Command 或 MCP Prompt 展开时。"
+      },
+      "Notification": {
+        "label": "Claude Code 通知",
+        "description": "Claude Code 产生通知时。"
+      },
+      "PreToolUse": {
+        "label": "工具执行前",
+        "description": "Skill、MCP、Bash 等工具执行前。"
+      },
+      "PostToolUse": {
+        "label": "工具成功后",
+        "description": "工具成功返回结果后。"
+      },
+      "PostToolUseFailure": {
+        "label": "工具失败后",
+        "description": "工具抛错或返回失败后。"
+      },
+      "PermissionRequest": {
+        "label": "请求权限",
+        "description": "工具需要用户确认权限时。"
+      },
+      "PermissionDenied": {
+        "label": "权限被拒绝",
+        "description": "权限策略拒绝工具时。"
+      },
+      "SubagentStart": {
+        "label": "子 Agent 开始",
+        "description": "子 Agent 启动时。"
+      },
+      "SubagentStop": {
+        "label": "子 Agent 结束",
+        "description": "子 Agent 准备完成时。"
+      },
+      "TeammateIdle": {
+        "label": "团队成员空闲",
+        "description": "Agent Team 成员准备空闲时。"
+      },
+      "TaskCreated": {
+        "label": "任务创建",
+        "description": "Claude 创建任务时。"
+      },
+      "TaskCompleted": {
+        "label": "任务完成",
+        "description": "Claude 准备完成任务时。"
+      },
+      "PreCompact": { "label": "压缩前", "description": "上下文压缩开始前。" },
+      "PostCompact": { "label": "压缩后", "description": "上下文摘要生成后。" },
+      "Elicitation": {
+        "label": "MCP 发起询问",
+        "description": "MCP Server 请求用户提供信息时。"
+      },
+      "ElicitationResult": {
+        "label": "MCP 询问结果",
+        "description": "用户回答发送回 MCP 前。"
+      },
+      "ConfigChange": {
+        "label": "配置变化",
+        "description": "Claude、项目、用户或 Skill 配置变化时。"
+      },
+      "InstructionsLoaded": {
+        "label": "指令加载",
+        "description": "CLAUDE.md 等指令文件加载时。"
+      },
+      "CwdChanged": {
+        "label": "工作目录变化",
+        "description": "Claude 切换工作目录时。"
+      },
+      "FileChanged": {
+        "label": "监听文件变化",
+        "description": "被监听文件新增、修改或删除时。"
+      },
+      "WorktreeCreate": {
+        "label": "Worktree 创建",
+        "description": "创建隔离 Worktree 时。"
+      },
+      "WorktreeRemove": {
+        "label": "Worktree 删除",
+        "description": "移除隔离 Worktree 时。"
+      }
+    },
+    "errors": {
+      "load": "加载 Hook 配置失败",
+      "loadSettings": "加载 Hook 事件设置失败",
+      "loadResources": "加载 Hook 可用资源失败",
+      "save": "保存 Hook 失败",
+      "publish": "发布 Hook 失败",
+      "start": "启动 Hook 失败",
+      "stop": "停止 Hook 失败",
+      "delete": "删除 Hook 失败",
+      "saveSettings": "保存 Hook 事件设置失败",
+      "uploadSkill": "上传内置 Hook Skill 失败",
+      "deleteSkill": "删除内置 Hook Skill 失败"
+    },
+    "toast": {
+      "saved": "Hook 草稿已保存",
+      "published": "Hook 已发布，请选择生效用户",
+      "started": "Hook 用户绑定已保存",
+      "stopped": "Hook 用户绑定已清空",
+      "deleted": "Hook 已删除",
+      "eventsSaved": "可见触发位置已保存",
+      "skillUploaded": "内置 Hook Skill“{{name}}”已上传",
+      "skillDeleted": "内置 Hook Skill“{{name}}”已删除"
+    }
+  },
+  "claudeEnvV2": {
+    "title": "分层 Claude 环境变量",
+    "description": "管理租户统一变量和个人变量策略；现有管理员单用户配置保持不变。",
+    "addVariable": "添加变量",
+    "encryptedConfigured": "已配置加密值；输入新值后才会替换",
+    "scopeTabsLabel": "Claude 环境变量配置范围",
+    "tabs": {
+      "personal": "指定个人配置",
+      "tenant": "指定租户配置",
+      "policy": "黑白名单配置"
+    },
+    "tenant": {
+      "saved": "租户变量已保存，将在新的 Claude 会话中生效。",
+      "batchSaved": "已将环境变量变更应用到 {{count}} 个租户，并将在新的 Claude 会话中生效。",
+      "selectLabel": "选择租户",
+      "selectPlaceholder": "请选择租户",
+      "selectedCount": "已选择 {{count}} 个租户",
+      "selectAll": "全选",
+      "clearSelection": "清空",
+      "selectionLimitHint": "每批最多选择 {{count}} 个租户；全选时取前 {{count}} 个活跃租户。",
+      "noActiveTenants": "暂无活跃租户",
+      "addDelete": "添加删除项",
+      "applyToSelected": "应用到所选租户",
+      "selectHint": "选择一个租户可编辑其现有配置；选择多个租户可创建安全的批量变更。",
+      "singleEditorTitle": "正在编辑 {{tenant}}",
+      "singleEditorHint": "已有加密值始终保持掩码，只有输入替换值后才会变更。",
+      "batchEditorTitle": "批量变更 {{count}} 个租户",
+      "batchEditorHint": "这里使用独立的空操作草稿，只应用下方明确填写的值和删除名称；不会复制或改动租户中其他已有值。改变租户选择会清空本草稿。",
+      "emptyBatchUpserts": "本批次暂无新增或更新项。",
+      "batchDeletesTitle": "从每个所选租户中删除",
+      "batchDeletesHint": "只会删除这里明确列出的变量名。",
+      "emptyBatchDeletes": "本批次暂无删除项。",
+      "overviewTitle": "各租户当前配置",
+      "overviewHint": "按租户展示当前配置；加密值始终隐藏，可在此逐项删除已有配置。",
+      "loadingOverview": "正在加载租户配置…",
+      "emptyOverview": "暂无可展示的租户。",
+      "snapshotUnavailable": "暂未获取到配置快照。",
+      "noVariables": "尚未配置租户环境变量。",
+      "encrypted": "已加密",
+      "configured": "已配置",
+      "deleteConfigured": "从 {{tenant}} 删除 {{name}}",
+      "confirmDeleteConfigured": "确定从 {{tenant}} 删除 {{name}} 吗？",
+      "deleteConfiguredSuccess": "已从 {{tenant}} 删除 {{name}}。",
+      "overviewDeleteDisabled": "请先应用或移除所有待保存的租户变更，再从配置汇总中直接删除。"
+    },
+    "policy": {
+      "editorTitle": "配置黑白名单",
+      "editorHint": "通过下方表单新增配置；保存后的内容会在下方单独展示，并支持逐项删除。",
+      "allowlist": "个人变量白名单",
+      "allowlistForm": "新增白名单字段",
+      "allowlistHint": "用户只能配置这些字段；长度按 UTF-8 字节计算。",
+      "addAllowlistField": "添加字段",
+      "saveAllowlist": "保存白名单",
+      "emptyAllowlistDraft": "暂无待保存的白名单字段，请先添加字段。",
+      "emptyAllowlist": "白名单为空，用户将无法新增或更新个人环境变量；可以直接保存当前空名单。",
+      "platformDeny": "平台黑名单",
+      "denyForm": "新增黑名单规则",
+      "denyHint": "这些规则用于进一步限制个人变量，且不能覆盖内置保护。",
+      "saveDenyRule": "保存规则",
+      "savedTitle": "管理员已保存配置",
+      "savedHint": "以下配置统一面向所有用户；删除某项后，该项将从策略中移除。",
+      "savedAllowlist": "管理员白名单",
+      "savedDenylist": "管理员黑名单",
+      "emptySavedAllowlist": "管理员尚未配置白名单字段。",
+      "emptySavedDenylist": "管理员尚未配置黑名单规则。",
+      "builtIn": "内置黑名单（只读）",
+      "enabled": "启用",
+      "disabled": "停用",
+      "maxLength": "最大字节数",
+      "maxLengthValue": "{{count}} 字节",
+      "reason": "原因",
+      "deleteAllowlist": "删除 {{name}}",
+      "deleteDenyRule": "删除 {{pattern}}",
+      "confirmDeleteAllowlist": "确定从白名单中删除 {{name}} 吗？",
+      "confirmDeleteDenyRule": "确定删除黑名单规则 {{pattern}} 吗？",
+      "allowlistSaved": "白名单字段已保存。",
+      "allowlistDeleted": "已从白名单中删除 {{name}}。",
+      "denyRuleSaved": "黑名单规则已保存。",
+      "denyRuleDeleted": "已删除黑名单规则 {{pattern}}。",
+      "matchType": {
+        "exact": "精确匹配",
+        "prefix": "前缀匹配",
+        "suffix": "后缀匹配",
+        "contains": "包含匹配"
+      },
+      "saved": "个人环境变量策略已保存。"
+    },
+    "errors": {
+      "loadTenant": "加载租户环境变量失败",
+      "saveTenant": "保存租户环境变量失败",
+      "loadPolicy": "加载个人环境变量策略失败",
+      "savePolicy": "保存个人环境变量白名单失败",
+      "deleteAllowlist": "删除白名单字段失败",
+      "createRule": "创建拒绝规则失败",
+      "saveRule": "保存拒绝规则失败",
+      "deleteRule": "删除拒绝规则失败",
+      "nameRequired": "环境变量名称不能为空",
+      "duplicateName": "环境变量名称不能重复",
+      "replacementRequired": "请输入 {{name}} 的替换值",
+      "loadOverview": "加载租户环境变量概览失败",
+      "deleteNameRequired": "请填写每个待删除的环境变量名称",
+      "duplicateDeleteName": "待删除的环境变量名称不能重复",
+      "batchChangesRequired": "请至少添加一项更新或删除",
+      "batchTenantLimit": "每批最多选择 {{count}} 个租户",
+      "deleteTenantVariable": "删除租户环境变量失败"
     }
   },
   "runtimes": {
@@ -401,6 +1206,35 @@
     "errors": {
       "load": "加载运行时失败",
       "stop": "停止运行时失败"
+    }
+  },
+  "scheduledTaskLogs": {
+    "title": "定时任务日志",
+    "description": "查看调度领取、执行、成功和失败日志。时间统一按上海时区展示。",
+    "retention": "时间按上海时区展示；日志保留 {{days}} 天，最多 {{maxRows}} 条。",
+    "autoRefresh": "每 10 秒自动刷新",
+    "refresh": "刷新日志",
+    "expand": "展开日志详情",
+    "collapse": "收起日志详情",
+    "empty": "暂无符合条件的定时任务日志",
+    "filters": {
+      "searchPlaceholder": "搜索任务、租户、用户、工作区、Run ID 或错误"
+    },
+    "table": {
+      "time": "时间（上海）",
+      "task": "任务 / 工作区",
+      "scope": "租户 / 用户",
+      "result": "结果"
+    },
+    "pagination": {
+      "pageSize": "每页日志数",
+      "total": "共 {{count}} 条",
+      "page": "第 {{page}} / {{totalPages}} 页",
+      "previous": "上一页",
+      "next": "下一页"
+    },
+    "errors": {
+      "load": "加载定时任务日志失败"
     }
   }
 }

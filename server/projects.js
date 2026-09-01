@@ -66,6 +66,27 @@ import Database from 'better-sqlite3';
 import os from 'os';
 import sessionManager from './sessionManager.js';
 import { applyCustomSessionNames } from './database/db.js';
+import { requireSafePathSegment, resolveDirectChildPath } from './utils/runtime-paths.js';
+
+const CLAUDE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+
+function validateClaudeSessionId(sessionId) {
+  return requireSafePathSegment(sessionId, {
+    label: 'Claude session id',
+    pattern: CLAUDE_SESSION_ID_PATTERN,
+  });
+}
+
+function validateClaudeProjectName(projectName) {
+  return requireSafePathSegment(projectName, { label: 'Claude project name' });
+}
+
+function resolveClaudeProjectDirectory(
+  projectName,
+  projectsRoot = path.join(os.homedir(), '.claude', 'projects'),
+) {
+  return resolveDirectChildPath(projectsRoot, projectName, { label: 'Claude project name' });
+}
 
 function createConversationSearchHelpers(query) {
   const terms = String(query || '')
@@ -321,6 +342,8 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
 
 // Extract the actual project directory from JSONL sessions (with caching)
 async function extractProjectDirectory(projectName) {
+  validateClaudeProjectName(projectName);
+
   // Check cache first
   if (projectDirectoryCache.has(projectName)) {
     return projectDirectoryCache.get(projectName);
@@ -335,7 +358,7 @@ async function extractProjectDirectory(projectName) {
     return originalPath;
   }
 
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
   const cwdCounts = new Map();
   let latestTimestamp = 0;
   let latestCwd = null;
@@ -699,7 +722,7 @@ async function getProjects(progressCallback = null) {
 }
 
 async function getSessions(projectName, limit = 5, offset = 0) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const files = await fs.readdir(projectDir);
@@ -979,9 +1002,11 @@ async function parseJsonlSessions(filePath) {
   }
 }
 
-// Parse an agent JSONL file and extract tool uses
-async function parseAgentTools(filePath) {
+// Parse an agent JSONL file once so history restoration can recover the full
+// subagent conversation (text/thinking/errors as well as tool activity).
+async function parseAgentTranscript(filePath) {
   const tools = [];
+  const entries = [];
 
   try {
     const fileStream = fsSync.createReadStream(filePath);
@@ -990,20 +1015,31 @@ async function parseAgentTools(filePath) {
       crlfDelay: Infinity
     });
 
+    let lineNumber = 0;
     for await (const line of rl) {
+      lineNumber += 1;
       if (line.trim()) {
         try {
           const entry = JSON.parse(line);
+          if (!entry.uuid) {
+            entry.uuid = `subagent-${path.basename(filePath)}-${lineNumber}`;
+          }
+          entries.push(entry);
           // Look for assistant messages with tool_use
           if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
             for (const part of entry.message.content) {
               if (part.type === 'tool_use') {
-                tools.push({
+                const tool = {
                   toolId: part.id,
                   toolName: part.name,
                   toolInput: part.input,
-                  timestamp: entry.timestamp
-                });
+                  timestamp: entry.timestamp,
+                };
+                const parentToolUseId = entry.parentToolUseId || entry.parent_tool_use_id;
+                if (typeof parentToolUseId === 'string' && parentToolUseId.trim()) {
+                  tool.parentToolUseId = parentToolUseId.trim();
+                }
+                tools.push(tool);
               }
             }
           }
@@ -1033,7 +1069,7 @@ async function parseAgentTools(filePath) {
     console.warn(`Error parsing agent file ${filePath}:`, error.message);
   }
 
-  return tools;
+  return { entries, tools };
 }
 
 // Get messages for a specific session from an explicit Claude project directory.
@@ -1046,12 +1082,42 @@ async function getSessionMessagesFromProjectDirectory(
   transcriptFiles = null,
 ) {
   try {
+    const safeSessionId = validateClaudeSessionId(sessionId);
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
     const jsonlFiles = Array.isArray(transcriptFiles)
       ? transcriptFiles.filter((file) => files.includes(file))
       : files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
-    const agentFiles = files.filter(file => file.endsWith('.jsonl') && file.startsWith('agent-'));
+    const agentTranscriptPaths = new Map();
+    for (const file of files) {
+      const match = file.match(/^agent-(.+)\.jsonl$/);
+      if (match?.[1]) {
+        // Legacy Claude versions stored subagent transcripts beside the main
+        // session transcript.
+        agentTranscriptPaths.set(match[1], path.join(projectDir, file));
+      }
+    }
+
+    // Current Claude versions keep subagent transcripts below
+    // <sessionId>/subagents/. Prefer those files when both layouts exist.
+    const sessionDataDir = resolveDirectChildPath(projectDir, safeSessionId, {
+      label: 'Claude session id',
+      pattern: CLAUDE_SESSION_ID_PATTERN,
+    });
+    const subagentsDir = path.join(sessionDataDir, 'subagents');
+    try {
+      const nestedAgentFiles = await fs.readdir(subagentsDir);
+      for (const file of nestedAgentFiles) {
+        const match = file.match(/^agent-(.+)\.jsonl$/);
+        if (match?.[1]) {
+          agentTranscriptPaths.set(match[1], path.join(subagentsDir, file));
+        }
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.warn(`Error reading subagent directory ${subagentsDir}:`, error.message);
+      }
+    }
 
     if (jsonlFiles.length === 0) {
       return { messages: [], total: 0, hasMore: false };
@@ -1059,7 +1125,7 @@ async function getSessionMessagesFromProjectDirectory(
 
     const messages = [];
     // Map of agentId -> tools for subagent tool grouping
-    const agentToolsCache = new Map();
+    const agentTranscriptCache = new Map();
 
     // Process all JSONL files to find messages for this session
     for (const file of jsonlFiles) {
@@ -1074,7 +1140,7 @@ async function getSessionMessagesFromProjectDirectory(
         if (line.trim()) {
           try {
             const entry = JSON.parse(line);
-            if (entry.sessionId === sessionId) {
+            if (entry.sessionId === safeSessionId) {
               messages.push(entry);
             }
           } catch (parseError) {
@@ -1084,31 +1150,115 @@ async function getSessionMessagesFromProjectDirectory(
       }
     }
 
-    // Collect agentIds from Task tool results
-    const agentIds = new Set();
+    const parseTimestamp = (value) => {
+      const timestamp = Date.parse(value || '');
+      return Number.isFinite(timestamp) ? timestamp : null;
+    };
+    const mainToolUseStartTimes = new Map();
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        agentIds.add(message.toolUseResult.agentId);
+      if (!Array.isArray(message.message?.content)) continue;
+      for (const part of message.message.content) {
+        if (part?.type === 'tool_use' && typeof part.id === 'string' && part.id.trim()) {
+          mainToolUseStartTimes.set(part.id.trim(), parseTimestamp(message.timestamp));
+        }
       }
+    }
+
+    // Collect agentIds and invocation windows from Agent/Task tool results.
+    const agentIds = new Set();
+    const agentInvocations = new Map();
+    for (const [sequence, message] of messages.entries()) {
+      const toolUseResult = message.toolUseResult || message.tool_use_result;
+      const agentId = toolUseResult?.agentId || toolUseResult?.agent_id;
+      if (typeof agentId === 'string' && agentId.trim()) {
+        const normalizedAgentId = agentId.trim();
+        agentIds.add(normalizedAgentId);
+        const parentToolUseId = Array.isArray(message.message?.content)
+          ? message.message.content.find((part) => (
+              part?.type === 'tool_result' &&
+              typeof part.tool_use_id === 'string' &&
+              part.tool_use_id.trim()
+            ))?.tool_use_id?.trim()
+          : undefined;
+        const startedAt = parentToolUseId
+          ? mainToolUseStartTimes.get(parentToolUseId) ?? parseTimestamp(message.timestamp)
+          : parseTimestamp(message.timestamp);
+        const invocations = agentInvocations.get(normalizedAgentId) || [];
+        invocations.push({ message, parentToolUseId, startedAt, sequence });
+        agentInvocations.set(normalizedAgentId, invocations);
+      }
+    }
+    for (const invocations of agentInvocations.values()) {
+      invocations.sort((left, right) => {
+        if (left.startedAt !== null && right.startedAt !== null) {
+          return left.startedAt - right.startedAt || left.sequence - right.sequence;
+        }
+        if (left.startedAt !== null) return -1;
+        if (right.startedAt !== null) return 1;
+        return left.sequence - right.sequence;
+      });
     }
 
     // Load agent tools for each agentId found
     for (const agentId of agentIds) {
-      const agentFileName = `agent-${agentId}.jsonl`;
-      if (agentFiles.includes(agentFileName)) {
-        const agentFilePath = path.join(projectDir, agentFileName);
-        const tools = await parseAgentTools(agentFilePath);
-        agentToolsCache.set(agentId, tools);
+      const agentFilePath = agentTranscriptPaths.get(agentId);
+      if (agentFilePath) {
+        const transcript = await parseAgentTranscript(agentFilePath);
+        agentTranscriptCache.set(agentId, transcript);
       }
     }
 
     // Attach agent tools to their parent Task messages
     for (const message of messages) {
-      if (message.toolUseResult?.agentId) {
-        const agentId = message.toolUseResult.agentId;
-        const agentTools = agentToolsCache.get(agentId);
-        if (agentTools && agentTools.length > 0) {
-          message.subagentTools = agentTools;
+      const toolUseResult = message.toolUseResult || message.tool_use_result;
+      const rawAgentId = toolUseResult?.agentId || toolUseResult?.agent_id;
+      const agentId = typeof rawAgentId === 'string' ? rawAgentId.trim() : '';
+      if (agentId) {
+        const agentTranscript = agentTranscriptCache.get(agentId);
+        if (agentTranscript) {
+          const invocations = agentInvocations.get(agentId) || [];
+          const invocationIndex = invocations.findIndex((invocation) => invocation.message === message);
+          const invocation = invocationIndex >= 0 ? invocations[invocationIndex] : null;
+          const nextInvocation = invocationIndex >= 0 ? invocations[invocationIndex + 1] : null;
+          const belongsToInvocation = (item) => {
+            const parentToolUseId = item.parentToolUseId || item.parent_tool_use_id;
+            if (parentToolUseId) {
+              return Boolean(invocation?.parentToolUseId) &&
+                parentToolUseId === invocation.parentToolUseId;
+            }
+
+            if (invocations.length <= 1) {
+              return true;
+            }
+
+            // Older transcripts do not carry parent_tool_use_id. Divide those
+            // tools by the main Agent invocation start times so resumed turns
+            // cannot inherit the full cumulative transcript from one another.
+            const itemTimestamp = parseTimestamp(item.timestamp);
+            if (itemTimestamp === null || !invocation) return false;
+            if (invocation.startedAt !== null && itemTimestamp < invocation.startedAt) {
+              return false;
+            }
+            if (nextInvocation && nextInvocation.startedAt !== null && itemTimestamp >= nextInvocation.startedAt) {
+              return false;
+            }
+            return invocation.startedAt !== null || Boolean(
+              nextInvocation && nextInvocation.startedAt !== null,
+            );
+          };
+          const scopedTools = agentTranscript.tools.filter(belongsToInvocation);
+          const scopedMessages = agentTranscript.entries.filter(belongsToInvocation);
+
+          // Resumed agents reuse their agent ID and transcript file. Current
+          // transcripts retain parent_tool_use_id, which lets each invocation
+          // restore only its own tools instead of inheriting every prior turn.
+          // Legacy multi-invocation history is conservatively time-sliced.
+          if (scopedTools.length > 0) {
+            message.subagentTools = scopedTools;
+          }
+          if (scopedMessages.length > 0) {
+            message.subagentMessages = scopedMessages;
+          }
         }
       }
     }
@@ -1146,27 +1296,28 @@ async function getSessionMessagesFromProjectDirectory(
 
 // Get messages for a specific session with pagination support.
 async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
-  const directFileName = `${sessionId}.jsonl`;
+  const safeSessionId = validateClaudeSessionId(sessionId);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
+  const directFileName = `${safeSessionId}.jsonl`;
+  const directFilePath = resolveDirectChildPath(projectDir, directFileName, {
+    label: 'Claude transcript name',
+  });
   try {
-    await fs.access(path.join(projectDir, directFileName));
+    await fs.access(directFilePath);
     return getSessionMessagesFromProjectDirectory(
       projectDir,
-      sessionId,
+      safeSessionId,
       limit,
       offset,
       [directFileName],
     );
   } catch {
-    return getSessionMessagesFromProjectDirectory(projectDir, sessionId, limit, offset);
+    return getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, limit, offset);
   }
 }
 
 async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0) {
-  const safeSessionId = String(sessionId || '');
-  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
-    throw new Error('Invalid Claude session id');
-  }
+  const safeSessionId = validateClaudeSessionId(sessionId);
 
   let entries;
   try {
@@ -1187,7 +1338,9 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
 
   for (const projectDir of projectDirs) {
     try {
-      await fs.access(path.join(projectDir, directFileName));
+      await fs.access(resolveDirectChildPath(projectDir, directFileName, {
+        label: 'Claude transcript name',
+      }));
       directMatches.push(projectDir);
     } catch {
       remainingDirs.push(projectDir);
@@ -1233,10 +1386,7 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
 }
 
 async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
-  const safeSessionId = String(sessionId || '');
-  if (!safeSessionId || !/^[a-zA-Z0-9._-]+$/.test(safeSessionId)) {
-    throw new Error('Invalid Claude session id');
-  }
+  const safeSessionId = validateClaudeSessionId(sessionId);
 
   let entries;
   try {
@@ -1250,7 +1400,9 @@ async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const projectDir = path.join(projectsRoot, entry.name);
-    const transcriptPath = path.join(projectDir, `${safeSessionId}.jsonl`);
+    const transcriptPath = resolveDirectChildPath(projectDir, `${safeSessionId}.jsonl`, {
+      label: 'Claude transcript name',
+    });
     try {
       await fs.unlink(transcriptPath);
       deleted = true;
@@ -1260,7 +1412,10 @@ async function deleteSessionFromProjectsRoot(projectsRoot, sessionId) {
 
     // Claude stores tool results and subagent history below a session-specific
     // directory. It is safe to remove only the directory named by this session.
-    const sessionDataDir = path.join(projectDir, safeSessionId);
+    const sessionDataDir = resolveDirectChildPath(projectDir, safeSessionId, {
+      label: 'Claude session id',
+      pattern: CLAUDE_SESSION_ID_PATTERN,
+    });
     try {
       await fs.rm(sessionDataDir, { recursive: true, force: true });
     } catch (error) {
@@ -1293,7 +1448,8 @@ async function renameProject(projectName, newDisplayName) {
 
 // Delete a session from a project
 async function deleteSession(projectName, sessionId) {
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const safeSessionId = validateClaudeSessionId(sessionId);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const files = await fs.readdir(projectDir);
@@ -1313,7 +1469,7 @@ async function deleteSession(projectName, sessionId) {
       const hasSession = lines.some(line => {
         try {
           const data = JSON.parse(line);
-          return data.sessionId === sessionId;
+          return data.sessionId === safeSessionId;
         } catch {
           return false;
         }
@@ -1324,7 +1480,7 @@ async function deleteSession(projectName, sessionId) {
         const filteredLines = lines.filter(line => {
           try {
             const data = JSON.parse(line);
-            return data.sessionId !== sessionId;
+            return data.sessionId !== safeSessionId;
           } catch {
             return true; // Keep malformed lines
           }
@@ -1336,7 +1492,7 @@ async function deleteSession(projectName, sessionId) {
       }
     }
 
-    throw new Error(`Session ${sessionId} not found in any files`);
+    throw new Error(`Session ${safeSessionId} not found in any files`);
   } catch (error) {
     console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
     throw error;
@@ -1361,7 +1517,7 @@ async function isProjectEmpty(projectName, { allowMissingDirectory = false } = {
 // When deleteData=true, also delete session/memory files on disk (destructive).
 async function deleteProject(projectName, force = false, deleteData = false, options = {}) {
   const { skipSessionCheck = false } = options;
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   try {
     const isEmpty = skipSessionCheck
@@ -1436,7 +1592,7 @@ async function addProjectManually(projectPath, displayName = null) {
 
   // Check if project already exists in config
   const config = await loadProjectConfig();
-  const projectDir = path.join(os.homedir(), '.claude', 'projects', projectName);
+  const projectDir = resolveClaudeProjectDirectory(projectName);
 
   if (config[projectName]) {
     throw new Error(`Project already configured for path: ${absolutePath}`);
@@ -2688,6 +2844,9 @@ export {
   getSessionMessages,
   getSessionMessagesFromProjectDirectory,
   getSessionMessagesFromProjectsRoot,
+  validateClaudeSessionId,
+  validateClaudeProjectName,
+  resolveClaudeProjectDirectory,
   deleteSessionFromProjectsRoot,
   parseJsonlSessions,
   renameProject,

@@ -1,10 +1,14 @@
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { requireSafePathSegment } from '../../../../utils/runtime-paths.js';
+
 const CLAUDE_PROJECTS_DIRECTORY = path.join('.claude', 'projects');
 const DISPLAY_COMMANDS_FILE_NAME = 'display-commands.jsonl';
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 const SLASH_COMMAND_PATTERN = /^\/[^\s/]+(?:\s[\s\S]*)?$/;
+const HOOK_RECOVERY_DISPLAY_PATTERN = /^<ccui-hook-recovery(?:\s[^>]*)?><\/ccui-hook-recovery>$/;
+const MCP_LOOP_DISPLAY_PATTERN = /^<ccui-mcp-loop-result(?:\s[^>]*)?><\/ccui-mcp-loop-result>$/;
 const SESSION_DIRECTORY_MODE = 0o700;
 const DISPLAY_COMMAND_FILE_MODE = 0o600;
 const DISPLAY_COMMAND_OPEN_FLAGS = fsConstants.O_APPEND
@@ -15,6 +19,18 @@ const pendingWrites = new Map();
 
 function normalizeIdentifier(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeClaudeSessionId(value) {
+  const normalized = normalizeIdentifier(value);
+  try {
+    return requireSafePathSegment(normalized, {
+      label: 'Claude session id',
+      pattern: SAFE_SESSION_ID_PATTERN,
+    });
+  } catch {
+    return '';
+  }
 }
 
 function isNonNegativeInteger(value) {
@@ -116,7 +132,11 @@ export function normalizeClaudeDisplayCommand(value) {
   }
 
   const normalized = value.trim();
-  return normalized && SLASH_COMMAND_PATTERN.test(normalized)
+  return normalized && (
+    SLASH_COMMAND_PATTERN.test(normalized)
+    || HOOK_RECOVERY_DISPLAY_PATTERN.test(normalized)
+    || MCP_LOOP_DISPLAY_PATTERN.test(normalized)
+  )
     ? normalized
     : null;
 }
@@ -138,12 +158,11 @@ function resolveClaudeProjectsRoot(runtimeHomePath) {
 export function resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId) {
   const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
   const projectStorageName = normalizeClaudeProjectStorageName(projectPath);
-  const normalizedSessionId = normalizeIdentifier(sessionId);
+  const normalizedSessionId = normalizeClaudeSessionId(sessionId);
   if (
     !projectsRoot
     || !projectStorageName
     || !normalizedSessionId
-    || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
   ) {
     return null;
   }
@@ -158,11 +177,10 @@ export function resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, se
 
 async function findClaudeDisplayCommandPaths(runtimeHomePath, sessionId) {
   const projectsRoot = resolveClaudeProjectsRoot(runtimeHomePath);
-  const normalizedSessionId = normalizeIdentifier(sessionId);
+  const normalizedSessionId = normalizeClaudeSessionId(sessionId);
   if (
     !projectsRoot
     || !normalizedSessionId
-    || !SAFE_SESSION_ID_PATTERN.test(normalizedSessionId)
   ) {
     return [];
   }
@@ -302,4 +320,26 @@ export async function readClaudeDisplayCommands({
   }
 
   return displayCommands;
+}
+
+export async function deleteClaudeDisplayCommands({
+  runtimeHomePath,
+  sessionId,
+}) {
+  const filePaths = await findClaudeDisplayCommandPaths(runtimeHomePath, sessionId);
+  let deleted = false;
+
+  for (const filePath of filePaths) {
+    await waitForPendingWrite(filePath);
+    try {
+      await fs.unlink(filePath);
+      deleted = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  return deleted;
 }

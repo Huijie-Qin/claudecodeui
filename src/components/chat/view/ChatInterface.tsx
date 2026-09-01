@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Bot } from 'lucide-react';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
@@ -14,6 +15,13 @@ import { useChatComposerState } from '../hooks/useChatComposerState';
 import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
+import { buildSubagentTraces } from '../subagent/buildSubagentTraces';
+import { SubagentPanel } from '../subagent/SubagentPanel';
+import {
+  applySubagentPermissionWaitingState,
+  partitionSubagentPermissionRequests,
+} from '../subagent/subagentPermissionRouting';
+import { useSubagentPanelLayout } from '../subagent/useSubagentPanelLayout';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -55,7 +63,10 @@ function ChatInterface({
   autoScrollToBottom,
   sendByCtrlEnter,
   externalMessageUpdate,
+  initialUserMessage,
+  onOpenCapabilities,
   onShowAllTasks,
+  workspaceTerminology = 'workspace',
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
@@ -67,15 +78,10 @@ function ChatInterface({
   const pendingViewSessionRef = useRef<PendingViewSession | null>(null);
   const lastRealtimeActivityAtRef = useRef(Date.now());
   const lastSessionStatusProbeAtRef = useRef(0);
+  const subagentReturnFocusRef = useRef<HTMLElement | null>(null);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
-
-  const resetStreamingState = useCallback(() => {
-    for (const timerId of streamTimersRef.current.values()) {
-      clearTimeout(timerId);
-    }
-    streamTimersRef.current.clear();
-    streamAccumulatorRef.current.clearAll();
-  }, []);
+  const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
+  const [selectedSubagentTraceId, setSelectedSubagentTraceId] = useState<string | null>(null);
 
   const {
     provider,
@@ -95,6 +101,23 @@ function ChatInterface({
   } = useChatProviderState({
     selectedSession,
   });
+
+  const resetStreamingState = useCallback(() => {
+    // A route/session transition can happen before the 100 ms streaming timer
+    // publishes the opening chunks. Persist every buffered snapshot first so
+    // the next view observes the same realtime content.
+    for (const snapshot of streamAccumulatorRef.current.drainSnapshots()) {
+      if (!snapshot.content) continue;
+      sessionStore.updateStreaming(snapshot.sessionId, snapshot.content, provider, {
+        id: snapshot.id,
+        timestamp: snapshot.timestamp,
+      });
+    }
+    for (const timerId of streamTimersRef.current.values()) {
+      clearTimeout(timerId);
+    }
+    streamTimersRef.current.clear();
+  }, [provider, sessionStore]);
 
   const {
     chatMessages,
@@ -136,7 +159,91 @@ function ChatInterface({
     resetStreamingState,
     pendingViewSessionRef,
     sessionStore,
+    initialUserMessage,
   });
+
+  const subagentTraces = useMemo(
+    () => buildSubagentTraces(chatMessages),
+    [chatMessages],
+  );
+  const subagentPermissionRouting = useMemo(
+    () => partitionSubagentPermissionRequests(
+      subagentTraces,
+      pendingPermissionRequests,
+      selectedSubagentTraceId,
+    ),
+    [pendingPermissionRequests, selectedSubagentTraceId, subagentTraces],
+  );
+  const routedSubagentQuestions = subagentPermissionRouting.routed;
+  const selectedSubagentQuestionRequests = subagentPermissionRouting.selectedRequests;
+  const hiddenSubagentQuestions = subagentPermissionRouting.hidden;
+  const unresolvedSubagentQuestions = subagentPermissionRouting.unresolved;
+  const mainPermissionRequests = subagentPermissionRouting.main;
+  const subagentDisplayTraces = useMemo(
+    () => applySubagentPermissionWaitingState(subagentTraces, routedSubagentQuestions),
+    [routedSubagentQuestions, subagentTraces],
+  );
+  const isSubagentPanelOpen = selectedSubagentTraceId !== null;
+  const {
+    containerRef: subagentLayoutRef,
+    panelWidth: subagentPanelWidth,
+    panelMinWidth: subagentPanelMinWidth,
+    panelMaxWidth: subagentPanelMaxWidth,
+    isDocked: isSubagentPanelDocked,
+    isResizing: isSubagentPanelResizing,
+    handleResizeStart: handleSubagentPanelResizeStart,
+    handleResizeKeyDown: handleSubagentPanelResizeKeyDown,
+  } = useSubagentPanelLayout(isSubagentPanelOpen);
+
+  const closeSubagentPanel = useCallback(() => {
+    setSelectedSubagentTraceId(null);
+    const returnFocusTarget = subagentReturnFocusRef.current;
+    subagentReturnFocusRef.current = null;
+    window.requestAnimationFrame(() => returnFocusTarget?.focus());
+  }, []);
+
+  // Keep opening explicit: only the matching Task/Agent tool card receives this callback.
+  const handleOpenSubagent = useCallback((toolId: string) => {
+    const trace = subagentTraces.find((candidate) => (
+      candidate.id === toolId || candidate.sourceToolIds.includes(toolId)
+    ));
+    if (trace) {
+      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      setIsQuickSettingsOpen(false);
+      setSelectedSubagentTraceId(trace.id);
+    }
+  }, [subagentTraces]);
+
+  const latestHiddenSubagentQuestion = hiddenSubagentQuestions[hiddenSubagentQuestions.length - 1];
+  const hiddenSubagentQuestionCount = hiddenSubagentQuestions.length + unresolvedSubagentQuestions.length;
+
+  useEffect(() => {
+    setSelectedSubagentTraceId(null);
+    setIsQuickSettingsOpen(false);
+    subagentReturnFocusRef.current = null;
+  }, [selectedSession?.id]);
+
+  const handleQuickSettingsOpenChange = useCallback((nextOpen: boolean) => {
+    setIsQuickSettingsOpen(nextOpen);
+    if (nextOpen && isSubagentPanelOpen && !isSubagentPanelDocked) {
+      subagentReturnFocusRef.current = null;
+      setSelectedSubagentTraceId(null);
+    }
+  }, [isSubagentPanelDocked, isSubagentPanelOpen]);
+
+  useEffect(() => {
+    if (
+      selectedSubagentTraceId &&
+      !subagentTraces.some((trace) => (
+        trace.id === selectedSubagentTraceId ||
+        trace.sourceToolIds.includes(selectedSubagentTraceId)
+      ))
+    ) {
+      setSelectedSubagentTraceId(null);
+    }
+  }, [selectedSubagentTraceId, subagentTraces]);
 
   const {
     input,
@@ -372,12 +479,42 @@ function ChatInterface({
   }, [isLoading, probeCurrentSessionStatus]);
 
   useEffect(() => {
-    if (!isLoading || !canAbortSession) {
+    const canCloseSubagentDrawer = isSubagentPanelOpen && !isSubagentPanelDocked;
+    if (
+      !isQuickSettingsOpen &&
+      !canCloseSubagentDrawer &&
+      (!isLoading || !canAbortSession)
+    ) {
       return;
     }
 
     const handleGlobalEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) {
+      if (
+        event.key !== 'Escape' ||
+        event.repeat ||
+        event.defaultPrevented ||
+        event.isComposing
+      ) {
+        return;
+      }
+
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-subagent-question-panel]')
+      ) {
+        // AskUserQuestion owns Escape ("skip") while its form has focus.
+        return;
+      }
+
+      if (isQuickSettingsOpen) {
+        event.preventDefault();
+        setIsQuickSettingsOpen(false);
+        return;
+      }
+
+      if (canCloseSubagentDrawer) {
+        event.preventDefault();
+        closeSubagentPanel();
         return;
       }
 
@@ -389,7 +526,15 @@ function ChatInterface({
     return () => {
       document.removeEventListener('keydown', handleGlobalEscape, { capture: true });
     };
-  }, [canAbortSession, handleAbortSession, isLoading]);
+  }, [
+    canAbortSession,
+    closeSubagentPanel,
+    handleAbortSession,
+    isLoading,
+    isQuickSettingsOpen,
+    isSubagentPanelDocked,
+    isSubagentPanelOpen,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -452,8 +597,12 @@ function ChatInterface({
 
   return (
     <PermissionContext.Provider value={permissionContextValue}>
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        <ChatMessagesPane
+      <div
+        ref={subagentLayoutRef}
+        className="relative flex h-full min-h-0 overflow-hidden"
+      >
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
           onTouchMove={handleScroll}
@@ -491,10 +640,36 @@ function ChatInterface({
           showRawParameters={showRawParameters}
           showThinking={showThinking}
           selectedProject={selectedProject}
+          onOpenSubagent={handleOpenSubagent}
         />
 
-        <ChatComposer
-          pendingPermissionRequests={pendingPermissionRequests}
+          {(latestHiddenSubagentQuestion || unresolvedSubagentQuestions.length > 0) && (
+            <div className="shrink-0 border-t border-border bg-background px-3 py-2">
+              <div
+                role="status"
+                className="flex w-full items-center gap-2 rounded-lg border border-purple-500/25 bg-purple-500/5 px-3 py-2 text-left text-xs"
+              >
+                <Bot className="h-4 w-4 shrink-0 text-purple-500" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {latestHiddenSubagentQuestion
+                    ? t('subagentPanel.questionWaiting', {
+                        defaultValue: 'A subagent is waiting for your answer',
+                      })
+                    : t('subagentPanel.locatingQuestion', {
+                        defaultValue: 'Connecting a subagent question…',
+                      })}
+                </span>
+                {hiddenSubagentQuestionCount > 1 && (
+                  <span className="rounded-full bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-purple-600 dark:text-purple-300">
+                    {hiddenSubagentQuestionCount}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <ChatComposer
+          pendingPermissionRequests={mainPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
           claudeStatus={claudeStatus}
@@ -509,6 +684,7 @@ function ChatInterface({
           tokenBudget={tokenBudget}
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
+          onOpenCapabilities={onOpenCapabilities}
           hasInput={Boolean(input.trim())}
           onClearInput={handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
@@ -549,7 +725,7 @@ function ChatInterface({
           placeholder={
             isLoading && provider === 'claude'
               ? t('input.supplementPlaceholder', {
-                  defaultValue: 'Add supplemental info while Claude is working...',
+                  defaultValue: 'Queue a follow-up after the current response...',
                 })
               : t('input.placeholder', {
                   provider:
@@ -567,6 +743,75 @@ function ChatInterface({
           onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}
           scheduledTasksDisabledReason={scheduledTasksDisabledReason}
         />
+        </div>
+
+        {isSubagentPanelOpen && isSubagentPanelDocked && (
+          <div className="flex h-full min-w-0 flex-shrink-0">
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label={t('subagent.resizePanel', { defaultValue: 'Resize agent activity panel' })}
+              aria-orientation="vertical"
+              aria-controls="subagent-activity-panel"
+              aria-valuemin={subagentPanelMinWidth}
+              aria-valuemax={subagentPanelMaxWidth}
+              aria-valuenow={Math.round(subagentPanelWidth)}
+              onPointerDown={handleSubagentPanelResizeStart}
+              onKeyDown={handleSubagentPanelResizeKeyDown}
+              className="group relative w-1 flex-shrink-0 cursor-col-resize bg-border/70 transition-colors hover:bg-purple-500 focus-visible:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40"
+            >
+              <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 bg-purple-500 opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
+            <div
+              className="h-full min-w-0 overflow-hidden border-l border-border bg-background"
+              style={{ width: `${subagentPanelWidth}px` }}
+            >
+              <SubagentPanel
+                traces={subagentDisplayTraces}
+                selectedTraceId={selectedSubagentTraceId}
+                onSelectTrace={setSelectedSubagentTraceId}
+                onClose={closeSubagentPanel}
+                mode="docked"
+                permissionRequests={selectedSubagentQuestionRequests}
+                onPermissionDecision={handlePermissionDecision}
+                createDiff={createDiff}
+                onFileOpen={onFileOpen}
+                onShowSettings={onShowSettings}
+                onGrantToolPermission={handleGrantToolPermission}
+                autoExpandTools={autoExpandTools}
+                showRawParameters={showRawParameters}
+                showThinking={showThinking}
+                selectedProject={selectedProject}
+                provider={provider}
+              />
+            </div>
+          </div>
+        )}
+
+        {isSubagentPanelOpen && !isSubagentPanelDocked && (
+          <SubagentPanel
+            traces={subagentDisplayTraces}
+            selectedTraceId={selectedSubagentTraceId}
+            onSelectTrace={setSelectedSubagentTraceId}
+            onClose={closeSubagentPanel}
+            mode="drawer"
+            permissionRequests={selectedSubagentQuestionRequests}
+            onPermissionDecision={handlePermissionDecision}
+            createDiff={createDiff}
+            onFileOpen={onFileOpen}
+            onShowSettings={onShowSettings}
+            onGrantToolPermission={handleGrantToolPermission}
+            autoExpandTools={autoExpandTools}
+            showRawParameters={showRawParameters}
+            showThinking={showThinking}
+            selectedProject={selectedProject}
+            provider={provider}
+          />
+        )}
+
+        {isSubagentPanelResizing && (
+          <div className="fixed inset-0 z-[10000] cursor-col-resize" aria-hidden="true" />
+        )}
       </div>
 
       {selectedProject && showScheduledTasks ? (
@@ -580,11 +825,15 @@ function ChatInterface({
           selectedSessionId={null}
           selectedSessionName={scheduledTaskSessionName}
           mode="create"
+          terminology={workspaceTerminology}
           onClose={() => setShowScheduledTasks(false)}
         />
       ) : null}
 
-      <QuickSettingsPanel />
+      <QuickSettingsPanel
+        open={isQuickSettingsOpen}
+        onOpenChange={handleQuickSettingsOpenChange}
+      />
     </PermissionContext.Provider>
   );
 }

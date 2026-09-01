@@ -15,6 +15,7 @@ export type AdminMcpPreset = {
   config: {
     type: 'http';
     url: string;
+    timeout?: number;
     headers?: Record<string, string>;
     headersHelper?: string;
     helperEnv?: Record<string, string>;
@@ -129,6 +130,7 @@ export function useAdminMcpPresets(tenantId?: number) {
       const payload = buildMcpPresetPayload(values, {
         headersFormat: t('mcp.validationErrors.headersFormat'),
         helperEnvSyntax: t('mcp.validationErrors.helperEnvSyntax'),
+        timeoutFormat: t('mcp.validationErrors.timeoutFormat'),
       });
       const response = presetId
         ? await api.admin.updateMcpPreset(presetId, payload)
@@ -163,6 +165,7 @@ export function useAdminMcpPresets(tenantId?: number) {
           payload = buildMcpPresetPayload({ ...values, tenantId }, {
             headersFormat: t('mcp.validationErrors.headersFormat'),
             helperEnvSyntax: t('mcp.validationErrors.helperEnvSyntax'),
+            timeoutFormat: t('mcp.validationErrors.timeoutFormat'),
           });
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : t('mcp.errors.invalidConfig');

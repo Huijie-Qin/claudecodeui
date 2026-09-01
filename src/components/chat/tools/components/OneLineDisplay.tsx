@@ -15,7 +15,6 @@ interface OneLineDisplayProps {
   secondary?: string;
   action?: ActionType;
   onAction?: () => void;
-  style?: string;
   wrapText?: boolean;
   colorScheme?: {
     primary?: string;
@@ -43,7 +42,6 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   secondary,
   action = 'none',
   onAction,
-  style,
   wrapText = false,
   colorScheme = {
     primary: 'text-foreground',
@@ -58,7 +56,6 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   completionTime,
 }) => {
   const [copied, setCopied] = useState(false);
-  const isTerminal = style === 'terminal';
 
   const handleAction = async () => {
     if (action === 'copy' && value) {
@@ -89,40 +86,6 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
       )}
     </button>
   );
-
-  // Terminal style: dark pill around the command
-  if (isTerminal) {
-    return (
-      <div className="group my-1">
-        <div className="flex items-start gap-2">
-          <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5">
-            <svg className="h-3 w-3 text-green-500 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <div className="flex min-w-0 flex-1 items-start gap-2">
-            <div className="flex min-w-0 flex-1 items-start gap-2">
-              <div className="min-w-0 rounded bg-gray-900 px-2.5 py-1 dark:bg-black">
-                <code className={`block min-w-0 font-mono text-xs text-green-400 ${wrapText ? 'whitespace-pre-wrap break-all' : 'truncate'}`}>
-                  <span className="select-none text-green-600 dark:text-green-500">$ </span>{value}
-                </code>
-              </div>
-              {completionTime}
-            </div>
-            {status && <ToolStatusBadge status={status} className="mt-0.5" />}
-            {action === 'copy' && renderCopyButton()}
-          </div>
-        </div>
-        {secondary && (
-          <div className="ml-7 mt-1">
-            <span className="text-[11px] italic text-muted-foreground/60">
-              {secondary}
-            </span>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   // File open style
   if (action === 'open-file') {
@@ -179,7 +142,7 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   // Default one-line style
   return (
     <div className={`group flex items-center gap-1.5 ${colorScheme.background || ''} border-l-2 ${colorScheme.border} my-0.5 py-0.5 pl-3`}>
-      {icon && icon !== 'terminal' && (
+      {icon && (
         <span className={`${colorScheme.icon} flex-shrink-0 text-xs`}>{icon}</span>
       )}
       {!icon && (label || toolName) && (

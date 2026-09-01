@@ -9,8 +9,13 @@ import { userDb as defaultUserDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
+import { claudeEnvService as defaultClaudeEnvService } from './claude-env.js';
 import { codeHubService } from './codehub.js';
 import { resolveContainerUser } from './container-user.js';
+import {
+  CODEHUB_EMAIL_ENV_NAMES,
+  resolveManagedGitIdentity,
+} from './user-execution-env.js';
 import { sanitizePathSegment } from './workspace-projects.js';
 import { mapWorkspacePathForContainer } from './workspace-path-mapping.js';
 import { migratePathOwnership } from './workspace-ownership.js';
@@ -38,15 +43,23 @@ const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
+export const DOCKER_CLI_PATH_ENV_NAME = 'CLOUDCLI_DOCKER_CLI_PATH';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
 const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
 const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
+export const DOCKER_BIND_HOST_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_BIND_HOST_ROOT';
+export const DOCKER_BIND_CONTAINER_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_BIND_CONTAINER_ROOT';
 const DOCKER_SHARED_PYTHON_CONTAINER_PATH = '/opt/cloudcli/python';
 const DOCKER_SHARED_PYTHON_USER_BASE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/user-base`;
 const DOCKER_SHARED_PIP_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pip-cache`;
 const DOCKER_SHARED_UV_CACHE = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/uv-cache`;
 const DOCKER_SHARED_PIPX_HOME = `${DOCKER_SHARED_PYTHON_CONTAINER_PATH}/pipx`;
+export const CLAUDE_DOCKER_ENV_POLICY_ENV_NAME = 'CLOUDCLI_CLAUDE_ENV_POLICY';
+const CLAUDE_DOCKER_ENV_POLICY_VERSION = 'exec-only-v1';
 const DEFAULT_DOCKER_CONTAINER_PATH = [
+  // Prefer a runtime-home installation so an explicitly pinned Claude Code
+  // version survives container recreation. Fall back to the image binary.
+  '/home/cloudcli/.local/bin',
   '/home/agent/.local/bin',
   '/usr/local/share/npm-global/bin',
   '/usr/local/sbin',
@@ -58,6 +71,13 @@ const DEFAULT_DOCKER_CONTAINER_PATH = [
 ].join(':');
 const DOCKER_SHARED_PYTHON_PATH = `${DOCKER_SHARED_PYTHON_USER_BASE}/bin:${DEFAULT_DOCKER_CONTAINER_PATH}`;
 const PRIVATE_TOKEN_ENV_NAME = 'PRIVATE_TOKEN';
+const MANAGED_GIT_ENV_NAMES = [
+  'GIT_AUTHOR_NAME',
+  'GIT_COMMITTER_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_EMAIL',
+  ...CODEHUB_EMAIL_ENV_NAMES,
+];
 const DOCKER_RUNTIME_MANAGED_ENV_NAMES = new Set([
   'HOME',
   'PATH',
@@ -87,16 +107,6 @@ const NPM_PROXY_ENV_NAMES = [
   'NPM_CONFIG_HTTPS_PROXY',
   'NPM_CONFIG_NOPROXY',
 ];
-const RUNTIME_PROCESS_ENV_ALLOWLIST = [
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'NO_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'no_proxy',
-  ...NPM_PROXY_ENV_NAMES,
-  MCP_DATA_SOURCE_KEY_ENV_NAME,
-];
 const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY',
   ANTHROPIC_BASE_URL_ENV_NAME,
@@ -115,6 +125,7 @@ const CLAUDE_CONTAINER_ENV_ALLOWLIST = [
   W3_NAME_ENV_NAME,
   TENANT_ID_ENV_NAME,
   WORKSPACE_ID_ENV_NAME,
+  ...MANAGED_GIT_ENV_NAMES,
 ];
 const WRAPPER_HOST_ENV_ALLOWLIST = [
   ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
@@ -126,6 +137,30 @@ const WRAPPER_HOST_ENV_ALLOWLIST = [
   'DOCKER_CONFIG',
   'XDG_RUNTIME_DIR',
 ];
+const DOCKER_HOST_PROCESS_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'DOCKER_HOST',
+  'DOCKER_CONTEXT',
+  'DOCKER_CONFIG',
+  'XDG_RUNTIME_DIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+];
+const CLAUDE_ENV_NON_BASE_SOURCES = new Set([
+  'adminUserEnv',
+  'tenant',
+  'personal',
+  'managed',
+]);
+const CLAUDE_DOCKER_BASE_ENV_ALLOWLIST = new Set([
+  ...CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  ...NPM_PROXY_ENV_NAMES,
+]);
 const CONTAINER_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const LOOPBACK_PROXY_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
@@ -179,6 +214,41 @@ function rewriteDockerProxyValue(value) {
   }
 }
 
+function isWindowsAbsolutePath(value) {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+}
+
+function isRelativePathInsideRoot(relativePath, pathApi) {
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..${pathApi.sep}`)
+    && !pathApi.isAbsolute(relativePath)
+  );
+}
+
+export function resolveDockerBindSourcePath(sourcePath, {
+  containerRoot = null,
+  hostRoot = null,
+} = {}) {
+  const source = requireValue(sourcePath, 'sourcePath');
+  const normalizedContainerRoot = String(containerRoot || '').trim().replace(/[\\/]+$/, '');
+  const normalizedHostRoot = String(hostRoot || '').trim().replace(/[\\/]+$/, '');
+  if (!normalizedContainerRoot || !normalizedHostRoot) return source;
+
+  const sourcePathApi = isWindowsAbsolutePath(source) || isWindowsAbsolutePath(normalizedContainerRoot)
+    ? path.win32
+    : path.posix;
+  const relativePath = sourcePathApi.relative(
+    sourcePathApi.resolve(normalizedContainerRoot),
+    sourcePathApi.resolve(source),
+  );
+  if (!isRelativePathInsideRoot(relativePath, sourcePathApi)) return source;
+
+  const hostPathApi = isWindowsAbsolutePath(normalizedHostRoot) ? path.win32 : path.posix;
+  const relativeSegments = relativePath.split(/[\\/]+/).filter(Boolean);
+  return hostPathApi.join(normalizedHostRoot, ...relativeSegments);
+}
+
 export function rewriteDockerProxyEnv(value) {
   const normalized = normalizeContainerEnvRecord(value);
   for (const name of [
@@ -212,6 +282,15 @@ export function resolveClaudeExecutionMode(env = process.env) {
     return mode;
   }
   throw new Error('CLAUDE_EXECUTION_MODE must be local or docker');
+}
+
+export function resolveDockerCliExecutable(env = process.env) {
+  const configuredPath = String(env?.[DOCKER_CLI_PATH_ENV_NAME] || '').trim();
+  return configuredPath || 'docker';
+}
+
+function resolveClaudeDockerImage(env = process.env) {
+  return readEnvValue(env, 'CLOUDCLI_CLAUDE_DOCKER_IMAGE') || DEFAULT_CLAUDE_DOCKER_IMAGE;
 }
 
 export function parseDockerPythonPackages(value) {
@@ -377,14 +456,22 @@ export function buildDockerRunArgs({
   containerEnv = {},
   memory = DEFAULT_DOCKER_MEMORY,
   cpus = DEFAULT_DOCKER_CPUS,
+  bindHostRoot = null,
+  bindContainerRoot = null,
 }) {
+  const bindRootOptions = { hostRoot: bindHostRoot, containerRoot: bindContainerRoot };
+  const dockerWorkspaceHostPath = resolveDockerBindSourcePath(workspaceHostPath, bindRootOptions);
+  const dockerRuntimeHomePath = resolveDockerBindSourcePath(runtimeHomePath, bindRootOptions);
+  const dockerSharedPythonHostPath = sharedPythonHostPath
+    ? resolveDockerBindSourcePath(sharedPythonHostPath, bindRootOptions)
+    : null;
   const containerEnvArgs = Object.entries(rewriteDockerProxyEnv(containerEnv))
     .filter(([key]) => !DOCKER_RUN_ENV_DENYLIST.has(key))
     .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
-  const sharedPythonArgs = sharedPythonHostPath
+  const sharedPythonArgs = dockerSharedPythonHostPath
     ? [
         '--mount',
-        `type=bind,src=${requireValue(sharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
+        `type=bind,src=${requireValue(dockerSharedPythonHostPath, 'sharedPythonHostPath')},dst=${DOCKER_SHARED_PYTHON_CONTAINER_PATH}`,
         '-e',
         `PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`,
         '-e',
@@ -428,9 +515,9 @@ export function buildDockerRunArgs({
     '--tmpfs',
     '/tmp:rw,nosuid,size=512m',
     '--mount',
-    `type=bind,src=${requireValue(workspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
+    `type=bind,src=${requireValue(dockerWorkspaceHostPath, 'workspaceHostPath')},dst=/workspace`,
     '--mount',
-    `type=bind,src=${requireValue(runtimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
+    `type=bind,src=${requireValue(dockerRuntimeHomePath, 'runtimeHomePath')},dst=/home/cloudcli`,
     ...sharedPythonArgs,
     '-e',
     'HOME=/home/cloudcli',
@@ -511,10 +598,15 @@ export function buildClaudeDockerExecArgs({
 export function createClaudeDockerSpawn({
   containerName,
   envAllowlist = CLAUDE_CONTAINER_ENV_ALLOWLIST,
+  hostEnv = process.env,
   spawnImpl = spawnChildProcess,
 } = {}) {
+  const dockerHostEnv = buildDockerHostProcessEnv(hostEnv);
+  const dockerExecutable = resolveDockerCliExecutable(hostEnv);
+  // The SDK's options.env is guest-facing and may contain user or tenant values.
+  // Use it only to build docker exec -e arguments, never as the Docker CLI's host env.
   return (options = {}) => spawnImpl(
-    'docker',
+    dockerExecutable,
     buildClaudeDockerExecArgs({
       containerName,
       args: options.args,
@@ -522,7 +614,7 @@ export function createClaudeDockerSpawn({
       envAllowlist,
     }),
     {
-      env: options.env,
+      env: dockerHostEnv,
       signal: options.signal,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -721,14 +813,57 @@ export function buildWrapperHostEnv(env = process.env, containerEnv = {}) {
   return rewriteDockerProxyEnv(output);
 }
 
-function buildRuntimeProcessEnv(env = process.env) {
+export function buildDockerHostProcessEnv(env = process.env) {
   const output = {};
-  for (const name of RUNTIME_PROCESS_ENV_ALLOWLIST) {
+  for (const name of DOCKER_HOST_PROCESS_ENV_ALLOWLIST) {
     if (env[name] != null) {
       output[name] = String(env[name]);
     }
   }
-  return rewriteDockerProxyEnv(output);
+  if (!output.PATH) output.PATH = process.env.PATH || '';
+  if (!output.HOME) output.HOME = os.homedir();
+  return output;
+}
+
+function buildClaudeDockerEnvForSources(resolvedEnv, allowedNonBaseSources) {
+  const output = {};
+  const effectiveEnv = normalizeContainerEnvRecord(resolvedEnv?.env);
+  const sources = resolvedEnv?.sources && typeof resolvedEnv.sources === 'object'
+    && !Array.isArray(resolvedEnv.sources)
+    ? resolvedEnv.sources
+    : {};
+
+  for (const [name, value] of Object.entries(effectiveEnv)) {
+    if (DOCKER_RUNTIME_MANAGED_ENV_NAMES.has(name)) continue;
+
+    const source = sources[name];
+    if (
+      allowedNonBaseSources.has(source)
+      || (source === 'baseEnv' && CLAUDE_DOCKER_BASE_ENV_ALLOWLIST.has(name))
+    ) {
+      output[name] = value;
+    }
+  }
+  return output;
+}
+
+export function buildClaudeDockerGuestEnv(resolvedEnv = {}) {
+  return buildClaudeDockerEnvForSources(resolvedEnv, CLAUDE_ENV_NON_BASE_SOURCES);
+}
+
+export function buildClaudeDockerCreateEnv(resolvedEnv = {}) {
+  const effectiveEnv = normalizeContainerEnvRecord(resolvedEnv?.env);
+  const sources = resolvedEnv?.sources && typeof resolvedEnv.sources === 'object'
+    && !Array.isArray(resolvedEnv.sources)
+    ? resolvedEnv.sources
+    : {};
+  const output = {
+    [CLAUDE_DOCKER_ENV_POLICY_ENV_NAME]: CLAUDE_DOCKER_ENV_POLICY_VERSION,
+  };
+  if (sources[W3_NAME_ENV_NAME] === 'managed' && effectiveEnv[W3_NAME_ENV_NAME] != null) {
+    output[W3_NAME_ENV_NAME] = effectiveEnv[W3_NAME_ENV_NAME];
+  }
+  return output;
 }
 
 function buildContainerEnvAllowlist(containerEnv = {}) {
@@ -744,7 +879,37 @@ function readEnvValue(record, name) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
+export function inspectedContainerUsesClaudeEnvPolicy(inspected) {
+  // Lightweight injected Docker clients may not expose Config.Env. Real
+  // DockerCliClient inspections always do, so preserve their reuse behavior
+  // while migrating every real legacy container that lacks this marker.
+  if (!Array.isArray(inspected?.env)) return true;
+  return inspected.env.includes(
+    `${CLAUDE_DOCKER_ENV_POLICY_ENV_NAME}=${CLAUDE_DOCKER_ENV_POLICY_VERSION}`,
+  );
+}
+
+function inspectedContainerUsesCurrentW3Name(inspected, containerEnv = {}) {
+  const expectedW3Name = readEnvValue(containerEnv, W3_NAME_ENV_NAME);
+  // Some injected Docker clients and lightweight test doubles expose only
+  // container state. Preserve their existing reuse behavior when Config.Env
+  // is unavailable, but treat a present env array without W3_NAME as stale.
+  if (!expectedW3Name || !Array.isArray(inspected?.env)) {
+    return true;
+  }
+
+  const prefix = `${W3_NAME_ENV_NAME}=`;
+  const configuredW3Name = inspected.env
+    .find((entry) => typeof entry === 'string' && entry.startsWith(prefix))
+    ?.slice(prefix.length) ?? null;
+  return configuredW3Name === expectedW3Name;
+}
+
+export function inspectedContainerUsesSharedPython(
+  inspected,
+  sharedPythonHostPath,
+  bindRootOptions = {},
+) {
   // Lightweight test doubles and third-party Docker clients may only expose
   // state. In that case preserve the previous reuse behavior.
   if (!Array.isArray(inspected?.mounts) || !Array.isArray(inspected?.env)) {
@@ -758,17 +923,17 @@ function inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath) {
     return !sharedMount;
   }
 
+  const dockerSharedPythonHostPath = resolveDockerBindSourcePath(
+    sharedPythonHostPath,
+    bindRootOptions,
+  );
   const envSet = new Set(inspected.env);
-  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(sharedPythonHostPath)
+  return path.resolve(String(sharedMount?.Source || '')) === path.resolve(dockerSharedPythonHostPath)
     && envSet.has(`PYTHONUSERBASE=${DOCKER_SHARED_PYTHON_USER_BASE}`)
     && envSet.has(`PIP_CACHE_DIR=${DOCKER_SHARED_PIP_CACHE}`)
     && envSet.has('PIP_BREAK_SYSTEM_PACKAGES=1')
     && envSet.has('PIP_USER=1')
     && envSet.has(`PATH=${DOCKER_SHARED_PYTHON_PATH}`);
-}
-
-function hasNonEmptyBaseEnvValue(baseEnv, name) {
-  return readEnvValue(baseEnv, name) !== null;
 }
 
 export function buildClaudeWrapperDefaultEnv(env = process.env, containerEnv = {}) {
@@ -790,12 +955,44 @@ function readUsernameForEnv(users, userId) {
   }
 
   const user = users.getUserById(userId);
+  if (user?.identity_change_status && user.identity_change_status !== 'active') {
+    const error = new Error('User identity is currently changing');
+    error.statusCode = 409;
+    throw error;
+  }
   const username = user?.username;
   return typeof username === 'string' && username.trim() !== '' ? username.trim() : null;
 }
 
-function readUserContainerEnv(users, userId, baseEnv = process.env) {
+function readAdminUserEnv(users, userId, baseEnv = process.env) {
+  if (typeof users?.getEnvForUser !== 'function') {
+    return {};
+  }
+
   const normalizedBaseEnv = normalizeContainerEnvRecord(baseEnv);
+  const configuredEnv = normalizeContainerEnvRecord(users.getEnvForUser(userId));
+  const output = {};
+  for (const [name, value] of Object.entries(configuredEnv)) {
+    if (name === USER_KEY_ENV_NAME) {
+      if (value !== '') output[name] = value;
+      continue;
+    }
+    if (
+      name === W3_NAME_ENV_NAME
+      || name === PRIVATE_TOKEN_ENV_NAME
+      || MANAGED_GIT_ENV_NAMES.includes(name)
+    ) {
+      continue;
+    }
+    if (value === '' && readEnvValue(normalizedBaseEnv, name) !== null) {
+      continue;
+    }
+    output[name] = value;
+  }
+  return output;
+}
+
+function readManagedUserEnv(users, userId) {
   const username = readUsernameForEnv(users, userId);
   if (!username) {
     throw new Error('username is required for W3_NAME');
@@ -804,6 +1001,16 @@ function readUserContainerEnv(users, userId, baseEnv = process.env) {
   const output = {
     [W3_NAME_ENV_NAME]: username,
   };
+  const gitIdentity = resolveManagedGitIdentity(userId, { users });
+  output.GIT_AUTHOR_NAME = gitIdentity.name;
+  output.GIT_COMMITTER_NAME = gitIdentity.name;
+  if (gitIdentity.email) {
+    output.GIT_AUTHOR_EMAIL = gitIdentity.email;
+    output.GIT_COMMITTER_EMAIL = gitIdentity.email;
+  }
+  for (const name of CODEHUB_EMAIL_ENV_NAMES) {
+    output[name] = gitIdentity.email || '';
+  }
 
   if (typeof users?.getGitTokenForUser === 'function') {
     const gitToken = readEnvValue({ [PRIVATE_TOKEN_ENV_NAME]: users.getGitTokenForUser(userId) }, PRIVATE_TOKEN_ENV_NAME);
@@ -812,22 +1019,6 @@ function readUserContainerEnv(users, userId, baseEnv = process.env) {
     }
   }
 
-  if (typeof users?.getEnvForUser !== 'function') {
-    return output;
-  }
-  const env = normalizeContainerEnvRecord(users.getEnvForUser(userId));
-  if (env[USER_KEY_ENV_NAME]) {
-    output[USER_KEY_ENV_NAME] = env[USER_KEY_ENV_NAME];
-  }
-  for (const [name, value] of Object.entries(env)) {
-    if (name === USER_KEY_ENV_NAME || name === W3_NAME_ENV_NAME || name === PRIVATE_TOKEN_ENV_NAME) {
-      continue;
-    }
-    if (value === '' && hasNonEmptyBaseEnvValue(normalizedBaseEnv, name)) {
-      continue;
-    }
-    output[name] = value;
-  }
   return output;
 }
 
@@ -856,9 +1047,13 @@ function resolveRuntimeDirectoryForCleanup(runtimeHomePath, runtimeRoot) {
 }
 
 export class DockerCliClient {
+  constructor({ env = process.env, executable } = {}) {
+    this.executable = String(executable || '').trim() || resolveDockerCliExecutable(env);
+  }
+
   async inspectContainer(containerName) {
     try {
-      const { stdout } = await execFileAsync('docker', [
+      const { stdout } = await execFileAsync(this.executable, [
         'inspect',
         '-f',
         '{{json .}}',
@@ -869,6 +1064,8 @@ export class DockerCliClient {
       return {
         exists: true,
         running: state.Running === true,
+        image: inspected.Config?.Image ?? null,
+        imageId: inspected.Image ?? null,
         user: inspected.Config?.User ?? null,
         state,
         env: Array.isArray(inspected.Config?.Env) ? inspected.Config.Env : [],
@@ -887,16 +1084,16 @@ export class DockerCliClient {
   }
 
   async startContainer(containerName) {
-    await execFileAsync('docker', ['start', containerName]);
+    await execFileAsync(this.executable, ['start', containerName]);
   }
 
   async stopContainer(containerName) {
-    await execFileAsync('docker', ['stop', '-t', '1', containerName]);
+    await execFileAsync(this.executable, ['stop', '-t', '1', containerName]);
   }
 
   async removeContainer(containerName) {
     try {
-      await execFileAsync('docker', ['rm', '-f', containerName]);
+      await execFileAsync(this.executable, ['rm', '-f', containerName]);
     } catch (error) {
       if (error?.code === 1 || error?.stderr?.includes('No such object')) {
         return;
@@ -906,7 +1103,7 @@ export class DockerCliClient {
   }
 
   async verifyWorkspaceCwd(containerName) {
-    await execFileAsync('docker', [
+    await execFileAsync(this.executable, [
       'exec',
       '-w',
       '/workspace',
@@ -922,7 +1119,7 @@ export class DockerCliClient {
   async installPythonPackages(containerName, packages = []) {
     const args = buildDockerPythonInstallArgs(containerName, packages);
     if (args.length === 0) return;
-    await execFileAsync('docker', args);
+    await execFileAsync(this.executable, args);
   }
 
   async statsContainers(containerNames) {
@@ -931,7 +1128,7 @@ export class DockerCliClient {
       : [];
     if (names.length === 0) return new Map();
 
-    const { stdout } = await execFileAsync('docker', [
+    const { stdout } = await execFileAsync(this.executable, [
       'stats',
       '--no-stream',
       '--format',
@@ -951,7 +1148,7 @@ export class DockerCliClient {
   }
 
   async runDetached(args) {
-    await execFileAsync('docker', args);
+    await execFileAsync(this.executable, args);
   }
 }
 
@@ -959,8 +1156,9 @@ export function createAgentSessionRuntimeManager({
   env = process.env,
   multitenancy = multitenancyDb,
   users = defaultUserDb,
+  claudeEnv = defaultClaudeEnvService,
   codeHub = null,
-  docker = new DockerCliClient(),
+  docker = new DockerCliClient({ env }),
   fs = fsPromises,
 } = {}) {
   const runtimeLocks = new Map();
@@ -1082,6 +1280,44 @@ export function createAgentSessionRuntimeManager({
     );
   }
 
+  async function resolveClaudeRuntimeEnv({
+    tenantId = null,
+    userId,
+    workspaceId = null,
+    workspaceHostPath = null,
+    includeCodeHub = false,
+  }) {
+    if (typeof claudeEnv?.resolveEffectiveEnv !== 'function') {
+      throw new Error('Claude environment resolver is unavailable');
+    }
+
+    const managedEnv = readManagedUserEnv(users, userId);
+    if (includeCodeHub && workspaceHostPath) {
+      Object.assign(managedEnv, await readCodeHubContainerEnv({ userId, workspaceHostPath }));
+    }
+    if (tenantId != null) {
+      managedEnv[TENANT_ID_ENV_NAME] = String(tenantId);
+    }
+    if (workspaceId != null) {
+      managedEnv[WORKSPACE_ID_ENV_NAME] = String(workspaceId);
+    }
+
+    const resolved = claudeEnv.resolveEffectiveEnv({
+      tenantId,
+      userId,
+      baseEnv: env,
+      adminUserEnv: readAdminUserEnv(users, userId, env),
+      managedEnv,
+    });
+    if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) {
+      throw new Error('Claude environment resolver returned an invalid result');
+    }
+    return {
+      ...resolved,
+      env: normalizeContainerEnvRecord(resolved.env),
+    };
+  }
+
   function readRuntimePathSegments({ tenantId, userId, workspaceId, workspaceHostPath }) {
     const tenant = typeof multitenancy.tenants?.getTenantById === 'function'
       ? multitenancy.tenants.getTenantById(tenantId)
@@ -1102,6 +1338,7 @@ export function createAgentSessionRuntimeManager({
 
   async function ensureContainer(runtime, containerEnv = {}, logContext = {}) {
     const requestId = logContext.requestId || null;
+    const previousImage = logContext.previousImage || null;
     const containerUser = resolveContainerUser(env);
     const expectedContainerUser = `${containerUser.uid}:${containerUser.gid}`;
     const sharedPythonHostPath = resolveDockerSharedPythonPath(env, runtime.image);
@@ -1122,6 +1359,8 @@ export function createAgentSessionRuntimeManager({
         containerEnv,
         memory,
         cpus,
+        bindHostRoot: env[DOCKER_BIND_HOST_ROOT_ENV_NAME],
+        bindContainerRoot: env[DOCKER_BIND_CONTAINER_ROOT_ENV_NAME],
       });
       logRuntimeEvent('container_create_start', createRuntimeLogDetails(runtime, {
         requestId,
@@ -1235,7 +1474,29 @@ export function createAgentSessionRuntimeManager({
       await migrateContainerUser(inspected);
       return;
     }
-    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath)) {
+    const configuredImageChanged = Boolean(previousImage && previousImage !== runtime.image);
+    const containerImageChanged = inspected?.image
+      ? inspected.image !== runtime.image
+      : configuredImageChanged;
+    if (inspected?.exists && containerImageChanged) {
+      await recreateContainer('configured_image_changed');
+      return;
+    }
+    if (inspected?.exists && !inspectedContainerUsesClaudeEnvPolicy(inspected)) {
+      await recreateContainer('env_policy_changed');
+      return;
+    }
+    if (inspected?.exists && !inspectedContainerUsesCurrentW3Name(inspected, containerEnv)) {
+      // Runtime and workspace paths are persistent host mounts. Replacing only
+      // the container refreshes its immutable base environment without moving
+      // either directory or creating another runtime row.
+      await recreateContainer('w3_name_changed');
+      return;
+    }
+    if (inspected?.exists && !inspectedContainerUsesSharedPython(inspected, sharedPythonHostPath, {
+      hostRoot: env[DOCKER_BIND_HOST_ROOT_ENV_NAME],
+      containerRoot: env[DOCKER_BIND_CONTAINER_ROOT_ENV_NAME],
+    })) {
       await recreateContainer('shared_python_config_changed');
       return;
     }
@@ -1297,15 +1558,15 @@ export function createAgentSessionRuntimeManager({
     }
   }
 
-  async function writeWrapper({ runtime, wrapperDir }) {
+  async function writeWrapper({ runtime, wrapperDir, execEnv = {}, createEnv = {} }) {
     await fs.mkdir(wrapperDir, { recursive: true });
     const wrapperPath = path.join(wrapperDir, 'claude-docker-wrapper');
     await fs.writeFile(
       wrapperPath,
       buildClaudeDockerWrapperScript({
         containerName: runtime.container_name,
-        envAllowlist: buildContainerEnvAllowlist(runtime.userEnv),
-        defaultEnv: buildClaudeWrapperDefaultEnv(env, runtime.userEnv),
+        envAllowlist: buildContainerEnvAllowlist(execEnv),
+        defaultEnv: buildClaudeWrapperDefaultEnv({}, createEnv),
       }),
       { mode: 0o700 },
     );
@@ -1316,22 +1577,22 @@ export function createAgentSessionRuntimeManager({
   async function createNewRuntime({
     tenantId,
     userId,
-    workspaceId,
-    workspaceHostPath,
-    pathSegments,
-    logRequestId = null,
-  }) {
-    const runtimeId = buildRuntimeId();
-    const runtimePaths = buildRuntimePaths({
-      runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
-      provider: 'claude',
+  workspaceId,
+  workspaceHostPath,
+  pathSegments,
+  logRequestId = null,
+}) {
+  const runtimeId = buildRuntimeId();
+  const runtimePaths = buildRuntimePaths({
+    runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+    provider: 'claude',
       ...pathSegments,
       tenantId,
       userId,
       workspaceId,
     });
-    const containerName = buildContainerName({
-      provider: 'claude',
+  const containerName = buildContainerName({
+    provider: 'claude',
       tenantId,
       userId,
       workspaceId,
@@ -1347,7 +1608,7 @@ export function createAgentSessionRuntimeManager({
       workspaceId,
       provider: 'claude',
       containerName,
-      image: env.CLOUDCLI_CLAUDE_DOCKER_IMAGE || DEFAULT_CLAUDE_DOCKER_IMAGE,
+      image: resolveClaudeDockerImage(env),
       workspaceHostPath,
       runtimeHomePath: runtimePaths.runtimeHomePath,
       status: 'pending',
@@ -1365,22 +1626,22 @@ export function createAgentSessionRuntimeManager({
   async function createNewLocalRuntime({
     tenantId,
     userId,
-    workspaceId,
-    workspaceHostPath,
-    pathSegments,
-    logRequestId = null,
-  }) {
-    const runtimeId = buildRuntimeId();
-    const runtimePaths = buildRuntimePaths({
-      runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
-      provider: 'claude',
+  workspaceId,
+  workspaceHostPath,
+  pathSegments,
+  logRequestId = null,
+}) {
+  const runtimeId = buildRuntimeId();
+  const runtimePaths = buildRuntimePaths({
+    runtimeRoot: env.CLOUDCLI_RUNTIME_ROOT || DEFAULT_RUNTIME_ROOT,
+    provider: 'claude',
       ...pathSegments,
       tenantId,
       userId,
       workspaceId,
     });
-    const containerName = buildContainerName({
-      provider: 'claude-local',
+  const containerName = buildContainerName({
+    provider: 'claude-local',
       tenantId,
       userId,
       workspaceId,
@@ -1467,37 +1728,71 @@ export function createAgentSessionRuntimeManager({
   }
 
   async function activateRuntimeContext({ runtimeContext, workspaceHostPath }) {
-    const userEnv = normalizeContainerEnvRecord(runtimeContext.userEnv);
-    const containerEnv = {
-      ...buildRuntimeProcessEnv(env),
-      ...userEnv,
-    };
+    const execEnv = normalizeContainerEnvRecord(runtimeContext.execEnv);
+    const createEnv = normalizeContainerEnvRecord(runtimeContext.createEnv);
+    const persistedRuntime = runtimeContext.runtime;
+    const desiredImage = resolveClaudeDockerImage(env);
+    const imageChanged = persistedRuntime.image !== desiredImage;
+    const desiredRuntime = imageChanged
+      ? { ...persistedRuntime, image: desiredImage }
+      : persistedRuntime;
     const containerUser = resolveContainerUser(env);
-    await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, containerUser);
-    await ensureClaudeCleanupPeriod(fs, runtimeContext.runtime.runtime_home_path, {
+    await ensureRuntimeHomeWritable(fs, desiredRuntime.runtime_home_path, containerUser);
+    await ensureClaudeCleanupPeriod(fs, desiredRuntime.runtime_home_path, {
       ...containerUser,
       logger: console,
-      context: createRuntimeLogDetails(runtimeContext.runtime, {
+      context: createRuntimeLogDetails(desiredRuntime, {
         requestId: runtimeContext.logRequestId || null,
       }),
     });
-    await ensureContainer(runtimeContext.runtime, containerEnv, {
+    if (imageChanged) {
+      logRuntimeEvent('runtime_image_reconcile_start', createRuntimeLogDetails(desiredRuntime, {
+        requestId: runtimeContext.logRequestId || null,
+        previousImage: persistedRuntime.image,
+        desiredImage,
+      }));
+    }
+    await ensureContainer(desiredRuntime, createEnv, {
       requestId: runtimeContext.logRequestId || null,
+      previousImage: imageChanged ? persistedRuntime.image : null,
     });
+    let imageRuntime = desiredRuntime;
+    if (imageChanged) {
+      if (typeof multitenancy.runtimes.updateImage !== 'function') {
+        throw new Error('Claude Docker runtime image persistence is unavailable');
+      }
+      const updatedImageRuntime = multitenancy.runtimes.updateImage({
+        runtimeId: desiredRuntime.runtime_id,
+        image: desiredImage,
+      });
+      if (!updatedImageRuntime || updatedImageRuntime.image !== desiredImage) {
+        throw new Error('Claude Docker runtime image could not be persisted');
+      }
+      imageRuntime = {
+        ...desiredRuntime,
+        ...updatedImageRuntime,
+        image: desiredImage,
+      };
+      logRuntimeEvent('runtime_image_reconciled', createRuntimeLogDetails(imageRuntime, {
+        requestId: runtimeContext.logRequestId || null,
+        previousImage: persistedRuntime.image,
+        desiredImage,
+      }));
+    }
     const wrapperPath = await writeWrapper({
       ...runtimeContext,
-      runtime: {
-        ...runtimeContext.runtime,
-        userEnv,
-      },
+      runtime: imageRuntime,
+      execEnv,
+      createEnv,
     });
     const updatedRuntime = multitenancy.runtimes.updateStatus({
-      runtimeId: runtimeContext.runtime.runtime_id,
+      runtimeId: imageRuntime.runtime_id,
       status: 'active',
     });
     const runtime = {
-      ...runtimeContext.runtime,
+      ...imageRuntime,
       ...(updatedRuntime || {}),
+      image: desiredImage,
     };
     beginRuntimeUse(runtime.runtime_id);
     logRuntimeEvent('runtime_ready', createRuntimeLogDetails(runtime, {
@@ -1519,15 +1814,27 @@ export function createAgentSessionRuntimeManager({
       pathToClaudeCodeExecutable: wrapperPath,
       spawnClaudeCodeProcess: createClaudeDockerSpawn({
         containerName: runtime.container_name,
-        envAllowlist: buildContainerEnvAllowlist(userEnv),
+        envAllowlist: buildContainerEnvAllowlist(execEnv),
+        hostEnv: env,
       }),
-      executionEnv: buildWrapperHostEnv(env, userEnv),
+      // Keep the exact guest-facing environment separate from the Docker CLI
+      // host environment. Hook headers helpers run through their own docker
+      // exec and must receive the same per-exec user and tenant variables as
+      // Claude (notably USER_KEY), which are intentionally absent from the
+      // long-lived container's base environment.
+      hookCommandEnv: { ...execEnv },
+      executionEnv: buildWrapperHostEnv(buildDockerHostProcessEnv(env), execEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,
     };
   }
 
-  async function activateLocalRuntimeContext({ runtimeContext, workspaceHostPath, userEnv, logRequestId = null }) {
+  async function activateLocalRuntimeContext({
+    runtimeContext,
+    workspaceHostPath,
+    executionEnv,
+    logRequestId = null,
+  }) {
     const runtimeUser = resolveContainerUser(env);
     await ensureRuntimeHomeWritable(fs, runtimeContext.runtime.runtime_home_path, runtimeUser);
     const updatedRuntime = multitenancy.runtimes.updateStatus({
@@ -1556,7 +1863,7 @@ export function createAgentSessionRuntimeManager({
       hostWorkspacePath: workspaceHostPath,
       pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
       settingSources: ['project', 'user', 'local'],
-      executionEnv: { ...env, ...userEnv },
+      executionEnv,
     };
   }
 
@@ -1569,12 +1876,13 @@ export function createAgentSessionRuntimeManager({
           const userId = requirePositiveInteger(options.userId, 'userId');
           const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
           const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
-          const userEnv = {
-            ...readUserContainerEnv(users, userId, env),
-            ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
-            [TENANT_ID_ENV_NAME]: String(tenantId),
-            [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
-          };
+          const resolvedEnv = await resolveClaudeRuntimeEnv({
+            tenantId,
+            userId,
+            workspaceId,
+            workspaceHostPath,
+            includeCodeHub: true,
+          });
           const pathSegments = readRuntimePathSegments({
             tenantId,
             userId,
@@ -1625,15 +1933,24 @@ export function createAgentSessionRuntimeManager({
             return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateLocalRuntimeContext({
               runtimeContext,
               workspaceHostPath,
-              userEnv,
+              executionEnv: resolvedEnv.env,
               logRequestId: options.logRequestId || null,
             }));
           });
         }
 
-        const userEnv = options.userId == null
-          ? {}
-          : readUserContainerEnv(users, requirePositiveInteger(options.userId, 'userId'), env);
+        let executionEnv = null;
+        if (options.userId != null) {
+          const userId = requirePositiveInteger(options.userId, 'userId');
+          const tenantId = options.tenantId == null
+            ? null
+            : requirePositiveInteger(options.tenantId, 'tenantId');
+          const workspaceId = options.workspaceId == null
+            ? null
+            : requirePositiveInteger(options.workspaceId, 'workspaceId');
+          const resolvedEnv = await resolveClaudeRuntimeEnv({ tenantId, userId, workspaceId });
+          executionEnv = resolvedEnv.env;
+        }
         return {
           mode: 'local',
           cwd: options.cwd,
@@ -1641,7 +1958,7 @@ export function createAgentSessionRuntimeManager({
           hostWorkspacePath: options.cwd || options.projectPath,
           pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
           settingSources: ['project', 'user', 'local'],
-          ...(Object.keys(userEnv).length > 0 ? { executionEnv: { ...env, ...userEnv } } : {}),
+          ...(executionEnv ? { executionEnv } : {}),
         };
       }
 
@@ -1649,12 +1966,15 @@ export function createAgentSessionRuntimeManager({
       const userId = requirePositiveInteger(options.userId, 'userId');
       const workspaceId = requirePositiveInteger(options.workspaceId, 'workspaceId');
       const workspaceHostPath = await resolveWorkspaceHostPath(options.cwd || options.projectPath);
-      const userEnv = {
-        ...readUserContainerEnv(users, userId, env),
-        ...await readCodeHubContainerEnv({ userId, workspaceHostPath }),
-        [TENANT_ID_ENV_NAME]: String(tenantId),
-        [WORKSPACE_ID_ENV_NAME]: String(workspaceId),
-      };
+      const resolvedEnv = await resolveClaudeRuntimeEnv({
+        tenantId,
+        userId,
+        workspaceId,
+        workspaceHostPath,
+        includeCodeHub: true,
+      });
+      const execEnv = buildClaudeDockerGuestEnv(resolvedEnv);
+      const createEnv = buildClaudeDockerCreateEnv(resolvedEnv);
       const pathSegments = readRuntimePathSegments({
         tenantId,
         userId,
@@ -1699,7 +2019,8 @@ export function createAgentSessionRuntimeManager({
             sessionId: options.sessionId || null,
           }),
         );
-        runtimeContext.userEnv = userEnv;
+        runtimeContext.execEnv = execEnv;
+        runtimeContext.createEnv = createEnv;
         runtimeContext.logRequestId = options.logRequestId || null;
 
         return withRuntimeLock(runtimeContext.runtime.runtime_id, () => activateRuntimeContext({

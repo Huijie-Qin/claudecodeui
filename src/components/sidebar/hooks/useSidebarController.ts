@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type React from 'react';
 import type { TFunction } from 'i18next';
+
 import { api } from '../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type {
@@ -14,6 +14,7 @@ import type {
 import {
   filterProjects,
   getAllSessions,
+  getWorkspaceDeleteRequest,
   isSessionFavorited,
   loadStarredProjects,
   persistStarredProjects,
@@ -93,9 +94,7 @@ export function useSidebarController({
   sidebarVisible,
 }: UseSidebarControllerArgs) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
-  const [editingProject, setEditingProject] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
-  const [editingName, setEditingName] = useState('');
   const [loadingSessions, setLoadingSessions] = useState<LoadingSessionsByProject>({});
   const [additionalSessions, setAdditionalSessions] = useState<AdditionalSessionsByProject>({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState<Set<string>>(new Set());
@@ -281,21 +280,6 @@ export function useSidebarController({
     };
   }, [searchFilter, searchMode]);
 
-  const handleTouchClick = useCallback(
-    (callback: () => void) =>
-      (event: React.TouchEvent<HTMLElement>) => {
-        const target = event.target as HTMLElement;
-        if (target.closest('.overflow-y-auto') || target.closest('[data-scroll-container]')) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        callback();
-      },
-    [],
-  );
-
   const toggleProject = useCallback((projectName: string) => {
     setExpandedProjects((prev) => {
       const next = new Set<string>();
@@ -313,13 +297,13 @@ export function useSidebarController({
     [onSessionSelect],
   );
 
-  const toggleStarProject = useCallback((projectName: string) => {
+  const setProjectStarred = useCallback((projectName: string, favorited: boolean) => {
     setStarredProjects((prev) => {
       const next = new Set(prev);
-      if (next.has(projectName)) {
-        next.delete(projectName);
-      } else {
+      if (favorited) {
         next.add(projectName);
+      } else {
+        next.delete(projectName);
       }
 
       persistStarredProjects(next);
@@ -361,39 +345,6 @@ export function useSidebarController({
   const filteredProjects = useMemo(
     () => filterProjects(sortedProjects, searchFilter),
     [searchFilter, sortedProjects],
-  );
-
-  const startEditing = useCallback((project: Project) => {
-    setEditingProject(project.name);
-    setEditingName(project.displayName);
-  }, []);
-
-  const cancelEditing = useCallback(() => {
-    setEditingProject(null);
-    setEditingName('');
-  }, []);
-
-  const saveProjectName = useCallback(
-    async (project: Project) => {
-      try {
-        const response = await api.renameProject(project.name, editingName, project.workspaceId);
-        if (response.ok) {
-          if (window.refreshProjects) {
-            await window.refreshProjects();
-          } else {
-            window.location.reload();
-          }
-        } else {
-          console.error('Failed to rename project');
-        }
-      } catch (error) {
-        console.error('Error renaming project:', error);
-      } finally {
-        setEditingProject(null);
-        setEditingName('');
-      }
-    },
-    [editingName],
   );
 
   const showDeleteSessionConfirmation = useCallback(
@@ -458,19 +409,19 @@ export function useSidebarController({
     [getProjectSessions],
   );
 
-  const confirmDeleteProject = useCallback(async (deleteData = false) => {
+  const confirmDeleteProject = useCallback(async () => {
     if (!deleteConfirmation) {
       return;
     }
 
     const { project, sessionCount } = deleteConfirmation;
-    const isEmpty = sessionCount === 0;
+    const { force, deleteData } = getWorkspaceDeleteRequest(sessionCount);
 
     setDeleteConfirmation(null);
     setDeletingProjects((prev) => new Set([...prev, project.name]));
 
     try {
-      const response = await api.deleteProject(project.name, !isEmpty, deleteData, project.workspaceId);
+      const response = await api.deleteProject(project.name, force, deleteData, project.workspaceId);
 
       if (response.ok) {
         onProjectDelete?.(project);
@@ -615,9 +566,7 @@ export function useSidebarController({
   return {
     isSidebarCollapsed,
     expandedProjects,
-    editingProject,
     showNewProject,
-    editingName,
     loadingSessions,
     additionalSessions,
     initialSessionsLoaded,
@@ -635,12 +584,9 @@ export function useSidebarController({
     filteredProjects,
     toggleProject,
     handleSessionClick,
-    toggleStarProject,
+    setProjectStarred,
     isProjectStarred,
     getProjectSessions,
-    startEditing,
-    cancelEditing,
-    saveProjectName,
     showDeleteSessionConfirmation,
     confirmDeleteSession,
     requestProjectDelete,
@@ -653,7 +599,6 @@ export function useSidebarController({
     collapseSidebar,
     expandSidebar,
     setShowNewProject,
-    setEditingName,
     setEditingSession,
     setEditingSessionName,
     searchMode,

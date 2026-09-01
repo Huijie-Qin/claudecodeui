@@ -19,6 +19,7 @@ type EditorSidebarProps = {
   projectPath?: string;
   isReadOnly?: boolean;
   fillSpace?: boolean;
+  onOpenFile?: (filePath: string) => void;
 };
 
 // Minimum width for the left content (file tree, chat, etc.)
@@ -40,6 +41,7 @@ export default function EditorSidebar({
   projectPath,
   isReadOnly = false,
   fillSpace,
+  onOpenFile,
 }: EditorSidebarProps) {
   const [poppedOut, setPoppedOut] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -103,6 +105,7 @@ export default function EditorSidebar({
         projectPath={projectPath}
         isReadOnly={isReadOnly}
         isSidebar={false}
+        onOpenFile={onOpenFile}
       />
     );
   }
@@ -146,6 +149,7 @@ export default function EditorSidebar({
           isExpanded={editorExpanded}
           onToggleExpand={onToggleEditorExpand}
           onPopOut={() => setPoppedOut(true)}
+          onOpenFile={onOpenFile}
         />
       </div>
     </div>

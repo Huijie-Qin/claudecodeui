@@ -45,3 +45,42 @@ test('finishing a stream segment lets later deltas start a new segment', () => {
   assert.equal(secondSegment?.content, 'After tool.');
   assert.equal(secondSegment?.timestamp, '2026-06-13T10:00:02.000Z');
 });
+
+test('draining snapshots preserves every buffered session before a lifecycle reset', () => {
+  const accumulator = createSessionStreamAccumulator();
+
+  accumulator.appendDelta('session-1', 'opening text', '2026-08-12T10:00:00.000Z');
+  accumulator.appendDelta('session-2', 'background text', '2026-08-12T10:00:01.000Z');
+
+  assert.deepEqual(accumulator.drainSnapshots(), [
+    {
+      id: '__streaming_session-1_1',
+      sessionId: 'session-1',
+      content: 'opening text',
+      timestamp: '2026-08-12T10:00:00.000Z',
+    },
+    {
+      id: '__streaming_session-2_1',
+      sessionId: 'session-2',
+      content: 'background text',
+      timestamp: '2026-08-12T10:00:01.000Z',
+    },
+  ]);
+  assert.equal(accumulator.getSnapshot('session-1'), null);
+  assert.deepEqual(accumulator.drainSnapshots(), []);
+});
+
+test('keeps main-agent and subagent stream deltas isolated within one session', () => {
+  const accumulator = createSessionStreamAccumulator();
+
+  accumulator.appendDelta('session-1', 'main', undefined);
+  accumulator.appendDelta('session-1', 'child ', undefined, 'toolu_agent_1');
+  accumulator.appendDelta('session-1', 'output', undefined, 'toolu_agent_1');
+
+  assert.equal(accumulator.get('session-1'), 'main');
+  assert.equal(accumulator.get('session-1', 'toolu_agent_1'), 'child output');
+  assert.equal(
+    accumulator.getSnapshot('session-1', 'toolu_agent_1')?.parentToolUseId,
+    'toolu_agent_1',
+  );
+});

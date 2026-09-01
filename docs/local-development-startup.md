@@ -135,6 +135,14 @@ DATABASE_PATH=./data/auth.db
 
 后端会自动创建数据库所在目录。项目 `.gitignore` 已忽略 `*.db`，但仍建议不要把本地数据库提交到仓库。
 
+Hook 配置页中由管理员上传的 Skill 默认保存在 `CLOUDCLI_DATA_ROOT/hook-skills`；未配置数据根目录时，回退到 `DATABASE_PATH` 所在目录的 `hook-skills`。如需调整，使用绝对路径：
+
+```bash
+CLOUDCLI_HOOK_SKILLS_ROOT=/path/to/persistent/hook-skills
+```
+
+修改路径不会自动复制旧目录中的 Skill。切换已有环境时，应先停止服务并把原目录内容移动到新目录，再更新环境变量。相对路径和文件系统根目录会被拒绝，避免服务启动目录变化后读写到意外位置。
+
 ### 4.3 Claude Code CLI 路径
 
 如果你的机器上已经能直接运行：
@@ -193,6 +201,7 @@ CLOUDCLI_DATA_ROOT=/data/db
 DATABASE_PATH=/data/db/auth.db
 WORKSPACES_ROOT=/data/workspaces
 CLOUDCLI_RUNTIME_ROOT=/data/runtimes
+CLOUDCLI_HOOK_SKILLS_ROOT=/data/db/hook-skills
 ```
 
 在宿主机创建目录，然后检查配置并重新创建 UI 容器：
@@ -203,7 +212,7 @@ docker-compose config
 docker-compose up -d --force-recreate
 ```
 
-`compose.yml` 会把 `CLOUDCLI_DATA_ROOT`、`WORKSPACES_ROOT` 和 `CLOUDCLI_RUNTIME_ROOT` 以相同的宿主机和容器路径挂载。数据库挂载整个目录而不是单独挂载 `auth.db`，以便同时持久化 SQLite 的 WAL、shared-memory 和 journal 文件。UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 workspace 和 runtime bind source 也必须能被宿主 Docker daemon 解析。不要改成 named volume，也不要只在 UI 容器内部创建这些目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
+`compose.yml` 会把 `CLOUDCLI_DATA_ROOT`、`WORKSPACES_ROOT` 和 `CLOUDCLI_RUNTIME_ROOT` 以相同的宿主机和容器路径挂载。上例把 `CLOUDCLI_HOOK_SKILLS_ROOT` 放在已挂载的 `CLOUDCLI_DATA_ROOT` 内，因此不需要额外挂载；如果改到这些根目录之外，必须在 Compose 中增加相同宿主机路径到相同容器路径的 bind mount。数据库挂载整个目录而不是单独挂载 `auth.db`，以便同时持久化 SQLite 的 WAL、shared-memory 和 journal 文件。UI 容器通过宿主机的 `/var/run/docker.sock` 创建 Claude 子容器，因此 workspace 和 runtime bind source 也必须能被宿主 Docker daemon 解析。不要改成 named volume，也不要只在 UI 容器内部创建这些目录。单独重新构建镜像不会更新 volume 配置，必须重新创建 UI 容器。
 
 UI 容器的 `HOME` 固定为 `/home/cloudcli`，并由私有的 `cloudcli-home` named volume 持久化。Compose 不再挂载宿主机的 `HOME`，因此不会读取或修改宿主 `/root/.ssh`、`/root/.docker`、`/root/.claude` 等敏感目录。如果确实需要某个宿主 Git/SSH 配置，应只单独挂载所需文件或子目录，不要恢复整个宿主 HOME bind。
 

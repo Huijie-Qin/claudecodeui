@@ -11,11 +11,14 @@ type FileTreeBodyProps = {
   files: FileTreeNode[];
   filteredFiles: FileTreeNode[];
   searchQuery: string;
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNode, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNode, event: DragEvent<HTMLDivElement>) => void;
@@ -32,6 +35,8 @@ type FileTreeBodyProps = {
   onCopyPath?: (item: FileTreeNode) => void;
   onDownload?: (item: FileTreeNode) => void;
   onMove?: (item: FileTreeNode) => void;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
@@ -57,11 +62,14 @@ export default function FileTreeBody({
   files,
   filteredFiles,
   searchQuery,
+  activePath,
+  showSelectionControls,
   viewMode,
   expandedDirs,
   dropTarget,
   selectedPaths,
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -78,6 +86,8 @@ export default function FileTreeBody({
   onCopyPath,
   onDownload,
   onMove,
+  onMoveSelection,
+  onDeleteSelection,
   onUpload,
   onUploadFolder,
   onRefresh,
@@ -116,11 +126,14 @@ export default function FileTreeBody({
       ) : (
         <FileTreeList
           items={filteredFiles}
+          activePath={activePath}
+          showSelectionControls={showSelectionControls}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}
           selectedPaths={selectedPaths}
           internalDropTarget={internalDropTarget}
+          focusedDirectoryPath={focusedDirectoryPath}
           onSelectionChange={onSelectionChange}
           onInternalDragStart={onInternalDragStart}
           onInternalDragOver={onInternalDragOver}
@@ -137,6 +150,8 @@ export default function FileTreeBody({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onMove={onMove}
+          onMoveSelection={onMoveSelection}
+          onDeleteSelection={onDeleteSelection}
           onUpload={onUpload}
           onUploadFolder={onUploadFolder}
           onRefresh={onRefresh}

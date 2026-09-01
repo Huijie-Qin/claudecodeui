@@ -2,7 +2,7 @@
   "projects": {
     "title": "Progetti",
     "newProject": "Nuovo progetto",
-    "deleteProject": "Rimuovi progetto",
+    "deleteProject": "Elimina workspace",
     "renameProject": "Rinomina progetto",
     "noProjects": "Nessun progetto trovato",
     "loadingProjects": "Caricamento progetti...",
@@ -40,7 +40,7 @@
     "createProject": "Crea nuovo progetto",
     "refresh": "Aggiorna progetti e sessioni (Ctrl+R)",
     "renameProject": "Rinomina progetto (F2)",
-    "deleteProject": "Rimuovi progetto dalla barra laterale (Canc)",
+    "deleteProject": "Elimina workspace (Canc)",
     "addToFavorites": "Aggiungi ai preferiti",
     "removeFromFavorites": "Rimuovi dai preferiti",
     "editSessionName": "Modifica manualmente il nome della sessione",
@@ -96,14 +96,14 @@
     "deleteSuccess": "Eliminato con successo",
     "errorOccurred": "Si è verificato un errore",
     "deleteSessionConfirm": "Sei sicuro di voler eliminare questa sessione? Questa azione non può essere annullata.",
-    "deleteProjectConfirm": "Rimuovere questo progetto dalla barra laterale? I file del progetto, le memorie e i dati delle sessioni non verranno eliminati.",
+    "deleteProjectConfirm": "Eliminare definitivamente questo workspace e i dati associati? Questa azione non può essere annullata.",
     "enterProjectPath": "Inserisci un percorso di progetto",
     "deleteSessionFailed": "Impossibile eliminare la sessione. Riprova.",
     "deleteSessionError": "Errore durante l'eliminazione della sessione. Riprova.",
     "renameSessionFailed": "Impossibile rinominare la sessione. Riprova.",
     "renameSessionError": "Errore durante la rinomina della sessione. Riprova.",
-    "deleteProjectFailed": "Impossibile rimuovere il progetto. Riprova.",
-    "deleteProjectError": "Errore durante la rimozione del progetto. Riprova.",
+    "deleteProjectFailed": "Impossibile eliminare il workspace. Riprova.",
+    "deleteProjectError": "Errore durante l'eliminazione del workspace. Riprova.",
     "createProjectFailed": "Impossibile creare il progetto. Riprova.",
     "createProjectError": "Errore durante la creazione del progetto. Riprova."
   },
@@ -123,14 +123,13 @@
     "projectsScanned_other": "{{count}} progetti analizzati"
   },
   "deleteConfirmation": {
-    "deleteProject": "Rimuovi progetto",
+    "deleteProject": "Elimina workspace",
     "deleteSession": "Elimina sessione",
-    "confirmDelete": "Cosa vuoi fare con",
-    "sessionCount_one": "Questo progetto contiene {{count}} conversazione.",
-    "sessionCount_other": "Questo progetto contiene {{count}} conversazioni.",
-    "removeFromSidebar": "Rimuovi solo dalla barra laterale",
-    "deleteAllData": "Elimina tutti i dati permanentemente",
-    "allConversationsDeleted": "Il progetto verrà rimosso dalla barra laterale. I tuoi file, memorie e dati delle sessioni verranno preservati.",
-    "cannotUndo": "Puoi riaggiungerlo in seguito."
+    "confirmDelete": "Eliminare definitivamente il workspace \"{{name}}\"?",
+    "sessionCount_one": "Questo workspace contiene {{count}} conversazione.",
+    "sessionCount_other": "Questo workspace contiene {{count}} conversazioni.",
+    "deleteWorkspace": "Elimina workspace",
+    "workspaceDeletionWarning": "Il workspace e i dati di runtime, memoria e sessione associati verranno eliminati definitivamente.",
+    "cannotUndo": "Questa azione non può essere annullata."
   }
 }

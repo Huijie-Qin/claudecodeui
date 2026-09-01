@@ -24,6 +24,7 @@
     "codehub": "CodeHub",
     "mcpTools": "MCP Tools",
     "sqlCheck": "SQL Check",
+    "agentGraph": "Agent Graph",
     "skills": "Skills",
     "tools": "Tools",
     "git": "Source Control",
@@ -116,6 +117,17 @@
     "selectedCount": "{{count}} selected",
     "configuredRules": "Configured rules",
     "effectiveConfig": "Effective SQL Check",
+    "enforcement": {
+      "title": "Enforce SQL checks",
+      "description": "When enabled, the current user is bound to the SQL Check Hook and SQL responses are checked automatically.",
+      "unavailable": "A published SQL Check Hook is required before enforcement can be enabled.",
+      "loading": "Loading enforcement status...",
+      "saving": "Saving",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enabledSaved": "SQL check enforcement enabled.",
+      "disabledSaved": "SQL check enforcement disabled."
+    },
     "summary": {
       "tenant": "Tenant rules",
       "custom": "Custom rules"
@@ -128,6 +140,7 @@
       "loadRules": "Failed to load SQL Check rules.",
       "loadConfig": "Failed to load SQL Check configuration.",
       "saveConfig": "Failed to save SQL Check configuration.",
+      "saveEnforcement": "Failed to save SQL check enforcement.",
       "workspaceUnavailable": "Current workspace does not support SQL Check."
     }
   },
@@ -343,6 +356,28 @@
     "removeSuccess": "{{name}} removed from this workspace.",
     "appliesOnNextTurn": "Applies on next Agent turn",
     "toolCount": "{{count}} tools",
+    "settings": {
+      "action": "Settings",
+      "menuLabel": "Open more actions for {{name}}",
+      "requiresInstall": "Install before configuring",
+      "description": "Select the MCP tools this user may use, then set each parameter to a default or forced value on the right.",
+      "selectAll": "Select all",
+      "enabled": "Allowed",
+      "configuredCount": "{{count}} configured",
+      "valueStrategy": "Value strategy",
+      "strategy": {
+        "none": "Not set",
+        "default": "Default value",
+        "force": "Forced value"
+      },
+      "strategyHelp": {
+        "default": "Used only when the Agent does not provide this parameter.",
+        "force": "Always used, overriding the parameter provided by the Agent."
+      },
+      "footer": "Tool access and parameter strategies are saved together and apply on the next Agent turn. Defaults fill missing parameters; forced values always override. Configuration is written to {{file}}.",
+      "saveSuccess": "MCP Tool settings saved. They apply on the next Agent turn.",
+      "saveFailed": "Failed to save MCP Tool settings."
+    },
     "cardAriaLabel": "{{name}} MCP server. Double-click to view details.",
     "summary": {
       "available": "Available",
@@ -404,6 +439,7 @@
       "quotaExceeded": "Upload size {{uploadSize}} MB exceeds remaining workspace space {{remainingSize}} MB. Please contact the administrator for expansion."
     },
     "context": {
+      "move": "Move",
       "rename": "Rename",
       "delete": "Delete",
       "copyPath": "Copy Path",
@@ -553,4 +589,3 @@
     }
   }
 }
-

@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   appendClaudeDisplayCommand,
+  deleteClaudeDisplayCommands,
   readClaudeDisplayCommands,
   resolveClaudeDisplayCommandPath,
 } from './claude-display-command-store.js';
@@ -32,6 +33,31 @@ function currentRuntimeOwnership() {
     gid: process.getgid(),
   };
 }
+
+test('Claude display command paths reject traversal-only session ids', () => {
+  const runtimeHomePath = path.join(os.tmpdir(), 'claude-display-command-path-safety');
+  const projectPath = '/workspace';
+
+  for (const sessionId of ['.', '..', '../outside', '..\\outside']) {
+    assert.equal(
+      resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId),
+      null,
+      sessionId,
+    );
+  }
+
+  assert.equal(
+    resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, 'session.v1'),
+    path.join(
+      runtimeHomePath,
+      '.claude',
+      'projects',
+      '-workspace',
+      'session.v1',
+      'display-commands.jsonl',
+    ),
+  );
+});
 
 test('Claude display command store records only expanded slash invocations', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
@@ -74,6 +100,64 @@ test('Claude display command store records only expanded slash invocations', asy
   });
   assert.deepEqual([...commands.entries()], [
     ['message-expanded', '/report-skill 生成日报'],
+  ]);
+});
+
+test('Claude display command store records internal Hook recovery markers', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-hook',
+  });
+
+  const marker = '<ccui-hook-recovery activity="activity-1"></ccui-hook-recovery>';
+  assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-hook',
+    messageId: 'message-hook',
+    displayCommand: marker,
+    modelContent: 'Hook follow-up model instructions',
+  }), true);
+
+  const commands = await readClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-hook',
+  });
+  assert.deepEqual([...commands.entries()], [
+    ['message-hook', marker],
+  ]);
+});
+
+test('Claude display command store records internal MCP loop resume markers', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-mcp-loop',
+  });
+
+  const marker = '<ccui-mcp-loop-result job-id="loop-1"></ccui-mcp-loop-result>';
+  assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-mcp-loop',
+    messageId: 'message-mcp-loop',
+    displayCommand: marker,
+    modelContent: 'MCP loop resume payload',
+  }), true);
+
+  const commands = await readClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-mcp-loop',
+  });
+  assert.deepEqual([...commands.entries()], [
+    ['message-mcp-loop', marker],
   ]);
 });
 
@@ -125,6 +209,50 @@ test('Claude display command store keeps the latest command inside the session d
     ),
   );
   await fs.access(displayCommandPath);
+});
+
+test('Claude display command store deletes metadata for one session only', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const projectPath = '/workspace';
+  const firstDisplayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-delete',
+  });
+  const secondDisplayCommandPath = await createSessionTranscript({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-keep',
+  });
+
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-delete',
+    messageId: 'message-delete',
+    displayCommand: '/report-skill delete',
+    modelContent: '# expanded',
+  });
+  await appendClaudeDisplayCommand({
+    runtimeHomePath,
+    projectPath,
+    sessionId: 'session-keep',
+    messageId: 'message-keep',
+    displayCommand: '/report-skill keep',
+    modelContent: '# expanded',
+  });
+
+  assert.equal(await deleteClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-delete',
+  }), true);
+  await assert.rejects(fs.access(firstDisplayCommandPath), { code: 'ENOENT' });
+  await fs.access(secondDisplayCommandPath);
+  assert.equal(await deleteClaudeDisplayCommands({
+    runtimeHomePath,
+    sessionId: 'session-delete',
+  }), false);
 });
 
 test('Claude display command store hardens the session directory and metadata file', async (t) => {

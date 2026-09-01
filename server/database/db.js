@@ -31,7 +31,16 @@ import {
   AI_MR_SUBMISSION_FILES_SUBMISSION_INDEX_SQL,
   DATABASE_SCHEMA_SQL
 } from './schema.js';
-import { MULTITENANCY_SCHEMA_SQL } from './multitenancy-schema.js';
+import {
+  migrateSkillMarketImportBindingColumns,
+  MULTITENANCY_SCHEMA_SQL,
+} from './multitenancy-schema.js';
+import {
+  HOOK_CONFIG_SCHEMA_SQL,
+  migrateHookActivationModel,
+  migrateHookConfigurationModel,
+  migrateHookExecutionDiagnostics,
+} from './hook-config-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
@@ -190,6 +199,10 @@ const runMigrations = () => {
     ensureAiMrSubmissionColumns();
     migrateSqlCheckPreferencesToWorkspaceScope();
     db.exec(MULTITENANCY_SCHEMA_SQL);
+    db.exec(HOOK_CONFIG_SCHEMA_SQL);
+    migrateHookConfigurationModel(db);
+    migrateHookActivationModel(db);
+    migrateHookExecutionDiagnostics(db);
     runMultitenancyMigrations();
 
     console.log('Database migrations completed successfully');
@@ -201,6 +214,16 @@ const runMigrations = () => {
 
 function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
+  migrateSkillMarketImportBindingColumns(db);
+  ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
+  migrateAgentTemplateSnapshotsToHistoricalReferences();
+  db.exec(`
+    INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
+    SELECT TRIM(category), MIN(created_by_user_id)
+    FROM agent_templates
+    WHERE TRIM(category) != ''
+    GROUP BY LOWER(TRIM(category))
+  `);
   migrateLegacyTenantProdCode();
 
   const mcpPresetColumns = db
@@ -258,6 +281,83 @@ function runMultitenancyMigrations() {
       ON mcp_server_presets(tenant_id, preinstall_scope, status)
   `);
 
+}
+
+function migrateAgentTemplateSnapshotsToHistoricalReferences() {
+  const hasAgentTemplateForeignKey = (tableName) => db
+    .prepare(`PRAGMA foreign_key_list(${tableName})`)
+    .all()
+    .some((foreignKey) => foreignKey.table === 'agent_templates');
+  const migrateSnapshots = hasAgentTemplateForeignKey('workspace_agent_template_snapshots');
+  const migrateMcpInstalls = hasAgentTemplateForeignKey('workspace_agent_template_mcp_installs');
+  if (!migrateSnapshots && !migrateMcpInstalls) {
+    return;
+  }
+
+  console.log('Running migration: Preserving Agent template project snapshots after template deletion');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    const migrate = db.transaction(() => {
+      if (migrateSnapshots) {
+        db.exec(`
+          ALTER TABLE workspace_agent_template_snapshots
+            RENAME TO workspace_agent_template_snapshots_legacy;
+          CREATE TABLE workspace_agent_template_snapshots (
+            workspace_id INTEGER PRIMARY KEY,
+            template_id INTEGER NOT NULL,
+            template_name TEXT NOT NULL,
+            template_updated_at DATETIME,
+            agent_markdown TEXT NOT NULL DEFAULT '',
+            guide_text TEXT NOT NULL DEFAULT '',
+            skill_presets_json TEXT NOT NULL DEFAULT '[]',
+            mcp_presets_json TEXT NOT NULL DEFAULT '[]',
+            created_by_user_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+          );
+          INSERT INTO workspace_agent_template_snapshots (
+            workspace_id, template_id, template_name, template_updated_at,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            created_by_user_id, created_at
+          )
+          SELECT
+            workspace_id, template_id, template_name, template_updated_at,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            created_by_user_id, created_at
+          FROM workspace_agent_template_snapshots_legacy;
+          DROP TABLE workspace_agent_template_snapshots_legacy;
+          CREATE INDEX idx_workspace_agent_template_snapshots_template
+            ON workspace_agent_template_snapshots(template_id);
+        `);
+      }
+
+      if (migrateMcpInstalls) {
+        db.exec(`
+          ALTER TABLE workspace_agent_template_mcp_installs
+            RENAME TO workspace_agent_template_mcp_installs_legacy;
+          CREATE TABLE workspace_agent_template_mcp_installs (
+            workspace_id INTEGER NOT NULL,
+            preset_id INTEGER NOT NULL,
+            template_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_id, preset_id),
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+            FOREIGN KEY (preset_id) REFERENCES mcp_server_presets(id) ON DELETE CASCADE
+          );
+          INSERT INTO workspace_agent_template_mcp_installs (
+            workspace_id, preset_id, template_id, created_at
+          )
+          SELECT workspace_id, preset_id, template_id, created_at
+          FROM workspace_agent_template_mcp_installs_legacy;
+          DROP TABLE workspace_agent_template_mcp_installs_legacy;
+        `);
+      }
+    });
+    migrate();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 function hasTable(tableName) {
@@ -411,6 +511,10 @@ function migrateSqlCheckPreferencesToWorkspaceScope() {
 const initializeDatabase = async () => {
   try {
     db.exec(DATABASE_SCHEMA_SQL);
+    db.exec(HOOK_CONFIG_SCHEMA_SQL);
+    migrateHookConfigurationModel(db);
+    migrateHookActivationModel(db);
+    migrateHookExecutionDiagnostics(db);
     console.log('Database initialized successfully');
     runMigrations();
   } catch (error) {
@@ -505,35 +609,78 @@ function buildUserEnvUpdateResult(env = {}, encrypted = {}) {
   );
 }
 
-function buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch = {}, encryptedPatch = {}) {
+function normalizeClaudeEnvDeleteNames(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError('deletes must be an array');
+  }
+
+  const seen = new Set();
+  const deletes = [];
+  for (const rawName of value) {
+    if (typeof rawName !== 'string') {
+      throw new TypeError('Each deleted Claude environment field name must be a string');
+    }
+    const name = rawName.trim();
+    if (!ENV_NAME_PATTERN.test(name)) {
+      throw new TypeError('Deleted Claude environment field names must use shell-safe syntax');
+    }
+    const nameKey = name.toUpperCase();
+    if (nameKey === USER_KEY_ENV_NAME) {
+      throw new TypeError(`${USER_KEY_ENV_NAME} is managed and cannot be deleted`);
+    }
+    if (seen.has(nameKey)) continue;
+    seen.add(nameKey);
+    deletes.push(name);
+  }
+  return deletes;
+}
+
+function omitClaudeEnvNames(record, deletedNameKeys) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([name]) => !deletedNameKeys.has(name.toUpperCase())),
+  );
+}
+
+function buildClaudeEnvUpdateResult(
+  row,
+  envPatch,
+  visibilityPatch = {},
+  encryptedPatch = {},
+  deletes = [],
+) {
   const existingEnv = ensureUserEnvForRow(row);
   const existingVisibility = parseUserEnvVisibilityJson(row.env_visibility);
   const existingEncrypted = parseUserEnvEncryptedJson(row.env_encrypted);
+  const deletedNameKeys = new Set(deletes.map((name) => name.toUpperCase()));
   const preparedPatch = buildUserEnvUpdateResult(envPatch, encryptedPatch);
   const nextEnv = {
-    ...existingEnv,
+    ...omitClaudeEnvNames(existingEnv, deletedNameKeys),
     ...preparedPatch,
   };
   const nextVisibility = {
-    ...existingVisibility,
+    ...omitClaudeEnvNames(existingVisibility, deletedNameKeys),
     ...visibilityPatch,
   };
   const nextEncrypted = {
-    ...existingEncrypted,
+    ...omitClaudeEnvNames(existingEncrypted, deletedNameKeys),
     ...Object.fromEntries(Object.keys(envPatch).map((name) => [name, encryptedPatch?.[name] === true])),
   };
   const envJson = buildUserEnvJson(nextEnv);
   const visibilityJson = serializeUserEnvVisibilityRecord(nextVisibility);
   const encryptedJson = serializeUserEnvEncryptedRecord(nextEncrypted);
-  db.prepare('UPDATE users SET env = ? WHERE id = ?').run(envJson, row.id);
-  db.prepare('UPDATE users SET env_visibility = ? WHERE id = ?').run(visibilityJson, row.id);
-  db.prepare('UPDATE users SET env_encrypted = ? WHERE id = ?').run(encryptedJson, row.id);
+  db.prepare(`
+    UPDATE users
+    SET env = ?, env_visibility = ?, env_encrypted = ?
+    WHERE id = ?
+  `).run(envJson, visibilityJson, encryptedJson, row.id);
 
   return {
     userId: row.id,
     username: row.username,
     success: true,
     env: Object.fromEntries(Object.keys(envPatch).map((name) => [name, nextEnv[name]])),
+    deleted: deletes,
   };
 }
 
@@ -541,6 +688,16 @@ function buildClaudeEnvListEntry(row) {
   const env = decryptUserEnvForRuntime(ensureUserEnvForRow(row) || {}, parseUserEnvEncryptedJson(row.env_encrypted));
   const visibility = parseUserEnvVisibilityJson(row.env_visibility);
   const encryptedFields = parseUserEnvEncryptedJson(row.env_encrypted);
+  const visibleNameKeys = new Set(
+    Object.entries(visibility)
+      .filter(([, visible]) => visible === true)
+      .map(([name]) => name.toUpperCase()),
+  );
+  const encryptedNameKeys = new Set(
+    Object.entries(encryptedFields)
+      .filter(([, encrypted]) => encrypted === true)
+      .map(([name]) => name.toUpperCase()),
+  );
 
   return {
     userId: row.id,
@@ -549,13 +706,15 @@ function buildClaudeEnvListEntry(row) {
       .filter(([name]) => name !== USER_KEY_ENV_NAME)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, value]) => {
-        const visible = visibility[name] === true;
+        const nameKey = name.toUpperCase();
+        const visible = visibleNameKeys.has(nameKey);
+        const encrypted = encryptedNameKeys.has(nameKey);
         return {
           name,
           configured: true,
           visible,
-          encrypted: encryptedFields[name] === true,
-          ...(visible ? { value } : {}),
+          encrypted,
+          ...(visible && !encrypted ? { value } : {}),
         };
       }),
   };
@@ -1182,7 +1341,7 @@ const userDb = {
     }
   },
 
-  updateClaudeEnvForUsers: ({ userIds, env, visibility, encrypted }) => {
+  updateClaudeEnvForUsers: ({ userIds, env, visibility, encrypted, deletes = [] }) => {
     try {
       const uniqueUserIds = Array.from(new Set(
         (Array.isArray(userIds) ? userIds : [])
@@ -1200,6 +1359,12 @@ const userDb = {
       const encryptedPatch = Object.fromEntries(
         Object.keys(envPatch).map((name) => [name, encrypted?.[name] === true]),
       );
+      const normalizedDeletes = normalizeClaudeEnvDeleteNames(deletes);
+      const upsertNameKeys = new Set(Object.keys(envPatch).map((name) => name.toUpperCase()));
+      const conflictingName = normalizedDeletes.find((name) => upsertNameKeys.has(name.toUpperCase()));
+      if (conflictingName) {
+        throw new TypeError(`${conflictingName} cannot be both updated and deleted`);
+      }
 
       const updateUsers = db.transaction(() => uniqueUserIds.map((userId) => {
         const row = db
@@ -1210,7 +1375,13 @@ const userDb = {
           return { userId, success: false, error: 'User not found' };
         }
 
-        return buildClaudeEnvUpdateResult(row, envPatch, visibilityPatch, encryptedPatch);
+        return buildClaudeEnvUpdateResult(
+          row,
+          envPatch,
+          visibilityPatch,
+          encryptedPatch,
+          normalizedDeletes,
+        );
       }));
 
       return updateUsers();
@@ -1665,6 +1836,37 @@ const aiMrSubmissionsDb = {
     String(repoRelativePath || ''),
     String(targetBranch || ''),
     String(commitSha || ''),
+  ).map(hydrateAiMrSubmission),
+
+  listActiveForBranches: ({
+    tenantId,
+    userId,
+    workspaceId,
+    repoRelativePath,
+    sourceBranch,
+    targetBranch,
+    mrProjectId,
+  }) => db.prepare(`
+    SELECT *
+    FROM ai_mr_submissions
+    WHERE tenant_id = ?
+      AND user_id = ?
+      AND workspace_id = ?
+      AND repo_relative_path = ?
+      AND source_branch = ?
+      AND target_branch = ?
+      AND mr_project_id = ?
+      AND status = 'pending'
+      AND mr_id IS NOT NULL
+    ORDER BY created_at DESC, id DESC
+  `).all(
+    Number(tenantId),
+    Number(userId),
+    Number(workspaceId),
+    String(repoRelativePath || ''),
+    String(sourceBranch || ''),
+    String(targetBranch || ''),
+    Number(mrProjectId),
   ).map(hydrateAiMrSubmission),
 
   listPendingDue: ({ now = new Date(), limit = 50 } = {}) => db.prepare(`

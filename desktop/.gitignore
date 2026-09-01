@@ -1,0 +1,6 @@
+.env.desktop
+.runtime/
+dist/
+node_modules/
+out/
+release-layout/

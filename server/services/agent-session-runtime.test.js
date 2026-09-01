@@ -6,20 +6,31 @@ import path from 'node:path';
 
 import {
   buildClaudeDockerExecArgs,
+  buildClaudeDockerCreateEnv,
+  buildClaudeDockerGuestEnv,
   buildClaudeDockerWrapperScript,
   buildClaudeWrapperDefaultEnv,
   buildContainerName,
+  buildDockerHostProcessEnv,
   buildDockerPythonInstallArgs,
   buildDockerRunArgs,
   buildRuntimePaths,
   buildWrapperHostEnv,
-  createAgentSessionRuntimeManager,
+  createAgentSessionRuntimeManager as createAgentSessionRuntimeManagerImpl,
   createClaudeDockerSpawn,
+  CLAUDE_DOCKER_ENV_POLICY_ENV_NAME,
+  DOCKER_CLI_PATH_ENV_NAME,
+  DOCKER_BIND_CONTAINER_ROOT_ENV_NAME,
+  DOCKER_BIND_HOST_ROOT_ENV_NAME,
   ensureClaudeCleanupPeriod,
   ensureRuntimeHomeWritable,
+  inspectedContainerUsesClaudeEnvPolicy,
+  inspectedContainerUsesSharedPython,
   migratePathOwnership,
   parseDockerPythonPackages,
   resolveClaudeExecutionMode,
+  resolveDockerBindSourcePath,
+  resolveDockerCliExecutable,
   resolveDockerSharedPythonPath,
   rewriteDockerProxyEnv,
 } from './agent-session-runtime.js';
@@ -34,6 +45,52 @@ const emptyUserEnvDb = {
   getEnvForUser: () => ({}),
 };
 
+function createLayeredClaudeEnvResolver({ tenantEnvs = {}, personalEnv = {} } = {}) {
+  const calls = [];
+  return {
+    calls,
+    service: {
+      resolveEffectiveEnv(input) {
+        calls.push(input);
+        const env = {};
+        const sources = {};
+        const apply = (layer, source) => {
+          for (const [name, value] of Object.entries(layer || {})) {
+            env[name] = String(value);
+            sources[name] = source;
+          }
+        };
+        apply(input.baseEnv, 'baseEnv');
+        if (input.tenantId != null) apply(tenantEnvs[input.tenantId], 'tenant');
+        apply(input.adminUserEnv, 'adminUserEnv');
+        const personalCredentialNames = [
+          'ANTHROPIC_BASE_URL',
+          'ANTHROPIC_AUTH_TOKEN',
+          'ANTHROPIC_API_KEY',
+        ];
+        if (personalCredentialNames.some((name) => Object.hasOwn(personalEnv, name))) {
+          for (const name of personalCredentialNames) {
+            delete env[name];
+            delete sources[name];
+          }
+        }
+        apply(personalEnv, 'personal');
+        apply(input.managedEnv, 'managed');
+        return { env, sources, blockedVariables: [] };
+      },
+    },
+  };
+}
+
+const testDefaultClaudeEnvService = createLayeredClaudeEnvResolver().service;
+
+function createAgentSessionRuntimeManager(options = {}) {
+  return createAgentSessionRuntimeManagerImpl({
+    claudeEnv: testDefaultClaudeEnvService,
+    ...options,
+  });
+}
+
 test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
   assert.equal(resolveClaudeExecutionMode({}), 'local');
   assert.equal(resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'local' }), 'local');
@@ -42,6 +99,102 @@ test('resolveClaudeExecutionMode defaults to local and accepts docker', () => {
     () => resolveClaudeExecutionMode({ CLAUDE_EXECUTION_MODE: 'podman' }),
     /CLAUDE_EXECUTION_MODE must be local or docker/,
   );
+});
+
+test('Docker CLI executable supports an explicit service path', () => {
+  assert.equal(resolveDockerCliExecutable({}), 'docker');
+  assert.equal(
+    resolveDockerCliExecutable({ [DOCKER_CLI_PATH_ENV_NAME]: ' /usr/local/bin/docker ' }),
+    '/usr/local/bin/docker',
+  );
+});
+
+test('local Claude runtime resolves base, selected tenant, admin user, personal, then managed env', async () => {
+  const resolver = createLayeredClaudeEnvResolver({
+    tenantEnvs: {
+      8: { LAYER_VALUE: 'wrong-tenant' },
+      9: {
+        LAYER_VALUE: 'tenant',
+        ADMIN_TENANT_SHARED: 'tenant-value',
+        TENANT_ONLY: 'tenant-value',
+      },
+    },
+    personalEnv: { LAYER_VALUE: 'personal', PERSONAL_ONLY: 'personal-value' },
+  });
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'local',
+      LAYER_VALUE: 'base',
+      BASE_ONLY: 'base-value',
+      LEGACY_EMPTY_OVERRIDE: 'keep-base-value',
+      W3_NAME: 'base-name',
+    },
+    users: {
+      getUserById: (userId) => ({ id: userId, username: 'alice' }),
+      getEnvForUser: () => ({
+        LAYER_VALUE: 'admin',
+        ADMIN_TENANT_SHARED: 'admin-value',
+        ADMIN_ONLY: 'admin-value',
+        ADMIN_EMPTY_ONLY: '',
+        LEGACY_EMPTY_OVERRIDE: '',
+        W3_NAME: 'admin-name',
+      }),
+    },
+    claudeEnv: resolver.service,
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 9,
+    userId: 4,
+    cwd: '/workspace/project',
+  });
+
+  assert.equal(resolver.calls.length, 1);
+  assert.equal(resolver.calls[0].tenantId, 9);
+  assert.equal(resolver.calls[0].userId, 4);
+  assert.equal(resolver.calls[0].baseEnv.LAYER_VALUE, 'base');
+  assert.equal(resolver.calls[0].adminUserEnv.LAYER_VALUE, 'admin');
+  assert.equal(Object.hasOwn(resolver.calls[0].adminUserEnv, 'LEGACY_EMPTY_OVERRIDE'), false);
+  assert.equal(resolver.calls[0].adminUserEnv.ADMIN_EMPTY_ONLY, '');
+  assert.equal(resolver.calls[0].managedEnv.W3_NAME, 'alice');
+  assert.equal(resolver.calls[0].managedEnv.TENANT_ID, '9');
+  assert.equal(runtime.executionEnv.LAYER_VALUE, 'personal');
+  assert.equal(runtime.executionEnv.BASE_ONLY, 'base-value');
+  assert.equal(runtime.executionEnv.ADMIN_ONLY, 'admin-value');
+  assert.equal(runtime.executionEnv.ADMIN_TENANT_SHARED, 'admin-value');
+  assert.equal(runtime.executionEnv.ADMIN_EMPTY_ONLY, '');
+  assert.equal(runtime.executionEnv.LEGACY_EMPTY_OVERRIDE, 'keep-base-value');
+  assert.equal(runtime.executionEnv.TENANT_ONLY, 'tenant-value');
+  assert.equal(runtime.executionEnv.PERSONAL_ONLY, 'personal-value');
+  assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+});
+
+test('local Claude runtime resolves global personal env without a tenant', async () => {
+  const resolver = createLayeredClaudeEnvResolver({
+    personalEnv: {
+      ANTHROPIC_MODEL: 'personal-model',
+      GLOBAL_PERSONAL: 'personal-value',
+    },
+  });
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'local',
+      ANTHROPIC_MODEL: 'base-model',
+    },
+    users: emptyUserEnvDb,
+    claudeEnv: resolver.service,
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    userId: 4,
+    cwd: '/workspace/project',
+  });
+
+  assert.equal(resolver.calls.length, 1);
+  assert.equal(resolver.calls[0].tenantId, null);
+  assert.equal(runtime.executionEnv.ANTHROPIC_MODEL, 'personal-model');
+  assert.equal(runtime.executionEnv.GLOBAL_PERSONAL, 'personal-value');
+  assert.equal(runtime.executionEnv.W3_NAME, 'user-4');
 });
 
 test('DAS falls back to the server environment like other Claude variables', () => {
@@ -106,7 +259,7 @@ test('shared Python path is stable per image and can be disabled', () => {
   const otherImage = resolveDockerSharedPythonPath(env, 'cloudcli/python:3.11');
 
   assert.equal(first, second);
-  assert.ok(first.startsWith('/var/cloudcli/python/image-'));
+  assert.ok(first.startsWith(path.join(path.resolve('/var/cloudcli/python'), 'image-')));
   assert.notEqual(first, otherImage);
   assert.equal(resolveDockerSharedPythonPath({
     ...env,
@@ -192,6 +345,59 @@ test('docker run args mount only workspace and runtime home', () => {
   assert.equal(joined.includes('/var/run/docker.sock'), false);
 });
 
+test('docker run args map container-local data paths to Docker daemon bind sources', () => {
+  const containerRoot = '/var/lib/cloudcli';
+  const hostRoot = '/var/lib/docker/volumes/ccui-data/_data';
+  const args = buildDockerRunArgs({
+    containerName: 'cloudcli-claude-t1-u2-w3-rnested',
+    image: 'cloudcli/test:claude',
+    uid: 1000,
+    gid: 1000,
+    workspaceHostPath: `${containerRoot}/workspaces/default/user/project`,
+    runtimeHomePath: `${containerRoot}/runtimes/claude/default/user/project/home`,
+    sharedPythonHostPath: `${containerRoot}/runtimes/.shared/python/image-abc`,
+    bindContainerRoot: containerRoot,
+    bindHostRoot: hostRoot,
+  });
+  const joined = args.join(' ');
+
+  assert.ok(joined.includes(`src=${hostRoot}/workspaces/default/user/project,dst=/workspace`));
+  assert.ok(joined.includes(`src=${hostRoot}/runtimes/claude/default/user/project/home,dst=/home/cloudcli`));
+  assert.ok(joined.includes(`src=${hostRoot}/runtimes/.shared/python/image-abc,dst=/opt/cloudcli/python`));
+  assert.equal(joined.includes(`src=${containerRoot}/`), false);
+});
+
+test('Docker bind source mapping leaves paths outside the configured container root unchanged', () => {
+  assert.equal(resolveDockerBindSourcePath('/external/workspace', {
+    containerRoot: '/var/lib/cloudcli',
+    hostRoot: '/var/lib/docker/volumes/ccui-data/_data',
+  }), '/external/workspace');
+  assert.equal(DOCKER_BIND_HOST_ROOT_ENV_NAME, 'CLOUDCLI_DOCKER_BIND_HOST_ROOT');
+  assert.equal(DOCKER_BIND_CONTAINER_ROOT_ENV_NAME, 'CLOUDCLI_DOCKER_BIND_CONTAINER_ROOT');
+});
+
+test('shared Python inspection compares the Docker daemon bind source after root mapping', () => {
+  const containerRoot = '/var/lib/cloudcli';
+  const hostRoot = '/var/lib/docker/volumes/ccui-data/_data';
+  const sharedPythonHostPath = `${containerRoot}/runtimes/.shared/python/image-abc`;
+  assert.equal(inspectedContainerUsesSharedPython({
+    mounts: [{
+      Destination: '/opt/cloudcli/python',
+      Source: `${hostRoot}/runtimes/.shared/python/image-abc`,
+    }],
+    env: [
+      'PYTHONUSERBASE=/opt/cloudcli/python/user-base',
+      'PIP_CACHE_DIR=/opt/cloudcli/python/pip-cache',
+      'PIP_BREAK_SYSTEM_PACKAGES=1',
+      'PIP_USER=1',
+      'PATH=/opt/cloudcli/python/user-base/bin:/home/cloudcli/.local/bin:/home/agent/.local/bin:/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    ],
+  }, sharedPythonHostPath, {
+    containerRoot,
+    hostRoot,
+  }), true);
+});
+
 test('docker run args mount a shared Python user base and pip cache', () => {
   const args = buildDockerRunArgs({
     containerName: 'cloudcli-claude-t1-u2-w3-rabc',
@@ -220,7 +426,7 @@ test('docker run args mount a shared Python user base and pip cache', () => {
   assert.ok(joined.includes('PIP_USER=1'));
   assert.ok(joined.includes('UV_CACHE_DIR=/opt/cloudcli/python/uv-cache'));
   assert.ok(joined.includes('PIPX_HOME=/opt/cloudcli/python/pipx'));
-  assert.ok(joined.includes('PATH=/opt/cloudcli/python/user-base/bin:'));
+  assert.ok(joined.includes('PATH=/opt/cloudcli/python/user-base/bin:/home/cloudcli/.local/bin:'));
   assert.ok(joined.includes('HTTP_PROXY=http://host.docker.internal:7890/'));
   assert.equal(joined.includes('/tmp/user-controlled'), false);
   assert.equal(joined.includes('/tmp/user-cache'), false);
@@ -308,6 +514,8 @@ test('docker exec args forward allowed environment and Claude arguments', () => 
       ANTHROPIC_BASE_URL: 'https://gateway.example.test',
       ANTHROPIC_MODEL: 'glm-5.1',
       PRIVATE_TOKEN: 'private-token',
+      codehub_email: 'developer@example.com',
+      CODEHUB_EMAIL: 'developer@example.com',
       'BAD-NAME': 'ignored',
     },
   });
@@ -324,8 +532,107 @@ test('docker exec args forward allowed environment and Claude arguments', () => 
   assert.ok(args.includes('ANTHROPIC_BASE_URL=https://gateway.example.test'));
   assert.ok(args.includes('ANTHROPIC_MODEL=glm-5.1'));
   assert.ok(args.includes('PRIVATE_TOKEN=private-token'));
+  assert.ok(args.includes('codehub_email=developer@example.com'));
+  assert.ok(args.includes('CODEHUB_EMAIL=developer@example.com'));
   assert.equal(args.includes('BAD-NAME=ignored'), false);
   assert.deepEqual(args.slice(-4), ['cloudcli-claude-test', 'claude', '--model', 'glm-5.1']);
+});
+
+test('docker exec args explicitly clear CodeHub email variables when git_email is empty', () => {
+  const args = buildClaudeDockerExecArgs({
+    containerName: 'cloudcli-claude-test',
+    env: {
+      codehub_email: '',
+      CODEHUB_EMAIL: '',
+    },
+  });
+
+  assert.ok(args.includes('codehub_email='));
+  assert.ok(args.includes('CODEHUB_EMAIL='));
+});
+
+test('docker host process env contains only server-owned Docker client variables', () => {
+  const hostEnv = buildDockerHostProcessEnv({
+    PATH: 'C:\\server-bin',
+    HOME: 'C:\\server-home',
+    DOCKER_HOST: 'tcp://docker.example.test:2376',
+    DOCKER_CONTEXT: 'production',
+    DOCKER_CONFIG: 'C:\\server-docker-config',
+    XDG_RUNTIME_DIR: '/run/user/1000',
+    HTTP_PROXY: 'http://host-proxy.example.test:8080',
+    NO_PROXY: 'docker.example.test',
+    ANTHROPIC_API_KEY: 'server-claude-key',
+    TENANT_API_KEY: 'tenant-key',
+    LD_PRELOAD: '/tmp/guest.so',
+    NODE_OPTIONS: '--require=/tmp/guest.js',
+  });
+
+  assert.deepEqual(hostEnv, {
+    PATH: 'C:\\server-bin',
+    HOME: 'C:\\server-home',
+    DOCKER_HOST: 'tcp://docker.example.test:2376',
+    DOCKER_CONTEXT: 'production',
+    DOCKER_CONFIG: 'C:\\server-docker-config',
+    XDG_RUNTIME_DIR: '/run/user/1000',
+    HTTP_PROXY: 'http://host-proxy.example.test:8080',
+    NO_PROXY: 'docker.example.test',
+  });
+});
+
+test('Claude Docker env split keeps scoped values exec-only and filters arbitrary base env', () => {
+  const resolvedEnv = {
+    env: {
+      ANTHROPIC_MODEL: 'base-model',
+      HTTP_PROXY: 'http://proxy.example.test:8080',
+      SERVER_INTERNAL_SECRET: 'do-not-forward',
+      ADMIN_CUSTOM: 'legacy-admin',
+      TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
+      PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+      W3_NAME: 'managed-user',
+      PATH: '/untrusted/path',
+      UNKNOWN_SOURCE: 'do-not-forward',
+    },
+    sources: {
+      ANTHROPIC_MODEL: 'baseEnv',
+      HTTP_PROXY: 'baseEnv',
+      SERVER_INTERNAL_SECRET: 'baseEnv',
+      ADMIN_CUSTOM: 'adminUserEnv',
+      TENANT_ENCRYPTED_TOKEN: 'tenant',
+      PERSONAL_ENCRYPTED_TOKEN: 'personal',
+      W3_NAME: 'managed',
+      PATH: 'managed',
+      UNKNOWN_SOURCE: 'unexpected',
+    },
+  };
+
+  assert.deepEqual(buildClaudeDockerGuestEnv(resolvedEnv), {
+    ANTHROPIC_MODEL: 'base-model',
+    HTTP_PROXY: 'http://proxy.example.test:8080',
+    ADMIN_CUSTOM: 'legacy-admin',
+    TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
+    PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+    W3_NAME: 'managed-user',
+  });
+  assert.deepEqual(buildClaudeDockerCreateEnv(resolvedEnv), {
+    [CLAUDE_DOCKER_ENV_POLICY_ENV_NAME]: 'exec-only-v1',
+    W3_NAME: 'managed-user',
+  });
+});
+
+test('Claude Docker env policy migrates legacy containers that may retain revoked keys', () => {
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({
+    env: [
+      'W3_NAME=managed-user',
+      'ANTHROPIC_API_KEY=revoked-key',
+    ],
+  }), false);
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({
+    env: [
+      `${CLAUDE_DOCKER_ENV_POLICY_ENV_NAME}=exec-only-v1`,
+      'W3_NAME=managed-user',
+    ],
+  }), true);
+  assert.equal(inspectedContainerUsesClaudeEnvPolicy({ running: true }), true);
 });
 
 test('custom docker spawn bypasses host wrapper execution', () => {
@@ -334,6 +641,7 @@ test('custom docker spawn bypasses host wrapper execution', () => {
   const spawnClaudeCodeProcess = createClaudeDockerSpawn({
     containerName: 'cloudcli-claude-test',
     envAllowlist: ['ANTHROPIC_MODEL'],
+    hostEnv: { PATH: 'C:\\bin', HOME: 'C:\\service-home' },
     spawnImpl: (...args) => {
       calls.push(args);
       return child;
@@ -367,6 +675,77 @@ test('custom docker spawn bypasses host wrapper execution', () => {
   assert.equal(calls[0][2].env.PATH, 'C:\\bin');
   assert.deepEqual(calls[0][2].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(calls[0][2].windowsHide, true);
+});
+
+test('custom docker spawn uses the configured Docker CLI path', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    hostEnv: {
+      PATH: '/usr/bin:/bin',
+      [DOCKER_CLI_PATH_ENV_NAME]: '/usr/local/bin/docker',
+    },
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  assert.equal(spawnClaudeCodeProcess({ args: ['--version'] }), child);
+  assert.equal(calls[0][0], '/usr/local/bin/docker');
+});
+
+test('custom docker spawn keeps arbitrary guest env out of the Docker host process', () => {
+  const calls = [];
+  const child = { stdin: {}, stdout: {}, killed: false, exitCode: null };
+  const spawnClaudeCodeProcess = createClaudeDockerSpawn({
+    containerName: 'cloudcli-claude-test',
+    envAllowlist: ['TENANT_API_KEY', 'USER_SETTING', 'DOCKER_HOST', 'LD_PRELOAD', 'NODE_OPTIONS'],
+    hostEnv: {
+      PATH: '/server/bin',
+      HOME: '/home/cloudcli-server',
+      DOCKER_HOST: 'tcp://server-docker.example.test:2376',
+      DOCKER_CONFIG: '/etc/cloudcli/docker',
+      HTTP_PROXY: 'http://server-proxy.example.test:8080',
+      SERVER_INTERNAL_SECRET: 'do-not-copy',
+    },
+    spawnImpl: (...args) => {
+      calls.push(args);
+      return child;
+    },
+  });
+
+  const result = spawnClaudeCodeProcess({
+    args: ['--model', 'sonnet'],
+    env: {
+      TENANT_API_KEY: 'tenant-key',
+      USER_SETTING: 'user-value',
+      DOCKER_HOST: 'tcp://guest-controlled.example.test:2375',
+      LD_PRELOAD: '/workspace/guest.so',
+      NODE_OPTIONS: '--require=/workspace/guest.js',
+    },
+  });
+
+  assert.equal(result, child);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0][1].includes('TENANT_API_KEY=tenant-key'));
+  assert.ok(calls[0][1].includes('USER_SETTING=user-value'));
+  assert.ok(calls[0][1].includes('DOCKER_HOST=tcp://guest-controlled.example.test:2375'));
+  assert.ok(calls[0][1].includes('LD_PRELOAD=/workspace/guest.so'));
+  assert.ok(calls[0][1].includes('NODE_OPTIONS=--require=/workspace/guest.js'));
+  assert.deepEqual(calls[0][2].env, {
+    PATH: '/server/bin',
+    HOME: '/home/cloudcli-server',
+    DOCKER_HOST: 'tcp://server-docker.example.test:2376',
+    DOCKER_CONFIG: '/etc/cloudcli/docker',
+    HTTP_PROXY: 'http://server-proxy.example.test:8080',
+  });
+  assert.equal(Object.hasOwn(calls[0][2].env, 'TENANT_API_KEY'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'USER_SETTING'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'LD_PRELOAD'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'NODE_OPTIONS'), false);
+  assert.equal(Object.hasOwn(calls[0][2].env, 'SERVER_INTERNAL_SECRET'), false);
 });
 
 test('docker runtime directory and home are owned by the sandbox user when possible', async () => {
@@ -689,9 +1068,14 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
         envUserId = userId;
         return {
           USER_KEY: encryptedUserKey,
+          codehub_email: 'attempted-lowercase-override@example.com',
+          CODEHUB_EMAIL: 'attempted-uppercase-override@example.com',
           'BAD-NAME': 'do-not-forward',
         };
       },
+      getGitConfig: () => ({
+        git_email: 'alice@example.com',
+      }),
     },
     docker: {
       inspectContainer: async () => null,
@@ -718,7 +1102,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(typeof runtime.spawnClaudeCodeProcess, 'function');
   assert.equal(createdRuntimes.length, 1);
   assert.equal(dockerCalls.length, 1);
-  assert.ok(dockerCalls[0].join(' ').includes(`src=${sharedPythonRoot}/image-`));
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${path.join(sharedPythonRoot, 'image-')}`));
   assert.ok(dockerCalls[0].join(' ').includes('dst=/opt/cloudcli/python'));
   assert.ok(dockerCalls[0].join(' ').includes('PYTHONUSERBASE=/opt/cloudcli/python/user-base'));
   assert.equal((await fs.stat(sharedPythonRoot)).isDirectory(), true);
@@ -731,7 +1115,13 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  assert.equal(runtime.hookCommandEnv.USER_KEY, encryptedUserKey);
+  assert.equal(runtime.hookCommandEnv.TENANT_ID, '3');
+  assert.equal(runtime.hookCommandEnv.WORKSPACE_ID, '5');
+  assert.equal(Object.hasOwn(runtime.hookCommandEnv, 'DOCKER_HOST'), false);
   assert.equal(runtime.executionEnv.W3_NAME, 'alice');
+  assert.equal(runtime.executionEnv.codehub_email, 'alice@example.com');
+  assert.equal(runtime.executionEnv.CODEHUB_EMAIL, 'alice@example.com');
   assert.equal(runtime.executionEnv.TENANT_ID, '3');
   assert.equal(runtime.executionEnv.WORKSPACE_ID, '5');
   assert.equal(runtime.executionEnv.HTTP_PROXY, 'http://proxy.example:8080');
@@ -740,11 +1130,17 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(runtime.executionEnv.https_proxy, 'http://lower-secure-proxy.example:8443');
   assert.equal(runtime.executionEnv.MCP_DATA_SOURCE_KEY, 'host-mcp-data-source-key');
   assert.equal(Object.hasOwn(runtime.executionEnv, 'BAD-NAME'), false);
-  assert.ok(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`));
+  assert.ok(dockerCalls[0].join(' ').includes(`${CLAUDE_DOCKER_ENV_POLICY_ENV_NAME}=exec-only-v1`));
+  assert.equal(dockerCalls[0].join(' ').includes(`USER_KEY=${encryptedUserKey}`), false);
   assert.ok(dockerCalls[0].join(' ').includes('W3_NAME=alice'));
-  assert.ok(dockerCalls[0].join(' ').includes('TENANT_ID=3'));
-  assert.ok(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'));
-  assert.ok(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'));
+  assert.equal(dockerCalls[0].join(' ').includes('codehub_email=alice@example.com'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('CODEHUB_EMAIL=alice@example.com'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('TENANT_ID=3'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('WORKSPACE_ID=5'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('MCP_DATA_SOURCE_KEY=host-mcp-data-source-key'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('HTTP_PROXY=http://proxy.example:8080'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('HTTPS_PROXY=http://secure-proxy.example:8443'), false);
+  assert.equal(dockerCalls[0].join(' ').includes('ANTHROPIC_API_KEY=key-1'), false);
   assert.equal(dockerCalls[0].join(' ').includes('BAD-NAME'), false);
 
   const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
@@ -757,6 +1153,8 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e https_proxy/);
   assert.match(wrapper, /-e USER_KEY/);
   assert.match(wrapper, /-e W3_NAME/);
+  assert.match(wrapper, /-e codehub_email/);
+  assert.match(wrapper, /-e CODEHUB_EMAIL/);
   assert.match(wrapper, /-e TENANT_ID/);
   assert.match(wrapper, /-e WORKSPACE_ID/);
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
@@ -1068,6 +1466,327 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(runtime.runtimeId, 'existing');
 });
 
+test('docker mode reuses the owner runtime home when another session replaced its current binding', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-rebound-resume-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtimes', 'claude', 'tenant-3', 'user-4', 'workspace-5', 'runtime-existing', 'home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'interactive-session',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:claude',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let created = false;
+  let ownerRuntimeSelected = false;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: () => {
+          created = true;
+        },
+        findByProviderSession: () => null,
+        findByOwner: () => {
+          ownerRuntimeSelected = true;
+          return runtimeRow;
+        },
+        updateStatus: (input) => ({ ...runtimeRow, status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({ exists: true, running: true, status: 'running' }),
+      verifyWorkspaceCwd: async () => undefined,
+      runDetached: async () => {
+        throw new Error('must not create a fresh container when the owner runtime home is reusable');
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'scheduled-session',
+  });
+
+  assert.equal(created, false);
+  assert.equal(ownerRuntimeSelected, true);
+  assert.equal(runtime.runtimeHomePath, runtimeHomePath);
+  assert.equal(runtime.runtimeId, 'existing');
+});
+
+test('docker mode recreates an existing runtime container when the configured image changes', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-change-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+
+  let runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let containerExists = true;
+  let containerRunning = false;
+  let containerImage = runtimeRow.image;
+  let created = false;
+  const events = [];
+  const dockerRuns = [];
+  const imageUpdates = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        createRuntime: () => {
+          created = true;
+        },
+        findByProviderSession: () => runtimeRow,
+        updateImage: (input) => {
+          events.push(`persist:${input.image}`);
+          imageUpdates.push(input);
+          runtimeRow = { ...runtimeRow, image: input.image };
+          return runtimeRow;
+        },
+        updateStatus: (input) => {
+          events.push(`mark:${input.status}`);
+          runtimeRow = { ...runtimeRow, status: input.status };
+          return runtimeRow;
+        },
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => {
+        events.push('inspect');
+        return containerExists
+          ? { exists: true, running: containerRunning, image: containerImage }
+          : null;
+      },
+      startContainer: async () => {
+        throw new Error('must not start a container created from the old image');
+      },
+      removeContainer: async (name) => {
+        events.push(`remove:${name}`);
+        containerExists = false;
+        containerRunning = false;
+      },
+      runDetached: async (args) => {
+        dockerRuns.push(args);
+        containerImage = args.at(-3);
+        containerExists = true;
+        containerRunning = true;
+        events.push(`run:${containerImage}`);
+      },
+      verifyWorkspaceCwd: async () => {
+        events.push('verify');
+      },
+    },
+  });
+
+  const first = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+  const second = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+
+  assert.equal(created, false);
+  assert.deepEqual(imageUpdates, [{ runtimeId: 'existing', image: 'cloudcli/test:new' }]);
+  assert.equal(dockerRuns.length, 1);
+  assert.equal(dockerRuns[0].at(-3), 'cloudcli/test:new');
+  assert.equal(dockerRuns[0].includes('cloudcli/test:old'), false);
+  assert.equal(first.runtimeId, 'existing');
+  assert.equal(first.runtimeHomePath, runtimeHomePath);
+  assert.equal(second.runtimeId, 'existing');
+  assert.deepEqual(events, [
+    'inspect',
+    'remove:cloudcli-claude-existing',
+    'run:cloudcli/test:new',
+    'verify',
+    'persist:cloudcli/test:new',
+    'mark:active',
+    'inspect',
+    'verify',
+    'mark:active',
+  ]);
+});
+
+test('docker mode persists a configured image already applied to the container without rebuilding it', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-persist-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  const imageUpdates = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateImage: (input) => {
+          imageUpdates.push(input);
+          return { ...runtimeRow, image: input.image };
+        },
+        updateStatus: (input) => ({ ...runtimeRow, image: 'cloudcli/test:new', status: input.status }),
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({
+        exists: true,
+        running: true,
+        image: 'cloudcli/test:new',
+      }),
+      verifyWorkspaceCwd: async () => undefined,
+      removeContainer: async () => {
+        throw new Error('must not remove a container that already uses the configured image');
+      },
+      runDetached: async () => {
+        throw new Error('must not recreate a container that already uses the configured image');
+      },
+    },
+  });
+
+  const runtime = await manager.prepareClaudeRuntime({
+    tenantId: 3,
+    userId: 4,
+    workspaceId: 5,
+    cwd: workspacePath,
+    sessionId: 'claude-session-1',
+  });
+
+  assert.equal(runtime.runtimeId, 'existing');
+  assert.deepEqual(imageUpdates, [{ runtimeId: 'existing', image: 'cloudcli/test:new' }]);
+});
+
+test('docker mode does not persist a configured image when the recreated container fails verification', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-image-failure-test-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  const runtimeHomePath = path.join(tempRoot, 'runtime-home');
+  await fs.mkdir(workspacePath, { recursive: true });
+  await fs.mkdir(runtimeHomePath, { recursive: true });
+  const workspaceRealPath = await fs.realpath(workspacePath);
+  const runtimeRow = {
+    runtime_id: 'existing',
+    tenant_id: 3,
+    workspace_id: 5,
+    user_id: 4,
+    provider: 'claude',
+    provider_session_id: 'claude-session-1',
+    container_name: 'cloudcli-claude-existing',
+    image: 'cloudcli/test:old',
+    workspace_host_path: workspaceRealPath,
+    runtime_home_path: runtimeHomePath,
+    status: 'idle',
+  };
+  let imageUpdated = false;
+  let statusUpdated = false;
+  const manager = createAgentSessionRuntimeManager({
+    env: {
+      CLAUDE_EXECUTION_MODE: 'docker',
+      CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:new',
+    },
+    multitenancy: {
+      runtimes: {
+        findByProviderSession: () => runtimeRow,
+        updateImage: () => {
+          imageUpdated = true;
+          return { ...runtimeRow, image: 'cloudcli/test:new' };
+        },
+        updateStatus: () => {
+          statusUpdated = true;
+          return runtimeRow;
+        },
+      },
+    },
+    users: emptyUserEnvDb,
+    docker: {
+      inspectContainer: async () => ({
+        exists: true,
+        running: false,
+        image: 'cloudcli/test:old',
+      }),
+      removeContainer: async () => undefined,
+      runDetached: async () => undefined,
+      verifyWorkspaceCwd: async () => {
+        throw new Error('new image workspace is unavailable');
+      },
+    },
+  });
+
+  await assert.rejects(
+    manager.prepareClaudeRuntime({
+      tenantId: 3,
+      userId: 4,
+      workspaceId: 5,
+      cwd: workspacePath,
+      sessionId: 'claude-session-1',
+    }),
+    /new image workspace is unavailable/,
+  );
+
+  assert.equal(imageUpdated, false);
+  assert.equal(statusUpdated, false);
+  assert.equal(runtimeRow.image, 'cloudcli/test:old');
+});
+
 test('docker mode migrates an existing root container to the configured non-root user', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-user-migration-test-'));
   const workspacePath = path.join(tempRoot, 'workspace');
@@ -1103,6 +1822,7 @@ test('docker mode migrates an existing root container to the configured non-root
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
+      CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
       CLOUDCLI_DOCKER_UID: '1000',
       CLOUDCLI_DOCKER_GID: '1000',
     },

@@ -119,9 +119,13 @@ test('workspace MCP config resolves uploaded helper script into private docker r
   const cloudcliPath = path.join(runtimeHomePath, '.cloudcli');
   const helperRoot = path.join(cloudcliPath, 'mcp-helpers');
   const chmodCalls = [];
+  const chownCalls = [];
   const fsImpl = {
     mkdir: fs.mkdir.bind(fs),
     writeFile: fs.writeFile.bind(fs),
+    chown: async (targetPath, uid, gid) => {
+      chownCalls.push([targetPath, uid, gid]);
+    },
     chmod: async (targetPath, mode) => {
       chmodCalls.push([targetPath, mode]);
       return fs.chmod(targetPath, mode);
@@ -146,6 +150,7 @@ test('workspace MCP config resolves uploaded helper script into private docker r
       workspaceId: workspace.id,
       runtimeMode: 'docker',
       runtimeHomePath,
+      runtimeOwner: { uid: 1000, gid: 1000 },
       multitenancy,
       fsImpl,
     });
@@ -166,6 +171,15 @@ test('workspace MCP config resolves uploaded helper script into private docker r
     assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === helperDirectory && mode === 0o755), true);
     assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === scriptPath && mode === 0o755), true);
     assert.equal(chmodCalls.some(([targetPath, mode]) => targetPath === envPath && mode === 0o644), true);
+    for (const targetPath of [cloudcliPath, helperRoot, helperDirectory, scriptPath, envPath]) {
+      assert.equal(
+        chownCalls.some(([chownedPath, uid, gid]) => (
+          chownedPath === targetPath && uid === 1000 && gid === 1000
+        )),
+        true,
+        `${targetPath} should be owned by the Docker runtime user`,
+      );
+    }
 
     if (process.platform !== 'win32') {
       assert.equal((await fs.stat(cloudcliPath)).mode & 0o777, 0o755);

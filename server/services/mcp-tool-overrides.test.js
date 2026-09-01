@@ -125,6 +125,127 @@ test('applyMcpToolOverrides supports sparse configs with only custom parameters'
   });
 });
 
+test('applyMcpToolOverrides fills only missing parameters configured as defaults', () => {
+  const result = applyMcpToolOverrides({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {
+      query: 'model query',
+      max_results: 3,
+    },
+    config: {
+      version: 1,
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { mode: 'default', value: 'default query' },
+                max_results: { mode: 'default', value: 8 },
+                indexes: { mode: 'default', value: ['engineering', 'policy'] },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.appliedParams, ['indexes']);
+  assert.deepEqual(result.input, {
+    query: 'model query',
+    max_results: 3,
+    indexes: ['engineering', 'policy'],
+  });
+});
+
+test('applyMcpToolOverrides always replaces parameters configured as forced values', () => {
+  const result = applyMcpToolOverrides({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {
+      query: 'model query',
+      max_results: null,
+    },
+    config: {
+      version: 1,
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { mode: 'force', value: 'forced query' },
+                max_results: { mode: 'force', value: 8 },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.appliedParams, ['query', 'max_results']);
+  assert.deepEqual(result.input, {
+    query: 'forced query',
+    max_results: 8,
+  });
+});
+
+test('applyMcpToolOverrides injects a forced value when the caller omits the parameter', () => {
+  const result = applyMcpToolOverrides({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {
+      query: 'model query',
+    },
+    config: {
+      version: 1,
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                max_results: { mode: 'force', value: 8 },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.appliedParams, ['max_results']);
+  assert.deepEqual(result.input, {
+    query: 'model query',
+    max_results: 8,
+  });
+});
+
+test('applyMcpToolOverrides treats an explicitly empty forced string as a value', () => {
+  const result = applyMcpToolOverrides({
+    toolName: 'mcp__typed_python_mcp__search_docs',
+    input: {},
+    config: {
+      version: 1,
+      mcpServers: {
+        typed_python_mcp: {
+          tools: {
+            search_docs: {
+              params: {
+                query: { mode: 'force', value: '' },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.appliedParams, ['query']);
+  assert.deepEqual(result.input, { query: '' });
+});
+
 test('applyMcpToolOverrides leaves non-custom and non-MCP inputs unchanged', () => {
   const config = {
     mcpServers: {
@@ -345,4 +466,3 @@ test('readMcpToolOverridesConfig logs trace marker and candidate paths', async (
     assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'relative'));
   });
 });
-

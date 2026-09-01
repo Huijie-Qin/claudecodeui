@@ -6,6 +6,7 @@ import SettingsCard from '../SettingsCard';
 import SettingsRow from '../SettingsRow';
 import SettingsSection from '../SettingsSection';
 import SettingsToggle from '../SettingsToggle';
+import { useUiPreferences } from '../../../../hooks/useUiPreferences';
 
 type AppearanceSettingsTabProps = {
   projectSortOrder: ProjectSortOrder;
@@ -29,6 +30,7 @@ export default function AppearanceSettingsTab({
   onCodeEditorFontSizeChange,
 }: AppearanceSettingsTabProps) {
   const { t } = useTranslation('settings');
+  const { preferences, setPreference } = useUiPreferences();
 
   return (
     <div className="space-y-8">
@@ -63,6 +65,21 @@ export default function AppearanceSettingsTab({
               <option value="name">{t('appearanceSettings.projectSorting.alphabetical')}</option>
               <option value="date">{t('appearanceSettings.projectSorting.recentActivity')}</option>
             </select>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title={t('appearanceSettings.files.title')}>
+        <SettingsCard>
+          <SettingsRow
+            label={t('appearanceSettings.files.showInternalConfigFiles.label')}
+            description={t('appearanceSettings.files.showInternalConfigFiles.description')}
+          >
+            <SettingsToggle
+              checked={preferences.showInternalConfigFiles}
+              onChange={(value) => setPreference('showInternalConfigFiles', value)}
+              ariaLabel={t('appearanceSettings.files.showInternalConfigFiles.label')}
+            />
           </SettingsRow>
         </SettingsCard>
       </SettingsSection>

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { Project } from '../../../types/app';
 
-import { getAllSessions, getSessionDate } from './utils';
+import { getAllSessions, getSessionDate, getWorkspaceDeleteRequest } from './utils';
 
 const makeProject = (sessions: Project['sessions']): Project => ({
   name: 'workspace-a',
@@ -73,4 +73,15 @@ test('getSessionDate treats SQLite CURRENT_TIMESTAMP values as UTC', () => {
     }).toISOString(),
     '2026-04-29T03:25:02.000Z',
   );
+});
+
+test('workspace deletion always requests permanent data deletion', () => {
+  assert.deepEqual(getWorkspaceDeleteRequest(0), {
+    force: false,
+    deleteData: true,
+  });
+  assert.deepEqual(getWorkspaceDeleteRequest(3), {
+    force: true,
+    deleteData: true,
+  });
 });

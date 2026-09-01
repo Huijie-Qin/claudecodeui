@@ -35,11 +35,10 @@ tools/
 
 ### OneLineDisplay
 
-Used by: Bash, Read, Grep, Glob, TodoRead, TaskCreate, TaskUpdate, TaskGet
+Used by: Read, Grep, Glob, TodoRead, TaskCreate, TaskUpdate, TaskGet
 
 Renders as a single line with `border-l-2` accent. Supports multiple rendering modes based on `action`:
 
-- **terminal** (`style: 'terminal'`) — Dark pill around command text, green `$` prompt
 - **open-file** — Shows filename only (truncated from full path), clickable to open
 - **jump-to-results** — Shows pattern with anchor link to result section
 - **copy** — Shows value with hover copy button
@@ -48,7 +47,7 @@ Renders as a single line with `border-l-2` accent. Supports multiple rendering m
 ```tsx
 <OneLineDisplay
   toolName="Read"
-  icon="terminal"           // Optional icon or style keyword
+  icon="icon"               // Optional icon
   label="Read"              // Tool label
   value="/path/to/file.ts"  // Main display value
   secondary="description"   // Optional secondary text (italic)
@@ -67,7 +66,7 @@ Renders as a single line with `border-l-2` accent. Supports multiple rendering m
 
 ### CollapsibleDisplay
 
-Used by: Edit, Write, ApplyPatch, Grep/Glob results, TodoWrite, TaskList/TaskGet results, ExitPlanMode, Default
+Used by: Bash, Edit, Write, ApplyPatch, Grep/Glob results, TodoWrite, TaskList/TaskGet results, ExitPlanMode, Default
 
 Wraps `CollapsibleSection` (`<details>`/`<summary>`) with a `border-l-2` accent colored by tool category. Accepts **children** directly (not contentProps).
 
@@ -90,7 +89,6 @@ Wraps `CollapsibleSection` (`<details>`/`<summary>`) with a `border-l-2` accent 
 | Category | Tools | Color |
 |----------|-------|-------|
 | `edit` | Edit, Write, ApplyPatch | amber |
-| `bash` | Bash | green |
 | `search` | Grep, Glob | gray |
 | `todo` | TodoWrite, TodoRead | violet |
 | `task` | TaskCreate/Update/List/Get | violet |
@@ -158,7 +156,6 @@ interface ToolDisplayConfig {
     getValue?: (input) => string;
     getSecondary?: (input) => string | undefined;
     action?: 'copy' | 'open-file' | 'jump-to-results' | 'none';
-    style?: string;                              // 'terminal' for Bash
     wrapText?: boolean;
     colorScheme?: {
       primary?: string;
@@ -171,6 +168,7 @@ interface ToolDisplayConfig {
     // Collapsible
     title?: string | ((input) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task';
     getContentProps?: (input, helpers?) => any;
     actionButton?: 'none';
@@ -179,9 +177,11 @@ interface ToolDisplayConfig {
   result?: {
     hidden?: boolean;                            // Never show
     hideOnSuccess?: boolean;                     // Only show errors
+    hideWhen?: (result) => boolean;              // Hide matching results
     type?: 'one-line' | 'collapsible' | 'special';
     title?: string | ((result) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task';
     getMessage?: (result) => string;
     getContentProps?: (result) => any;
@@ -195,7 +195,7 @@ interface ToolDisplayConfig {
 
 | Tool | Input | Result | Notes |
 |------|-------|--------|-------|
-| Bash | terminal one-line | hide success | Dark command pill, green accent |
+| Bash | collapsed command | collapsed output | Expands content below on demand |
 | Read | one-line (open-file) | hidden | Shows filename, clicks to open |
 | Edit | collapsible (diff) | hide success | Amber border, clickable filename |
 | Write | collapsible (diff) | hide success | "New" badge on diff |

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type FocusEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { cn } from '../../../lib/utils';
@@ -101,6 +101,19 @@ function Tooltip({
     setIsVisible(false);
   };
 
+  const handleFocus = () => {
+    clearTooltipTimer();
+    setIsVisible(true);
+  };
+
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const nextFocusedElement = event.relatedTarget;
+    if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+      return;
+    }
+    setIsVisible(false);
+  };
+
   const handleTouchStart = () => {
     clearTooltipTimer();
     longPressTriggeredRef.current = false;
@@ -172,6 +185,8 @@ function Tooltip({
       className="relative inline-block"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocusCapture={handleFocus}
+      onBlurCapture={handleBlur}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}

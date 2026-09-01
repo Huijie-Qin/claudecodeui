@@ -586,6 +586,14 @@ test('workspace share route lets owners replace ACL entries', async () => {
 
 test('workspace sql check route resolves tenant config and stores user overrides', async () => {
   const seen = { access: [] };
+  const enforcement = {
+    available: true,
+    enabled: false,
+    hookId: 'sql-hook',
+    hookName: 'SQL Check 强制校验',
+    hookStatus: 'published',
+    reason: null,
+  };
   const config = {
     tenantId: 2,
     workspaceId: 10,
@@ -623,6 +631,14 @@ test('workspace sql check route resolves tenant config and stores user overrides
         },
       },
     },
+    hookConfigs: {
+      getSqlCheckEnforcement: ({ userId }) => ({ ...enforcement, userId }),
+      setSqlCheckEnforcement: ({ userId, enabled }) => {
+        seen.enforcement = { userId, enabled };
+        enforcement.enabled = enabled;
+        return { ...enforcement };
+      },
+    },
   });
 
   const loaded = await requestJson(router, '/10/sql-check');
@@ -630,9 +646,14 @@ test('workspace sql check route resolves tenant config and stores user overrides
     method: 'PUT',
     body: { customEnabled: true, ruleIds: ['limit_rows'] },
   });
+  const enforcementSaved = await requestJson(router, '/10/sql-check/enforcement', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
 
   assert.equal(loaded.response.status, 200);
   assert.deepEqual(loaded.payload.effectiveRuleIds, ['require_where']);
+  assert.equal(loaded.payload.enforcement.enabled, false);
   assert.equal(saved.response.status, 200);
   assert.deepEqual(seen.saved, {
     tenantId: 2,
@@ -643,4 +664,140 @@ test('workspace sql check route resolves tenant config and stores user overrides
   });
   assert.equal(seen.access.every((args) => args.requireEdit !== true), true);
   assert.deepEqual(saved.payload.effectiveRuleIds, ['limit_rows']);
+  assert.equal(enforcementSaved.response.status, 200);
+  assert.deepEqual(seen.enforcement, { userId: 1, enabled: true });
+  assert.equal(enforcementSaved.payload.enforcement.enabled, true);
+});
+
+test('workspace Hook settings list eligible Hooks and materialize resources before enabling', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'notify-hook',
+    name: '对话正常结束通知',
+    status: 'published',
+    bindingController: 'admin',
+    enabled: false,
+    showInChat: true,
+    postActions: [{ type: 'invoke_skill' }],
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: () => ({
+        workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+        accessRole: 'view',
+      }),
+    },
+    hookConfigs: {
+      listAvailableHooksForUser: (userId) => {
+        seen.push(['list', userId]);
+        return [availableHook];
+      },
+      getHook: (hookId) => ({ ...availableHook, id: hookId }),
+      setUserHookEnabled: ({ userId, hookId, enabled }) => {
+        seen.push(['enable', userId, hookId, enabled]);
+        return { hookId, enabled };
+      },
+      setUserHookChatVisibility: ({ userId, hookId, showInChat }) => {
+        seen.push(['visibility', userId, hookId, showInChat]);
+        return { hookId, showInChat };
+      },
+    },
+    hookResources: {
+      materializeHook: async ({ hook, workspacePath }) => {
+        seen.push(['materialize', hook.id, workspacePath]);
+        return { root: `${workspacePath}/.cloudcli/hook-config` };
+      },
+    },
+  });
+
+  const listed = await requestJson(router, '/10/hooks');
+  const enabled = await requestJson(router, '/10/hooks/notify-hook', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+  const hidden = await requestJson(router, '/10/hooks/notify-hook/chat-visibility', {
+    method: 'PUT',
+    body: { showInChat: false },
+  });
+
+  assert.equal(listed.response.status, 200);
+  assert.equal(listed.payload.hooks[0].name, '对话正常结束通知');
+  assert.equal(enabled.response.status, 200);
+  assert.equal(hidden.response.status, 200);
+  assert.equal(hidden.payload.showInChat, false);
+  assert.deepEqual(seen, [
+    ['list', 1],
+    ['list', 1],
+    ['materialize', 'notify-hook', '/tmp/hook-workspace'],
+    ['enable', 1, 'notify-hook', true],
+    ['list', 1],
+    ['visibility', 1, 'notify-hook', false],
+  ]);
+});
+
+test('workspace Hook execution history is forced to the current user, tenant, and workspace', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'record-hook',
+    name: 'SQL 行数记录',
+    eventName: 'Stop',
+    status: 'published',
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: (args) => {
+        seen.push(['access', args]);
+        return {
+          workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+          accessRole: 'view',
+        };
+      },
+    },
+    hookConfigs: {
+      listAvailableHooksForUser: (userId) => {
+        seen.push(['available', userId]);
+        return [availableHook];
+      },
+      listUserExecutionPage: (filters) => {
+        seen.push(['history', filters]);
+        return {
+          executions: [{ id: 'execution-1', hookId: availableHook.id, records: [] }],
+          standaloneRecords: [],
+          total: 1,
+          executionTotal: 1,
+          limit: 20,
+          offset: 0,
+        };
+      },
+    },
+  });
+
+  const loaded = await requestJson(
+    router,
+    '/10/hooks/record-hook/executions?limit=20&offset=0&userId=999&tenantId=999',
+  );
+
+  assert.equal(loaded.response.status, 200);
+  assert.equal(loaded.payload.hook.name, 'SQL 行数记录');
+  assert.deepEqual(loaded.payload.executions.map((execution) => execution.id), ['execution-1']);
+  assert.deepEqual(seen, [
+    ['access', { tenantId: 2, userId: 1, workspaceId: 10 }],
+    ['available', 1],
+    ['history', {
+      hookId: 'record-hook',
+      userId: 1,
+      tenantId: 2,
+      workspaceId: 10,
+      limit: '20',
+      offset: '0',
+    }],
+  ]);
 });

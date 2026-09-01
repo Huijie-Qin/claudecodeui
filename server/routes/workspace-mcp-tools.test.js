@@ -82,6 +82,7 @@ test('GET /:workspaceId/mcp-tools returns catalog for view-only users', async ()
   assert.deepEqual(seen.catalogArgs, {
     tenantId: 2,
     workspaceId: 10,
+    userId: 7,
     workspacePath: '/tmp/workspace',
     accessRole: 'view',
   });
@@ -145,4 +146,36 @@ test('POST /:workspaceId/mcp-tools/:presetId/install installs without a modal pa
     userId: 7,
   });
   assert.equal(payload.installed.containerPath, '/workspace/.mcp.json');
+});
+
+test('PUT /:workspaceId/mcp-tools/:presetId/tool-preference saves the current user selection', async () => {
+  const seen = {};
+  const router = createRouter({
+    accessRole: 'view',
+    service: {
+      updateWorkspaceMcpToolPreference: (args) => {
+        seen.preferenceArgs = args;
+        return {
+          presetId: args.presetId,
+          allowedToolNames: args.allowedToolNames,
+          toolSelectionConfigured: true,
+        };
+      },
+    },
+  });
+
+  const { response, payload } = await requestJson(router, '/10/mcp-tools/3/tool-preference?tenantId=2', {
+    method: 'PUT',
+    body: { allowedToolNames: ['search_docs'] },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen.preferenceArgs, {
+    tenantId: 2,
+    workspaceId: 10,
+    presetId: 3,
+    userId: 7,
+    allowedToolNames: ['search_docs'],
+  });
+  assert.deepEqual(payload.preference.allowedToolNames, ['search_docs']);
 });

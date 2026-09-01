@@ -6,11 +6,14 @@ import FileTreeNode from './FileTreeNode';
 
 type FileTreeListProps = {
   items: FileTreeNodeType[];
+  activePath?: string | null;
+  showSelectionControls?: boolean;
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   dropTarget?: string | null;
   selectedPaths?: Set<string>;
   internalDropTarget?: string | null;
+  focusedDirectoryPath?: string | null;
   onSelectionChange?: (item: FileTreeNodeType, additive: boolean) => void;
   onInternalDragStart?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
   onInternalDragOver?: (item: FileTreeNodeType, event: DragEvent<HTMLDivElement>) => void;
@@ -27,6 +30,8 @@ type FileTreeListProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onMove?: (item: FileTreeNodeType) => void;
+  onMoveSelection?: () => void;
+  onDeleteSelection?: () => void;
   onUpload?: (path: string) => void;
   onUploadFolder?: (path: string) => void;
   onRefresh?: () => void;
@@ -50,11 +55,14 @@ type FileTreeListProps = {
 
 export default function FileTreeList({
   items,
+  activePath,
+  showSelectionControls,
   viewMode,
   expandedDirs,
   dropTarget,
   selectedPaths,
   internalDropTarget,
+  focusedDirectoryPath,
   onSelectionChange,
   onInternalDragStart,
   onInternalDragOver,
@@ -71,6 +79,8 @@ export default function FileTreeList({
   onCopyPath,
   onDownload,
   onMove,
+  onMoveSelection,
+  onDeleteSelection,
   onUpload,
   onUploadFolder,
   onRefresh,
@@ -96,12 +106,15 @@ export default function FileTreeList({
         <FileTreeNode
           key={item.path}
           item={item}
+          activePath={activePath}
+          showSelectionControls={showSelectionControls}
           level={0}
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           dropTarget={dropTarget}
           selectedPaths={selectedPaths}
           internalDropTarget={internalDropTarget}
+          focusedDirectoryPath={focusedDirectoryPath}
           onSelectionChange={onSelectionChange}
           onInternalDragStart={onInternalDragStart}
           onInternalDragOver={onInternalDragOver}
@@ -118,6 +131,8 @@ export default function FileTreeList({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onMove={onMove}
+          onMoveSelection={onMoveSelection}
+          onDeleteSelection={onDeleteSelection}
           onUpload={onUpload}
           onUploadFolder={onUploadFolder}
           onRefresh={onRefresh}

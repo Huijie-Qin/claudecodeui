@@ -13,7 +13,12 @@ import type { LLMProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
-import { computeMerged, reconcileRealtimeAfterServerRefresh } from './sessionMerge';
+import {
+  computeMerged,
+  dropSupersededStreamingPlaceholders,
+  reconcileRealtimeAfterServerRefresh,
+  upsertRealtimeMessages,
+} from './sessionMerge';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -31,7 +36,8 @@ export type MessageKind =
   | 'permission_cancelled'
   | 'session_created'
   | 'interactive_prompt'
-  | 'task_notification';
+  | 'task_notification'
+  | 'hook_activity';
 
 export interface NormalizedMessage {
   id: string;
@@ -41,8 +47,14 @@ export interface NormalizedMessage {
   kind: MessageKind;
 
   // kind-specific fields (flat for simplicity)
+  origin?: 'hook';
+  activityKind?: 'execution' | 'followup';
+  hookActivityId?: string;
   role?: 'user' | 'assistant';
   content?: string;
+  clientMessageId?: string;
+  queueStatus?: 'queued' | 'processing' | 'failed';
+  queuePosition?: number;
   images?: string[];
   toolName?: string;
   toolInput?: unknown;
@@ -60,6 +72,28 @@ export interface NormalizedMessage {
   newSessionId?: string;
   status?: string;
   summary?: string;
+  jobId?: string;
+  executionId?: string;
+  hookId?: string;
+  hookName?: string;
+  actionId?: string;
+  actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
+  eventName?: string;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionResults?: Array<{
+    actionId: string;
+    actionType: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record';
+    output?: unknown;
+    record?: {
+      id: string;
+      type?: string;
+      data?: unknown;
+      createdAt?: string;
+    };
+  }>;
+  hasScript?: boolean;
+  skillName?: string;
+  error?: string;
   taskId?: string;
   toolUseId?: string;
   outputFile?: string;
@@ -70,7 +104,17 @@ export interface NormalizedMessage {
   actualSessionId?: string;
   parentToolUseId?: string;
   subagentTools?: unknown[];
+  subagentMessages?: NormalizedMessage[];
   isFinal?: boolean;
+  mcpLoopReplacement?: boolean;
+  mcpLoopJobId?: string;
+  loopJobId?: string;
+  loopStatus?: string;
+  loopAttemptCount?: number;
+  loopStartedAtMs?: number;
+  loopNextPollAtMs?: number;
+  loopTargetTool?: string;
+  loopToolUseId?: string;
   // Cursor-specific ordering
   sequence?: number;
   rowid?: number;
@@ -262,11 +306,9 @@ export function useSessionStore() {
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    const shouldReplaceStream = msg.kind === 'text' && msg.role === 'assistant';
-    const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
-      : slot.realtimeMessages;
-    let updated = [...current, msg];
+    let updated = dropSupersededStreamingPlaceholders(
+      upsertRealtimeMessages(slot.realtimeMessages, [msg]),
+    );
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -281,11 +323,9 @@ export function useSessionStore() {
   const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
     if (msgs.length === 0) return;
     const slot = getSlot(sessionId);
-    const shouldReplaceStream = msgs.some(msg => msg.kind === 'text' && msg.role === 'assistant');
-    const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
-      : slot.realtimeMessages;
-    let updated = [...current, ...msgs];
+    let updated = dropSupersededStreamingPlaceholders(
+      upsertRealtimeMessages(slot.realtimeMessages, msgs),
+    );
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -358,7 +398,7 @@ export function useSessionStore() {
     sessionId: string,
     accumulatedText: string,
     msgProvider: LLMProvider,
-    options: { id?: string; timestamp?: string } = {},
+    options: { id?: string; timestamp?: string; parentToolUseId?: string } = {},
   ) => {
     const slot = getSlot(sessionId);
     const streamId = options.id || `__streaming_${sessionId}`;
@@ -370,6 +410,7 @@ export function useSessionStore() {
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
+      ...(options.parentToolUseId ? { parentToolUseId: options.parentToolUseId } : {}),
     };
     const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
     if (idx >= 0) {

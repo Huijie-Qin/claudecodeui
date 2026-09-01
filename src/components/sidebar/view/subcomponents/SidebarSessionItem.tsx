@@ -12,6 +12,7 @@ import { createSessionViewModel } from '../../utils/utils';
 type SidebarSessionItemProps = {
   project: Project;
   session: SessionWithProvider;
+  isProcessing: boolean;
   selectedSession: ProjectSession | null;
   currentTime: Date;
   editingSession: string | null;
@@ -35,6 +36,7 @@ type SidebarSessionItemProps = {
 export default function SidebarSessionItem({
   project,
   session,
+  isProcessing,
   selectedSession,
   currentTime,
   editingSession,
@@ -49,7 +51,7 @@ export default function SidebarSessionItem({
   onDeleteSession,
   t,
 }: SidebarSessionItemProps) {
-  const sessionView = createSessionViewModel(session, currentTime, t);
+  const sessionView = createSessionViewModel(session, t);
   const isSelected = selectedSession?.id === session.id;
   const isFavorited = session.isFavorited === true;
   const isScheduledTaskSession = session.isScheduledTaskSession === true;
@@ -74,7 +76,7 @@ export default function SidebarSessionItem({
   };
   return (
     <div className="group relative">
-      {sessionView.isActive && (
+      {isProcessing && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
         </div>
@@ -86,7 +88,7 @@ export default function SidebarSessionItem({
             'p-2 mx-3 my-0.5 rounded-md bg-card border active:scale-[0.98] transition-all duration-150 relative',
             isSelected ? 'bg-primary/10 border-primary/30' : '',
             !isSelected &&
-              (sessionView.isActive
+              (isProcessing
                 ? 'border-green-500/30 bg-green-50/5 dark:bg-green-900/5'
                 : 'border-border/30'),
           )}
