@@ -41,4 +41,12 @@ test('canUnpublishSkill only allows the creator-owned local published binding', 
     canManage: true,
     skill: { canPublish: false, origin: 'local', bindingType: 'published' },
   }), false);
+  assert.equal(canUnpublishSkill({
+    canManage: false,
+    skill: { canPublish: true, origin: 'local', bindingType: 'published' },
+  }), false);
+  assert.equal(canUnpublishSkill({
+    canManage: true,
+    skill: { canPublish: true, origin: 'local', bindingType: 'imported' },
+  }), false);
 });

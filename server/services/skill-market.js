@@ -778,7 +778,7 @@ async function unpublishMarketSkillUnlocked({
   }
 
   const remoteAccountId = accountId ?? currentUsername;
-  await requestMarketJson('/portal/skill/delete', {
+  await requestMarketJson('/api/skill/delete', {
     method: 'POST',
     tenantCode,
     accountId: remoteAccountId,

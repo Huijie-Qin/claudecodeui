@@ -29,16 +29,18 @@ import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
 import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
+import SkillUnpublishAction from './SkillUnpublishAction';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
 import { canEditSkillDetailEntries, getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
+import { canUnpublishSkill } from './utils/skillPublish';
 import { selectSkillUploadArchive } from './utils/skillUpload';
+import { getSkillTabClickDecision, type SkillsView } from './utils/skillViewRefresh';
 
 type SkillsWorkspacePanelProps = {
   selectedProject: Project;
   isReadOnly: boolean;
 };
 
-type SkillsView = 'market' | 'mine';
 type DetailSource = 'market' | 'mine';
 
 type MarketSkill = {
@@ -55,6 +57,7 @@ type MarketSkill = {
   remoteDeleted?: boolean;
   updateAvailable?: boolean;
   locallyModified?: boolean;
+  canPublish?: boolean;
   bindingType?: 'published' | 'imported';
   diagnostics?: Array<{ code: string; message: string; path?: string }>;
   targetPath?: string;
@@ -135,6 +138,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const [overwriteConfirmation, setOverwriteConfirmation] = useState<{ skillName: string } | null>(null);
   const [nameConflict, setNameConflict] = useState<{ name: string } | null>(null);
   const mine = useWorkspaceSkills(workspaceId);
+  const tabRefreshInFlightRef = useRef<Record<SkillsView, boolean>>({ market: false, mine: false });
   const canManage = !isReadOnly && mine.data?.canManage !== false;
   const dirty = editing && file?.content !== editContent;
 
@@ -271,15 +275,32 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const guardUnsaved = () => !dirty || window.confirm('当前文件有未保存的修改，确定放弃吗？');
 
   const changeView = (nextView: SkillsView) => {
-    if (nextView === view || !guardUnsaved()) return;
-    setView(nextView);
-    setDetailTarget(null);
-    setDetail(null);
-    setSelectedFilePath(null);
-    setSelectedEntryPath(null);
-    setFile(null);
-    setEditing(false);
-    setMessage(null);
+    const decision = getSkillTabClickDecision({
+      currentView: view,
+      nextView,
+      marketLoading: marketLoading || marketLoadingMore,
+      mineLoading: mine.isLoading,
+    });
+
+    if (decision.shouldSwitch) {
+      if (!guardUnsaved()) return;
+      setView(nextView);
+      setDetailTarget(null);
+      setDetail(null);
+      setSelectedFilePath(null);
+      setSelectedEntryPath(null);
+      setFile(null);
+      setEditing(false);
+      setMessage(null);
+    }
+
+    if (!decision.refreshView || tabRefreshInFlightRef.current[decision.refreshView]) return;
+    const refreshView = decision.refreshView;
+    tabRefreshInFlightRef.current[refreshView] = true;
+    const refreshPromise = refreshView === 'market' ? loadMarket(1, true) : mine.reload();
+    void refreshPromise.finally(() => {
+      tabRefreshInFlightRef.current[refreshView] = false;
+    });
   };
 
   const selectFile = (filePath: string) => {
@@ -647,11 +668,18 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
                 await loadDetail(nextTarget, selectedFilePath);
                 setMessage({ kind: 'success', text: mode === 'upload' ? '技能已发布到技能市场。' : '技能更新已发布。' });
               }}
+            />
+          ) : null}
+          unpublishAction={detailTarget.source === 'market' && detail && canUnpublishSkill({ canManage, skill: detail }) ? (
+            <SkillUnpublishAction
+              workspaceId={workspaceId}
+              skillName={detailTarget.name}
+              disabled={!canManage || actionLoading}
+              onError={(text) => setMessage({ kind: 'error', text })}
               onUnpublished={async (unpublishedSkillName) => {
-                const nextTarget = { source: 'mine' as const, name: unpublishedSkillName };
                 notifyWorkspaceChanged(unpublishedSkillName, 'workspace-skill-unpublish');
                 await refreshAll();
-                await loadDetail(nextTarget, selectedFilePath);
+                resetDetail();
                 setMessage({ kind: 'success', text: '技能已从技能市场下架，本地 Skill 保持不变。' });
               }}
             />
@@ -884,6 +912,7 @@ function SkillDetailView({
   selectedFilePath,
   source,
   publishAction,
+  unpublishAction,
 }: {
   actionLoading: boolean;
   canManage: boolean;
@@ -913,6 +942,7 @@ function SkillDetailView({
   selectedFilePath: string | null;
   source: DetailSource;
   publishAction?: ReactNode;
+  unpublishAction?: ReactNode;
 }) {
   if (detailLoading) return <CenteredState icon={<Loader2 className="h-5 w-5 animate-spin" />} title="正在加载技能详情…" />;
   if (!detail) return <CenteredState icon={<AlertCircle className="h-5 w-5" />} title="技能详情不可用" action="返回" onAction={onBack} />;
@@ -936,6 +966,7 @@ function SkillDetailView({
         <div className="flex flex-wrap items-center gap-2">
           {source === 'market' && !marketInstalled ? <ActionButton icon={Plus} label="导入" primary onClick={() => onMarketAction('import')} disabled={!canManage || actionLoading} /> : null}
           {marketInstalled && updateAvailable ? <ActionButton icon={RefreshCw} label="更新" primary onClick={() => onMarketAction('update')} disabled={!canManage || actionLoading} /> : null}
+          {source === 'market' ? unpublishAction : null}
           {source === 'mine' ? publishAction : null}
           {marketInstalled ? <ActionButton icon={Trash2} label="移除" onClick={() => onMarketAction('remove')} disabled={!canManage || actionLoading} danger /> : null}
           {isLocalOrigin ? <ActionButton icon={Trash2} label="移除" onClick={onDeleteLocalSkill} disabled={!canManage || actionLoading} danger /> : null}

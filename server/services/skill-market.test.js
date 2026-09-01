@@ -922,7 +922,7 @@ test('uploadAndPublishLocalSkill suffixes only the market archive directory when
   }
 });
 
-test('reserveUnpublishMarketSkill calls the portal delete API, clears the binding, and retains local files', async () => {
+test('reserveUnpublishMarketSkill calls the signed delete API, clears the binding, and retains local files', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'published-local');
   await fs.mkdir(skillPath, { recursive: true });
@@ -939,23 +939,40 @@ test('reserveUnpublishMarketSkill calls the portal delete API, clears the bindin
   });
 
   let deletePayload = null;
+  const appid = 'delete-auth-app';
+  const authKey = '00112233445566778899aabbccddeeff';
   const server = http.createServer(async (req, res) => {
     const bodyBuffer = await readRequestBuffer(req);
+    const bodyText = bodyBuffer.toString('utf8');
     const endpoint = new URL(req.url || '/', 'http://127.0.0.1').pathname;
-    assert.equal(endpoint, '/dataagent-mirror/data-agent/portal/skill/delete');
+    assert.equal(endpoint, '/dataagent-mirror/data-agent/api/skill/delete');
     assert.equal(req.method, 'POST');
     assert.equal(req.headers['x-data-agent-tenant'], TEST_TENANT_CODE);
     assert.equal(req.headers['x-account-id'], TEST_ACCOUNT_ID);
-    deletePayload = parseJson(bodyBuffer.toString('utf8'));
+    assert.equal(
+      req.headers.authorization,
+      createExpectedAuthorization({
+        endpoint: '/data-agent/api/skill/delete',
+        payloadText: bodyText,
+        appid,
+        authKey,
+        actualAuthorization: req.headers.authorization,
+      }),
+    );
+    deletePayload = parseJson(bodyText);
     sendJson(res, { code: 0, message: 'success' });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const previousApiUrl = process.env.SKILL_MARKET_API_URL;
   const previousBaseUrl = process.env.SKILL_MARKET_BASE_URL;
+  const previousAppid = process.env.SKILL_MARKET_AUTH_APPID;
+  const previousAuthKey = process.env.SKILL_MARKET_AUTH_KEY;
   let result;
   try {
     process.env.SKILL_MARKET_BASE_URL = `http://127.0.0.1:${server.address().port}/dataagent-mirror`;
     delete process.env.SKILL_MARKET_API_URL;
+    process.env.SKILL_MARKET_AUTH_APPID = appid;
+    process.env.SKILL_MARKET_AUTH_KEY = authKey;
     result = await reserveUnpublishMarketSkill(withTenant({
       workspacePath,
       name: 'published-local',
@@ -965,6 +982,8 @@ test('reserveUnpublishMarketSkill calls the portal delete API, clears the bindin
   } finally {
     restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
     restoreEnv('SKILL_MARKET_BASE_URL', previousBaseUrl);
+    restoreEnv('SKILL_MARKET_AUTH_APPID', previousAppid);
+    restoreEnv('SKILL_MARKET_AUTH_KEY', previousAuthKey);
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 
@@ -979,7 +998,7 @@ test('reserveUnpublishMarketSkill calls the portal delete API, clears the bindin
   assert.equal(await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Published Local\n');
 });
 
-test('reserveUnpublishMarketSkill leaves the binding and local files unchanged when the portal delete fails', async () => {
+test('reserveUnpublishMarketSkill leaves the binding and local files unchanged when the delete API fails', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'failed-unpublish');
   await fs.mkdir(skillPath, { recursive: true });
@@ -1025,7 +1044,7 @@ test('reserveUnpublishMarketSkill leaves the binding and local files unchanged w
   assert.equal(await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Failed Unpublish\n');
 });
 
-test('reserveUnpublishMarketSkill validates confirmation, binding type, creator, and remote id before calling the portal', async () => {
+test('reserveUnpublishMarketSkill validates confirmation, binding type, creator, and remote id before calling the delete API', async () => {
   const workspacePath = await makeWorkspace();
   await writeLegacyMarketImport(workspacePath, 'guarded-unpublish', {
     name: 'guarded-unpublish',
