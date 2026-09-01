@@ -93,6 +93,7 @@ const sessionExecutionQueue = createClaudeSessionExecutionQueue();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
   parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 24 * 60 * 60 * 1000;
+const INTERACTIVE_STREAM_CLOSE_GRACE_MS = 60 * 1000;
 const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
 const STREAM_STALL_PAUSE_POLL_MS = 5000;
 const SUBAGENT_STOP_TIMEOUT_MS = parseInt(process.env.CLAUDE_SUBAGENT_STOP_TIMEOUT_MS, 10) || 1500;
@@ -474,6 +475,17 @@ function resolveClaudeModel(options = {}) {
   return runtimeEnvModel || envModel || options.model || CLAUDE_MODELS.DEFAULT;
 }
 
+function resolveInteractiveStreamCloseTimeoutMs(
+  env = {},
+  approvalTimeoutMs = INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS,
+) {
+  const configuredTimeoutMs = Number.parseInt(env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT, 10);
+  const minimumTimeoutMs = approvalTimeoutMs + INTERACTIVE_STREAM_CLOSE_GRACE_MS;
+  return Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? Math.max(configuredTimeoutMs, minimumTimeoutMs)
+    : minimumTimeoutMs;
+}
+
 /**
  * Maps CLI options to SDK-compatible options format
  * @param {Object} options - CLI options
@@ -497,6 +509,11 @@ function mapCliOptionsToSDK(options = {}) {
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = applyClaudeNativeSchedulingEnvironmentPolicy(
     executionEnv ? { ...executionEnv } : { ...process.env },
+  );
+  // Tool approval requests travel over the CLI's structured-input stream. Keep
+  // that stream alive for at least as long as the UI may wait for the user.
+  sdkOptions.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(
+    resolveInteractiveStreamCloseTimeoutMs(sdkOptions.env),
   );
 
   // Use CLAUDE_CLI_PATH if explicitly set, otherwise fall back to 'claude' on PATH.
@@ -1175,6 +1192,10 @@ function createPendingInteractionTracker() {
   };
 }
 
+function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions) {
+  return Boolean(pendingCompletion) && !pendingInteractions?.isPaused?.();
+}
+
 /**
  * Builds a Claude SDK user message. Text-only turns use native string content;
  * turns with images use content blocks so Claude receives native visual input.
@@ -1369,8 +1390,13 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
   };
 
   const emitPendingTurnCompletion = () => {
+    // Closing the completed turn also closes the structured-input stream used
+    // to answer AskUserQuestion. A result/idle event can race with that answer,
+    // so leave the completion pending until every interaction has settled.
+    if (!shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions)) {
+      return false;
+    }
     const completion = pendingTurnCompletion;
-    if (!completion) return false;
     pendingTurnCompletion = null;
 
     const completedSession = completion.sessionId ? getSession(completion.sessionId) : null;
@@ -2118,32 +2144,36 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       return { behavior: 'deny', message: decision.message ?? 'User declined tool interaction' };
     };
 
-    // Set stream-close timeout for interactive tools (Query constructor reads it synchronously). Claude Agent SDK has a default of 5s and this overrides it
+    // The SDK host reads this value synchronously, while the spawned CLI reads
+    // sdkOptions.env. Set both to the same approval-aware timeout.
     const prevStreamTimeout = process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
-    process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = '300000';
+    process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = sdkOptions.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
 
     let queryInstance;
     try {
-      queryInstance = query({
-        prompt: inputQueue,
-        options: sdkOptions
-      });
-    } catch (hookError) {
-      // Older/newer SDK versions may not accept hook shapes yet.
-      // Keep notification behavior operational via runtime events even if hook registration fails.
-      console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
-      delete sdkOptions.hooks;
-      queryInstance = query({
-        prompt: inputQueue,
-        options: sdkOptions
-      });
-    }
-
-    // Restore immediately — Query constructor already captured the value
-    if (prevStreamTimeout !== undefined) {
-      process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
-    } else {
-      delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      try {
+        queryInstance = query({
+          prompt: inputQueue,
+          options: sdkOptions
+        });
+      } catch (hookError) {
+        // Older/newer SDK versions may not accept hook shapes yet.
+        // Keep notification behavior operational via runtime events even if hook registration fails.
+        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        delete sdkOptions.hooks;
+        queryInstance = query({
+          prompt: inputQueue,
+          options: sdkOptions
+        });
+      }
+    } finally {
+      // Query construction has captured the host value; avoid leaking it into
+      // unrelated requests after either initialization attempt.
+      if (prevStreamTimeout !== undefined) {
+        process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = prevStreamTimeout;
+      } else {
+        delete process.env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT;
+      }
     }
 
     // Track the query instance for abort capability
@@ -3041,6 +3071,7 @@ export {
   mapCliOptionsToSDK,
   resolveToolApproval,
   resolveClaudeModel,
+  resolveInteractiveStreamCloseTimeoutMs,
   loadMcpConfig,
   getPendingApprovalsForSession,
   reconnectSessionWriter,
@@ -3050,6 +3081,7 @@ export {
   buildToolInteractionContext,
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,
+  shouldEmitClaudeTurnCompletion,
   stopActiveClaudeSubagentTasks,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,

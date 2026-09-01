@@ -155,6 +155,23 @@ test('mapCliOptionsToSDK preserves plan mode without enabling permission bypass'
   assert.ok(options.allowedTools.includes('Task'));
 });
 
+test('interactive stream timeout cannot expire before the tool approval timeout', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+
+  assert.equal(
+    claudeSdk.resolveInteractiveStreamCloseTimeoutMs({
+      CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: '5000',
+    }, 10_000),
+    70_000,
+  );
+  assert.equal(
+    claudeSdk.resolveInteractiveStreamCloseTimeoutMs({
+      CLAUDE_CODE_STREAM_CLOSE_TIMEOUT: '120000',
+    }, 10_000),
+    120_000,
+  );
+});
+
 test('buildToolInteractionContext preserves subagent and tool identities for UI routing', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 
@@ -368,6 +385,18 @@ test('Claude stream timeout stays paused until all concurrent interactions finis
 
   interactions.end('request-b');
   assert.equal(interactions.isPaused(), false);
+});
+
+test('Claude turn completion waits for AskUserQuestion responses before closing the stream', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const interactions = claudeSdk.createPendingInteractionTracker();
+  const completion = { sessionId: 'session-1' };
+
+  interactions.begin('ask-user-question-1');
+  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions), false);
+
+  interactions.end('ask-user-question-1');
+  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions), true);
 });
 
 test('Claude lifecycle tracker exposes active subagents for manual stop', async () => {
