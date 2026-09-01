@@ -35,7 +35,7 @@ tools/
 
 ### OneLineDisplay
 
-Used by: Bash, Read, Grep, Glob, TodoRead, TaskCreate, TaskUpdate, TaskGet
+Used by: Read, Grep, Glob, TodoRead, TaskCreate, TaskUpdate, TaskGet
 
 Renders as a single line with `border-l-2` accent. Supports multiple rendering modes based on `action`:
 
@@ -66,7 +66,7 @@ Renders as a single line with `border-l-2` accent. Supports multiple rendering m
 
 ### CollapsibleDisplay
 
-Used by: Edit, Write, ApplyPatch, Grep/Glob results, TodoWrite, TaskList/TaskGet results, ExitPlanMode, Default
+Used by: Bash, Edit, Write, ApplyPatch, Grep/Glob results, TodoWrite, TaskList/TaskGet results, ExitPlanMode, Default
 
 Wraps `CollapsibleSection` (`<details>`/`<summary>`) with a `border-l-2` accent colored by tool category. Accepts **children** directly (not contentProps).
 
@@ -168,6 +168,7 @@ interface ToolDisplayConfig {
     // Collapsible
     title?: string | ((input) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task';
     getContentProps?: (input, helpers?) => any;
     actionButton?: 'none';
@@ -180,6 +181,7 @@ interface ToolDisplayConfig {
     type?: 'one-line' | 'collapsible' | 'special';
     title?: string | ((result) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task';
     getMessage?: (result) => string;
     getContentProps?: (result) => any;
@@ -193,7 +195,7 @@ interface ToolDisplayConfig {
 
 | Tool | Input | Result | Notes |
 |------|-------|--------|-------|
-| Bash | one-line | collapsible text | Standard neutral tool styling |
+| Bash | collapsed command | collapsed output | Expands content below on demand |
 | Read | one-line (open-file) | hidden | Shows filename, clicks to open |
 | Edit | collapsible (diff) | hide success | Amber border, clickable filename |
 | Write | collapsible (diff) | hide success | "New" badge on diff |

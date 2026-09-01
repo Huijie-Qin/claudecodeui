@@ -25,6 +25,7 @@ export interface ToolDisplayConfig {
     // Collapsible config
     title?: string | ((input: any) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     contentType?: 'diff' | 'markdown' | 'file-list' | 'todo-list' | 'text' | 'task' | 'question-answer';
     getContentProps?: (input: any, helpers?: any) => any;
     actionButton?: 'file-button' | 'none';
@@ -36,6 +37,7 @@ export interface ToolDisplayConfig {
     type?: 'one-line' | 'collapsible' | 'plan' | 'special';
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
+    stickyHeader?: boolean;
     // Special result handlers
     contentType?: 'markdown' | 'file-list' | 'todo-list' | 'text' | 'success-message' | 'task' | 'question-answer';
     getMessage?: (result: any) => string;
@@ -354,23 +356,21 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
 
   Bash: {
     input: {
-      type: 'one-line',
-      label: 'Bash',
-      getValue: (input) => input.command,
-      action: 'copy',
-      wrapText: true,
-      colorScheme: {
-        primary: 'text-gray-700 dark:text-gray-300',
-        secondary: 'text-gray-500 dark:text-gray-400',
-        background: '',
-        border: 'border-gray-300 dark:border-gray-600',
-        icon: 'text-gray-500 dark:text-gray-400'
-      }
+      type: 'collapsible',
+      title: 'Command',
+      defaultOpen: false,
+      stickyHeader: false,
+      contentType: 'text',
+      getContentProps: (input) => ({
+        content: String(input?.command || ''),
+        format: 'code'
+      })
     },
     result: {
       type: 'collapsible',
       title: 'Output',
-      defaultOpen: true,
+      defaultOpen: false,
+      stickyHeader: false,
       contentType: 'text',
       hideWhen: (result) => !normalizeBashOutput(result).hasOutput,
       getContentProps: (result) => {

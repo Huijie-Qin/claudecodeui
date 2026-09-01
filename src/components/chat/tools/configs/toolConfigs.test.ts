@@ -75,11 +75,23 @@ test('Grep result title uses normalized search result count', () => {
   );
 });
 
-test('Bash uses the standard tool display with normalized output', () => {
-  assert.equal(TOOL_CONFIGS.Bash.input.type, 'one-line');
-  assert.equal(TOOL_CONFIGS.Bash.input.label, 'Bash');
-  assert.equal('style' in TOOL_CONFIGS.Bash.input, false);
+test('Bash command and output use collapsed standard tool displays', () => {
+  assert.equal(TOOL_CONFIGS.Bash.input.type, 'collapsible');
+  assert.equal(TOOL_CONFIGS.Bash.input.title, 'Command');
+  assert.equal(TOOL_CONFIGS.Bash.input.defaultOpen, false);
+  assert.equal(TOOL_CONFIGS.Bash.input.stickyHeader, false);
+  assert.deepEqual(
+    TOOL_CONFIGS.Bash.input.getContentProps?.({ command: 'npm run build' }),
+    {
+      content: 'npm run build',
+      format: 'code',
+    },
+  );
+
   assert.equal(TOOL_CONFIGS.Bash.result?.type, 'collapsible');
+  assert.equal(TOOL_CONFIGS.Bash.result?.title, 'Output');
+  assert.equal(TOOL_CONFIGS.Bash.result?.defaultOpen, false);
+  assert.equal(TOOL_CONFIGS.Bash.result?.stickyHeader, false);
 
   const getContentProps = TOOL_CONFIGS.Bash.result?.getContentProps;
   assert.deepEqual(

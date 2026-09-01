@@ -9,6 +9,7 @@ interface CollapsibleDisplayProps {
   toolId?: string;
   title: string;
   defaultOpen?: boolean;
+  stickyHeader?: boolean;
   meta?: React.ReactNode;
   action?: React.ReactNode;
   badge?: React.ReactNode;
@@ -35,6 +36,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
   toolName,
   title,
   defaultOpen = false,
+  stickyHeader = true,
   meta,
   action,
   badge,
@@ -53,6 +55,7 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
         title={title}
         toolName={toolName}
         open={defaultOpen}
+        stickyHeader={stickyHeader}
         meta={meta}
         action={action}
         badge={badge}

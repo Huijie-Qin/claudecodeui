@@ -294,6 +294,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         toolId={toolId}
         title={title}
         defaultOpen={defaultOpen}
+        stickyHeader={displayConfig.stickyHeader}
         onTitleClick={handleTitleClick}
         badge={badgeElement}
         showRawParameters={mode === 'input' && showRawParameters}
