@@ -192,6 +192,43 @@ test('Claude turn completion waits until an active background task is terminal',
   assert.equal(lifecycle.flush(), false);
 });
 
+test('Claude turn completion waits for authoritative idle when session-state events are available', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'running',
+  }), 'processing');
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-1',
+  }), 'processing');
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-1',
+    status: 'completed',
+  }), null);
+
+  // Parent output may still arrive here; it must not be cut off by an early
+  // main-turn completion after the child settles.
+  assert.equal(lifecycle.observe({
+    type: 'stream_event',
+    parent_tool_use_id: null,
+    event: { type: 'content_block_delta', delta: { text: 'final parent output' } },
+  }), null);
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), 'complete');
+  assert.equal(lifecycle.flush(), false);
+});
+
 test('Claude turn completion does not require idle after a task is already terminal', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();

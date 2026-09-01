@@ -205,6 +205,13 @@ function isAssistantText(message: NormalizedMessage): boolean {
   return message.kind === 'text' && message.role === 'assistant';
 }
 
+function isSameAgentStreamScope(
+  message: NormalizedMessage,
+  streamingPlaceholder: NormalizedMessage,
+): boolean {
+  return (message.parentToolUseId || '') === (streamingPlaceholder.parentToolUseId || '');
+}
+
 function isSupersedingAssistantText(
   message: NormalizedMessage,
   streamingPlaceholder: NormalizedMessage,
@@ -212,6 +219,7 @@ function isSupersedingAssistantText(
   if (!isAssistantText(message)) return false;
   if (message.sessionId !== streamingPlaceholder.sessionId) return false;
   if (message.provider !== streamingPlaceholder.provider) return false;
+  if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
 
   const messageTime = getMessageTime(message);
   const streamTime = getMessageTime(streamingPlaceholder);
@@ -220,7 +228,7 @@ function isSupersedingAssistantText(
   return messageTime >= streamTime;
 }
 
-function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
+export function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
   const filtered = messages.filter((message) => {
     if (!isStreamingPlaceholder(message)) return true;
     return !messages.some(candidate => isSupersedingAssistantText(candidate, message));

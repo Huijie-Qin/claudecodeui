@@ -15,6 +15,7 @@ import { authenticatedFetch } from '../utils/api';
 import { buildSessionMessagesUrl } from './sessionRequestUrl';
 import {
   computeMerged,
+  dropSupersededStreamingPlaceholders,
   reconcileRealtimeAfterServerRefresh,
   upsertRealtimeMessages,
 } from './sessionMerge';
@@ -305,11 +306,9 @@ export function useSessionStore() {
    */
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
     const slot = getSlot(sessionId);
-    const shouldReplaceStream = msg.kind === 'text' && msg.role === 'assistant';
-    const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
-      : slot.realtimeMessages;
-    let updated = upsertRealtimeMessages(current, [msg]);
+    let updated = dropSupersededStreamingPlaceholders(
+      upsertRealtimeMessages(slot.realtimeMessages, [msg]),
+    );
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
@@ -324,11 +323,9 @@ export function useSessionStore() {
   const appendRealtimeBatch = useCallback((sessionId: string, msgs: NormalizedMessage[]) => {
     if (msgs.length === 0) return;
     const slot = getSlot(sessionId);
-    const shouldReplaceStream = msgs.some(msg => msg.kind === 'text' && msg.role === 'assistant');
-    const current = shouldReplaceStream
-      ? slot.realtimeMessages.filter(m => !isStreamingPlaceholder(m))
-      : slot.realtimeMessages;
-    let updated = upsertRealtimeMessages(current, msgs);
+    let updated = dropSupersededStreamingPlaceholders(
+      upsertRealtimeMessages(slot.realtimeMessages, msgs),
+    );
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }

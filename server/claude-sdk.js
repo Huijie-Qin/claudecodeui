@@ -1013,6 +1013,11 @@ function createClaudeTurnLifecycleTracker() {
 
   const completeWaitingTurnIfTasksSettled = () => {
     if (!isWaitingForIdle || activeTasks.size > 0) return null;
+    // Once this SDK session has exposed session-state events, idle is the
+    // authoritative turn boundary. A terminal background-task notification
+    // can arrive before the parent assistant has flushed its held-back result,
+    // so completing here would drop the parent's trailing realtime output.
+    if (hasSeenSessionState) return null;
     isWaitingForIdle = false;
     return 'complete';
   };
@@ -1120,10 +1125,10 @@ function createClaudeTurnLifecycleTracker() {
         isWaitingForIdle = false;
         return true;
       }
-      // The SDK may omit the trailing idle event after background task
-      // lifecycle messages. A final result with no active tasks is still a
-      // complete turn; active tasks continue to block this fallback.
-      if (hasSeenTaskLifecycle && activeTasks.size === 0) {
+      // Older SDK/CLI combinations may omit session-state events entirely.
+      // In that mode, a final result with no active tasks is the safest
+      // available boundary; active tasks continue to block this fallback.
+      if (!hasSeenSessionState && hasSeenTaskLifecycle && activeTasks.size === 0) {
         isWaitingForIdle = false;
         return true;
       }
