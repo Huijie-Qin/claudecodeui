@@ -1031,11 +1031,10 @@ function createClaudeTurnLifecycleTracker() {
 
   const completeWaitingTurnIfTasksSettled = () => {
     if (!isWaitingForIdle || activeTasks.size > 0) return null;
-    // Once this SDK session has exposed session-state events, idle is the
-    // authoritative turn boundary. A terminal background-task notification
-    // can arrive before the parent assistant has flushed its held-back result,
-    // so completing here would drop the parent's trailing realtime output.
-    if (hasSeenSessionState) return null;
+    // When session-state events are available, both conditions matter: the
+    // parent session must be idle and every background task must be terminal.
+    // Parent idle alone only means it is waiting for its children.
+    if (hasSeenSessionState && !isCurrentlyIdle) return null;
     isWaitingForIdle = false;
     return 'complete';
   };
@@ -1074,7 +1073,13 @@ function createClaudeTurnLifecycleTracker() {
           : '';
         if (['completed', 'failed', 'killed', 'stopped', 'aborted', 'interrupted', 'cancelled', 'canceled'].includes(status)) {
           if (!taskId) return null;
-          activeTasks.delete(taskId);
+          const settledActiveTask = activeTasks.delete(taskId);
+          if (settledActiveTask && hasSeenSessionState) {
+            // An idle emitted before this terminal event described the parent
+            // waiting for its child. Require a fresh idle after the parent has
+            // had a chance to consume the child's result and resume output.
+            isCurrentlyIdle = false;
+          }
           return completeWaitingTurnIfTasksSettled();
         }
         if (taskId && ['pending', 'running'].includes(status)) {
@@ -1108,7 +1113,10 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenTaskLifecycle = true;
         const taskId = readTaskId(message);
         if (!taskId) return null;
-        activeTasks.delete(taskId);
+        const settledActiveTask = activeTasks.delete(taskId);
+        if (settledActiveTask && hasSeenSessionState) {
+          isCurrentlyIdle = false;
+        }
         return completeWaitingTurnIfTasksSettled();
       }
 
@@ -1116,12 +1124,10 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenSessionState = true;
         if (message.state === 'idle') {
           isCurrentlyIdle = true;
-          activeTasks.clear();
-          if (isWaitingForIdle) {
-            isWaitingForIdle = false;
-            return 'complete';
-          }
-          return null;
+          // Do not clear activeTasks here. Claude may mark the parent session
+          // idle while background agents are still running; their terminal
+          // lifecycle events are the authority for child completion.
+          return completeWaitingTurnIfTasksSettled();
         }
         if (message.state === 'running' || message.state === 'requires_action') {
           isCurrentlyIdle = false;

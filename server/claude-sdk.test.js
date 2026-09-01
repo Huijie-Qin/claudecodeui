@@ -246,6 +246,66 @@ test('Claude turn completion waits for authoritative idle when session-state eve
   assert.equal(lifecycle.flush(), false);
 });
 
+test('parent idle does not erase or complete active background agents', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'running',
+  });
+  lifecycle.observe({
+    type: 'system',
+    subtype: 'task_started',
+    task_id: 'agent-background',
+    tool_use_id: 'toolu_agent_background',
+  });
+  assert.equal(lifecycle.finishResult(0), false);
+
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), null);
+  assert.deepEqual(lifecycle.getActiveTasks().map((task) => task.taskId), ['agent-background']);
+
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: 'agent-background',
+    status: 'completed',
+  }), null);
+  assert.deepEqual(lifecycle.getActiveTasks(), []);
+
+  assert.equal(lifecycle.observe({
+    type: 'system',
+    subtype: 'session_state_changed',
+    state: 'idle',
+  }), 'complete');
+});
+
+test('background activity after parent idle requires a fresh idle boundary', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+
+  lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+  lifecycle.observe({ type: 'system', subtype: 'task_started', task_id: 'agent-background' });
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.observe({
+    type: 'system', subtype: 'session_state_changed', state: 'idle',
+  }), null);
+  assert.equal(lifecycle.observe({
+    type: 'system', subtype: 'task_progress', task_id: 'agent-background', summary: 'Still working',
+  }), 'processing');
+  assert.equal(lifecycle.observe({
+    type: 'system', subtype: 'task_notification', task_id: 'agent-background', status: 'completed',
+  }), null);
+  assert.equal(lifecycle.observe({
+    type: 'system', subtype: 'session_state_changed', state: 'idle',
+  }), 'complete');
+});
+
 test('Claude turn completion does not require idle after a task is already terminal', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
