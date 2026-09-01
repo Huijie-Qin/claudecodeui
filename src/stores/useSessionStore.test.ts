@@ -340,6 +340,27 @@ test('computeMerged hides segmented streaming placeholders once canonical assist
   assert.deepEqual(merged, [canonicalAssistant]);
 });
 
+test('a shorter canonical assistant message cannot hide the realtime stream tail', () => {
+  const streamingPlaceholder: NormalizedMessage = {
+    id: '__streaming_session-1_2',
+    sessionId: 'session-1',
+    timestamp: '2026-04-28T19:01:19.000Z',
+    provider: 'claude',
+    kind: 'stream_delta',
+    content: 'The complete parent response, including its final paragraph.',
+  };
+  const staleCanonicalAssistant = makeAssistantText({
+    id: 'msg_stale_canonical_assistant',
+    timestamp: '2026-04-28T19:01:19.500Z',
+    content: 'The complete parent response,',
+  });
+
+  assert.deepEqual(
+    dropSupersededStreamingPlaceholders([streamingPlaceholder, staleCanonicalAssistant]),
+    [streamingPlaceholder],
+  );
+});
+
 test('a subagent assistant message does not supersede the main-agent stream', () => {
   const mainStream: NormalizedMessage = {
     id: '__streaming_session-1_1',

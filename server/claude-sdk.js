@@ -96,6 +96,7 @@ const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
 const INTERACTIVE_STREAM_CLOSE_GRACE_MS = 60 * 1000;
 const STREAM_STALL_TIMEOUT_MS = parseInt(process.env.CLAUDE_STREAM_STALL_TIMEOUT_MS, 10) || 120000;
 const STREAM_STALL_PAUSE_POLL_MS = 5000;
+const TURN_COMPLETION_GRACE_MS = parseInt(process.env.CLAUDE_TURN_COMPLETION_GRACE_MS, 10) || 500;
 const SUBAGENT_STOP_TIMEOUT_MS = parseInt(process.env.CLAUDE_SUBAGENT_STOP_TIMEOUT_MS, 10) || 1500;
 const CLAUDE_DISABLED_TOOLS_ENV = 'CLAUDE_DISABLED_TOOLS';
 const execFileAsync = promisify(execFile);
@@ -1196,6 +1197,37 @@ function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions) 
   return Boolean(pendingCompletion) && !pendingInteractions?.isPaused?.();
 }
 
+function createClaudeTurnCompletionScheduler({
+  delayMs = TURN_COMPLETION_GRACE_MS,
+  onComplete,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+} = {}) {
+  let timer = null;
+
+  const cancel = () => {
+    if (timer === null) return false;
+    clearTimeoutFn(timer);
+    timer = null;
+    return true;
+  };
+
+  return {
+    schedule() {
+      cancel();
+      timer = setTimeoutFn(() => {
+        timer = null;
+        onComplete?.();
+      }, delayMs);
+      timer.unref?.();
+    },
+    cancel,
+    isScheduled() {
+      return Boolean(timer);
+    },
+  };
+}
+
 /**
  * Builds a Claude SDK user message. Text-only turns use native string content;
  * turns with images use content blocks so Claude receives native visual input.
@@ -1319,8 +1351,10 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
   let queuedFollowupTurn = null;
   let hookActivityTerminalSent = false;
   let turnBoundaryReached = false;
+  let turnCompletionScheduler = null;
   const inputQueue = new ClaudeInputQueue({
     onQueryPushed: () => {
+      turnCompletionScheduler?.cancel();
       pendingTurnCompletion = null;
       turnLifecycle.beginTurn();
     },
@@ -1447,6 +1481,25 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       });
     }
     turnBoundaryReached = true;
+    return true;
+  };
+
+  turnCompletionScheduler = createClaudeTurnCompletionScheduler({
+    onComplete: emitPendingTurnCompletion,
+  });
+
+  const schedulePendingTurnCompletion = () => {
+    if (
+      !pendingTurnCompletion ||
+      turnBoundaryReached ||
+      pendingInteractions.isPaused()
+    ) {
+      return false;
+    }
+    // Idle/result can be delivered before already-buffered trailing assistant
+    // messages. Complete only after the SDK stream has stayed quiet briefly;
+    // every subsequent event restarts this grace period.
+    turnCompletionScheduler.schedule();
     return true;
   };
 
@@ -2224,6 +2277,9 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       }
 
       const message = next.value;
+      if (pendingTurnCompletion) {
+        turnCompletionScheduler.cancel();
+      }
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
@@ -2305,7 +2361,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       // the UI never observes the parent turn as done while its last subagent
       // card is still running.
       if (lifecycleSignal === 'complete') {
-        emitPendingTurnCompletion();
+        schedulePendingTurnCompletion();
       }
 
       // Extract and send token budget updates from result messages
@@ -2356,17 +2412,23 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
 
         pendingTurnCompletion = { sessionId: completedSessionId };
         if (turnLifecycle.finishResult(remainingQueryTurns)) {
-          emitPendingTurnCompletion();
+          schedulePendingTurnCompletion();
         }
         if (turnBoundaryReached) {
           break;
         }
       }
+
+      if (pendingTurnCompletion) {
+        schedulePendingTurnCompletion();
+      }
     }
 
+    turnCompletionScheduler.cancel();
     if (turnLifecycle.flush()) {
       emitPendingTurnCompletion();
     }
+    emitPendingTurnCompletion();
 
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
@@ -2456,6 +2518,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     // Complete
 
   } catch (error) {
+    turnCompletionScheduler?.cancel();
     console.error('SDK query error:', error);
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
@@ -3082,6 +3145,7 @@ export {
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,
   shouldEmitClaudeTurnCompletion,
+  createClaudeTurnCompletionScheduler,
   stopActiveClaudeSubagentTasks,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,

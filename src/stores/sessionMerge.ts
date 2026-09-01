@@ -220,6 +220,10 @@ function isSupersedingAssistantText(
   if (message.sessionId !== streamingPlaceholder.sessionId) return false;
   if (message.provider !== streamingPlaceholder.provider) return false;
   if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  // A canonical assistant event can briefly lag behind the accumulated stream.
+  // Never discard a richer realtime snapshot in favor of a shorter copy, or
+  // the tail disappears until the persisted transcript is fetched again.
+  if ((message.content?.length || 0) < (streamingPlaceholder.content?.length || 0)) return false;
 
   const messageTime = getMessageTime(message);
   const streamTime = getMessageTime(streamingPlaceholder);
@@ -228,10 +232,34 @@ function isSupersedingAssistantText(
   return messageTime >= streamTime;
 }
 
+function isStaleAssistantPrefixOfStream(
+  message: NormalizedMessage,
+  streamingPlaceholder: NormalizedMessage,
+): boolean {
+  if (!isAssistantText(message) || !isStreamingPlaceholder(streamingPlaceholder)) return false;
+  if (message.sessionId !== streamingPlaceholder.sessionId) return false;
+  if (message.provider !== streamingPlaceholder.provider) return false;
+  if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  const messageContent = message.content || '';
+  const streamContent = streamingPlaceholder.content || '';
+  if (!messageContent || messageContent.length >= streamContent.length) return false;
+  if (!streamContent.startsWith(messageContent)) return false;
+
+  const messageTime = getMessageTime(message);
+  const streamTime = getMessageTime(streamingPlaceholder);
+  if (messageTime === null || streamTime === null) return true;
+  return messageTime >= streamTime;
+}
+
 export function dropSupersededStreamingPlaceholders(messages: NormalizedMessage[]): NormalizedMessage[] {
   const filtered = messages.filter((message) => {
-    if (!isStreamingPlaceholder(message)) return true;
-    return !messages.some(candidate => isSupersedingAssistantText(candidate, message));
+    if (isStreamingPlaceholder(message)) {
+      return !messages.some(candidate => isSupersedingAssistantText(candidate, message));
+    }
+    if (isAssistantText(message)) {
+      return !messages.some(candidate => isStaleAssistantPrefixOfStream(message, candidate));
+    }
+    return true;
   });
 
   return filtered.length === messages.length ? messages : filtered;

@@ -399,6 +399,39 @@ test('Claude turn completion waits for AskUserQuestion responses before closing 
   assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions), true);
 });
 
+test('Claude turn completion grace restarts when trailing parent output arrives', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  let completed = 0;
+  const timers = [];
+  const scheduler = claudeSdk.createClaudeTurnCompletionScheduler({
+    delayMs: 500,
+    onComplete: () => {
+      completed++;
+    },
+    setTimeoutFn: (callback, delayMs) => {
+      const timer = { callback, delayMs, cancelled: false, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeoutFn: (timer) => {
+      timer.cancelled = true;
+    },
+  });
+
+  scheduler.schedule();
+  scheduler.schedule();
+
+  assert.equal(timers.length, 2);
+  assert.equal(timers[0].cancelled, true);
+  assert.equal(timers[1].cancelled, false);
+  assert.equal(completed, 0);
+  assert.equal(scheduler.isScheduled(), true);
+
+  timers[1].callback();
+  assert.equal(completed, 1);
+  assert.equal(scheduler.isScheduled(), false);
+});
+
 test('Claude lifecycle tracker exposes active subagents for manual stop', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
