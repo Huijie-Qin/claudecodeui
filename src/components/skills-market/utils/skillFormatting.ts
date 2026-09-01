@@ -74,7 +74,8 @@ export function filterWorkspaceSkills(skills: WorkspaceSkill[], query: string): 
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return skills;
 
-  return skills.filter((skill) => getSkillSearchText(skill).includes(normalizedQuery));
+  return skills.filter((skill) => getSkillSearchFields(skill)
+    .some((value) => value.toLowerCase().includes(normalizedQuery)));
 }
 
 export function getSkillKindLabelKey(skill: WorkspaceSkill): string {
@@ -107,21 +108,13 @@ export function canEditSkillDetailEntries(source: 'market' | 'mine', canManage: 
   return source === 'mine' && canManage;
 }
 
-function getSkillSearchText(skill: WorkspaceSkill): string {
+function getSkillSearchFields(skill: WorkspaceSkill): string[] {
   return [
     skill.name,
     skill.displayName,
     skill.description,
-    skill.kind,
-    skill.status,
-    skill.sourceType,
-    skill.sourceUrl,
-    skill.resolvedCommit,
-    skill.sourceSubdir,
-    skill.sourceFileName,
-    skill.parseError,
+    skill.createUserId,
   ]
     .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+    .map(String);
 }

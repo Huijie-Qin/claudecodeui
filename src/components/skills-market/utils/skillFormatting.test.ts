@@ -14,12 +14,15 @@ import {
 const skills: WorkspaceSkill[] = [
   {
     name: 'unmanaged-one',
+    displayName: 'Runtime Navigator',
     description: 'Runtime folder skill',
     kind: 'unmanaged',
     status: 'available',
     enabled: true,
     manageable: false,
     sourceType: 'workspace-runtime',
+    origin: 'local',
+    createUserId: 'alice',
   },
   {
     name: 'managed-one',
@@ -29,6 +32,8 @@ const skills: WorkspaceSkill[] = [
     enabled: true,
     manageable: true,
     sourceType: 'github',
+    origin: 'market',
+    createUserId: 'Bob Builder',
   },
   {
     name: 'broken-one',
@@ -39,6 +44,7 @@ const skills: WorkspaceSkill[] = [
     manageable: false,
     sourceType: 'workspace-runtime',
     parseError: 'Invalid front matter',
+    files: [{ path: 'references/only-in-file.md', type: 'file' }],
   },
 ];
 
@@ -50,13 +56,21 @@ test('sortWorkspaceSkills keeps managed skills first and invalid skills visible'
   ]);
 });
 
-test('filterWorkspaceSkills matches name, description, kind, status, and parse errors', () => {
+test('filterWorkspaceSkills searches every local skill by name, display name, description, or creator', () => {
   assert.deepEqual(filterWorkspaceSkills(skills, 'cloudcli').map((skill) => skill.name), ['managed-one']);
-  assert.deepEqual(filterWorkspaceSkills(skills, 'unmanaged').map((skill) => skill.name), [
-    'unmanaged-one',
-    'broken-one',
-  ]);
-  assert.deepEqual(filterWorkspaceSkills(skills, 'front matter').map((skill) => skill.name), ['broken-one']);
+  assert.deepEqual(filterWorkspaceSkills(skills, '  BROKEN-ONE  ').map((skill) => skill.name), ['broken-one']);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'navigator').map((skill) => skill.name), ['unmanaged-one']);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'runtime folder').map((skill) => skill.name), ['unmanaged-one']);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'bob builder').map((skill) => skill.name), ['managed-one']);
+});
+
+test('filterWorkspaceSkills does not match status, source, parse errors, or other metadata', () => {
+  assert.deepEqual(filterWorkspaceSkills(skills, 'available'), []);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'workspace-runtime'), []);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'front matter'), []);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'market'), []);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'only-in-file'), []);
+  assert.deepEqual(filterWorkspaceSkills(skills, 'runtime navigator runtime folder'), []);
 });
 
 test('skill label helpers return translation keys for kind and status', () => {

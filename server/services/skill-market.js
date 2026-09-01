@@ -13,6 +13,8 @@ const DEFAULT_MARKET_API_URL = 'http://127.0.0.1:3101';
 const MARKET_REQUEST_TIMEOUT_MS = 10000;
 const MARKET_RESPONSE_LOG_SNIPPET_CHARS = 500;
 const DEFAULT_LIST_PAGE_SIZE = 20;
+const FULL_MARKET_SEARCH_PAGE_SIZE = 100;
+const MAX_FULL_MARKET_SEARCH_PAGES = 100;
 const MARKET_AUTH_SCHEME = 'CLOUDSOA-HMAC-SHA256';
 const MARKET_ENDPOINT_PREFIX = '/data-agent';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
@@ -51,19 +53,27 @@ export async function listSkillMarket(options = {}) {
   } = normalizedOptions;
   const normalizedPage = normalizePositiveInteger(page, 1);
   const normalizedPageSize = normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE);
+  const normalizedSearchContent = String(searchContent || '').trim();
   const remoteAccountId = accountId ?? currentUsername;
   const openApiRequestBody = createSkillListRequestBody({
     searchContent,
     page: normalizedPage,
     pageSize: normalizedPageSize,
   });
-  const remotePage = await fetchRemoteSkillPage({
-    searchContent,
-    page: normalizedPage,
-    pageSize: normalizedPageSize,
-    tenantCode,
-    accountId: remoteAccountId,
-  });
+  const remotePage = normalizedSearchContent
+    ? await searchCompleteRemoteSkillDirectory({
+      searchContent: normalizedSearchContent,
+      page: normalizedPage,
+      pageSize: normalizedPageSize,
+      tenantCode,
+      accountId: remoteAccountId,
+    })
+    : await fetchRemoteSkillPage({
+      page: normalizedPage,
+      pageSize: normalizedPageSize,
+      tenantCode,
+      accountId: remoteAccountId,
+    });
   const remoteSkills = remotePage.skills;
 
   if (!workspacePath) {
@@ -88,15 +98,17 @@ export async function listSkillMarket(options = {}) {
       };
     }),
   );
-  const importedSkillSummaries = await listImportedSkillSummariesMissingFromRemotePage({
-    workspacePath,
-    imports,
-    remoteSkills: enrichedRemoteSkills,
-    currentUsername,
-    tenantCode,
-    accountId: remoteAccountId,
-    searchContent,
-  });
+  const importedSkillSummaries = normalizedSearchContent
+    ? []
+    : await listImportedSkillSummariesMissingFromRemotePage({
+      workspacePath,
+      imports,
+      remoteSkills: enrichedRemoteSkills,
+      currentUsername,
+      tenantCode,
+      accountId: remoteAccountId,
+      searchContent,
+    });
   const skills = [...enrichedRemoteSkills, ...importedSkillSummaries];
   if (includePageInfo) {
     return {
@@ -853,15 +865,114 @@ async function fetchRemoteSkillPage({
 
   const skills = normalizeSkillListPayload(payload.data)
     .map(normalizeRemoteSkillSummary);
+  const remoteTotal = getSkillListTotal(payload);
   return {
     skills,
     pageInfo: createSkillListPageInfo({
       remoteCount: skills.length,
       page,
       pageSize,
-      total: getSkillListTotal(payload),
+      total: remoteTotal,
+    }),
+    remotePagination: {
+      total: remoteTotal,
+      hasNextPage: getSkillListExplicitHasNextPage(payload),
+    },
+  };
+}
+
+async function searchCompleteRemoteSkillDirectory({
+  searchContent,
+  page,
+  pageSize,
+  tenantCode,
+  accountId,
+}) {
+  const remoteSkills = await fetchCompleteRemoteSkillDirectory({ tenantCode, accountId });
+  const matchingSkills = remoteSkills.filter((skill) => matchesSkillSearch(skill, searchContent));
+  const start = (page - 1) * pageSize;
+  const skills = matchingSkills.slice(start, start + pageSize);
+  return {
+    skills,
+    pageInfo: createSkillListPageInfo({
+      remoteCount: skills.length,
+      page,
+      pageSize,
+      total: matchingSkills.length,
     }),
   };
+}
+
+async function fetchCompleteRemoteSkillDirectory({ tenantCode, accountId }) {
+  const skillsByIdentity = new Map();
+
+  for (let page = 1; page <= MAX_FULL_MARKET_SEARCH_PAGES; page += 1) {
+    const result = await fetchRemoteSkillPage({
+      page,
+      pageSize: FULL_MARKET_SEARCH_PAGE_SIZE,
+      tenantCode,
+      accountId,
+    });
+    let addedSkillCount = 0;
+    result.skills.forEach((skill) => {
+      const identity = getRemoteSkillSearchIdentity(skill);
+      if (!skillsByIdentity.has(identity)) {
+        skillsByIdentity.set(identity, skill);
+        addedSkillCount += 1;
+      }
+    });
+
+    if (result.skills.length === 0) {
+      if (
+        result.remotePagination.hasNextPage === true
+        || (
+          result.remotePagination.total !== undefined
+          && skillsByIdentity.size < result.remotePagination.total
+        )
+      ) {
+        throw createHttpError('Skill market pagination ended before the complete inventory was loaded', 502);
+      }
+      return Array.from(skillsByIdentity.values());
+    }
+    if (result.remotePagination.hasNextPage === false) {
+      if (
+        result.remotePagination.total !== undefined
+        && skillsByIdentity.size < result.remotePagination.total
+      ) {
+        throw createHttpError('Skill market pagination ended before the complete inventory was loaded', 502);
+      }
+      return Array.from(skillsByIdentity.values());
+    }
+    if (
+      result.remotePagination.total !== undefined
+      && skillsByIdentity.size >= result.remotePagination.total
+    ) {
+      return Array.from(skillsByIdentity.values());
+    }
+    if (addedSkillCount === 0) {
+      if (
+        result.remotePagination.hasNextPage === true
+        || (
+          result.remotePagination.total !== undefined
+          && skillsByIdentity.size < result.remotePagination.total
+        )
+      ) {
+        throw createHttpError('Skill market pagination did not advance while loading the complete inventory', 502);
+      }
+      return Array.from(skillsByIdentity.values());
+    }
+    if (page === MAX_FULL_MARKET_SEARCH_PAGES) {
+      throw createHttpError('Skill market inventory exceeds the full-search safety limit', 502);
+    }
+  }
+
+  return Array.from(skillsByIdentity.values());
+}
+
+function getRemoteSkillSearchIdentity(skill) {
+  const remoteId = firstNonEmptyString(skill?.id, skill?.skillId);
+  if (remoteId) return `id:${remoteId.toLowerCase()}`;
+  return `name:${normalizeSkillIdentityKey(skill?.name || skill?.displayName)}`;
 }
 
 async function resolveAvailableMarketDirectory({
@@ -974,6 +1085,21 @@ function getSkillListTotal(payload) {
   return undefined;
 }
 
+function getSkillListExplicitHasNextPage(payload) {
+  const candidates = [
+    payload?.data?.pageInfo?.hasNextPage,
+    payload?.data?.hasNextPage,
+    payload?.pageInfo?.hasNextPage,
+    payload?.hasNextPage,
+  ];
+  for (const candidate of candidates) {
+    if (candidate === true || candidate === false) return candidate;
+    if (candidate === 'true' || candidate === 1) return true;
+    if (candidate === 'false' || candidate === 0) return false;
+  }
+  return undefined;
+}
+
 export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
   const searchContent = String(skillRef || '').trim();
   if (!searchContent) {
@@ -982,7 +1108,12 @@ export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId }
   const normalizedRef = searchContent.toLowerCase();
   const sanitizedRef = safeNormalizeSkillFolderName(searchContent);
   const skills = await fetchRemoteSkillList({ searchContent, tenantCode, accountId });
-  const remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
+  let remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
+
+  if (!remoteSkill) {
+    const completeDirectory = await fetchCompleteRemoteSkillDirectory({ tenantCode, accountId });
+    remoteSkill = findRemoteSkill(completeDirectory, normalizedRef, sanitizedRef);
+  }
 
   if (!remoteSkill) {
     throw createHttpError(`Skill "${skillRef}" was not found`, 404);
@@ -1109,9 +1240,7 @@ function matchesSkillSearch(skill, searchContent = '') {
     skill.createUserId,
   ]
     .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-    .includes(query);
+    .some((value) => String(value).toLowerCase().includes(query));
 }
 
 function findRemoteSkill(skills, normalizedRef, sanitizedRef) {

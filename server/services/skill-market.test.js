@@ -9,6 +9,7 @@ import test from 'node:test';
 import JSZip from 'jszip';
 
 import {
+  fetchRemoteSkillDetail,
   getSkillMarketDetail,
   getMarketSkillPublishPreview,
   getMarketSkillPublishState,
@@ -302,6 +303,192 @@ test('listSkillMarket returns the OpenAPI skillList request body with page info'
       pageSize: 3,
     },
   });
+});
+
+test('listSkillMarket searches the complete remote inventory before paginating results', async () => {
+  const workspacePath = await makeWorkspace();
+  const remoteSkills = Array.from({ length: 130 }, (_, index) => ({
+    id: `catalog-skill-${String(index + 1).padStart(3, '0')}`,
+    skillName: `catalog-skill-${String(index + 1).padStart(3, '0')}`,
+    description: 'General catalog skill.',
+    createUserId: 'catalog-owner',
+    version: 1,
+    published: true,
+  }));
+  remoteSkills[2] = {
+    ...remoteSkills[2],
+    id: 'needle-by-name',
+    skillName: 'Needle Finder',
+  };
+  remoteSkills[109] = {
+    ...remoteSkills[109],
+    description: 'Finds a hidden NEEDLE in later catalog pages.',
+  };
+  remoteSkills[121] = {
+    ...remoteSkills[121],
+    createUserId: 'NeedleOwner',
+  };
+  remoteSkills.push({
+    ...remoteSkills[2],
+    skillName: 'Needle Finder Duplicate',
+  });
+  const importedSkillName = 'local-needle-owner';
+  const importedSkill = remoteSkills[121];
+  const importedSkillPath = path.join(workspacePath, '.claude', 'skills', importedSkillName);
+  await fs.mkdir(importedSkillPath, { recursive: true });
+  await fs.writeFile(path.join(importedSkillPath, 'SKILL.md'), '# Local Needle Owner\n', 'utf8');
+  await writeLegacyMarketImport(workspacePath, importedSkillName, {
+    name: importedSkillName,
+    id: importedSkill.id,
+    skillId: importedSkill.id,
+    skillName: importedSkill.skillName,
+    createUserId: importedSkill.createUserId,
+    version: 1,
+    source: 'skill-market-api',
+    origin: 'market',
+    bindingType: 'imported',
+  });
+
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const body = parseJson((await readRequestBuffer(req)).toString('utf8'));
+    const page = Number(body?.pageInfo?.page || 1);
+    const pageSize = Number(body?.pageInfo?.pageSize || 20);
+    const effectivePageSize = Math.min(pageSize, 50);
+    const start = (page - 1) * effectivePageSize;
+    requests.push({
+      searchContent: body?.data?.searchContent,
+      page,
+      pageSize,
+    });
+    sendJson(res, {
+      code: 0,
+      message: 'success',
+      data: {
+        list: remoteSkills.slice(start, start + effectivePageSize),
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  try {
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+
+    const firstPage = await listSkillMarket(withTenant({
+      workspacePath,
+      searchContent: '  NeEdLe  ',
+      page: 1,
+      pageSize: 2,
+      includePageInfo: true,
+    }));
+    assert.deepEqual(firstPage.skills.map((skill) => skill.id), [
+      'needle-by-name',
+      'catalog-skill-110',
+    ]);
+    assert.equal(firstPage.skills.every((skill) => skill.imported === false), true);
+    assert.deepEqual(firstPage.pageInfo, {
+      page: 1,
+      pageSize: 2,
+      total: 3,
+      totalPages: 2,
+      hasNextPage: true,
+    });
+
+    const secondPage = await listSkillMarket(withTenant({
+      workspacePath,
+      searchContent: 'needle',
+      page: 2,
+      pageSize: 2,
+      includePageInfo: true,
+    }));
+    assert.deepEqual(secondPage.skills.map((skill) => skill.id), ['catalog-skill-122']);
+    assert.equal(secondPage.skills[0].name, importedSkillName);
+    assert.equal(secondPage.skills[0].imported, true);
+    assert.deepEqual(secondPage.pageInfo, {
+      page: 2,
+      pageSize: 2,
+      total: 3,
+      totalPages: 2,
+      hasNextPage: false,
+    });
+    assert.equal(requests.length, 8);
+    assert.equal(requests.every((request) => request.searchContent === ''), true);
+    assert.deepEqual(requests.map(({ page, pageSize }) => ({ page, pageSize })), [
+      { page: 1, pageSize: 100 },
+      { page: 2, pageSize: 100 },
+      { page: 3, pageSize: 100 },
+      { page: 4, pageSize: 100 },
+      { page: 1, pageSize: 100 },
+      { page: 2, pageSize: 100 },
+      { page: 3, pageSize: 100 },
+      { page: 4, pageSize: 100 },
+    ]);
+
+    const detail = await fetchRemoteSkillDetail('catalog-skill-122', withTenant());
+    assert.equal(detail.id, 'catalog-skill-122');
+
+    requests.length = 0;
+    await listSkillMarket(withTenant({
+      page: 3,
+      pageSize: 10,
+      includePageInfo: true,
+    }));
+    assert.deepEqual(requests, [{ searchContent: '', page: 3, pageSize: 10 }]);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test('listSkillMarket does not treat overlapping remote pages as a complete inventory', async () => {
+  const remoteSkills = Array.from({ length: 120 }, (_, index) => ({
+    id: `overlap-skill-${String(index + 1).padStart(3, '0')}`,
+    skillName: index === 119 ? 'Last Target Skill' : `Overlap Skill ${index + 1}`,
+    description: 'Overlapping page fixture.',
+    createUserId: 'catalog-owner',
+    version: 1,
+    published: true,
+  }));
+  const pages = [
+    remoteSkills.slice(0, 80),
+    remoteSkills.slice(60, 100),
+    remoteSkills.slice(100),
+  ];
+  const requestedPages = [];
+  const server = http.createServer(async (req, res) => {
+    const body = parseJson((await readRequestBuffer(req)).toString('utf8'));
+    const page = Number(body?.pageInfo?.page || 1);
+    requestedPages.push(page);
+    sendJson(res, {
+      code: 0,
+      message: 'success',
+      data: {
+        list: pages[page - 1] ?? [],
+        total: remoteSkills.length,
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  try {
+    process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+    const result = await listSkillMarket(withTenant({
+      searchContent: 'last target',
+      includePageInfo: true,
+    }));
+
+    assert.deepEqual(result.skills.map((skill) => skill.id), ['overlap-skill-120']);
+    assert.deepEqual(requestedPages, [1, 2, 3]);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 });
 
 test('importMarketSkill downloads the mock API skill into .claude/skills and records metadata', async () => {
@@ -1825,7 +2012,7 @@ test('getMarketSkillPublishState marks imported skills as uploadable when the re
   assert.equal(state.canPublish, false);
   assert.equal(state.canUploadAndPublish, true);
   assert.equal(state.importedVersion, 3);
-  assert.deepEqual(seenSearchContents, ['remote-deleted-id']);
+  assert.deepEqual(seenSearchContents, ['remote-deleted-id', '']);
 });
 
 test('uploadAndPublishLocalSkill can republish a local skill whose remote binding was deleted', async () => {

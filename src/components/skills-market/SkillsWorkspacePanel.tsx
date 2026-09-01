@@ -31,7 +31,13 @@ import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
 import SkillUnpublishAction from './SkillUnpublishAction';
 import { useWorkspaceSkills } from './hooks/useWorkspaceSkills';
-import { canEditSkillDetailEntries, getSkillDetailDisplayVersions, type WorkspaceSkill, type WorkspaceSkillEntry } from './utils/skillFormatting';
+import {
+  canEditSkillDetailEntries,
+  filterWorkspaceSkills,
+  getSkillDetailDisplayVersions,
+  type WorkspaceSkill,
+  type WorkspaceSkillEntry,
+} from './utils/skillFormatting';
 import { canUnpublishSkill } from './utils/skillPublish';
 import { selectSkillUploadArchive } from './utils/skillUpload';
 import { getSkillTabClickDecision, type SkillsView } from './utils/skillViewRefresh';
@@ -140,6 +146,13 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const [nameConflict, setNameConflict] = useState<{ name: string } | null>(null);
   const mine = useWorkspaceSkills(workspaceId);
   const tabRefreshInFlightRef = useRef<Record<SkillsView, boolean>>({ market: false, mine: false });
+  const marketListGenerationRef = useRef(0);
+  const activeMarketSearchRef = useRef('');
+  const activeMarketWorkspaceRef = useRef<number | undefined>(workspaceId);
+  const latestMarketSearchRef = useRef('');
+  const latestMarketWorkspaceRef = useRef<number | undefined>(workspaceId);
+  latestMarketSearchRef.current = query.trim();
+  latestMarketWorkspaceRef.current = workspaceId;
   const canManage = !isReadOnly && mine.data?.canManage !== false;
   const dirty = editing && file?.content !== editContent;
 
@@ -147,6 +160,19 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     if (!workspaceId) {
       setMarketError('当前工作区不支持技能市场。');
       return;
+    }
+    const requestSearch = query.trim();
+    if (!reset && (
+      activeMarketSearchRef.current !== requestSearch
+      || activeMarketWorkspaceRef.current !== workspaceId
+    )) return;
+    const generation = reset
+      ? marketListGenerationRef.current + 1
+      : marketListGenerationRef.current;
+    if (reset) {
+      marketListGenerationRef.current = generation;
+      activeMarketSearchRef.current = requestSearch;
+      activeMarketWorkspaceRef.current = workspaceId;
     }
     if (reset) {
       setMarketLoading(true);
@@ -156,25 +182,39 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     setMarketError(null);
     try {
       const payload = await readPayload(
-        await api.skillMarket.list(workspaceId, { searchContent: query.trim(), page, pageSize: MARKET_PAGE_SIZE }),
+        await api.skillMarket.list(workspaceId, { searchContent: requestSearch, page, pageSize: MARKET_PAGE_SIZE }),
         '技能市场加载失败。',
       );
+      if (
+        generation !== marketListGenerationRef.current
+        || requestSearch !== latestMarketSearchRef.current
+        || workspaceId !== latestMarketWorkspaceRef.current
+      ) return;
       const nextSkills = (payload.skills ?? []) as MarketSkill[];
       setMarketSkills((current) => reset ? nextSkills : mergeMarketSkills(current, nextSkills));
       setMarketPage(page);
       setMarketHasMore(Boolean(payload.pageInfo?.hasNextPage ?? nextSkills.length >= MARKET_PAGE_SIZE));
     } catch (error) {
-      setMarketError(toErrorMessage(error, '技能市场加载失败。'));
+      if (
+        generation === marketListGenerationRef.current
+        && requestSearch === latestMarketSearchRef.current
+        && workspaceId === latestMarketWorkspaceRef.current
+      ) {
+        setMarketError(toErrorMessage(error, '技能市场加载失败。'));
+      }
     } finally {
-      setMarketLoading(false);
-      setMarketLoadingMore(false);
+      if (generation === marketListGenerationRef.current) {
+        setMarketLoading(false);
+        setMarketLoadingMore(false);
+      }
     }
   }, [query, workspaceId]);
 
   useEffect(() => {
+    if (view !== 'market') return undefined;
     const timer = window.setTimeout(() => void loadMarket(1, true), 250);
     return () => window.clearTimeout(timer);
-  }, [loadMarket]);
+  }, [loadMarket, view]);
 
   useEffect(() => {
     setDetailTarget(null);
@@ -294,6 +334,8 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
       setEditing(false);
       setMessage(null);
     }
+
+    if (decision.shouldSwitch && nextView === 'market') return;
 
     if (!decision.refreshView || tabRefreshInFlightRef.current[decision.refreshView]) return;
     const refreshView = decision.refreshView;
@@ -591,10 +633,12 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     }
   };
 
-  const mineSkills = useMemo(() => (mine.data?.skills ?? [])
-    .filter((skill) => skill.kind !== 'system')
-    .filter((skill) => originFilter === 'all' || skill.origin === originFilter)
-    .filter((skill) => matchesSkillQuery(skill, query)), [mine.data?.skills, originFilter, query]);
+  const mineSkills = useMemo(() => filterWorkspaceSkills(
+    (mine.data?.skills ?? [])
+      .filter((skill) => skill.kind !== 'system')
+      .filter((skill) => originFilter === 'all' || skill.origin === originFilter),
+    query,
+  ), [mine.data?.skills, originFilter, query]);
 
   const marketSummary = useMemo(() => ({
     total: marketSkills.length,
@@ -1313,12 +1357,6 @@ function normalizeDetail(detail: SkillDetail, source: DetailSource): SkillDetail
 function findDefaultFile(files: WorkspaceSkillEntry[], preferred?: string | null) {
   const fileEntries = files.filter((entry) => entry.type === 'file');
   return fileEntries.find((entry) => entry.path === preferred) ?? fileEntries.find((entry) => entry.path === 'SKILL.md') ?? fileEntries[0];
-}
-
-function matchesSkillQuery(skill: WorkspaceSkill, query: string) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  return [skill.name, skill.displayName, skill.description, skill.createUserId].filter(Boolean).join(' ').toLowerCase().includes(normalized);
 }
 
 function mergeMarketSkills(current: MarketSkill[], next: MarketSkill[]) {
