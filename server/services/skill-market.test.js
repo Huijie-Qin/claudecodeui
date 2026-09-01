@@ -588,29 +588,53 @@ test('submitMarketSkill submits the complete imported skill directory', async ()
   );
 });
 
-test('submitMarketSkill preserves empty file content instead of falling back to the mock source', async () => {
+test('submitMarketSkill rejects an empty file before updating the market', async () => {
   const workspacePath = await makeWorkspace();
   await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
 
   await fs.writeFile(
-    path.join(workspacePath, '.claude', 'skills', 'bug-hunter', 'SKILL.md'),
+    path.join(workspacePath, '.claude', 'skills', 'bug-hunter', 'references', 'checklist.md'),
     '',
     'utf8',
   );
 
-  await submitMarketSkill(withTenant({
-    workspacePath,
-    name: 'bug-hunter',
-    currentUsername: 'j00939207',
-  }));
+  await assert.rejects(
+    submitMarketSkill(withTenant({
+      workspacePath,
+      name: 'bug-hunter',
+      currentUsername: 'j00939207',
+    })),
+    (error) => {
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, 'SKILL_EMPTY_FILE_NOT_PUBLISHABLE');
+      assert.equal(error.message, 'references/checklist.md 是空文件，技能市场暂不支持发布空文件。');
+      return true;
+    },
+  );
 
-  const viewedFile = await viewMarketSkillFile(withTenant({
-    workspacePath,
-    name: 'bug-hunter',
-    filePath: 'SKILL.md',
-  }));
+  assert.deepEqual(await readMockSubmissions(marketDataPath), {});
+});
 
-  assert.equal(viewedFile.file.content, '');
+test('uploadAndPublishLocalSkill rejects an empty file before saving to the market', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillPath = path.join(workspacePath, '.claude', 'skills', 'empty-local-file');
+  await fs.mkdir(path.join(skillPath, 'references'), { recursive: true });
+  await fs.writeFile(path.join(skillPath, 'SKILL.md'), '# Empty Local File\n', 'utf8');
+  await fs.writeFile(path.join(skillPath, 'references', 'demo.md'), '', 'utf8');
+
+  await assert.rejects(
+    uploadAndPublishLocalSkill(withTenant({
+      workspacePath,
+      name: 'empty-local-file',
+      currentUsername: TEST_ACCOUNT_ID,
+    })),
+    (error) => {
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, 'SKILL_EMPTY_FILE_NOT_PUBLISHABLE');
+      assert.equal(error.message, 'references/demo.md 是空文件，技能市场暂不支持发布空文件。');
+      return true;
+    },
+  );
 });
 
 test('submitMarketSkill rejects stale local skills when the remote version has advanced', async () => {
@@ -975,7 +999,8 @@ test('reserveUnpublishMarketSkill calls the signed delete API, clears the bindin
     process.env.SKILL_MARKET_AUTH_KEY = authKey;
     result = await reserveUnpublishMarketSkill(withTenant({
       workspacePath,
-      name: 'published-local',
+      name: 'Published Market Name',
+      remoteSkillId: 'published-local-id',
       currentUsername: TEST_ACCOUNT_ID,
       confirmation: 'yes',
     }));
@@ -996,6 +1021,33 @@ test('reserveUnpublishMarketSkill calls the signed delete API, clears the bindin
   const imports = JSON.parse(await fs.readFile(path.join(workspacePath, '.cloudcli', 'skills', 'market-imports.json'), 'utf8'));
   assert.deepEqual(imports.imports, {});
   assert.equal(await fs.readFile(path.join(skillPath, 'SKILL.md'), 'utf8'), '# Published Local\n');
+});
+
+test('getSkillMarketDetail keeps creator unpublish permission after local files are removed', async () => {
+  const workspacePath = await makeWorkspace();
+  await writeLegacyMarketImport(workspacePath, 'detached-local-name', {
+    name: 'detached-local-name',
+    skillId: 'bug-hunter',
+    id: 'bug-hunter',
+    skillName: 'bug-hunter',
+    createUserId: TEST_ACCOUNT_ID,
+    bindingType: 'published',
+    origin: 'local',
+    version: 1,
+  });
+
+  const detail = await getSkillMarketDetail(withTenant({
+    workspacePath,
+    name: 'bug-hunter',
+    currentUsername: TEST_ACCOUNT_ID,
+  }));
+
+  assert.equal(detail.runtimeExists, false);
+  assert.equal(detail.imported, false);
+  assert.equal(detail.canPublish, false);
+  assert.equal(detail.canUnpublish, true);
+  assert.equal(detail.bindingType, 'published');
+  assert.equal(detail.origin, 'local');
 });
 
 test('reserveUnpublishMarketSkill leaves the binding and local files unchanged when the delete API fails', async () => {

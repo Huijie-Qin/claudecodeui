@@ -127,7 +127,7 @@ export async function getSkillMarketDetail({ workspaceId, workspacePath, name, c
     }
     throw error;
   }
-  const status = remoteSkill.name === requestedSkillName
+  const status = requestedStatus.metadataEntry
     ? requestedStatus
     : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
   let runtimeSkillName = status.imported ? status.skillName : remoteSkill.name;
@@ -184,7 +184,7 @@ export async function viewMarketSkillFile({ workspaceId, workspacePath, name, fi
     throw error;
   }
   const status = workspacePath
-    ? remoteSkill.name === requestedSkillName
+    ? requestedStatus.metadataEntry
       ? requestedStatus
       : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports)
     : { imported: false };
@@ -745,6 +745,7 @@ async function unpublishMarketSkillUnlocked({
   workspaceId,
   workspacePath,
   name,
+  remoteSkillId: requestedRemoteSkillId,
   currentUsername,
   confirmation,
   tenantCode,
@@ -755,9 +756,15 @@ async function unpublishMarketSkillUnlocked({
   }
   const requestedSkillName = normalizeRuntimeSkillFolderName(name);
   const imports = await readMarketImports({ workspaceId, workspacePath });
-  const bindingPair = Object.entries(imports.imports || {}).find(([entryName]) => (
+  const normalizedRemoteSkillId = String(requestedRemoteSkillId || '').trim().toLowerCase();
+  const bindingEntries = Object.entries(imports.imports || {});
+  const bindingPair = bindingEntries.find(([entryName]) => (
     normalizeSkillIdentityKey(entryName) === normalizeSkillIdentityKey(requestedSkillName)
-  ));
+  )) || (normalizedRemoteSkillId
+    ? bindingEntries.find(([, entry]) => [entry?.id, entry?.skillId]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .includes(normalizedRemoteSkillId))
+    : undefined);
   if (!bindingPair) {
     throw createHttpError(`Published skill "${requestedSkillName}" was not found`, 404);
   }
@@ -1701,6 +1708,7 @@ async function buildSkillSaveForm(skillName, files) {
 }
 
 async function buildSkillArchiveForm(skillName, files) {
+  assertNoEmptySkillFiles(files);
   const archiveRoot = normalizeRuntimeSkillFolderName(skillName);
   const zip = new JSZip();
   files.forEach((file) => {
@@ -1710,6 +1718,19 @@ async function buildSkillArchiveForm(skillName, files) {
   const formData = new FormData();
   formData.append('file', new Blob([zipBuffer], { type: 'application/zip' }), `${archiveRoot}.zip`);
   return formData;
+}
+
+function assertNoEmptySkillFiles(files) {
+  const emptyFile = files.find((file) => {
+    if (Buffer.isBuffer(file.rawContent)) return file.rawContent.length === 0;
+    return Buffer.byteLength(file.content ?? '', 'utf8') === 0;
+  });
+  if (!emptyFile) return;
+  throw createHttpError(
+    `${emptyFile.path} 是空文件，技能市场暂不支持发布空文件。`,
+    400,
+    'SKILL_EMPTY_FILE_NOT_PUBLISHABLE',
+  );
 }
 
 async function readZipFiles(buffer, { remoteSkill, skillRootName } = {}) {
@@ -2142,11 +2163,18 @@ function getFileContentDigest(file) {
 function toLocalImportState(status, remoteSkill, currentUsername) {
   const importedVersion = normalizeVersion(status.metadataEntry?.version);
   const updateAvailable = Boolean(status.imported && importedVersion !== undefined && remoteSkill.version > importedVersion);
+  const bindingCreatorId = status.metadataEntry?.createUserId;
   const canPublish = Boolean(
     status.imported
     && remoteSkill.createUserId
     && currentUsername
     && String(remoteSkill.createUserId) === String(currentUsername)
+  );
+  const canUnpublish = Boolean(
+    status.metadataEntry?.bindingType === 'published'
+    && bindingCreatorId
+    && currentUsername
+    && String(bindingCreatorId) === String(currentUsername)
   );
 
   return pruneUndefined({
@@ -2161,6 +2189,7 @@ function toLocalImportState(status, remoteSkill, currentUsername) {
     importedVersion,
     updateAvailable,
     canPublish,
+    canUnpublish,
   });
 }
 

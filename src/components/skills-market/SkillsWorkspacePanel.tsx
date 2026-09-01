@@ -58,6 +58,7 @@ type MarketSkill = {
   updateAvailable?: boolean;
   locallyModified?: boolean;
   canPublish?: boolean;
+  canUnpublish?: boolean;
   bindingType?: 'published' | 'imported';
   diagnostics?: Array<{ code: string; message: string; path?: string }>;
   targetPath?: string;
@@ -674,6 +675,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
             <SkillUnpublishAction
               workspaceId={workspaceId}
               skillName={detailTarget.name}
+              remoteSkillId={detail.id ?? detail.skillId}
               disabled={!canManage || actionLoading}
               onError={(text) => setMessage({ kind: 'error', text })}
               onUnpublished={async (unpublishedSkillName) => {

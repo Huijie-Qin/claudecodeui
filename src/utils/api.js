@@ -941,10 +941,10 @@ export const api = {
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/upload-publish`, workspaceId), {
         method: 'POST',
       }),
-    unpublishSkill: (workspaceId, name) =>
+    unpublishSkill: (workspaceId, name, remoteSkillId) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/unpublish`, workspaceId), {
         method: 'POST',
-        body: JSON.stringify({ confirmation: 'yes' }),
+        body: JSON.stringify({ confirmation: 'yes', remoteSkillId }),
       }),
     submitSkill: (workspaceId, name, localContentHash) =>
       authenticatedFetch(withTenantAndWorkspaceParam(`/api/skill-market/skills/${encodeURIComponent(name)}/publish`, workspaceId), {

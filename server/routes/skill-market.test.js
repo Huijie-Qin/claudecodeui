@@ -375,7 +375,7 @@ test('POST /skills/:name/unpublish forwards identity and exact confirmation to t
   });
   const { response, payload } = await requestJson(router, '/skills/my-skill/unpublish?tenantId=2&workspaceId=10', {
     method: 'POST',
-    body: { confirmation: 'yes' },
+    body: { confirmation: 'yes', remoteSkillId: 'my-skill-id' },
   });
   assert.equal(response.status, 200);
   assert.equal(payload.unpublished, 'my-skill');
@@ -386,6 +386,7 @@ test('POST /skills/:name/unpublish forwards identity and exact confirmation to t
     name: 'my-skill',
     currentUsername: TEST_USERNAME,
     confirmation: 'yes',
+    remoteSkillId: 'my-skill-id',
     tenantCode: TEST_TENANT_CODE,
     accountId: TEST_USERNAME,
   });

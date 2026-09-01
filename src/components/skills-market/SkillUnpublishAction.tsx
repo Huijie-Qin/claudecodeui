@@ -6,6 +6,7 @@ import { api } from '../../utils/api';
 type SkillUnpublishActionProps = {
   workspaceId?: number;
   skillName: string;
+  remoteSkillId?: string;
   disabled?: boolean;
   onError?: (message: string) => void;
   onUnpublished?: (skillName: string) => void | Promise<void>;
@@ -14,6 +15,7 @@ type SkillUnpublishActionProps = {
 export default function SkillUnpublishAction({
   workspaceId,
   skillName,
+  remoteSkillId,
   disabled = false,
   onError,
   onUnpublished,
@@ -28,7 +30,7 @@ export default function SkillUnpublishAction({
     setSubmitting(true);
     try {
       await readApiPayload(
-        await api.skillMarket.unpublishSkill(workspaceId, skillName),
+        await api.skillMarket.unpublishSkill(workspaceId, skillName, remoteSkillId),
         '技能下架失败。',
       );
       setOpen(false);
@@ -43,7 +45,7 @@ export default function SkillUnpublishAction({
     } finally {
       setSubmitting(false);
     }
-  }, [confirmation, disabled, onError, onUnpublished, skillName, submitting, workspaceId]);
+  }, [confirmation, disabled, onError, onUnpublished, remoteSkillId, skillName, submitting, workspaceId]);
 
   return (
     <>

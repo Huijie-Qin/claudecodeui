@@ -5,6 +5,7 @@ type SkillPublishStatePayload = {
   skill?: {
     imported?: boolean;
     canPublish?: boolean;
+    canUnpublish?: boolean;
     canUploadAndPublish?: boolean;
     origin?: 'market' | 'local';
     bindingType?: 'published' | 'imported';
@@ -20,7 +21,5 @@ export function getSkillPublishMode(payload: SkillPublishStatePayload): SkillPub
 
 export function canUnpublishSkill(payload: SkillPublishStatePayload): boolean {
   return payload.canManage !== false
-    && payload.skill?.canPublish === true
-    && payload.skill.origin === 'local'
-    && payload.skill.bindingType === 'published';
+    && payload.skill?.canUnpublish === true;
 }

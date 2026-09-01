@@ -378,7 +378,7 @@ export async function createWorkspaceSkillEntry({
   name,
   entryPath,
   entryType,
-  content = '',
+  content = '\n',
   marketImports = [],
 }) {
   const context = await requireEditableWorkspaceSkill({ workspacePath, name, marketImports });

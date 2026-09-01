@@ -31,22 +31,22 @@ test('getSkillPublishMode hides publishing without workspace or creator permissi
 test('canUnpublishSkill only allows the creator-owned local published binding', () => {
   assert.equal(canUnpublishSkill({
     canManage: true,
-    skill: { canPublish: true, origin: 'local', bindingType: 'published' },
+    skill: { canUnpublish: true, canPublish: false, origin: 'local', bindingType: 'published' },
   }), true);
   assert.equal(canUnpublishSkill({
     canManage: true,
-    skill: { canPublish: true, origin: 'market', bindingType: 'imported' },
+    skill: { canUnpublish: false, canPublish: true, origin: 'market', bindingType: 'imported' },
   }), false);
   assert.equal(canUnpublishSkill({
     canManage: true,
-    skill: { canPublish: false, origin: 'local', bindingType: 'published' },
+    skill: { canUnpublish: false, canPublish: true, origin: 'local', bindingType: 'published' },
   }), false);
   assert.equal(canUnpublishSkill({
     canManage: false,
-    skill: { canPublish: true, origin: 'local', bindingType: 'published' },
+    skill: { canUnpublish: true, canPublish: true, origin: 'local', bindingType: 'published' },
   }), false);
   assert.equal(canUnpublishSkill({
     canManage: true,
-    skill: { canPublish: true, origin: 'local', bindingType: 'imported' },
+    skill: { canUnpublish: false, canPublish: true, origin: 'local', bindingType: 'imported' },
   }), false);
 });

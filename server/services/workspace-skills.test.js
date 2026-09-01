@@ -308,6 +308,38 @@ test('listWorkspaceSkills keeps published local skills local and exposes their m
   assert.equal(inventory.skills[0].manageable, true);
 });
 
+test('new workspace skill files default to one newline while explicit empty content stays empty', async () => {
+  const workspacePath = await makeWorkspace();
+  await createWorkspaceSkill({
+    workspacePath,
+    name: 'new-file-defaults',
+    displayName: 'New File Defaults',
+    description: 'Checks file initialization.',
+  });
+  await createWorkspaceSkillEntry({
+    workspacePath,
+    name: 'new-file-defaults',
+    entryPath: 'new-file.md',
+    entryType: 'file',
+  });
+  await createWorkspaceSkillEntry({
+    workspacePath,
+    name: 'new-file-defaults',
+    entryPath: 'explicit-empty.md',
+    entryType: 'file',
+    content: '',
+  });
+
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'new-file-defaults', 'new-file.md'), 'utf8'),
+    '\n',
+  );
+  assert.equal(
+    await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'new-file-defaults', 'explicit-empty.md'), 'utf8'),
+    '',
+  );
+});
+
 test('local workspace skill file operations preserve SKILL.md and revision safety', async () => {
   const workspacePath = await makeWorkspace();
   await createWorkspaceSkill({

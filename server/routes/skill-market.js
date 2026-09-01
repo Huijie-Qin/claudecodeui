@@ -273,6 +273,7 @@ export function createSkillMarketRouter({
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
+        remoteSkillId: req.body?.remoteSkillId,
         currentUsername: accountId,
         confirmation: req.body?.confirmation,
         tenantCode,
