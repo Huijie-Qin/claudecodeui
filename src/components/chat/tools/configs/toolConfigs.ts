@@ -3,6 +3,8 @@
  * Defines display behavior for all tool types 
  */
 
+import { normalizeBashOutput } from '../utils/bashOutput';
+
 export interface ToolDisplayConfig {
   input: {
     type: 'one-line' | 'collapsible' | 'plan' | 'hidden';
@@ -12,7 +14,6 @@ export interface ToolDisplayConfig {
     getValue?: (input: any) => string;
     getSecondary?: (input: any) => string | undefined;
     action?: 'copy' | 'open-file' | 'jump-to-results' | 'none';
-    style?: string;
     wrapText?: boolean;
     colorScheme?: {
       primary?: string;
@@ -31,7 +32,8 @@ export interface ToolDisplayConfig {
   result?: {
     hidden?: boolean;
     hideOnSuccess?: boolean;
-    type?: 'one-line' | 'collapsible' | 'plan' | 'special' | 'bash-output';
+    hideWhen?: (result: any) => boolean;
+    type?: 'one-line' | 'collapsible' | 'plan' | 'special';
     title?: string | ((result: any) => string);
     defaultOpen?: boolean;
     // Special result handlers
@@ -353,21 +355,31 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   Bash: {
     input: {
       type: 'one-line',
-      icon: 'terminal',
+      label: 'Bash',
       getValue: (input) => input.command,
       action: 'copy',
-      style: 'terminal',
       wrapText: true,
       colorScheme: {
-        primary: 'text-green-400 font-mono',
-        secondary: 'text-gray-400',
+        primary: 'text-gray-700 dark:text-gray-300',
+        secondary: 'text-gray-500 dark:text-gray-400',
         background: '',
-        border: 'border-green-500 dark:border-green-400',
-        icon: 'text-green-500 dark:text-green-400'
+        border: 'border-gray-300 dark:border-gray-600',
+        icon: 'text-gray-500 dark:text-gray-400'
       }
     },
     result: {
-      type: 'bash-output'
+      type: 'collapsible',
+      title: 'Output',
+      defaultOpen: true,
+      contentType: 'text',
+      hideWhen: (result) => !normalizeBashOutput(result).hasOutput,
+      getContentProps: (result) => {
+        const { stdout, stderr } = normalizeBashOutput(result);
+        return {
+          content: [stdout, stderr].filter(Boolean).join('\n'),
+          format: 'code'
+        };
+      }
     }
   },
 
@@ -871,6 +883,10 @@ export function shouldHideToolResult(toolName: string, toolResult: any): boolean
 
   // Hide on success only
   if (config.result.hideOnSuccess && toolResult && !toolResult.isError) {
+    return true;
+  }
+
+  if (config.result.hideWhen?.(toolResult)) {
     return true;
   }
 
