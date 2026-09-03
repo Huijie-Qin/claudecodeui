@@ -22,7 +22,7 @@
   },
   "messageQueue": {
     "queued": "Queued",
-    "failed": "Failed to queue"
+    "failed": "Failed to send supplement"
   },
   "hookActivity": {
     "title": "Follow-up message",
@@ -174,8 +174,7 @@
     "attachImages": "Attach images",
     "send": "Send",
     "stop": "Stop",
-    "sendSupplement": "Queue follow-up",
-    "supplementPlaceholder": "Add supplementary information while DataAgent is running",
+    "supplementPlaceholder": "Add supplemental information while Claude is working...",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands",
       "enter": "Enter to send • Shift+Enter for new line • Tab to change modes • / for slash commands"

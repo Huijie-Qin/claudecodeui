@@ -2605,8 +2605,8 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         return;
     }
 
-    // Queued Claude follow-ups stay inside this command chain. The lease remains
-    // held across those turn boundaries and is released after the final turn.
+    // Claude supplemental turns and queued Hook follow-ups stay inside this
+    // command chain. Release the lease only after the final turn completes.
     const acquireConcurrencyLease = () => {
         if (lease) return;
         lease = sessionConcurrencyLimiter.acquire({
@@ -2689,11 +2689,10 @@ function handleChatConnection(ws, request) {
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
                 const logContext = createChatSessionLogContext({ data, provider: 'claude', request });
-                // A regular composer submission is a new query turn. Reusing a completed
-                // SDK input stream can omit Stop hooks on later turns, so resume the
-                // provider session through a fresh query with a freshly registered Hook
-                // runtime. Running-message submissions use `claude-supplement` below,
-                // which queues a fresh turn behind the active Stop Hook boundary.
+                // A regular composer submission resumes through a fresh query so every
+                // completed turn receives a freshly registered Hook runtime. While Claude
+                // is actively working, `claude-supplement` below injects user input into
+                // that active SDK stream instead.
                 void runLimitedProviderCommand({
                     data,
                     provider: 'claude',

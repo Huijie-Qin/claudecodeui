@@ -330,6 +330,135 @@ test('normalizedToChatMessages preserves generic Hook execution details', () => 
   assert.equal(hookMessage.hookActivity?.hasScript, true);
 });
 
+test('normalizedToChatMessages hides action-only Hook cards until a record or MCP call runs', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'hook_activity_custom-record-running_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-09-03T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'running',
+      hookId: 'custom-record',
+      hookName: '自定义审计记录',
+      actionTypes: ['write_record'],
+    },
+    {
+      id: 'hook_activity_custom-record-skipped_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-09-03T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      hookId: 'custom-record',
+      hookName: '自定义审计记录',
+      actionTypes: ['write_record'],
+      actionResults: [{
+        actionId: 'record-audit',
+        actionType: 'write_record',
+        output: { recorded: false, reason: 'condition_false' },
+      }],
+    },
+    {
+      id: 'hook_activity_custom-mcp-skipped_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-09-03T00:00:02.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      hookId: 'custom-mcp',
+      hookName: '自定义 MCP 检查',
+      actionTypes: ['call_mcp_tool'],
+      actionResults: [{
+        actionId: 'run-check',
+        actionType: 'call_mcp_tool',
+        output: { called: false, reason: 'condition_false' },
+      }],
+    },
+  ]);
+
+  assert.deepEqual(chatMessages, []);
+});
+
+test('normalizedToChatMessages keeps action-only Hook cards for executed actions and failures', () => {
+  const chatMessages = normalizedToChatMessages([
+    {
+      id: 'hook_activity_custom-mcp-executed_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-09-03T00:00:00.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'succeeded',
+      hookId: 'custom-mcp',
+      hookName: '自定义 MCP 检查',
+      actionTypes: ['call_mcp_tool'],
+      actionResults: [{
+        actionId: 'run-check',
+        actionType: 'call_mcp_tool',
+        output: { valid: true, issueCount: 0 },
+      }],
+    },
+    {
+      id: 'hook_activity_custom-record-failed_execution',
+      sessionId: 'session-1',
+      timestamp: '2026-09-03T00:00:01.000Z',
+      provider: 'claude',
+      kind: 'hook_activity',
+      origin: 'hook',
+      activityKind: 'execution',
+      status: 'failed',
+      hookId: 'custom-record',
+      hookName: '自定义审计记录',
+      actionTypes: ['write_record'],
+      error: 'Hook failed',
+    },
+  ]);
+
+  assert.deepEqual(
+    chatMessages.map((message) => message.hookActivity?.status),
+    ['succeeded', 'failed'],
+  );
+});
+
+test('normalizedToChatMessages removes skipped record and MCP results from mixed Hook cards', () => {
+  const [hookMessage] = normalizedToChatMessages([{
+    id: 'hook_activity_mixed_execution',
+    sessionId: 'session-1',
+    timestamp: '2026-09-03T00:00:00.000Z',
+    provider: 'claude',
+    kind: 'hook_activity',
+    origin: 'hook',
+    activityKind: 'execution',
+    status: 'succeeded',
+    hookId: 'mixed-hook',
+    hookName: '混合动作 Hook',
+    actionTypes: ['invoke_skill', 'write_record', 'call_mcp_tool'],
+    actionResults: [
+      {
+        actionId: 'record-if-needed',
+        actionType: 'write_record',
+        output: { recorded: false, reason: 'condition_false' },
+      },
+      {
+        actionId: 'call-if-needed',
+        actionType: 'call_mcp_tool',
+        output: { called: false, reason: 'condition_false' },
+      },
+    ],
+  }]);
+
+  assert.equal(hookMessage.hookActivity?.activityKind, 'execution');
+  assert.equal(hookMessage.hookActivity?.actionResults, undefined);
+});
+
 test('normalizedToChatMessages hides persisted mcp loop scheduling metadata from Hook results', () => {
   const [hookMessage] = normalizedToChatMessages([{
     id: 'hook_activity_execution-loop_execution',

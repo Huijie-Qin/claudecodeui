@@ -20,6 +20,11 @@ import {
 
 type TimestampValue = string | number | Date;
 
+const DEFERRED_ACTION_ONLY_HOOK_TYPES = new Set([
+  'call_mcp_tool',
+  'write_record',
+]);
+
 const getMessageIdentity = (msg: NormalizedMessage): Pick<ChatMessage, 'id' | 'messageId' | 'rowid' | 'sequence'> => ({
   id: msg.id,
   messageId: msg.id,
@@ -101,6 +106,51 @@ function normalizeHookActivityStatus(status: unknown): HookActivityStatus {
   return ['queued', 'running', 'succeeded', 'failed'].includes(String(status || ''))
     ? status as HookActivityStatus
     : 'running';
+}
+
+function wasRecordOrMcpActionPerformed(
+  result: NonNullable<NormalizedMessage['actionResults']>[number],
+): boolean {
+  const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
+    ? result.output as Record<string, unknown>
+    : null;
+
+  if (result.actionType === 'call_mcp_tool') {
+    // Successful MCP calls return the tool's business output directly. A
+    // skipped conditional call uses this explicit wrapper marker.
+    return !(output?.called === false && output.reason === 'condition_false');
+  }
+  if (result.actionType === 'write_record') {
+    return output?.recorded === true;
+  }
+  return true;
+}
+
+function shouldHideDeferredActionOnlyHook(
+  message: NormalizedMessage,
+  status: HookActivityStatus,
+  visibleActionResults: NonNullable<NormalizedMessage['actionResults']>,
+): boolean {
+  if (message.activityKind !== 'execution' || status === 'failed') {
+    return false;
+  }
+
+  const actionTypes = message.actionTypes || [];
+  const onlyDeferredActions = actionTypes.length > 0 && actionTypes.every(
+    (actionType) => DEFERRED_ACTION_ONLY_HOOK_TYPES.has(actionType),
+  );
+  if (!onlyDeferredActions) {
+    return false;
+  }
+
+  // These cards become useful only after an action produces a real result.
+  // Waiting for the terminal event also prevents skipped conditions from
+  // briefly flashing a running card.
+  if (status === 'queued' || status === 'running') {
+    return true;
+  }
+
+  return visibleActionResults.length === 0;
 }
 
 function hookActivityIdentity(message: NormalizedMessage): string {
@@ -1131,6 +1181,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           break;
         }
         const status = normalizeHookActivityStatus(msg.status);
+        const visibleActionResults = (msg.actionResults || []).filter((result) => (
+          result.actionType !== 'mcp_loop_run' && wasRecordOrMcpActionPerformed(result)
+        ));
+        if (shouldHideDeferredActionOnlyHook(msg, status, visibleActionResults)) {
+          break;
+        }
         const persistedFollowups = msg.activityKind === 'execution'
           ? (hookFollowupsByExecutionMessageId.get(msg.id) || []).map((followup) => (
             toHookFollowupDetails(
@@ -1173,9 +1229,6 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const loopResult = msg.loopJobId
           ? mcpLoopResults.get(msg.loopJobId)
           : undefined;
-        const visibleActionResults = (msg.actionResults || []).filter((result) => (
-          result.actionType !== 'mcp_loop_run'
-        ));
         converted.push({
           ...getMessageIdentity(msg),
           type: 'hook',

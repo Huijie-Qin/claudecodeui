@@ -446,7 +446,6 @@ export function useChatComposerState({
           content: supplementContent,
           timestamp: new Date(),
           clientMessageId,
-          queueStatus: 'queued',
         });
         setIsLoading(true);
         setClaudeStatus({

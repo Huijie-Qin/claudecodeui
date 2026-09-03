@@ -2457,8 +2457,8 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     }
     if (wasAborted) abortedSessions.delete(finalSessionId);
 
-    // Keep the lightweight session entry while transitioning so additional
-    // running-message follow-ups remain queued behind the next independent turn.
+    // Keep the lightweight session entry while transitioning so Hook-generated
+    // follow-ups can remain queued behind the next independent turn.
     if (finalSessionId && (!queuedFollowupTurn || wasAborted)) {
       removeSession(finalSessionId);
     }
@@ -3090,49 +3090,88 @@ function pushClaudeSupplement({
   const normalizedDisplayContent = supplement.displayContent;
 
   const session = getSession(normalizedSessionId);
-  if (!session?.inputQueue || !['processing', 'transitioning'].includes(session.status)) {
+  if (!session?.inputQueue || session.status !== 'processing') {
     return { success: false, error: 'Claude session is not accepting supplemental input' };
   }
 
   const { priority, shouldQuery } = normalizeSupplementMode(mode);
+  if (shouldQuery) {
+    try {
+      session.runtimeOptions?.onConcurrencyResume?.();
+    } catch (error) {
+      if (error?.code === 'SESSION_LIMIT_EXCEEDED') {
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          activeCount: error.activeCount,
+          limit: error.limit,
+          source: error.source,
+          userId: error.userId,
+        };
+      }
+      throw error;
+    }
+  }
+
   updateSessionWriter(normalizedSessionId, writer);
 
   const timestamp = new Date().toISOString();
-  let queuePosition = 0;
-  if (shouldQuery) {
-    queuePosition = enqueueClaudeFollowupTurn(session, {
-      content: normalizedContent,
-      displayContent: normalizedDisplayContent,
-      clientMessageId,
-      mode,
-      priority,
-      writer: writer || session.writer,
-      queuedAt: timestamp,
-    });
-    console.info('[ClaudeTurnBoundary] Queued running-message follow-up', {
-      sessionId: normalizedSessionId,
-      queuePosition,
-      mode,
-    });
-  } else {
-    const claudeMessageId = createRequestId();
-    session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
-      uuid: claudeMessageId,
-      priority,
-      shouldQuery: false,
-      timestamp,
-    }));
-  }
+  const messageId = typeof clientMessageId === 'string' && clientMessageId.trim()
+    ? `supplement_${clientMessageId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120)}`
+    : null;
+  const persistedMessage = createNormalizedMessage({
+    kind: 'text',
+    role: 'user',
+    content: normalizedDisplayContent,
+    sessionId: normalizedSessionId,
+    provider: 'claude',
+    timestamp,
+    ...(messageId ? { id: messageId } : {}),
+    isSupplement: true,
+    supplementMode: mode,
+  });
+
+  persistNormalizedMessages({
+    options: session.runtimeOptions,
+    provider: 'claude',
+    providerSessionId: normalizedSessionId,
+    runtimeId: session.runtimeId,
+    messages: [persistedMessage],
+  });
+
+  markSessionProcessing(normalizedSessionId);
+  const claudeMessageId = createRequestId();
+  void appendClaudeDisplayCommand({
+    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
+    sessionId: normalizedSessionId,
+    messageId: claudeMessageId,
+    displayCommand: normalizedDisplayContent,
+    modelContent: normalizedContent,
+    uid: session.runtimeOptions?.runtimeUid,
+    gid: session.runtimeOptions?.runtimeGid,
+  }).catch((error) => {
+    console.warn(
+      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
+      error?.message || error,
+    );
+  });
+  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+    uuid: claudeMessageId,
+    priority,
+    shouldQuery,
+    timestamp,
+  }));
 
   const targetWriter = writer || session.writer;
   sendWriterMessage(targetWriter, {
     type: 'claude-supplement-ack',
     sessionId: normalizedSessionId,
     clientMessageId,
-    status: shouldQuery ? 'queued' : 'injected',
+    status: 'injected',
     mode,
     content: normalizedDisplayContent,
-    ...(shouldQuery ? { queuePosition } : {}),
     timestamp,
   });
   if (shouldQuery) {

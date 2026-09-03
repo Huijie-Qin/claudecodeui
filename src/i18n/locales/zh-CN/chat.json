@@ -22,7 +22,7 @@
   },
   "messageQueue": {
     "queued": "队列中",
-    "failed": "入队失败"
+    "failed": "补充失败"
   },
   "hookActivity": {
     "title": "后置消息",
@@ -154,8 +154,7 @@
     "attachImages": "附加图片",
     "send": "发送",
     "stop": "停止",
-    "sendSupplement": "排队发送",
-    "supplementPlaceholder": "在 DataAgent 运行时补充附加信息",
+    "supplementPlaceholder": "向正在工作的 Claude 补充输入...",
     "hintText": {
       "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
       "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令"
