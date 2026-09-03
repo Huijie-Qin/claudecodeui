@@ -53,7 +53,8 @@ export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOption
 
 /**
  * Claude writes internal command and system reminder entries into history.
- * Those are useful for the CLI but should not appear in the user-facing chat.
+ * User slash invocations are restored before filtering; their internal wrappers
+ * and expanded skill instructions should not appear in the user-facing chat.
  */
 const INTERNAL_CONTENT_PREFIXES = [
   '<ccui-hook-recovery',
@@ -96,12 +97,31 @@ function cleanAssistantText(text: string): string {
   return text.replace(/<\|assistant\|>/g, '');
 }
 
+function readNativeSlashInvocation(text: string): string | null {
+  // Match the entire command envelope so expanded instructions and unrelated
+  // internal messages cannot be mistaken for a user query.
+  const match = text.match(/^\s*<command-message>[^<]*<\/command-message>\s*<command-name>(\/[^\s<>]+)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?\s*$/);
+  if (!match) {
+    return null;
+  }
+  const args = match[2]?.trim() || '';
+  return `${match[1]}${args ? ` ${args}` : ''}`;
+}
+
 function resolveVisibleUserText(
   text: string,
   storedDisplayCommand: string | null = null,
+  restoreNativeCommand = false,
 ): string | null {
   if (storedDisplayCommand) {
     return isInternalContent(storedDisplayCommand) ? null : storedDisplayCommand;
+  }
+
+  if (restoreNativeCommand) {
+    const invocation = readNativeSlashInvocation(text);
+    if (invocation) {
+      return invocation;
+    }
   }
 
   return isInternalContent(text) ? null : text;
@@ -245,6 +265,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (conversationRole === 'user' && raw.message?.content) {
+      const restoreNativeCommand = raw.type === 'user' && raw.message.role === 'user';
       if (Array.isArray(raw.message.content)) {
         let didUseStoredDisplayCommand = false;
         for (let partIndex = 0; partIndex < raw.message.content.length; partIndex++) {
@@ -272,6 +293,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               ? resolveVisibleUserText(
                 text,
                 didUseStoredDisplayCommand ? null : storedDisplayCommand,
+                restoreNativeCommand,
               )
               : null;
             if (visibleText) {
@@ -296,7 +318,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .filter(Boolean)
             .join('\n');
           const visibleTextParts = textParts
-            ? resolveVisibleUserText(textParts, storedDisplayCommand)
+            ? resolveVisibleUserText(textParts, storedDisplayCommand, restoreNativeCommand)
             : null;
           if (visibleTextParts) {
             messages.push(createNormalizedMessage({
@@ -313,7 +335,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       } else if (typeof raw.message.content === 'string') {
         const text = raw.message.content;
         const visibleText = text
-          ? resolveVisibleUserText(text, storedDisplayCommand)
+          ? resolveVisibleUserText(text, storedDisplayCommand, restoreNativeCommand)
           : null;
         if (visibleText) {
           messages.push(createNormalizedMessage({

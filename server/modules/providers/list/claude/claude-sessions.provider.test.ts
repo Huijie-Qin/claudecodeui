@@ -140,6 +140,82 @@ test('ClaudeSessionsProvider filters skill bodies even when the meta flag is mis
   assert.deepEqual(messages, []);
 });
 
+test('ClaudeSessionsProvider restores native user skill commands and preserves multiline queries', () => {
+  const provider = new ClaudeSessionsProvider();
+  for (const args of ['user_query', '第一行\n\n第二行  保留空格', '']) {
+    const content = [
+      '<command-message>game_skill</command-message>',
+      '<command-name>/game_skill</command-name>',
+      `<command-args>${args}</command-args>`,
+    ].join('\n');
+    for (const messageContent of [content, [{ type: 'text', text: content }]]) {
+      const messages = provider.normalizeMessage({
+        type: 'user',
+        uuid: 'native-skill',
+        message: { role: 'user', content: messageContent },
+      }, 'session-1');
+
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0].kind, 'text');
+      assert.equal(messages[0].role, 'user');
+      assert.equal(messages[0].content, `/game_skill${args ? ` ${args}` : ''}`);
+    }
+  }
+});
+
+test('ClaudeSessionsProvider keeps internal and incomplete skill command records hidden', () => {
+  const provider = new ClaudeSessionsProvider();
+  const content = '<command-message>game_skill</command-message>\n<command-name>/game_skill</command-name>\n<command-args>user_query</command-args>';
+  for (const raw of [
+    { type: 'user', isMeta: true, message: { role: 'user', content } },
+    { type: 'user', isSidechain: true, message: { role: 'user', content } },
+    { type: 'user', message: { role: 'assistant', content } },
+    { type: 'system', message: { role: 'user', content } },
+    { type: 'user', message: { role: 'user', content: '<command-args>user_query</command-args>' } },
+    { type: 'user', message: { role: 'user', content: `${content}\nBase directory for this skill: /skills/game_skill\nExpanded instructions.` } },
+    { type: 'user', message: { role: 'user', content: content.replace('/game_skill', 'game_skill') + '\n<skill-format>true</skill-format>' } },
+  ]) {
+    assert.deepEqual(provider.normalizeMessage(raw, 'session-1'), []);
+  }
+  const restored = provider.normalizeMessage({
+    type: 'user',
+    message: { role: 'user', content },
+  }, 'session-1', '/game_skill original query');
+  assert.equal(restored[0].content, '/game_skill original query');
+});
+
+test('ClaudeSessionsProvider loads native skill queries from JSONL while hiding expanded skill bodies', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-native-skill-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = 'native-skill-session';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const rows = [
+    {
+      type: 'user', uuid: 'native-skill-query', sessionId,
+      message: {
+        role: 'user',
+        content: '<command-message>game_skill</command-message>\n<command-name>/game_skill</command-name>\n<command-args>user_query</command-args>',
+      },
+    },
+    {
+      type: 'user', uuid: 'native-skill-body', sessionId, isMeta: true,
+      message: { role: 'user', content: 'Base directory for this skill: /skills/game_skill\nExpanded instructions.' },
+    },
+    {
+      type: 'assistant', uuid: 'native-skill-answer', sessionId,
+      message: { role: 'assistant', content: 'Working on the game.' },
+    },
+  ];
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+  const result = await new ClaudeSessionsProvider().fetchHistory(sessionId, { runtimeHomePath });
+  assert.deepEqual(result.messages.map(({ role, content }) => ({ role, content })), [
+    { role: 'user', content: '/game_skill user_query' },
+    { role: 'assistant', content: 'Working on the game.' },
+  ]);
+});
+
 test('ClaudeSessionsProvider restores a stored slash invocation without exposing expanded instructions', () => {
   const provider = new ClaudeSessionsProvider();
   const secretInstruction = 'INTERNAL_SKILL_INSTRUCTION_MUST_NOT_BE_VISIBLE';
