@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ChatMessage, PendingPermissionRequest } from '../types/types';
@@ -92,9 +92,7 @@ interface UseChatRealtimeHandlersArgs {
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
 
-export function useChatRealtimeHandlers({
-  latestMessage,
-  subscribeMessage,
+export function createChatRealtimeMessageHandler({
   provider,
   selectedSession,
   currentSessionId,
@@ -115,10 +113,9 @@ export function useChatRealtimeHandlers({
   onWebSocketReconnect,
   addMessage,
   sessionStore,
-}: UseChatRealtimeHandlersArgs) {
-  const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
-
-  const processRealtimeMessage = useCallback((incomingMessage: LatestChatMessage | null) => {
+}: Omit<UseChatRealtimeHandlersArgs, 'latestMessage' | 'subscribeMessage'>,
+lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current: null }) {
+  return (incomingMessage: LatestChatMessage | null) => {
     if (!incomingMessage) return;
     if (lastProcessedMessageRef.current === incomingMessage) return;
     lastProcessedMessageRef.current = incomingMessage;
@@ -328,8 +325,10 @@ export function useChatRealtimeHandlers({
         const parentToolUseId = typeof msg.parentToolUseId === 'string'
           ? msg.parentToolUseId
           : undefined;
-        clearStreamTimer(sid, parentToolUseId);
-        streamAccumulatorRef.current.clear(sid, parentToolUseId);
+        // Publish buffered deltas before reconciling the canonical copy. It
+        // may be shorter than the stream, and the 100ms UI flush may not have
+        // run yet; clearing here permanently loses that unpublished tail.
+        finishStreamSegment(sid, parentToolUseId);
       }
       sessionStore.appendRealtime(sid, { ...msg, sessionId: sid } as NormalizedMessage);
     }
@@ -505,28 +504,13 @@ export function useChatRealtimeHandlers({
       default:
         break;
     }
-  }, [
-    provider,
-    selectedSession,
-    currentSessionId,
-    setCurrentSessionId,
-    setIsLoading,
-    setCanAbortSession,
-    setClaudeStatus,
-    setTokenBudget,
-    setPendingPermissionRequests,
-    pendingViewSessionRef,
-    streamAccumulatorRef,
-    streamTimersRef,
-    onSessionInactive,
-    onSessionProcessing,
-    onSessionNotProcessing,
-    onReplaceTemporarySession,
-    onNavigateToSession,
-    onWebSocketReconnect,
-    addMessage,
-    sessionStore,
-  ]);
+  };
+}
+
+export function useChatRealtimeHandlers(args: UseChatRealtimeHandlersArgs) {
+  const { latestMessage, subscribeMessage } = args;
+  const lastProcessedMessageRef = useRef<LatestChatMessage | null>(null);
+  const processRealtimeMessage = createChatRealtimeMessageHandler(args, lastProcessedMessageRef);
 
   const processRealtimeMessageRef = useRef(processRealtimeMessage);
   useEffect(() => {
