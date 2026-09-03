@@ -114,6 +114,14 @@ function isPersistedCopyOfOptimisticUserText(
   if (!isLocalOptimisticUserText(realtimeMessage)) return false;
   if (serverMessage.kind !== 'text' || serverMessage.role !== 'user') return false;
   if (serverMessage.provider !== realtimeMessage.provider) return false;
+
+  // The SDK may rewrite a skill alias or its whitespace. A shared request UUID
+  // confirms persistence independently of the content and client/server clocks.
+  if (serverMessage.clientMessageId && realtimeMessage.clientMessageId) {
+    return serverMessage.sessionId === realtimeMessage.sessionId &&
+      serverMessage.clientMessageId === realtimeMessage.clientMessageId;
+  }
+
   if (typeof serverMessage.content !== 'string') return false;
   if (serverMessage.content.trim() !== realtimeMessage.content?.trim()) return false;
 
@@ -309,6 +317,9 @@ function insertByTimestamp(
 
 function getRealtimeDedupeKey(message: NormalizedMessage): string {
   if (isLocalOptimisticUserText(message)) {
+    if (message.clientMessageId) {
+      return ['optimistic-user', message.provider, message.sessionId, message.clientMessageId].join(':');
+    }
     return [
       'optimistic-user',
       message.sessionId,

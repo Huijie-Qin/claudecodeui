@@ -59,7 +59,7 @@ test('Claude display command paths reject traversal-only session ids', () => {
   );
 });
 
-test('Claude display command store records only expanded slash invocations', async (t) => {
+test('Claude display command store records native and expanded slash invocations', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-display-command-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
   const projectPath = '/workspace';
@@ -84,7 +84,7 @@ test('Claude display command store records only expanded slash invocations', asy
     messageId: 'message-unexpanded',
     displayCommand: '/report-skill',
     modelContent: '/report-skill',
-  }), false);
+  }), true);
   assert.equal(await appendClaudeDisplayCommand({
     runtimeHomePath,
     projectPath,
@@ -99,6 +99,7 @@ test('Claude display command store records only expanded slash invocations', asy
     sessionId: 'session-1',
   });
   assert.deepEqual([...commands.entries()], [
+    ['message-unexpanded', '/report-skill'],
     ['message-expanded', '/report-skill 生成日报'],
   ]);
 });

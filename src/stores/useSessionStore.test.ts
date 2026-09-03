@@ -224,6 +224,39 @@ test('computeMerged matches persisted user messages to optimistic messages one-t
   assert.deepEqual(merged, [serverMessage, secondLocalCall]);
 });
 
+test('skill request identity preserves repeated submissions and pending history', () => {
+  const first = makeUserText({ id: 'local_first', clientMessageId: 'first', content: '/game_test 你好' });
+  const second = makeUserText({ id: 'local_second', clientMessageId: 'second', content: first.content });
+  const persisted = makeUserText({ id: 'first_text_0', clientMessageId: 'first', content: '/game_skill 你好' });
+
+  // Two clicks in the same millisecond are still two distinct submissions.
+  assert.deepEqual(computeMerged([], [first, second]), [first, second]);
+  assert.deepEqual(reconcileRealtimeAfterServerRefresh([], [first, second]), [first, second]);
+  assert.deepEqual(computeMerged([persisted], [first, second]), [persisted, second]);
+  assert.deepEqual(reconcileRealtimeAfterServerRefresh([persisted], [first, second]), [second]);
+
+  // Distinct request IDs must not fall back to matching text and timestamps.
+  const sameText = { ...persisted, content: first.content };
+  assert.deepEqual(computeMerged([sameText], [second]), [sameText, second]);
+  assert.deepEqual(reconcileRealtimeAfterServerRefresh([sameText], [second]), [second]);
+
+  const persistedSecond = { ...persisted, id: 'second', clientMessageId: 'second' };
+  assert.deepEqual(computeMerged([persisted, persistedSecond], [first, second]), [persisted, persistedSecond]);
+  assert.deepEqual(reconcileRealtimeAfterServerRefresh([persisted, persistedSecond], [first, second]), []);
+});
+
+test('request identity reconciliation stays within its provider and session', () => {
+  const local = makeUserText({ id: 'local_first', clientMessageId: 'first', content: '/game_test 你好' });
+  const persisted = makeUserText({ id: 'first', clientMessageId: 'first', content: '/game_skill 你好' });
+  for (const other of [
+    { ...persisted, sessionId: 'other-session' },
+    { ...persisted, provider: 'codex' as const },
+  ]) {
+    assert.equal(computeMerged([other], [local]).length, 2);
+    assert.deepEqual(reconcileRealtimeAfterServerRefresh([other], [local]), [local]);
+  }
+});
+
 test('computeMerged keeps later repeated user text as a distinct message', () => {
   const serverMessage = makeUserText({
     id: 'server-user',

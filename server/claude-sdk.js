@@ -1255,6 +1255,15 @@ function createClaudeTurnCompletionScheduler({
   };
 }
 
+function resolveClaudeUserMessageId(clientMessageId) {
+  // Only SDK-compatible UUIDs may be used as transcript identities. Older
+  // clients and server-generated turns continue to receive a fresh UUID.
+  return typeof clientMessageId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientMessageId)
+    ? clientMessageId
+    : createRequestId();
+}
+
 /**
  * Builds a Claude SDK user message. Text-only turns use native string content;
  * turns with images use content blocks so Claude receives native visual input.
@@ -1349,7 +1358,9 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @param {Object} ws - WebSocket connection
  * @returns {Promise<void>}
  */
-async function queryClaudeSDKInternal(command, options = {}, ws) {
+async function queryClaudeSDKInternal(command, { clientMessageId, ...options } = {}, ws) {
+  // A request identity belongs to this turn, not the reusable runtime options:
+  // Hook and MCP continuations must not inherit the original user's UUID.
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
@@ -1587,7 +1598,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
-    const initialMessageId = createRequestId();
+    const initialMessageId = resolveClaudeUserMessageId(clientMessageId);
     initialDisplayCommandRecord = {
       messageId: initialMessageId,
       displayCommand,
@@ -2504,6 +2515,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       return queryClaudeSDKInternal(queuedFollowupTurn.content, {
         ...runtimeOptions,
         ...(queuedFollowupTurn.runtimeOptions || {}),
+        clientMessageId: queuedFollowupTurn.clientMessageId,
         hookRecovery: queuedFollowupTurn.runtimeOptions?.hookRecovery || null,
         sessionId: finalSessionId,
         displayCommand: followupDisplayCommand,
@@ -3141,7 +3153,7 @@ function pushClaudeSupplement({
   });
 
   markSessionProcessing(normalizedSessionId);
-  const claudeMessageId = createRequestId();
+  const claudeMessageId = resolveClaudeUserMessageId(clientMessageId);
   void appendClaudeDisplayCommand({
     runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
     projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
@@ -3203,6 +3215,7 @@ export {
   pushClaudeSupplement,
   createClaudePromptFactory,
   buildClaudeUserMessage,
+  resolveClaudeUserMessageId,
   buildToolInteractionContext,
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,

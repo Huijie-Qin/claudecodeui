@@ -34,6 +34,7 @@ interface UseChatSessionStateArgs {
   pendingViewSessionRef: MutableRefObject<PendingViewSession | null>;
   sessionStore: SessionStore;
   initialUserMessage?: {
+    clientMessageId?: string;
     sessionId: string;
     provider: LLMProvider;
     content: string;
@@ -216,12 +217,13 @@ export function useChatSessionState({
 
     const content = initialUserMessage.content.trim();
     if (!content) return;
-    const key = `${initialUserMessage.sessionId}:${initialUserMessage.timestamp}:${content}`;
+    const key = `${initialUserMessage.sessionId}:${initialUserMessage.clientMessageId || `${initialUserMessage.timestamp}:${content}`}`;
     if (appliedInitialMessageKeysRef.current.has(key)) return;
     appliedInitialMessageKeysRef.current.add(key);
 
     sessionStore.appendRealtime(initialUserMessage.sessionId, {
-      id: `local_initial_${initialUserMessage.timestamp}`,
+      id: `local_initial_${initialUserMessage.clientMessageId || initialUserMessage.timestamp}`,
+      clientMessageId: initialUserMessage.clientMessageId,
       sessionId: initialUserMessage.sessionId,
       timestamp: new Date(initialUserMessage.timestamp).toISOString(),
       provider: initialUserMessage.provider,

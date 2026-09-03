@@ -731,6 +731,15 @@ test('buildClaudeUserMessage preserves native multiline skill invocations exactl
   assert.equal(message.message.content, invocation);
 });
 
+test('Claude user message IDs preserve client UUIDs and replace invalid or missing values', async () => {
+  const { resolveClaudeUserMessageId } = await import('./claude-sdk.js');
+  const clientMessageId = '11111111-1111-4111-8111-111111111111';
+  assert.equal(resolveClaudeUserMessageId(clientMessageId), clientMessageId);
+  const ids = [undefined, '', 'old-client-id', {}, 123].map(resolveClaudeUserMessageId);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
 test('resolveClaudeSupplementPayload validates without trimming native skill content', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const invocation = '/report-skill\n第一行\n第二行\n';

@@ -265,6 +265,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     if (conversationRole === 'user' && raw.message?.content) {
+      const clientMessageId = typeof raw.uuid === 'string' ? raw.uuid : undefined;
       const restoreNativeCommand = raw.type === 'user' && raw.message.role === 'user';
       if (Array.isArray(raw.message.content)) {
         let didUseStoredDisplayCommand = false;
@@ -300,6 +301,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               didUseStoredDisplayCommand = Boolean(storedDisplayCommand);
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
+                clientMessageId,
                 sessionId,
                 timestamp: ts,
                 provider: PROVIDER,
@@ -323,6 +325,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           if (visibleTextParts) {
             messages.push(createNormalizedMessage({
               id: `${baseId}_text`,
+              clientMessageId,
               sessionId,
               timestamp: ts,
               provider: PROVIDER,
@@ -340,6 +343,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         if (visibleText) {
           messages.push(createNormalizedMessage({
             id: baseId,
+            clientMessageId,
             sessionId,
             timestamp: ts,
             provider: PROVIDER,
