@@ -869,6 +869,7 @@ export function createAdminRouter(
         hookId: req.params.hookId,
         scope: req.body?.scope,
         userIds: req.body?.userIds,
+        tenantIds: req.body?.tenantIds,
         boundBy: req.user.id,
       }));
     } catch (error) {

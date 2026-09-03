@@ -589,11 +589,13 @@
       },
       "scopeHints": {
         "users": "Only selected users can see this Hook in Settings; each user decides whether to enable it.",
-        "tenants": "Runs for every active member of the selected tenants; future tenant members are included automatically.",
+        "tenants": "Every active member of the selected tenants can see this Hook in Settings; future tenant members are included automatically.",
         "all_users": "Every active user can see this Hook in Settings and decide whether to enable it."
       },
       "search": "Search username",
       "searchTenant": "Search tenant name or code",
+      "selectVisible": "Select visible",
+      "deselectVisible": "Deselect visible",
       "loading": "Loading user scope",
       "noUsers": "No users available",
       "noTenants": "No tenants available",

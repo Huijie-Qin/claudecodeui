@@ -388,13 +388,16 @@ test('publishing a Hook passes built-in validated Skills to the configuration se
   assert.equal(payload.hook.status, 'published');
 });
 
-test('Hook user scope supports selected users and all users', async () => {
+test('Hook user scope supports selected users, tenants, and all users', async () => {
   const seen = {};
   const users = [
     { id: 9, username: 'admin-user', isActive: true, isSystemAdmin: true, bound: true },
     { id: 10, username: 'member', isActive: true, isSystemAdmin: false, bound: false },
   ];
-  const bindings = { scope: 'users', users, tenants: [] };
+  const tenants = [
+    { id: 3, code: 'tenant-3', name: 'Tenant 3', active: true, activeUserCount: 2, bound: false },
+  ];
+  const bindings = { scope: 'users', users, tenants };
   const router = createRouter({
     hookConfigs: {
       listHookBindings: (hookId) => {
@@ -414,16 +417,31 @@ test('Hook user scope supports selected users and all users', async () => {
   assert.equal(seen.listHookId, 'hook-1');
   assert.equal(listed.payload.scope, 'users');
   assert.deepEqual(listed.payload.users, users);
+  assert.deepEqual(listed.payload.tenants, tenants);
+
+  const tenantUpdated = await requestJson(router, '/hooks/hook-1/bindings', {
+    method: 'PUT',
+    body: { scope: 'tenants', userIds: [], tenantIds: [3] },
+  });
+  assert.equal(tenantUpdated.response.status, 200);
+  assert.deepEqual(seen.replace, {
+    hookId: 'hook-1',
+    scope: 'tenants',
+    userIds: [],
+    tenantIds: [3],
+    boundBy: 9,
+  });
 
   const updated = await requestJson(router, '/hooks/hook-1/bindings', {
     method: 'PUT',
-    body: { scope: 'all_users', userIds: [] },
+    body: { scope: 'all_users', userIds: [], tenantIds: [] },
   });
   assert.equal(updated.response.status, 200);
   assert.deepEqual(seen.replace, {
     hookId: 'hook-1',
     scope: 'all_users',
     userIds: [],
+    tenantIds: [],
     boundBy: 9,
   });
   assert.equal(updated.payload.scope, 'all_users');

@@ -201,6 +201,99 @@ test('Hook configuration CRUD persists scripts, post actions, Claude response, a
   }
 });
 
+test('tenant Hook scopes dynamically grant visibility to active tenant members', () => {
+  const { database, service } = createFixture();
+  try {
+    database.prepare(`
+      INSERT INTO tenants (id, code, name, status)
+      VALUES (1, 'alpha', 'Alpha', 'active'), (2, 'disabled', 'Disabled', 'disabled')
+    `).run();
+    database.prepare(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+      VALUES (1, 2, 'member', 'view', 'active')
+    `).run();
+
+    const created = service.createHook({ input: publishableHook(), userId: 1 });
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const tenantScope = service.replaceHookBindings({
+      hookId: created.id,
+      scope: 'tenants',
+      tenantIds: [1, 1],
+      boundBy: 1,
+    });
+
+    assert.equal(tenantScope.hook.activationScope, 'manual');
+    assert.equal(tenantScope.hook.scopedUserCount, 0);
+    assert.equal(tenantScope.hook.boundTenantCount, 1);
+    assert.deepEqual(service.listHookBindings(created.id).tenants.map((tenant) => ({
+      id: tenant.id,
+      active: tenant.active,
+      activeUserCount: tenant.activeUserCount,
+      bound: tenant.bound,
+    })), [
+      { id: 1, active: true, activeUserCount: 1, bound: true },
+      { id: 2, active: false, activeUserCount: 0, bound: false },
+    ]);
+    assert.equal(service.listHookBindings(created.id).scope, 'tenants');
+    assert.deepEqual(service.listAvailableHooksForUser(1), []);
+    assert.equal(service.listAvailableHooksForUser(2)[0].enabled, false);
+    assert.throws(
+      () => service.setUserHookEnabled({ userId: 1, hookId: created.id, enabled: true }),
+      /not available/,
+    );
+
+    service.setUserHookEnabled({ userId: 2, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(2).map((hook) => hook.id), [created.id]);
+
+    database.prepare('INSERT INTO users (id, username) VALUES (3, ?)').run('future-member');
+    database.prepare(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+      VALUES (1, 3, 'member', 'view', 'active')
+    `).run();
+    assert.equal(service.listAvailableHooksForUser(3)[0].enabled, false);
+    service.setUserHookEnabled({ userId: 3, hookId: created.id, enabled: true });
+    assert.deepEqual(service.listActiveHooksForUser(3).map((hook) => hook.id), [created.id]);
+
+    database.prepare(`
+      UPDATE tenant_users SET status = 'disabled' WHERE tenant_id = 1 AND user_id = 2
+    `).run();
+    assert.deepEqual(service.listAvailableHooksForUser(2), []);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+
+    const userScope = service.replaceHookBindings({
+      hookId: created.id,
+      scope: 'users',
+      userIds: [1],
+      boundBy: 1,
+    });
+    assert.equal(userScope.hook.boundTenantCount, 0);
+    assert.equal(userScope.hook.scopedUserCount, 1);
+    assert.equal(userScope.hook.boundUserCount, 0);
+    assert.deepEqual(service.listActiveHooksForUser(3), []);
+
+    assert.throws(
+      () => service.replaceHookBindings({
+        hookId: created.id,
+        scope: 'tenants',
+        tenantIds: [],
+        boundBy: 1,
+      }),
+      /Select at least one active tenant/,
+    );
+    assert.throws(
+      () => service.replaceHookBindings({
+        hookId: created.id,
+        scope: 'tenants',
+        tenantIds: [2],
+        boundBy: 1,
+      }),
+      /do not exist or are inactive/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test('mcp_loop_run repeats the Matcher MCP with original inputs and a Python termination script', () => {
   const statusTool = {
     name: 'mcp__loopdemo__get_task_status',
