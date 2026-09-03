@@ -1022,6 +1022,12 @@ function createClaudeTurnLifecycleTracker() {
   let hasSeenTaskLifecycle = false;
   let isCurrentlyIdle = false;
   let isWaitingForIdle = false;
+  let hasPendingResult = false;
+
+  // Readiness must remain queryable after observe()/finishResult() have emitted
+  // their one-shot signal, and must be revoked when new activity arrives.
+  const canComplete = () => hasPendingResult && activeTasks.size === 0 &&
+    (!hasSeenSessionState || isCurrentlyIdle);
 
   const readTaskId = (message) => (
     typeof message?.task_id === 'string' && message.task_id.trim()
@@ -1044,6 +1050,7 @@ function createClaudeTurnLifecycleTracker() {
       // A newly queued user turn supersedes completion that was waiting on an
       // earlier background agent's idle event.
       isWaitingForIdle = false;
+      hasPendingResult = false;
       isCurrentlyIdle = false;
       hasSeenTaskLifecycle = false;
     },
@@ -1139,6 +1146,7 @@ function createClaudeTurnLifecycleTracker() {
     },
 
     finishResult(remainingQueryTurns) {
+      hasPendingResult = remainingQueryTurns === 0;
       if (remainingQueryTurns > 0) {
         isWaitingForIdle = false;
         return false;
@@ -1166,10 +1174,15 @@ function createClaudeTurnLifecycleTracker() {
     },
 
     flush() {
-      if (!isWaitingForIdle) return false;
+      if (!isWaitingForIdle || !hasPendingResult || activeTasks.size > 0) return false;
+      // A naturally exhausted stream can stand in for a missing idle event,
+      // but cannot stand in for unfinished child tasks.
+      isCurrentlyIdle = true;
       isWaitingForIdle = false;
       return true;
     },
+
+    canComplete,
 
     getActiveTasks() {
       return [...activeTasks.values()].map((task) => ({ ...task }));
@@ -1178,6 +1191,8 @@ function createClaudeTurnLifecycleTracker() {
     stopAll() {
       const tasks = [...activeTasks.values()].map((task) => ({ ...task }));
       activeTasks.clear();
+      hasPendingResult = false;
+      isWaitingForIdle = false;
       return tasks;
     },
   };
@@ -1199,13 +1214,15 @@ function createPendingInteractionTracker() {
   };
 }
 
-function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions) {
-  return Boolean(pendingCompletion) && !pendingInteractions?.isPaused?.();
+function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions, turnLifecycle) {
+  return Boolean(pendingCompletion) && Boolean(turnLifecycle?.canComplete()) &&
+    !pendingInteractions?.isPaused?.();
 }
 
 function createClaudeTurnCompletionScheduler({
   delayMs = TURN_COMPLETION_GRACE_MS,
   onComplete,
+  canComplete = () => true,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
 } = {}) {
@@ -1221,11 +1238,15 @@ function createClaudeTurnCompletionScheduler({
   return {
     schedule() {
       cancel();
+      if (!canComplete()) return false;
       timer = setTimeoutFn(() => {
         timer = null;
-        onComplete?.();
+        // Permission requests or new child/parent activity can arrive while
+        // the timer is armed. Never treat elapsed time as completion authority.
+        if (canComplete()) onComplete?.();
       }, delayMs);
       timer.unref?.();
+      return true;
     },
     cancel,
     isScheduled() {
@@ -1429,11 +1450,18 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     runtimeBoundToProviderSession = true;
   };
 
+  const canCompletePendingTurn = () => {
+    const sid = capturedSessionId || sessionId || null;
+    return !turnBoundaryReached && !queryAbortController.signal.aborted &&
+      !abortedSessions.has(sid) && !mcpLoopSuspensionsBySession.has(sid) &&
+      shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions, turnLifecycle);
+  };
+
   const emitPendingTurnCompletion = () => {
     // Closing the completed turn also closes the structured-input stream used
     // to answer AskUserQuestion. A result/idle event can race with that answer,
     // so leave the completion pending until every interaction has settled.
-    if (!shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions)) {
+    if (!canCompletePendingTurn()) {
       return false;
     }
     const completion = pendingTurnCompletion;
@@ -1491,22 +1519,15 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
   };
 
   turnCompletionScheduler = createClaudeTurnCompletionScheduler({
+    canComplete: canCompletePendingTurn,
     onComplete: emitPendingTurnCompletion,
   });
 
   const schedulePendingTurnCompletion = () => {
-    if (
-      !pendingTurnCompletion ||
-      turnBoundaryReached ||
-      pendingInteractions.isPaused()
-    ) {
-      return false;
-    }
     // Idle/result can be delivered before already-buffered trailing assistant
     // messages. Complete only after the SDK stream has stayed quiet briefly;
     // every subsequent event restarts this grace period.
-    turnCompletionScheduler.schedule();
-    return true;
+    return turnCompletionScheduler.schedule();
   };
 
   try {
@@ -2363,13 +2384,6 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
         break;
       }
 
-      // Deliver the terminal task event before the main completion event so
-      // the UI never observes the parent turn as done while its last subagent
-      // card is still running.
-      if (lifecycleSignal === 'complete') {
-        schedulePendingTurnCompletion();
-      }
-
       // Extract and send token budget updates from result messages
       if (message.type === 'result') {
         const remainingQueryTurns = inputQueue.finishQueryTurn();
@@ -2417,28 +2431,31 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
         }
 
         pendingTurnCompletion = { sessionId: completedSessionId };
-        if (turnLifecycle.finishResult(remainingQueryTurns)) {
-          schedulePendingTurnCompletion();
-        }
+        turnLifecycle.finishResult(remainingQueryTurns);
         if (turnBoundaryReached) {
           break;
         }
       }
 
-      if (pendingTurnCompletion) {
-        schedulePendingTurnCompletion();
-      }
+      // Retry after forwarding the event, using current lifecycle readiness
+      // rather than merely the existence of an earlier result.
+      schedulePendingTurnCompletion();
     }
 
     turnCompletionScheduler.cancel();
-    if (turnLifecycle.flush()) {
-      emitPendingTurnCompletion();
-    }
-    emitPendingTurnCompletion();
-
     const finalSessionId = capturedSessionId || sessionId || null;
-    const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const wasAborted = finalSessionId ? abortedSessions.has(finalSessionId) : false;
     const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+
+    if (!wasAborted && !loopSuspension) {
+      turnLifecycle.flush();
+      if (pendingTurnCompletion && !emitPendingTurnCompletion()) {
+        const error = new Error('Claude stream closed before pending tasks or interactions completed');
+        error.code = 'CLAUDE_STREAM_INCOMPLETE';
+        throw error;
+      }
+    }
+    if (wasAborted) abortedSessions.delete(finalSessionId);
 
     // Keep the lightweight session entry while transitioning so additional
     // running-message follow-ups remain queued behind the next independent turn.

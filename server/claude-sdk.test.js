@@ -450,13 +450,126 @@ test('Claude stream timeout stays paused until all concurrent interactions finis
 test('Claude turn completion waits for AskUserQuestion responses before closing the stream', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const interactions = claudeSdk.createPendingInteractionTracker();
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+  lifecycle.finishResult(0);
   const completion = { sessionId: 'session-1' };
 
   interactions.begin('ask-user-question-1');
-  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions), false);
+  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions, lifecycle), false);
 
   interactions.end('ask-user-question-1');
-  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions), true);
+  assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions, lifecycle), true);
+});
+
+test('result plus a quiet stream cannot close the turn while background agents are running', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const { completeClaudeTurnBoundary } = await import('./services/claude-turn-boundary.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+  const interactions = claudeSdk.createPendingInteractionTracker();
+  const events = [];
+  const timers = [];
+  let pendingCompletion = null;
+  const session = {
+    status: 'processing',
+    inputQueue: { close: () => events.push('input-closed') },
+    instance: { close: () => events.push('query-closed') },
+    queuedTurns: [{ content: 'Next turn' }],
+  };
+  const scheduler = claudeSdk.createClaudeTurnCompletionScheduler({
+    canComplete: () => claudeSdk.shouldEmitClaudeTurnCompletion(pendingCompletion, interactions, lifecycle),
+    onComplete: () => {
+      completeClaudeTurnBoundary(session);
+      events.push('complete');
+      pendingCompletion = null;
+    },
+    setTimeoutFn: (callback) => {
+      const timer = { callback, cancelled: false, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeoutFn: (timer) => { timer.cancelled = true; },
+  });
+  const observe = (message) => {
+    scheduler.cancel();
+    lifecycle.observe(message);
+    // The real stream loop retries scheduling after EVERY event, not just idle.
+    scheduler.schedule();
+  };
+
+  observe({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+  for (const taskId of ['child-a', 'child-b']) {
+    observe({ type: 'system', subtype: 'task_started', task_id: taskId });
+  }
+  pendingCompletion = { sessionId: 'session-1' };
+  assert.equal(lifecycle.finishResult(0), false);
+  scheduler.schedule();
+  assert.equal(timers.length, 0, 'a pending result is not permission to arm completion');
+
+  observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  observe({ type: 'system', subtype: 'task_notification', task_id: 'child-a', status: 'completed' });
+  observe({ type: 'assistant', message: { content: 'Parent is still waiting.' } });
+  assert.equal(timers.length, 0);
+  assert.equal(session.status, 'processing');
+  assert.equal(session.queuedTurns.length, 1);
+  assert.deepEqual(events, []);
+
+  observe({ type: 'system', subtype: 'task_notification', task_id: 'child-b', status: 'completed' });
+  observe({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+  events.push('parent-final-text');
+  observe({ type: 'assistant', message: { content: 'Final parent summary.' } });
+  assert.equal(timers.length, 0, 'parent output must finish before completion is armed');
+  observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.equal(scheduler.isScheduled(), true);
+  timers.at(-1).callback();
+  assert.deepEqual(events, ['parent-final-text', 'input-closed', 'query-closed', 'complete']);
+  assert.equal(session.queuedTurns.length, 0);
+});
+
+test('completion timer rechecks readiness after parent, child, permission, or turn state changes', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const changes = [
+    (lifecycle) => lifecycle.observe({ type: 'system', subtype: 'task_started', task_id: 'late-child' }),
+    (lifecycle) => lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'running' }),
+    (_lifecycle, interactions) => interactions.begin('ask-user-question'),
+    (lifecycle) => lifecycle.beginTurn(),
+    (lifecycle) => lifecycle.finishResult(1),
+    (lifecycle) => lifecycle.stopAll(),
+  ];
+  for (const change of changes) {
+    const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+    const interactions = claudeSdk.createPendingInteractionTracker();
+    lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+    assert.equal(lifecycle.finishResult(0), true);
+    let fire;
+    let closed = false;
+    const scheduler = claudeSdk.createClaudeTurnCompletionScheduler({
+      canComplete: () => claudeSdk.shouldEmitClaudeTurnCompletion({ sessionId: 'session-1' }, interactions, lifecycle),
+      onComplete: () => { closed = true; },
+      setTimeoutFn: (callback) => { fire = callback; return { unref() {} }; },
+      clearTimeoutFn: () => {},
+    });
+    assert.equal(scheduler.schedule(), true);
+    change(lifecycle, interactions);
+    fire();
+    assert.equal(closed, false);
+    assert.equal(scheduler.schedule(), false);
+  }
+});
+
+test('stream exhaustion cannot flush a result with unfinished background agents', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const lifecycle = claudeSdk.createClaudeTurnLifecycleTracker();
+  lifecycle.observe({ type: 'system', subtype: 'task_started', task_id: 'child' });
+  assert.equal(lifecycle.finishResult(0), false);
+  assert.equal(lifecycle.flush(), false);
+  assert.equal(lifecycle.canComplete(), false);
+  assert.equal(lifecycle.getActiveTasks().length, 1);
+
+  const parentOnly = claudeSdk.createClaudeTurnLifecycleTracker();
+  parentOnly.observe({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+  assert.equal(parentOnly.finishResult(0), false);
+  assert.equal(parentOnly.flush(), true);
+  assert.equal(parentOnly.canComplete(), true);
 });
 
 test('Claude turn completion grace restarts when trailing parent output arrives', async () => {
