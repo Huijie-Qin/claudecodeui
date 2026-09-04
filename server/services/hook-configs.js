@@ -1004,6 +1004,30 @@ export function createHookConfigService({
     if (!hook) throw createHttpError('Hook not found', 404);
     return hook;
   };
+  const isAdminHookAvailableToUser = ({ hook, userId }) => (
+    hook.activationScope === 'all_users'
+    || Boolean(database.prepare(`
+      SELECT 1
+      WHERE EXISTS (
+        SELECT 1
+        FROM hook_user_scopes scope
+        WHERE scope.hook_id = ?
+          AND scope.user_id = ?
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM hook_tenant_bindings tenant_scope
+        INNER JOIN tenant_users membership
+          ON membership.tenant_id = tenant_scope.tenant_id
+         AND membership.user_id = ?
+         AND membership.status = 'active'
+        INNER JOIN tenants tenant
+          ON tenant.id = tenant_scope.tenant_id
+         AND tenant.status = 'active'
+        WHERE tenant_scope.hook_id = ?
+      )
+    `).get(hook.id, userId, userId, hook.id))
+  );
   const getSqlCheckHookRow = ({ publishedOnly = false } = {}) => database.prepare(`
     SELECT *
     FROM hooks
@@ -1396,13 +1420,25 @@ export function createHookConfigService({
                   WHERE scope.hook_id = h.id
                     AND scope.user_id = ?
                 )
+                OR EXISTS (
+                  SELECT 1
+                  FROM hook_tenant_bindings tenant_scope
+                  INNER JOIN tenant_users membership
+                    ON membership.tenant_id = tenant_scope.tenant_id
+                   AND membership.user_id = ?
+                   AND membership.status = 'active'
+                  INNER JOIN tenants tenant
+                    ON tenant.id = tenant_scope.tenant_id
+                   AND tenant.status = 'active'
+                  WHERE tenant_scope.hook_id = h.id
+                )
               )
             )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC
       `,
         )
-        .all(userId, userId, userId);
+        .all(userId, userId, userId, userId);
       return rows.map((row) => ({
         ...mapHookRow(row),
         enabled: row.user_enabled === 1,
@@ -1415,7 +1451,7 @@ export function createHookConfigService({
         SELECT h.*,
           (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
           (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
-          0 AS bound_tenant_count,
+          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_scopes WHERE all_tenant_scopes.hook_id = h.id) AS bound_tenant_count,
           COALESCE((
             SELECT preference.show_in_chat
             FROM user_hook_preferences preference
@@ -1438,9 +1474,21 @@ export function createHookConfigService({
               WHERE scope.hook_id = h.id
                 AND scope.user_id = ?
             )
+            OR EXISTS (
+              SELECT 1
+              FROM hook_tenant_bindings tenant_scope
+              INNER JOIN tenant_users membership
+                ON membership.tenant_id = tenant_scope.tenant_id
+               AND membership.user_id = ?
+               AND membership.status = 'active'
+              INNER JOIN tenants tenant
+                ON tenant.id = tenant_scope.tenant_id
+               AND tenant.status = 'active'
+              WHERE tenant_scope.hook_id = h.id
+            )
           )
         ORDER BY h.updated_at DESC, h.created_at DESC
-      `).all(userId, userId, userId);
+      `).all(userId, userId, userId, userId);
       return rows.map((row) => ({
         ...mapHookRow(row),
         showInChat: row.user_show_in_chat !== 0,
@@ -1483,14 +1531,52 @@ export function createHookConfigService({
           bound: row.is_scoped === 1,
           enabled: row.is_enabled === 1,
         }));
+      const tenants = database
+        .prepare(
+          `
+        SELECT
+          tenants.id,
+          tenants.code,
+          tenants.name,
+          tenants.status,
+          CASE WHEN scope.tenant_id IS NULL THEN 0 ELSE 1 END AS is_scoped,
+          (
+            SELECT COUNT(*)
+            FROM tenant_users membership
+            INNER JOIN users
+              ON users.id = membership.user_id
+             AND users.is_active = 1
+            WHERE membership.tenant_id = tenants.id
+              AND membership.status = 'active'
+          ) AS active_user_count
+        FROM tenants
+        LEFT JOIN hook_tenant_bindings scope
+          ON scope.tenant_id = tenants.id
+         AND scope.hook_id = ?
+        ORDER BY tenants.name COLLATE NOCASE ASC, tenants.id ASC
+      `,
+        )
+        .all(hookId)
+        .map((row) => ({
+          id: row.id,
+          code: row.code,
+          name: row.name,
+          active: row.status === 'active',
+          activeUserCount: Number(row.active_user_count || 0),
+          bound: row.is_scoped === 1,
+        }));
       return {
-        scope: hook.activationScope === 'all_users' ? 'all_users' : 'users',
+        scope: hook.activationScope === 'all_users'
+          ? 'all_users'
+          : hook.boundTenantCount > 0
+            ? 'tenants'
+            : 'users',
         users,
-        tenants: [],
+        tenants,
       };
     },
 
-    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], boundBy }) => {
+    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], boundBy }) => {
       const hook = requireHook(hookId);
       if (hook.bindingController === 'sql_check') {
         throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
@@ -1498,13 +1584,18 @@ export function createHookConfigService({
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before binding users');
       }
-      if (!['users', 'all_users'].includes(scope)) {
-        throw createHttpError('scope must be users or all_users');
+      if (!['users', 'tenants', 'all_users'].includes(scope)) {
+        throw createHttpError('scope must be users, tenants, or all_users');
       }
       if (!Array.isArray(userIds)) throw createHttpError('userIds must be an array');
+      if (!Array.isArray(tenantIds)) throw createHttpError('tenantIds must be an array');
       const normalizedUserIds = [...new Set(userIds.map((value) => Number(value)))];
+      const normalizedTenantIds = [...new Set(tenantIds.map((value) => Number(value)))];
       if (normalizedUserIds.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
         throw createHttpError('userIds must contain positive integer user IDs');
+      }
+      if (normalizedTenantIds.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+        throw createHttpError('tenantIds must contain positive integer tenant IDs');
       }
       if (scope === 'users' && normalizedUserIds.length > 0) {
         const placeholders = normalizedUserIds.map(() => '?').join(', ');
@@ -1513,6 +1604,18 @@ export function createHookConfigService({
           .all(...normalizedUserIds);
         if (activeUsers.length !== normalizedUserIds.length) {
           throw createHttpError('One or more selected users do not exist or are inactive');
+        }
+      }
+      if (scope === 'tenants') {
+        if (normalizedTenantIds.length === 0) {
+          throw createHttpError('Select at least one active tenant');
+        }
+        const placeholders = normalizedTenantIds.map(() => '?').join(', ');
+        const activeTenants = database
+          .prepare(`SELECT id FROM tenants WHERE status = 'active' AND id IN (${placeholders})`)
+          .all(...normalizedTenantIds);
+        if (activeTenants.length !== normalizedTenantIds.length) {
+          throw createHttpError('One or more selected tenants do not exist or are inactive');
         }
       }
 
@@ -1536,6 +1639,29 @@ export function createHookConfigService({
               WHERE hook_id = ? AND user_id NOT IN (${placeholders})
             `).run(hookId, ...normalizedUserIds);
           }
+        }
+        if (scope === 'tenants') {
+          const insertTenant = database.prepare(`
+            INSERT INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+            VALUES (?, ?, ?)
+          `);
+          for (const tenantId of normalizedTenantIds) insertTenant.run(hookId, tenantId, boundBy);
+          database.prepare(`
+            DELETE FROM user_hook_bindings
+            WHERE hook_id = ?
+              AND NOT EXISTS (
+                SELECT 1
+                FROM hook_tenant_bindings tenant_scope
+                INNER JOIN tenant_users membership
+                  ON membership.tenant_id = tenant_scope.tenant_id
+                 AND membership.status = 'active'
+                INNER JOIN tenants tenant
+                  ON tenant.id = tenant_scope.tenant_id
+                 AND tenant.status = 'active'
+                WHERE tenant_scope.hook_id = ?
+                  AND membership.user_id = user_hook_bindings.user_id
+              )
+          `).run(hookId, hookId);
         }
         database
           .prepare(
@@ -1565,9 +1691,7 @@ export function createHookConfigService({
         throw createHttpError('This Hook is managed from its dedicated settings page', 409);
       }
       if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
-      const eligible = hook.activationScope === 'all_users' || Boolean(database.prepare(`
-        SELECT 1 FROM hook_user_scopes WHERE hook_id = ? AND user_id = ?
-      `).get(hookId, normalizedUserId));
+      const eligible = isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
       if (enabled) {
         database.prepare(`
@@ -1597,10 +1721,7 @@ export function createHookConfigService({
       const hook = requireHook(hookId);
       if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
       const eligible = hook.bindingController === 'sql_check'
-        || hook.activationScope === 'all_users'
-        || Boolean(database.prepare(`
-          SELECT 1 FROM hook_user_scopes WHERE hook_id = ? AND user_id = ?
-        `).get(hookId, normalizedUserId));
+        || isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
       database.prepare(`
         INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)

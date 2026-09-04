@@ -326,7 +326,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               {isFailedQueuedUserMessage && (
                 <span className="mr-auto inline-flex items-center gap-1 font-medium text-red-100">
                   <XCircle className="h-3 w-3" aria-hidden="true" />
-                  {t('messageQueue.failed', { defaultValue: 'Failed to queue' })}
+                  {t('messageQueue.failed', { defaultValue: 'Failed to send supplement' })}
                 </span>
               )}
               {shouldShowUserCopyControl && (

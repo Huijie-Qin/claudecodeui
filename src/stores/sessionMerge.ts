@@ -65,7 +65,21 @@ function isRealtimeHookActivityAhead(
   return realtimeRank > serverRank;
 }
 
-function applySameIdRealtimeLifecycleUpdates(
+function isRealtimeAssistantTextAhead(
+  serverMessage: NormalizedMessage,
+  realtimeMessage: NormalizedMessage,
+): boolean {
+  if (serverMessage.id !== realtimeMessage.id) return false;
+  if (!isAssistantText(serverMessage) || !isAssistantText(realtimeMessage)) return false;
+  if (serverMessage.sessionId !== realtimeMessage.sessionId) return false;
+  if (serverMessage.provider !== realtimeMessage.provider) return false;
+  if (!isSameAgentStreamScope(serverMessage, realtimeMessage)) return false;
+  const persistedContent = serverMessage.content || '';
+  const liveContent = realtimeMessage.content || '';
+  return liveContent.length > persistedContent.length && liveContent.startsWith(persistedContent);
+}
+
+function applySameIdRealtimeUpdates(
   server: NormalizedMessage[],
   realtime: NormalizedMessage[],
 ): NormalizedMessage[] {
@@ -73,11 +87,14 @@ function applySameIdRealtimeLifecycleUpdates(
   let changed = false;
   const merged = server.map((serverMessage) => {
     const realtimeMessage = realtimeById.get(serverMessage.id);
-    if (!realtimeMessage || !shouldUseRealtimeHookActivity(serverMessage, realtimeMessage)) {
+    if (!realtimeMessage || !(
+      shouldUseRealtimeHookActivity(serverMessage, realtimeMessage) ||
+      isRealtimeAssistantTextAhead(serverMessage, realtimeMessage)
+    )) {
       return serverMessage;
     }
     changed = true;
-    return realtimeMessage;
+    return { ...serverMessage, ...realtimeMessage };
   });
   return changed ? merged : server;
 }
@@ -97,6 +114,14 @@ function isPersistedCopyOfOptimisticUserText(
   if (!isLocalOptimisticUserText(realtimeMessage)) return false;
   if (serverMessage.kind !== 'text' || serverMessage.role !== 'user') return false;
   if (serverMessage.provider !== realtimeMessage.provider) return false;
+
+  // The SDK may rewrite a skill alias or its whitespace. A shared request UUID
+  // confirms persistence independently of the content and client/server clocks.
+  if (serverMessage.clientMessageId && realtimeMessage.clientMessageId) {
+    return serverMessage.sessionId === realtimeMessage.sessionId &&
+      serverMessage.clientMessageId === realtimeMessage.clientMessageId;
+  }
+
   if (typeof serverMessage.content !== 'string') return false;
   if (serverMessage.content.trim() !== realtimeMessage.content?.trim()) return false;
 
@@ -292,6 +317,9 @@ function insertByTimestamp(
 
 function getRealtimeDedupeKey(message: NormalizedMessage): string {
   if (isLocalOptimisticUserText(message)) {
+    if (message.clientMessageId) {
+      return ['optimistic-user', message.provider, message.sessionId, message.clientMessageId].join(':');
+    }
     return [
       'optimistic-user',
       message.sessionId,
@@ -320,15 +348,14 @@ function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessag
 
 /**
  * Compute merged messages: server + realtime, deduped by id.
- * Persisted messages normally take priority. Same-id Hook activity lifecycle
- * updates are the exception: a newer realtime state must remain visible while
- * the asynchronously persisted copy is still queued or running.
+ * Persisted messages normally take priority, except for a newer Hook state or
+ * an assistant text extension not yet represented in the history snapshot.
  */
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   const realtimeUnique = dropSupersededStreamingPlaceholders(dedupeRealtimeMessages(realtime));
   if (realtimeUnique.length === 0) return server;
   if (server.length === 0) return pinQueuedUserMessagesToEnd(realtimeUnique);
-  const serverWithLifecycleUpdates = applySameIdRealtimeLifecycleUpdates(server, realtimeUnique);
+  const serverWithLifecycleUpdates = applySameIdRealtimeUpdates(server, realtimeUnique);
   const serverIds = new Set(serverWithLifecycleUpdates.map(m => m.id));
   const extra = dropPersistedRealtimeCopies(serverWithLifecycleUpdates, realtimeUnique, serverIds);
   if (extra.length === 0) return serverWithLifecycleUpdates;
@@ -353,7 +380,10 @@ export function reconcileRealtimeAfterServerRefresh(
   return realtime.filter((realtimeMessage) => {
     if (serverIds.has(realtimeMessage.id)) {
       const serverMessage = server.find(message => message.id === realtimeMessage.id);
-      return Boolean(serverMessage && isRealtimeHookActivityAhead(serverMessage, realtimeMessage));
+      return Boolean(serverMessage && (
+        isRealtimeHookActivityAhead(serverMessage, realtimeMessage) ||
+        isRealtimeAssistantTextAhead(serverMessage, realtimeMessage)
+      ));
     }
 
     for (let serverIndex = 0; serverIndex < server.length; serverIndex++) {

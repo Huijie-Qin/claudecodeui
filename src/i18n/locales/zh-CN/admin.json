@@ -543,11 +543,13 @@
       },
       "scopeHints": {
         "users": "只有选中的用户能在设置中看到此 Hook；是否启用由用户自己决定。",
-        "tenants": "对所选租户的全部有效成员生效；以后加入租户的新用户会自动生效。",
+        "tenants": "所选租户的全部有效成员都能在设置中看到此 Hook；以后加入租户的新用户也会自动获得可见权限。",
         "all_users": "全部有效用户都能在设置中看到此 Hook；是否启用由用户自己决定。"
       },
       "search": "搜索用户名",
       "searchTenant": "搜索租户名称或编码",
+      "selectVisible": "批量选中",
+      "deselectVisible": "批量取消",
       "loading": "正在加载用户范围",
       "noUsers": "暂无可选用户",
       "noTenants": "暂无可绑定租户",

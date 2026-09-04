@@ -175,7 +175,7 @@ function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
 
 const STALE_THRESHOLD_MS = 30_000;
 
-const MAX_REALTIME_MESSAGES = 500;
+const REALTIME_RECONCILIATION_THRESHOLD = 500;
 
 function isStreamingPlaceholder(message: NormalizedMessage): boolean {
   return message.kind === 'stream_delta' && message.id.startsWith('__streaming_');
@@ -186,6 +186,7 @@ function isStreamingPlaceholder(message: NormalizedMessage): boolean {
 export function useSessionStore() {
   const storeRef = useRef(new Map<string, SessionSlot>());
   const activeSessionIdRef = useRef<string | null>(null);
+  const historyRequestsRef = useRef(new Map<string, { nextId: number; appliedId: number }>());
   // Bump to force re-render — only when the active session's data changes
   const [, setTick] = useState(0);
   const notify = useCallback((sessionId: string) => {
@@ -208,6 +209,21 @@ export function useSessionStore() {
 
   const has = useCallback((sessionId: string) => storeRef.current.has(sessionId), []);
 
+  const beginHistoryRequest = useCallback((sessionId: string) => {
+    const requests = historyRequestsRef.current;
+    const state = requests.get(sessionId) || { nextId: 0, appliedId: 0 };
+    requests.set(sessionId, state);
+    const requestId = ++state.nextId;
+    return {
+      isStale: () => requestId < state.appliedId,
+      accept() {
+        if (requestId < state.appliedId) return false;
+        state.appliedId = requestId;
+        return true;
+      },
+    };
+  }, []);
+
   /**
    * Fetch messages from the unified endpoint and populate serverMessages.
    */
@@ -223,6 +239,7 @@ export function useSessionStore() {
     } = {},
   ) => {
     const slot = getSlot(sessionId);
+    const request = beginHistoryRequest(sessionId);
     slot.status = 'loading';
     notify(sessionId);
 
@@ -236,8 +253,10 @@ export function useSessionStore() {
 
       const data = await response.json();
       const messages: NormalizedMessage[] = data.messages || [];
+      if (!request.accept()) return slot;
 
       slot.serverMessages = messages;
+      slot.realtimeMessages = reconcileRealtimeAfterServerRefresh(messages, slot.realtimeMessages);
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = (opts.offset ?? 0) + messages.length;
@@ -251,12 +270,13 @@ export function useSessionStore() {
       notify(sessionId);
       return slot;
     } catch (error) {
+      if (request.isStale()) return slot;
       console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
       slot.status = 'error';
       notify(sessionId);
       return slot;
     }
-  }, [getSlot, notify]);
+  }, [beginHistoryRequest, getSlot, notify]);
 
   /**
    * Load older (paginated) messages and prepend to serverMessages.
@@ -273,6 +293,7 @@ export function useSessionStore() {
   ) => {
     const slot = getSlot(sessionId);
     if (!slot.hasMore) return slot;
+    const historyAtRequest = slot.serverMessages;
 
     const limit = opts.limit ?? 20;
     const url = buildSessionMessagesUrl(sessionId, {
@@ -286,6 +307,9 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const olderMessages: NormalizedMessage[] = data.messages || [];
+      // Pagination belongs to the snapshot/offset it started from. A newer
+      // full refresh may already include this page and newer message copies.
+      if (slot.serverMessages !== historyAtRequest) return slot;
 
       // Prepend older messages (they're earlier in the conversation)
       slot.serverMessages = [...olderMessages, ...slot.serverMessages];
@@ -309,8 +333,10 @@ export function useSessionStore() {
     let updated = dropSupersededStreamingPlaceholders(
       upsertRealtimeMessages(slot.realtimeMessages, [msg]),
     );
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
+    if (updated.length > REALTIME_RECONCILIATION_THRESHOLD) {
+      // Never evict the only copy of an unpersisted message merely because
+      // subagents emitted enough events to fill the realtime buffer.
+      updated = reconcileRealtimeAfterServerRefresh(slot.serverMessages, updated);
     }
     slot.realtimeMessages = updated;
     recomputeMergedIfNeeded(slot);
@@ -326,8 +352,8 @@ export function useSessionStore() {
     let updated = dropSupersededStreamingPlaceholders(
       upsertRealtimeMessages(slot.realtimeMessages, msgs),
     );
-    if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
+    if (updated.length > REALTIME_RECONCILIATION_THRESHOLD) {
+      updated = reconcileRealtimeAfterServerRefresh(slot.serverMessages, updated);
     }
     slot.realtimeMessages = updated;
     recomputeMergedIfNeeded(slot);
@@ -347,17 +373,23 @@ export function useSessionStore() {
     } = {},
   ) => {
     const slot = getSlot(sessionId);
+    const request = beginHistoryRequest(sessionId);
     try {
       const url = buildSessionMessagesUrl(sessionId, opts);
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      // A newer response may already have absorbed and removed realtime
+      // copies. Accepting this old snapshot would then erase their tail.
+      if (!request.accept()) return;
 
       slot.serverMessages = data.messages || [];
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
+      slot.offset = slot.serverMessages.length;
       slot.fetchedAt = Date.now();
+      slot.status = 'idle';
       // Drop only messages confirmed by the refreshed history. The history
       // endpoint can briefly lag the complete event, so unmatched realtime
       // messages must remain visible until a later refresh catches up.
@@ -370,7 +402,7 @@ export function useSessionStore() {
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
     }
-  }, [getSlot, notify]);
+  }, [beginHistoryRequest, getSlot, notify]);
 
   /**
    * Update session status.

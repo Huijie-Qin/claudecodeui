@@ -6,7 +6,7 @@ import {
   enqueueClaudeFollowupTurn,
 } from './claude-turn-boundary.js';
 
-test('running Claude follow-ups wait outside the active SDK input stream', () => {
+test('queued Hook follow-ups wait outside the active SDK input stream', () => {
   let inputPushes = 0;
   let inputCloses = 0;
   let instanceCloses = 0;

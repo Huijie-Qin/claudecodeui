@@ -71,6 +71,7 @@ import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useUiPreferences } from '../../hooks/useUiPreferences';
 import type { LLMProvider, Project, ProjectScheduledTask, ProjectSession } from '../../types/app';
 import { api } from '../../utils/api';
+import { createClientMessageId } from '../../utils/clientMessageId';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import {
   CLAUDE_MODELS,
@@ -98,6 +99,7 @@ type ScheduledTask = ProjectScheduledTask & {
 };
 
 type PendingLaunch = {
+  clientMessageId?: string;
   provider: LLMProvider;
   temporarySessionId: string;
   workspaceId?: number;
@@ -106,6 +108,7 @@ type PendingLaunch = {
 };
 
 type PendingInitialMessage = {
+  clientMessageId?: string;
   sessionId: string;
   provider: LLMProvider;
   content: string;
@@ -2314,6 +2317,7 @@ export default function DataAgentApp() {
       sessionStorage.setItem('pendingSessionId', newSessionId);
       setPendingSession({ id: newSessionId, summary: pending.prompt.replace(/\s+/g, ' ').slice(0, 80), __provider: pending.provider });
       setPendingInitialMessage({
+        clientMessageId: pending.clientMessageId,
         sessionId: newSessionId,
         provider: pending.provider,
         content: pending.prompt,
@@ -2342,7 +2346,8 @@ export default function DataAgentApp() {
 
     const provider = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const temporarySessionId = `new-session-${Date.now()}`;
-    const launch = { provider, temporarySessionId, workspaceId: selectedProject.workspaceId, prompt, submittedAt: Date.now() };
+    const clientMessageId = provider === 'claude' ? createClientMessageId() : undefined;
+    const launch = { provider, clientMessageId, temporarySessionId, workspaceId: selectedProject.workspaceId, prompt, submittedAt: Date.now() };
     pendingLaunchRef.current = launch;
     pendingFailureSessionIdRef.current = null;
     setPendingLaunch(launch);
@@ -2364,7 +2369,7 @@ export default function DataAgentApp() {
       const toolsSettings = parseJsonSettings('gemini-settings');
       sendMessage({ type: 'gemini-command', command: prompt, sessionId: null, options: { cwd: resolvedProjectPath, projectPath: resolvedProjectPath, workspaceId: selectedProject.workspaceId, sessionId: null, resume: false, model: localStorage.getItem('gemini-model') || GEMINI_MODELS.DEFAULT, sessionSummary, permissionMode, toolsSettings } });
     } else {
-      sendMessage({ type: 'claude-command', command: prompt, options: { projectName: selectedProject.name, projectPath: resolvedProjectPath, cwd: resolvedProjectPath, workspaceId: selectedProject.workspaceId, sessionId: null, resume: false, toolsSettings: parseJsonSettings('claude-settings'), permissionMode, model: localStorage.getItem('claude-model') || CLAUDE_MODELS.DEFAULT, sessionSummary } });
+      sendMessage({ type: 'claude-command', command: prompt, options: { clientMessageId, projectName: selectedProject.name, projectPath: resolvedProjectPath, cwd: resolvedProjectPath, workspaceId: selectedProject.workspaceId, sessionId: null, resume: false, toolsSettings: parseJsonSettings('claude-settings'), permissionMode, model: localStorage.getItem('claude-model') || CLAUDE_MODELS.DEFAULT, sessionSummary } });
     }
   }, [isConnected, markSessionAsActive, markSessionAsProcessing, selectedProject, sendMessage]);
 

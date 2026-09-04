@@ -236,6 +236,7 @@ export interface ChatInterfaceProps {
   sendByCtrlEnter?: boolean;
   externalMessageUpdate?: number;
   initialUserMessage?: {
+    clientMessageId?: string;
     sessionId: string;
     provider: LLMProvider;
     content: string;

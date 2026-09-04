@@ -263,7 +263,9 @@ export async function appendClaudeDisplayCommand({
     !filePath
     || !normalizedMessageId
     || !normalizedDisplayCommand
-    || normalizedDisplayCommand === normalizedModelContent
+    // Native slash commands can be renamed by the SDK (SKILL.md name versus
+    // directory name), even when the input and display initially match.
+    || (normalizedDisplayCommand === normalizedModelContent && !normalizedDisplayCommand.startsWith('/'))
   ) {
     return false;
   }

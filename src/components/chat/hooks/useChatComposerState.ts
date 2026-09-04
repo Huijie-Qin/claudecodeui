@@ -11,6 +11,7 @@ import type {
 } from 'react';
 
 import { authenticatedFetch } from '../../../utils/api';
+import { createClientMessageId } from '../../../utils/clientMessageId';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
@@ -94,13 +95,6 @@ const MIN_TEXTAREA_HEIGHT_PX = 40;
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
   Boolean(sessionId && sessionId.startsWith('new-session-'));
-
-const createClientMessageId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `supplement_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-};
 
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
@@ -446,7 +440,6 @@ export function useChatComposerState({
           content: supplementContent,
           timestamp: new Date(),
           clientMessageId,
-          queueStatus: 'queued',
         });
         setIsLoading(true);
         setClaudeStatus({
@@ -514,8 +507,10 @@ export function useChatComposerState({
       const effectiveSessionId =
         currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
+      const clientMessageId = provider === 'claude' ? createClientMessageId() : undefined;
 
       const userMessage: ChatMessage = {
+        ...(clientMessageId ? { id: `local_${clientMessageId}`, clientMessageId } : {}),
         type: 'user',
         content: displayInput,
         timestamp: new Date(),
@@ -627,6 +622,7 @@ export function useChatComposerState({
           type: 'claude-command',
           command: messageContent,
           options: {
+            clientMessageId,
             projectName: selectedProject.name,
             projectPath: resolvedProjectPath,
             cwd: resolvedProjectPath,

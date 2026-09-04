@@ -1022,6 +1022,12 @@ function createClaudeTurnLifecycleTracker() {
   let hasSeenTaskLifecycle = false;
   let isCurrentlyIdle = false;
   let isWaitingForIdle = false;
+  let hasPendingResult = false;
+
+  // Readiness must remain queryable after observe()/finishResult() have emitted
+  // their one-shot signal, and must be revoked when new activity arrives.
+  const canComplete = () => hasPendingResult && activeTasks.size === 0 &&
+    (!hasSeenSessionState || isCurrentlyIdle);
 
   const readTaskId = (message) => (
     typeof message?.task_id === 'string' && message.task_id.trim()
@@ -1031,11 +1037,10 @@ function createClaudeTurnLifecycleTracker() {
 
   const completeWaitingTurnIfTasksSettled = () => {
     if (!isWaitingForIdle || activeTasks.size > 0) return null;
-    // Once this SDK session has exposed session-state events, idle is the
-    // authoritative turn boundary. A terminal background-task notification
-    // can arrive before the parent assistant has flushed its held-back result,
-    // so completing here would drop the parent's trailing realtime output.
-    if (hasSeenSessionState) return null;
+    // When session-state events are available, both conditions matter: the
+    // parent session must be idle and every background task must be terminal.
+    // Parent idle alone only means it is waiting for its children.
+    if (hasSeenSessionState && !isCurrentlyIdle) return null;
     isWaitingForIdle = false;
     return 'complete';
   };
@@ -1045,6 +1050,7 @@ function createClaudeTurnLifecycleTracker() {
       // A newly queued user turn supersedes completion that was waiting on an
       // earlier background agent's idle event.
       isWaitingForIdle = false;
+      hasPendingResult = false;
       isCurrentlyIdle = false;
       hasSeenTaskLifecycle = false;
     },
@@ -1074,7 +1080,13 @@ function createClaudeTurnLifecycleTracker() {
           : '';
         if (['completed', 'failed', 'killed', 'stopped', 'aborted', 'interrupted', 'cancelled', 'canceled'].includes(status)) {
           if (!taskId) return null;
-          activeTasks.delete(taskId);
+          const settledActiveTask = activeTasks.delete(taskId);
+          if (settledActiveTask && hasSeenSessionState) {
+            // An idle emitted before this terminal event described the parent
+            // waiting for its child. Require a fresh idle after the parent has
+            // had a chance to consume the child's result and resume output.
+            isCurrentlyIdle = false;
+          }
           return completeWaitingTurnIfTasksSettled();
         }
         if (taskId && ['pending', 'running'].includes(status)) {
@@ -1108,7 +1120,10 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenTaskLifecycle = true;
         const taskId = readTaskId(message);
         if (!taskId) return null;
-        activeTasks.delete(taskId);
+        const settledActiveTask = activeTasks.delete(taskId);
+        if (settledActiveTask && hasSeenSessionState) {
+          isCurrentlyIdle = false;
+        }
         return completeWaitingTurnIfTasksSettled();
       }
 
@@ -1116,12 +1131,10 @@ function createClaudeTurnLifecycleTracker() {
         hasSeenSessionState = true;
         if (message.state === 'idle') {
           isCurrentlyIdle = true;
-          activeTasks.clear();
-          if (isWaitingForIdle) {
-            isWaitingForIdle = false;
-            return 'complete';
-          }
-          return null;
+          // Do not clear activeTasks here. Claude may mark the parent session
+          // idle while background agents are still running; their terminal
+          // lifecycle events are the authority for child completion.
+          return completeWaitingTurnIfTasksSettled();
         }
         if (message.state === 'running' || message.state === 'requires_action') {
           isCurrentlyIdle = false;
@@ -1133,6 +1146,7 @@ function createClaudeTurnLifecycleTracker() {
     },
 
     finishResult(remainingQueryTurns) {
+      hasPendingResult = remainingQueryTurns === 0;
       if (remainingQueryTurns > 0) {
         isWaitingForIdle = false;
         return false;
@@ -1160,10 +1174,15 @@ function createClaudeTurnLifecycleTracker() {
     },
 
     flush() {
-      if (!isWaitingForIdle) return false;
+      if (!isWaitingForIdle || !hasPendingResult || activeTasks.size > 0) return false;
+      // A naturally exhausted stream can stand in for a missing idle event,
+      // but cannot stand in for unfinished child tasks.
+      isCurrentlyIdle = true;
       isWaitingForIdle = false;
       return true;
     },
+
+    canComplete,
 
     getActiveTasks() {
       return [...activeTasks.values()].map((task) => ({ ...task }));
@@ -1172,6 +1191,8 @@ function createClaudeTurnLifecycleTracker() {
     stopAll() {
       const tasks = [...activeTasks.values()].map((task) => ({ ...task }));
       activeTasks.clear();
+      hasPendingResult = false;
+      isWaitingForIdle = false;
       return tasks;
     },
   };
@@ -1193,13 +1214,15 @@ function createPendingInteractionTracker() {
   };
 }
 
-function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions) {
-  return Boolean(pendingCompletion) && !pendingInteractions?.isPaused?.();
+function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions, turnLifecycle) {
+  return Boolean(pendingCompletion) && Boolean(turnLifecycle?.canComplete()) &&
+    !pendingInteractions?.isPaused?.();
 }
 
 function createClaudeTurnCompletionScheduler({
   delayMs = TURN_COMPLETION_GRACE_MS,
   onComplete,
+  canComplete = () => true,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
 } = {}) {
@@ -1215,17 +1238,30 @@ function createClaudeTurnCompletionScheduler({
   return {
     schedule() {
       cancel();
+      if (!canComplete()) return false;
       timer = setTimeoutFn(() => {
         timer = null;
-        onComplete?.();
+        // Permission requests or new child/parent activity can arrive while
+        // the timer is armed. Never treat elapsed time as completion authority.
+        if (canComplete()) onComplete?.();
       }, delayMs);
       timer.unref?.();
+      return true;
     },
     cancel,
     isScheduled() {
       return Boolean(timer);
     },
   };
+}
+
+function resolveClaudeUserMessageId(clientMessageId) {
+  // Only SDK-compatible UUIDs may be used as transcript identities. Older
+  // clients and server-generated turns continue to receive a fresh UUID.
+  return typeof clientMessageId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientMessageId)
+    ? clientMessageId
+    : createRequestId();
 }
 
 /**
@@ -1322,7 +1358,9 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @param {Object} ws - WebSocket connection
  * @returns {Promise<void>}
  */
-async function queryClaudeSDKInternal(command, options = {}, ws) {
+async function queryClaudeSDKInternal(command, { clientMessageId, ...options } = {}, ws) {
+  // A request identity belongs to this turn, not the reusable runtime options:
+  // Hook and MCP continuations must not inherit the original user's UUID.
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
@@ -1423,11 +1461,18 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     runtimeBoundToProviderSession = true;
   };
 
+  const canCompletePendingTurn = () => {
+    const sid = capturedSessionId || sessionId || null;
+    return !turnBoundaryReached && !queryAbortController.signal.aborted &&
+      !abortedSessions.has(sid) && !mcpLoopSuspensionsBySession.has(sid) &&
+      shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions, turnLifecycle);
+  };
+
   const emitPendingTurnCompletion = () => {
     // Closing the completed turn also closes the structured-input stream used
     // to answer AskUserQuestion. A result/idle event can race with that answer,
     // so leave the completion pending until every interaction has settled.
-    if (!shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions)) {
+    if (!canCompletePendingTurn()) {
       return false;
     }
     const completion = pendingTurnCompletion;
@@ -1485,22 +1530,15 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
   };
 
   turnCompletionScheduler = createClaudeTurnCompletionScheduler({
+    canComplete: canCompletePendingTurn,
     onComplete: emitPendingTurnCompletion,
   });
 
   const schedulePendingTurnCompletion = () => {
-    if (
-      !pendingTurnCompletion ||
-      turnBoundaryReached ||
-      pendingInteractions.isPaused()
-    ) {
-      return false;
-    }
     // Idle/result can be delivered before already-buffered trailing assistant
     // messages. Complete only after the SDK stream has stayed quiet briefly;
     // every subsequent event restarts this grace period.
-    turnCompletionScheduler.schedule();
-    return true;
+    return turnCompletionScheduler.schedule();
   };
 
   try {
@@ -1560,7 +1598,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
-    const initialMessageId = createRequestId();
+    const initialMessageId = resolveClaudeUserMessageId(clientMessageId);
     initialDisplayCommandRecord = {
       messageId: initialMessageId,
       displayCommand,
@@ -2357,13 +2395,6 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
         break;
       }
 
-      // Deliver the terminal task event before the main completion event so
-      // the UI never observes the parent turn as done while its last subagent
-      // card is still running.
-      if (lifecycleSignal === 'complete') {
-        schedulePendingTurnCompletion();
-      }
-
       // Extract and send token budget updates from result messages
       if (message.type === 'result') {
         const remainingQueryTurns = inputQueue.finishQueryTurn();
@@ -2411,31 +2442,34 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
         }
 
         pendingTurnCompletion = { sessionId: completedSessionId };
-        if (turnLifecycle.finishResult(remainingQueryTurns)) {
-          schedulePendingTurnCompletion();
-        }
+        turnLifecycle.finishResult(remainingQueryTurns);
         if (turnBoundaryReached) {
           break;
         }
       }
 
-      if (pendingTurnCompletion) {
-        schedulePendingTurnCompletion();
-      }
+      // Retry after forwarding the event, using current lifecycle readiness
+      // rather than merely the existence of an earlier result.
+      schedulePendingTurnCompletion();
     }
 
     turnCompletionScheduler.cancel();
-    if (turnLifecycle.flush()) {
-      emitPendingTurnCompletion();
-    }
-    emitPendingTurnCompletion();
-
     const finalSessionId = capturedSessionId || sessionId || null;
-    const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const wasAborted = finalSessionId ? abortedSessions.has(finalSessionId) : false;
     const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
 
-    // Keep the lightweight session entry while transitioning so additional
-    // running-message follow-ups remain queued behind the next independent turn.
+    if (!wasAborted && !loopSuspension) {
+      turnLifecycle.flush();
+      if (pendingTurnCompletion && !emitPendingTurnCompletion()) {
+        const error = new Error('Claude stream closed before pending tasks or interactions completed');
+        error.code = 'CLAUDE_STREAM_INCOMPLETE';
+        throw error;
+      }
+    }
+    if (wasAborted) abortedSessions.delete(finalSessionId);
+
+    // Keep the lightweight session entry while transitioning so Hook-generated
+    // follow-ups can remain queued behind the next independent turn.
     if (finalSessionId && (!queuedFollowupTurn || wasAborted)) {
       removeSession(finalSessionId);
     }
@@ -2481,6 +2515,7 @@ async function queryClaudeSDKInternal(command, options = {}, ws) {
       return queryClaudeSDKInternal(queuedFollowupTurn.content, {
         ...runtimeOptions,
         ...(queuedFollowupTurn.runtimeOptions || {}),
+        clientMessageId: queuedFollowupTurn.clientMessageId,
         hookRecovery: queuedFollowupTurn.runtimeOptions?.hookRecovery || null,
         sessionId: finalSessionId,
         displayCommand: followupDisplayCommand,
@@ -3067,49 +3102,88 @@ function pushClaudeSupplement({
   const normalizedDisplayContent = supplement.displayContent;
 
   const session = getSession(normalizedSessionId);
-  if (!session?.inputQueue || !['processing', 'transitioning'].includes(session.status)) {
+  if (!session?.inputQueue || session.status !== 'processing') {
     return { success: false, error: 'Claude session is not accepting supplemental input' };
   }
 
   const { priority, shouldQuery } = normalizeSupplementMode(mode);
+  if (shouldQuery) {
+    try {
+      session.runtimeOptions?.onConcurrencyResume?.();
+    } catch (error) {
+      if (error?.code === 'SESSION_LIMIT_EXCEEDED') {
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          activeCount: error.activeCount,
+          limit: error.limit,
+          source: error.source,
+          userId: error.userId,
+        };
+      }
+      throw error;
+    }
+  }
+
   updateSessionWriter(normalizedSessionId, writer);
 
   const timestamp = new Date().toISOString();
-  let queuePosition = 0;
-  if (shouldQuery) {
-    queuePosition = enqueueClaudeFollowupTurn(session, {
-      content: normalizedContent,
-      displayContent: normalizedDisplayContent,
-      clientMessageId,
-      mode,
-      priority,
-      writer: writer || session.writer,
-      queuedAt: timestamp,
-    });
-    console.info('[ClaudeTurnBoundary] Queued running-message follow-up', {
-      sessionId: normalizedSessionId,
-      queuePosition,
-      mode,
-    });
-  } else {
-    const claudeMessageId = createRequestId();
-    session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
-      uuid: claudeMessageId,
-      priority,
-      shouldQuery: false,
-      timestamp,
-    }));
-  }
+  const messageId = typeof clientMessageId === 'string' && clientMessageId.trim()
+    ? `supplement_${clientMessageId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120)}`
+    : null;
+  const persistedMessage = createNormalizedMessage({
+    kind: 'text',
+    role: 'user',
+    content: normalizedDisplayContent,
+    sessionId: normalizedSessionId,
+    provider: 'claude',
+    timestamp,
+    ...(messageId ? { id: messageId } : {}),
+    isSupplement: true,
+    supplementMode: mode,
+  });
+
+  persistNormalizedMessages({
+    options: session.runtimeOptions,
+    provider: 'claude',
+    providerSessionId: normalizedSessionId,
+    runtimeId: session.runtimeId,
+    messages: [persistedMessage],
+  });
+
+  markSessionProcessing(normalizedSessionId);
+  const claudeMessageId = resolveClaudeUserMessageId(clientMessageId);
+  void appendClaudeDisplayCommand({
+    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
+    sessionId: normalizedSessionId,
+    messageId: claudeMessageId,
+    displayCommand: normalizedDisplayContent,
+    modelContent: normalizedContent,
+    uid: session.runtimeOptions?.runtimeUid,
+    gid: session.runtimeOptions?.runtimeGid,
+  }).catch((error) => {
+    console.warn(
+      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
+      error?.message || error,
+    );
+  });
+  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+    uuid: claudeMessageId,
+    priority,
+    shouldQuery,
+    timestamp,
+  }));
 
   const targetWriter = writer || session.writer;
   sendWriterMessage(targetWriter, {
     type: 'claude-supplement-ack',
     sessionId: normalizedSessionId,
     clientMessageId,
-    status: shouldQuery ? 'queued' : 'injected',
+    status: 'injected',
     mode,
     content: normalizedDisplayContent,
-    ...(shouldQuery ? { queuePosition } : {}),
     timestamp,
   });
   if (shouldQuery) {
@@ -3141,6 +3215,7 @@ export {
   pushClaudeSupplement,
   createClaudePromptFactory,
   buildClaudeUserMessage,
+  resolveClaudeUserMessageId,
   buildToolInteractionContext,
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,

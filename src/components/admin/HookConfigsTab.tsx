@@ -3,6 +3,7 @@ import type { DragEvent } from 'react';
 import {
   Activity,
   BookOpen,
+  Building2,
   Check,
   ChevronDown,
   CircleAlert,
@@ -169,7 +170,16 @@ type HookBindingUser = {
   bound: boolean;
 };
 
-type HookBindingScope = 'users' | 'all_users';
+type HookBindingTenant = {
+  id: number;
+  code: string;
+  name: string;
+  active: boolean;
+  activeUserCount: number;
+  bound: boolean;
+};
+
+type HookBindingScope = 'users' | 'tenants' | 'all_users';
 
 type HookExampleCatalogItem = {
   id: string;
@@ -547,26 +557,34 @@ function HookUserBindingsDialog({
   hook,
   scope,
   users,
+  tenants,
   selectedUserIds,
+  selectedTenantIds,
   loading,
   saving,
   error,
   onClose,
   onScopeChange,
   onToggle,
+  onToggleTenant,
+  onBatchChange,
   onClear,
   onSave,
 }: {
   hook: HookConfig | null;
   scope: HookBindingScope;
   users: HookBindingUser[];
+  tenants: HookBindingTenant[];
   selectedUserIds: number[];
+  selectedTenantIds: number[];
   loading: boolean;
   saving: boolean;
   error: string | null;
   onClose: () => void;
   onScopeChange: (scope: HookBindingScope) => void;
   onToggle: (userId: number) => void;
+  onToggleTenant: (tenantId: number) => void;
+  onBatchChange: (ids: number[], selected: boolean) => void;
   onClear: () => void;
   onSave: () => void;
 }) {
@@ -578,17 +596,37 @@ function HookUserBindingsDialog({
   }, [hook?.id]);
 
   const selectedUsers = useMemo(() => new Set(selectedUserIds), [selectedUserIds]);
+  const selectedTenants = useMemo(() => new Set(selectedTenantIds), [selectedTenantIds]);
   const filteredUsers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return users;
     return users.filter((user) => user.username.toLowerCase().includes(normalizedQuery));
   }, [query, users]);
+  const filteredTenants = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return tenants;
+    return tenants.filter((tenant) => (
+      tenant.name.toLowerCase().includes(normalizedQuery)
+      || tenant.code.toLowerCase().includes(normalizedQuery)
+    ));
+  }, [query, tenants]);
   const activeUserCount = users.filter((user) => user.isActive).length;
   const selectionCount = scope === 'users'
     ? selectedUserIds.length
-    : activeUserCount;
+    : scope === 'tenants'
+      ? selectedTenantIds.length
+      : activeUserCount;
+  const visibleSelectableIds = scope === 'users'
+    ? filteredUsers.filter((user) => user.isActive).map((user) => user.id)
+    : scope === 'tenants'
+      ? filteredTenants.filter((tenant) => tenant.active).map((tenant) => tenant.id)
+      : [];
+  const selectedIds = scope === 'users' ? selectedUsers : selectedTenants;
+  const hasUnselectedVisible = visibleSelectableIds.some((id) => !selectedIds.has(id));
+  const hasSelectedVisible = visibleSelectableIds.some((id) => selectedIds.has(id));
   const scopeOptions: Array<{ value: HookBindingScope; icon: typeof UsersRound }> = [
     { value: 'users', icon: UsersRound },
+    { value: 'tenants', icon: Building2 },
     { value: 'all_users', icon: Globe2 },
   ];
 
@@ -616,7 +654,7 @@ function HookUserBindingsDialog({
         </div>
 
         <div className="space-y-3 p-4 sm:p-5">
-          <div className="grid grid-cols-2 gap-2 rounded-xl bg-muted/60 p-1.5">
+          <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/60 p-1.5">
             {scopeOptions.map((option) => {
               const Icon = option.icon;
               const active = scope === option.value;
@@ -647,14 +685,38 @@ function HookUserBindingsDialog({
           ) : null}
 
           {scope !== 'all_users' ? (
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('hooks.bindings.search')}
-                className="h-10 rounded-xl pl-9"
-              />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t(scope === 'users' ? 'hooks.bindings.search' : 'hooks.bindings.searchTenant')}
+                  className="h-10 rounded-xl pl-9"
+                />
+              </div>
+              <div className="flex shrink-0 gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-10 flex-1 sm:flex-none"
+                  disabled={!hasUnselectedVisible || saving}
+                  onClick={() => onBatchChange(visibleSelectableIds, true)}
+                >
+                  {t('hooks.bindings.selectVisible')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-10 flex-1 sm:flex-none"
+                  disabled={!hasSelectedVisible || saving}
+                  onClick={() => onBatchChange(visibleSelectableIds, false)}
+                >
+                  {t('hooks.bindings.deselectVisible')}
+                </Button>
+              </div>
             </div>
           ) : null}
 
@@ -678,7 +740,11 @@ function HookUserBindingsDialog({
               <div className="flex min-h-44 items-center justify-center text-sm text-muted-foreground">
                 {query ? t('hooks.bindings.noMatches') : t('hooks.bindings.noUsers')}
               </div>
-            ) : filteredUsers.map((user) => {
+            ) : scope === 'tenants' && filteredTenants.length === 0 ? (
+              <div className="flex min-h-44 items-center justify-center text-sm text-muted-foreground">
+                {query ? t('hooks.bindings.noMatches') : t('hooks.bindings.noTenants')}
+              </div>
+            ) : scope === 'users' ? filteredUsers.map((user) => {
               const checked = selectedUsers.has(user.id);
               const cannotAdd = !user.isActive && !checked;
               return (
@@ -711,6 +777,39 @@ function HookUserBindingsDialog({
                   {!user.isActive ? <Badge variant="secondary">{t('hooks.bindings.inactive')}</Badge> : null}
                 </label>
               );
+            }) : filteredTenants.map((tenant) => {
+              const checked = selectedTenants.has(tenant.id);
+              const cannotAdd = !tenant.active && !checked;
+              return (
+                <label
+                  key={tenant.id}
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
+                    checked ? 'bg-primary/10' : 'hover:bg-muted/50',
+                    cannotAdd && 'cursor-not-allowed opacity-55',
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={cannotAdd}
+                    onChange={() => onToggleTenant(tenant.id)}
+                    className="h-4 w-4 rounded border-input accent-primary"
+                  />
+                  <span className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                    checked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                  )}>
+                    <Building2 className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">{tenant.name}</span>
+                    <span className="block text-[10px] text-muted-foreground">{tenant.code}</span>
+                  </span>
+                  <Badge variant="outline">{t('hooks.bindings.tenantUsers', { count: tenant.activeUserCount })}</Badge>
+                  {!tenant.active ? <Badge variant="secondary">{t('hooks.bindings.inactive')}</Badge> : null}
+                </label>
+              );
             })}
           </div>
         </div>
@@ -731,7 +830,7 @@ function HookUserBindingsDialog({
             type="button"
             size="sm"
             onClick={onSave}
-            disabled={loading || saving}
+            disabled={loading || saving || (scope === 'tenants' && selectedTenantIds.length === 0)}
           >
             {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
             {t('hooks.bindings.save')}
@@ -1032,7 +1131,9 @@ export default function HookConfigsTab() {
   const [bindingsHook, setBindingsHook] = useState<HookConfig | null>(null);
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
+  const [bindingTenants, setBindingTenants] = useState<HookBindingTenant[]>([]);
   const [selectedBindingUserIds, setSelectedBindingUserIds] = useState<number[]>([]);
+  const [selectedBindingTenantIds, setSelectedBindingTenantIds] = useState<number[]>([]);
   const [bindingsLoading, setBindingsLoading] = useState(false);
   const [bindingsSaving, setBindingsSaving] = useState(false);
   const [bindingsError, setBindingsError] = useState<string | null>(null);
@@ -1211,7 +1312,9 @@ export default function HookConfigsTab() {
     setBindingsHook(hook);
     setBindingScope('users');
     setBindingUsers([]);
+    setBindingTenants([]);
     setSelectedBindingUserIds([]);
+    setSelectedBindingTenantIds([]);
     setBindingsError(null);
     setBindingsLoading(true);
     try {
@@ -1220,11 +1323,15 @@ export default function HookConfigsTab() {
       const payload = await response.json() as {
         scope?: HookBindingScope;
         users?: HookBindingUser[];
+        tenants?: HookBindingTenant[];
       };
       const users = payload.users || [];
+      const tenants = payload.tenants || [];
       setBindingScope(payload.scope || 'users');
       setBindingUsers(users);
+      setBindingTenants(tenants);
       setSelectedBindingUserIds(users.filter((user) => user.bound).map((user) => user.id));
+      setSelectedBindingTenantIds(tenants.filter((tenant) => tenant.bound).map((tenant) => tenant.id));
     } catch (caughtError) {
       setBindingsError(caughtError instanceof Error ? caughtError.message : t('hooks.bindings.loadError'));
     } finally {
@@ -1240,6 +1347,7 @@ export default function HookConfigsTab() {
       const response = await api.admin.updateHookBindings(bindingsHook.id, {
         scope: bindingScope,
         userIds: bindingScope === 'users' ? selectedBindingUserIds : [],
+        tenantIds: bindingScope === 'tenants' ? selectedBindingTenantIds : [],
       });
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.saveError')));
       const payload = await response.json() as { hook: HookConfig };
@@ -1647,7 +1755,9 @@ export default function HookConfigsTab() {
       hook={bindingsHook}
       scope={bindingScope}
       users={bindingUsers}
+      tenants={bindingTenants}
       selectedUserIds={selectedBindingUserIds}
+      selectedTenantIds={selectedBindingTenantIds}
       loading={bindingsLoading}
       saving={bindingsSaving}
       error={bindingsError}
@@ -1655,15 +1765,43 @@ export default function HookConfigsTab() {
         setBindingsHook(null);
         setBindingScope('users');
         setBindingUsers([]);
+        setBindingTenants([]);
         setSelectedBindingUserIds([]);
+        setSelectedBindingTenantIds([]);
         setBindingsError(null);
       }}
       onScopeChange={setBindingScope}
       onToggle={(userId) => setSelectedBindingUserIds((current) => (
         current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]
       ))}
+      onToggleTenant={(tenantId) => setSelectedBindingTenantIds((current) => (
+        current.includes(tenantId) ? current.filter((id) => id !== tenantId) : [...current, tenantId]
+      ))}
+      onBatchChange={(ids, selected) => {
+        if (bindingScope === 'users') {
+          setSelectedBindingUserIds((current) => {
+            const next = new Set(current);
+            for (const id of ids) {
+              if (selected) next.add(id);
+              else next.delete(id);
+            }
+            return [...next];
+          });
+        }
+        if (bindingScope === 'tenants') {
+          setSelectedBindingTenantIds((current) => {
+            const next = new Set(current);
+            for (const id of ids) {
+              if (selected) next.add(id);
+              else next.delete(id);
+            }
+            return [...next];
+          });
+        }
+      }}
       onClear={() => {
         if (bindingScope === 'users') setSelectedBindingUserIds([]);
+        if (bindingScope === 'tenants') setSelectedBindingTenantIds([]);
       }}
       onSave={() => void saveHookBindings()}
     />
@@ -2047,12 +2185,15 @@ export default function HookConfigsTab() {
                 : findUnavailableHookSkills(hook, resources.skills);
               const isSqlCheckManaged = hook.bindingController === 'sql_check';
               const bindingActive = hook.activationScope === 'all_users'
+                || hook.boundTenantCount > 0
                 || hook.scopedUserCount > 0;
               const bindingLabel = isSqlCheckManaged
                 ? t('hooks.bindings.sqlCheckManagedCount', { count: hook.boundUserCount })
                 : hook.activationScope === 'all_users'
                 ? t('hooks.bindings.allUsersShort')
-                : hook.scopedUserCount > 0
+                : hook.boundTenantCount > 0
+                  ? t('hooks.bindings.boundTenantCountShort', { count: hook.boundTenantCount })
+                  : hook.scopedUserCount > 0
                     ? t('hooks.bindings.boundCountShort', { count: hook.scopedUserCount })
                     : t('hooks.bindings.unbound');
               return (
