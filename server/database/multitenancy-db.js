@@ -391,6 +391,7 @@ function hydrateMcpInstallRow(row) {
   return {
     ...row,
     tools: parseJson(row.tools_json, []),
+    presetTools: parseJson(row.preset_tools_json, []),
     toolSettings: parseJson(row.tool_settings_json, {}),
   };
 }

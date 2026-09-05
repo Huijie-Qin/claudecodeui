@@ -188,6 +188,57 @@ test('workspace mcp tools catalog defaults to all tools and returns the current 
   assert.deepEqual(selectedCatalog.presets[0].allowedToolNames, ['search_docs']);
 });
 
+test('workspace mcp tools catalog exposes template tool defaults before a user override', async () => {
+  const database = createTestDb();
+  const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
+  const service = createWorkspaceMcpToolsService({ multitenancy });
+  multitenancy.mcpPresets.recordPresetTest({
+    tenantId: tenant.id,
+    presetId: published.id,
+    status: 'healthy',
+    error: null,
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+    dockerCompatible: true,
+    updatedByUserId: userId,
+  });
+  multitenancy.mcpInstalls.upsertInstall({
+    workspaceId: workspace.id,
+    presetId: published.id,
+    installedByUserId: userId,
+    probeStatus: 'healthy',
+    toolCount: 2,
+    tools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+  });
+  multitenancy.mcpInstalls.updateToolSettings({
+    workspaceId: workspace.id,
+    presetId: published.id,
+    toolSettings: { allowedToolNames: ['search_docs'], tools: {} },
+  });
+
+  const templateCatalog = await service.listWorkspaceMcpPresetCatalog({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+  });
+  assert.equal(templateCatalog.presets[0].toolSelectionConfigured, true);
+  assert.deepEqual(templateCatalog.presets[0].allowedToolNames, ['search_docs']);
+
+  service.updateWorkspaceMcpToolPreference({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+    presetId: published.id,
+    allowedToolNames: ['delete_docs'],
+  });
+  const userCatalog = await service.listWorkspaceMcpPresetCatalog({
+    tenantId: tenant.id,
+    workspaceId: workspace.id,
+    userId,
+  });
+  assert.deepEqual(userCatalog.presets[0].allowedToolNames, ['delete_docs']);
+});
+
 test('workspace mcp tools catalog probes installed presets and records connection state', async () => {
   const database = createTestDb();
   const { workspacePath, cleanup } = await createWorkspacePath();

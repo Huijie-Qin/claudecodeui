@@ -28,10 +28,28 @@ function createFixture() {
   const mcpId = Number(database.prepare(`
     INSERT INTO mcp_server_presets (
       tenant_id, name, display_name, config_json, status, last_test_status,
-      tool_count, created_by_user_id, updated_by_user_id
+      tool_count, tools_json, created_by_user_id, updated_by_user_id
     ) VALUES (?, 'web-search', 'Web Search', '{"type":"http","url":"https://example.com"}',
-      'published', 'healthy', 2, 1, 1)
-  `).run(dataAgentTenantId).lastInsertRowid);
+      'published', 'healthy', 2, ?, 1, 1)
+  `).run(dataAgentTenantId, JSON.stringify([
+    {
+      name: 'search_web',
+      description: 'Search the web',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          limit: { type: 'integer', default: 5 },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'read_page',
+      description: 'Read a page',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
+    },
+  ])).lastInsertRowid);
 
   return {
     database,
@@ -333,4 +351,77 @@ test('workspace snapshot preserves template content and preset versions', () => 
     SELECT COUNT(*) AS count FROM workspace_agent_template_mcp_installs
     WHERE workspace_id = ? AND template_id = ?
   `).get(workspaceId, draft.id).count), 1, 'template MCP install markers must remain historical records');
+});
+
+test('MCP tool settings are validated and preserved in template snapshots', () => {
+  const fixture = createFixture();
+  const toolSettings = {
+    allowedToolNames: ['search_web'],
+    tools: {
+      search_web: {
+        params: {
+          limit: { mode: 'force', value: 10 },
+          query: { mode: 'default', value: '应用市场' },
+        },
+      },
+    },
+  };
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '带 MCP 配置的模板',
+      category: '市场分析',
+      tenantIds: [fixture.dataAgentTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [{
+        tenantId: fixture.dataAgentTenantId,
+        presetId: fixture.mcpId,
+        toolSettings,
+      }],
+    },
+  });
+  assert.deepEqual(draft.mcpPresetRefs[0].toolSettings, toolSettings);
+
+  fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+  const snapshot = fixture.service.resolveTemplateSnapshot({
+    templateId: draft.id,
+    tenantId: fixture.appTenantId,
+  });
+  assert.equal(snapshot.mcps[0].serverName, 'web-search');
+  assert.deepEqual(snapshot.mcps[0].toolSettings, toolSettings);
+});
+
+test('MCP tool settings reject unknown tools and parameters', () => {
+  const fixture = createFixture();
+  const baseInput = {
+    name: '非法 MCP 配置模板',
+    category: '市场分析',
+    tenantIds: [fixture.dataAgentTenantId],
+    skillPresetRefs: [],
+  };
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      ...baseInput,
+      mcpPresetRefs: [{
+        tenantId: fixture.dataAgentTenantId,
+        presetId: fixture.mcpId,
+        toolSettings: { allowedToolNames: ['missing_tool'], tools: {} },
+      }],
+    },
+  }), /Unknown MCP tools/);
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      ...baseInput,
+      mcpPresetRefs: [{
+        tenantId: fixture.dataAgentTenantId,
+        presetId: fixture.mcpId,
+        toolSettings: {
+          allowedToolNames: ['search_web'],
+          tools: { search_web: { params: { missing: { mode: 'force', value: true } } } },
+        },
+      }],
+    },
+  }), /Unknown MCP parameter/);
 });

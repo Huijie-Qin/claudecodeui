@@ -20,6 +20,13 @@ export type McpToolOverridesConfig = {
   }>;
 };
 
+export type McpTemplateToolSettings = {
+  allowedToolNames: string[];
+  tools: Record<string, {
+    params: Record<string, McpToolOverrideParam>;
+  }>;
+};
+
 export type McpToolParameterKind = 'string' | 'number' | 'boolean' | 'enum' | 'array' | 'object';
 
 export type McpToolParameterField = {

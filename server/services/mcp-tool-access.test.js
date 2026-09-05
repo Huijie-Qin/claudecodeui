@@ -65,3 +65,53 @@ test('MCP tool access handles server names containing double underscores', () =>
   assert.equal(access.isAllowed('mcp__data__source__query'), true);
   assert.equal(access.isAllowed('mcp__data__source__drop'), false);
 });
+
+test('MCP tool access uses template defaults until the user saves an explicit preference', () => {
+  const templateDefault = resolveUserWorkspaceMcpToolAccess({
+    tenantId: 1,
+    workspaceId: 2,
+    userId: 3,
+    multitenancy: {
+      mcpToolPreferences: { listForUser: () => [] },
+      mcpInstalls: {
+        listInstallsForWorkspace: () => [{
+          preset_id: 7,
+          name: 'knowledge',
+          toolSettings: { allowedToolNames: ['search_docs'] },
+          presetTools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+          tools: [],
+        }],
+      },
+    },
+  });
+  assert.equal(templateDefault.isAllowed('mcp__knowledge__search_docs'), true);
+  assert.equal(templateDefault.isAllowed('mcp__knowledge__delete_docs'), false);
+
+  const explicitPreference = resolveUserWorkspaceMcpToolAccess({
+    tenantId: 1,
+    workspaceId: 2,
+    userId: 3,
+    multitenancy: {
+      mcpToolPreferences: {
+        listForUser: () => [{
+          preset_id: 7,
+          server_name: 'knowledge',
+          allowedToolNames: ['delete_docs'],
+          presetTools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+          installedTools: [],
+        }],
+      },
+      mcpInstalls: {
+        listInstallsForWorkspace: () => [{
+          preset_id: 7,
+          name: 'knowledge',
+          toolSettings: { allowedToolNames: ['search_docs'] },
+          presetTools: [{ name: 'search_docs' }, { name: 'delete_docs' }],
+          tools: [],
+        }],
+      },
+    },
+  });
+  assert.equal(explicitPreference.isAllowed('mcp__knowledge__search_docs'), false);
+  assert.equal(explicitPreference.isAllowed('mcp__knowledge__delete_docs'), true);
+});

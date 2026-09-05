@@ -64,11 +64,13 @@ function getToolNames(tools) {
     .filter(Boolean)));
 }
 
-function withUserToolPreference(preset, preference) {
+function withUserToolPreference(preset, preference, install) {
   const availableToolNames = getToolNames(preset?.tools);
   const configuredAllowedToolNames = Array.isArray(preference?.allowedToolNames)
     ? preference.allowedToolNames
-    : null;
+    : Array.isArray(install?.toolSettings?.allowedToolNames)
+      ? install.toolSettings.allowedToolNames
+      : null;
   const allowedSet = new Set(configuredAllowedToolNames || availableToolNames);
   return {
     ...preset,
@@ -354,7 +356,7 @@ export function createWorkspaceMcpToolsService({
         preset,
         installsByPresetId.get(Number(preset.id)),
         probesByPresetId.get(Number(preset.id)),
-      ), preferencesByPresetId.get(Number(preset.id)))
+      ), preferencesByPresetId.get(Number(preset.id)), installsByPresetId.get(Number(preset.id)))
     ));
 
     return {

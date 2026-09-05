@@ -125,6 +125,39 @@ export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.
   return null;
 }
 
+export async function mergeMcpToolOverridesConfig(workspaceRoot, mcpServers) {
+  if (typeof workspaceRoot !== 'string' || !workspaceRoot.trim()) {
+    throw new Error('workspaceRoot is required');
+  }
+  if (!isPlainObject(mcpServers)) {
+    throw new Error('mcpServers must be an object');
+  }
+
+  const targetPath = path.join(workspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+  let current = {};
+  try {
+    const content = (await fs.readFile(targetPath, 'utf8')).replace(/^\uFEFF/, '');
+    const parsed = content.trim() ? JSON.parse(content) : {};
+    current = isPlainObject(parsed) ? parsed : {};
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+  }
+
+  const nextConfig = {
+    ...current,
+    version: 1,
+    mcpServers: {
+      ...(isPlainObject(current.mcpServers) ? current.mcpServers : {}),
+      ...mcpServers,
+    },
+  };
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const temporaryPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf8');
+  await fs.rename(temporaryPath, targetPath);
+  return nextConfig;
+}
+
 export function applyMcpToolOverrides({ toolName, input, config }) {
   const parsedToolName = parseMcpToolName(toolName);
   if (!parsedToolName || !isPlainObject(config)) {

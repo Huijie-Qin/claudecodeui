@@ -58,6 +58,90 @@ function normalizePresetRefs(values, name) {
   return [...new Map(refs.map((ref) => [`${ref.tenantId}:${ref.presetId}`, ref])).values()];
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getMcpToolDefinitions(row) {
+  return parseJson(row?.tools_json, []).filter((tool) => (
+    isPlainObject(tool) && typeof tool.name === 'string' && tool.name.trim()
+  ));
+}
+
+function normalizeMcpToolSettings(value, row, name) {
+  if (value == null) return undefined;
+  if (!isPlainObject(value)) throw createHttpError(`${name} must be an object`);
+
+  const tools = getMcpToolDefinitions(row);
+  const toolsByName = new Map(tools.map((tool) => [tool.name.trim(), tool]));
+  const rawAllowedToolNames = value.allowedToolNames;
+  if (rawAllowedToolNames != null && !Array.isArray(rawAllowedToolNames)) {
+    throw createHttpError(`${name}.allowedToolNames must be an array`);
+  }
+  const allowedToolNames = [...new Set((rawAllowedToolNames ?? tools.map((tool) => tool.name))
+    .map((toolName) => requiredString(toolName, `${name}.allowedToolNames`)))];
+  const unknownAllowedTools = allowedToolNames.filter((toolName) => !toolsByName.has(toolName));
+  if (unknownAllowedTools.length > 0) {
+    throw createHttpError(`Unknown MCP tools in ${name}: ${unknownAllowedTools.join(', ')}`);
+  }
+
+  const rawTools = value.tools ?? {};
+  if (!isPlainObject(rawTools)) throw createHttpError(`${name}.tools must be an object`);
+  const normalizedTools = Object.create(null);
+  for (const [toolName, toolSettings] of Object.entries(rawTools)) {
+    const tool = toolsByName.get(toolName);
+    if (!tool) throw createHttpError(`Unknown MCP tool in ${name}: ${toolName}`);
+    if (!isPlainObject(toolSettings)) throw createHttpError(`${name}.tools.${toolName} must be an object`);
+    const rawParams = toolSettings.params ?? {};
+    if (!isPlainObject(rawParams)) throw createHttpError(`${name}.tools.${toolName}.params must be an object`);
+
+    const inputSchema = isPlainObject(tool.inputSchema)
+      ? tool.inputSchema
+      : isPlainObject(tool.input_schema)
+        ? tool.input_schema
+        : {};
+    const properties = isPlainObject(inputSchema.properties) ? inputSchema.properties : {};
+    const params = {};
+    for (const [paramName, entry] of Object.entries(rawParams)) {
+      if (!Object.hasOwn(properties, paramName)) {
+        throw createHttpError(`Unknown MCP parameter in ${name}: ${toolName}.${paramName}`);
+      }
+      if (!isPlainObject(entry)) {
+        throw createHttpError(`${name}.tools.${toolName}.params.${paramName} must be an object`);
+      }
+      const mode = entry.mode === 'default' || entry.mode === 'force'
+        ? entry.mode
+        : entry.custom === true
+          ? 'force'
+          : null;
+      if (!mode) {
+        throw createHttpError(`Invalid MCP parameter strategy in ${name}: ${toolName}.${paramName}`);
+      }
+      if (!Object.hasOwn(entry, 'value')) {
+        throw createHttpError(`MCP parameter value is required in ${name}: ${toolName}.${paramName}`);
+      }
+      params[paramName] = { mode, value: entry.value };
+    }
+    if (Object.keys(params).length > 0) normalizedTools[toolName] = { params };
+  }
+
+  const normalized = { allowedToolNames, tools: normalizedTools };
+  if (JSON.stringify(normalized).length > 64 * 1024) {
+    throw createHttpError(`${name} must not exceed 64 KiB`);
+  }
+  return normalized;
+}
+
+function normalizeMcpPresetRefs(values, name) {
+  if (!Array.isArray(values)) throw createHttpError(`${name} must be an array`);
+  const refs = values.map((value) => ({
+    tenantId: positiveInteger(value?.tenantId ?? value?.tenant_id, `${name}.tenantId`),
+    presetId: positiveInteger(value?.presetId ?? value?.preset_id ?? value, `${name}.presetId`),
+    ...(value?.toolSettings != null ? { toolSettings: value.toolSettings } : {}),
+  }));
+  return [...new Map(refs.map((ref) => [`${ref.tenantId}:${ref.presetId}`, ref])).values()];
+}
+
 function hydrateTemplate(row) {
   if (!row) return null;
   return {
@@ -92,6 +176,18 @@ function buildPresetSnapshot(rows) {
     name: row.display_name || row.name,
     version: Number(row.version || 0),
     updatedAt: row.updated_at || null,
+  }));
+}
+
+function buildMcpPresetSnapshot(inspections) {
+  return inspections.map(({ row, ref }) => ({
+    id: Number(row.id),
+    tenantId: Number(row.tenant_id),
+    name: row.display_name || row.name,
+    serverName: row.name,
+    version: Number(row.version || 0),
+    updatedAt: row.updated_at || null,
+    ...(ref.toolSettings ? { toolSettings: ref.toolSettings } : {}),
   }));
 }
 
@@ -256,7 +352,7 @@ export function createAgentTemplateService(database = db) {
       input.skillPresetRefs ?? existing?.skillPresetRefs ?? [],
       'skillPresetRefs',
     );
-    const mcpPresetRefs = normalizePresetRefs(
+    let mcpPresetRefs = normalizeMcpPresetRefs(
       input.mcpPresetRefs ?? existing?.mcpPresetRefs ?? [],
       'mcpPresetRefs',
     );
@@ -267,7 +363,14 @@ export function createAgentTemplateService(database = db) {
       }
     }
     resolveSkillRows(skillPresetRefs);
-    resolveMcpRows(mcpPresetRefs);
+    const mcpRows = resolveMcpRows(mcpPresetRefs);
+    mcpPresetRefs = mcpPresetRefs.map((ref, index) => ({
+      tenantId: ref.tenantId,
+      presetId: ref.presetId,
+      ...(ref.toolSettings != null
+        ? { toolSettings: normalizeMcpToolSettings(ref.toolSettings, mcpRows[index], `mcpPresetRefs[${index}].toolSettings`) }
+        : {}),
+    }));
     const legacyAgentMarkdownWasEdited = existing
       && input.agentMarkdown !== undefined
       && input.agentMarkdown !== existing.agentMarkdown
@@ -397,7 +500,7 @@ export function createAgentTemplateService(database = db) {
     return {
       template,
       skills: buildPresetSnapshot(skillInspections.filter((inspection) => inspection.available).map((inspection) => inspection.row)),
-      mcps: buildPresetSnapshot(mcpInspections.filter((inspection) => inspection.available).map((inspection) => inspection.row)),
+      mcps: buildMcpPresetSnapshot(mcpInspections.filter((inspection) => inspection.available)),
       unavailableCapabilities,
     };
   };
@@ -478,12 +581,16 @@ export function createAgentTemplateService(database = db) {
           ORDER BY display_name ASC, id ASC
         `).all(normalizedTenantId),
         mcps: database.prepare(`
-          SELECT id, tenant_id AS tenantId, name, display_name AS displayName, description, tool_count AS toolCount
+          SELECT id, tenant_id AS tenantId, name, display_name AS displayName, description,
+            tool_count AS toolCount, tools_json AS toolsJson
           FROM mcp_server_presets
           WHERE tenant_id = ? AND status = 'published'
             AND last_test_status = 'healthy' AND tool_count > 0
           ORDER BY display_name ASC, id ASC
-        `).all(normalizedTenantId),
+        `).all(normalizedTenantId).map((preset) => ({
+          ...preset,
+          tools: parseJson(preset.toolsJson, []),
+        })),
       };
     },
     listAvailableTemplates,

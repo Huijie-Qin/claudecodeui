@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, Sparkles, Tags, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, SlidersHorizontal, Sparkles, Tags, Trash2, X } from 'lucide-react';
 
 import { api } from '../../utils/api';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { cn } from '../../lib/utils';
+import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTools';
+import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
 
+import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
 
 type Tenant = { id: number; code: string; name: string; status: string };
-type PresetRef = { tenantId: number; presetId: number };
+type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
 type MarketSkill = {
   id?: string;
   skillId?: string;
@@ -56,7 +59,15 @@ type AgentTemplate = {
     unavailableReason?: string;
   }>;
 };
-type Preset = { id: number; tenantId: number; name: string; displayName: string; description?: string };
+type Preset = {
+  id: number;
+  tenantId: number;
+  name: string;
+  displayName: string;
+  description?: string;
+  toolCount?: number;
+  tools?: WorkspaceMcpTool[];
+};
 type SkillCandidate = Preset & {
   sourceRef: string;
   presetId?: number;
@@ -78,6 +89,7 @@ function normalizePresetRef(ref: PresetRef): PresetRef {
   return {
     tenantId: normalizeId(ref.tenantId),
     presetId: normalizeId(ref.presetId),
+    ...(ref.toolSettings ? { toolSettings: ref.toolSettings } : {}),
   };
 }
 
@@ -245,6 +257,7 @@ export default function AgentTemplatesTab({
   const [deleteTarget, setDeleteTarget] = useState<AgentTemplate | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [configuringMcp, setConfiguringMcp] = useState<Preset | null>(null);
   const isEditing = editing !== null;
   const availableCategories = useMemo(() => categories.map((category) => category.name), [categories]);
   const filteredTenantOptions = useMemo(() => {
@@ -342,6 +355,7 @@ export default function AgentTemplatesTab({
   }, [catalogTenantId, isEditing]);
 
   const closeEditor = () => {
+    setConfiguringMcp(null);
     setEditing(null);
     setIsAddingCategory(false);
     setEditorError(null);
@@ -401,6 +415,20 @@ export default function AgentTemplatesTab({
     update(kind, selected
       ? refs.filter((ref) => !(ref.tenantId === preset.tenantId && ref.presetId === preset.id))
       : [...refs, { tenantId: preset.tenantId, presetId: preset.id }]);
+  };
+
+  const saveMcpToolSettings = (preset: Preset, toolSettings: McpTemplateToolSettings) => {
+    setEditing((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        mcpPresetRefs: previous.mcpPresetRefs.map((ref) => (
+          ref.tenantId === preset.tenantId && ref.presetId === preset.id
+            ? { ...ref, toolSettings }
+            : ref
+        )),
+      };
+    });
   };
 
   const toggleSkill = async (skill: SkillCandidate) => {
@@ -754,11 +782,18 @@ export default function AgentTemplatesTab({
           <div className="space-y-6">
             <div className="grid gap-5 lg:grid-cols-2">
               <PresetList key={`${selectedCatalogTenant.id}:skills`} title="Skills" itemLabel="Skill" emptyText="该租户技能市场暂无可用 Skill" presets={catalog.skills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
-              <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} />
+              <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => setConfiguringMcp(preset)} />
             </div>
           </div>
         ) : <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">请先选择至少一个租户</div>}
       </section>
+      {configuringMcp ? <AgentTemplateMcpSettingsDialog
+        key={`${configuringMcp.tenantId}:${configuringMcp.id}`}
+        preset={configuringMcp}
+        value={editing.mcpPresetRefs.find((ref) => ref.tenantId === configuringMcp.tenantId && ref.presetId === configuringMcp.id)?.toolSettings}
+        onClose={() => setConfiguringMcp(null)}
+        onSave={(toolSettings) => saveMcpToolSettings(configuringMcp, toolSettings)}
+      /> : null}
       <ToastNotice toast={toast} onClose={() => setToast(null)} />
     </div>
   );
@@ -870,6 +905,7 @@ function PresetList({
   refs,
   loadingKeys = new Set(),
   onToggle,
+  onConfigure,
 }: {
   title: string;
   itemLabel: string;
@@ -878,6 +914,7 @@ function PresetList({
   refs: PresetRef[];
   loadingKeys?: Set<string>;
   onToggle: (preset: Preset | SkillCandidate) => void;
+  onConfigure?: (preset: Preset) => void;
 }) {
   const [searchText, setSearchText] = useState('');
   const [viewMode, setViewMode] = useState<'all' | 'selected'>('all');
@@ -893,6 +930,7 @@ function PresetList({
       skillKey,
       loading: loadingKeys.has(skillKey),
       selected: Boolean(ref),
+      configured: Boolean(ref?.toolSettings),
     };
   }), [loadingKeys, presets, refs]);
   const selectedCount = items.filter((item) => item.selected).length;
@@ -930,12 +968,13 @@ function PresetList({
       <div className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
         {visibleItems.length === 0 ? (
           <div className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{noResultsText}</div>
-        ) : visibleItems.map(({ preset, presetId, skillKey, loading, selected }) => (
+        ) : visibleItems.map(({ preset, presetId, skillKey, loading, selected, configured }) => (
           <div key={presetId || skillKey} className={cn('flex items-center rounded-md border', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}>
             <button type="button" disabled={loading} onClick={() => onToggle(preset)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70">
               <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : selected ? <Check className="h-3.5 w-3.5" /> : null}</span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}{configured ? <span className="mt-1 block text-xs font-medium text-primary">已设置 Tool 权限与参数</span> : null}</span>
             </button>
+            {onConfigure && selected ? <button type="button" onClick={() => onConfigure(preset as Preset)} className="mr-2 inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-foreground hover:bg-muted"><SlidersHorizontal className="h-3.5 w-3.5" />设置</button> : null}
           </div>
         ))}
       </div>

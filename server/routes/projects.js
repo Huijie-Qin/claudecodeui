@@ -19,6 +19,7 @@ import {
   writeWorkspaceAgentInstructions,
 } from '../services/workspace-agent-instructions.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
+import { mergeMcpToolOverridesConfig } from '../services/mcp-tool-overrides.js';
 
 const router = express.Router();
 const MAX_AGENT_MARKDOWN_BYTES = 1024 * 1024;
@@ -111,6 +112,7 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
   });
   const appliedSkills = [];
   const appliedMcps = [];
+  const templateMcpOverrides = {};
   const warnings = [...(snapshot.unavailableCapabilities || [])];
 
   const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
@@ -165,6 +167,16 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
         presetId: preset.id,
         templateId: snapshot.template.id,
       });
+      multitenancyDb.mcpInstalls.updateToolSettings({
+        workspaceId: workspace.id,
+        presetId: preset.id,
+        toolSettings: preset.toolSettings || {},
+      });
+      if (preset.toolSettings) {
+        if (preset.serverName && Object.keys(preset.toolSettings.tools || {}).length > 0) {
+          templateMcpOverrides[preset.serverName] = { tools: preset.toolSettings.tools };
+        }
+      }
       appliedMcps.push(preset);
     } catch (error) {
       warnings.push({
@@ -174,6 +186,10 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
         unavailableReason: error instanceof Error ? error.message : '安装失败',
       });
     }
+  }
+
+  if (Object.keys(templateMcpOverrides).length > 0) {
+    await mergeMcpToolOverridesConfig(workspace.path, templateMcpOverrides);
   }
 
   agentTemplateService.saveWorkspaceSnapshot({

@@ -11,6 +11,7 @@ import {
   WORKSPACE_HOST_ROOT_ENV,
   applyMcpToolOverrides,
   buildMcpToolOverridePreToolUseOutput,
+  mergeMcpToolOverridesConfig,
   parseMcpToolName,
   readMcpToolOverridesConfig,
 } from './mcp-tool-overrides.js';
@@ -465,4 +466,30 @@ test('readMcpToolOverridesConfig logs trace marker and candidate paths', async (
     assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'workspace'));
     assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'relative'));
   });
+});
+
+test('mergeMcpToolOverridesConfig preserves other servers and writes template overrides', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-mcp-template-overrides-'));
+  try {
+    const targetPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, JSON.stringify({
+      version: 1,
+      mcpServers: { existing: { tools: { ping: { params: {} } } } },
+    }));
+
+    const result = await mergeMcpToolOverridesConfig(tempRoot, {
+      'web-search': {
+        tools: { search_web: { params: { limit: { mode: 'force', value: 10 } } } },
+      },
+    });
+
+    assert.deepEqual(result.mcpServers.existing, { tools: { ping: { params: {} } } });
+    assert.deepEqual(result.mcpServers['web-search'], {
+      tools: { search_web: { params: { limit: { mode: 'force', value: 10 } } } },
+    });
+    assert.deepEqual(JSON.parse(await fs.readFile(targetPath, 'utf8')), result);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });

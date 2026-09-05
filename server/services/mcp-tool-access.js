@@ -28,10 +28,27 @@ export function resolveUserWorkspaceMcpToolAccess({
         userId: ids[2],
       })
     : [];
+  const installs = typeof multitenancy.mcpInstalls?.listInstallsForWorkspace === 'function'
+    ? multitenancy.mcpInstalls.listInstallsForWorkspace({ workspaceId: ids[1] })
+    : [];
+  const explicitPresetIds = new Set(preferences.map((preference) => Number(preference.preset_id)));
+  const effectivePreferences = [
+    ...preferences,
+    ...installs.filter((install) => (
+      !explicitPresetIds.has(Number(install.preset_id))
+      && Array.isArray(install?.toolSettings?.allowedToolNames)
+    )).map((install) => ({
+      preset_id: install.preset_id,
+      server_name: install.name,
+      allowedToolNames: install.toolSettings.allowedToolNames,
+      presetTools: install.presetTools,
+      installedTools: install.tools,
+    })),
+  ];
   const allowedByServer = new Map();
   const disallowedTools = [];
 
-  for (const preference of preferences) {
+  for (const preference of effectivePreferences) {
     const serverName = typeof preference?.server_name === 'string'
       ? preference.server_name.trim()
       : '';
