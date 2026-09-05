@@ -594,13 +594,16 @@ export const api = {
       authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
     skillPresets: (tenantId) =>
       authenticatedFetch(`/api/admin/skill-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
-    searchSkillPresetMarket: (tenantId, { searchContent = '', page = 1, pageSize = 20 } = {}) => {
+    searchSkillPresetMarket: (tenantId, {
+      searchContent = '', page = 1, pageSize = 20, complete = false,
+    } = {}) => {
       const params = new URLSearchParams({
         tenantId: String(tenantId),
         page: String(page),
         pageSize: String(pageSize),
       });
       if (searchContent) params.set('searchContent', searchContent);
+      if (complete) params.set('complete', 'true');
       return authenticatedFetch(`/api/admin/skill-presets/market?${params.toString()}`);
     },
     createSkillPreset: (payload) =>

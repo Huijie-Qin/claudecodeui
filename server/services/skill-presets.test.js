@@ -90,6 +90,33 @@ function seedTenantWorkspace({ database, multitenancy, workspacePath }) {
   return { adminId, userId, tenant, workspace };
 }
 
+test('admin Skill market search requests the complete inventory when configured', async () => {
+  let seenOptions;
+  const service = createSkillPresetService({
+    multitenancy: {},
+    marketService: {
+      listSkillMarket: async (options) => {
+        seenOptions = options;
+        return {
+          skills: [{ id: 'later-page-skill', name: 'later-page-skill' }],
+          pageInfo: { page: 1, pageSize: 1, total: 1, hasNextPage: false },
+          openApiRequestBody: {},
+        };
+      },
+    },
+  });
+
+  const result = await service.searchMarketSkills({
+    tenantCode: 'team',
+    accountId: 'admin',
+    completeInventory: true,
+  });
+
+  assert.equal(seenOptions.completeInventory, true);
+  assert.equal(seenOptions.includePageInfo, true);
+  assert.equal(result.skills[0].id, 'later-page-skill');
+});
+
 test('admin skill presets install only into the Claude workspace skill directory', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);

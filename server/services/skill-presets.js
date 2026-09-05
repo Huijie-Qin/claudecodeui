@@ -595,7 +595,14 @@ export function createSkillPresetService({
   };
 
   return {
-    searchMarketSkills: async ({ searchContent = '', page = 1, pageSize = 20, tenantCode, accountId } = {}) => {
+    searchMarketSkills: async ({
+      searchContent = '',
+      page = 1,
+      pageSize = 20,
+      tenantCode,
+      accountId,
+      completeInventory = false,
+    } = {}) => {
       const result = await marketService.listSkillMarket({
         searchContent,
         page,
@@ -603,6 +610,7 @@ export function createSkillPresetService({
         tenantCode,
         accountId,
         includePageInfo: true,
+        completeInventory,
       });
       return {
         skills: result.skills || [],

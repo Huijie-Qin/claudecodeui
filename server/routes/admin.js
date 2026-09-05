@@ -1436,6 +1436,7 @@ export function createAdminRouter(
         pageSize: parsePositiveIntegerWithFallback(req.query?.pageSize, 20, 'pageSize'),
         tenantCode: resolveAdminTenantCode(multitenancy, tenantId),
         accountId: resolveAdminAccountId(req, users),
+        completeInventory: req.query?.complete === 'true',
       });
       return res.json(result);
     } catch (error) {

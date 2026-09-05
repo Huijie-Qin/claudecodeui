@@ -128,7 +128,7 @@ test('admin skill preset routes pass tenant and user context through to the serv
     },
   });
 
-  const market = await requestJson(router, '/skill-presets/market?tenantId=7&searchContent=review&page=2&pageSize=5', {
+  const market = await requestJson(router, '/skill-presets/market?tenantId=7&searchContent=review&page=2&pageSize=5&complete=true', {
     user: { id: 9, is_system_admin: 1 },
   });
   const list = await requestJson(router, '/skill-presets?tenantId=7');
@@ -185,6 +185,7 @@ test('admin skill preset routes pass tenant and user context through to the serv
     pageSize: 5,
     tenantCode: 'team',
     accountId: 'admin-user',
+    completeInventory: true,
   });
   assert.equal(list.response.status, 200);
   assert.deepEqual(seen.list, { tenantId: 7 });

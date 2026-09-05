@@ -425,6 +425,27 @@ test('listSkillMarket searches the complete remote inventory before paginating r
       { page: 4, pageSize: 100 },
     ]);
 
+    requests.length = 0;
+    const completeCatalog = await listSkillMarket(withTenant({
+      completeInventory: true,
+      includePageInfo: true,
+    }));
+    assert.equal(completeCatalog.skills.length, 130);
+    assert.equal(completeCatalog.skills.some((skill) => skill.id === 'catalog-skill-122'), true);
+    assert.deepEqual(completeCatalog.pageInfo, {
+      page: 1,
+      pageSize: 130,
+      total: 130,
+      totalPages: 1,
+      hasNextPage: false,
+    });
+    assert.deepEqual(requests.map(({ page, pageSize }) => ({ page, pageSize })), [
+      { page: 1, pageSize: 100 },
+      { page: 2, pageSize: 100 },
+      { page: 3, pageSize: 100 },
+      { page: 4, pageSize: 100 },
+    ]);
+
     const detail = await fetchRemoteSkillDetail('catalog-skill-122', withTenant());
     assert.equal(detail.id, 'catalog-skill-122');
 

@@ -5,6 +5,7 @@ import { api } from '../../utils/api';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { cn } from '../../lib/utils';
 
+
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number };
 type MarketSkill = {
@@ -230,6 +231,7 @@ export default function AgentTemplatesTab({
   const [categoryFilter, setCategoryFilter] = useState('');
   const [catalogTenantId, setCatalogTenantId] = useState<number | null>(normalizedCurrentTenantId || activeTenants[0]?.id || null);
   const [catalog, setCatalog] = useState<Catalog>({ skills: [], mcps: [] });
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
@@ -300,16 +302,22 @@ export default function AgentTemplatesTab({
   useEffect(() => {
     if (!isEditing || !catalogTenantId) {
       setCatalog({ skills: [], mcps: [] });
+      setIsCatalogLoading(false);
       return;
     }
     let cancelled = false;
-    void Promise.all([
+    setCatalog({ skills: [], mcps: [] });
+    setIsCatalogLoading(true);
+    void Promise.allSettled([
       api.admin.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
-      api.admin.searchSkillPresetMarket(catalogTenantId, { pageSize: 200 }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
+      api.admin.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
       api.admin.skillPresets(catalogTenantId).then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
     ])
-      .then(([presetCatalog, marketCatalog, presetPayload]) => {
+      .then(([presetResult, marketResult, presetListResult]) => {
         if (cancelled) return;
+        const presetCatalog = presetResult.status === 'fulfilled' ? presetResult.value : {};
+        const marketCatalog = marketResult.status === 'fulfilled' ? marketResult.value : {};
+        const presetPayload = presetListResult.status === 'fulfilled' ? presetListResult.value : {};
         const normalized = normalizeCatalog(presetCatalog);
         setCatalog({
           ...normalized,
@@ -320,8 +328,16 @@ export default function AgentTemplatesTab({
             publishedSkills: normalized.skills,
           }),
         });
+        const failedCatalogLabels = [
+          ...(presetResult.status === 'rejected' ? ['Skill 与 MCP'] : []),
+          ...(marketResult.status === 'rejected' ? ['技能市场'] : []),
+          ...(presetListResult.status === 'rejected' ? ['Skill 预置'] : []),
+        ];
+        if (failedCatalogLabels.length > 0) {
+          setEditorError(`部分能力目录加载失败：${failedCatalogLabels.join('、')}。其余已加载能力仍可配置。`);
+        }
       })
-      .catch((catalogError) => { if (!cancelled) setEditorError(catalogError instanceof Error ? catalogError.message : '预设加载失败'); });
+      .finally(() => { if (!cancelled) setIsCatalogLoading(false); });
     return () => { cancelled = true; };
   }, [catalogTenantId, isEditing]);
 
@@ -711,6 +727,11 @@ export default function AgentTemplatesTab({
         <label className="block space-y-1.5"><span className="text-sm font-medium text-foreground">CLAUDE.md</span><textarea value={editing.claudeMarkdown} onChange={(event) => update('claudeMarkdown', event.target.value)} rows={10} className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:ring-2 focus:ring-ring" placeholder="# Project Memory&#10;你是一名应用市场分析专家……" /></label>
       </section>
 
+      <section className="space-y-3 rounded-lg border border-border bg-card p-5">
+        <div><h3 className="font-semibold text-foreground">引导语</h3><p className="mt-1 text-sm text-muted-foreground">项目创建后展示给用户，不会自动发送给模型。</p></div>
+        <textarea value={editing.guideText} onChange={(event) => update('guideText', event.target.value)} rows={5} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring" placeholder="例如：告诉我需要分析的应用名称、目标市场和你最关注的问题。" />
+      </section>
+
       <section className="space-y-5 rounded-lg border border-border bg-card p-5">
         <div><h3 className="font-semibold text-foreground">Skills 与 MCP</h3><p className="mt-1 text-sm text-muted-foreground">先指定可见租户，再从该租户技能市场选择 Skill，并选择已发布的 MCP。模板只保存引用，不保存密钥。</p></div>
         <div>
@@ -727,17 +748,16 @@ export default function AgentTemplatesTab({
 
         {editing.tenantIds.length > 0 ? <div className="flex flex-wrap gap-2">{editing.tenantIds.map((tenantId) => { const tenant = activeTenants.find((item) => item.id === tenantId); return <button key={tenantId} type="button" onClick={() => setCatalogTenantId(tenantId)} className={cn('rounded-md border px-3 py-1.5 text-sm', catalogTenantId === tenantId ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground')}>{tenant?.name || tenantId}</button>; })}</div> : null}
 
-        {selectedCatalogTenant && editing.tenantIds.includes(selectedCatalogTenant.id) ? (
-          <div className="grid gap-5 lg:grid-cols-2">
-            <PresetList title="Skills" emptyText="该租户技能市场暂无可用 Skill" presets={catalog.skills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
-            <PresetList title="MCP 工具" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} />
+        {isCatalogLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-md border border-dashed border-border p-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在加载该租户的能力目录…</div>
+        ) : selectedCatalogTenant && editing.tenantIds.includes(selectedCatalogTenant.id) ? (
+          <div className="space-y-6">
+            <div className="grid gap-5 lg:grid-cols-2">
+              <PresetList key={`${selectedCatalogTenant.id}:skills`} title="Skills" itemLabel="Skill" emptyText="该租户技能市场暂无可用 Skill" presets={catalog.skills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
+              <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} />
+            </div>
           </div>
         ) : <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">请先选择至少一个租户</div>}
-      </section>
-
-      <section className="space-y-3 rounded-lg border border-border bg-card p-5">
-        <div><h3 className="font-semibold text-foreground">引导语</h3><p className="mt-1 text-sm text-muted-foreground">项目创建后展示给用户，不会自动发送给模型。</p></div>
-        <textarea value={editing.guideText} onChange={(event) => update('guideText', event.target.value)} rows={5} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring" placeholder="例如：告诉我需要分析的应用名称、目标市场和你最关注的问题。" />
       </section>
       <ToastNotice toast={toast} onClose={() => setToast(null)} />
     </div>
@@ -842,6 +862,83 @@ function ToastNotice({ toast, onClose }: { toast: Toast; onClose: () => void }) 
   );
 }
 
-function PresetList({ title, emptyText, presets, refs, loadingKeys = new Set(), onToggle }: { title: string; emptyText: string; presets: (Preset | SkillCandidate)[]; refs: PresetRef[]; loadingKeys?: Set<string>; onToggle: (preset: Preset | SkillCandidate) => void }) {
-  return <div><h4 className="mb-2 text-sm font-medium text-foreground">{title}</h4><div className="space-y-2">{presets.length === 0 ? <div className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{emptyText}</div> : presets.map((preset) => { const presetId = 'presetId' in preset ? preset.presetId : preset.id; const skillKey = 'sourceRef' in preset ? `${preset.tenantId}:${preset.sourceRef}` : ''; const loading = loadingKeys.has(skillKey); const selected = Boolean(presetId) && refs.some((ref) => ref.tenantId === preset.tenantId && ref.presetId === presetId); return <button key={presetId || skillKey} type="button" disabled={loading} onClick={() => onToggle(preset)} className={cn('flex w-full items-center gap-3 rounded-md border px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}><span className={cn('flex h-5 w-5 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : selected ? <Check className="h-3.5 w-3.5" /> : null}</span><span><span className="block text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}</span></button>; })}</div></div>;
+function PresetList({
+  title,
+  itemLabel,
+  emptyText,
+  presets,
+  refs,
+  loadingKeys = new Set(),
+  onToggle,
+}: {
+  title: string;
+  itemLabel: string;
+  emptyText: string;
+  presets: (Preset | SkillCandidate)[];
+  refs: PresetRef[];
+  loadingKeys?: Set<string>;
+  onToggle: (preset: Preset | SkillCandidate) => void;
+}) {
+  const [searchText, setSearchText] = useState('');
+  const [viewMode, setViewMode] = useState<'all' | 'selected'>('all');
+  const items = useMemo(() => presets.map((preset) => {
+    const presetId = 'presetId' in preset ? preset.presetId : preset.id;
+    const skillKey = 'sourceRef' in preset ? `${preset.tenantId}:${preset.sourceRef}` : '';
+    const ref = presetId ? refs.find((candidate) => (
+      candidate.tenantId === preset.tenantId && candidate.presetId === presetId
+    )) : undefined;
+    return {
+      preset,
+      presetId,
+      skillKey,
+      loading: loadingKeys.has(skillKey),
+      selected: Boolean(ref),
+    };
+  }), [loadingKeys, presets, refs]);
+  const selectedCount = items.filter((item) => item.selected).length;
+  const normalizedSearch = searchText.trim().toLocaleLowerCase();
+  const visibleItems = items.filter(({ preset, selected }) => {
+    if (viewMode === 'selected' && !selected) return false;
+    if (!normalizedSearch) return true;
+    return [preset.displayName, preset.name, preset.description]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase()
+      .includes(normalizedSearch);
+  });
+  const noResultsText = viewMode === 'selected'
+    ? `当前租户暂无已选 ${itemLabel}`
+    : normalizedSearch
+      ? `没有匹配的 ${itemLabel}`
+      : emptyText;
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-medium text-foreground">{title}</h4>
+        <span className="text-xs text-muted-foreground">已选 {selectedCount} / {items.length}</span>
+      </div>
+      <div className="grid grid-cols-2 rounded-md bg-muted p-1">
+        <button type="button" onClick={() => setViewMode('all')} className={cn('rounded px-3 py-1.5 text-xs font-medium transition-colors', viewMode === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>全部 ({items.length})</button>
+        <button type="button" onClick={() => setViewMode('selected')} className={cn('rounded px-3 py-1.5 text-xs font-medium transition-colors', viewMode === 'selected' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>已选 ({selectedCount})</button>
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={`搜索${itemLabel}名称或描述`} className="pl-9" aria-label={`搜索${itemLabel}`} />
+        {searchText ? <button type="button" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`清空${itemLabel}搜索`}><X className="h-3.5 w-3.5" /></button> : null}
+      </div>
+      <div className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+        {visibleItems.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{noResultsText}</div>
+        ) : visibleItems.map(({ preset, presetId, skillKey, loading, selected }) => (
+          <div key={presetId || skillKey} className={cn('flex items-center rounded-md border', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}>
+            <button type="button" disabled={loading} onClick={() => onToggle(preset)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70">
+              <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : selected ? <Check className="h-3.5 w-3.5" /> : null}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}</span>
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

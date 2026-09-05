@@ -50,6 +50,7 @@ export async function listSkillMarket(options = {}) {
     tenantCode,
     accountId,
     includePageInfo = false,
+    completeInventory = false,
   } = normalizedOptions;
   const normalizedPage = normalizePositiveInteger(page, 1);
   const normalizedPageSize = normalizePositiveInteger(pageSize, DEFAULT_LIST_PAGE_SIZE);
@@ -60,20 +61,29 @@ export async function listSkillMarket(options = {}) {
     page: normalizedPage,
     pageSize: normalizedPageSize,
   });
-  const remotePage = normalizedSearchContent
-    ? await searchCompleteRemoteSkillDirectory({
+  let remotePage;
+  if (completeInventory) {
+    remotePage = await loadCompleteRemoteSkillDirectory({
+      searchContent: normalizedSearchContent,
+      tenantCode,
+      accountId: remoteAccountId,
+    });
+  } else if (normalizedSearchContent) {
+    remotePage = await searchCompleteRemoteSkillDirectory({
       searchContent: normalizedSearchContent,
       page: normalizedPage,
       pageSize: normalizedPageSize,
       tenantCode,
       accountId: remoteAccountId,
-    })
-    : await fetchRemoteSkillPage({
+    });
+  } else {
+    remotePage = await fetchRemoteSkillPage({
       page: normalizedPage,
       pageSize: normalizedPageSize,
       tenantCode,
       accountId: remoteAccountId,
     });
+  }
   const remoteSkills = remotePage.skills;
 
   if (!workspacePath) {
@@ -900,6 +910,27 @@ async function searchCompleteRemoteSkillDirectory({
       pageSize,
       total: matchingSkills.length,
     }),
+  };
+}
+
+async function loadCompleteRemoteSkillDirectory({
+  searchContent = '',
+  tenantCode,
+  accountId,
+}) {
+  const remoteSkills = await fetchCompleteRemoteSkillDirectory({ tenantCode, accountId });
+  const skills = searchContent
+    ? remoteSkills.filter((skill) => matchesSkillSearch(skill, searchContent))
+    : remoteSkills;
+  return {
+    skills,
+    pageInfo: {
+      page: 1,
+      pageSize: Math.max(skills.length, 1),
+      total: skills.length,
+      totalPages: 1,
+      hasNextPage: false,
+    },
   };
 }
 
