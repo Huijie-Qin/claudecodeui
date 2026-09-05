@@ -669,7 +669,7 @@ test('workspace sql check route resolves tenant config and stores user overrides
   assert.equal(enforcementSaved.payload.enforcement.enabled, true);
 });
 
-test('workspace Hook settings list eligible Hooks and materialize resources before enabling', async () => {
+test('workspace Hook settings let read-only members change preferences for ready assignments without materializing', async () => {
   const seen = [];
   const availableHook = {
     id: 'notify-hook',
@@ -679,6 +679,7 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
     enabled: false,
     showInChat: true,
     postActions: [{ type: 'invoke_skill' }],
+    workspaceAssignment: { installStatus: 'ready' },
   };
   const router = createWorkspacesRouter({
     tenantMiddleware: (req, res, next) => {
@@ -692,25 +693,27 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
       }),
     },
     hookConfigs: {
-      listAvailableHooksForUser: (userId) => {
-        seen.push(['list', userId]);
+      listAvailableHooksForContext: (context) => {
+        seen.push(['list', context]);
         return [availableHook];
       },
-      getHook: (hookId) => ({ ...availableHook, id: hookId }),
-      setUserHookEnabled: ({ userId, hookId, enabled }) => {
-        seen.push(['enable', userId, hookId, enabled]);
+      setWorkspaceUserHookEnabled: ({ workspaceId, tenantId, userId, hookId, enabled }) => {
+        seen.push(['enable', workspaceId, tenantId, userId, hookId, enabled]);
         return { hookId, enabled };
       },
-      setUserHookChatVisibility: ({ userId, hookId, showInChat }) => {
-        seen.push(['visibility', userId, hookId, showInChat]);
+      setWorkspaceUserHookChatVisibility: ({
+        workspaceId,
+        tenantId,
+        userId,
+        hookId,
+        showInChat,
+      }) => {
+        seen.push(['visibility', workspaceId, tenantId, userId, hookId, showInChat]);
         return { hookId, showInChat };
       },
     },
     hookResources: {
-      materializeHook: async ({ hook, workspacePath }) => {
-        seen.push(['materialize', hook.id, workspacePath]);
-        return { root: `${workspacePath}/.cloudcli/hook-config` };
-      },
+      materializeHook: async () => { throw new Error('ready assignment must not be materialized'); },
     },
   });
 
@@ -730,13 +733,157 @@ test('workspace Hook settings list eligible Hooks and materialize resources befo
   assert.equal(hidden.response.status, 200);
   assert.equal(hidden.payload.showInChat, false);
   assert.deepEqual(seen, [
-    ['list', 1],
-    ['list', 1],
-    ['materialize', 'notify-hook', '/tmp/hook-workspace'],
-    ['enable', 1, 'notify-hook', true],
-    ['list', 1],
-    ['visibility', 1, 'notify-hook', false],
+    ['list', { userId: 1, tenantId: 2, workspaceId: 10 }],
+    ['list', { userId: 1, tenantId: 2, workspaceId: 10 }],
+    ['enable', 10, 2, 1, 'notify-hook', true],
+    ['list', { userId: 1, tenantId: 2, workspaceId: 10 }],
+    ['visibility', 10, 2, 1, 'notify-hook', false],
   ]);
+});
+
+test('workspace Hook settings reject read-only members before installing shared Hook resources', async () => {
+  const seen = [];
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: () => ({
+        workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+        accessRole: 'view',
+      }),
+    },
+    hookConfigs: {
+      listAvailableHooksForContext: () => [{
+        id: 'unassigned-hook',
+        status: 'published',
+        bindingController: 'admin',
+        enabled: false,
+      }],
+      setWorkspaceUserHookEnabled: () => seen.push('enabled'),
+    },
+    hookResources: {
+      prepareHook: async () => { seen.push('prepared'); },
+      materializeHook: async () => { seen.push('materialized'); },
+    },
+  });
+
+  const result = await requestJson(router, '/10/hooks/unassigned-hook', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+
+  assert.equal(result.response.status, 403);
+  assert.equal(result.payload.error, 'Only workspace owner can install Hook resources');
+  assert.deepEqual(seen, []);
+});
+
+test('workspace owner validates prepared Hook resources before installing a pending assignment', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'pending-hook',
+    status: 'published',
+    bindingController: 'admin',
+    enabled: false,
+    resourceRefs: { skills: [] },
+    workspaceAssignment: { installStatus: 'pending' },
+  };
+  const preparedResources = { skills: [], mcpServers: [] };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: () => ({
+        workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+        accessRole: 'owner',
+      }),
+    },
+    hookConfigs: {
+      listAvailableHooksForContext: () => [availableHook],
+      validatePublishedHookMaterialization: ({ resources }) => {
+        assert.equal(resources, preparedResources);
+        seen.push('validated');
+      },
+      markWorkspaceHookAssignmentReady: () => seen.push('ready'),
+      markWorkspaceHookAssignmentFailed: () => seen.push('failed'),
+      setWorkspaceUserHookEnabled: () => {
+        seen.push('enabled');
+        return { hookId: availableHook.id, enabled: true };
+      },
+    },
+    hookResources: {
+      prepareHook: async () => {
+        seen.push('prepared');
+        return preparedResources;
+      },
+      materializeHook: async ({ preparedResources: received }) => {
+        assert.equal(received, preparedResources);
+        seen.push('materialized');
+        return preparedResources;
+      },
+    },
+  });
+
+  const result = await requestJson(router, '/10/hooks/pending-hook', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(seen, ['prepared', 'validated', 'materialized', 'ready', 'enabled']);
+});
+
+test('workspace Hook settings keep a failed assignment disabled when resources cannot materialize', async () => {
+  const seen = [];
+  const availableHook = {
+    id: 'broken-hook',
+    name: 'Broken Hook',
+    status: 'published',
+    bindingController: 'admin',
+    enabled: false,
+    postActions: [{ type: 'invoke_skill' }],
+    workspaceAssignment: { installStatus: 'pending' },
+  };
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, res, next) => {
+      req.tenant = { id: 2, permission: 'view' };
+      next();
+    },
+    access: {
+      requireWorkspace: () => ({
+        workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' },
+        accessRole: 'owner',
+      }),
+    },
+    hookConfigs: {
+      listAvailableHooksForContext: () => [availableHook],
+      markWorkspaceHookAssignmentReady: () => seen.push('ready'),
+      markWorkspaceHookAssignmentFailed: (args) => seen.push(['failed', args]),
+      setWorkspaceUserHookEnabled: () => seen.push('enabled'),
+    },
+    hookResources: {
+      materializeHook: async () => {
+        const error = new Error('Hook Skill is unavailable');
+        error.statusCode = 409;
+        throw error;
+      },
+    },
+  });
+
+  const result = await requestJson(router, '/10/hooks/broken-hook', {
+    method: 'PUT',
+    body: { enabled: true },
+  });
+
+  assert.equal(result.response.status, 409);
+  assert.equal(result.payload.error, 'Hook Skill is unavailable');
+  assert.deepEqual(seen, [[
+    'failed',
+    { workspaceId: 10, hookId: 'broken-hook', error: 'Hook Skill is unavailable' },
+  ]]);
 });
 
 test('workspace Hook execution history is forced to the current user, tenant, and workspace', async () => {
@@ -762,8 +909,8 @@ test('workspace Hook execution history is forced to the current user, tenant, an
       },
     },
     hookConfigs: {
-      listAvailableHooksForUser: (userId) => {
-        seen.push(['available', userId]);
+      listAvailableHooksForContext: (context) => {
+        seen.push(['available', context]);
         return [availableHook];
       },
       listUserExecutionPage: (filters) => {
@@ -790,7 +937,7 @@ test('workspace Hook execution history is forced to the current user, tenant, an
   assert.deepEqual(loaded.payload.executions.map((execution) => execution.id), ['execution-1']);
   assert.deepEqual(seen, [
     ['access', { tenantId: 2, userId: 1, workspaceId: 10 }],
-    ['available', 1],
+    ['available', { userId: 1, tenantId: 2, workspaceId: 10 }],
     ['history', {
       hookId: 'record-hook',
       userId: 1,

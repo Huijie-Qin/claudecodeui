@@ -489,6 +489,23 @@ export function createAdminRouter(
       ? hookMcpCatalog.listToolResources()
       : [],
   });
+  const loadAgentTemplateHookResourceCatalog = async () => {
+    let skills = [];
+    try {
+      if (typeof hookSkillCatalog?.listConfigurationSkills === 'function') {
+        const result = await hookSkillCatalog.listConfigurationSkills();
+        skills = Array.isArray(result?.skills) ? result.skills : [];
+      }
+    } catch (error) {
+      console.warn('Failed to inspect built-in Hook Skills for Agent templates:', error);
+    }
+    return {
+      skills,
+      mcpTools: typeof hookMcpCatalog?.listToolResources === 'function'
+        ? hookMcpCatalog.listToolResources()
+        : [],
+    };
+  };
   router.use(requireSystemAdmin);
   router.use(createAdminClaudeEnvRouter());
 
@@ -1326,12 +1343,15 @@ export function createAdminRouter(
     }
   });
 
-  router.get('/agent-templates', (req, res) => {
+  router.get('/agent-templates', async (req, res) => {
     try {
       const tenantId = req.query?.tenantId == null || req.query.tenantId === ''
         ? undefined
         : parsePositiveId(req.query.tenantId, 'tenantId');
-      return res.json({ templates: agentTemplates.listAdminTemplates({ tenantId }) });
+      const hookResourceCatalog = await loadAgentTemplateHookResourceCatalog();
+      return res.json({
+        templates: agentTemplates.listAdminTemplates({ tenantId, hookResourceCatalog }),
+      });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to list Agent templates');
     }
@@ -1343,6 +1363,18 @@ export function createAdminRouter(
       return res.json(agentTemplates.listPresetCatalog({ tenantId }));
     } catch (error) {
       return sendRouteError(res, error, 'Failed to load Agent template presets');
+    }
+  });
+
+  router.get('/agent-templates/hook-catalog', async (req, res) => {
+    try {
+      const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
+      const resourceCatalog = await loadAgentTemplateHookResourceCatalog();
+      return res.json({
+        hooks: agentTemplates.listHookCatalog({ tenantId, resourceCatalog }),
+      });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Agent template Hooks');
     }
   });
 
@@ -1394,11 +1426,13 @@ export function createAdminRouter(
     }
   });
 
-  router.post('/agent-templates/:templateId/publish', (req, res) => {
+  router.post('/agent-templates/:templateId/publish', async (req, res) => {
     try {
+      const hookResourceCatalog = await loadAgentTemplateHookResourceCatalog();
       const template = agentTemplates.publishTemplate({
         templateId: Number(req.params.templateId),
         userId: req.user.id,
+        hookResourceCatalog,
       });
       return res.json({ template });
     } catch (error) {

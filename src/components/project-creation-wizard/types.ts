@@ -46,8 +46,12 @@ export type WizardFormState = {
 };
 
 export type AgentTemplateCapability = {
-  id: number;
+  id: number | string;
   name: string;
+};
+
+export type AgentTemplateHookCapability = AgentTemplateCapability & {
+  eventName?: string;
 };
 
 export type AgentTemplateOption = {
@@ -58,5 +62,6 @@ export type AgentTemplateOption = {
   guideText?: string;
   skills: AgentTemplateCapability[];
   mcps: AgentTemplateCapability[];
+  hooks?: AgentTemplateHookCapability[];
   updatedAt?: string;
 };

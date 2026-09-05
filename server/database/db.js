@@ -218,7 +218,9 @@ function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
   migrateSkillMarketImportBindingColumns(db);
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('agent_templates', 'hook_refs_json', "TEXT NOT NULL DEFAULT '[]'");
   migrateAgentTemplateSnapshotsToHistoricalReferences();
+  ensureColumn('workspace_agent_template_snapshots', 'hooks_json', "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
     INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
     SELECT TRIM(category), MIN(created_by_user_id)
@@ -313,6 +315,7 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
             guide_text TEXT NOT NULL DEFAULT '',
             skill_presets_json TEXT NOT NULL DEFAULT '[]',
             mcp_presets_json TEXT NOT NULL DEFAULT '[]',
+            hooks_json TEXT NOT NULL DEFAULT '[]',
             created_by_user_id INTEGER NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -320,12 +323,12 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
           );
           INSERT INTO workspace_agent_template_snapshots (
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json,
             created_by_user_id, created_at
           )
           SELECT
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, '[]',
             created_by_user_id, created_at
           FROM workspace_agent_template_snapshots_legacy;
           DROP TABLE workspace_agent_template_snapshots_legacy;

@@ -116,6 +116,76 @@ function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
   return Number.isInteger(hookUserId) && hookUserId > 0 ? hookUserId : null;
 }
 
+async function resolveConfiguredHooksForRuntime({
+  hookConfigs,
+  hookResources,
+  userId,
+  tenantId = null,
+  workspaceId = null,
+  workspacePath,
+  onMaterializeError = null,
+}) {
+  const candidates = tenantId && workspaceId
+    ? hookConfigs.listEffectiveHooksForContext({ userId, tenantId, workspaceId })
+    : hookConfigs.listActiveHooksForUser(userId);
+  const materializedByHookId = new Map();
+  const hooks = [];
+  for (const hook of candidates) {
+    try {
+      const preparedResources = typeof hookResources.prepareHook === 'function'
+        ? await hookResources.prepareHook({ hook })
+        : null;
+      if (hook.resourceRefs && !preparedResources) {
+        throw new Error('Hook resource service cannot safely validate the published resource snapshot');
+      }
+      if (typeof hookConfigs.validatePublishedHookMaterialization === 'function') {
+        // Validate the central Skill/MCP sources against the immutable published
+        // references before anything can be written into the project.
+        if (preparedResources) {
+          hookConfigs.validatePublishedHookMaterialization({
+            hook,
+            resources: preparedResources,
+          });
+        }
+      }
+      const resources = await hookResources.materializeHook({
+        hook,
+        workspacePath,
+        ...(preparedResources ? { preparedResources } : {}),
+      });
+      if (!preparedResources && typeof hookConfigs.validatePublishedHookMaterialization === 'function') {
+        // Compatibility for injected/legacy resource services without a
+        // read-only preparation phase.
+        hookConfigs.validatePublishedHookMaterialization({ hook, resources });
+      }
+      materializedByHookId.set(hook.id, resources);
+      hooks.push(hook);
+    } catch (error) {
+      if (
+        workspaceId
+        && hook.workspaceAssignment
+        && error?.statusCode === 409
+        && typeof hookConfigs.markWorkspaceHookAssignmentFailed === 'function'
+      ) {
+        try {
+          hookConfigs.markWorkspaceHookAssignmentFailed({
+            workspaceId,
+            hookId: hook.id,
+            error: error?.message,
+          });
+        } catch (statusError) {
+          console.warn(
+            `[HookResources] Failed to persist Hook ${hook.id} materialization error:`,
+            statusError?.message || statusError,
+          );
+        }
+      }
+      if (typeof onMaterializeError === 'function') await onMaterializeError(hook, error);
+    }
+  }
+  return { hooks, materializedByHookId };
+}
+
 function createHookActivityDescriptor({
   hook,
   action,
@@ -1814,20 +1884,19 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     let configuredSdkHooks = {};
     if (hookUserId !== null) {
       try {
-        const activeHooks = hookConfigService.listActiveHooksForUser(hookUserId);
+        const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
+        const { hooks: activeHooks, materializedByHookId } = await resolveConfiguredHooksForRuntime({
+          hookConfigs: hookConfigService,
+          hookResources: hookWorkspaceResourcesService,
+          userId: hookUserId,
+          tenantId: runtimeOptions.tenantId,
+          workspaceId: runtimeOptions.workspaceId,
+          workspacePath,
+          onMaterializeError: (hook, error) => {
+            console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
+          },
+        });
         if (activeHooks.length > 0) {
-          const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
-          const materializedByHookId = new Map();
-          for (const hook of activeHooks) {
-            try {
-              materializedByHookId.set(hook.id, await hookWorkspaceResourcesService.materializeHook({
-                hook,
-                workspacePath,
-              }));
-            } catch (error) {
-              console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
-            }
-          }
           const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
             diagnostics: processDiagnostics,
           });
@@ -1897,7 +1966,32 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
             }) => {
               let resources = materializedByHookId.get(hook.id);
               if (!resources) {
-                resources = await hookWorkspaceResourcesService.materializeHook({ hook, workspacePath });
+                const preparedResources = typeof hookWorkspaceResourcesService.prepareHook === 'function'
+                  ? await hookWorkspaceResourcesService.prepareHook({ hook })
+                  : null;
+                if (hook.resourceRefs && !preparedResources) {
+                  throw new Error('Hook resource service cannot safely validate the published resource snapshot');
+                }
+                if (
+                  preparedResources
+                  && typeof hookConfigService.validatePublishedHookMaterialization === 'function'
+                ) {
+                  hookConfigService.validatePublishedHookMaterialization({
+                    hook,
+                    resources: preparedResources,
+                  });
+                }
+                resources = await hookWorkspaceResourcesService.materializeHook({
+                  hook,
+                  workspacePath,
+                  ...(preparedResources ? { preparedResources } : {}),
+                });
+                if (
+                  !preparedResources
+                  && typeof hookConfigService.validatePublishedHookMaterialization === 'function'
+                ) {
+                  hookConfigService.validatePublishedHookMaterialization({ hook, resources });
+                }
                 materializedByHookId.set(hook.id, resources);
               }
               const skill = resources.skills.find((candidate) => candidate.skillId === action.config?.skillId);
@@ -3224,6 +3318,7 @@ export {
   stopActiveClaudeSubagentTasks,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,
+  resolveConfiguredHooksForRuntime,
   createHookHeadersHelperRunner,
   createHookCardActionResults,
 };

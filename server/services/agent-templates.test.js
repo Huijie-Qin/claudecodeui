@@ -4,6 +4,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 
 import { createMultitenancyDb } from '../database/multitenancy-db.js';
+import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createAgentTemplateService } from './agent-templates.js';
@@ -12,6 +13,7 @@ function createFixture() {
   const database = new Database(':memory:');
   database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);');
   database.exec(MULTITENANCY_SCHEMA_SQL);
+  database.exec(HOOK_CONFIG_SCHEMA_SQL);
   database.prepare('INSERT INTO users (id, username) VALUES (1, ?)').run('admin');
   const insertTenant = database.prepare('INSERT INTO tenants (code, name) VALUES (?, ?)');
   const dataAgentTenantId = Number(insertTenant.run('dataagent-admin', 'DataAgent管理').lastInsertRowid);
@@ -50,6 +52,57 @@ function createFixture() {
       inputSchema: { type: 'object', properties: { url: { type: 'string' } } },
     },
   ])).lastInsertRowid);
+  const insertHook = database.prepare(`
+    INSERT INTO hooks (
+      id, name, description, status, event_name, matcher_json,
+      extension_logic_json, post_actions_json, claude_response_json,
+      version, binding_controller, created_by, updated_by, published_at
+    ) VALUES (?, ?, ?, ?, ?, '{}', 'null', ?, '{"bindings":{}}', ?, ?, 1, 1, CURRENT_TIMESTAMP)
+  `);
+  insertHook.run(
+    'hook-template-ready',
+    '项目完成记录',
+    '记录任务完成结果',
+    'published',
+    'TaskCompleted',
+    JSON.stringify([{ id: 'record', type: 'write_record', position: 0, config: { recordType: 'task' } }]),
+    2,
+    'admin',
+  );
+  database.prepare(`
+    INSERT INTO hook_published_versions (
+      hook_id, version, config_json, resource_refs_json, published_by, published_at
+    ) VALUES (?, 2, ?, '{"skills":[],"mcpServers":[],"mcpTools":[]}', 1, CURRENT_TIMESTAMP)
+  `).run('hook-template-ready', JSON.stringify({
+    name: '项目完成记录',
+    description: '记录任务完成结果',
+    eventName: 'TaskCompleted',
+    matcher: {},
+    extensionLogic: null,
+    postActions: [{ id: 'record', type: 'write_record', position: 0, config: { recordType: 'task' } }],
+    claudeResponse: { bindings: {} },
+    bindingController: 'admin',
+  }));
+  insertHook.run(
+    'hook-template-sql-check',
+    'SQL Check',
+    '',
+    'published',
+    'PreToolUse',
+    '[]',
+    1,
+    'sql_check',
+  );
+  insertHook.run(
+    'hook-template-draft',
+    '未发布 Hook',
+    '',
+    'draft',
+    'Stop',
+    '[]',
+    0,
+    'admin',
+  );
 
   return {
     database,
@@ -59,6 +112,7 @@ function createFixture() {
     otherTenantId,
     skillId,
     mcpId,
+    hookId: 'hook-template-ready',
   };
 }
 
@@ -424,4 +478,322 @@ test('MCP tool settings reject unknown tools and parameters', () => {
       }],
     },
   }), /Unknown MCP parameter/);
+});
+
+test('Agent templates persist only current published admin Hooks', () => {
+  const fixture = createFixture();
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '带 Hook 的模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{
+        hookId: fixture.hookId,
+        version: 2,
+        defaultEnabled: true,
+        showInChat: false,
+        allowUserDisable: true,
+        order: 20,
+      }],
+    },
+  });
+
+  assert.deepEqual(draft.hookRefs, [{
+    hookId: fixture.hookId,
+    version: 2,
+    defaultEnabled: true,
+    showInChat: false,
+    allowUserDisable: true,
+    order: 20,
+  }]);
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: 'SQL Check 模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: 'hook-template-sql-check', version: 1 }],
+    },
+  }), /SQL Check/);
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '未发布 Hook 模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: 'hook-template-draft', version: 1 }],
+    },
+  }), /未发布/);
+  assert.throws(() => fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '配置矛盾 Hook 模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{
+        hookId: fixture.hookId,
+        version: 2,
+        defaultEnabled: false,
+        allowUserDisable: false,
+      }],
+    },
+  }), /mandatory Hook/);
+});
+
+test('Agent templates stay pinned to an immutable published Hook version', () => {
+  const fixture = createFixture();
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '锁定 Hook 版本模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: fixture.hookId, version: 2 }],
+    },
+  });
+  fixture.database.prepare(`
+    UPDATE hooks SET version = 3, name = '新版 Hook 草稿', status = 'draft' WHERE id = ?
+  `).run(fixture.hookId);
+  fixture.database.prepare(`
+    INSERT INTO hook_published_versions (
+      hook_id, version, config_json, resource_refs_json, published_by, published_at
+    ) VALUES (?, 3, ?, '{}', 1, CURRENT_TIMESTAMP)
+  `).run(fixture.hookId, JSON.stringify({
+    name: '新版 Hook',
+    description: '',
+    eventName: 'Stop',
+    matcher: {},
+    extensionLogic: { language: 'javascript', code: 'export async function run() { return {}; }', outputs: [] },
+    postActions: [],
+    claudeResponse: { bindings: {} },
+    bindingController: 'admin',
+  }));
+
+  fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+  const snapshot = fixture.service.resolveTemplateSnapshot({
+    templateId: draft.id,
+    tenantId: fixture.appTenantId,
+  });
+  assert.equal(snapshot.hooks[0].version, 2);
+  assert.equal(snapshot.hooks[0].name, '项目完成记录');
+});
+
+test('Hook catalog excludes SQL Check and respects tenant bindings', () => {
+  const fixture = createFixture();
+  assert.deepEqual(
+    fixture.service.listHookCatalog({ tenantId: fixture.otherTenantId }).map((hook) => hook.id),
+    [fixture.hookId],
+  );
+
+  fixture.database.prepare(`
+    INSERT INTO hook_tenant_bindings (hook_id, tenant_id, bound_by)
+    VALUES (?, ?, 1)
+  `).run(fixture.hookId, fixture.appTenantId);
+  assert.deepEqual(
+    fixture.service.listHookCatalog({ tenantId: fixture.appTenantId }).map((hook) => hook.id),
+    [fixture.hookId],
+  );
+  assert.deepEqual(fixture.service.listHookCatalog({ tenantId: fixture.otherTenantId }), []);
+});
+
+test('Hook dependency failures block template publish and appear in the admin catalog', () => {
+  const fixture = createFixture();
+  fixture.database.prepare(`
+    UPDATE hooks
+    SET post_actions_json = ?
+    WHERE id = ?
+  `).run(JSON.stringify([{
+    id: 'notify',
+    type: 'invoke_skill',
+    position: 0,
+    config: { skillId: 'builtin:missing', skillName: 'missing' },
+  }]), fixture.hookId);
+  const publishedConfig = JSON.parse(fixture.database.prepare(`
+    SELECT config_json FROM hook_published_versions WHERE hook_id = ? AND version = 2
+  `).get(fixture.hookId).config_json);
+  publishedConfig.postActions = [{
+    id: 'notify',
+    type: 'invoke_skill',
+    position: 0,
+    config: { skillId: 'builtin:missing', skillName: 'missing' },
+  }];
+  fixture.database.prepare(`
+    UPDATE hook_published_versions SET config_json = ? WHERE hook_id = ? AND version = 2
+  `).run(JSON.stringify(publishedConfig), fixture.hookId);
+  const resourceCatalog = { skills: [], mcpTools: [] };
+  const [catalogHook] = fixture.service.listHookCatalog({
+    tenantId: fixture.appTenantId,
+    resourceCatalog,
+  });
+  assert.equal(catalogHook.available, false);
+  assert.equal(catalogHook.dependencySummary.unavailableCount, 1);
+
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '依赖失效 Hook 模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: fixture.hookId, version: 2 }],
+    },
+  });
+  assert.throws(
+    () => fixture.service.publishTemplate({
+      templateId: draft.id,
+      userId: 1,
+      hookResourceCatalog: resourceCatalog,
+    }),
+    /依赖能力不可用/,
+  );
+});
+
+test('Agent template Hook checks compare pinned Skill and MCP content hashes', () => {
+  const fixture = createFixture();
+  const published = fixture.database.prepare(`
+    SELECT config_json FROM hook_published_versions WHERE hook_id = ? AND version = 2
+  `).get(fixture.hookId);
+  const config = JSON.parse(published.config_json);
+  config.postActions = [
+    {
+      id: 'notify',
+      type: 'invoke_skill',
+      position: 0,
+      config: { skillId: 'builtin:notify', skillName: 'notify' },
+    },
+    {
+      id: 'send',
+      type: 'call_mcp_tool',
+      position: 1,
+      config: { toolName: 'mcp__notify__send', mcpServerId: 'server-1' },
+    },
+  ];
+  fixture.database.prepare(`
+    UPDATE hook_published_versions
+    SET config_json = ?, resource_refs_json = ?
+    WHERE hook_id = ? AND version = 2
+  `).run(JSON.stringify(config), JSON.stringify({
+    skills: [{
+      skillId: 'builtin:notify',
+      skillName: 'notify',
+      version: 3,
+      contentHash: 'skill-hash-v1',
+    }],
+    mcpServers: [{ id: 'server-1', contentHash: 'server-hash-v1' }],
+    mcpTools: [{ mcpServerId: 'server-1', toolName: 'mcp__notify__send' }],
+  }), fixture.hookId);
+  const matchingCatalog = {
+    skills: [{
+      skillId: 'builtin:notify',
+      name: 'notify',
+      version: 3,
+      contentHash: 'skill-hash-v1',
+    }],
+    mcpTools: [{
+      name: 'mcp__notify__send',
+      mcpServerId: 'server-1',
+      mcpServerContentHash: 'server-hash-v1',
+    }],
+  };
+  assert.equal(fixture.service.listHookCatalog({
+    tenantId: fixture.appTenantId,
+    resourceCatalog: matchingCatalog,
+  })[0].available, true);
+
+  const changedSkillCatalog = {
+    ...matchingCatalog,
+    skills: [{
+      ...matchingCatalog.skills[0],
+      contentHash: 'skill-hash-v2',
+    }],
+  };
+  assert.equal(fixture.service.listHookCatalog({
+    tenantId: fixture.appTenantId,
+    resourceCatalog: changedSkillCatalog,
+  })[0].available, false);
+
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: '固定 Hook 依赖模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: fixture.hookId, version: 2 }],
+    },
+  });
+  assert.throws(
+    () => fixture.service.publishTemplate({
+      templateId: draft.id,
+      userId: 1,
+      hookResourceCatalog: changedSkillCatalog,
+    }),
+    /依赖能力不可用/,
+  );
+
+  const changedMcpCatalog = {
+    ...matchingCatalog,
+    mcpTools: [{
+      ...matchingCatalog.mcpTools[0],
+      mcpServerContentHash: 'server-hash-v2',
+    }],
+  };
+  assert.throws(
+    () => fixture.service.publishTemplate({
+      templateId: draft.id,
+      userId: 1,
+      hookResourceCatalog: changedMcpCatalog,
+    }),
+    /依赖能力不可用/,
+  );
+});
+
+test('workspace Agent template snapshot stores non-secret Hook audit metadata', () => {
+  const fixture = createFixture();
+  fixture.database.prepare(`
+    INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+    VALUES (?, 1, 'member', 'edit', 'active')
+  `).run(fixture.appTenantId);
+  const workspaceId = Number(fixture.database.prepare(`
+    INSERT INTO workspaces (tenant_id, owner_user_id, slug, display_name, path)
+    VALUES (?, 1, 'hook-agent', 'hook-agent', '/tmp/hook-agent-template-snapshot')
+  `).run(fixture.appTenantId).lastInsertRowid);
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: {
+      name: 'Hook 快照模板',
+      category: '通用助手',
+      tenantIds: [fixture.appTenantId],
+      skillPresetRefs: [],
+      mcpPresetRefs: [],
+      hookRefs: [{ hookId: fixture.hookId, version: 2 }],
+    },
+  });
+  fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+  const snapshot = fixture.service.resolveTemplateSnapshot({
+    templateId: draft.id,
+    tenantId: fixture.appTenantId,
+  });
+  fixture.service.saveWorkspaceSnapshot({ workspaceId, userId: 1, snapshot });
+
+  const stored = JSON.parse(fixture.database.prepare(`
+    SELECT hooks_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?
+  `).get(workspaceId).hooks_json);
+  assert.equal(stored[0].id, fixture.hookId);
+  assert.equal(stored[0].version, 2);
+  assert.equal(Object.hasOwn(stored[0], 'extensionLogic'), false);
+  assert.equal(Object.hasOwn(stored[0], 'postActions'), false);
 });

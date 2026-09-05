@@ -24,6 +24,12 @@ type AvailableHook = {
   showInChat: boolean;
   bindingController?: 'admin' | 'sql_check';
   postActions?: Array<{ type?: string }>;
+  unavailableReason?: string | null;
+  workspaceAssignment?: {
+    source?: 'manual' | 'agent_template';
+    allowUserDisable?: boolean;
+    installStatus?: 'pending' | 'ready' | 'failed';
+  } | null;
 };
 
 async function readError(response: Response, fallback: string) {
@@ -47,6 +53,7 @@ export default function HookSettingsTab({
     [projects],
   );
   const [workspaceId, setWorkspaceId] = useState<number | null>(() => availableProjects[0]?.workspaceId || null);
+  const [workspaceAccessRole, setWorkspaceAccessRole] = useState<string | null>(null);
   const [hooks, setHooks] = useState<AvailableHook[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyHookId, setBusyHookId] = useState<string | null>(null);
@@ -78,16 +85,19 @@ export default function HookSettingsTab({
   useEffect(() => {
     if (!workspaceId) {
       setHooks([]);
+      setWorkspaceAccessRole(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setWorkspaceAccessRole(null);
     void api.workspaceHooks(workspaceId)
       .then(async (response) => {
         if (!response.ok) throw new Error(await readError(response, '加载 Hook 失败'));
-        const payload = await response.json() as { hooks?: AvailableHook[] };
+        const payload = await response.json() as { hooks?: AvailableHook[]; accessRole?: string };
         if (!cancelled) {
+          setWorkspaceAccessRole(payload.accessRole || null);
           setHooks(Array.isArray(payload.hooks)
             ? payload.hooks.map((hook) => ({ ...hook, showInChat: hook.showInChat !== false }))
             : []);
@@ -107,8 +117,15 @@ export default function HookSettingsTab({
     try {
       const response = await api.updateWorkspaceHook(workspaceId, hook.id, enabled);
       if (!response.ok) throw new Error(await readError(response, enabled ? '开启 Hook 失败' : '关闭 Hook 失败'));
+      const payload = await response.json() as { hook?: AvailableHook | null; enabled?: boolean };
       setHooks((current) => current.map((candidate) => (
-        candidate.id === hook.id ? { ...candidate, enabled } : candidate
+        candidate.id === hook.id
+          ? {
+            ...candidate,
+            ...(payload.hook || {}),
+            enabled: payload.enabled ?? enabled,
+          }
+          : candidate
       )));
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '更新 Hook 失败');
@@ -234,6 +251,13 @@ export default function HookSettingsTab({
           <div className="p-5 text-sm text-muted-foreground">管理员暂未向你开放 Hook。</div>
         ) : hooks.map((hook) => {
           const isSqlCheckManaged = hook.bindingController === 'sql_check';
+          const isTemplateMandatory = hook.workspaceAssignment?.source === 'agent_template'
+            && hook.workspaceAssignment.allowUserDisable === false;
+          const resourcesUnavailable = Boolean(hook.unavailableReason)
+            || (hook.workspaceAssignment?.installStatus != null
+              && hook.workspaceAssignment.installStatus !== 'ready');
+          const canRetryResources = workspaceAccessRole === 'owner'
+            && hook.unavailableReason === 'resources_unavailable';
           const hasSkill = hook.postActions?.some((action) => action.type === 'invoke_skill');
           const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run');
           const hasAgentMessage = hook.postActions?.some((action) => action.type === 'send_agent_message');
@@ -254,6 +278,16 @@ export default function HookSettingsTab({
                       SQL Check 强制校验管理
                     </span>
                   ) : null}
+                  {isTemplateMandatory ? (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      模板强制启用
+                    </span>
+                  ) : null}
+                  {resourcesUnavailable ? (
+                    <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">
+                      依赖不可用
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
               </div>
@@ -271,7 +305,10 @@ export default function HookSettingsTab({
                   <span className="text-[11px] text-muted-foreground">启用</span>
                   <SettingsToggle
                     checked={hook.enabled}
-                    disabled={Boolean(busyHookId) || isSqlCheckManaged}
+                    disabled={Boolean(busyHookId)
+                      || isSqlCheckManaged
+                      || (isTemplateMandatory && !canRetryResources)
+                      || (resourcesUnavailable && !canRetryResources)}
                     ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
                     onChange={(enabled) => void toggleHook(hook, enabled)}
                   />

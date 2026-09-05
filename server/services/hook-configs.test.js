@@ -294,6 +294,531 @@ test('tenant Hook scopes dynamically grant visibility to active tenant members',
   }
 });
 
+function createTenantScopedWorkspaceHookFixture() {
+  const fixture = createFixture();
+  const { database, service } = fixture;
+  database.prepare(`
+    INSERT INTO tenants (id, code, name, status)
+    VALUES (10, 'alpha', 'Alpha', 'active'), (20, 'beta', 'Beta', 'active')
+  `).run();
+  database.prepare(`
+    INSERT INTO tenant_users (tenant_id, user_id, role, permission, status)
+    VALUES (10, 2, 'member', 'view', 'active'), (20, 2, 'member', 'view', 'active')
+  `).run();
+  database.prepare(`
+    INSERT INTO workspaces (id, tenant_id, owner_user_id, slug, display_name, path)
+    VALUES
+      (100, 10, 2, 'alpha-first', 'Alpha First', '/tmp/hook-alpha-first'),
+      (101, 10, 2, 'alpha-second', 'Alpha Second', '/tmp/hook-alpha-second'),
+      (200, 20, 2, 'beta', 'Beta', '/tmp/hook-beta')
+  `).run();
+  const hook = service.createHook({ input: publishableHook(), userId: 1 });
+  service.publishHook({ hookId: hook.id, userId: 1 });
+  service.replaceHookBindings({ hookId: hook.id, scope: 'tenants', tenantIds: [10], boundBy: 1 });
+  return {
+    ...fixture,
+    hookId: hook.id,
+    alpha: { userId: 2, tenantId: 10, workspaceId: 100 },
+    alphaSecond: { userId: 2, tenantId: 10, workspaceId: 101 },
+    beta: { userId: 2, tenantId: 20, workspaceId: 200 },
+  };
+}
+
+test('workspace Hook tenant scopes use the current project tenant while legacy visibility stays user-wide', () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    assert.deepEqual(service.listAvailableHooksForUser(2).map((hook) => hook.id), [hookId]);
+    assert.deepEqual(service.listAvailableHooksForContext(alpha).map((hook) => ({ id: hook.id, enabled: hook.enabled })), [
+      { id: hookId, enabled: false },
+    ]);
+    assert.deepEqual(service.listAvailableHooksForContext(beta), []);
+    // A legacy enablement must not activate the tenant-scoped Hook in another tenant.
+    service.setUserHookEnabled({ userId: 2, hookId, enabled: true });
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha).map((hook) => hook.id), [hookId]);
+    assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
+    for (const enabled of [true, false]) {
+      assert.throws(
+        () => service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled }),
+        (error) => error.statusCode === 403 && /not available/.test(error.message),
+      );
+    }
+    assert.throws(
+      () => service.setWorkspaceUserHookChatVisibility({ ...beta, hookId, showInChat: false }),
+      (error) => error.statusCode === 403 && /not available/.test(error.message),
+    );
+    assert.equal(service.getWorkspaceHookAssignment({ workspaceId: beta.workspaceId, hookId }), null);
+  } finally {
+    database.close();
+  }
+});
+
+test('tenant-scoped Hooks can be manually enabled and hidden within a single project', () => {
+  const { database, service, hookId, alpha, alphaSecond, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    const activeHook = service.listEffectiveHooksForContext(alpha)[0];
+    assert.equal(activeHook.id, hookId);
+    assert.equal(activeHook.showInChat, false);
+    assert.equal(activeHook.workspaceAssignment.source, 'manual');
+    assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].enabled, false);
+    assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].showInChat, true);
+    assert.deepEqual(service.listAvailableHooksForContext(beta), []);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].enabled, false);
+  } finally {
+    database.close();
+  }
+});
+
+test('unassigned workspace Hooks track active tenant membership and tenant availability', () => {
+  const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+  try {
+    database.prepare("UPDATE tenant_users SET status = 'disabled' WHERE tenant_id = 10 AND user_id = 2").run();
+    assert.deepEqual(service.listAvailableHooksForContext(alpha), []);
+    assert.throws(
+      () => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true }),
+      (error) => error.statusCode === 403,
+    );
+    database.prepare("UPDATE tenant_users SET status = 'active' WHERE tenant_id = 10 AND user_id = 2").run();
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].id, hookId);
+    database.prepare("UPDATE tenants SET status = 'disabled' WHERE id = 10").run();
+    assert.deepEqual(service.listAvailableHooksForContext(alpha), []);
+    assert.throws(
+      () => service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false }),
+      (error) => error.statusCode === 403,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('explicit user and all-user Hook scopes retain visibility across workspace tenants', () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    for (const scope of ['users', 'all_users']) {
+      service.replaceHookBindings({ hookId, scope, userIds: scope === 'users' ? [2] : [], boundBy: 1 });
+      for (const context of [alpha, beta]) {
+        assert.equal(service.listAvailableHooksForContext(context)[0].id, hookId);
+        service.setWorkspaceUserHookChatVisibility({ ...context, hookId, showInChat: false });
+        assert.equal(service.listAvailableHooksForContext(context)[0].showInChat, false);
+      }
+    }
+  } finally {
+    database.close();
+  }
+});
+
+test('template Hook assignments remain independent of later tenant scope changes', () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.assignWorkspaceHook({
+      workspaceId: beta.workspaceId,
+      hookId,
+      hookVersion: 1,
+      source: 'agent_template',
+      sourceTemplateId: 88,
+      defaultEnabled: true,
+      installStatus: 'ready',
+      createdBy: 1,
+    });
+    assert.equal(service.listEffectiveHooksForContext(beta)[0].id, hookId);
+    service.replaceHookBindings({ hookId, scope: 'users', userIds: [], boundBy: 1 });
+    assert.deepEqual(service.listAvailableHooksForContext(alpha), []);
+    assert.equal(service.listEffectiveHooksForContext(beta)[0].version, 1);
+    service.setWorkspaceUserHookChatVisibility({ ...beta, hookId, showInChat: false });
+    service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: false });
+    assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
+    service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: true });
+    assert.equal(service.listEffectiveHooksForContext(beta)[0].showInChat, false);
+  } finally {
+    database.close();
+  }
+});
+
+test('workspace Hook assignments pin published versions and isolate member preferences by project', () => {
+  const { database, service } = createFixture();
+  try {
+    database.prepare('INSERT INTO tenants (id, code, name) VALUES (10, ?, ?)')
+      .run('tenant-10', 'Tenant 10');
+    const insertWorkspace = database.prepare(`
+      INSERT INTO workspaces (id, tenant_id, owner_user_id, slug, display_name, path)
+      VALUES (?, 10, 2, ?, ?, ?)
+    `);
+    insertWorkspace.run(100, 'first', 'First', '/tmp/hook-workspace-first');
+    insertWorkspace.run(101, 'second', 'Second', '/tmp/hook-workspace-second');
+
+    const created = service.createHook({
+      input: publishableHook({ name: '模板 Hook v1' }),
+      userId: 1,
+    });
+    const firstPublished = service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(firstPublished.version, 1);
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).name, '模板 Hook v1');
+
+    const assignment = service.assignWorkspaceHook({
+      workspaceId: 100,
+      hookId: created.id,
+      hookVersion: 1,
+      source: 'agent_template',
+      sourceTemplateId: 88,
+      defaultEnabled: true,
+      defaultShowInChat: false,
+      sortOrder: 2,
+      installStatus: 'ready',
+      createdBy: 1,
+    });
+    assert.deepEqual({
+      hookVersion: assignment.hookVersion,
+      source: assignment.source,
+      sourceTemplateId: assignment.sourceTemplateId,
+      defaultEnabled: assignment.defaultEnabled,
+    }, {
+      hookVersion: 1,
+      source: 'agent_template',
+      sourceTemplateId: 88,
+      defaultEnabled: true,
+    });
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => ({ name: hook.name, version: hook.version, showInChat: hook.showInChat })), [
+      { name: '模板 Hook v1', version: 1, showInChat: false },
+    ]);
+    assert.equal(service.getWorkspaceUserHookChatVisibility({
+      workspaceId: 100,
+      userId: 2,
+      hookId: created.id,
+    }), false);
+    assert.equal(service.getUserHookChatVisibility({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: created.id,
+    }), false);
+    service.setWorkspaceUserHookChatVisibility({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: created.id,
+      showInChat: true,
+    });
+    assert.equal(service.getWorkspaceUserHookChatVisibility({
+      workspaceId: 100,
+      userId: 2,
+      hookId: created.id,
+    }), true);
+    assert.equal(service.getUserHookChatVisibility({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: created.id,
+    }), true);
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 101,
+    }), []);
+
+    service.setWorkspaceUserHookEnabled({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: created.id,
+      enabled: false,
+    });
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }), []);
+
+    const draftUpdate = service.updateHook({
+      hookId: created.id,
+      userId: 1,
+      input: publishableHook({ name: '模板 Hook v2' }),
+    });
+    assert.equal(draftUpdate.status, 'draft');
+    service.assignWorkspaceHook({
+      workspaceId: 101,
+      hookId: created.id,
+      hookVersion: 1,
+      source: 'agent_template',
+      sourceTemplateId: 88,
+      defaultEnabled: true,
+      createdBy: 1,
+    });
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 101,
+    }).map((hook) => ({ name: hook.name, version: hook.version })), [
+      { name: '模板 Hook v1', version: 1 },
+    ]);
+    service.removeWorkspaceHookAssignment({ workspaceId: 101, hookId: created.id });
+    service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).name, '模板 Hook v1');
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).name, '模板 Hook v2');
+    service.setWorkspaceUserHookEnabled({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: created.id,
+      enabled: true,
+    });
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => ({ name: hook.name, version: hook.version })), [
+      { name: '模板 Hook v1', version: 1 },
+    ]);
+
+    database.prepare("UPDATE hooks SET status = 'disabled' WHERE id = ?").run(created.id);
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => ({ name: hook.name, version: hook.version })), [
+      { name: '模板 Hook v1', version: 1 },
+    ]);
+    assert.throws(
+      () => service.assignWorkspaceHook({
+        workspaceId: 101,
+        hookId: created.id,
+        hookVersion: 1,
+        source: 'agent_template',
+        sourceTemplateId: 88,
+        createdBy: 1,
+      }),
+      (error) => error.statusCode === 409 && /not available for new workspace assignments/.test(error.message),
+    );
+    database.prepare("UPDATE hooks SET status = 'published' WHERE id = ?").run(created.id);
+
+    database.prepare(`
+      UPDATE hook_published_versions
+      SET revoked_at = CURRENT_TIMESTAMP, revoke_reason = 'security incident'
+      WHERE hook_id = ? AND version = 1
+    `).run(created.id);
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }), []);
+    database.prepare(`
+      UPDATE hook_published_versions
+      SET revoked_at = NULL, revoke_reason = NULL
+      WHERE hook_id = ? AND version = 1
+    `).run(created.id);
+
+    service.markWorkspaceHookAssignmentFailed({
+      workspaceId: 100,
+      hookId: created.id,
+      error: 'resource unavailable',
+    });
+    const unavailable = service.listAvailableHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    })[0];
+    assert.equal(unavailable.enabled, false);
+    assert.equal(unavailable.unavailableReason, 'resources_unavailable');
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }), []);
+    assert.throws(
+      () => service.deleteHook(created.id),
+      (error) => error.statusCode === 409 && /installed in 1 workspace/.test(error.message),
+    );
+    assert.equal(service.removeWorkspaceHookAssignment({
+      workspaceId: 100,
+      hookId: created.id,
+    }), true);
+    assert.equal(service.deleteHook(created.id), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('Hooks referenced by draft or published Agent templates cannot be deleted', () => {
+  const { database, service } = createFixture();
+  try {
+    database.prepare('INSERT INTO tenants (id, code, name) VALUES (10, ?, ?)')
+      .run('tenant-10', 'Tenant 10');
+    const created = service.createHook({
+      input: publishableHook({ name: '模板引用 Hook' }),
+      userId: 1,
+    });
+    const insertTemplate = database.prepare(`
+      INSERT INTO agent_templates (
+        name, category, tenant_ids_json, hook_refs_json, status,
+        created_by_user_id, updated_by_user_id
+      ) VALUES (?, '通用', '[10]', ?, ?, 1, 1)
+    `);
+    const refs = JSON.stringify([{ hookId: created.id, version: 1 }]);
+    const draftTemplateId = Number(insertTemplate.run('草稿模板', refs, 'draft').lastInsertRowid);
+    const publishedTemplateId = Number(insertTemplate.run('已发布模板', refs, 'published').lastInsertRowid);
+
+    assert.throws(
+      () => service.deleteHook(created.id),
+      (error) => error.statusCode === 409
+        && /仍被 2 个草稿或已发布 Agent 模板引用/.test(error.message)
+        && error.message.includes('草稿模板')
+        && error.message.includes('已发布模板'),
+    );
+
+    database.prepare(`
+      UPDATE agent_templates SET status = 'disabled' WHERE id IN (?, ?)
+    `).run(draftTemplateId, publishedTemplateId);
+    assert.equal(service.deleteHook(created.id), true);
+  } finally {
+    database.close();
+  }
+});
+
+test('workspace Hook resolution falls back to legacy user bindings without changing SQL Check ownership', () => {
+  const { database, service } = createFixture();
+  try {
+    database.prepare('INSERT INTO tenants (id, code, name) VALUES (10, ?, ?)')
+      .run('tenant-10', 'Tenant 10');
+    database.prepare(`
+      INSERT INTO workspaces (id, tenant_id, owner_user_id, slug, display_name, path)
+      VALUES (100, 10, 2, 'first', 'First', '/tmp/hook-workspace-first')
+    `).run();
+
+    const adminHook = service.createHook({ input: publishableHook(), userId: 1 });
+    service.publishHook({ hookId: adminHook.id, userId: 1 });
+    service.replaceHookBindings({ hookId: adminHook.id, scope: 'all_users', boundBy: 1 });
+    service.setUserHookEnabled({ userId: 2, hookId: adminHook.id, enabled: true });
+
+    const sqlHook = service.createHook({
+      input: publishableHook({ name: 'SQL Check 强制校验' }),
+      userId: 1,
+    });
+    service.publishHook({ hookId: sqlHook.id, userId: 1 });
+    service.setSqlCheckEnforcement({ userId: 2, enabled: true });
+
+    assert.deepEqual(new Set(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => hook.id)), new Set([adminHook.id, sqlHook.id]));
+
+    service.setWorkspaceUserHookEnabled({
+      workspaceId: 100,
+      tenantId: 10,
+      userId: 2,
+      hookId: adminHook.id,
+      enabled: false,
+    });
+    assert.equal(service.getWorkspaceHookAssignment({
+      workspaceId: 100,
+      hookId: adminHook.id,
+    }), null);
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => hook.id), [sqlHook.id]);
+    database.prepare(`
+      DELETE FROM user_workspace_hook_preferences
+      WHERE workspace_id = 100 AND user_id = 2 AND hook_id = ?
+    `).run(adminHook.id);
+
+    service.assignWorkspaceHook({
+      workspaceId: 100,
+      hookId: adminHook.id,
+      hookVersion: 1,
+      defaultEnabled: false,
+      createdBy: 2,
+    });
+    assert.deepEqual(service.listEffectiveHooksForContext({
+      userId: 2,
+      tenantId: 10,
+      workspaceId: 100,
+    }).map((hook) => hook.id), [sqlHook.id]);
+    assert.equal(service.getSqlCheckEnforcement({ userId: 2 }).enabled, true);
+  } finally {
+    database.close();
+  }
+});
+
+test('published Hook resource validation rejects changed Skill and MCP versions', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = {
+      resourceRefs: {
+        skills: [{
+          skillId: 'builtin:notifier',
+          skillName: 'notifier',
+          version: 3,
+          contentHash: 'skill-hash-v1',
+        }],
+        mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v1' }],
+        mcpTools: [{ mcpServerId: 'hook-mcp-1', toolName: 'mcp__notify__send' }],
+      },
+    };
+    assert.equal(service.validatePublishedHookMaterialization({
+      hook,
+      resources: {
+        skills: [{ skillId: 'builtin:notifier', version: 3, contentHash: 'skill-hash-v1' }],
+        mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v1' }],
+        mcpTools: [{ mcpServerId: 'hook-mcp-1', toolName: 'mcp__notify__send' }],
+      },
+    }), true);
+    assert.throws(
+      () => service.validatePublishedHookMaterialization({
+        hook,
+        resources: {
+          skills: [{ skillId: 'builtin:notifier', version: 4, contentHash: 'skill-hash-v1' }],
+          mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v1' }],
+          mcpTools: [{ mcpServerId: 'hook-mcp-1', toolName: 'mcp__notify__send' }],
+        },
+      }),
+      (error) => error.statusCode === 409 && /Skill .* version has changed/.test(error.message),
+    );
+    assert.throws(
+      () => service.validatePublishedHookMaterialization({
+        hook,
+        resources: {
+          skills: [{ skillId: 'builtin:notifier', version: 3, contentHash: 'skill-hash-v2' }],
+          mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v1' }],
+          mcpTools: [{ mcpServerId: 'hook-mcp-1', toolName: 'mcp__notify__send' }],
+        },
+      }),
+      (error) => error.statusCode === 409 && /Skill .* content has changed/.test(error.message),
+    );
+    assert.throws(
+      () => service.validatePublishedHookMaterialization({
+        hook,
+        resources: {
+          skills: [{ skillId: 'builtin:notifier', version: 3, contentHash: 'skill-hash-v1' }],
+          mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v2' }],
+          mcpTools: [{ mcpServerId: 'hook-mcp-1', toolName: 'mcp__notify__send' }],
+        },
+      }),
+      (error) => error.statusCode === 409 && /MCP server .* configuration has changed/.test(error.message),
+    );
+    assert.throws(
+      () => service.validatePublishedHookMaterialization({
+        hook,
+        resources: {
+          skills: [{ skillId: 'builtin:notifier', version: 3, contentHash: 'skill-hash-v1' }],
+          mcpServers: [{ id: 'hook-mcp-1', contentHash: 'hash-v1' }],
+          mcpTools: [],
+        },
+      }),
+      (error) => error.statusCode === 409 && /MCP tool .* is unavailable/.test(error.message),
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test('mcp_loop_run repeats the Matcher MCP with original inputs and a Python termination script', () => {
   const statusTool = {
     name: 'mcp__loopdemo__get_task_status',
@@ -1086,9 +1611,23 @@ test('StopFailure can call a published MCP tool and then start a Skill recovery 
     const published = service.publishHook({
       hookId: created.id,
       userId: 1,
-      validatedSkills: [{ skillId: 'builtin:hook-notification', name: 'hook-notification' }],
+      validatedSkills: [{
+        skillId: 'builtin:hook-notification',
+        name: 'hook-notification',
+        version: 1,
+        contentHash: 'notification-skill-hash-v1',
+      }],
     });
     assert.equal(published.status, 'published');
+    assert.deepEqual(
+      service.getPublishedHookVersion({ hookId: created.id, version: 1 }).resourceRefs.skills,
+      [{
+        skillId: 'builtin:hook-notification',
+        skillName: 'hook-notification',
+        version: 1,
+        contentHash: 'notification-skill-hash-v1',
+      }],
+    );
   } finally {
     database.close();
   }

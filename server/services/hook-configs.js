@@ -673,6 +673,186 @@ function mapHookRow(row) {
   };
 }
 
+function collectPublishedHookResourceRefs(hook, hookMcpCatalog, validatedSkills = []) {
+  const skills = new Map();
+  const mcpServers = new Map();
+  const mcpTools = new Map();
+  const catalogTools = typeof hookMcpCatalog?.listToolResources === 'function'
+    ? hookMcpCatalog.listToolResources()
+    : [];
+  const catalogServers = typeof hookMcpCatalog?.listServers === 'function'
+    ? hookMcpCatalog.listServers()
+    : [];
+  const skillsById = new Map((validatedSkills || []).map((skill) => [String(skill.skillId || ''), skill]));
+  for (const action of hook?.postActions || []) {
+    if (action.type === 'invoke_skill') {
+      const skillId = String(action.config?.skillId || '').trim();
+      const skillName = String(action.config?.skillName || '').trim();
+      const validatedSkill = skillsById.get(skillId);
+      if (skillId) {
+        skills.set(skillId, {
+          skillId,
+          skillName,
+          version: Number.isFinite(Number(validatedSkill?.version))
+            ? Number(validatedSkill.version)
+            : null,
+          contentHash: typeof validatedSkill?.contentHash === 'string'
+            ? validatedSkill.contentHash
+            : null,
+        });
+      }
+      continue;
+    }
+    if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type)) continue;
+    const qualifiedToolName = action.type === 'mcp_loop_run'
+      ? String(hook.matcher?.value || '')
+      : String(action.config?.toolName || '');
+    const catalogTool = catalogTools.find((tool) => tool.name === qualifiedToolName);
+    const mcpServerId = String(action.config?.mcpServerId || catalogTool?.mcpServerId || '').trim();
+    if (mcpServerId) {
+      const server = catalogServers.find((candidate) => candidate.id === mcpServerId);
+      mcpServers.set(mcpServerId, {
+        id: mcpServerId,
+        contentHash: server?.contentHash || null,
+      });
+    }
+    if (qualifiedToolName) {
+      mcpTools.set(`${mcpServerId}\0${qualifiedToolName}`, {
+        mcpServerId: mcpServerId || null,
+        toolName: qualifiedToolName,
+      });
+    }
+  }
+  return {
+    skills: [...skills.values()],
+    mcpServers: [...mcpServers.values()],
+    mcpTools: [...mcpTools.values()],
+  };
+}
+
+function publishedHookConfig(hook) {
+  return {
+    name: hook.name,
+    description: hook.description || '',
+    eventName: hook.eventName,
+    matcher: hook.matcher || {},
+    extensionLogic: hook.extensionLogic || null,
+    postActions: hook.postActions || [],
+    claudeResponse: hook.claudeResponse || { bindings: {} },
+    bindingController: hook.bindingController === 'sql_check' ? 'sql_check' : 'admin',
+  };
+}
+
+function mapPublishedHookVersionRow(row) {
+  if (!row) return null;
+  const config = parseJson(row.config_json, {});
+  const normalized = normalizeHookInput({
+    name: config.name,
+    description: config.description || '',
+    eventName: config.eventName,
+    matcher: config.matcher || {},
+    extensionLogic: config.extensionLogic || null,
+    postActions: config.postActions || [],
+    claudeResponse: config.claudeResponse || { bindings: {} },
+  });
+  return {
+    id: row.hook_id,
+    ...normalized,
+    status: 'published',
+    activationScope: 'manual',
+    bindingController: config.bindingController === 'sql_check' ? 'sql_check' : 'admin',
+    version: Number(row.version),
+    resourceRefs: parseJson(row.resource_refs_json, { skills: [], mcpServers: [], mcpTools: [] }),
+    publishedBy: row.published_by || null,
+    publishedAt: row.published_at || null,
+    revokedAt: row.revoked_at || null,
+    revokedBy: row.revoked_by || null,
+    revokeReason: row.revoke_reason || null,
+  };
+}
+
+function mapWorkspaceHookAssignmentRow(row) {
+  if (!row) return null;
+  return {
+    workspaceId: Number(row.workspace_id),
+    hookId: row.hook_id,
+    hookVersion: Number(row.hook_version),
+    source: row.source === 'agent_template' ? 'agent_template' : 'manual',
+    sourceTemplateId: row.source_template_id == null ? null : Number(row.source_template_id),
+    defaultEnabled: row.default_enabled === 1,
+    defaultShowInChat: row.default_show_in_chat !== 0,
+    allowUserDisable: row.allow_user_disable !== 0,
+    sortOrder: Number(row.sort_order || 0),
+    installStatus: row.install_status || 'ready',
+    installError: row.install_error || null,
+    createdBy: row.created_by || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+function validatePublishedHookMaterialization({ hook, resources }) {
+  const expected = hook?.resourceRefs || {};
+  const materializedSkills = Array.isArray(resources?.skills) ? resources.skills : [];
+  const materializedMcpServers = Array.isArray(resources?.mcpServers) ? resources.mcpServers : [];
+  for (const expectedSkill of Array.isArray(expected.skills) ? expected.skills : []) {
+    const skillId = typeof expectedSkill === 'string'
+      ? expectedSkill
+      : String(expectedSkill?.skillId || '');
+    if (!skillId) continue;
+    const actual = materializedSkills.find((skill) => skill.skillId === skillId);
+    if (!actual) throw createHttpError(`Published Hook Skill ${skillId} could not be materialized`, 409);
+    const expectedVersion = typeof expectedSkill === 'object' && expectedSkill != null
+      ? Number(expectedSkill.version)
+      : NaN;
+    if (
+      Number.isFinite(expectedVersion)
+      && expectedVersion > 0
+      && Number(actual.version) !== expectedVersion
+    ) {
+      throw createHttpError(`Published Hook Skill ${skillId} version has changed`, 409);
+    }
+    const expectedHash = typeof expectedSkill === 'object' && expectedSkill != null
+      ? String(expectedSkill.contentHash || '')
+      : '';
+    if (expectedHash && actual.contentHash !== expectedHash) {
+      throw createHttpError(`Published Hook Skill ${skillId} content has changed`, 409);
+    }
+  }
+  for (const expectedServer of Array.isArray(expected.mcpServers) ? expected.mcpServers : []) {
+    const serverId = typeof expectedServer === 'string'
+      ? expectedServer
+      : String(expectedServer?.id || '');
+    if (!serverId) continue;
+    const actual = materializedMcpServers.find((server) => server.id === serverId);
+    if (!actual) throw createHttpError(`Published Hook MCP server ${serverId} could not be materialized`, 409);
+    const expectedHash = typeof expectedServer === 'object' && expectedServer != null
+      ? String(expectedServer.contentHash || '')
+      : '';
+    if (expectedHash && actual.contentHash !== expectedHash) {
+      throw createHttpError(`Published Hook MCP server ${serverId} configuration has changed`, 409);
+    }
+  }
+  const materializedMcpTools = Array.isArray(resources?.mcpTools) ? resources.mcpTools : [];
+  for (const expectedTool of Array.isArray(expected.mcpTools) ? expected.mcpTools : []) {
+    const toolName = typeof expectedTool === 'string'
+      ? expectedTool
+      : String(expectedTool?.toolName || expectedTool?.name || '');
+    if (!toolName) continue;
+    const expectedServerId = typeof expectedTool === 'object' && expectedTool != null
+      ? String(expectedTool.mcpServerId || '')
+      : '';
+    const actual = materializedMcpTools.find((tool) => (
+      String(tool.toolName || tool.name || '') === toolName
+      && (!expectedServerId || String(tool.mcpServerId || '') === expectedServerId)
+    ));
+    if (!actual) {
+      throw createHttpError(`Published Hook MCP tool ${toolName} is unavailable`, 409);
+    }
+  }
+  return true;
+}
+
 function hasTable(database, tableName) {
   return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
 }
@@ -1004,7 +1184,7 @@ export function createHookConfigService({
     if (!hook) throw createHttpError('Hook not found', 404);
     return hook;
   };
-  const isAdminHookAvailableToUser = ({ hook, userId }) => (
+  const isAdminHookAvailableToUser = ({ hook, userId, tenantId = null }) => (
     hook.activationScope === 'all_users'
     || Boolean(database.prepare(`
       SELECT 1
@@ -1025,9 +1205,450 @@ export function createHookConfigService({
           ON tenant.id = tenant_scope.tenant_id
          AND tenant.status = 'active'
         WHERE tenant_scope.hook_id = ?
+          AND (? IS NULL OR tenant_scope.tenant_id = ?)
       )
-    `).get(hook.id, userId, userId, hook.id))
+    `).get(hook.id, userId, userId, hook.id, tenantId, tenantId))
   );
+  const requireWorkspaceContext = ({ workspaceId, tenantId = null }) => {
+    const normalizedWorkspaceId = Number(workspaceId);
+    if (!Number.isSafeInteger(normalizedWorkspaceId) || normalizedWorkspaceId <= 0) {
+      throw createHttpError('workspaceId must be a positive integer');
+    }
+    const workspace = database.prepare(`
+      SELECT id, tenant_id, status
+      FROM workspaces
+      WHERE id = ?
+    `).get(normalizedWorkspaceId);
+    if (!workspace || workspace.status === 'deleted') {
+      throw createHttpError('Workspace not found', 404);
+    }
+    if (tenantId != null && tenantId !== '') {
+      const normalizedTenantId = Number(tenantId);
+      if (!Number.isSafeInteger(normalizedTenantId) || normalizedTenantId <= 0) {
+        throw createHttpError('tenantId must be a positive integer');
+      }
+      if (Number(workspace.tenant_id) !== normalizedTenantId) {
+        throw createHttpError('Workspace does not belong to this tenant', 403);
+      }
+    }
+    return {
+      id: Number(workspace.id),
+      tenantId: Number(workspace.tenant_id),
+      status: workspace.status,
+    };
+  };
+  const getPublishedHookVersion = ({ hookId, version }) => {
+    const normalizedVersion = Number(version);
+    if (!hookId || !Number.isSafeInteger(normalizedVersion) || normalizedVersion <= 0) return null;
+    const row = database.prepare(`
+      SELECT *
+      FROM hook_published_versions
+      WHERE hook_id = ? AND version = ?
+    `).get(String(hookId), normalizedVersion);
+    return mapPublishedHookVersionRow(row);
+  };
+  const getWorkspaceHookAssignment = ({ workspaceId, hookId }) => {
+    const normalizedWorkspaceId = Number(workspaceId);
+    if (!Number.isSafeInteger(normalizedWorkspaceId) || normalizedWorkspaceId <= 0 || !hookId) return null;
+    return mapWorkspaceHookAssignmentRow(database.prepare(`
+      SELECT * FROM workspace_hook_assignments
+      WHERE workspace_id = ? AND hook_id = ?
+    `).get(normalizedWorkspaceId, String(hookId)));
+  };
+  const listAvailableHooksForContext = ({ userId, tenantId, workspaceId }) => {
+    const normalizedUserId = Number(userId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    const workspace = requireWorkspaceContext({ workspaceId, tenantId });
+    const rows = database.prepare(`
+      SELECT h.*,
+        (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
+        (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
+        (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count,
+        EXISTS (
+          SELECT 1 FROM user_hook_bindings legacy_binding
+          WHERE legacy_binding.hook_id = h.id
+            AND legacy_binding.user_id = ?
+        ) AS legacy_user_enabled,
+        COALESCE((
+          SELECT preference.show_in_chat
+          FROM user_hook_preferences preference
+          WHERE preference.hook_id = h.id
+            AND preference.user_id = ?
+        ), 1) AS legacy_show_in_chat,
+        workspace_assignment.hook_version AS assignment_hook_version,
+        workspace_assignment.source AS assignment_source,
+        workspace_assignment.source_template_id AS assignment_source_template_id,
+        workspace_assignment.default_enabled AS assignment_default_enabled,
+        workspace_assignment.default_show_in_chat AS assignment_default_show_in_chat,
+        workspace_assignment.allow_user_disable AS assignment_allow_user_disable,
+        workspace_assignment.sort_order AS assignment_sort_order,
+        workspace_assignment.install_status AS assignment_install_status,
+        workspace_assignment.install_error AS assignment_install_error,
+        workspace_assignment.created_by AS assignment_created_by,
+        workspace_assignment.created_at AS assignment_created_at,
+        workspace_assignment.updated_at AS assignment_updated_at,
+        workspace_preference.enabled AS workspace_user_enabled,
+        workspace_preference.show_in_chat AS workspace_user_show_in_chat,
+        EXISTS (
+          SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
+        ) AS has_data_records
+      FROM hooks h
+      LEFT JOIN workspace_hook_assignments workspace_assignment
+        ON workspace_assignment.hook_id = h.id
+       AND workspace_assignment.workspace_id = ?
+      LEFT JOIN user_workspace_hook_preferences workspace_preference
+        ON workspace_preference.hook_id = h.id
+       AND workspace_preference.workspace_id = ?
+       AND workspace_preference.user_id = ?
+      WHERE
+        (h.binding_controller = 'sql_check' AND h.status = 'published')
+        OR (
+          h.binding_controller = 'admin'
+          AND (
+            workspace_assignment.hook_id IS NOT NULL
+            OR (
+              h.status = 'published'
+              AND (
+                h.activation_scope = 'all_users'
+                OR EXISTS (
+                  SELECT 1 FROM hook_user_scopes scope
+                  WHERE scope.hook_id = h.id
+                    AND scope.user_id = ?
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM hook_tenant_bindings tenant_scope
+                  INNER JOIN tenant_users membership
+                    ON membership.tenant_id = tenant_scope.tenant_id
+                   AND membership.user_id = ?
+                   AND membership.status = 'active'
+                  INNER JOIN tenants tenant
+                    ON tenant.id = tenant_scope.tenant_id
+                   AND tenant.status = 'active'
+                  WHERE tenant_scope.hook_id = h.id
+                    AND tenant_scope.tenant_id = ?
+                )
+              )
+            )
+          )
+        )
+    `).all(
+      normalizedUserId,
+      normalizedUserId,
+      workspace.id,
+      workspace.id,
+      normalizedUserId,
+      normalizedUserId,
+      normalizedUserId,
+      workspace.tenantId,
+    );
+    const hooks = rows.map((row) => {
+      const hasAssignment = row.assignment_hook_version != null;
+      const assignment = hasAssignment ? {
+        workspaceId: workspace.id,
+        hookId: row.id,
+        hookVersion: Number(row.assignment_hook_version),
+        source: row.assignment_source === 'agent_template' ? 'agent_template' : 'manual',
+        sourceTemplateId: row.assignment_source_template_id == null
+          ? null
+          : Number(row.assignment_source_template_id),
+        defaultEnabled: row.assignment_default_enabled === 1,
+        defaultShowInChat: row.assignment_default_show_in_chat !== 0,
+        allowUserDisable: row.assignment_allow_user_disable !== 0,
+        sortOrder: Number(row.assignment_sort_order || 0),
+        installStatus: row.assignment_install_status || 'ready',
+        installError: row.assignment_install_error || null,
+        createdBy: row.assignment_created_by || null,
+        createdAt: row.assignment_created_at || null,
+        updatedAt: row.assignment_updated_at || null,
+      } : null;
+      const versionHook = assignment
+        ? getPublishedHookVersion({ hookId: row.id, version: assignment.hookVersion })
+        : null;
+      const hook = versionHook || mapHookRow(row);
+      const versionReady = !assignment || Boolean(
+        versionHook
+        && !versionHook.revokedAt
+        && assignment.installStatus === 'ready',
+      );
+      const explicitEnabled = row.workspace_user_enabled == null
+        ? null
+        : row.workspace_user_enabled === 1;
+      let enabled;
+      if (hook.bindingController === 'sql_check') {
+        enabled = row.legacy_user_enabled === 1;
+      } else if (assignment) {
+        enabled = explicitEnabled == null
+          ? assignment.defaultEnabled
+          : explicitEnabled || !assignment.allowUserDisable;
+        enabled = enabled && versionReady;
+      } else {
+        enabled = explicitEnabled == null
+          ? row.legacy_user_enabled === 1
+          : explicitEnabled;
+      }
+      const showInChat = row.workspace_user_show_in_chat != null
+        ? row.workspace_user_show_in_chat === 1
+        : assignment
+          ? assignment.defaultShowInChat
+          : row.legacy_show_in_chat !== 0;
+      let unavailableReason = null;
+      if (assignment?.installStatus === 'pending') unavailableReason = 'resources_pending';
+      else if (assignment?.installStatus === 'failed') unavailableReason = 'resources_unavailable';
+      else if (assignment && !versionHook) unavailableReason = 'version_unavailable';
+      else if (versionHook?.revokedAt) unavailableReason = 'version_revoked';
+      return {
+        ...hook,
+        enabled,
+        showInChat,
+        workspaceAssignment: assignment,
+        unavailableReason,
+      };
+    });
+    return hooks.sort((left, right) => {
+      const leftOrder = left.workspaceAssignment?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.workspaceAssignment?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    });
+  };
+  const assignWorkspaceHook = ({
+    workspaceId,
+    hookId,
+    hookVersion = null,
+    source = 'manual',
+    sourceTemplateId = null,
+    defaultEnabled = true,
+    defaultShowInChat = true,
+    allowUserDisable = true,
+    sortOrder = 0,
+    installStatus = 'ready',
+    installError = null,
+    createdBy = null,
+  }) => {
+    const workspace = requireWorkspaceContext({ workspaceId });
+    const hook = requireHook(hookId);
+    if (hook.bindingController !== 'admin') {
+      throw createHttpError('This Hook is managed from its dedicated settings page', 409);
+    }
+    if (!['manual', 'agent_template'].includes(source)) {
+      throw createHttpError('source must be manual or agent_template');
+    }
+    // Editing a Hook moves the live row back to draft, but does not invalidate
+    // an already published immutable version referenced by a template.
+    if (hook.status === 'disabled' || (source === 'manual' && hook.status !== 'published')) {
+      throw createHttpError('Hook is not available for new workspace assignments', 409);
+    }
+    const normalizedVersion = hookVersion == null ? hook.version : Number(hookVersion);
+    if (!Number.isSafeInteger(normalizedVersion) || normalizedVersion <= 0) {
+      throw createHttpError('hookVersion must be a positive integer');
+    }
+    const publishedVersion = getPublishedHookVersion({ hookId, version: normalizedVersion });
+    if (!publishedVersion) throw createHttpError('Published Hook version not found', 404);
+    if (publishedVersion.revokedAt) throw createHttpError('Published Hook version has been revoked', 409);
+    const normalizedTemplateId = sourceTemplateId == null || sourceTemplateId === ''
+      ? null
+      : Number(sourceTemplateId);
+    if (
+      normalizedTemplateId != null
+      && (!Number.isSafeInteger(normalizedTemplateId) || normalizedTemplateId <= 0)
+    ) {
+      throw createHttpError('sourceTemplateId must be a positive integer');
+    }
+    if (source === 'agent_template' && normalizedTemplateId == null) {
+      throw createHttpError('sourceTemplateId is required for an Agent template Hook');
+    }
+    for (const [name, value] of Object.entries({ defaultEnabled, defaultShowInChat, allowUserDisable })) {
+      if (typeof value !== 'boolean') throw createHttpError(`${name} must be a boolean`);
+    }
+    if (!allowUserDisable && !defaultEnabled) {
+      throw createHttpError('defaultEnabled must be true when users cannot disable the Hook');
+    }
+    const normalizedSortOrder = Number(sortOrder);
+    if (!Number.isSafeInteger(normalizedSortOrder) || normalizedSortOrder < 0) {
+      throw createHttpError('sortOrder must be a non-negative integer');
+    }
+    if (!['pending', 'ready', 'failed'].includes(installStatus)) {
+      throw createHttpError('installStatus must be pending, ready, or failed');
+    }
+    const normalizedCreatedBy = createdBy == null || createdBy === '' ? null : Number(createdBy);
+    if (
+      normalizedCreatedBy != null
+      && (!Number.isSafeInteger(normalizedCreatedBy) || normalizedCreatedBy <= 0)
+    ) {
+      throw createHttpError('createdBy must be a positive integer');
+    }
+    const normalizedInstallError = installStatus === 'failed'
+      ? String(installError || 'Hook resources could not be installed').slice(0, 1000)
+      : null;
+    database.prepare(`
+      INSERT INTO workspace_hook_assignments (
+        workspace_id, hook_id, hook_version, source, source_template_id,
+        default_enabled, default_show_in_chat, allow_user_disable,
+        sort_order, install_status, install_error, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_id, hook_id) DO UPDATE SET
+        hook_version = excluded.hook_version,
+        source = excluded.source,
+        source_template_id = excluded.source_template_id,
+        default_enabled = excluded.default_enabled,
+        default_show_in_chat = excluded.default_show_in_chat,
+        allow_user_disable = excluded.allow_user_disable,
+        sort_order = excluded.sort_order,
+        install_status = excluded.install_status,
+        install_error = excluded.install_error,
+        created_by = COALESCE(excluded.created_by, workspace_hook_assignments.created_by),
+        updated_at = CURRENT_TIMESTAMP
+    `).run(
+      workspace.id,
+      hook.id,
+      normalizedVersion,
+      source,
+      normalizedTemplateId,
+      defaultEnabled ? 1 : 0,
+      defaultShowInChat ? 1 : 0,
+      allowUserDisable ? 1 : 0,
+      normalizedSortOrder,
+      installStatus,
+      normalizedInstallError,
+      normalizedCreatedBy,
+    );
+    return getWorkspaceHookAssignment({ workspaceId: workspace.id, hookId: hook.id });
+  };
+  const setWorkspaceHookAssignmentStatus = ({ workspaceId, hookId, status, error = null }) => {
+    const workspace = requireWorkspaceContext({ workspaceId });
+    if (!['pending', 'ready', 'failed'].includes(status)) {
+      throw createHttpError('status must be pending, ready, or failed');
+    }
+    const normalizedError = status === 'failed'
+      ? String(error || 'Hook resources could not be installed').slice(0, 1000)
+      : null;
+    const result = database.prepare(`
+      UPDATE workspace_hook_assignments
+      SET install_status = ?, install_error = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE workspace_id = ? AND hook_id = ?
+    `).run(status, normalizedError, workspace.id, String(hookId));
+    if (result.changes === 0) throw createHttpError('Workspace Hook assignment not found', 404);
+    return getWorkspaceHookAssignment({ workspaceId: workspace.id, hookId });
+  };
+  const removeWorkspaceHookAssignment = ({ workspaceId, hookId }) => {
+    const workspace = requireWorkspaceContext({ workspaceId });
+    const remove = database.transaction(() => {
+      database.prepare(`
+        DELETE FROM user_workspace_hook_preferences
+        WHERE workspace_id = ? AND hook_id = ?
+      `).run(workspace.id, String(hookId));
+      return database.prepare(`
+        DELETE FROM workspace_hook_assignments
+        WHERE workspace_id = ? AND hook_id = ?
+      `).run(workspace.id, String(hookId)).changes;
+    });
+    return remove() > 0;
+  };
+  const ensureWorkspaceHookEligible = ({ workspaceId, userId, hookId }) => {
+    const workspace = requireWorkspaceContext({ workspaceId });
+    const hook = requireHook(hookId);
+    if (hook.bindingController !== 'admin') {
+      throw createHttpError('This Hook is managed from its dedicated settings page', 409);
+    }
+    const assignment = getWorkspaceHookAssignment({ workspaceId, hookId });
+    const userEligible = isAdminHookAvailableToUser({
+      hook,
+      userId: Number(userId),
+      tenantId: workspace.tenantId,
+    });
+    if (!assignment && (hook.status !== 'published' || !userEligible)) {
+      throw createHttpError('Hook is not available to this user', 403);
+    }
+    return { hook, assignment };
+  };
+  const ensureManualWorkspaceAssignment = ({ workspaceId, userId, hook, assignment }) => assignment
+    || assignWorkspaceHook({
+      workspaceId,
+      hookId: hook.id,
+      hookVersion: hook.version,
+      source: 'manual',
+      defaultEnabled: false,
+      defaultShowInChat: true,
+      allowUserDisable: true,
+      createdBy: userId,
+    });
+  const setWorkspaceUserHookEnabled = ({ workspaceId, tenantId = null, userId, hookId, enabled }) => {
+    const normalizedUserId = Number(userId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    if (typeof enabled !== 'boolean') throw createHttpError('enabled must be a boolean');
+    const workspace = requireWorkspaceContext({ workspaceId, tenantId });
+    const eligible = ensureWorkspaceHookEligible({
+      workspaceId: workspace.id,
+      userId: normalizedUserId,
+      hookId,
+    });
+    // A project-specific opt-out from a legacy global binding is personal
+    // state only; it must not create a shared workspace assignment. Enabling a
+    // previously unassigned Hook still installs a pinned project version.
+    const assignment = eligible.assignment || (enabled
+      ? ensureManualWorkspaceAssignment({
+          workspaceId: workspace.id,
+          userId: normalizedUserId,
+          ...eligible,
+        })
+      : null);
+    if (assignment && !assignment.allowUserDisable && !enabled) {
+      throw createHttpError('This Hook cannot be disabled for this workspace', 409);
+    }
+    if (enabled && assignment?.installStatus !== 'ready') {
+      throw createHttpError('Hook resources are not available in this workspace', 409);
+    }
+    database.prepare(`
+      INSERT INTO user_workspace_hook_preferences (
+        workspace_id, user_id, hook_id, enabled, show_in_chat
+      ) VALUES (?, ?, ?, ?, NULL)
+      ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
+        enabled = excluded.enabled,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(workspace.id, normalizedUserId, String(hookId), enabled ? 1 : 0);
+    return {
+      hookId: String(hookId),
+      enabled,
+      hook: listAvailableHooksForContext({
+        userId: normalizedUserId,
+        tenantId: workspace.tenantId,
+        workspaceId: workspace.id,
+      }).find((candidate) => candidate.id === String(hookId)) || null,
+    };
+  };
+  const setWorkspaceUserHookChatVisibility = ({
+    workspaceId,
+    tenantId = null,
+    userId,
+    hookId,
+    showInChat,
+  }) => {
+    const normalizedUserId = Number(userId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    if (typeof showInChat !== 'boolean') throw createHttpError('showInChat must be a boolean');
+    const workspace = requireWorkspaceContext({ workspaceId, tenantId });
+    ensureWorkspaceHookEligible({
+      workspaceId: workspace.id,
+      userId: normalizedUserId,
+      hookId,
+    });
+    database.prepare(`
+      INSERT INTO user_workspace_hook_preferences (
+        workspace_id, user_id, hook_id, enabled, show_in_chat
+      ) VALUES (?, ?, ?, NULL, ?)
+      ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
+        show_in_chat = excluded.show_in_chat,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(workspace.id, normalizedUserId, String(hookId), showInChat ? 1 : 0);
+    return { hookId: String(hookId), showInChat };
+  };
   const getSqlCheckHookRow = ({ publishedOnly = false } = {}) => database.prepare(`
     SELECT *
     FROM hooks
@@ -1384,6 +2005,74 @@ export function createHookConfigService({
       return rows.map(mapHookRow);
     },
 
+    getPublishedHookVersion,
+
+    validatePublishedHookMaterialization,
+
+    listPublishedHookVersions: (hookId) => {
+      requireHook(hookId);
+      return database.prepare(`
+        SELECT * FROM hook_published_versions
+        WHERE hook_id = ?
+        ORDER BY version DESC
+      `).all(String(hookId)).map(mapPublishedHookVersionRow);
+    },
+
+    getWorkspaceHookAssignment,
+
+    listWorkspaceHookAssignments: ({ workspaceId, tenantId = null }) => {
+      const workspace = requireWorkspaceContext({ workspaceId, tenantId });
+      return database.prepare(`
+        SELECT * FROM workspace_hook_assignments
+        WHERE workspace_id = ?
+        ORDER BY sort_order ASC, created_at ASC
+      `).all(workspace.id).map(mapWorkspaceHookAssignmentRow);
+    },
+
+    assignWorkspaceHook,
+
+    setWorkspaceHookAssignmentStatus,
+
+    markWorkspaceHookAssignmentReady: ({ workspaceId, hookId }) => (
+      setWorkspaceHookAssignmentStatus({ workspaceId, hookId, status: 'ready' })
+    ),
+
+    markWorkspaceHookAssignmentFailed: ({ workspaceId, hookId, error }) => (
+      setWorkspaceHookAssignmentStatus({ workspaceId, hookId, status: 'failed', error })
+    ),
+
+    removeWorkspaceHookAssignment,
+
+    listAvailableHooksForContext,
+
+    listEffectiveHooksForContext: (context) => (
+      listAvailableHooksForContext(context).filter((hook) => hook.enabled && !hook.unavailableReason)
+    ),
+
+    setWorkspaceUserHookEnabled,
+
+    setWorkspaceUserHookChatVisibility,
+
+    getWorkspaceUserHookChatVisibility: ({ workspaceId, userId, hookId }) => {
+      const normalizedUserId = Number(userId);
+      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0 || !hookId) return true;
+      const workspace = requireWorkspaceContext({ workspaceId });
+      const preference = database.prepare(`
+        SELECT show_in_chat
+        FROM user_workspace_hook_preferences
+        WHERE workspace_id = ? AND user_id = ? AND hook_id = ?
+      `).get(workspace.id, normalizedUserId, String(hookId));
+      if (preference?.show_in_chat != null) return preference.show_in_chat !== 0;
+      const assignment = getWorkspaceHookAssignment({ workspaceId: workspace.id, hookId });
+      if (assignment) return assignment.defaultShowInChat;
+      const legacyPreference = database.prepare(`
+        SELECT show_in_chat
+        FROM user_hook_preferences
+        WHERE user_id = ? AND hook_id = ?
+      `).get(normalizedUserId, String(hookId));
+      return legacyPreference?.show_in_chat !== 0;
+    },
+
     listAvailableHooksForUser: (userId) => {
       const rows = database
         .prepare(
@@ -1733,9 +2422,17 @@ export function createHookConfigService({
       return { hookId, showInChat };
     },
 
-    getUserHookChatVisibility: ({ userId, hookId }) => {
+    getUserHookChatVisibility: ({ userId, hookId, workspaceId = null, tenantId = null }) => {
       const normalizedUserId = Number(userId);
       if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0 || !hookId) return true;
+      if (workspaceId != null && workspaceId !== '') {
+        const workspaceHook = listAvailableHooksForContext({
+          userId: normalizedUserId,
+          tenantId,
+          workspaceId,
+        }).find((candidate) => candidate.id === String(hookId));
+        if (workspaceHook) return workspaceHook.showInChat !== false;
+      }
       const preference = database.prepare(`
         SELECT show_in_chat
         FROM user_hook_preferences
@@ -1911,23 +2608,75 @@ export function createHookConfigService({
       const hook = requireHook(hookId);
       const normalized = normalizeWithMcpIdentity(hook, { strict: true });
       validatePublishResources(normalized, hookMcpCatalog, validatedSkills);
-      database
-        .prepare(
-          `
-        UPDATE hooks
-        SET status = 'published', version = version + 1,
-            post_actions_json = ?,
-            published_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP, updated_by = ?
-        WHERE id = ?
-      `,
-        )
-        .run(JSON.stringify(normalized.postActions), userId, hookId);
-      return getHook(hookId);
+      const publish = database.transaction(() => {
+        database
+          .prepare(
+            `
+          UPDATE hooks
+          SET status = 'published', version = version + 1,
+              post_actions_json = ?,
+              published_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          WHERE id = ?
+        `,
+          )
+          .run(JSON.stringify(normalized.postActions), userId, hookId);
+        const published = getHook(hookId);
+        database.prepare(`
+          INSERT INTO hook_published_versions (
+            hook_id, version, config_json, resource_refs_json,
+            published_by, published_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run(
+          published.id,
+          published.version,
+          JSON.stringify(publishedHookConfig(published)),
+          JSON.stringify(collectPublishedHookResourceRefs(published, hookMcpCatalog, validatedSkills)),
+          userId,
+          published.publishedAt,
+        );
+        return published;
+      });
+      return publish();
     },
 
     deleteHook: (hookId) => {
-      requireHook(hookId);
+      const hook = requireHook(hookId);
+      const referencingTemplates = hasTable(database, 'agent_templates')
+        ? database.prepare(`
+          SELECT id, name, hook_refs_json
+          FROM agent_templates
+          WHERE status IN ('draft', 'published')
+          ORDER BY updated_at DESC, id DESC
+        `).all().filter((template) => {
+          const refs = parseJson(template.hook_refs_json, []);
+          return Array.isArray(refs) && refs.some((ref) => (
+            String(ref?.hookId ?? ref?.hook_id ?? '').trim() === String(hookId)
+          ));
+        })
+        : [];
+      if (referencingTemplates.length > 0) {
+        const names = referencingTemplates
+          .slice(0, 3)
+          .map((template) => `“${template.name || `#${template.id}`}”`)
+          .join('、');
+        const remaining = referencingTemplates.length - 3;
+        throw createHttpError(
+          `Hook “${hook.name}”仍被 ${referencingTemplates.length} 个草稿或已发布 Agent 模板引用（${names}${remaining > 0 ? `等 ${referencingTemplates.length} 个模板` : ''}）。请先从这些模板中移除该 Hook，再删除。`,
+          409,
+        );
+      }
+      const assignedWorkspaceCount = Number(database.prepare(`
+        SELECT COUNT(DISTINCT workspace_id) AS count
+        FROM workspace_hook_assignments
+        WHERE hook_id = ?
+      `).get(String(hookId))?.count || 0);
+      if (assignedWorkspaceCount > 0) {
+        throw createHttpError(
+          `Hook is installed in ${assignedWorkspaceCount} workspace(s) and cannot be deleted`,
+          409,
+        );
+      }
       const result = database.prepare('DELETE FROM hooks WHERE id = ?').run(hookId);
       if (result.changes === 0) throw createHttpError('Hook not found', 404);
       return true;

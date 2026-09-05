@@ -128,30 +128,38 @@ async function scanSkillDirectory(directory, relativeDirectory = '') {
   return files;
 }
 
-async function describeSkill(skill) {
+export async function describeHookSkillSource(skill) {
   const sourceDirectory = path.dirname(skill.manifestPath);
   const files = await scanSkillDirectory(sourceDirectory);
   if (files.length > MAX_SKILL_FILES) {
     throw createResourceError(`Hook Skill ${skill.name} exceeds ${MAX_SKILL_FILES} files`);
   }
-  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  const filesWithContent = await Promise.all(files.map(async (file) => ({
+    ...file,
+    content: await fs.readFile(file.absolutePath),
+  })));
+  const totalBytes = filesWithContent.reduce((total, file) => total + file.content.length, 0);
   if (totalBytes > MAX_SKILL_BYTES) {
     throw createResourceError(`Hook Skill ${skill.name} exceeds ${MAX_SKILL_BYTES} bytes`);
   }
   const hash = crypto.createHash('sha256');
-  for (const file of files) {
+  for (const file of filesWithContent) {
     hash.update(file.relativePath.split(path.sep).join('/'));
     hash.update('\0');
     hash.update(String(file.mode));
     hash.update('\0');
-    hash.update(await fs.readFile(file.absolutePath));
+    hash.update(file.content);
     hash.update('\0');
   }
-  return { sourceDirectory, files, totalBytes, contentHash: hash.digest('hex') };
+  return {
+    sourceDirectory,
+    files: filesWithContent,
+    totalBytes,
+    contentHash: hash.digest('hex'),
+  };
 }
 
-async function materializeSkill({ workspaceRoot, skill }) {
-  const description = await describeSkill(skill);
+async function materializeSkill({ workspaceRoot, skill, description }) {
   const skillKey = safeSegment(skill.skillId, safeSegment(skill.name, 'skill'));
   const skillRoot = path.join(workspaceRoot, HOOK_CONFIG_DIRECTORY, 'skills', skillKey);
   const targetDirectory = path.join(skillRoot, description.contentHash);
@@ -174,7 +182,7 @@ async function materializeSkill({ workspaceRoot, skill }) {
     for (const file of description.files) {
       const destination = path.join(stagingDirectory, file.relativePath);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: MATERIALIZED_DIRECTORY_MODE });
-      await fs.copyFile(file.absolutePath, destination);
+      await fs.writeFile(destination, file.content, { mode: materializedFileMode(file.mode) });
       await fs.chmod(destination, materializedFileMode(file.mode));
     }
     await fs.writeFile(path.join(stagingDirectory, '.ccui-resource.json'), `${JSON.stringify({
@@ -219,6 +227,32 @@ function resolveActionMcpServerIds(hook, catalog) {
   return [...serverIds];
 }
 
+function resolveActionMcpTools(hook, catalog) {
+  const tools = catalog.listToolResources();
+  const selected = new Map();
+  for (const action of hook?.postActions || []) {
+    if (!['call_mcp_tool', 'mcp_loop_run'].includes(action.type)) continue;
+    const name = action.type === 'mcp_loop_run'
+      ? String(hook?.matcher?.value || '')
+      : String(action.config?.toolName || '');
+    if (!name) continue;
+    const explicitServerId = action.type === 'call_mcp_tool'
+      ? String(action.config?.mcpServerId || '')
+      : '';
+    const tool = tools.find((candidate) => (
+      candidate.name === name
+      && (!explicitServerId || candidate.mcpServerId === explicitServerId)
+    ));
+    if (!tool) throw createResourceError(`Hook MCP tool ${name} is unavailable`);
+    selected.set(`${tool.mcpServerId}\0${tool.name}`, {
+      name: tool.name,
+      toolName: tool.name,
+      mcpServerId: tool.mcpServerId,
+    });
+  }
+  return [...selected.values()];
+}
+
 async function materializeMcpManifest({ workspaceRoot, server }) {
   const serverDirectory = path.join(
     workspaceRoot,
@@ -256,37 +290,151 @@ export function createHookWorkspaceResourcesService({
   hookMcpCatalog = hookMcpCatalogService,
   skillLoader = loadBuiltinHookSkill,
 } = {}) {
-  async function materializeHook({ hook, workspacePath }) {
+  const preparedPlans = new WeakMap();
+
+  function validatePreparedResources(hook, resources) {
+    const expected = hook?.resourceRefs;
+    if (!expected || typeof expected !== 'object') return;
+    for (const expectedSkill of Array.isArray(expected.skills) ? expected.skills : []) {
+      const skillId = typeof expectedSkill === 'string'
+        ? expectedSkill
+        : String(expectedSkill?.skillId || '');
+      if (!skillId) continue;
+      const actual = resources.skills.find((skill) => skill.skillId === skillId);
+      if (!actual) throw createResourceError(`Published Hook Skill ${skillId} could not be resolved`);
+      const expectedVersion = typeof expectedSkill === 'object' && expectedSkill != null
+        ? Number(expectedSkill.version)
+        : NaN;
+      if (
+        Number.isFinite(expectedVersion)
+        && expectedVersion > 0
+        && Number(actual.version) !== expectedVersion
+      ) {
+        throw createResourceError(`Published Hook Skill ${skillId} version has changed`);
+      }
+      const expectedHash = typeof expectedSkill === 'object' && expectedSkill != null
+        ? String(expectedSkill.contentHash || '')
+        : '';
+      if (expectedHash && actual.contentHash !== expectedHash) {
+        throw createResourceError(`Published Hook Skill ${skillId} content has changed`);
+      }
+    }
+    for (const expectedServer of Array.isArray(expected.mcpServers) ? expected.mcpServers : []) {
+      const serverId = typeof expectedServer === 'string'
+        ? expectedServer
+        : String(expectedServer?.id || '');
+      if (!serverId) continue;
+      const actual = resources.mcpServers.find((server) => server.id === serverId);
+      if (!actual) throw createResourceError(`Published Hook MCP server ${serverId} could not be resolved`);
+      const expectedHash = typeof expectedServer === 'object' && expectedServer != null
+        ? String(expectedServer.contentHash || '')
+        : '';
+      if (expectedHash && actual.contentHash !== expectedHash) {
+        throw createResourceError(`Published Hook MCP server ${serverId} configuration has changed`);
+      }
+    }
+    for (const expectedTool of Array.isArray(expected.mcpTools) ? expected.mcpTools : []) {
+      const toolName = typeof expectedTool === 'string'
+        ? expectedTool
+        : String(expectedTool?.toolName || expectedTool?.name || '');
+      if (!toolName) continue;
+      const expectedServerId = typeof expectedTool === 'object' && expectedTool != null
+        ? String(expectedTool.mcpServerId || '')
+        : '';
+      const actual = resources.mcpTools.find((tool) => (
+        tool.toolName === toolName
+        && (!expectedServerId || tool.mcpServerId === expectedServerId)
+      ));
+      if (!actual) throw createResourceError(`Published Hook MCP tool ${toolName} is unavailable`);
+    }
+  }
+
+  async function prepareHook({ hook }) {
+    if (!hook?.id) throw createResourceError('Hook is required');
+    const skillPlans = [];
+    for (const action of hook.postActions || []) {
+      if (action.type !== 'invoke_skill') continue;
+      let skill;
+      try {
+        skill = await skillLoader({
+          skillId: action.config?.skillId,
+          skillName: action.config?.skillName,
+        });
+      } catch (error) {
+        if (error?.statusCode) throw error;
+        throw createResourceError(error?.message || 'Hook Skill is unavailable');
+      }
+      if (!skillPlans.some((candidate) => candidate.skill.skillId === skill.skillId)) {
+        let description;
+        try {
+          description = await describeHookSkillSource(skill);
+        } catch (error) {
+          if (error?.statusCode) throw error;
+          throw createResourceError(error?.message || `Hook Skill ${skill.name} is unavailable`);
+        }
+        skillPlans.push({ skill, description });
+      }
+    }
+
+    const mcpTools = resolveActionMcpTools(hook, hookMcpCatalog);
+    const serverIds = resolveActionMcpServerIds(hook, hookMcpCatalog);
+    const serverPlans = [];
+    for (const serverId of serverIds) {
+      const server = hookMcpCatalog.getServerById(serverId);
+      if (!server) throw createResourceError(`Hook MCP server ${serverId} is unavailable`);
+      const publicServer = hookMcpCatalog.listServers().find((candidate) => candidate.id === serverId);
+      serverPlans.push({ ...server, ...publicServer, helperScript: server.helperScript || null });
+    }
+
+    const resources = {
+      skills: skillPlans.map(({ skill, description }) => ({
+        skillId: skill.skillId,
+        name: skill.name,
+        version: Number(skill.version) || 0,
+        contentHash: description.contentHash,
+      })),
+      mcpServers: serverPlans.map((server) => ({ id: server.id, contentHash: server.contentHash })),
+      mcpTools,
+    };
+    validatePreparedResources(hook, resources);
+    preparedPlans.set(resources, {
+      hookId: hook.id,
+      hookVersion: Number(hook.version) || 0,
+      skillPlans,
+      serverPlans,
+    });
+    return resources;
+  }
+
+  async function materializeHook({ hook, workspacePath, preparedResources = null }) {
     if (!hook?.id) throw createResourceError('Hook is required');
     const requestedWorkspacePath = String(workspacePath || '').trim();
     if (!requestedWorkspacePath || !path.isAbsolute(requestedWorkspacePath)) {
       throw createResourceError('Workspace path must be absolute', 500);
     }
+    const resources = preparedResources || await prepareHook({ hook });
+    const plan = preparedPlans.get(resources);
+    if (
+      !plan
+      || plan.hookId !== hook.id
+      || plan.hookVersion !== (Number(hook.version) || 0)
+    ) {
+      throw createResourceError('Prepared Hook resources do not match this Hook');
+    }
+    // Re-run the cheap comparison immediately before the first workspace write.
+    // The prepared plan contains the exact Skill bytes and MCP configuration that
+    // passed validation, so later source changes cannot alter this installation.
+    validatePreparedResources(hook, resources);
     const workspaceRoot = path.resolve(requestedWorkspacePath);
     await ensureHookConfigRoot(workspaceRoot);
 
     const skills = [];
-    for (const action of hook.postActions || []) {
-      if (action.type !== 'invoke_skill') continue;
-      const skill = await skillLoader({
-        skillId: action.config?.skillId,
-        skillName: action.config?.skillName,
-      });
-      if (!skills.some((candidate) => candidate.skillId === skill.skillId)) {
-        skills.push(await materializeSkill({ workspaceRoot, skill }));
-      }
+    for (const { skill, description } of plan.skillPlans) {
+      skills.push(await materializeSkill({ workspaceRoot, skill, description }));
     }
-
-    const serverIds = resolveActionMcpServerIds(hook, hookMcpCatalog);
     const mcpServers = [];
-    for (const serverId of serverIds) {
-      const server = hookMcpCatalog.getServerById(serverId);
-      if (!server) throw createResourceError(`Hook MCP server ${serverId} is unavailable`);
-      const publicServer = hookMcpCatalog.listServers().find((candidate) => candidate.id === serverId);
-      mcpServers.push(await materializeMcpManifest({
-        workspaceRoot,
-        server: { ...server, ...publicServer, helperScript: server.helperScript || null },
-      }));
+    for (const server of plan.serverPlans) {
+      mcpServers.push(await materializeMcpManifest({ workspaceRoot, server }));
     }
 
     const hookDirectory = path.join(workspaceRoot, HOOK_CONFIG_DIRECTORY, 'hooks');
@@ -298,7 +446,12 @@ export function createHookWorkspaceResourcesService({
       mcpResources: mcpServers.map((server) => ({ id: server.id, contentHash: server.contentHash })),
       materializedAt: new Date().toISOString(),
     })}\n`, { mode: MATERIALIZED_FILE_MODE });
-    return { root: path.join(workspaceRoot, HOOK_CONFIG_DIRECTORY), skills, mcpServers };
+    return {
+      root: path.join(workspaceRoot, HOOK_CONFIG_DIRECTORY),
+      skills,
+      mcpServers,
+      mcpTools: resources.mcpTools,
+    };
   }
 
   async function materializeHooks({ hooks, workspacePath }) {
@@ -307,7 +460,7 @@ export function createHookWorkspaceResourcesService({
     return results;
   }
 
-  return { materializeHook, materializeHooks, resolveActionMcpServerIds };
+  return { prepareHook, materializeHook, materializeHooks, resolveActionMcpServerIds };
 }
 
 export const hookWorkspaceResourcesService = createHookWorkspaceResourcesService();

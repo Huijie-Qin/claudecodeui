@@ -48,6 +48,111 @@ test('configured Hooks are not registered for an internal Hook follow-up turn', 
   }, 7), null);
 });
 
+test('configured Hook runtime resolves project scope and excludes resource failures', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const seen = [];
+  const goodHook = {
+    id: 'good-hook',
+    resourceRefs: { skills: [] },
+    workspaceAssignment: { installStatus: 'ready' },
+  };
+  const brokenHook = {
+    id: 'broken-hook',
+    resourceRefs: { skills: [{ skillId: 'builtin:changed', contentHash: 'old-hash' }] },
+    workspaceAssignment: { installStatus: 'ready' },
+  };
+  const preparedByHook = new Map();
+  const result = await claudeSdk.resolveConfiguredHooksForRuntime({
+    hookConfigs: {
+      listEffectiveHooksForContext: (context) => {
+        seen.push(['context', context]);
+        return [goodHook, brokenHook];
+      },
+      listActiveHooksForUser: () => {
+        throw new Error('legacy fallback must not be used for a project context');
+      },
+      validatePublishedHookMaterialization: ({ hook }) => {
+        seen.push(['validate', hook.id]);
+        if (hook.id === brokenHook.id) {
+          const error = new Error('Hook Skill content has changed');
+          error.statusCode = 409;
+          throw error;
+        }
+      },
+      markWorkspaceHookAssignmentFailed: (input) => seen.push(['failed', input]),
+    },
+    hookResources: {
+      prepareHook: async ({ hook }) => {
+        const prepared = { skills: [], mcpServers: [] };
+        preparedByHook.set(hook.id, prepared);
+        seen.push(['prepare', hook.id]);
+        return prepared;
+      },
+      materializeHook: async ({ hook, workspacePath, preparedResources }) => {
+        assert.equal(preparedResources, preparedByHook.get(hook.id));
+        seen.push(['materialize', hook.id, workspacePath]);
+        return { root: `${workspacePath}/.cloudcli/hook-config` };
+      },
+    },
+    userId: 7,
+    tenantId: 8,
+    workspaceId: 9,
+    workspacePath: '/tmp/project-hook-runtime',
+    onMaterializeError: (hook, error) => seen.push(['error', hook.id, error.message]),
+  });
+
+  assert.deepEqual(result.hooks, [goodHook]);
+  assert.equal(result.materializedByHookId.has('good-hook'), true);
+  assert.equal(result.materializedByHookId.has('broken-hook'), false);
+  assert.deepEqual(seen, [
+    ['context', { userId: 7, tenantId: 8, workspaceId: 9 }],
+    ['prepare', 'good-hook'],
+    ['validate', 'good-hook'],
+    ['materialize', 'good-hook', '/tmp/project-hook-runtime'],
+    ['prepare', 'broken-hook'],
+    ['validate', 'broken-hook'],
+    ['failed', {
+      workspaceId: 9,
+      hookId: 'broken-hook',
+      error: 'Hook Skill content has changed',
+    }],
+    ['error', 'broken-hook', 'Hook Skill content has changed'],
+  ]);
+});
+
+test('transient workspace write failures do not permanently fail a ready Hook assignment', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const markedFailed = [];
+  const errors = [];
+  const hook = {
+    id: 'transient-hook',
+    resourceRefs: { skills: [] },
+    workspaceAssignment: { installStatus: 'ready' },
+  };
+  const result = await claudeSdk.resolveConfiguredHooksForRuntime({
+    hookConfigs: {
+      listEffectiveHooksForContext: () => [hook],
+      validatePublishedHookMaterialization: () => true,
+      markWorkspaceHookAssignmentFailed: (input) => markedFailed.push(input),
+    },
+    hookResources: {
+      prepareHook: async () => ({ skills: [], mcpServers: [], mcpTools: [] }),
+      materializeHook: async () => {
+        throw new Error('workspace is temporarily read-only');
+      },
+    },
+    userId: 7,
+    tenantId: 8,
+    workspaceId: 9,
+    workspacePath: '/tmp/project-hook-runtime',
+    onMaterializeError: (candidate, error) => errors.push([candidate.id, error.message]),
+  });
+
+  assert.deepEqual(result.hooks, []);
+  assert.deepEqual(markedFailed, []);
+  assert.deepEqual(errors, [['transient-hook', 'workspace is temporarily read-only']]);
+});
+
 test('Hook execution cards omit mcp loop scheduling metadata from action results', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const results = claudeSdk.createHookCardActionResults({

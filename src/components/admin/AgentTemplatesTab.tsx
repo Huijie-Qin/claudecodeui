@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, SlidersHorizontal, Sparkles, Tags, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Webhook, X } from 'lucide-react';
 
 import { api } from '../../utils/api';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
@@ -11,6 +11,36 @@ import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
 
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
+type HookRef = {
+  hookId: string;
+  version: number;
+  defaultEnabled: boolean;
+  showInChat: boolean;
+  allowUserDisable: boolean;
+  order: number;
+};
+type HookDependencySummary = {
+  skillCount?: number;
+  mcpCount?: number;
+  unavailableCount?: number;
+  available?: boolean;
+  capabilityTags?: string[];
+};
+type HookCatalogItem = {
+  id: string;
+  name: string;
+  description?: string;
+  eventName?: string;
+  version: number;
+  postActionTypes?: string[];
+  capabilityTags?: string[];
+  dependencySummary?: HookDependencySummary;
+  available: boolean;
+  unavailableReason?: string;
+  status?: string;
+  bindingController?: string;
+  selectedFallback?: boolean;
+};
 type MarketSkill = {
   id?: string;
   skillId?: string;
@@ -50,11 +80,12 @@ type AgentTemplate = {
   tenantIds: number[];
   skillPresetRefs: PresetRef[];
   mcpPresetRefs: PresetRef[];
+  hookRefs: HookRef[];
   globalVisible: boolean;
   status: 'draft' | 'published' | 'disabled';
   unavailableCapabilities?: Array<{
-    type: 'skill' | 'mcp';
-    id: number;
+    type: 'skill' | 'mcp' | 'hook';
+    id: number | string;
     name: string;
     unavailableReason?: string;
   }>;
@@ -75,7 +106,7 @@ type SkillCandidate = Preset & {
   lastValidationStatus?: string | null;
   marketSkill?: MarketSkill;
 };
-type Catalog = { skills: SkillCandidate[]; mcps: Preset[] };
+type Catalog = { skills: SkillCandidate[]; mcps: Preset[]; hooks: HookCatalogItem[] };
 type TemplateCategory = { id: number; name: string; templateCount: number };
 type Toast = { type: 'success' | 'error'; message: string } | null;
 type CategoryFeedback = { type: 'success' | 'error'; message: string } | null;
@@ -93,6 +124,47 @@ function normalizePresetRef(ref: PresetRef): PresetRef {
   };
 }
 
+function normalizeHookRef(ref: Partial<HookRef>, index: number): HookRef | null {
+  const hookId = String(ref.hookId || '').trim();
+  if (!hookId) return null;
+  const version = Number(ref.version);
+  const order = Number(ref.order);
+  return {
+    hookId,
+    version: Number.isInteger(version) && version > 0 ? version : 1,
+    defaultEnabled: ref.defaultEnabled !== false,
+    showInChat: ref.showInChat !== false,
+    allowUserDisable: ref.allowUserDisable !== false,
+    order: Number.isFinite(order) ? order : (index + 1) * 10,
+  };
+}
+
+function normalizeHookCatalog(payload: { hooks?: HookCatalogItem[] }): HookCatalogItem[] {
+  return (payload.hooks || []).flatMap((hook) => {
+    const id = String(hook.id || '').trim();
+    if (!id || hook.status && hook.status !== 'published' || hook.bindingController === 'sql_check') return [];
+    const version = Number(hook.version);
+    const dependencySummary = hook.dependencySummary && typeof hook.dependencySummary === 'object'
+      ? hook.dependencySummary
+      : undefined;
+    const unavailableCount = Number(dependencySummary?.unavailableCount || 0);
+    const available = hook.available !== false
+      && dependencySummary?.available !== false
+      && unavailableCount === 0;
+    return [{
+      ...hook,
+      id,
+      name: String(hook.name || id),
+      description: String(hook.description || ''),
+      version: Number.isInteger(version) && version > 0 ? version : 1,
+      postActionTypes: Array.isArray(hook.postActionTypes) ? hook.postActionTypes.map(String) : [],
+      capabilityTags: Array.isArray(hook.capabilityTags) ? hook.capabilityTags.map(String) : [],
+      dependencySummary,
+      available,
+    }];
+  });
+}
+
 function normalizeTemplate(template: AgentTemplate): AgentTemplate {
   return {
     ...template,
@@ -104,6 +176,10 @@ function normalizeTemplate(template: AgentTemplate): AgentTemplate {
       .filter((ref) => ref.tenantId && ref.presetId),
     mcpPresetRefs: (template.mcpPresetRefs || []).map(normalizePresetRef)
       .filter((ref) => ref.tenantId && ref.presetId),
+    hookRefs: (template.hookRefs || [])
+      .map((ref, index) => normalizeHookRef(ref, index))
+      .filter((ref): ref is HookRef => ref !== null)
+      .sort((left, right) => left.order - right.order),
   };
 }
 
@@ -118,6 +194,7 @@ function normalizeCatalog(payload: { skills?: Preset[]; mcps?: Preset[] }): Cata
       .filter((preset) => preset.id && preset.tenantId)
       .map((preset) => ({ ...preset, sourceRef: preset.name, presetId: preset.id, status: 'published' })),
     mcps: (payload.mcps || []).map(normalizePreset).filter((preset) => preset.id && preset.tenantId),
+    hooks: [],
   };
 }
 
@@ -203,6 +280,7 @@ const EMPTY_TEMPLATE: Omit<AgentTemplate, 'id'> = {
   tenantIds: [],
   skillPresetRefs: [],
   mcpPresetRefs: [],
+  hookRefs: [],
   globalVisible: false,
   status: 'draft',
 };
@@ -242,7 +320,7 @@ export default function AgentTemplatesTab({
   const [tenantFilterSearch, setTenantFilterSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [catalogTenantId, setCatalogTenantId] = useState<number | null>(normalizedCurrentTenantId || activeTenants[0]?.id || null);
-  const [catalog, setCatalog] = useState<Catalog>({ skills: [], mcps: [] });
+  const [catalog, setCatalog] = useState<Catalog>({ skills: [], mcps: [], hooks: [] });
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -314,26 +392,29 @@ export default function AgentTemplatesTab({
 
   useEffect(() => {
     if (!isEditing || !catalogTenantId) {
-      setCatalog({ skills: [], mcps: [] });
+      setCatalog({ skills: [], mcps: [], hooks: [] });
       setIsCatalogLoading(false);
       return;
     }
     let cancelled = false;
-    setCatalog({ skills: [], mcps: [] });
+    setCatalog({ skills: [], mcps: [], hooks: [] });
     setIsCatalogLoading(true);
     void Promise.allSettled([
       api.admin.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
+      api.admin.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
       api.admin.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
       api.admin.skillPresets(catalogTenantId).then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
     ])
-      .then(([presetResult, marketResult, presetListResult]) => {
+      .then(([presetResult, hookResult, marketResult, presetListResult]) => {
         if (cancelled) return;
         const presetCatalog = presetResult.status === 'fulfilled' ? presetResult.value : {};
+        const hookCatalog = hookResult.status === 'fulfilled' ? hookResult.value : {};
         const marketCatalog = marketResult.status === 'fulfilled' ? marketResult.value : {};
         const presetPayload = presetListResult.status === 'fulfilled' ? presetListResult.value : {};
         const normalized = normalizeCatalog(presetCatalog);
         setCatalog({
           ...normalized,
+          hooks: normalizeHookCatalog(hookCatalog),
           skills: buildSkillCandidates({
             tenantId: catalogTenantId,
             marketSkills: marketCatalog.skills || [],
@@ -343,6 +424,7 @@ export default function AgentTemplatesTab({
         });
         const failedCatalogLabels = [
           ...(presetResult.status === 'rejected' ? ['Skill 与 MCP'] : []),
+          ...(hookResult.status === 'rejected' ? ['Hook'] : []),
           ...(marketResult.status === 'rejected' ? ['技能市场'] : []),
           ...(presetListResult.status === 'rejected' ? ['Skill 预置'] : []),
         ];
@@ -415,6 +497,41 @@ export default function AgentTemplatesTab({
     update(kind, selected
       ? refs.filter((ref) => !(ref.tenantId === preset.tenantId && ref.presetId === preset.id))
       : [...refs, { tenantId: preset.tenantId, presetId: preset.id }]);
+  };
+
+  const toggleHook = (hook: HookCatalogItem) => {
+    if (!editing) return;
+    const selected = editing.hookRefs.some((ref) => ref.hookId === hook.id);
+    if (selected) {
+      update('hookRefs', editing.hookRefs.filter((ref) => ref.hookId !== hook.id));
+      return;
+    }
+    const nextOrder = editing.hookRefs.reduce((maximum, ref) => Math.max(maximum, ref.order), 0) + 10;
+    update('hookRefs', [...editing.hookRefs, {
+      hookId: hook.id,
+      version: hook.version,
+      defaultEnabled: true,
+      showInChat: true,
+      allowUserDisable: true,
+      order: nextOrder,
+    }]);
+  };
+
+  const updateHookPreference = (
+    hookId: string,
+    key: 'defaultEnabled' | 'showInChat' | 'allowUserDisable',
+    value: boolean,
+  ) => {
+    if (!editing) return;
+    update('hookRefs', editing.hookRefs.map((ref) => (
+      ref.hookId === hookId
+        ? {
+          ...ref,
+          [key]: value,
+          ...(key === 'defaultEnabled' && !value ? { allowUserDisable: true } : {}),
+        }
+        : ref
+    )));
   };
 
   const saveMcpToolSettings = (preset: Preset, toolSettings: McpTemplateToolSettings) => {
@@ -631,7 +748,7 @@ export default function AgentTemplatesTab({
       <>
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">为不同租户预配置 CLAUDE.md、Skills、MCP 和引导语。</p></div>
+            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">为不同租户预配置 CLAUDE.md、Skills、MCP、Hooks 和引导语。</p></div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => { setCategoryFeedback(null); setCategoryDialogOpen(true); }}><Tags className="h-4 w-4" />分类管理</Button>
               <Button onClick={beginCreate} disabled={activeTenants.length === 0}><Plus className="h-4 w-4" />新建模板</Button>
@@ -682,12 +799,15 @@ export default function AgentTemplatesTab({
               const tenantNames = template.tenantIds
                 .map((id) => activeTenants.find((tenant) => tenant.id === id)?.name)
                 .filter(Boolean);
+              const unavailableHooks = (template.unavailableCapabilities || [])
+                .filter((capability) => capability.type === 'hook');
+              const otherUnavailableCount = (template.unavailableCapabilities?.length || 0) - unavailableHooks.length;
               const actionLoading = actionTemplateId === template.id;
               return (
                 <div key={template.id} className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/30">
                   <button type="button" onClick={() => beginEdit(template)} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></span>
-                    <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span>{template.unavailableCapabilities?.length ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{template.unavailableCapabilities.length} 项能力不可用</span> : null}</span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
+                    <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span>{template.hookRefs.length ? <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"><Webhook className="h-3 w-3" />{template.hookRefs.length} Hooks</span> : null}{unavailableHooks.length ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{unavailableHooks.length} Hook 不可用</span> : null}{otherUnavailableCount > 0 ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{otherUnavailableCount} 项能力不可用</span> : null}</span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
                     <span className={cn('rounded-full px-2.5 py-1 text-xs', template.status === 'published' ? 'bg-emerald-100 text-emerald-700' : template.status === 'disabled' ? 'bg-amber-100 text-amber-700' : 'bg-muted text-muted-foreground')}>{statusLabel(template.status)}</span>
                   </button>
                   <div className="flex shrink-0 items-center gap-1">
@@ -761,7 +881,7 @@ export default function AgentTemplatesTab({
       </section>
 
       <section className="space-y-5 rounded-lg border border-border bg-card p-5">
-        <div><h3 className="font-semibold text-foreground">Skills 与 MCP</h3><p className="mt-1 text-sm text-muted-foreground">先指定可见租户，再从该租户技能市场选择 Skill，并选择已发布的 MCP。模板只保存引用，不保存密钥。</p></div>
+        <div><h3 className="font-semibold text-foreground">Skills、MCP 与 Hooks</h3><p className="mt-1 text-sm text-muted-foreground">先指定可见租户，再选择该租户可用的 Skill、MCP 和已发布 Hook。模板只保存引用与启用偏好，不保存密钥或 Hook 脚本。</p></div>
         <div>
           <div className="mb-2 text-sm font-medium text-foreground">指定租户</div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -783,6 +903,16 @@ export default function AgentTemplatesTab({
             <div className="grid gap-5 lg:grid-cols-2">
               <PresetList key={`${selectedCatalogTenant.id}:skills`} title="Skills" itemLabel="Skill" emptyText="该租户技能市场暂无可用 Skill" presets={catalog.skills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
               <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => setConfiguringMcp(preset)} />
+            </div>
+            <div className="border-t border-border pt-5">
+              <HookList
+                key={`${selectedCatalogTenant.id}:hooks`}
+                hooks={catalog.hooks}
+                refs={editing.hookRefs}
+                unavailableCapabilities={editing.unavailableCapabilities || []}
+                onToggle={toggleHook}
+                onPreferenceChange={updateHookPreference}
+              />
             </div>
           </div>
         ) : <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">请先选择至少一个租户</div>}
@@ -876,7 +1006,7 @@ function DeleteTemplateDialog({
       <DialogContent className="max-w-md p-5">
         <DialogTitle>删除 Agent 模板</DialogTitle>
         <h3 className="font-semibold text-foreground">确认删除模板？</h3>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">将从管理端永久删除“{template?.name}”。已有项目中保存的 CLAUDE.md、Skills、MCP 和引导语快照不会受到影响。此操作不可恢复。</p>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">将从管理端永久删除“{template?.name}”。已有项目中保存的 CLAUDE.md、Skills、MCP、Hooks 和引导语快照不会受到影响。此操作不可恢复。</p>
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" disabled={isDeleting} onClick={onClose}>取消</Button>
           <Button variant="destructive" disabled={isDeleting} onClick={onConfirm}>{isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}确认删除</Button>
@@ -893,6 +1023,152 @@ function ToastNotice({ toast, onClose }: { toast: Toast; onClose: () => void }) 
       {toast.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <X className="h-4 w-4" />}
       <span className="flex-1">{toast.message}</span>
       <button type="button" onClick={onClose} className="rounded p-0.5 hover:bg-white/10" aria-label="关闭提示"><X className="h-4 w-4" /></button>
+    </div>
+  );
+}
+
+const HOOK_ACTION_LABELS: Record<string, string> = {
+  call_mcp_tool: '调用 MCP',
+  mcp_loop_run: 'MCP 循环任务',
+  write_record: '写入记录',
+  invoke_skill: '执行 Skill',
+  send_agent_message: '追加对话',
+};
+
+function getHookCapabilityTags(hook: HookCatalogItem) {
+  const tags = new Set<string>();
+  for (const tag of hook.capabilityTags || []) {
+    const normalized = String(tag || '').trim();
+    if (normalized) tags.add(normalized);
+  }
+  if (tags.size === 0) {
+    for (const actionType of hook.postActionTypes || []) {
+      tags.add(HOOK_ACTION_LABELS[actionType] || actionType);
+    }
+  }
+  const skillCount = Number(hook.dependencySummary?.skillCount || 0);
+  const mcpCount = Number(hook.dependencySummary?.mcpCount || 0);
+  if (skillCount > 0) tags.add(`${skillCount} 个 Hook Skill`);
+  if (mcpCount > 0) tags.add(`${mcpCount} 个 Hook MCP`);
+  return [...tags].slice(0, 6);
+}
+
+function HookList({
+  hooks,
+  refs,
+  unavailableCapabilities,
+  onToggle,
+  onPreferenceChange,
+}: {
+  hooks: HookCatalogItem[];
+  refs: HookRef[];
+  unavailableCapabilities: NonNullable<AgentTemplate['unavailableCapabilities']>;
+  onToggle: (hook: HookCatalogItem) => void;
+  onPreferenceChange: (hookId: string, key: 'defaultEnabled' | 'showInChat' | 'allowUserDisable', value: boolean) => void;
+}) {
+  const [searchText, setSearchText] = useState('');
+  const [viewMode, setViewMode] = useState<'all' | 'selected'>('all');
+  const items = useMemo(() => {
+    const byId = new Map(hooks.map((hook) => [hook.id, hook]));
+    const unavailableById = new Map(unavailableCapabilities
+      .filter((capability) => capability.type === 'hook')
+      .map((capability) => [String(capability.id), capability]));
+    for (const ref of refs) {
+      if (byId.has(ref.hookId)) continue;
+      const unavailable = unavailableById.get(ref.hookId);
+      byId.set(ref.hookId, {
+        id: ref.hookId,
+        name: unavailable?.name || `Hook ${ref.hookId.slice(0, 8)}`,
+        description: unavailable
+          ? '该 Hook 已下线、被删除，或不适用于当前租户。保留在已选列表中，您可以将其移除。'
+          : '该模板已锁定历史发布版本，后续 Hook 编辑不会改变已发布模板的行为。',
+        version: ref.version,
+        available: !unavailable,
+        unavailableReason: unavailable?.unavailableReason,
+        selectedFallback: true,
+      });
+    }
+    return [...byId.values()].map((hook) => {
+      const ref = refs.find((candidate) => candidate.hookId === hook.id);
+      const unavailable = ref ? unavailableById.get(hook.id) : undefined;
+      return {
+        hook: unavailable ? {
+          ...hook,
+          available: false,
+          unavailableReason: unavailable.unavailableReason || hook.unavailableReason || '当前 Hook 不可用',
+        } : hook,
+        ref,
+      };
+    });
+  }, [hooks, refs, unavailableCapabilities]);
+  const selectedCount = refs.length;
+  const normalizedSearch = searchText.trim().toLocaleLowerCase();
+  const visibleItems = items.filter(({ hook, ref }) => {
+    if (viewMode === 'selected' && !ref) return false;
+    if (!normalizedSearch) return true;
+    return [hook.name, hook.description, hook.eventName, ...getHookCapabilityTags(hook)]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase()
+      .includes(normalizedSearch);
+  });
+  const noResultsText = viewMode === 'selected'
+    ? '当前租户暂无已选 Hook'
+    : normalizedSearch ? '没有匹配的 Hook' : '该租户暂无可用于 Agent 模板的已发布 Hook';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground"><Webhook className="h-4 w-4 text-primary" />Hooks</h4>
+          <p className="mt-1 text-xs text-muted-foreground">Hook 会在当前项目的指定事件中自动执行；脚本和资源仍由 Hook 配置统一管理。</p>
+        </div>
+        <span className="text-xs text-muted-foreground">已选 {selectedCount} / {items.length}</span>
+      </div>
+      <div className="grid grid-cols-2 rounded-md bg-muted p-1">
+        <button type="button" onClick={() => setViewMode('all')} className={cn('rounded px-3 py-1.5 text-xs font-medium transition-colors', viewMode === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>全部 ({items.length})</button>
+        <button type="button" onClick={() => setViewMode('selected')} className={cn('rounded px-3 py-1.5 text-xs font-medium transition-colors', viewMode === 'selected' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>已选 ({selectedCount})</button>
+      </div>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索 Hook 名称、事件或能力" className="pl-9" aria-label="搜索 Hook" />
+        {searchText ? <button type="button" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="清空 Hook 搜索"><X className="h-3.5 w-3.5" /></button> : null}
+      </div>
+      <div className="max-h-[36rem] space-y-2 overflow-y-auto pr-1">
+        {visibleItems.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{noResultsText}</div>
+        ) : visibleItems.map(({ hook, ref }) => {
+          const selected = Boolean(ref);
+          const unavailable = !hook.available;
+          const dependencyUnavailableCount = Number(hook.dependencySummary?.unavailableCount || 0);
+          const capabilityTags = getHookCapabilityTags(hook);
+          return (
+            <div key={hook.id} className={cn('overflow-hidden rounded-md border', selected ? 'border-primary bg-primary/5' : unavailable ? 'border-amber-500/40 bg-amber-500/5' : 'border-border hover:bg-muted/30')}>
+              <button type="button" disabled={unavailable && !selected} onClick={() => onToggle(hook)} className="flex w-full items-start gap-3 px-3 py-3 text-left disabled:cursor-not-allowed disabled:opacity-70">
+                <span className={cn('mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{selected ? <Check className="h-3.5 w-3.5" /> : null}</span>
+                <span className="min-w-0 flex-1 space-y-1.5">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium text-foreground">{hook.name}</span>
+                    {hook.eventName ? <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{hook.eventName}</span> : null}
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">v{ref?.version || hook.version}</span>
+                    {unavailable ? <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />依赖不可用</span> : hook.selectedFallback ? <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"><CheckCircle2 className="h-3 w-3" />已锁定历史版本</span> : <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"><CheckCircle2 className="h-3 w-3" />依赖正常</span>}
+                  </span>
+                  {hook.description ? <span className="block text-xs leading-5 text-muted-foreground">{hook.description}</span> : null}
+                  {capabilityTags.length ? <span className="flex flex-wrap gap-1">{capabilityTags.map((tag) => <span key={tag} className="rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</span> : null}
+                  {unavailable ? <span className="block text-xs text-amber-700 dark:text-amber-300">{hook.unavailableReason || (dependencyUnavailableCount > 0 ? `${dependencyUnavailableCount} 项依赖不可用` : '当前 Hook 不可用')}</span> : null}
+                </span>
+              </button>
+              {ref ? (
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-background/60 px-11 py-2.5">
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground"><input type="checkbox" checked={ref.defaultEnabled} onChange={(event) => onPreferenceChange(hook.id, 'defaultEnabled', event.target.checked)} className="h-4 w-4 rounded border-input accent-primary" />创建后默认启用</label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground"><input type="checkbox" checked={ref.showInChat} onChange={(event) => onPreferenceChange(hook.id, 'showInChat', event.target.checked)} className="h-4 w-4 rounded border-input accent-primary" />在对话中展示</label>
+                  <label className={cn('flex items-center gap-2 text-xs', ref.defaultEnabled ? 'cursor-pointer text-foreground' : 'cursor-not-allowed text-muted-foreground')}><input type="checkbox" checked={ref.allowUserDisable} disabled={!ref.defaultEnabled} onChange={(event) => onPreferenceChange(hook.id, 'allowUserDisable', event.target.checked)} className="h-4 w-4 rounded border-input accent-primary disabled:cursor-not-allowed" />允许用户关闭</label>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

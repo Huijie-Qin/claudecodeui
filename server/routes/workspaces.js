@@ -145,7 +145,11 @@ export function createWorkspacesRouter({
       return res.json({
         workspaceId: workspace.id,
         accessRole,
-        hooks: hookConfigs.listAvailableHooksForUser(req.user.id),
+        hooks: hookConfigs.listAvailableHooksForContext({
+          userId: req.user.id,
+          tenantId: workspace.tenant_id,
+          workspaceId: workspace.id,
+        }),
       });
     } catch (error) {
       return sendRouteError(res, error);
@@ -160,7 +164,11 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
-      const availableHook = hookConfigs.listAvailableHooksForUser(req.user.id)
+      const availableHook = hookConfigs.listAvailableHooksForContext({
+        userId: req.user.id,
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+      })
         .find((hook) => hook.id === req.params.hookId);
       if (!availableHook) {
         const error = new Error('Hook is not available to this user');
@@ -197,18 +205,76 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
-      const availableHook = hookConfigs.listAvailableHooksForUser(req.user.id)
+      const availableHook = hookConfigs.listAvailableHooksForContext({
+        userId: req.user.id,
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+      })
         .find((hook) => hook.id === req.params.hookId);
       if (!availableHook) {
         const error = new Error('Hook is not available to this user');
         error.statusCode = 403;
         throw error;
       }
-      if (req.body?.enabled === true) {
-        const hook = hookConfigs.getHook(req.params.hookId);
-        await hookResources.materializeHook({ hook, workspacePath: workspace.path });
+      const needsMaterialization = req.body?.enabled === true && (
+        !availableHook.workspaceAssignment
+        || availableHook.workspaceAssignment.installStatus !== 'ready'
+      );
+      if (needsMaterialization && accessRole !== 'owner') {
+        const error = new Error('Only workspace owner can install Hook resources');
+        error.statusCode = 403;
+        throw error;
       }
-      const result = hookConfigs.setUserHookEnabled({
+      if (needsMaterialization) {
+        try {
+          const preparedResources = typeof hookResources.prepareHook === 'function'
+            ? await hookResources.prepareHook({ hook: availableHook })
+            : null;
+          if (availableHook.resourceRefs && !preparedResources) {
+            const error = new Error('Hook resource service cannot safely validate the published resource snapshot');
+            error.statusCode = 409;
+            throw error;
+          }
+          if (
+            preparedResources
+            && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+          ) {
+            hookConfigs.validatePublishedHookMaterialization({
+              hook: availableHook,
+              resources: preparedResources,
+            });
+          }
+          const resources = await hookResources.materializeHook({
+            hook: availableHook,
+            workspacePath: workspace.path,
+            ...(preparedResources ? { preparedResources } : {}),
+          });
+          if (
+            !preparedResources
+            && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+          ) {
+            hookConfigs.validatePublishedHookMaterialization({ hook: availableHook, resources });
+          }
+          if (availableHook.workspaceAssignment) {
+            hookConfigs.markWorkspaceHookAssignmentReady({
+              workspaceId: workspace.id,
+              hookId: availableHook.id,
+            });
+          }
+        } catch (error) {
+          if (availableHook.workspaceAssignment) {
+            hookConfigs.markWorkspaceHookAssignmentFailed({
+              workspaceId: workspace.id,
+              hookId: availableHook.id,
+              error: error?.message,
+            });
+          }
+          throw error;
+        }
+      }
+      const result = hookConfigs.setWorkspaceUserHookEnabled({
+        workspaceId: workspace.id,
+        tenantId: workspace.tenant_id,
         userId: req.user.id,
         hookId: req.params.hookId,
         enabled: req.body?.enabled,
@@ -227,14 +293,20 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
-      const availableHook = hookConfigs.listAvailableHooksForUser(req.user.id)
+      const availableHook = hookConfigs.listAvailableHooksForContext({
+        userId: req.user.id,
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+      })
         .find((hook) => hook.id === req.params.hookId);
       if (!availableHook) {
         const error = new Error('Hook is not available to this user');
         error.statusCode = 403;
         throw error;
       }
-      const result = hookConfigs.setUserHookChatVisibility({
+      const result = hookConfigs.setWorkspaceUserHookChatVisibility({
+        workspaceId: workspace.id,
+        tenantId: workspace.tenant_id,
         userId: req.user.id,
         hookId: req.params.hookId,
         showInChat: req.body?.showInChat,

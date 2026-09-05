@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Box, Check, Minus, Plug, Sparkles } from 'lucide-react';
+import { Box, Check, Minus, Plug, Sparkles, Webhook } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 import type { AgentTemplateOption } from '../types';
@@ -161,8 +161,17 @@ export default function AgentTemplatePicker({
                       <div><div className="text-sm font-medium text-gray-800 dark:text-gray-100">{mcp.name}</div><div className="text-xs text-gray-500">MCP</div></div>
                     </div>
                   ))}
-                  {selected.skills.length === 0 && selected.mcps.length === 0 ? (
-                    <div className="col-span-full rounded-lg border border-dashed border-gray-200 px-3 py-5 text-center text-sm text-gray-500 dark:border-gray-700">该模板未配置 Skill 或 MCP</div>
+                  {(selected.hooks || []).map((hook) => (
+                    <div key={`hook-${hook.id}`} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+                      <Webhook className="h-4 w-4 text-violet-600" />
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{hook.name}</div>
+                        <div className="text-xs text-gray-500">自动化能力{hook.eventName ? ` · ${hook.eventName}` : ''}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {selected.skills.length === 0 && selected.mcps.length === 0 && (selected.hooks || []).length === 0 ? (
+                    <div className="col-span-full rounded-lg border border-dashed border-gray-200 px-3 py-5 text-center text-sm text-gray-500 dark:border-gray-700">该模板暂未配置扩展能力</div>
                   ) : null}
                 </div>
               </div>

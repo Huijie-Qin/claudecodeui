@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createHookWorkspaceResourcesService } from './hook-workspace-resources.js';
+import {
+  createHookWorkspaceResourcesService,
+  describeHookSkillSource,
+} from './hook-workspace-resources.js';
 
 test('Hook resources materialize full Skill folders and non-secret MCP cache entries idempotently', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-resources-'));
@@ -179,6 +182,99 @@ test('Hook Skill materialization rejects symbolic links', async () => {
       }),
       /symbolic link/,
     );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('published Hook resources are validated before existing workspace files can be overwritten', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-resources-preflight-'));
+  const skillSource = path.join(root, 'skill');
+  const workspacePath = path.join(root, 'workspace');
+  const hookDirectory = path.join(workspacePath, '.cloudcli', 'hook-config', 'hooks');
+  await fs.mkdir(skillSource, { recursive: true });
+  await fs.mkdir(hookDirectory, { recursive: true });
+  const manifestPath = path.join(skillSource, 'SKILL.md');
+  await fs.writeFile(manifestPath, '# Original\n');
+  const skill = {
+    skillId: 'builtin:stable',
+    name: 'stable',
+    version: 1,
+    manifestPath,
+  };
+  const originalHash = (await describeHookSkillSource(skill)).contentHash;
+  const existingHookManifest = path.join(hookDirectory, 'stable-hook.json');
+  await fs.writeFile(existingHookManifest, 'existing-project-resource\n');
+  await fs.writeFile(manifestPath, '# Replaced without a version change\n');
+  const service = createHookWorkspaceResourcesService({
+    hookMcpCatalog: { listServers: () => [], getServerById: () => null, listToolResources: () => [] },
+    skillLoader: async () => skill,
+  });
+
+  try {
+    await assert.rejects(
+      service.materializeHook({
+        workspacePath,
+        hook: {
+          id: 'stable-hook',
+          version: 1,
+          resourceRefs: {
+            skills: [{
+              skillId: skill.skillId,
+              skillName: skill.name,
+              version: 1,
+              contentHash: originalHash,
+            }],
+          },
+          postActions: [{
+            type: 'invoke_skill',
+            config: { skillId: skill.skillId, skillName: skill.name },
+          }],
+        },
+      }),
+      /Skill .* content has changed/,
+    );
+    assert.equal(await fs.readFile(existingHookManifest, 'utf8'), 'existing-project-resource\n');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('published Hook preparation rejects a removed MCP tool before writing the workspace', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-mcp-preflight-'));
+  const workspacePath = path.join(root, 'workspace');
+  const existingFile = path.join(workspacePath, '.cloudcli', 'hook-config', 'hooks', 'tool-hook.json');
+  await fs.mkdir(path.dirname(existingFile), { recursive: true });
+  await fs.writeFile(existingFile, 'existing-project-resource\n');
+  const server = { id: 'server-1', name: 'notify', contentHash: 'server-hash-v1', config: {} };
+  const service = createHookWorkspaceResourcesService({
+    hookMcpCatalog: {
+      listServers: () => [server],
+      getServerById: () => server,
+      listToolResources: () => [],
+    },
+  });
+
+  try {
+    await assert.rejects(
+      service.materializeHook({
+        workspacePath,
+        hook: {
+          id: 'tool-hook',
+          version: 1,
+          resourceRefs: {
+            mcpServers: [{ id: server.id, contentHash: server.contentHash }],
+            mcpTools: [{ mcpServerId: server.id, toolName: 'mcp__notify__send' }],
+          },
+          postActions: [{
+            type: 'call_mcp_tool',
+            config: { mcpServerId: server.id, toolName: 'mcp__notify__send' },
+          }],
+        },
+      }),
+      /MCP tool .* is unavailable/,
+    );
+    assert.equal(await fs.readFile(existingFile, 'utf8'), 'existing-project-resource\n');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

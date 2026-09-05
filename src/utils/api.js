@@ -464,6 +464,8 @@ export const api = {
     ),
     agentTemplatePresetCatalog: (tenantId) =>
       authenticatedFetch(`/api/admin/agent-templates/preset-catalog?tenantId=${encodeURIComponent(String(tenantId))}`),
+    agentTemplateHookCatalog: (tenantId) =>
+      authenticatedFetch(`/api/admin/agent-templates/hook-catalog?tenantId=${encodeURIComponent(String(tenantId))}`),
     createAgentTemplate: (payload) =>
       authenticatedFetch('/api/admin/agent-templates', {
         method: 'POST',

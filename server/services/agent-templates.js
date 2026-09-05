@@ -2,6 +2,14 @@ import { db } from '../database/db.js';
 
 const TEMPLATE_STATUSES = new Set(['draft', 'published', 'disabled']);
 const GLOBAL_TENANT_CODES = new Set(['dataagent', 'dataagent-admin', 'dataagent-management']);
+const MAX_TEMPLATE_HOOKS = 20;
+const HOOK_CAPABILITY_LABELS = Object.freeze({
+  call_mcp_tool: 'MCP',
+  mcp_loop_run: 'MCP 循环',
+  write_record: '写记录',
+  invoke_skill: 'Skill',
+  send_agent_message: 'Agent 消息',
+});
 
 function createHttpError(message, statusCode = 400) {
   const error = new Error(message);
@@ -142,6 +150,156 @@ function normalizeMcpPresetRefs(values, name) {
   return [...new Map(refs.map((ref) => [`${ref.tenantId}:${ref.presetId}`, ref])).values()];
 }
 
+function normalizeHookRefs(values, name) {
+  if (!Array.isArray(values)) throw createHttpError(`${name} must be an array`);
+  if (values.length > MAX_TEMPLATE_HOOKS) {
+    throw createHttpError(`${name} supports at most ${MAX_TEMPLATE_HOOKS} Hooks`);
+  }
+  const seen = new Set();
+  return values.map((value, index) => {
+    const hookId = limitedRequiredString(value?.hookId ?? value?.hook_id, `${name}.hookId`, 200);
+    if (seen.has(hookId)) throw createHttpError(`Hook ${hookId} is selected more than once`);
+    seen.add(hookId);
+    const rawVersion = value?.version;
+    const version = rawVersion == null || rawVersion === ''
+      ? null
+      : positiveInteger(rawVersion, `${name}.version`);
+    const rawOrder = Number(value?.order ?? (index + 1) * 10);
+    if (!Number.isSafeInteger(rawOrder) || rawOrder < 0) {
+      throw createHttpError(`${name}.order must be a non-negative integer`);
+    }
+    const defaultEnabled = value?.defaultEnabled !== false;
+    const allowUserDisable = value?.allowUserDisable !== false;
+    if (!defaultEnabled && !allowUserDisable) {
+      throw createHttpError(`${name} cannot disable a mandatory Hook by default`);
+    }
+    return {
+      hookId,
+      version,
+      defaultEnabled,
+      showInChat: value?.showInChat !== false,
+      allowUserDisable,
+      order: rawOrder,
+    };
+  }).sort((left, right) => left.order - right.order || left.hookId.localeCompare(right.hookId));
+}
+
+function getHookPostActions(row) {
+  return parseJson(row?.post_actions_json, []).filter(isPlainObject);
+}
+
+function getHookCapabilityTags(row) {
+  const tags = new Set(getHookPostActions(row)
+    .map((action) => HOOK_CAPABILITY_LABELS[action.type])
+    .filter(Boolean));
+  if (parseJson(row?.extension_logic_json, null)?.code) tags.add('执行脚本');
+  if (Object.keys(parseJson(row?.claude_response_json, { bindings: {} })?.bindings || {}).length > 0) {
+    tags.add('响应控制');
+  }
+  return [...tags];
+}
+
+function getHookDependencies(row) {
+  const skills = new Map();
+  const mcpTools = new Map();
+  for (const action of getHookPostActions(row)) {
+    if (action.type === 'invoke_skill') {
+      const id = String(action.config?.skillId || '').trim();
+      if (id) skills.set(id, {
+        id,
+        name: String(action.config?.skillName || id).trim(),
+      });
+    } else if (action.type === 'call_mcp_tool') {
+      const name = String(action.config?.toolName || '').trim();
+      if (name) mcpTools.set(name, {
+        name,
+        serverId: String(action.config?.mcpServerId || '').trim() || null,
+      });
+    } else if (action.type === 'mcp_loop_run') {
+      const name = String(parseJson(row?.matcher_json, {})?.value || '').trim();
+      if (name) mcpTools.set(name, { name, serverId: null });
+    }
+  }
+  return { skills: [...skills.values()], mcpTools: [...mcpTools.values()] };
+}
+
+function normalizeHookResourceCatalog(catalog) {
+  if (!catalog) return null;
+  const mcpServersById = new Map((catalog.mcpServers || []).map((server) => [
+    String(server.id || ''),
+    server,
+  ]));
+  for (const tool of catalog.mcpTools || []) {
+    const serverId = String(tool.mcpServerId || '');
+    if (!serverId || mcpServersById.has(serverId)) continue;
+    mcpServersById.set(serverId, {
+      id: serverId,
+      contentHash: tool.mcpServerContentHash || null,
+    });
+  }
+  return {
+    skillsById: new Map((catalog.skills || []).map((skill) => [String(skill.skillId || skill.id || ''), skill])),
+    mcpToolsByName: new Map((catalog.mcpTools || []).map((tool) => [String(tool.name || ''), tool])),
+    mcpServersById,
+  };
+}
+
+function inspectHookResources(row, resourceCatalog) {
+  const dependencies = getHookDependencies(row);
+  const normalizedCatalog = normalizeHookResourceCatalog(resourceCatalog);
+  if (!normalizedCatalog) {
+    return { dependencies, unavailable: [], available: true };
+  }
+  const unavailable = [];
+  for (const skill of dependencies.skills) {
+    const candidate = normalizedCatalog.skillsById.get(skill.id);
+    if (!candidate || String(candidate.name || '') !== skill.name) {
+      unavailable.push({ type: 'skill', id: skill.id, name: skill.name });
+    }
+  }
+  for (const tool of dependencies.mcpTools) {
+    const candidate = normalizedCatalog.mcpToolsByName.get(tool.name);
+    if (!candidate || (tool.serverId && String(candidate.mcpServerId || '') !== tool.serverId)) {
+      unavailable.push({ type: 'mcp', id: tool.name, name: tool.name });
+    }
+  }
+  const publishedRefs = parseJson(row?.resource_refs_json, {});
+  for (const expectedSkill of Array.isArray(publishedRefs.skills) ? publishedRefs.skills : []) {
+    const skillId = typeof expectedSkill === 'string'
+      ? expectedSkill
+      : String(expectedSkill?.skillId || '');
+    if (!skillId) continue;
+    const candidate = normalizedCatalog.skillsById.get(skillId);
+    if (!candidate) continue;
+    const expectedVersion = typeof expectedSkill === 'object' && expectedSkill != null
+      ? Number(expectedSkill.version)
+      : NaN;
+    const expectedHash = typeof expectedSkill === 'object' && expectedSkill != null
+      ? String(expectedSkill.contentHash || '')
+      : '';
+    if (
+      (Number.isFinite(expectedVersion) && expectedVersion > 0 && Number(candidate.version) !== expectedVersion)
+      || (expectedHash && String(candidate.contentHash || '') !== expectedHash)
+    ) {
+      unavailable.push({ type: 'skill_version', id: skillId, name: skillId });
+    }
+  }
+  for (const expectedServer of Array.isArray(publishedRefs.mcpServers) ? publishedRefs.mcpServers : []) {
+    const serverId = typeof expectedServer === 'string'
+      ? expectedServer
+      : String(expectedServer?.id || '');
+    if (!serverId) continue;
+    const candidate = normalizedCatalog.mcpServersById.get(serverId);
+    const expectedHash = typeof expectedServer === 'object' && expectedServer != null
+      ? String(expectedServer.contentHash || '')
+      : '';
+    if (!candidate || (expectedHash && String(candidate.contentHash || '') !== expectedHash)) {
+      unavailable.push({ type: 'mcp_version', id: serverId, name: serverId });
+    }
+  }
+  return { dependencies, unavailable, available: unavailable.length === 0 };
+}
+
 function hydrateTemplate(row) {
   if (!row) return null;
   return {
@@ -156,6 +314,7 @@ function hydrateTemplate(row) {
     tenantIds: parseJson(row.tenant_ids_json, []),
     skillPresetRefs: parseJson(row.skill_preset_refs_json, []),
     mcpPresetRefs: parseJson(row.mcp_preset_refs_json, []),
+    hookRefs: parseJson(row.hook_refs_json, []),
     globalVisible: row.global_visible === 1,
     status: row.status,
     createdAt: row.created_at,
@@ -189,6 +348,27 @@ function buildMcpPresetSnapshot(inspections) {
     updatedAt: row.updated_at || null,
     ...(ref.toolSettings ? { toolSettings: ref.toolSettings } : {}),
   }));
+}
+
+function buildHookSnapshot(inspections) {
+  return inspections.map(({ row, ref }) => {
+    const resourceInspection = inspectHookResources(row, null);
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description || '',
+      version: Number(row.version || 0),
+      eventName: row.event_name,
+      defaultEnabled: ref.defaultEnabled,
+      showInChat: ref.showInChat,
+      allowUserDisable: ref.allowUserDisable,
+      order: ref.order,
+      capabilityTags: getHookCapabilityTags(row),
+      dependencies: resourceInspection.dependencies,
+      publishedAt: row.published_at || null,
+      updatedAt: row.updated_at || null,
+    };
+  });
 }
 
 export function createAgentTemplateService(database = db) {
@@ -267,6 +447,141 @@ export function createAgentTemplateService(database = db) {
     return tenants;
   };
 
+  const tableExists = (tableName) => Boolean(database.prepare(`
+    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
+  `).get(tableName));
+
+  const loadHookTenantIds = (hookId) => {
+    if (!tableExists('hook_tenant_bindings')) return [];
+    return database.prepare(`
+      SELECT tenant_id FROM hook_tenant_bindings WHERE hook_id = ?
+      ORDER BY tenant_id ASC
+    `).all(hookId).map((binding) => Number(binding.tenant_id));
+  };
+
+  const hookIsVisibleToTenants = (hookId, tenantIds) => {
+    const boundTenantIds = loadHookTenantIds(hookId);
+    // Existing Hooks predate tenant-scoped template distribution. An empty
+    // binding set therefore remains globally eligible for backwards compatibility.
+    if (boundTenantIds.length === 0) return true;
+    const boundTenants = loadTenants(boundTenantIds);
+    if (boundTenants.some(isGlobalTenant)) return true;
+    const allowed = new Set(boundTenantIds);
+    return tenantIds.every((tenantId) => allowed.has(Number(tenantId)));
+  };
+
+  const getHookRow = (hookId) => {
+    if (!tableExists('hooks')) return null;
+    return database.prepare('SELECT * FROM hooks WHERE id = ?').get(String(hookId));
+  };
+
+  const getPublishedHookDefinitionRow = (hookId, version) => {
+    if (!tableExists('hook_published_versions') || version == null) return null;
+    const published = database.prepare(`
+      SELECT * FROM hook_published_versions
+      WHERE hook_id = ? AND version = ?
+    `).get(String(hookId), Number(version));
+    if (!published) return null;
+    const config = parseJson(published.config_json, {});
+    return {
+      id: published.hook_id,
+      name: config.name || published.hook_id,
+      description: config.description || '',
+      status: 'published',
+      binding_controller: config.bindingController === 'sql_check' ? 'sql_check' : 'admin',
+      event_name: config.eventName || '',
+      matcher_json: JSON.stringify(config.matcher || {}),
+      extension_logic_json: JSON.stringify(config.extensionLogic || null),
+      post_actions_json: JSON.stringify(config.postActions || []),
+      claude_response_json: JSON.stringify(config.claudeResponse || { bindings: {} }),
+      resource_refs_json: published.resource_refs_json || '{}',
+      version: Number(published.version || 0),
+      published_at: published.published_at || null,
+      updated_at: published.published_at || null,
+      revoked_at: published.revoked_at || null,
+    };
+  };
+
+  const inspectHookRefs = (refs, { tenantIds = [], resourceCatalog = null } = {}) => refs.map((ref) => {
+    const hookRow = getHookRow(ref.hookId);
+    const requestedVersion = ref.version ?? Number(hookRow?.version || 0);
+    const publishedVersionRow = getPublishedHookDefinitionRow(ref.hookId, requestedVersion);
+    // This fallback is only for databases that have not run the immutable-version
+    // backfill yet. Normal production reads use hook_published_versions.
+    const row = publishedVersionRow || (
+      hookRow && Number(hookRow.version || 0) === Number(requestedVersion) ? hookRow : null
+    );
+    let unavailableReason = '';
+    if (!hookRow) unavailableReason = '已删除';
+    else if (hookRow.binding_controller !== 'admin') unavailableReason = '由 SQL Check 独立管理';
+    else if (hookRow.status === 'disabled') unavailableReason = '已下线';
+    else if (hookRow.status === 'draft' && !publishedVersionRow) unavailableReason = '未发布';
+    else if (!['published', 'draft'].includes(hookRow.status)) unavailableReason = '未发布';
+    else if (!row) unavailableReason = '版本不可用';
+    else if (row.revoked_at) unavailableReason = '版本已紧急撤销';
+    else if (row.binding_controller !== 'admin') unavailableReason = '由 SQL Check 独立管理';
+    else if (!hookIsVisibleToTenants(hookRow.id, tenantIds)) {
+      unavailableReason = '不适用于模板的可见租户';
+    }
+    const resourceInspection = row
+      ? inspectHookResources(row, resourceCatalog)
+      : { dependencies: { skills: [], mcpTools: [] }, unavailable: [], available: false };
+    if (!unavailableReason && !resourceInspection.available) {
+      unavailableReason = `依赖能力不可用：${resourceInspection.unavailable.map((item) => item.name).join('、')}`;
+    }
+    return {
+      ref,
+      row,
+      hookRow,
+      available: !unavailableReason,
+      unavailableReason,
+      resourceInspection,
+    };
+  });
+
+  const requireSelectableHooks = (refs, tenantIds) => inspectHookRefs(refs, { tenantIds }).map((inspection) => {
+    if (!inspection.hookRow) throw createHttpError(`Hook ${inspection.ref.hookId} was not found`, 404);
+    if (!inspection.available) {
+      throw createHttpError(`Hook ${inspection.row?.name || inspection.hookRow.name || inspection.ref.hookId} 不可用：${inspection.unavailableReason}`);
+    }
+    return {
+      ...inspection.ref,
+      version: Number(inspection.row.version || 0),
+    };
+  });
+
+  const buildHookCatalogItem = (row, resourceCatalog = null) => {
+    const publishedRow = getPublishedHookDefinitionRow(row.id, Number(row.version || 0));
+    const definitionRow = publishedRow || row;
+    const resourceInspection = inspectHookResources(definitionRow, resourceCatalog);
+    const postActionTypes = [...new Set(getHookPostActions(definitionRow).map((action) => action.type).filter(Boolean))];
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description || '',
+      eventName: row.event_name,
+      version: Number(row.version || 0),
+      status: row.status,
+      bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
+      postActionTypes,
+      capabilityTags: getHookCapabilityTags(definitionRow),
+      dependencies: resourceInspection.dependencies,
+      dependencySummary: {
+        skillCount: resourceInspection.dependencies.skills.length,
+        mcpCount: resourceInspection.dependencies.mcpTools.length,
+        unavailableCount: resourceInspection.unavailable.length,
+        available: resourceInspection.available,
+        capabilityTags: getHookCapabilityTags(definitionRow),
+      },
+      available: resourceInspection.available,
+      unavailableReason: resourceInspection.available
+        ? undefined
+        : `依赖能力不可用：${resourceInspection.unavailable.map((item) => item.name).join('、')}`,
+      publishedAt: row.published_at || null,
+      updatedAt: row.updated_at || null,
+    };
+  };
+
   const resolveSkillRows = (refs, { requirePublished = false } = {}) => refs.map((ref) => {
     const row = database.prepare(`
       SELECT * FROM tenant_skill_presets WHERE tenant_id = ? AND id = ?
@@ -340,6 +655,15 @@ export function createAgentTemplateService(database = db) {
       type: 'mcp',
       ...toCapability(inspection, 'MCP'),
     })),
+    ...inspectHookRefs(template.hookRefs, { tenantIds: template.tenantIds })
+      .filter((inspection) => !inspection.available)
+      .map((inspection) => ({
+        type: 'hook',
+        id: inspection.row?.id || inspection.hookRow?.id || inspection.ref.hookId,
+        name: inspection.row?.name || inspection.hookRow?.name || `Hook #${inspection.ref.hookId}`,
+        available: false,
+        unavailableReason: inspection.unavailableReason,
+      })),
   ];
 
   const normalizeInput = (input, existing = null) => {
@@ -356,6 +680,10 @@ export function createAgentTemplateService(database = db) {
       input.mcpPresetRefs ?? existing?.mcpPresetRefs ?? [],
       'mcpPresetRefs',
     );
+    let hookRefs = normalizeHookRefs(
+      input.hookRefs ?? existing?.hookRefs ?? [],
+      'hookRefs',
+    );
     const allowedTenantIds = new Set(tenantIds);
     for (const ref of [...skillPresetRefs, ...mcpPresetRefs]) {
       if (!allowedTenantIds.has(ref.tenantId)) {
@@ -371,6 +699,7 @@ export function createAgentTemplateService(database = db) {
         ? { toolSettings: normalizeMcpToolSettings(ref.toolSettings, mcpRows[index], `mcpPresetRefs[${index}].toolSettings`) }
         : {}),
     }));
+    hookRefs = requireSelectableHooks(hookRefs, tenantIds);
     const legacyAgentMarkdownWasEdited = existing
       && input.agentMarkdown !== undefined
       && input.agentMarkdown !== existing.agentMarkdown
@@ -387,6 +716,7 @@ export function createAgentTemplateService(database = db) {
       tenantIds,
       skillPresetRefs,
       mcpPresetRefs,
+      hookRefs,
       globalVisible: tenants.some(isGlobalTenant),
     };
   };
@@ -403,9 +733,9 @@ export function createAgentTemplateService(database = db) {
       const result = database.prepare(`
         INSERT INTO agent_templates (
           name, category, summary, agent_markdown, guide_text, tenant_ids_json,
-          skill_preset_refs_json, mcp_preset_refs_json, global_visible,
+          skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, global_visible,
           status, created_by_user_id, updated_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
       `).run(
         values.name,
         values.category,
@@ -415,6 +745,7 @@ export function createAgentTemplateService(database = db) {
         JSON.stringify(values.tenantIds),
         JSON.stringify(values.skillPresetRefs),
         JSON.stringify(values.mcpPresetRefs),
+        JSON.stringify(values.hookRefs),
         values.globalVisible ? 1 : 0,
         normalizedUserId,
         normalizedUserId,
@@ -425,7 +756,7 @@ export function createAgentTemplateService(database = db) {
     database.prepare(`
       UPDATE agent_templates SET
         name = ?, category = ?, summary = ?, agent_markdown = ?, guide_text = ?,
-        tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?,
+        tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?, hook_refs_json = ?,
         global_visible = ?, status = 'draft', updated_by_user_id = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -438,6 +769,7 @@ export function createAgentTemplateService(database = db) {
       JSON.stringify(values.tenantIds),
       JSON.stringify(values.skillPresetRefs),
       JSON.stringify(values.mcpPresetRefs),
+      JSON.stringify(values.hookRefs),
       values.globalVisible ? 1 : 0,
       normalizedUserId,
       existing.id,
@@ -445,13 +777,21 @@ export function createAgentTemplateService(database = db) {
     return getTemplate(existing.id);
   };
 
-  const publishTemplate = ({ templateId, userId }) => {
+  const publishTemplate = ({ templateId, userId, hookResourceCatalog = null }) => {
     const template = getTemplate(templateId);
     if (!template) throw createHttpError('Agent template not found', 404);
     limitedRequiredString(template.category, 'category', 50);
     validateTenantSelection(template.tenantIds);
     resolveSkillRows(template.skillPresetRefs, { requirePublished: true });
     resolveMcpRows(template.mcpPresetRefs, { requirePublished: true });
+    const hookInspections = inspectHookRefs(template.hookRefs, {
+      tenantIds: template.tenantIds,
+      resourceCatalog: hookResourceCatalog,
+    });
+    const unavailableHook = hookInspections.find((inspection) => !inspection.available);
+    if (unavailableHook) {
+      throw createHttpError(`Hook ${unavailableHook.row?.name || unavailableHook.ref.hookId} 不可用：${unavailableHook.unavailableReason}`);
+    }
     database.prepare(`
       UPDATE agent_templates
       SET status = 'published', updated_by_user_id = ?, updated_at = CURRENT_TIMESTAMP
@@ -481,6 +821,15 @@ export function createAgentTemplateService(database = db) {
       mcps: inspectMcpRefs(template.mcpPresetRefs)
         .filter((inspection) => inspection.available)
         .map((inspection) => ({ id: Number(inspection.row.id), name: inspection.row.display_name || inspection.row.name })),
+      hooks: inspectHookRefs(template.hookRefs, { tenantIds: template.tenantIds })
+        .filter((inspection) => inspection.available)
+        .map((inspection) => ({
+          id: inspection.row.id,
+          name: inspection.row.name,
+          eventName: inspection.row.event_name,
+          version: Number(inspection.row.version || 0),
+          capabilityTags: getHookCapabilityTags(inspection.row),
+        })),
       updatedAt: template.updatedAt,
     }));
   };
@@ -501,6 +850,10 @@ export function createAgentTemplateService(database = db) {
       template,
       skills: buildPresetSnapshot(skillInspections.filter((inspection) => inspection.available).map((inspection) => inspection.row)),
       mcps: buildMcpPresetSnapshot(mcpInspections.filter((inspection) => inspection.available)),
+      hooks: buildHookSnapshot(
+        inspectHookRefs(template.hookRefs, { tenantIds: template.tenantIds })
+          .filter((inspection) => inspection.available),
+      ),
       unavailableCapabilities,
     };
   };
@@ -508,12 +861,24 @@ export function createAgentTemplateService(database = db) {
   return {
     getTemplate,
     getWorkspaceTemplateInfo,
-    listAdminTemplates: ({ tenantId } = {}) => {
+    listAdminTemplates: ({ tenantId, hookResourceCatalog = null } = {}) => {
       const templates = database.prepare(`
         SELECT * FROM agent_templates ORDER BY updated_at DESC, id DESC
       `).all().map(hydrateTemplate).map((template) => ({
         ...template,
-        unavailableCapabilities: getUnavailableCapabilities(template),
+        unavailableCapabilities: [
+          ...getUnavailableCapabilities(template).filter((capability) => capability.type !== 'hook'),
+          ...inspectHookRefs(template.hookRefs, {
+            tenantIds: template.tenantIds,
+            resourceCatalog: hookResourceCatalog,
+          }).filter((inspection) => !inspection.available).map((inspection) => ({
+            type: 'hook',
+            id: inspection.row?.id || inspection.hookRow?.id || inspection.ref.hookId,
+            name: inspection.row?.name || inspection.hookRow?.name || `Hook #${inspection.ref.hookId}`,
+            available: false,
+            unavailableReason: inspection.unavailableReason,
+          })),
+        ],
       }));
       if (tenantId == null || tenantId === '') return templates;
       const normalizedTenantId = positiveInteger(tenantId, 'tenantId');
@@ -593,15 +958,27 @@ export function createAgentTemplateService(database = db) {
         })),
       };
     },
+    listHookCatalog: ({ tenantId, resourceCatalog = null }) => {
+      const normalizedTenantId = positiveInteger(tenantId, 'tenantId');
+      validateTenantSelection([normalizedTenantId]);
+      if (!tableExists('hooks')) return [];
+      return database.prepare(`
+        SELECT * FROM hooks
+        WHERE status = 'published' AND binding_controller = 'admin'
+        ORDER BY name COLLATE NOCASE ASC, updated_at DESC, id ASC
+      `).all()
+        .filter((row) => hookIsVisibleToTenants(row.id, [normalizedTenantId]))
+        .map((row) => buildHookCatalogItem(row, resourceCatalog));
+    },
     listAvailableTemplates,
     resolveTemplateSnapshot,
     saveWorkspaceSnapshot: ({ workspaceId, userId, snapshot }) => {
       database.prepare(`
         INSERT INTO workspace_agent_template_snapshots (
           workspace_id, template_id, template_name, template_updated_at,
-          agent_markdown, guide_text, skill_presets_json, mcp_presets_json,
+          agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json,
           created_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         positiveInteger(workspaceId, 'workspaceId'),
         snapshot.template.id,
@@ -611,6 +988,7 @@ export function createAgentTemplateService(database = db) {
         snapshot.template.guideText,
         JSON.stringify(snapshot.skills),
         JSON.stringify(snapshot.mcps),
+        JSON.stringify(snapshot.hooks || []),
         positiveInteger(userId, 'userId'),
       );
     },

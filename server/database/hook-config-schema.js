@@ -134,6 +134,48 @@ function http200RecoveryActions(skill) {
   }];
 }
 
+function parseHookJson(value, fallback) {
+  try {
+    return JSON.parse(value || '');
+  } catch {
+    return fallback;
+  }
+}
+
+function publishedVersionConfigFromRow(row) {
+  return {
+    name: row.name,
+    description: row.description || '',
+    eventName: row.event_name,
+    matcher: parseHookJson(row.matcher_json, {}),
+    extensionLogic: parseHookJson(row.extension_logic_json, null),
+    postActions: parseHookJson(row.post_actions_json, []),
+    claudeResponse: parseHookJson(row.claude_response_json, { bindings: {} }),
+    bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
+  };
+}
+
+function publishedVersionResourceRefsFromRow(row) {
+  const actions = parseHookJson(row.post_actions_json, []);
+  const skillKeys = new Set();
+  const mcpServers = new Set();
+  const skills = [];
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type === 'invoke_skill') {
+      const skillId = String(action.config?.skillId || '').trim();
+      const skillName = String(action.config?.skillName || '').trim();
+      const key = `${skillId}\0${skillName}`;
+      if (skillId && !skillKeys.has(key)) {
+        skillKeys.add(key);
+        skills.push({ skillId, skillName });
+      }
+    }
+    const mcpServerId = String(action?.config?.mcpServerId || '').trim();
+    if (mcpServerId) mcpServers.add(mcpServerId);
+  }
+  return { skills, mcpServers: [...mcpServers] };
+}
+
 export const HOOK_CONFIG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS hooks (
   id TEXT PRIMARY KEY,
@@ -163,6 +205,27 @@ CREATE INDEX IF NOT EXISTS idx_hooks_status_updated
 CREATE INDEX IF NOT EXISTS idx_hooks_event_name
   ON hooks(event_name);
 
+-- Every published Hook version is immutable. Workspace/template assignments
+-- resolve this snapshot instead of silently inheriting later edits to hooks.
+CREATE TABLE IF NOT EXISTS hook_published_versions (
+  hook_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  config_json TEXT NOT NULL,
+  resource_refs_json TEXT NOT NULL DEFAULT '{"skills":[],"mcpServers":[]}',
+  published_by INTEGER,
+  published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME,
+  revoked_by INTEGER,
+  revoke_reason TEXT,
+  PRIMARY KEY (hook_id, version),
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
+  FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_published_versions_active
+  ON hook_published_versions(hook_id, version, revoked_at);
+
 CREATE TABLE IF NOT EXISTS user_hook_bindings (
   user_id INTEGER NOT NULL,
   hook_id TEXT NOT NULL,
@@ -190,6 +253,52 @@ CREATE TABLE IF NOT EXISTS user_hook_preferences (
 
 CREATE INDEX IF NOT EXISTS idx_user_hook_preferences_hook
   ON user_hook_preferences(hook_id, user_id);
+
+-- Project defaults are separate from a member's project-specific override.
+-- Legacy user_hook_bindings remain as a compatibility fallback and continue
+-- to own SQL Check enablement.
+CREATE TABLE IF NOT EXISTS workspace_hook_assignments (
+  workspace_id INTEGER NOT NULL,
+  hook_id TEXT NOT NULL,
+  hook_version INTEGER NOT NULL CHECK (hook_version > 0),
+  source TEXT NOT NULL DEFAULT 'manual'
+    CHECK (source IN ('manual', 'agent_template')),
+  source_template_id INTEGER,
+  default_enabled INTEGER NOT NULL DEFAULT 0 CHECK (default_enabled IN (0, 1)),
+  default_show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (default_show_in_chat IN (0, 1)),
+  allow_user_disable INTEGER NOT NULL DEFAULT 1 CHECK (allow_user_disable IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  install_status TEXT NOT NULL DEFAULT 'ready'
+    CHECK (install_status IN ('pending', 'ready', 'failed')),
+  install_error TEXT,
+  created_by INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, hook_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (hook_id, hook_version)
+    REFERENCES hook_published_versions(hook_id, version),
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_hook_assignments_hook
+  ON workspace_hook_assignments(hook_id, hook_version, install_status);
+
+CREATE TABLE IF NOT EXISTS user_workspace_hook_preferences (
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  hook_id TEXT NOT NULL,
+  enabled INTEGER CHECK (enabled IS NULL OR enabled IN (0, 1)),
+  show_in_chat INTEGER CHECK (show_in_chat IS NULL OR show_in_chat IN (0, 1)),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, user_id, hook_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_workspace_hook_preferences_user
+  ON user_workspace_hook_preferences(user_id, workspace_id, hook_id);
 
 CREATE TABLE IF NOT EXISTS hook_user_scopes (
   hook_id TEXT NOT NULL,
@@ -460,6 +569,9 @@ export function migrateHookActivationModel(database) {
   const hasTenantBindingsTable = Boolean(database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_tenant_bindings'")
     .get());
+  const hasTenantsTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'")
+    .get());
   const hasHookExecutionsTable = Boolean(database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_executions'")
     .get());
@@ -711,7 +823,7 @@ export function migrateHookActivationModel(database) {
     initializeUserScopes();
   }
 
-  if (hasTenantBindingsTable) {
+  if (hasTenantBindingsTable && hasTenantsTable) {
     database.prepare(`
       DELETE FROM hook_tenant_bindings
       WHERE hook_id IN (
@@ -741,6 +853,38 @@ export function migrateHookActivationModel(database) {
       ON hooks(activation_scope, status);
 
   `);
+
+  // This backfill runs after all legacy Hook rewrites above. It therefore
+  // snapshots the final published behavior, while INSERT OR IGNORE keeps an
+  // already published version immutable on later startups.
+  const hasPublishedVersionsTable = Boolean(database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_published_versions'")
+    .get());
+  if (hasPublishedVersionsTable) {
+    const publishedRows = database.prepare(`
+      SELECT * FROM hooks
+      WHERE status = 'published' AND version > 0
+    `).all();
+    const insertPublishedVersion = database.prepare(`
+      INSERT OR IGNORE INTO hook_published_versions (
+        hook_id, version, config_json, resource_refs_json,
+        published_by, published_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const backfill = database.transaction(() => {
+      for (const row of publishedRows) {
+        insertPublishedVersion.run(
+          row.id,
+          row.version,
+          JSON.stringify(publishedVersionConfigFromRow(row)),
+          JSON.stringify(publishedVersionResourceRefsFromRow(row)),
+          row.updated_by || null,
+          row.published_at || row.updated_at || row.created_at || null,
+        );
+      }
+    });
+    backfill();
+  }
 
   return {
     migratedGlobalEnabled: hasGlobalEnabled,
