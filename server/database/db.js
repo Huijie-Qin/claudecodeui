@@ -33,6 +33,7 @@ import {
 } from './schema.js';
 import {
   migrateSkillMarketImportBindingColumns,
+  migrateWorkspaceSoftDeleteUniqueness,
   MULTITENANCY_SCHEMA_SQL,
 } from './multitenancy-schema.js';
 import {
@@ -213,6 +214,7 @@ const runMigrations = () => {
 };
 
 function runMultitenancyMigrations() {
+  migrateWorkspaceSoftDeleteUniqueness(db);
   ensureColumn('tenants', 'prod_code', 'TEXT');
   migrateSkillMarketImportBindingColumns(db);
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");

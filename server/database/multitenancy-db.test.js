@@ -127,6 +127,142 @@ test('multitenancy initialization adds explicit skill market binding columns', (
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM workspace_skill_market_imports').get().count, 0);
 });
 
+test('deleted workspace names and paths can be reused without reviving the deleted workspace', () => {
+  const database = createTestDb();
+  try {
+    const mt = createMultitenancyDb(database);
+    const ownerId = seedUser(database, 'workspace-recreate-owner');
+    const tenant = mt.tenants.createTenant({ code: 'workspace-recreate', name: 'Workspace Recreate' });
+    mt.memberships.upsertMembership({
+      tenantId: tenant.id,
+      userId: ownerId,
+      role: 'member',
+      permission: 'edit',
+      status: 'active',
+    });
+
+    const deletedWorkspace = mt.workspaces.createWorkspace({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'same-name',
+      displayName: 'Same Name',
+      path: '/tmp/workspace-recreate/same-name',
+    });
+    assert.equal(mt.workspaces.markDeleted({ workspaceId: deletedWorkspace.id }), true);
+    assert.equal(mt.workspaces.getWorkspaceByTenantSlug({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'same-name',
+    }), null);
+
+    const recreatedWorkspace = mt.workspaces.createWorkspace({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'same-name',
+      displayName: 'Same Name Again',
+      path: '/tmp/workspace-recreate/same-name',
+    });
+
+    assert.notEqual(recreatedWorkspace.id, deletedWorkspace.id);
+    assert.equal(recreatedWorkspace.status, 'active');
+    assert.equal(mt.workspaces.getWorkspaceByTenantSlug({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'same-name',
+    })?.id, recreatedWorkspace.id);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM workspaces
+      WHERE tenant_id = ? AND owner_user_id = ? AND slug = ?
+    `).get(tenant.id, ownerId, 'same-name').count, 2);
+  } finally {
+    database.close();
+  }
+});
+
+test('workspace soft-delete uniqueness migration preserves history and is idempotent', () => {
+  const database = createTestDb();
+  try {
+    const mt = createMultitenancyDb(database);
+    const ownerId = seedUser(database, 'workspace-migration-owner');
+    const viewerId = seedUser(database, 'workspace-migration-viewer');
+    const tenant = mt.tenants.createTenant({ code: 'workspace-migration', name: 'Workspace Migration' });
+    mt.memberships.upsertMembership({
+      tenantId: tenant.id,
+      userId: ownerId,
+      role: 'member',
+      permission: 'edit',
+      status: 'active',
+    });
+    const workspace = mt.workspaces.createWorkspace({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'legacy-name',
+      displayName: 'Legacy Name',
+      path: '/tmp/workspace-migration/legacy-name',
+    });
+    database.prepare(`
+      INSERT INTO workspace_acl (workspace_id, user_id, permission, created_by_user_id)
+      VALUES (?, ?, 'view', ?)
+    `).run(workspace.id, viewerId, ownerId);
+    mt.workspaces.markDeleted({ workspaceId: workspace.id });
+
+    database.pragma('foreign_keys = OFF');
+    database.exec(`
+      CREATE TABLE workspaces_legacy_unique (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL,
+        owner_user_id INTEGER NOT NULL,
+        slug TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'deleted')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, owner_user_id, slug),
+        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+        FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      INSERT INTO workspaces_legacy_unique
+      SELECT * FROM workspaces;
+      DROP TABLE workspaces;
+      ALTER TABLE workspaces_legacy_unique RENAME TO workspaces;
+      CREATE INDEX idx_workspaces_tenant_owner ON workspaces(tenant_id, owner_user_id);
+    `);
+    database.pragma('foreign_keys = ON');
+
+    initializeMultitenancyTables(database);
+    initializeMultitenancyTables(database);
+
+    const migratedTableSql = database.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'
+    `).get().sql.toLowerCase();
+    assert.equal(migratedTableSql.includes('path text not null unique'), false);
+    assert.equal(migratedTableSql.includes('unique (tenant_id, owner_user_id, slug)'), false);
+    assert.deepEqual(database.pragma('foreign_key_check'), []);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM workspace_acl').get().count, 1);
+
+    const migrated = createMultitenancyDb(database);
+    const recreatedWorkspace = migrated.workspaces.createWorkspace({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'legacy-name',
+      displayName: 'Legacy Name Again',
+      path: '/tmp/workspace-migration/legacy-name',
+    });
+    assert.notEqual(recreatedWorkspace.id, workspace.id);
+    assert.throws(() => migrated.workspaces.createWorkspace({
+      tenantId: tenant.id,
+      ownerUserId: ownerId,
+      slug: 'legacy-name',
+      displayName: 'Duplicate Active',
+      path: '/tmp/workspace-migration/another-path',
+    }), /UNIQUE constraint failed/);
+  } finally {
+    database.close();
+  }
+});
+
 test('multitenancy initialization removes the complete untouched legacy Claude allowlist fingerprint once', () => {
   const database = createAllowlistMigrationDb();
   try {

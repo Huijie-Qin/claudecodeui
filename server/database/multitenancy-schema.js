@@ -2,6 +2,8 @@ import { APP_CONFIG_TABLE_SQL } from './schema.js';
 
 const CLAUDE_ENV_DENY_RULES_TABLE_NAME = 'claude_env_deny_rules';
 const CLAUDE_ENV_DENY_RULES_MIGRATION_TABLE_NAME = 'claude_env_deny_rules_match_type_migration';
+const WORKSPACES_TABLE_NAME = 'workspaces';
+const WORKSPACES_MIGRATION_TABLE_NAME = 'workspaces_soft_delete_unique_migration';
 export const CLAUDE_ENV_ALLOWLIST_DEFAULT_CLEANUP_MIGRATION_KEY = 'migration:claude_env_allowlist:v1-defaults-cleanup';
 export const CLAUDE_ENV_PERSONAL_DENY_RETIREMENT_MIGRATION_KEY = 'migration:claude_env_deny_rules:v1-retire-personal';
 const LEGACY_CLAUDE_ENV_ALLOWLIST_DEFAULTS = Object.freeze([
@@ -45,6 +47,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_env_deny_rules_user_unique_nocase
   WHERE owner_type = 'user';
 CREATE INDEX IF NOT EXISTS idx_claude_env_deny_rules_active_owner
   ON claude_env_deny_rules(owner_type, owner_user_id, enabled);`;
+
+function buildWorkspacesTableSql(tableName, { ifNotExists = false } = {}) {
+  return `CREATE TABLE ${ifNotExists ? 'IF NOT EXISTS ' : ''}${tableName} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id INTEGER NOT NULL,
+  owner_user_id INTEGER NOT NULL,
+  slug TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'deleted')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+);`;
+}
+
+const WORKSPACES_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS idx_workspaces_tenant_owner
+  ON workspaces(tenant_id, owner_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_live_path
+  ON workspaces(path)
+  WHERE status != 'deleted';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_live_tenant_owner_slug
+  ON workspaces(tenant_id, owner_user_id, slug)
+  WHERE status != 'deleted';`;
+
+export function migrateWorkspaceSoftDeleteUniqueness(database) {
+  const table = database.prepare(`
+    SELECT sql
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+  `).get(WORKSPACES_TABLE_NAME);
+  if (!table?.sql) return { applied: false, migratedRows: 0 };
+
+  const currentSql = String(table.sql).replace(/\s+/g, ' ').toLowerCase();
+  const hasLegacyPathConstraint = /\bpath\s+text\s+not\s+null\s+unique\b/.test(currentSql);
+  const hasLegacySlugConstraint = /unique\s*\(\s*tenant_id\s*,\s*owner_user_id\s*,\s*slug\s*\)/.test(currentSql);
+  if (!hasLegacyPathConstraint && !hasLegacySlugConstraint) {
+    database.exec(WORKSPACES_INDEX_SQL);
+    return { applied: false, migratedRows: 0 };
+  }
+
+  const foreignKeysWereEnabled = database.pragma('foreign_keys', { simple: true }) === 1;
+  database.pragma('foreign_keys = OFF');
+  try {
+    const migrate = database.transaction(() => {
+      database.exec(`DROP TABLE IF EXISTS ${WORKSPACES_MIGRATION_TABLE_NAME}`);
+      database.exec(buildWorkspacesTableSql(WORKSPACES_MIGRATION_TABLE_NAME));
+      const result = database.prepare(`
+        INSERT INTO ${WORKSPACES_MIGRATION_TABLE_NAME} (
+          id, tenant_id, owner_user_id, slug, display_name, path, status,
+          created_at, updated_at
+        )
+        SELECT
+          id, tenant_id, owner_user_id, slug, display_name, path, status,
+          created_at, updated_at
+        FROM ${WORKSPACES_TABLE_NAME}
+        ORDER BY id ASC
+      `).run();
+      database.exec(`
+        DROP TABLE ${WORKSPACES_TABLE_NAME};
+        ALTER TABLE ${WORKSPACES_MIGRATION_TABLE_NAME}
+          RENAME TO ${WORKSPACES_TABLE_NAME};
+      `);
+      database.exec(WORKSPACES_INDEX_SQL);
+
+      const foreignKeyViolations = database.pragma('foreign_key_check');
+      if (foreignKeyViolations.length > 0) {
+        throw new Error('Workspace soft-delete uniqueness migration failed foreign-key validation');
+      }
+      return Number(result.changes);
+    });
+    return { applied: true, migratedRows: migrate() };
+  } finally {
+    database.pragma(`foreign_keys = ${foreignKeysWereEnabled ? 'ON' : 'OFF'}`);
+  }
+}
 
 export function migrateClaudeEnvDenyRuleMatchTypes(database) {
   const table = database.prepare(`
@@ -241,22 +321,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_env_allowlist_name_nocase
 ${buildClaudeEnvDenyRulesTableSql(CLAUDE_ENV_DENY_RULES_TABLE_NAME, { ifNotExists: true })}
 ${CLAUDE_ENV_DENY_RULES_INDEX_SQL}
 
-CREATE TABLE IF NOT EXISTS workspaces (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  tenant_id INTEGER NOT NULL,
-  owner_user_id INTEGER NOT NULL,
-  slug TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  path TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'deleted')),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (tenant_id, owner_user_id, slug),
-  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspaces_tenant_owner ON workspaces(tenant_id, owner_user_id);
+${buildWorkspacesTableSql(WORKSPACES_TABLE_NAME, { ifNotExists: true })}
+${WORKSPACES_INDEX_SQL}
 
 CREATE TABLE IF NOT EXISTS workspace_acl (
   workspace_id INTEGER NOT NULL,

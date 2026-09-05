@@ -6,6 +6,7 @@ import {
   migrateLegacyDefaultClaudeEnvAllowlist,
   migrateRetiredPersonalClaudeEnvDenyRules,
   migrateSkillMarketImportBindingColumns,
+  migrateWorkspaceSoftDeleteUniqueness,
   MULTITENANCY_SCHEMA_SQL,
 } from './multitenancy-schema.js';
 
@@ -30,6 +31,7 @@ const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 
 export function initializeMultitenancyTables(database = db) {
   database.exec(MULTITENANCY_SCHEMA_SQL);
+  migrateWorkspaceSoftDeleteUniqueness(database);
   migrateLegacyDefaultClaudeEnvAllowlist(database);
   migrateClaudeEnvDenyRuleMatchTypes(database);
   migrateRetiredPersonalClaudeEnvDenyRules(database);
@@ -1068,6 +1070,7 @@ export function createMultitenancyDb(database = db) {
           SELECT *
           FROM workspaces
           WHERE tenant_id = ? AND owner_user_id = ? AND slug = ?
+            AND status != 'deleted'
         `).get(
           requirePositiveInteger(tenantId, 'tenantId'),
           requirePositiveInteger(ownerUserId, 'ownerUserId'),
