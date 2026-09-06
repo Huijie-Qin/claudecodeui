@@ -65,6 +65,7 @@ import {
   redactClaudeDiagnosticText,
 } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
+import { createClaudeMessageDisplayTracker } from './services/claude-message-display.js';
 import { userDb } from './database/db.js';
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
@@ -959,11 +960,15 @@ class ClaudeInputQueue {
     this.closed = false;
     this.pendingQueryTurns = 0;
     this.onQueryPushed = typeof onQueryPushed === 'function' ? onQueryPushed : null;
+    this.onConsumedByMessage = new WeakMap();
   }
 
-  push(message) {
+  push(message, { onConsumed = null } = {}) {
     if (this.closed) {
       throw new Error('Claude input queue is closed');
+    }
+    if (message && typeof message === 'object' && typeof onConsumed === 'function') {
+      this.onConsumedByMessage.set(message, onConsumed);
     }
     if (message?.shouldQuery !== false) {
       this.pendingQueryTurns += 1;
@@ -972,6 +977,7 @@ class ClaudeInputQueue {
 
     const waiter = this.waiters.shift();
     if (waiter) {
+      this.notifyConsumed(message);
       waiter({ value: message, done: false });
       return;
     }
@@ -994,6 +1000,7 @@ class ClaudeInputQueue {
   async next() {
     const item = this.items.shift();
     if (item) {
+      this.notifyConsumed(item);
       return { value: item, done: false };
     }
 
@@ -1008,6 +1015,18 @@ class ClaudeInputQueue {
 
   [Symbol.asyncIterator]() {
     return this;
+  }
+
+  notifyConsumed(message) {
+    if (!message || typeof message !== 'object') return;
+    const onConsumed = this.onConsumedByMessage.get(message);
+    if (!onConsumed) return;
+    this.onConsumedByMessage.delete(message);
+    try {
+      onConsumed();
+    } catch (error) {
+      console.warn('[ClaudeInputQueue] Failed to notify consumed input:', error?.message || error);
+    }
   }
 
   finishQueryTurn() {
@@ -1385,6 +1404,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   let initialDisplayCommandRecord = null;
   let initialDisplayCommandPersisted = false;
   const turnLifecycle = createClaudeTurnLifecycleTracker();
+  const messageDisplay = createClaudeMessageDisplayTracker();
   let pendingTurnCompletion = null;
   let queuedFollowupTurn = null;
   let hookActivityTerminalSent = false;
@@ -2352,8 +2372,10 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }
 
       // Transform and normalize message via adapter
-      const transformedMessage = transformMessage(message);
+      const transformedMessage = transformMessage(messageDisplay.observe(message));
       const sid = capturedSessionId || sessionId || null;
+      const displaySession = sid ? getSession(sid) : null;
+      if (displaySession) displaySession.messageDisplay = messageDisplay;
       const persistenceSessionId = sid || pendingProviderSessionId;
       const lifecycleSignal = turnLifecycle.observe(message);
       if (lifecycleSignal === 'processing' && sid) {
@@ -3090,6 +3112,7 @@ function pushClaudeSupplement({
   content,
   displayContent = null,
   clientMessageId = null,
+  displayAfterAssistantId: requestedDisplayAnchor = null,
   mode = 'now',
   writer = null,
 } = {}) {
@@ -3132,59 +3155,85 @@ function pushClaudeSupplement({
   const messageId = typeof clientMessageId === 'string' && clientMessageId.trim()
     ? `supplement_${clientMessageId.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 120)}`
     : null;
-  const persistedMessage = createNormalizedMessage({
-    kind: 'text',
-    role: 'user',
-    content: normalizedDisplayContent,
-    sessionId: normalizedSessionId,
-    provider: 'claude',
-    timestamp,
-    ...(messageId ? { id: messageId } : {}),
-    isSupplement: true,
-    supplementMode: mode,
-  });
-
-  persistNormalizedMessages({
-    options: session.runtimeOptions,
-    provider: 'claude',
-    providerSessionId: normalizedSessionId,
-    runtimeId: session.runtimeId,
-    messages: [persistedMessage],
-  });
-
   markSessionProcessing(normalizedSessionId);
   const claudeMessageId = resolveClaudeUserMessageId(clientMessageId);
-  void appendClaudeDisplayCommand({
-    runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
-    projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
-    sessionId: normalizedSessionId,
-    messageId: claudeMessageId,
-    displayCommand: normalizedDisplayContent,
-    modelContent: normalizedContent,
-    uid: session.runtimeOptions?.runtimeUid,
-    gid: session.runtimeOptions?.runtimeGid,
-  }).catch((error) => {
-    console.warn(
-      `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
-      error?.message || error,
-    );
-  });
-  session.inputQueue.push(buildClaudeUserMessage(normalizedContent, [], {
+  // Prefer the reply visible at send time, including a just-finished buffered
+  // stream. Validate it against this query's main-agent identities.
+  const displayAfterAssistantId = session.messageDisplay?.hasMainMessageId(requestedDisplayAnchor)
+    ? requestedDisplayAnchor
+    : session.messageDisplay?.getActiveMainMessageId() || null;
+  session.supplementSequence = (session.supplementSequence || 0) + 1;
+  const displayPosition = displayAfterAssistantId
+    ? { displayAfterAssistantId, supplementSequence: session.supplementSequence }
+    : {};
+  const supplementalMessage = buildClaudeUserMessage(normalizedContent, [], {
     uuid: claudeMessageId,
     priority,
     shouldQuery,
     timestamp,
-  }));
+  });
 
   const targetWriter = writer || session.writer;
   sendWriterMessage(targetWriter, {
     type: 'claude-supplement-ack',
     sessionId: normalizedSessionId,
     clientMessageId,
-    status: 'injected',
+    status: 'queued',
     mode,
     content: normalizedDisplayContent,
     timestamp,
+    ...displayPosition,
+  });
+  session.inputQueue.push(supplementalMessage, {
+    onConsumed: () => {
+      const consumedAt = new Date().toISOString();
+      const persistedMessage = createNormalizedMessage({
+        kind: 'text',
+        role: 'user',
+        content: normalizedDisplayContent,
+        sessionId: normalizedSessionId,
+        provider: 'claude',
+        timestamp: consumedAt,
+        ...(messageId ? { id: messageId } : {}),
+        isSupplement: true,
+        supplementMode: mode,
+      });
+
+      persistNormalizedMessages({
+        options: session.runtimeOptions,
+        provider: 'claude',
+        providerSessionId: normalizedSessionId,
+        runtimeId: session.runtimeId,
+        messages: [persistedMessage],
+      });
+      void appendClaudeDisplayCommand({
+        runtimeHomePath: session.runtimeOptions?.runtimeHomePath,
+        projectPath: session.runtimeOptions?.projectPath || session.runtimeOptions?.cwd,
+        sessionId: normalizedSessionId,
+        messageId: claudeMessageId,
+        displayCommand: normalizedDisplayContent,
+        modelContent: normalizedContent,
+        ...displayPosition,
+        uid: session.runtimeOptions?.runtimeUid,
+        gid: session.runtimeOptions?.runtimeGid,
+      }).catch((error) => {
+        console.warn(
+          `[ClaudeDisplayCommand] Failed to persist supplemental display metadata for ${normalizedSessionId}:`,
+          error?.message || error,
+        );
+      });
+
+      sendWriterMessage(getSession(normalizedSessionId)?.writer || targetWriter, {
+        type: 'claude-supplement-ack',
+        sessionId: normalizedSessionId,
+        clientMessageId,
+        status: 'processing',
+        mode,
+        content: normalizedDisplayContent,
+        timestamp: consumedAt,
+        ...displayPosition,
+      });
+    },
   });
   if (shouldQuery) {
     sendWriterMessage(targetWriter, createNormalizedMessage({
@@ -3226,4 +3275,5 @@ export {
   resolveConfiguredHookUserId,
   createHookHeadersHelperRunner,
   createHookCardActionResults,
+  ClaudeInputQueue,
 };

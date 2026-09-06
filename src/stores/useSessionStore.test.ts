@@ -147,6 +147,46 @@ test('processing a queued follow-up moves it before later queued messages', () =
   assert.deepEqual(merged, [completedResponse, firstProcessing, secondQueued]);
 });
 
+test('a live supplement stays below the active response until the SDK consumes it', () => {
+  const currentResponse = makeAssistantText({
+    id: 'assistant-current-turn',
+    timestamp: '2026-04-26T10:31:36.000Z',
+    content: 'Current response',
+  });
+  const pendingSupplement = makeUserText({
+    id: 'local_supplement_followup-1',
+    timestamp: '2026-04-26T10:31:35.000Z',
+    content: 'Use this live context',
+    queueStatus: 'queued',
+    clientMessageId: 'followup-1',
+  });
+
+  assert.deepEqual(
+    computeMerged([], [pendingSupplement, currentResponse]),
+    [currentResponse, pendingSupplement],
+  );
+
+  const processingSupplement = {
+    ...pendingSupplement,
+    timestamp: '2026-04-26T10:31:37.000Z',
+    queueStatus: 'processing' as const,
+  };
+  const nextResponse = makeAssistantText({
+    id: 'assistant-next-turn',
+    timestamp: '2026-04-26T10:31:38.000Z',
+    content: 'Response using the live context',
+  });
+  const realtime = upsertRealtimeMessages(
+    [pendingSupplement, currentResponse],
+    [processingSupplement, nextResponse],
+  );
+
+  assert.deepEqual(
+    computeMerged([], realtime),
+    [currentResponse, processingSupplement, nextResponse],
+  );
+});
+
 test('computeMerged drops local optimistic user message after the server copy arrives', () => {
   const serverMessage = makeUserText({
     id: 'server-user',
@@ -160,6 +200,19 @@ test('computeMerged drops local optimistic user message after the server copy ar
   const merged = computeMerged([serverMessage], [localOptimisticMessage]);
 
   assert.deepEqual(merged, [serverMessage]);
+});
+
+test('identical text in a different assistant message cannot replace an anchored stream', () => {
+  const stream: NormalizedMessage = {
+    ...makeAssistantText({ id: '__streaming_s_1', content: 'Identical text' }),
+    kind: 'stream_delta', assistantMessageId: 'msg-a',
+  };
+  const supplement: NormalizedMessage = {
+    ...makeUserText({ id: 'local_supplement_input', content: 'Supplement' }),
+    displayAfterAssistantId: 'msg-a',
+  };
+  const next = { ...makeAssistantText({ id: 'next', content: 'Identical text' }), assistantMessageId: 'msg-b' };
+  assert.deepEqual(computeMerged([], [stream, supplement, next]), [stream, supplement, next]);
 });
 
 test('computeMerged drops realtime slash invocation after metadata-restored history arrives', () => {

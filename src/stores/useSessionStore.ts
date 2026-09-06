@@ -53,6 +53,9 @@ export interface NormalizedMessage {
   role?: 'user' | 'assistant';
   content?: string;
   clientMessageId?: string;
+  assistantMessageId?: string;
+  displayAfterAssistantId?: string;
+  supplementSequence?: number;
   queueStatus?: 'queued' | 'processing' | 'failed';
   queuePosition?: number;
   images?: string[];
@@ -430,7 +433,7 @@ export function useSessionStore() {
     sessionId: string,
     accumulatedText: string,
     msgProvider: LLMProvider,
-    options: { id?: string; timestamp?: string; parentToolUseId?: string } = {},
+    options: { id?: string; timestamp?: string; parentToolUseId?: string; assistantMessageId?: string } = {},
   ) => {
     const slot = getSlot(sessionId);
     const streamId = options.id || `__streaming_${sessionId}`;
@@ -442,6 +445,7 @@ export function useSessionStore() {
       provider: msgProvider,
       kind: 'stream_delta',
       content: accumulatedText,
+      ...(options.assistantMessageId ? { assistantMessageId: options.assistantMessageId } : {}),
       ...(options.parentToolUseId ? { parentToolUseId: options.parentToolUseId } : {}),
     };
     const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);

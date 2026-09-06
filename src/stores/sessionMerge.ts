@@ -1,4 +1,5 @@
 import type { NormalizedMessage } from './useSessionStore';
+import { orderSupplementMessages } from '../../shared/messageDisplayOrder';
 
 const OPTIMISTIC_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const OPTIMISTIC_USER_CLOCK_SKEW_MS = 2_000;
@@ -36,7 +37,7 @@ function pinQueuedUserMessagesToEnd(messages: NormalizedMessage[]): NormalizedMe
   const queued = messages.filter(message =>
     message.kind === 'text' &&
     message.role === 'user' &&
-    message.queueStatus === 'queued'
+    message.queueStatus === 'queued' && !message.displayAfterAssistantId
   );
   if (queued.length === 0) return messages;
 
@@ -155,6 +156,10 @@ function isPersistedCopyOfFinalizedStream(
   if (serverMessage.sessionId !== realtimeMessage.sessionId) return false;
   if (serverMessage.provider !== realtimeMessage.provider) return false;
   if (serverMessage.content?.trim() !== realtimeMessage.content?.trim()) return false;
+  if (!isSameAgentStreamScope(serverMessage, realtimeMessage)) return false;
+  if (serverMessage.assistantMessageId && realtimeMessage.assistantMessageId) {
+    return serverMessage.assistantMessageId === realtimeMessage.assistantMessageId;
+  }
 
   const serverTime = getMessageTime(serverMessage);
   const realtimeTime = getMessageTime(realtimeMessage);
@@ -245,10 +250,15 @@ function isSupersedingAssistantText(
   if (message.sessionId !== streamingPlaceholder.sessionId) return false;
   if (message.provider !== streamingPlaceholder.provider) return false;
   if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  if (message.assistantMessageId && streamingPlaceholder.assistantMessageId &&
+      message.assistantMessageId !== streamingPlaceholder.assistantMessageId) return false;
   // A canonical assistant event can briefly lag behind the accumulated stream.
   // Never discard a richer realtime snapshot in favor of a shorter copy, or
   // the tail disappears until the persisted transcript is fetched again.
   if ((message.content?.length || 0) < (streamingPlaceholder.content?.length || 0)) return false;
+  if (message.assistantMessageId && streamingPlaceholder.assistantMessageId) {
+    return (message.content || '').startsWith(streamingPlaceholder.content || '');
+  }
 
   const messageTime = getMessageTime(message);
   const streamTime = getMessageTime(streamingPlaceholder);
@@ -265,10 +275,13 @@ function isStaleAssistantPrefixOfStream(
   if (message.sessionId !== streamingPlaceholder.sessionId) return false;
   if (message.provider !== streamingPlaceholder.provider) return false;
   if (!isSameAgentStreamScope(message, streamingPlaceholder)) return false;
+  if (message.assistantMessageId && streamingPlaceholder.assistantMessageId &&
+      message.assistantMessageId !== streamingPlaceholder.assistantMessageId) return false;
   const messageContent = message.content || '';
   const streamContent = streamingPlaceholder.content || '';
   if (!messageContent || messageContent.length >= streamContent.length) return false;
   if (!streamContent.startsWith(messageContent)) return false;
+  if (message.assistantMessageId && streamingPlaceholder.assistantMessageId) return true;
 
   const messageTime = getMessageTime(message);
   const streamTime = getMessageTime(streamingPlaceholder);
@@ -351,15 +364,27 @@ function dedupeRealtimeMessages(messages: NormalizedMessage[]): NormalizedMessag
  * Persisted messages normally take priority, except for a newer Hook state or
  * an assistant text extension not yet represented in the history snapshot.
  */
+function applyRealtimeDisplayPositions(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
+  const anchored = realtime.filter(message => message.displayAfterAssistantId);
+  if (anchored.length === 0) return server;
+  return server.map(message => {
+    const live = anchored.find(candidate =>
+      (candidate.id === message.id || isPersistedCopyOfOptimisticUserText(message, candidate)));
+    if (!live || message.displayAfterAssistantId) return message;
+    return { ...message, displayAfterAssistantId: live.displayAfterAssistantId, supplementSequence: live.supplementSequence };
+  });
+}
+
 export function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
   const realtimeUnique = dropSupersededStreamingPlaceholders(dedupeRealtimeMessages(realtime));
-  if (realtimeUnique.length === 0) return server;
-  if (server.length === 0) return pinQueuedUserMessagesToEnd(realtimeUnique);
-  const serverWithLifecycleUpdates = applySameIdRealtimeUpdates(server, realtimeUnique);
+  if (realtimeUnique.length === 0) return orderSupplementMessages(server);
+  if (server.length === 0) return orderSupplementMessages(pinQueuedUserMessagesToEnd(realtimeUnique));
+  const serverWithLifecycleUpdates = applyRealtimeDisplayPositions(applySameIdRealtimeUpdates(server, realtimeUnique), realtimeUnique);
   const serverIds = new Set(serverWithLifecycleUpdates.map(m => m.id));
   const extra = dropPersistedRealtimeCopies(serverWithLifecycleUpdates, realtimeUnique, serverIds);
-  if (extra.length === 0) return serverWithLifecycleUpdates;
-  return pinQueuedUserMessagesToEnd(extra.reduce(insertByTimestamp, serverWithLifecycleUpdates));
+  return orderSupplementMessages(dropSupersededStreamingPlaceholders(
+    pinQueuedUserMessagesToEnd(extra.reduce(insertByTimestamp, serverWithLifecycleUpdates))
+  ));
 }
 
 /**
@@ -378,6 +403,11 @@ export function reconcileRealtimeAfterServerRefresh(
   const claimedServerIndexes = new Set<number>();
 
   return realtime.filter((realtimeMessage) => {
+    if (realtimeMessage.displayAfterAssistantId && !server.some(message =>
+      (message.id === realtimeMessage.id || isPersistedCopyOfOptimisticUserText(message, realtimeMessage)) &&
+      message.displayAfterAssistantId === realtimeMessage.displayAfterAssistantId &&
+      message.supplementSequence === realtimeMessage.supplementSequence
+    )) return true;
     if (serverIds.has(realtimeMessage.id)) {
       const serverMessage = server.find(message => message.id === realtimeMessage.id);
       return Boolean(serverMessage && (

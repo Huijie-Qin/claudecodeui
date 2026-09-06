@@ -169,6 +169,8 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
             content,
             clientMessageId,
             queueStatus,
+            ...(typeof msg.displayAfterAssistantId === 'string' ? { displayAfterAssistantId: msg.displayAfterAssistantId } : {}),
+            ...(typeof msg.supplementSequence === 'number' ? { supplementSequence: msg.supplementSequence } : {}),
             ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
           });
           return;
@@ -255,6 +257,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           id: streamSnapshot.id,
           timestamp: streamSnapshot.timestamp,
           parentToolUseId: streamSnapshot.parentToolUseId,
+          assistantMessageId: streamSnapshot.assistantMessageId,
         });
       }
     };
@@ -267,6 +270,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           id: streamSnapshot.id,
           timestamp: streamSnapshot.timestamp,
           parentToolUseId: streamSnapshot.parentToolUseId,
+          assistantMessageId: streamSnapshot.assistantMessageId,
         });
       }
     };
@@ -283,6 +287,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           id: streamSnapshot.id,
           timestamp: streamSnapshot.timestamp,
           parentToolUseId: streamSnapshot.parentToolUseId,
+          assistantMessageId: streamSnapshot.assistantMessageId,
         });
       }
     };
@@ -301,7 +306,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
         ? msg.parentToolUseId
         : undefined;
       const key = streamScopeKey(sid, parentToolUseId);
-      streamAccumulatorRef.current.appendDelta(sid, text, msg.timestamp, parentToolUseId);
+      streamAccumulatorRef.current.appendDelta(sid, text, msg.timestamp, parentToolUseId, msg.assistantMessageId);
       if (!streamTimersRef.current.has(key)) {
         const timerId = window.setTimeout(() => {
           streamTimersRef.current.delete(key);

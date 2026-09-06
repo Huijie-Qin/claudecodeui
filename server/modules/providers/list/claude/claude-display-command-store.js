@@ -249,12 +249,15 @@ export async function appendClaudeDisplayCommand({
   messageId,
   displayCommand,
   modelContent,
+  displayAfterAssistantId = '',
+  supplementSequence = 0,
   uid = null,
   gid = null,
 }) {
   const filePath = resolveClaudeDisplayCommandPath(runtimeHomePath, projectPath, sessionId);
   const normalizedMessageId = normalizeIdentifier(messageId);
   const normalizedDisplayCommand = normalizeClaudeDisplayCommand(displayCommand);
+  const anchor = normalizeIdentifier(displayAfterAssistantId);
   const normalizedModelContent = typeof modelContent === 'string'
     ? modelContent.trim()
     : '';
@@ -262,10 +265,10 @@ export async function appendClaudeDisplayCommand({
   if (
     !filePath
     || !normalizedMessageId
-    || !normalizedDisplayCommand
+    || (!normalizedDisplayCommand && !anchor)
     // Native slash commands can be renamed by the SDK (SKILL.md name versus
     // directory name), even when the input and display initially match.
-    || (normalizedDisplayCommand === normalizedModelContent && !normalizedDisplayCommand.startsWith('/'))
+    || (!anchor && normalizedDisplayCommand === normalizedModelContent && !normalizedDisplayCommand.startsWith('/'))
   ) {
     return false;
   }
@@ -273,7 +276,9 @@ export async function appendClaudeDisplayCommand({
   const record = JSON.stringify({
     version: 1,
     messageId: normalizedMessageId,
-    displayCommand: normalizedDisplayCommand,
+    ...(normalizedDisplayCommand ? { displayCommand: normalizedDisplayCommand } : {}),
+    ...(anchor ? { displayAfterAssistantId: anchor } : {}),
+    ...(Number.isSafeInteger(supplementSequence) && supplementSequence > 0 ? { supplementSequence } : {}),
   });
   const ownership = normalizeOwnership(uid, gid);
 
@@ -284,7 +289,7 @@ export async function appendClaudeDisplayCommand({
   return true;
 }
 
-export async function readClaudeDisplayCommands({
+export async function readClaudeDisplayMetadata({
   runtimeHomePath,
   sessionId,
 }) {
@@ -312,8 +317,15 @@ export async function readClaudeDisplayCommands({
         const record = JSON.parse(line);
         const messageId = normalizeIdentifier(record?.messageId);
         const displayCommand = normalizeClaudeDisplayCommand(record?.displayCommand);
-        if (messageId && displayCommand) {
-          displayCommands.set(messageId, displayCommand);
+        const anchor = normalizeIdentifier(record?.displayAfterAssistantId);
+        if (messageId && (displayCommand || anchor)) {
+          displayCommands.set(messageId, {
+            ...displayCommands.get(messageId),
+            ...(displayCommand ? { displayCommand } : {}),
+            ...(anchor ? { displayAfterAssistantId: anchor } : {}),
+            ...(Number.isSafeInteger(record.supplementSequence) && record.supplementSequence > 0
+              ? { supplementSequence: record.supplementSequence } : {}),
+          });
         }
       } catch {
         // Ignore a partial final line if the process stopped during an append.
@@ -322,6 +334,12 @@ export async function readClaudeDisplayCommands({
   }
 
   return displayCommands;
+}
+
+export async function readClaudeDisplayCommands(options) {
+  const metadata = await readClaudeDisplayMetadata(options);
+  return new Map([...metadata].filter(([, record]) => record.displayCommand)
+    .map(([id, record]) => [id, record.displayCommand]));
 }
 
 export async function deleteClaudeDisplayCommands({
