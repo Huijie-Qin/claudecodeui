@@ -4,10 +4,11 @@ export interface SessionStreamSnapshot {
   content: string;
   timestamp: string;
   parentToolUseId?: string;
+  assistantMessageId?: string;
 }
 
 export interface SessionStreamAccumulator {
-  appendDelta(sessionId: string, delta: string, timestamp?: string, parentToolUseId?: string): string;
+  appendDelta(sessionId: string, delta: string, timestamp?: string, parentToolUseId?: string, assistantMessageId?: string): string;
   get(sessionId: string, parentToolUseId?: string): string;
   getSnapshot(sessionId: string, parentToolUseId?: string): SessionStreamSnapshot | null;
   drainSnapshots(): SessionStreamSnapshot[];
@@ -47,11 +48,12 @@ export function createSessionStreamAccumulator(): SessionStreamAccumulator {
   };
 
   return {
-    appendDelta(sessionId, delta, timestamp, parentToolUseId) {
+    appendDelta(sessionId, delta, timestamp, parentToolUseId, assistantMessageId) {
       const key = scopeKey(sessionId, parentToolUseId);
       const current = streams.get(key) || createStream(sessionId, timestamp, parentToolUseId);
       const next = {
         ...current,
+        ...(assistantMessageId ? { assistantMessageId } : {}),
         content: `${current.content}${delta}`,
       };
       streams.set(key, next);

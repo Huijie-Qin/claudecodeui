@@ -59,7 +59,7 @@ interface UseChatComposerStateArgs {
   onShowSettings?: () => void;
   pendingViewSessionRef: { current: PendingViewSession | null };
   scrollToBottom: () => void;
-  addMessage: (msg: ChatMessage) => void;
+  addMessage: (msg: ChatMessage) => string | void;
   clearMessages: () => void;
   rewindMessages: (count: number) => void;
   setIsLoading: (loading: boolean) => void;
@@ -434,7 +434,7 @@ export function useChatComposerState({
 
         const supplementContent = currentInput;
         const clientMessageId = createClientMessageId();
-        addMessage({
+        const displayAfterAssistantId = addMessage({
           id: `local_supplement_${clientMessageId}`,
           type: 'user',
           content: supplementContent,
@@ -458,6 +458,7 @@ export function useChatComposerState({
           content: supplementContent,
           clientMessageId,
           mode: 'now',
+          ...(displayAfterAssistantId ? { displayAfterAssistantId } : {}),
         });
 
         setInput('');

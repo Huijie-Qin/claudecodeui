@@ -1,6 +1,7 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
 
 import { hookConfigService } from './hook-configs.js';
+import { orderSupplementMessages } from '../../shared/messageDisplayOrder.js';
 
 function generateUserPromptMessageId() {
   return `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -402,6 +403,7 @@ function mergeLegacyScheduledSkillInvocations(jsonlMessages, dbMessages) {
 }
 
 function paginateHistory(messages, limit, offset) {
+  messages = orderSupplementMessages(messages);
   const normalizedOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
   const normalizedLimit = limit == null
     ? null

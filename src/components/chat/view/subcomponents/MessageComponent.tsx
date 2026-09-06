@@ -184,7 +184,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
-  const isQueuedUserMessage = message.type === 'user' && message.queueStatus === 'queued';
+  // Supplemental input is pinned only until the active Claude SDK stream
+  // consumes it. Keep that ordering state invisible: this is direct live
+  // input, not an app-level queued turn.
+  const isQueuedUserMessage = message.type === 'user' &&
+    message.queueStatus === 'queued' &&
+    !message.clientMessageId;
   const isFailedQueuedUserMessage = message.type === 'user' && message.queueStatus === 'failed';
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&

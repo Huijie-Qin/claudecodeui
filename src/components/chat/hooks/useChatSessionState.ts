@@ -268,7 +268,17 @@ export function useChatSessionState({
     const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const normalized = chatMessageToNormalized(msg, activeSessionId, prov);
     if (normalized) {
+      if (normalized.id.startsWith('local_supplement_')) {
+        const messages = sessionStore.getMessages(activeSessionId);
+        const lastVisible = [...messages].reverse().find(message => !message.parentToolUseId &&
+          ['text', 'stream_delta', 'thinking', 'tool_use', 'tool_result', 'hook_activity'].includes(message.kind) &&
+          message.role !== 'user');
+        if (lastVisible?.role === 'assistant' || lastVisible?.kind === 'stream_delta') {
+          normalized.displayAfterAssistantId = lastVisible.assistantMessageId;
+        }
+      }
       sessionStore.appendRealtime(activeSessionId, normalized);
+      return normalized.displayAfterAssistantId;
     }
   }, [activeSessionId, sessionStore]);
 

@@ -112,6 +112,56 @@ test('a canonical message before the 100ms flush cannot erase buffered parent te
   assert.equal(timers.size, 0);
 });
 
+test('supplements stay after their complete streaming reply across canonical replacement and reload', async (t) => {
+  const { process, store } = makeHandler(t);
+  const replies = interceptHistory(t);
+  const first = { ...answer('Opening'), assistantMessageId: 'msg-a' };
+  process({ ...first, kind: 'stream_delta' });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  const supplements = [1, 2].map(sequence => ({
+    id: `local_supplement_input-${sequence}`, sessionId: 'session-1', provider: 'claude' as const,
+    kind: 'text' as const, role: 'user' as const, content: `Supplement ${sequence}`,
+    clientMessageId: `input-${sequence}`, timestamp: `2026-09-03T10:00:0${sequence}.000Z`,
+    displayAfterAssistantId: 'msg-a', supplementSequence: sequence,
+  }));
+  for (const supplement of supplements) {
+    store.appendRealtime('session-1', supplement);
+    for (const status of ['queued', 'processing']) process({
+      type: 'claude-supplement-ack', sessionId: 'session-1', status, mode: 'now',
+      clientMessageId: supplement.clientMessageId, content: supplement.content,
+      timestamp: supplement.timestamp, displayAfterAssistantId: 'msg-a',
+      supplementSequence: supplement.supplementSequence,
+    });
+  }
+  process({ ...first, kind: 'stream_delta', content: ' plus tail' });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  const content = () => store.getMessages('session-1').map(message => message.content);
+  assert.deepEqual(content(), ['Opening plus tail', 'Supplement 1', 'Supplement 2']);
+  const full = { ...first, content: 'Opening plus tail', timestamp: '2026-09-03T10:00:03.000Z' };
+  process(full);
+  const next = { ...answer('New reply', 'next'), assistantMessageId: 'msg-b', timestamp: '2026-09-03T10:00:04.000Z' };
+  process(next);
+  const expected = ['Opening plus tail', 'Supplement 1', 'Supplement 2', 'New reply'];
+  assert.deepEqual(content(), expected);
+
+  const history = supplements.map(message => ({ ...message, id: message.clientMessageId }));
+  const staleRefresh = store.refreshFromServer('session-1');
+  replies[0]([...history.map(({ displayAfterAssistantId, supplementSequence, ...message }) => message), full, next]);
+  await staleRefresh;
+  assert.deepEqual(content(), expected);
+  const persisted = [...history, full, next];
+  const refresh = store.refreshFromServer('session-1');
+  replies[1](persisted);
+  await refresh;
+  assert.deepEqual(content(), expected);
+  assert.equal(store.getSessionSlot('session-1')?.realtimeMessages.length, 0);
+  const reloaded = makeStore();
+  const load = reloaded.fetchFromServer('session-1');
+  replies[2](persisted);
+  await load;
+  assert.deepEqual(reloaded.getMessages('session-1').map(message => message.content), expected);
+});
+
 test('a complete canonical copy replaces the published buffer without duplicates', (t) => {
   const { process, store, accumulator, timers } = makeHandler(t);
   const full = 'Full canonical answer.';

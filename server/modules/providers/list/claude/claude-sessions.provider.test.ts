@@ -10,6 +10,47 @@ import {
 } from './claude-sessions.provider.js';
 import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
 
+test('supplement display anchors survive JSONL reload and are applied before pagination', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-supplement-order-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = 'supplement-session';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  const rows = [
+    { uuid: 'u1', type: 'user', timestamp: '2026-09-06T10:00:01.000Z', message: { role: 'user', content: 'Supplement 1' } },
+    { uuid: 'u2', type: 'user', timestamp: '2026-09-06T10:00:02.000Z', message: { role: 'user', content: 'Supplement 2' } },
+    { uuid: 'a', type: 'assistant', timestamp: '2026-09-06T10:00:03.000Z', message: { id: 'msg-a', role: 'assistant', content: [{ type: 'text', text: 'Full current reply' }] } },
+    { uuid: 'b', type: 'assistant', timestamp: '2026-09-06T10:00:04.000Z', message: { id: 'msg-b', role: 'assistant', content: [{ type: 'text', text: 'New reply' }] } },
+  ].map(row => ({ ...row, sessionId }));
+  const transcript = path.join(projectDirectory, `${sessionId}.jsonl`);
+  const raw = rows.map(row => JSON.stringify(row)).join('\n') + '\n';
+  await fs.writeFile(transcript, raw);
+  for (const sequence of [1, 2]) assert.equal(await appendClaudeDisplayCommand({
+    runtimeHomePath, projectPath: '/workspace', sessionId, messageId: `u${sequence}`,
+    displayCommand: `Supplement ${sequence}`, modelContent: `Supplement ${sequence}`,
+    displayAfterAssistantId: 'msg-a', supplementSequence: sequence,
+  }), true);
+  const provider = new ClaudeSessionsProvider();
+  const full = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  assert.deepEqual(full.messages.map(message => message.content), ['Full current reply', 'Supplement 1', 'Supplement 2', 'New reply']);
+  const recent = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 2 });
+  const older = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 2, offset: 2 });
+  assert.deepEqual([...older.messages, ...recent.messages], full.messages);
+  assert.equal(recent.hasMore, true);
+  assert.equal(older.hasMore, false);
+  assert.equal(await fs.readFile(transcript, 'utf8'), raw);
+});
+
+test('live and persisted Claude output expose the same assistant message identity', () => {
+  const provider = new ClaudeSessionsProvider();
+  const [live] = provider.normalizeMessage({ type: 'stream_event', assistantMessageId: 'msg-a',
+    event: { type: 'content_block_delta', delta: { text: 'Answer' } } }, 's');
+  const [persisted] = provider.normalizeMessage({ type: 'assistant', uuid: 'different-transcript-uuid',
+    message: { id: 'msg-a', role: 'assistant', content: [{ type: 'text', text: 'Answer' }] } }, 's');
+  assert.equal(live.assistantMessageId, persisted.assistantMessageId);
+  assert.equal(live.assistantMessageId, 'msg-a');
+});
+
 test('resolveClaudeProjectStorageName prefers encoded workspace path for tenant workspaces', () => {
   assert.equal(
     resolveClaudeProjectStorageName({

@@ -9,7 +9,8 @@ import {
   readObjectRecord,
 } from '@/shared/utils.js';
 
-import { readClaudeDisplayCommands } from './claude-display-command-store.js';
+import { readClaudeDisplayMetadata } from './claude-display-command-store.js';
+import { orderSupplementMessages } from '../../../../../shared/messageDisplayOrder.js';
 
 const PROVIDER: 'claude' = 'claude';
 
@@ -188,16 +189,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const streamEvent = raw.type === 'stream_event' ? readObjectRecord(raw.event) : raw;
+    const assistantMessageId = raw.assistantMessageId || raw.message?.id;
+    const assistantIdentity = typeof assistantMessageId === 'string' ? { assistantMessageId } : {};
 
     if (streamEvent?.type === 'content_block_delta' && streamEvent.delta?.text) {
       const content = cleanAssistantText(streamEvent.delta.text);
       if (!content) {
         return [];
       }
-      return [createNormalizedMessage({ kind: 'stream_delta', content, sessionId, provider: PROVIDER })];
+      return [createNormalizedMessage({ kind: 'stream_delta', content, sessionId, provider: PROVIDER, ...assistantIdentity })];
     }
     if (streamEvent?.type === 'content_block_stop') {
-      return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER })];
+      return [createNormalizedMessage({ kind: 'stream_end', sessionId, provider: PROVIDER, ...assistantIdentity })];
     }
 
     const messages: NormalizedMessage[] = [];
@@ -464,6 +467,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           ...attachUsage(),
         }));
       }
+      for (const message of messages) Object.assign(message, assistantIdentity);
       return messages;
     }
 
@@ -484,16 +488,30 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
+    let displayMetadata = new Map<string, { displayCommand?: string; displayAfterAssistantId?: string; supplementSequence?: number }>();
+    if (options.runtimeHomePath) {
+      try {
+        displayMetadata = await readClaudeDisplayMetadata({ runtimeHomePath: options.runtimeHomePath, sessionId });
+      } catch (error) {
+        console.warn(`[ClaudeProvider] Failed to load display metadata for ${sessionId}:`, String(error));
+      }
+    }
+    // Apply display relationships before pagination so an anchor and its user
+    // messages cannot be separated by the transcript's timestamp ordering.
+    const hasDisplayAnchors = [...displayMetadata.values()].some(record => record.displayAfterAssistantId);
+    const historyLimit = hasDisplayAnchors ? null : limit;
+    const historyOffset = hasDisplayAnchors ? 0 : offset;
+
     let result: ClaudeHistoryResult;
     try {
       result = options.runtimeHomePath
         ? await loadClaudeRuntimeSessionMessages(
           path.join(options.runtimeHomePath, '.claude', 'projects'),
           sessionId,
-          limit,
-          offset,
+          historyLimit,
+          historyOffset,
         )
-        : await loadClaudeSessionMessages(projectStorageName, sessionId, limit, offset);
+        : await loadClaudeSessionMessages(projectStorageName, sessionId, historyLimit, historyOffset);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
@@ -503,18 +521,6 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const rawMessages = Array.isArray(result) ? result : (result.messages || []);
     const total = Array.isArray(result) ? rawMessages.length : (result.total || 0);
     const hasMore = Array.isArray(result) ? false : Boolean(result.hasMore);
-    let displayCommands = new Map<string, string>();
-    if (options.runtimeHomePath) {
-      try {
-        displayCommands = await readClaudeDisplayCommands({
-          runtimeHomePath: options.runtimeHomePath,
-          sessionId,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[ClaudeProvider] Failed to load display metadata for ${sessionId}:`, message);
-      }
-    }
 
     const toolResultMap = new Map<string, ClaudeToolResult>();
     for (const raw of rawMessages) {
@@ -536,11 +542,18 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const normalized: NormalizedMessage[] = [];
     let activeHookActivityId: string | null = null;
     for (const raw of rawMessages) {
-      const displayCommand = typeof raw.uuid === 'string'
-        ? displayCommands.get(raw.uuid) || null
-        : null;
+      const metadata = typeof raw.uuid === 'string' ? displayMetadata.get(raw.uuid) : undefined;
+      const displayCommand = metadata?.displayCommand || null;
       const recoveryActivityId = readHookRecoveryActivityId(displayCommand);
       const nextMessages = this.normalizeMessage(raw, sessionId, displayCommand);
+      if (metadata?.displayAfterAssistantId) {
+        for (const message of nextMessages) {
+          if (message.kind === 'text' && message.role === 'user') {
+            message.displayAfterAssistantId = metadata.displayAfterAssistantId;
+            message.supplementSequence = metadata.supplementSequence;
+          }
+        }
+      }
       if (recoveryActivityId) {
         activeHookActivityId = recoveryActivityId;
       } else if (nextMessages.some((message) => message.kind === 'text' && message.role === 'user')) {
@@ -587,6 +600,12 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
+    if (hasDisplayAnchors) {
+      const ordered = orderSupplementMessages(normalized);
+      const end = Math.max(0, ordered.length - Math.max(0, offset));
+      const start = limit === null ? 0 : Math.max(0, end - Math.max(0, limit));
+      return { messages: ordered.slice(start, end), total: ordered.length, hasMore: start > 0, offset, limit };
+    }
     return {
       messages: normalized,
       total,

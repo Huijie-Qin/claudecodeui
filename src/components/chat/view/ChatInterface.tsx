@@ -111,6 +111,8 @@ function ChatInterface({
       sessionStore.updateStreaming(snapshot.sessionId, snapshot.content, provider, {
         id: snapshot.id,
         timestamp: snapshot.timestamp,
+        parentToolUseId: snapshot.parentToolUseId,
+        assistantMessageId: snapshot.assistantMessageId,
       });
     }
     for (const timerId of streamTimersRef.current.values()) {

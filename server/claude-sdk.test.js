@@ -813,6 +813,42 @@ test('createClaudePromptFactory keeps text-only prompts as strings', async () =>
   assert.equal(createPrompt(), 'hello');
 });
 
+test('ClaudeInputQueue notifies when the SDK consumes queued and waiting input', async () => {
+  const claudeSdk = await import('./claude-sdk.js');
+  const queue = new claudeSdk.ClaudeInputQueue();
+  const queuedMessage = claudeSdk.buildClaudeUserMessage('queued supplement', []);
+  const waitingMessage = claudeSdk.buildClaudeUserMessage('waiting supplement', []);
+  const consumed = [];
+
+  queue.push(queuedMessage, {
+    onConsumed: () => consumed.push('queued'),
+  });
+  assert.deepEqual(consumed, []);
+  assert.equal((await queue.next()).value, queuedMessage);
+  assert.deepEqual(consumed, ['queued']);
+
+  const waitingRead = queue.next();
+  queue.push(waitingMessage, {
+    onConsumed: () => consumed.push('waiting'),
+  });
+  assert.equal((await waitingRead).value, waitingMessage);
+  assert.deepEqual(consumed, ['queued', 'waiting']);
+});
+
+test('live supplements reach a waiting SDK reader before any result boundary', { timeout: 1000 }, async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
+  const queue = new ClaudeInputQueue();
+  queue.push(buildClaudeUserMessage('initial request', []));
+  await queue.next();
+  const waitingReader = queue.next();
+  queue.push(buildClaudeUserMessage('supplement now', [], { priority: 'now' }));
+  const received = await waitingReader;
+  assert.equal(received.value.message.content, 'supplement now');
+  assert.equal(received.value.priority, 'now');
+  assert.equal(queue.pendingQueryTurns, 2);
+  queue.close();
+});
+
 test('buildClaudeUserMessage keeps display metadata out of model content', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const expandedSkillContent = '# report-skill\n\nExpanded skill instructions.';

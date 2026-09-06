@@ -2713,6 +2713,7 @@ function handleChatConnection(ws, request) {
                     sessionId: data.sessionId,
                     content: data.content,
                     clientMessageId: data.clientMessageId,
+                    displayAfterAssistantId: data.displayAfterAssistantId,
                     mode: data.mode,
                     writer,
                 });
