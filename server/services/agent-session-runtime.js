@@ -12,6 +12,7 @@ import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 import { claudeEnvService as defaultClaudeEnvService } from './claude-env.js';
 import { codeHubService } from './codehub.js';
 import { resolveContainerUser } from './container-user.js';
+import { prepareClaudeDockerCa } from './claude-docker-ca.js';
 import {
   CODEHUB_EMAIL_ENV_NAMES,
   resolveManagedGitIdentity,
@@ -1738,6 +1739,24 @@ export function createAgentSessionRuntimeManager({
       : persistedRuntime;
     const containerUser = resolveContainerUser(env);
     await ensureRuntimeHomeWritable(fs, desiredRuntime.runtime_home_path, containerUser);
+    const ca = await prepareClaudeDockerCa({
+      runtimeHomePath: desiredRuntime.runtime_home_path,
+      env,
+      containerEnv: execEnv,
+      fsImpl: fs,
+    });
+    Object.assign(execEnv, ca.env);
+    console.info('[MCP Runtime]', JSON.stringify({
+      event: 'ca_config',
+      requestId: runtimeContext.logRequestId || null,
+      workspaceId: desiredRuntime.workspace_id,
+      runtimeId: desiredRuntime.runtime_id,
+      mode: ca.mode,
+      systemStore: ca.systemStore || null,
+      certificateCount: ca.certificateCount,
+      fileSourceCount: ca.fileSourceCount || 0,
+      containerPath: ca.containerPath || null,
+    }));
     await ensureClaudeCleanupPeriod(fs, desiredRuntime.runtime_home_path, {
       ...containerUser,
       logger: console,

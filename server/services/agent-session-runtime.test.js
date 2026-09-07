@@ -3,6 +3,8 @@ import test from 'node:test';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import tls from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 
 import {
   buildClaudeDockerExecArgs,
@@ -1010,6 +1012,9 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   await fs.mkdir(workspacePath, { recursive: true });
   const workspaceRealPath = await fs.realpath(workspacePath);
 
+  const hostCaFile = path.join(tempRoot, 'host-ca.pem');
+  await fs.writeFile(hostCaFile, tls.rootCertificates[0]);
+
   const createdRuntimes = [];
   const dockerCalls = [];
   const pythonPackageInstalls = [];
@@ -1022,6 +1027,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
       CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT: sharedPythonRoot,
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      NODE_EXTRA_CA_CERTS: hostCaFile,
       CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests, httpx',
       ANTHROPIC_API_KEY: 'key-1',
       HTTP_PROXY: 'http://proxy.example:8080',
@@ -1115,6 +1121,13 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  const guestCaFile = runtime.executionEnv.NODE_EXTRA_CA_CERTS;
+  assert.match(guestCaFile, /^\/home\/cloudcli\/\.cloudcli-ca-[a-f0-9]+\.pem$/);
+  assert.notEqual(guestCaFile, hostCaFile);
+  assert.equal(runtime.hookCommandEnv.NODE_EXTRA_CA_CERTS, guestCaFile);
+  assert.ok((await fs.readFile(path.join(runtime.runtimeHomePath, path.basename(guestCaFile)), 'utf8'))
+    .includes(new X509Certificate(tls.rootCertificates[0]).toString().trim()));
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${runtime.runtimeHomePath},dst=/home/cloudcli`));
   assert.equal(runtime.hookCommandEnv.USER_KEY, encryptedUserKey);
   assert.equal(runtime.hookCommandEnv.TENANT_ID, '3');
   assert.equal(runtime.hookCommandEnv.WORKSPACE_ID, '5');
@@ -1158,6 +1171,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e TENANT_ID/);
   assert.match(wrapper, /-e WORKSPACE_ID/);
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
+  assert.match(wrapper, /-e NODE_EXTRA_CA_CERTS/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });

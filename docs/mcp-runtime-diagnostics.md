@@ -31,3 +31,36 @@ pm2 logs <应用名称或ID> --lines 200
 错误只输出 `authentication`、`timeout`、`tls`、`dns`、`network`、`protocol`、`process_or_file` 或 `other` 等分类，不输出原始错误正文。分类是启发式提示，不是最终根因。
 日志不序列化服务器配置、URL、认证头、环境变量、helper 命令、工具描述或返回正文。
 状态查询不阻塞会话，也不自动重连或更改 MCP 配置。此日志覆盖普通 Claude 会话的 SDK 查询入口，不覆盖 Codex 或独立 Agent Graph 运行入口。
+
+## 宿主机通过测试、workspace 容器报 TLS 错误
+
+Docker Claude 运行时会在每次准备查询时导出后端的系统 CA（Node 支持
+`tls.getCACertificates('system')` 时），并合并后端 `NODE_EXTRA_CA_CERTS`
+文件中的证书。只复制公开 PEM 证书，不复制私钥，也不关闭 TLS 校验。
+导出的 CA 会被容器内的 Claude/Node HTTPS 连接使用，不只影响 MCP。
+
+需要明确指定公司 CA，或后端 Node 不支持导出系统 CA 时，在远程部署的 `.env` 中配置：
+
+```dotenv
+CLOUDCLI_DOCKER_CA_CERTS_FILE=/etc/company/certs/internal-ca-bundle.pem
+```
+
+这里必须是 **PM2 后端能读取的绝对路径**，内容是 PEM CA 证书包。
+系统 CA、该文件以及后端 `NODE_EXTRA_CA_CERTS` 文件会合并去重。
+如果宿主机已有可导出的系统 CA，通常不需要新增这个配置项。
+
+更新代码、重新构建后端后，执行 `pm2 restart <应用名称或ID> --update-env`，
+随后在 workspace 发起新的 Claude 查询。已有的 runtime home 挂载会自动提供
+`/home/cloudcli/.cloudcli-ca-<hash>.pem`，该容器路径通过 `docker exec` 的
+`NODE_EXTRA_CA_CERTS` 传给 Claude；不需要重建 workspace 镜像或另加挂载。
+正在运行的 Claude 进程不会热加载变更；新增系统 CA 后也应重启 PM2 以刷新后端的 CA 缓存。
+
+PM2 日志中的 `[MCP Runtime]` / `event: "ca_config"` 可确认：
+
+- `mode: "host_bundle"`：证书已导出，`certificateCount` 是数量，`containerPath` 是实际容器路径。
+- `mode: "image_defaults"`：没有导出额外 CA，仍使用镜像默认信任；检查 `systemStore` 或配置上面的文件。
+- `mode: "container_override"`：用户/租户已显式配置容器内 `NODE_EXTRA_CA_CERTS`，保留该设置；请保证该容器路径存在且包含所需 CA。
+
+显式指定的宿主机 CA 文件缺失、不可读、格式错误或包含私钥时，查询准备会报错。
+CA 内容变化后会生成新的文件名，旧包保留给原有进程使用，并随 runtime home 一起清理。
+本功能解决 CA 信任差异；证书过期、域名不匹配仍需修复 MCP 服务端证书。
