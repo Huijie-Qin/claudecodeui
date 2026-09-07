@@ -13,6 +13,7 @@ import {
   readMcpDrafts,
   readMcpStatus,
   readWorkspaceMcpConfig,
+  resolveMcpProxyOptions,
   removeWorkspaceMcpServer,
   upsertWorkspaceMcpServer,
   writeWorkspaceMcpConfig,
@@ -601,4 +602,47 @@ test('probeHttpMcpServer reports auth and static validation failures', async () 
   assert.equal(authResult.phase, 'auth');
   assert.equal(invalidResult.phase, 'static_validation');
   assert.match(invalidResult.error, /http:\/\/ or https:\/\//);
+});
+
+test('probeHttpMcpServer exposes the underlying fetch failure cause', async () => {
+  const dnsError = new TypeError('fetch failed', {
+    cause: Object.assign(new Error('getaddrinfo ENOTFOUND mcp.internal'), { code: 'ENOTFOUND' }),
+  });
+  const refusedError = new TypeError('fetch failed', {
+    cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:39999'), { code: 'ECONNREFUSED' }),
+  });
+
+  const dnsResult = await probeHttpMcpServer(
+    { type: 'http', url: 'https://mcp.internal/mcp' },
+    { fetchImpl: async () => { throw dnsError; } },
+  );
+  const refusedResult = await probeHttpMcpServer(
+    { type: 'http', url: 'http://127.0.0.1:39999/mcp' },
+    { fetchImpl: async () => { throw refusedError; } },
+  );
+
+  assert.equal(dnsResult.phase, 'network');
+  assert.match(dnsResult.error, /DNS lookup failed.*ENOTFOUND/);
+  assert.equal(refusedResult.phase, 'network');
+  assert.match(refusedResult.error, /refused the connection.*ECONNREFUSED/);
+});
+
+test('MCP probes resolve the standard curl-compatible proxy environment', () => {
+  assert.deepEqual(resolveMcpProxyOptions({
+    HTTP_PROXY: 'http://proxy.internal:8080',
+    HTTPS_PROXY: 'http://secure-proxy.internal:8443',
+    NO_PROXY: 'localhost,127.0.0.1,.internal',
+  }), {
+    httpProxy: 'http://proxy.internal:8080',
+    httpsProxy: 'http://secure-proxy.internal:8443',
+    noProxy: 'localhost,127.0.0.1,.internal',
+  });
+  assert.deepEqual(resolveMcpProxyOptions({
+    ALL_PROXY: 'http://fallback-proxy.internal:3128',
+  }), {
+    httpProxy: 'http://fallback-proxy.internal:3128',
+    httpsProxy: 'http://fallback-proxy.internal:3128',
+    noProxy: '',
+  });
+  assert.equal(resolveMcpProxyOptions({}), null);
 });
