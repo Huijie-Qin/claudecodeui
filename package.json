@@ -36,6 +36,7 @@
     "mock:skill-market": "node scripts/skill-market-test-server.mjs",
     "test:skill-market-mock": "node --test scripts/skill-market-test-server.test.mjs",
     "test:mcp-loop-e2e": "node --test scripts/mcp-loop-demo.e2e.test.mjs",
+    "test:agent-templates:e2e": "tsx --tsconfig server/tsconfig.json scripts/agent-template-e2e.mjs",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "prebuild:server": "node -e \"require('node:fs').rmSync('dist-server', { recursive: true, force: true })\"",

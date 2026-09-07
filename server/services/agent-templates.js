@@ -1,4 +1,5 @@
 import { db } from '../database/db.js';
+import { isMcpParameterValueCompatible } from '../../shared/mcpParameterValue.js';
 
 const TEMPLATE_STATUSES = new Set(['draft', 'published', 'disabled']);
 const GLOBAL_TENANT_CODES = new Set(['dataagent', 'dataagent-admin', 'dataagent-management']);
@@ -127,6 +128,9 @@ function normalizeMcpToolSettings(value, row, name) {
       }
       if (!Object.hasOwn(entry, 'value')) {
         throw createHttpError(`MCP parameter value is required in ${name}: ${toolName}.${paramName}`);
+      }
+      if (!isMcpParameterValueCompatible(entry.value, properties[paramName])) {
+        throw createHttpError(`Invalid MCP parameter value in ${name}: ${toolName}.${paramName}`);
       }
       params[paramName] = { mode, value: entry.value };
     }

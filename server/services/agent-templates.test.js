@@ -480,6 +480,34 @@ test('MCP tool settings reject unknown tools and parameters', () => {
   }), /Unknown MCP parameter/);
 });
 
+test('MCP template parameter strategies reject invalid types and preserve falsy values', () => {
+  const fixture = createFixture();
+  try {
+    fixture.database.prepare('UPDATE mcp_server_presets SET tools_json = ? WHERE id = ?').run(JSON.stringify([{
+      name: 'echo', inputSchema: { type: 'object', properties: {
+        limit: { type: 'integer' }, enabled: { type: 'boolean' },
+        filters: { type: 'array', items: { type: 'string' } },
+        options: { type: 'object' }, region: { type: 'string', enum: ['cn', 'us'] },
+        topic: { type: 'string' },
+      } },
+    }]), fixture.mcpId);
+    const save = (param, value) => fixture.service.saveTemplate({ userId: 1, input: {
+      name: `类型检查 ${param}`, category: '测试', tenantIds: [fixture.dataAgentTenantId], skillPresetRefs: [],
+      mcpPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.mcpId,
+        toolSettings: { allowedToolNames: ['echo'], tools: { echo: { params: { [param]: { mode: 'force', value } } } } },
+      }],
+    } });
+    for (const [param, value] of [['limit', '7'], ['limit', 1.5], ['enabled', 'false'], ['filters', {}], ['filters', [1]], ['options', []], ['region', ''], ['topic', null]]) {
+      assert.throws(() => save(param, value), /Invalid MCP parameter value/, `${param}: ${JSON.stringify(value)}`);
+    }
+    for (const [param, value] of [['limit', 0], ['enabled', false], ['filters', []], ['options', {}], ['region', 'cn'], ['topic', '']]) {
+      assert.deepEqual(save(param, value).mcpPresetRefs[0].toolSettings.tools.echo.params[param].value, value);
+    }
+  } finally {
+    fixture.database.close();
+  }
+});
+
 test('Agent templates persist only current published admin Hooks', () => {
   const fixture = createFixture();
   const draft = fixture.service.saveTemplate({

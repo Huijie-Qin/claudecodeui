@@ -52,6 +52,24 @@ test('parseMcpToolName extracts MCP server and tool names', () => {
   assert.equal(parseMcpToolName('Bash'), null);
 });
 
+test('MCP overrides resolve the longest configured server name containing separators', () => {
+  const config = { mcpServers: {
+    qa: { tools: { echo__search: { params: { limit: { mode: 'force', value: 99 } } } } },
+    qa__echo: { tools: { search: { params: {
+      topic: { mode: 'default', value: 'template-topic' },
+      limit: { mode: 'force', value: 7 },
+    } } } },
+  } };
+  const { output, overrideResult } = buildMcpToolOverridePreToolUseOutput({
+    toolName: 'mcp__qa__echo__search', input: { limit: 1 }, config,
+  });
+  assert.equal(overrideResult.serverName, 'qa__echo');
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, { topic: 'template-topic', limit: 7 });
+  assert.deepEqual(applyMcpToolOverrides({
+    toolName: 'mcp__qa__echo__search', input: { topic: '', limit: 0 }, config,
+  }).input, { topic: '', limit: 7 });
+});
+
 test('applyMcpToolOverrides replaces model parameters when custom is true', () => {
   const result = applyMcpToolOverrides({
     toolName: 'mcp__knowledge_retrieval__search_docs',

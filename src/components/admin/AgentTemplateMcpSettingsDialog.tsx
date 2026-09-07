@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
+import { isMcpParameterValueCompatible } from '../../../shared/mcpParameterValue.js';
 import { Button } from '../../shared/view/ui';
 import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTools';
 import {
@@ -39,7 +40,7 @@ function formatValue(field: McpToolParameterField, value: unknown) {
 function parseValue(field: McpToolParameterField, rawValue: string): unknown {
   if (field.kind === 'number') {
     const value = Number(rawValue);
-    if (!Number.isFinite(value)) throw new Error(`参数 ${field.key} 必须是数字`);
+    if (!rawValue.trim() || !Number.isFinite(value)) throw new Error(`参数 ${field.key} 必须是数字`);
     return value;
   }
   if (field.kind === 'boolean') return rawValue === 'true';
@@ -121,10 +122,15 @@ export default function AgentTemplateMcpSettingsDialog({
     try {
       const configuredTools = Object.create(null) as McpTemplateToolSettings['tools'];
       for (const tool of tools) {
+        const schema = tool.inputSchema as { properties?: Record<string, unknown> } | undefined;
         const params = Object.fromEntries(getToolParameterFields(tool).flatMap((field) => {
           const draft = drafts[tool.name]?.[field.key];
           if (!draft || draft.mode === 'none') return [];
-          return [[field.key, { mode: draft.mode, value: parseValue(field, draft.rawValue) }]];
+          const value = parseValue(field, draft.rawValue);
+          if (!isMcpParameterValueCompatible(value, schema?.properties?.[field.key])) {
+            throw new Error(`参数 ${field.key} 的值不符合参数类型或可选值`);
+          }
+          return [[field.key, { mode: draft.mode, value }]];
         }));
         if (Object.keys(params).length > 0) configuredTools[tool.name] = { params };
       }
