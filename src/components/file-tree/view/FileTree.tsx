@@ -70,7 +70,7 @@ export default function FileTree({
     }
   }, [toast]);
 
-  const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
+  const { files, loading, error: filesError, refreshFiles } = useFileTreeData(selectedProject);
   const { quota, loading: quotaLoading, refreshQuota } = useWorkspaceStorageQuota(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode(presentation === 'data-agent'
     ? { defaultMode: 'detailed', storageKey: 'data-agent-file-tree-view-mode' }
@@ -373,6 +373,22 @@ export default function FileTree({
         totalItemCount={allItemsByPath.size}
         filteredItemCount={filteredItemCount}
       />
+
+      {filesError && (
+        <div className="mx-2 mt-2 flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">
+            {t('fileTree.loadError', 'Unable to load files')}: {filesError}
+          </span>
+          <button
+            type="button"
+            className="border-current/30 shrink-0 rounded border px-2 py-1 hover:bg-red-500/10"
+            onClick={refreshFiles}
+          >
+            {t('buttons.retry', 'Retry')}
+          </button>
+        </div>
+      )}
 
       {!isReadOnly && selectedItems.length > 0 && (
         <div className="mx-2 mt-1 flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">

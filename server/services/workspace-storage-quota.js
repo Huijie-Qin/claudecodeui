@@ -5,6 +5,7 @@ export const DEFAULT_WORKSPACE_SIZE_MB = 200;
 export const WORKSPACE_SIZE_ENV_NAME = 'WORKSPACE_SIZE';
 export const WORKSPACE_SIZE_ADMIN_ENV_NAME = 'workspace_size';
 export const BYTES_PER_MB = 1024 * 1024;
+export const DEFAULT_USAGE_SCAN_CONCURRENCY = 32;
 
 function parseWorkspaceSizeMb(value, fallback = DEFAULT_WORKSPACE_SIZE_MB) {
   const parsed = Number(String(value ?? '').trim());
@@ -37,15 +38,35 @@ export function workspaceSizeMbToBytes(sizeMb) {
   return Math.floor(Number(sizeMb) * BYTES_PER_MB);
 }
 
-export async function calculateWorkspaceUsageBytes(workspaceRoot) {
+function createAbortError() {
+  const error = new Error('Workspace usage scan was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function normalizeConcurrency(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return DEFAULT_USAGE_SCAN_CONCURRENCY;
+  }
+  return Math.min(parsed, 128);
+}
+
+export async function calculateWorkspaceUsageBytes(workspaceRoot, options = {}) {
   if (!workspaceRoot) {
     return 0;
   }
 
   const root = path.resolve(workspaceRoot);
+  const concurrency = normalizeConcurrency(options.concurrency);
+  const signal = options.signal;
   let totalBytes = 0;
 
-  async function visit(targetPath) {
+  const inspectPath = async (targetPath) => {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+
     let stat;
     try {
       stat = await fs.lstat(targetPath);
@@ -57,13 +78,11 @@ export async function calculateWorkspaceUsageBytes(workspaceRoot) {
     }
 
     if (stat.isSymbolicLink()) {
-      totalBytes += stat.size;
-      return;
+      return { bytes: stat.size, children: [] };
     }
 
     if (!stat.isDirectory()) {
-      totalBytes += stat.size;
-      return;
+      return { bytes: stat.size, children: [] };
     }
 
     let entries;
@@ -71,22 +90,47 @@ export async function calculateWorkspaceUsageBytes(workspaceRoot) {
       entries = await fs.readdir(targetPath);
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'EACCES' || error?.code === 'EPERM') {
-        return;
+        return { bytes: 0, children: [] };
       }
       throw error;
     }
 
-    await Promise.all(entries.map((entry) => visit(path.join(targetPath, entry))));
+    return {
+      bytes: 0,
+      children: entries.map((entry) => path.join(targetPath, entry)),
+    };
+  };
+
+  // Process a bounded batch at a time. The previous recursive Promise.all
+  // implementation could queue tens of thousands of lstat calls at once for
+  // workspaces containing node_modules or generated artifacts, exhausting file
+  // descriptors and making unrelated HTTP requests appear to hang.
+  const pendingPaths = [root];
+  let cursor = 0;
+
+  while (cursor < pendingPaths.length) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+
+    const batch = pendingPaths.slice(cursor, cursor + concurrency);
+    cursor += batch.length;
+    const results = await Promise.all(batch.map(inspectPath));
+
+    for (const result of results) {
+      if (!result) continue;
+      totalBytes += result.bytes;
+      pendingPaths.push(...result.children);
+    }
   }
 
-  await visit(root);
   return totalBytes;
 }
 
-export async function getWorkspaceStorageQuota({ workspace, userStore, env = process.env }) {
+export async function getWorkspaceStorageQuota({ workspace, userStore, env = process.env, signal }) {
   const limitMb = resolveWorkspaceSizeMb({ workspace, userStore, env });
   const limitBytes = workspaceSizeMbToBytes(limitMb);
-  const usedBytes = await calculateWorkspaceUsageBytes(workspace?.path);
+  const usedBytes = await calculateWorkspaceUsageBytes(workspace?.path, { signal });
   const remainingBytes = Math.max(limitBytes - usedBytes, 0);
 
   return {

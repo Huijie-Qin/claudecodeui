@@ -1083,6 +1083,13 @@ async function getSessionMessagesFromProjectDirectory(
 ) {
   try {
     const safeSessionId = validateClaudeSessionId(sessionId);
+    const normalizedLimit = limit === null ? null : Math.max(0, Number(limit) || 0);
+    const normalizedOffset = Math.max(0, Number(offset) || 0);
+    const retainedMessageCount = normalizedLimit === null
+      ? null
+      : (normalizedLimit === 0 ? 0 : normalizedLimit + normalizedOffset);
+    const compareMessageTimestamps = (a, b) =>
+      new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
     const files = await fs.readdir(projectDir);
     // agent-*.jsonl files contain subagent tool history - we'll process them separately
     const jsonlFiles = Array.isArray(transcriptFiles)
@@ -1124,6 +1131,12 @@ async function getSessionMessagesFromProjectDirectory(
     }
 
     const messages = [];
+    let total = 0;
+    const trimRetainedMessages = () => {
+      if (retainedMessageCount === null || messages.length <= retainedMessageCount) return;
+      messages.sort(compareMessageTimestamps);
+      messages.splice(0, messages.length - retainedMessageCount);
+    };
     // Map of agentId -> tools for subagent tool grouping
     const agentTranscriptCache = new Map();
 
@@ -1141,7 +1154,18 @@ async function getSessionMessagesFromProjectDirectory(
           try {
             const entry = JSON.parse(line);
             if (entry.sessionId === safeSessionId) {
-              messages.push(entry);
+              total += 1;
+              if (retainedMessageCount !== 0) {
+                messages.push(entry);
+                // Keep memory bounded for large transcripts while avoiding a
+                // sort for every JSONL line. The final trim preserves the
+                // newest offset + limit messages by timestamp.
+                const trimThreshold = Math.max(
+                  (retainedMessageCount || 0) * 2,
+                  (retainedMessageCount || 0) + 256,
+                );
+                if (messages.length > trimThreshold) trimRetainedMessages();
+              }
             }
           } catch (parseError) {
             // Silently skip malformed JSONL lines (common with concurrent writes)
@@ -1149,6 +1173,8 @@ async function getSessionMessagesFromProjectDirectory(
         }
       }
     }
+
+    trimRetainedMessages();
 
     const parseTimestamp = (value) => {
       const timestamp = Date.parse(value || '');
@@ -1263,11 +1289,7 @@ async function getSessionMessagesFromProjectDirectory(
       }
     }
     // Sort messages by timestamp
-    const sortedMessages = messages.sort((a, b) =>
-      new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
-    );
-
-    const total = sortedMessages.length;
+    const sortedMessages = messages.sort(compareMessageTimestamps);
 
     // If no limit is specified, return all messages (backward compatibility)
     if (limit === null) {
@@ -1276,17 +1298,17 @@ async function getSessionMessagesFromProjectDirectory(
 
     // Apply pagination - for recent messages, we need to slice from the end
     // offset 0 should give us the most recent messages
-    const startIndex = Math.max(0, total - offset - limit);
-    const endIndex = total - offset;
+    const endIndex = Math.max(0, sortedMessages.length - normalizedOffset);
+    const startIndex = Math.max(0, endIndex - normalizedLimit);
     const paginatedMessages = sortedMessages.slice(startIndex, endIndex);
-    const hasMore = startIndex > 0;
+    const hasMore = total - normalizedOffset - normalizedLimit > 0;
 
     return {
       messages: paginatedMessages,
       total,
       hasMore,
-      offset,
-      limit
+      offset: normalizedOffset,
+      limit: normalizedLimit
     };
   } catch (error) {
     console.error(`Error reading messages for session ${sessionId}:`, error);
@@ -1349,6 +1371,24 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
 
   // The normal Claude layout names the transcript after the session. Only scan
   // other project directories for legacy layouts when no direct match exists.
+  if (directMatches.length === 1) {
+    const directResult = await getSessionMessagesFromProjectDirectory(
+      directMatches[0],
+      safeSessionId,
+      limit,
+      offset,
+      [directFileName],
+    );
+    if (!Array.isArray(directResult)) return directResult;
+    return {
+      messages: directResult,
+      total: directResult.length,
+      hasMore: false,
+      offset: 0,
+      limit: null,
+    };
+  }
+
   const candidateDirs = directMatches.length > 0 ? directMatches : remainingDirs;
   const allMessages = [];
   for (const projectDir of candidateDirs) {

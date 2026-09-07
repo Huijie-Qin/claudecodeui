@@ -16,6 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+
 import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
 
 const __dirname = getModuleDir(import.meta.url);
@@ -384,6 +385,32 @@ async function sandboxCommand(args) {
 
     const opts = parseSandboxArgs(args);
 
+    const launchCloudCliServer = () => {
+        sbx([
+            'exec', opts.name, 'bash', '-c',
+            'if [ -f /tmp/cloudcli-ui.pid ] && kill -0 "$(cat /tmp/cloudcli-ui.pid)" 2>/dev/null; then exit 0; fi; nohup cloudcli start --port 3001 </dev/null >/tmp/cloudcli-ui.log 2>&1 & echo $! >/tmp/cloudcli-ui.pid',
+        ]);
+    };
+
+    const waitForCloudCliServer = async () => {
+        const attempts = 30;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                sbx([
+                    'exec', opts.name, 'bash', '-c',
+                    'curl -fsS --max-time 1 http://127.0.0.1:3001/health >/dev/null',
+                ]);
+                return;
+            } catch {
+                if (attempt < attempts) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+
+        throw new Error(`CloudCLI server did not become ready in sandbox "${opts.name}". Run "cloudcli sandbox logs ${opts.name}" for details.`);
+    };
+
     if (opts.subcommand === 'help') {
         showSandboxHelp();
         return;
@@ -455,7 +482,8 @@ async function sandboxCommand(args) {
             await new Promise(resolve => setTimeout(resolve, 5000));
 
             console.log(`${c.info('▶')} Launching CloudCLI web server...`);
-            sbx(['exec', opts.name, 'bash', '-c', 'cloudcli start --port 3001 &']);
+            launchCloudCliServer();
+            await waitForCloudCliServer();
 
             console.log(`${c.info('▶')} Forwarding port ${opts.port} → 3001...`);
             try {
@@ -554,7 +582,8 @@ async function sandboxCommand(args) {
 
             // Step 3: Start CloudCLI inside the sandbox
             console.log(`${c.info('▶')} Launching CloudCLI web server...`);
-            sbx(['exec', opts.name, 'bash', '-c', 'cloudcli start --port 3001 &']);
+            launchCloudCliServer();
+            await waitForCloudCliServer();
 
             // Step 4: Forward port
             console.log(`${c.info('▶')} Forwarding port ${opts.port} → 3001...`);

@@ -2,8 +2,40 @@ import { IS_PLATFORM, SQL_CHECK_BASE_URL } from "../constants/config";
 import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
 import { AUTH_TOKEN_REFRESHED_EVENT } from "../components/auth/constants";
 
+const RETRYABLE_HTTP_STATUSES = new Set([502, 503, 504]);
+// Cover short backend restarts as well as momentary proxy resets. Only
+// idempotent GET/HEAD requests use these retries.
+const RETRY_DELAYS_MS = [250, 750, 2000];
+
+const applyRefreshedToken = (response) => {
+  const refreshedToken = response.headers.get('X-Refreshed-Token');
+  if (refreshedToken) {
+    localStorage.setItem('auth-token', refreshedToken);
+    window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, {
+      detail: { token: refreshedToken },
+    }));
+  }
+};
+
+const waitForRetry = (delayMs, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+    return;
+  }
+
+  const timeoutId = window.setTimeout(() => {
+    signal?.removeEventListener('abort', handleAbort);
+    resolve();
+  }, delayMs);
+  const handleAbort = () => {
+    window.clearTimeout(timeoutId);
+    reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+  };
+  signal?.addEventListener('abort', handleAbort, { once: true });
+});
+
 // Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
+export const authenticatedFetch = async (url, options = {}) => {
   const token = localStorage.getItem('auth-token');
 
   const defaultHeaders = {};
@@ -17,22 +49,37 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  const requestOptions = {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
-  }).then((response) => {
-    const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
-      localStorage.setItem('auth-token', refreshedToken);
-      window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, {
-        detail: { token: refreshedToken },
-      }));
+  };
+  const method = String(requestOptions.method || 'GET').toUpperCase();
+  const retryable = method === 'GET' || method === 'HEAD';
+  const maxAttempts = retryable ? RETRY_DELAYS_MS.length + 1 : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, requestOptions);
+      applyRefreshedToken(response);
+
+      if (!RETRYABLE_HTTP_STATUSES.has(response.status) || attempt === maxAttempts - 1) {
+        return response;
+      }
+
+      await response.body?.cancel().catch(() => {});
+    } catch (error) {
+      if (requestOptions.signal?.aborted || attempt === maxAttempts - 1) {
+        throw error;
+      }
     }
-    return response;
-  });
+
+    await waitForRetry(RETRY_DELAYS_MS[attempt], requestOptions.signal);
+  }
+
+  throw new Error('Request failed without a response');
 };
 
 const getCurrentTenantId = () => localStorage.getItem('currentTenantId');
@@ -199,22 +246,22 @@ export const api = {
       body: JSON.stringify(workspaceData),
     }),
   agentTemplates: () => authenticatedFetch(withTenantParam('/api/agent-templates')),
-  readFile: (projectName, filePath, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId)),
+  readFile: (projectName, filePath, workspaceId, options = {}) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId), options),
   readFileBlob: (projectName, filePath, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId)),
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId)),
   saveFile: (projectName, filePath, content, workspaceId) =>
-    authenticatedFetch(withTenantParam(`/api/projects/${projectName}/file`), {
+    authenticatedFetch(withTenantParam(`/api/projects/${encodeURIComponent(projectName)}/file`), {
       method: 'PUT',
       body: JSON.stringify({ filePath, content, workspaceId }),
     }),
   getFiles: (projectName, options = {}, workspaceId, showInternalConfigFiles = false) =>
     authenticatedFetch(withTenantAndWorkspaceParam(
-      `/api/projects/${projectName}/files${showInternalConfigFiles ? '?showInternalConfigFiles=true' : ''}`,
+      `/api/projects/${encodeURIComponent(projectName)}/files${showInternalConfigFiles ? '?showInternalConfigFiles=true' : ''}`,
       workspaceId,
     ), options),
   getFileQuota: (projectName, workspaceId, options = {}) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${projectName}/files/quota`, workspaceId), options),
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/quota`, workspaceId), options),
 
   // File operations
   createFile: (projectName, { path, type, name, workspaceId }) =>

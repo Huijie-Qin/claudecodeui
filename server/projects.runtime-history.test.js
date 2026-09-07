@@ -96,6 +96,27 @@ test('runtime Claude history keeps newest-first pagination semantics', async () 
   assert.equal(older.hasMore, false);
 });
 
+test('runtime Claude history keeps the correct page after bounded large-history trimming', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-history-large-page-'));
+  const projectsRoot = path.join(root, '.claude', 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-large-page';
+  const rows = Array.from({ length: 600 }, (_, index) => ({
+    sessionId,
+    uuid: `m${index}`,
+    type: 'assistant',
+    timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    message: { role: 'assistant', content: String(index) },
+  })).reverse();
+  await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), rows);
+
+  const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, 3, 2);
+
+  assert.equal(result.total, 600);
+  assert.equal(result.hasMore, true);
+  assert.deepEqual(result.messages.map((message) => message.uuid), ['m595', 'm596', 'm597']);
+});
+
 test('runtime Claude history restores tools from the current nested subagent transcript layout', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-subagent-history-'));
   const projectsRoot = path.join(root, '.claude', 'projects');

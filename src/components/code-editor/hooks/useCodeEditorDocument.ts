@@ -20,6 +20,8 @@ const getErrorMessage = (error: unknown) => {
   return String(error);
 };
 
+const FILE_LOAD_TIMEOUT_MS = 30_000;
+
 export const useCodeEditorDocument = ({
   file,
   projectPath,
@@ -41,6 +43,14 @@ export const useCodeEditorDocument = ({
   const fileDiffOldString = file.diffInfo?.old_string;
 
   useEffect(() => {
+    const abortController = new AbortController();
+    let isActive = true;
+    let didTimeout = false;
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      abortController.abort();
+    }, FILE_LOAD_TIMEOUT_MS);
+
     const loadFileContent = async () => {
       try {
         setLoading(true);
@@ -65,28 +75,44 @@ export const useCodeEditorDocument = ({
           throw new Error('Missing project identifier');
         }
 
-        const response = await api.readFile(fileProjectName, filePath, file.workspaceId);
+        const response = await api.readFile(fileProjectName, filePath, file.workspaceId, {
+          signal: abortController.signal,
+        });
         if (!response.ok) {
-          throw new Error(`Failed to load file: ${response.status} ${response.statusText}`);
+          const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(errorPayload?.error || `Failed to load file: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
-        setContent(data.content);
+        if (isActive) {
+          setContent(data.content);
+        }
       } catch (error) {
+        if (!isActive) return;
         const message = getErrorMessage(error);
         console.error('Error loading file:', error);
         if (showLoadError) {
           setContent('');
-          setLoadError(message);
+          setLoadError(didTimeout ? 'File loading timed out. Please try again.' : message);
         } else {
-          setContent(`// Error loading file: ${message}\n// File: ${fileName}\n// Path: ${filePath}`);
+          const displayMessage = didTimeout ? 'File loading timed out. Please try again.' : message;
+          setContent(`// Error loading file: ${displayMessage}\n// File: ${fileName}\n// Path: ${filePath}`);
         }
       } finally {
-        setLoading(false);
+        window.clearTimeout(timeoutId);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
 
-    loadFileContent();
+    void loadFileContent();
+
+    return () => {
+      isActive = false;
+      window.clearTimeout(timeoutId);
+      abortController.abort();
+    };
   }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName, reloadToken, showLoadError]);
 
   const handleSave = useCallback(async () => {
