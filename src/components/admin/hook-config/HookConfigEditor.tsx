@@ -37,6 +37,7 @@ import {
 } from './catalog';
 import { createHookItemId } from './editorUtils';
 import HookSelect, { type HookSelectOption } from './HookSelect';
+import HookUserVariablesEditor from './HookUserVariablesEditor';
 import type {
   FieldChoice,
   FieldType,
@@ -112,6 +113,9 @@ function fieldGroup(t: ReturnType<typeof useTranslation>['t'], field: FieldChoic
 }
 
 function pythonEnvironmentPath(path: string) {
+  if (path.startsWith('ccui.env.userVariables.')) {
+    return `ccui.env.userVariables[${JSON.stringify(path.slice('ccui.env.userVariables.'.length))}]`;
+  }
   return path.replace(/[A-Z]/g, (value) => `_${value.toLowerCase()}`);
 }
 
@@ -1425,7 +1429,10 @@ export default function HookConfigEditor({
   const references = useMemo(() => buildReferenceChoices(hook, resources), [hook, resources]);
   const language = hook.extensionLogic?.language || 'javascript';
   const scriptApis = CCUI_SCRIPT_APIS.filter((api) => !api.javascript.startsWith('ccui.records.'));
-  const scriptEnvironmentVariables = resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.'));
+  const scriptEnvironmentVariables = [
+    ...resources.environmentVariables.filter((variable) => variable.path.startsWith('ccui.env.')),
+    ...(hook.userVariables || []).map((variable) => ({ path: `ccui.env.userVariables.${variable.name}`, type: 'string' })),
+  ];
   const matcherValue = hook.matcher.value || '';
   const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
@@ -1581,6 +1588,7 @@ export default function HookConfigEditor({
                 />
               </label>
             </div>
+            <HookUserVariablesEditor variables={hook.userVariables || []} onChange={(userVariables) => updateDraft({ userVariables })} />
           </Section>
 
           <Section

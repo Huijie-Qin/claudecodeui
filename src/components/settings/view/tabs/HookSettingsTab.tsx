@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { History, RefreshCw, Webhook } from 'lucide-react';
 
 import { api } from '../../../../utils/api';
+import type { HookUserVariable } from '../../../admin/hook-config/types';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
 import SettingsSection from '../SettingsSection';
@@ -11,6 +12,7 @@ import HookExecutionRecordsDrawer, {
   type UserHookExecution,
   type UserHookStandaloneRecord,
 } from './HookExecutionRecordsDrawer';
+import HookUserVariablesDialog from './HookUserVariablesDialog';
 
 const EXECUTION_PAGE_SIZE = 20;
 
@@ -22,6 +24,9 @@ type AvailableHook = {
   version: number;
   enabled: boolean;
   showInChat: boolean;
+  userVariables?: HookUserVariable[];
+  configuredUserVariables?: string[];
+  missingRequiredUserVariables?: string[];
   bindingController?: 'admin' | 'sql_check';
   postActions?: Array<{ type?: string }>;
   unavailableReason?: string | null;
@@ -59,6 +64,9 @@ export default function HookSettingsTab({
   const [busyHookId, setBusyHookId] = useState<string | null>(null);
   const [visibilityBusyHookId, setVisibilityBusyHookId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [variablesHook, setVariablesHook] = useState<AvailableHook | null>(null);
+  const currentWorkspaceId = useRef(workspaceId);
+  currentWorkspaceId.current = workspaceId;
   const [recordsHook, setRecordsHook] = useState<AvailableHook | null>(null);
   const [executions, setExecutions] = useState<UserHookExecution[]>([]);
   const [standaloneRecords, setStandaloneRecords] = useState<UserHookStandaloneRecord[]>([]);
@@ -74,6 +82,7 @@ export default function HookSettingsTab({
   }, [availableProjects, workspaceId]);
 
   useEffect(() => {
+    setVariablesHook(null);
     setRecordsHook(null);
     setExecutions([]);
     setStandaloneRecords([]);
@@ -110,14 +119,20 @@ export default function HookSettingsTab({
     return () => { cancelled = true; };
   }, [workspaceId]);
 
-  const toggleHook = async (hook: AvailableHook, enabled: boolean) => {
+  const toggleHook = async (hook: AvailableHook, enabled: boolean, userVariables?: Record<string, string>) => {
     if (!workspaceId) return;
+    if (enabled && hook.userVariables?.length && userVariables === undefined) {
+      setError(null);
+      setVariablesHook(hook);
+      return;
+    }
     setBusyHookId(hook.id);
     setError(null);
     try {
-      const response = await api.updateWorkspaceHook(workspaceId, hook.id, enabled);
+      const response = await api.updateWorkspaceHook(workspaceId, hook.id, enabled, userVariables);
       if (!response.ok) throw new Error(await readError(response, enabled ? '开启 Hook 失败' : '关闭 Hook 失败'));
       const payload = await response.json() as { hook?: AvailableHook | null; enabled?: boolean };
+      if (currentWorkspaceId.current !== workspaceId) return;
       setHooks((current) => current.map((candidate) => (
         candidate.id === hook.id
           ? {
@@ -127,8 +142,9 @@ export default function HookSettingsTab({
           }
           : candidate
       )));
+      setVariablesHook(null);
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '更新 Hook 失败');
+      if (currentWorkspaceId.current === workspaceId) setError(caughtError instanceof Error ? caughtError.message : '更新 Hook 失败');
     } finally {
       setBusyHookId(null);
     }
@@ -290,6 +306,18 @@ export default function HookSettingsTab({
                   ) : null}
                 </div>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{hook.description || '无说明'}</p>
+                {hook.userVariables?.length ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      {hook.missingRequiredUserVariables?.length
+                        ? '待填写必填的个人变量'
+                        : `已配置 ${hook.configuredUserVariables?.length || 0}/${hook.userVariables.length} 个个人变量`}
+                    </span>
+                    <button type="button" disabled={Boolean(busyHookId) || isSqlCheckManaged || (resourcesUnavailable && !canRetryResources)} className="text-primary underline disabled:opacity-50" onClick={() => { setError(null); setVariablesHook(hook); }}>
+                      配置个人变量
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <div className="flex flex-shrink-0 flex-col items-end gap-2">
                 <button
@@ -307,7 +335,7 @@ export default function HookSettingsTab({
                     checked={hook.enabled}
                     disabled={Boolean(busyHookId)
                       || isSqlCheckManaged
-                      || (isTemplateMandatory && !canRetryResources)
+                      || (isTemplateMandatory && hook.enabled && !canRetryResources)
                       || (resourcesUnavailable && !canRetryResources)}
                     ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
                     onChange={(enabled) => void toggleHook(hook, enabled)}
@@ -331,6 +359,17 @@ export default function HookSettingsTab({
         })}
       </SettingsCard>
       </SettingsSection>
+
+      {variablesHook ? (
+        <HookUserVariablesDialog
+          key={`${workspaceId}:${variablesHook.id}`}
+          hook={variablesHook}
+          busy={busyHookId === variablesHook.id}
+          error={error}
+          onClose={() => { setVariablesHook(null); setError(null); }}
+          onSave={(values) => void toggleHook(variablesHook, true, values)}
+        />
+      ) : null}
 
       {recordsHook ? (
         <HookExecutionRecordsDrawer

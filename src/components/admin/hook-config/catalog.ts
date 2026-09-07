@@ -636,6 +636,7 @@ export function createHookCopyDraft(hook: HookConfig, name: string): HookConfigD
   return JSON.parse(JSON.stringify({
     name,
     description: hook.description,
+    userVariables: hook.userVariables || [],
     eventName: hook.eventName,
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,
@@ -697,6 +698,14 @@ export function buildFieldChoices(draft: HookConfigDraft, resources: HookResourc
 
 export function buildReferenceChoices(draft: HookConfigDraft, resources: HookResources): FieldChoice[] {
   const fields = buildFieldChoices(draft, resources);
+  for (const variable of draft.userVariables || []) {
+    fields.push({
+      path: `ccui.env.userVariables.${variable.name}`,
+      label: `${variable.label || variable.name}（用户个人变量）`,
+      type: 'string',
+      group: 'environment',
+    });
+  }
   for (const variable of resources.environmentVariables.filter((item) => item.path.startsWith('ccui.env.'))) {
     fields.push({
       path: variable.path,

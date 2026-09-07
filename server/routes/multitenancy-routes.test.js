@@ -948,3 +948,33 @@ test('workspace Hook execution history is forced to the current user, tenant, an
     }],
   ]);
 });
+
+test('workspace Hook variables use authenticated scope and validate before resource installation', async () => {
+  let saved;
+  let installed = 0;
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, _res, next) => { req.tenant = { id: 2, permission: 'edit' }; next(); },
+    access: { requireWorkspace: () => ({ workspace: { id: 10, tenant_id: 2, path: '/tmp/hook-workspace' }, accessRole: 'owner' }) },
+    hookConfigs: {
+      listAvailableHooksForContext: () => [{ id: 'personal-hook', status: 'published', userVariables: [{ name: 'token', required: true }] }],
+      validateWorkspaceUserHookVariables: (input) => {
+        assert.equal(input.userId, 1);
+        assert.equal(input.tenantId, 2);
+        assert.equal(input.workspaceId, 10);
+        if (!input.userVariables?.token) { const error = new Error('请填写个人变量'); error.statusCode = 400; throw error; }
+      },
+      setWorkspaceUserHookEnabled: (input) => { saved = input; return { enabled: true, hook: { configuredUserVariables: ['token'] } }; },
+    },
+    hookResources: { materializeHook: async () => { installed += 1; return {}; } },
+  });
+  const invalid = await requestJson(router, '/10/hooks/personal-hook', { method: 'PUT', body: { enabled: true } });
+  assert.equal(invalid.response.status, 400);
+  assert.equal(installed, 0);
+  const valid = await requestJson(router, '/10/hooks/personal-hook', { method: 'PUT', body: {
+    enabled: true, userId: 999, tenantId: 999, workspaceId: 999, userVariables: { token: 'private-test-value' },
+  } });
+  assert.equal(valid.response.status, 200);
+  assert.equal(installed, 1);
+  assert.deepEqual(saved, { workspaceId: 10, tenantId: 2, userId: 1, hookId: 'personal-hook', enabled: true, userVariables: { token: 'private-test-value' } });
+  assert.doesNotMatch(JSON.stringify(valid.payload), /private-test-value/);
+});

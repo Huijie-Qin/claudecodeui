@@ -953,3 +953,106 @@ test('mergeSdkHooks preserves built-in and configured callbacks', () => {
   assert.equal(merged.PreToolUse.length, 2);
   assert.equal(merged.Stop.length, 1);
 });
+
+for (const language of ['javascript', 'python']) {
+  test(`${language} Hooks pass personal variables to scripts and Skills while redacting audit and display values`, async () => {
+    const database = createDatabase();
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-hook-user-variables-'));
+    const secret = 'personal-secret-123';
+    const queued = [];
+    const activities = [];
+    try {
+      const hook = {
+        id: 'hook-1', version: 1, name: 'Personal Skill', eventName: 'Stop', matcher: {},
+        userVariables: [
+          { name: 'credential', label: '凭据', required: true, secret: true },
+          { name: 'project', label: '项目', required: false, secret: false },
+        ],
+        extensionLogic: {
+          language,
+          code: language === 'javascript'
+            ? 'export async function run(event, ccui) { const value = ccui.env.userVariables.credential; await ccui.log.info(value, { detail: value }); await ccui.records.write("personal", { detail: value }); return { output: { echo: value } }; }'
+            : 'async def run(event, ccui):\n    value = ccui.env.userVariables["credential"]\n    await ccui.log.info(value, {"detail": value})\n    await ccui.records.write("personal", {"detail": value})\n    return {"output": {"echo": value}}',
+          outputs: [{ name: 'echo', type: 'string' }],
+        },
+        postActions: [{ id: 'skill', type: 'invoke_skill', config: {
+          skillId: 'builtin:hook-notification', skillName: 'hook-notification',
+          argumentsTemplate: '{{script.output.echo}} / {{ccui.env.userVariables.project}}',
+        } }],
+        claudeResponse: { bindings: {} },
+      };
+      const runtime = createHookRuntimeSession({ hooks: [hook], database, workspaceRoot, userId: 1,
+        resolveUserVariables: async () => ({ credential: secret }),
+        skillContentLoader: async (_id, _name, args) => `Skill payload: ${args}`,
+        enqueueSkillRecovery: async (payload) => { queued.push(payload); return { detail: secret }; },
+        onExecutionActivity: (activity) => activities.push(activity),
+      });
+      await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'session-1', last_assistant_message: secret });
+      assert.equal(queued.length, 1);
+      assert.equal(queued[0].argumentsText, `${secret} / `);
+      assert.equal(queued[0].modelContent, `Skill payload: ${secret} / `);
+      assert.doesNotMatch(queued[0].displayCommand, new RegExp(secret));
+      assert.match(queued[0].displayCommand, /\[redacted\]/);
+      assert.doesNotMatch(JSON.stringify(activities), new RegExp(secret));
+      const execution = database.prepare('SELECT * FROM hook_executions').get();
+      assert.equal(execution.status, 'succeeded');
+      assert.doesNotMatch(JSON.stringify(execution), new RegExp(secret));
+      assert.doesNotMatch(JSON.stringify(database.prepare('SELECT * FROM hook_data_records').all()), new RegExp(secret));
+    } finally {
+      database.close();
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('missing required variables prevent all Hook side effects and short secrets do not corrupt execution status', async () => {
+  const database = createDatabase();
+  const hook = { id: 'hook-1', version: 1, name: 'Personal', eventName: 'Stop',
+    userVariables: [{ name: 'value', label: '必填值', required: true, secret: true }],
+    extensionLogic: { language: 'javascript', code: 'injected', outputs: [] },
+    postActions: [], claudeResponse: { bindings: {} },
+  };
+  let calls = 0;
+  let value = {};
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], userId: 1, database,
+      resolveUserVariables: () => value,
+      scriptExecutor: async () => { calls += 1; throw new Error('failed with value a'); },
+    });
+    await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'same-session' });
+    assert.equal(calls, 0);
+    value = { value: 'a' };
+    await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'same-session' });
+    assert.equal(calls, 1);
+    const executions = database.prepare('SELECT * FROM hook_executions ORDER BY started_at_ms').all();
+    assert.equal(executions.length, 2);
+    assert.ok(executions.every((execution) => execution.status === 'failed' && execution.session_id === 'same-session'));
+    assert.match(executions[1].error_message, /f\[redacted\]iled/);
+  } finally { database.close(); }
+});
+
+test('personal variables reach MCP inputs and Agent content with redacted display text', async () => {
+  const database = createDatabase();
+  const secret = 'unique-secret-456';
+  let received;
+  let message;
+  const hook = { id: 'hook-1', version: 1, name: 'Personal', eventName: 'Stop',
+    userVariables: [{ name: 'value', label: '凭据', required: true, secret: true }],
+    postActions: [
+      { id: 'mcp', type: 'call_mcp_tool', config: { toolName: 'mcp__service__call', inputs: { value: { source: 'reference', path: 'ccui.env.userVariables.value' } } } },
+      { id: 'agent', type: 'send_agent_message', config: { messageTemplate: 'Use {{actions.mcp.output.detail}}' } },
+    ], claudeResponse: { bindings: {} },
+  };
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], userId: 1, database,
+      resolveUserVariables: () => ({ value: secret }),
+      mcpCaller: async ({ input }) => { received = input; return { detail: input.value }; },
+      enqueueAgentMessage: async (payload) => { message = payload; },
+    });
+    await runtime.executeHook(hook, { hook_event_name: 'Stop' });
+    assert.deepEqual(received, { value: secret });
+    assert.equal(message.messageText, `Use ${secret}`);
+    assert.equal(message.displayMessage, 'Use [redacted]');
+    assert.doesNotMatch(JSON.stringify(database.prepare('SELECT * FROM hook_executions').all()), new RegExp(secret));
+  } finally { database.close(); }
+});

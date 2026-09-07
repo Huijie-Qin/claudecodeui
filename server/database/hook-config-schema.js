@@ -146,6 +146,7 @@ function publishedVersionConfigFromRow(row) {
   return {
     name: row.name,
     description: row.description || '',
+    userVariables: parseHookJson(row.user_variables_json, []),
     eventName: row.event_name,
     matcher: parseHookJson(row.matcher_json, {}),
     extensionLogic: parseHookJson(row.extension_logic_json, null),
@@ -181,6 +182,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
+  user_variables_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
   event_name TEXT NOT NULL,
   matcher_json TEXT NOT NULL DEFAULT '{}',
@@ -300,6 +302,18 @@ CREATE TABLE IF NOT EXISTS user_workspace_hook_preferences (
 CREATE INDEX IF NOT EXISTS idx_user_workspace_hook_preferences_user
   ON user_workspace_hook_preferences(user_id, workspace_id, hook_id);
 
+CREATE TABLE IF NOT EXISTS user_workspace_hook_variables (
+  workspace_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  hook_id TEXT NOT NULL,
+  values_encrypted TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (workspace_id, user_id, hook_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS hook_user_scopes (
   hook_id TEXT NOT NULL,
   user_id INTEGER NOT NULL,
@@ -408,6 +422,9 @@ export function migrateHookConfigurationModel(database) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_bindings'")
     .get());
   const migrate = database.transaction(() => {
+    if (!columns.some((column) => column.name === 'user_variables_json')) {
+      database.exec("ALTER TABLE hooks ADD COLUMN user_variables_json TEXT NOT NULL DEFAULT '[]'");
+    }
     if (!hasExtensionLogic) {
       database.exec(`
         ALTER TABLE hooks

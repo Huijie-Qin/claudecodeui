@@ -108,11 +108,11 @@ export const api = {
   workspaceHookExecutions: (workspaceId, hookId, filters = {}) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`,
   )),
-  updateWorkspaceHook: (workspaceId, hookId, enabled) => authenticatedFetch(withTenantParam(
+  updateWorkspaceHook: (workspaceId, hookId, enabled, userVariables) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}`,
   ), {
     method: 'PUT',
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({ enabled, userVariables }),
   }),
   updateWorkspaceHookChatVisibility: (workspaceId, hookId, showInChat) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/chat-visibility`,

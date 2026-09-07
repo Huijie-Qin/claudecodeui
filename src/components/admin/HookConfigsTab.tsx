@@ -1358,6 +1358,7 @@ export default function HookConfigsTab() {
           ...normalizedHook,
           name: editor.name,
           description: editor.description,
+          userVariables: editor.userVariables,
           eventName: editor.eventName,
           matcher: editor.matcher,
           extensionLogic: editor.extensionLogic,

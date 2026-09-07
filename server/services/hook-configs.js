@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 
 import { appConfigDb, db } from '../database/db.js';
+import { decryptSecretString, encryptSecretString } from '../database/user-env.js';
 
 import { isBuiltinHookSkillId } from './hook-builtin-skills.js';
 import { hookMcpCatalogService } from './hook-mcp-catalog.js';
+import { mergeHookUserVariableValues, normalizeHookUserVariables } from './hook-user-variables.js';
 
 const HOOK_EVENTS = Object.freeze([
   'Setup',
@@ -539,8 +541,11 @@ function allowedClaudeOutputs(eventName) {
   ]);
 }
 
-function isAllowedReference(path, { scriptOutputs, actionIds }) {
+function isAllowedReference(path, { scriptOutputs, actionIds, userVariables }) {
   if (path === 'event' || path.startsWith('event.')) return true;
+  if (path.startsWith('ccui.env.userVariables.')) {
+    return userVariables.has(path.slice('ccui.env.userVariables.'.length));
+  }
   if ([...ENVIRONMENT_VARIABLE_PATHS].some((environmentPath) => path === environmentPath || path.startsWith(`${environmentPath}.`))) {
     return true;
   }
@@ -562,6 +567,7 @@ function bindingReferences(binding) {
 }
 
 function validateHookReferences(hook) {
+  const userVariables = new Set(hook.userVariables.map((variable) => variable.name));
   const scriptOutputs = new Set((hook.extensionLogic?.outputs || []).map((output) => output.name));
   const allActionIds = new Set(hook.postActions.map((action) => action.id));
   const precedingActionIds = new Set();
@@ -574,7 +580,7 @@ function validateHookReferences(hook) {
           : [action.config.condition, ...Object.values(action.config.fields)].filter(Boolean);
       for (const binding of bindings) {
         for (const path of bindingReferences(binding)) {
-          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds, userVariables })) {
             throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
           }
         }
@@ -582,7 +588,7 @@ function validateHookReferences(hook) {
     } else {
       if (action.config.condition) {
         for (const path of bindingReferences(action.config.condition)) {
-          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+          if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds, userVariables })) {
             throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
           }
         }
@@ -593,7 +599,7 @@ function validateHookReferences(hook) {
       const matches = template.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g);
       for (const match of matches) {
         const path = match[1];
-        if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds })) {
+        if (!isAllowedReference(path, { scriptOutputs, actionIds: precedingActionIds, userVariables })) {
           throw createHttpError(`Reference ${path} is not available to post action ${action.id}`);
         }
       }
@@ -602,7 +608,7 @@ function validateHookReferences(hook) {
   }
   for (const binding of Object.values(hook.claudeResponse.bindings)) {
     for (const path of bindingReferences(binding)) {
-      if (!isAllowedReference(path, { scriptOutputs, actionIds: allActionIds })) {
+      if (!isAllowedReference(path, { scriptOutputs, actionIds: allActionIds, userVariables })) {
         throw createHttpError(`Reference ${path} is not available to claudeResponse`);
       }
     }
@@ -621,6 +627,7 @@ function normalizeHookInput(input, { strict = false } = {}) {
     }),
     eventName,
     matcher,
+    userVariables: normalizeHookUserVariables(input.userVariables),
     extensionLogic: normalizeExtensionLogic(input.extensionLogic),
     postActions: normalizePostActions(input.postActions, eventName),
     claudeResponse: normalizeClaudeResponse(input.claudeResponse),
@@ -647,6 +654,7 @@ function mapHookRow(row) {
     id: row.id,
     name: row.name,
     description: row.description || '',
+    userVariables: normalizeHookUserVariables(parseJson(row.user_variables_json, [])),
     status: row.status,
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
@@ -734,6 +742,7 @@ function publishedHookConfig(hook) {
   return {
     name: hook.name,
     description: hook.description || '',
+    userVariables: hook.userVariables || [],
     eventName: hook.eventName,
     matcher: hook.matcher || {},
     extensionLogic: hook.extensionLogic || null,
@@ -749,6 +758,7 @@ function mapPublishedHookVersionRow(row) {
   const normalized = normalizeHookInput({
     name: config.name,
     description: config.description || '',
+    userVariables: config.userVariables || [],
     eventName: config.eventName,
     matcher: config.matcher || {},
     extensionLogic: config.extensionLogic || null,
@@ -1184,6 +1194,23 @@ export function createHookConfigService({
     if (!hook) throw createHttpError('Hook not found', 404);
     return hook;
   };
+  const variableEncryptionKey = () => {
+    if (process.env.PROXY_ENCRYPTION_KEY?.trim()) return process.env.PROXY_ENCRYPTION_KEY;
+    const key = configStore.get('user_key_encryption_secret') || crypto.randomBytes(32).toString('hex');
+    if (!configStore.get('user_key_encryption_secret')) configStore.set('user_key_encryption_secret', key);
+    return key;
+  };
+  const readUserVariables = ({ workspaceId, userId, hook }) => {
+    if (!hook.userVariables?.length) return {};
+    const row = database.prepare(`
+      SELECT values_encrypted FROM user_workspace_hook_variables
+      WHERE workspace_id = ? AND user_id = ? AND hook_id = ?
+    `).get(workspaceId, userId, hook.id);
+    const values = row ? JSON.parse(decryptSecretString(row.values_encrypted, {
+      secretMaterial: variableEncryptionKey(),
+    })) : {};
+    return mergeHookUserVariableValues(hook.userVariables, values);
+  };
   const isAdminHookAvailableToUser = ({ hook, userId, tenantId = null }) => (
     hook.activationScope === 'all_users'
     || Boolean(database.prepare(`
@@ -1399,9 +1426,16 @@ export function createHookConfigService({
       else if (assignment?.installStatus === 'failed') unavailableReason = 'resources_unavailable';
       else if (assignment && !versionHook) unavailableReason = 'version_unavailable';
       else if (versionHook?.revokedAt) unavailableReason = 'version_revoked';
+      const values = readUserVariables({ workspaceId: workspace.id, userId: normalizedUserId, hook });
+      const configuredUserVariables = Object.keys(values);
+      const missingRequiredUserVariables = (hook.userVariables || [])
+        .filter((variable) => variable.required && !values[variable.name]?.trim())
+        .map((variable) => variable.name);
       return {
         ...hook,
-        enabled,
+        enabled: enabled && missingRequiredUserVariables.length === 0,
+        configuredUserVariables,
+        missingRequiredUserVariables,
         showInChat,
         workspaceAssignment: assignment,
         unavailableReason,
@@ -1537,6 +1571,10 @@ export function createHookConfigService({
     const workspace = requireWorkspaceContext({ workspaceId });
     const remove = database.transaction(() => {
       database.prepare(`
+        DELETE FROM user_workspace_hook_variables
+        WHERE workspace_id = ? AND hook_id = ?
+      `).run(workspace.id, String(hookId));
+      database.prepare(`
         DELETE FROM user_workspace_hook_preferences
         WHERE workspace_id = ? AND hook_id = ?
       `).run(workspace.id, String(hookId));
@@ -1575,7 +1613,7 @@ export function createHookConfigService({
       allowUserDisable: true,
       createdBy: userId,
     });
-  const setWorkspaceUserHookEnabled = ({ workspaceId, tenantId = null, userId, hookId, enabled }) => {
+  const prepareWorkspaceUserHookVariables = ({ workspaceId, tenantId = null, userId, hookId, enabled, userVariables }) => {
     const normalizedUserId = Number(userId);
     if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
       throw createHttpError('userId must be a positive integer');
@@ -1587,6 +1625,21 @@ export function createHookConfigService({
       userId: normalizedUserId,
       hookId,
     });
+    const hook = eligible.assignment
+      ? getPublishedHookVersion({ hookId, version: eligible.assignment.hookVersion })
+      : eligible.hook;
+    if (enabled && (!hook || hook.revokedAt)) throw createHttpError('Hook version is unavailable', 409);
+    const values = mergeHookUserVariableValues(
+      hook?.userVariables || [],
+      hook ? readUserVariables({ workspaceId: workspace.id, userId: normalizedUserId, hook }) : {},
+      userVariables,
+      { requireComplete: enabled },
+    );
+    return { workspace, eligible, values, normalizedUserId };
+  };
+  const setWorkspaceUserHookEnabled = (input) => database.transaction(() => {
+    const { hookId, enabled, userVariables } = input;
+    const { workspace, eligible, values, normalizedUserId } = prepareWorkspaceUserHookVariables(input);
     // A project-specific opt-out from a legacy global binding is personal
     // state only; it must not create a shared workspace assignment. Enabling a
     // previously unassigned Hook still installs a pinned project version.
@@ -1602,6 +1655,16 @@ export function createHookConfigService({
     }
     if (enabled && assignment?.installStatus !== 'ready') {
       throw createHttpError('Hook resources are not available in this workspace', 409);
+    }
+    if (userVariables !== undefined) {
+      database.prepare(`
+        INSERT INTO user_workspace_hook_variables (workspace_id, user_id, hook_id, values_encrypted)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
+          values_encrypted = excluded.values_encrypted, updated_at = CURRENT_TIMESTAMP
+      `).run(workspace.id, normalizedUserId, String(hookId), encryptSecretString(JSON.stringify(values), {
+        secretMaterial: variableEncryptionKey(),
+      }));
     }
     database.prepare(`
       INSERT INTO user_workspace_hook_preferences (
@@ -1620,7 +1683,7 @@ export function createHookConfigService({
         workspaceId: workspace.id,
       }).find((candidate) => candidate.id === String(hookId)) || null,
     };
-  };
+  })();
   const setWorkspaceUserHookChatVisibility = ({
     workspaceId,
     tenantId = null,
@@ -2051,6 +2114,15 @@ export function createHookConfigService({
 
     setWorkspaceUserHookEnabled,
 
+    validateWorkspaceUserHookVariables: (input) => { prepareWorkspaceUserHookVariables(input); },
+
+    // Runtime-only access. HTTP responses expose configured names, never values.
+    getWorkspaceHookUserVariables: ({ workspaceId, tenantId = null, userId, hook }) => {
+      const workspace = requireWorkspaceContext({ workspaceId, tenantId });
+      const normalizedUserId = requireInteger(userId, 'userId');
+      return readUserVariables({ workspaceId: workspace.id, userId: normalizedUserId, hook });
+    },
+
     setWorkspaceUserHookChatVisibility,
 
     getWorkspaceUserHookChatVisibility: ({ workspaceId, userId, hookId }) => {
@@ -2382,6 +2454,9 @@ export function createHookConfigService({
       if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
       const eligible = isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
+      if (enabled && hook.userVariables.some((variable) => variable.required)) {
+        throw createHttpError('请在工作区辅助功能中填写个人变量后启用此 Hook', 409);
+      }
       if (enabled) {
         database.prepare(`
           INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
@@ -2555,9 +2630,9 @@ export function createHookConfigService({
           `
         INSERT INTO hooks (
           id, name, description, status, event_name, matcher_json,
-          extension_logic_json, post_actions_json, claude_response_json,
+          extension_logic_json, post_actions_json, claude_response_json, user_variables_json,
           binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2569,6 +2644,7 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
+          JSON.stringify(normalized.userVariables),
           normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
@@ -2585,7 +2661,7 @@ export function createHookConfigService({
         UPDATE hooks
         SET name = ?, description = ?, status = 'draft', event_name = ?,
             matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
-            claude_response_json = ?,
+            claude_response_json = ?, user_variables_json = ?,
             updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `,
@@ -2598,6 +2674,7 @@ export function createHookConfigService({
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
+          JSON.stringify(normalized.userVariables),
           userId,
           hookId,
         );

@@ -1994,8 +1994,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               action,
               event,
               executionId,
-              argumentsText,
               modelContent,
+              displayCommand,
             }) => {
               let resources = materializedByHookId.get(hook.id);
               if (!resources) {
@@ -2054,7 +2054,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                 hook,
                 action,
                 executionId,
-                summary: `/${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                summary: displayCommand,
                 skillName: action.config?.skillName || null,
                 queuedAt,
               });
@@ -2066,7 +2066,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: recoveryContent,
-                displayContent: `Hook · /${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                displayContent: `Hook · ${displayCommand}`,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,
@@ -2091,6 +2091,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               event,
               executionId,
               messageText,
+              displayMessage,
             }) => {
               const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
               const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
@@ -2100,7 +2101,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                 hook,
                 action,
                 executionId,
-                summary: messageText,
+                summary: displayMessage,
                 queuedAt,
               });
               const hookRecovery = {
@@ -2110,7 +2111,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: messageText,
-                displayContent: messageText,
+                displayContent: displayMessage,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,

@@ -1856,7 +1856,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat'],
+      ['id', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat'],
     );
     assert.equal(
       database
@@ -2171,4 +2171,84 @@ test('resource catalog exposes only runtime-backed environment fields', () => {
   } finally {
     database.close();
   }
+});
+
+const personalVariables = [
+  { name: 'token', label: '个人 Token', description: '填写服务访问令牌', required: true, secret: true },
+  { name: 'project', label: '项目标识', description: '', required: false, secret: false },
+];
+
+test('personal variables validate definitions and references and survive immutable publication snapshots', () => {
+  const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+  try {
+    const input = publishableHook({ userVariables: personalVariables, claudeResponse: {
+      bindings: { systemMessage: { source: 'template', template: '{{ccui.env.userVariables.project}}' } },
+    } });
+    for (const userVariables of [
+      [...personalVariables, personalVariables[0]],
+      [{ name: 'bad.name' }], [{ name: '__proto__' }], [{ name: 'token', required: 'true' }],
+    ]) assert.throws(() => service.updateHook({ hookId, userId: 1, input: { ...input, userVariables } }), { statusCode: 400 });
+    assert.throws(() => service.updateHook({ hookId, userId: 1, input: { ...input, userVariables: [] } }), /Reference/);
+    service.updateHook({ hookId, userId: 1, input });
+    const published = service.publishHook({ hookId, userId: 1 });
+    assert.deepEqual(published.userVariables, personalVariables);
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, hookVersion: published.version, installStatus: 'ready' });
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: [{ name: 'new_field' }] }) });
+    service.publishHook({ hookId, userId: 1 });
+    assert.deepEqual(service.listAvailableHooksForContext(alpha)[0].userVariables, personalVariables);
+    assert.deepEqual(service.getPublishedHookVersion({ hookId, version: 1 }).userVariables, []);
+  } finally { database.close(); }
+});
+
+test('personal variable values are encrypted, scoped, validated, updated, and never returned by settings APIs', () => {
+  const { database, service, hookId, alpha, alphaSecond, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: personalVariables }) });
+    const hook = service.publishHook({ hookId, userId: 1 });
+    const before = service.listAvailableHooksForContext(alpha)[0];
+    assert.deepEqual(before.missingRequiredUserVariables, ['token']);
+    assert.equal(before.enabled, false);
+    for (const userVariables of [undefined, {}, { token: '   ' }, { token: 123 }, { token: 'ok', unknown: 'value' }]) {
+      assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables }), { statusCode: 400 });
+    }
+    assert.equal(service.getWorkspaceHookAssignment({ workspaceId: alpha.workspaceId, hookId }), null);
+    assert.throws(() => service.setUserHookEnabled({ userId: 2, hookId, enabled: true }), { statusCode: 409 });
+    const result = service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'private-alice', project: 'project-a' } });
+    assert.equal(result.hook.enabled, true);
+    assert.deepEqual(result.hook.configuredUserVariables, ['token', 'project']);
+    assert.doesNotMatch(JSON.stringify(result), /private-alice|project-a/);
+    const stored = database.prepare('SELECT values_encrypted FROM user_workspace_hook_variables').get();
+    assert.match(stored.values_encrypted, /^secret:/);
+    assert.doesNotMatch(stored.values_encrypted, /private-alice|project-a/);
+    assert.deepEqual(service.getWorkspaceHookUserVariables({ ...alpha, hook }), { token: 'private-alice', project: 'project-a' });
+    for (const context of [alphaSecond, beta, { ...alpha, userId: 1 }]) {
+      assert.deepEqual(service.getWorkspaceHookUserVariables({ ...context, hook }), {});
+    }
+    assert.deepEqual(service.getWorkspaceHookUserVariables({ ...alpha, hook: { ...hook, id: 'another-hook' } }), {});
+    assert.throws(() => service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: true, userVariables: { token: 'no' } }), { statusCode: 403 });
+    assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, tenantId: 20, hookId, enabled: true, userVariables: { token: 'no' } }), { statusCode: 403 });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { project: '', token: 'new-token' } });
+    assert.deepEqual(service.getWorkspaceHookUserVariables({ ...alpha, hook }), { token: 'new-token' });
+    assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: '' } }), { statusCode: 400 });
+    assert.deepEqual(service.getWorkspaceHookUserVariables({ ...alpha, hook }), { token: 'new-token' });
+    service.removeWorkspaceHookAssignment({ workspaceId: alpha.workspaceId, hookId });
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM user_workspace_hook_variables').get().count, 0);
+  } finally { database.close(); }
+});
+
+test('mandatory template Hooks wait for each user to configure required variables', () => {
+  const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: personalVariables }) });
+    const hook = service.publishHook({ hookId, userId: 1 });
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, hookVersion: hook.version,
+      source: 'agent_template', sourceTemplateId: 88, defaultEnabled: true, allowUserDisable: false, installStatus: 'ready' });
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'member-token' } });
+    assert.equal(service.listEffectiveHooksForContext(alpha).length, 1);
+    assert.deepEqual(service.listEffectiveHooksForContext({ ...alpha, userId: 1 }), []);
+    assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false }), { statusCode: 409 });
+  } finally { database.close(); }
 });

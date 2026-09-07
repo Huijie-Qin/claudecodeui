@@ -216,6 +216,14 @@ export function createWorkspacesRouter({
         error.statusCode = 403;
         throw error;
       }
+      hookConfigs.validateWorkspaceUserHookVariables?.({
+        workspaceId: workspace.id,
+        tenantId: workspace.tenant_id,
+        userId: req.user.id,
+        hookId: req.params.hookId,
+        enabled: req.body?.enabled,
+        userVariables: req.body?.userVariables,
+      });
       const needsMaterialization = req.body?.enabled === true && (
         !availableHook.workspaceAssignment
         || availableHook.workspaceAssignment.installStatus !== 'ready'
@@ -278,6 +286,7 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         hookId: req.params.hookId,
         enabled: req.body?.enabled,
+        userVariables: req.body?.userVariables,
       });
       return res.json({ workspaceId: workspace.id, accessRole, ...result });
     } catch (error) {
