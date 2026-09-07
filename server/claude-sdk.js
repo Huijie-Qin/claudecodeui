@@ -69,6 +69,7 @@ import { createClaudeMessageDisplayTracker } from './services/claude-message-dis
 import { userDb } from './database/db.js';
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
+import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.js';
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
@@ -1748,6 +1749,18 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       hookRecoveryToolNames = hookMcpRuntime.toolNames;
     }
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
+    const mcpDiagnostics = createMcpRuntimeDiagnostics({
+      requestId: runtimeOptions.logRequestId || null,
+      workspaceId: runtimeOptions.workspaceId || null,
+      runtimeId: runtimeContext.runtimeId || null,
+      runtimeMode: runtimeContext.mode,
+      workspacePath: runtimeOptions.cwd || null,
+      containerName: runtimeContext.containerName || null,
+    });
+    mcpDiagnostics.logConfig(sdkOptions, {
+      sessionId: capturedSessionId || sessionId || null,
+      includeHostConfig: !runtimeContext.disableHostMcpConfig,
+    });
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
       uuid: initialMessageId,
@@ -2429,6 +2442,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }
 
       const message = next.value;
+      mcpDiagnostics.observe(message, queryInstance);
       if (pendingTurnCompletion) {
         turnCompletionScheduler.cancel();
       }
