@@ -103,4 +103,4 @@ RUN sed -i 's/\r$//' /usr/local/bin/cloudcli-docker-entrypoint \
 EXPOSE 3001
 
 ENTRYPOINT ["/usr/local/bin/cloudcli-docker-entrypoint"]
-CMD ["node", "dist-server/server/index.js"]
+CMD ["node", "--use-system-ca", "dist-server/server/index.js"]

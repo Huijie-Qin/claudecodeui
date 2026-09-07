@@ -25,9 +25,9 @@
   },
   "scripts": {
     "dev": "concurrently --kill-others \"npm run server:dev\" \"npm run client\"",
-    "server": "node dist-server/server/index.js",
-    "server:dev": "tsx --tsconfig server/tsconfig.json server/index.js",
-    "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.js",
+    "server": "node --use-system-ca dist-server/server/index.js",
+    "server:dev": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs --tsconfig server/tsconfig.json server/index.js",
+    "server:dev-watch": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs watch --tsconfig server/tsconfig.json server/index.js",
     "client": "vite",
     "mock:sql-check": "node scripts/sql-check-rules-mock.js",
     "mock:mcp-tool-settings": "node scripts/mcp-tool-settings-mock.mjs",
