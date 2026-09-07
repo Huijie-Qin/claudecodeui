@@ -55,7 +55,9 @@ export default function HookUserVariablesEditor({
             </Button>
           </div>
           <p className="break-all text-[11px] leading-5 text-muted-foreground">
-            引用：<code>{`{{ccui.env.userVariables.${variable.name}}}`}</code>
+            模板：<code>{`{{ccui.env.userVariables.${variable.name}}}`}</code>
+            <br />
+            Skill Shell 环境变量：<code>{`\${${variable.name}}`}</code>（启用后自动注入，下次执行生效）
           </p>
         </div>
       ))}

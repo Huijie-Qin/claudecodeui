@@ -2208,7 +2208,7 @@ test('personal variable values are encrypted, scoped, validated, updated, and ne
     const before = service.listAvailableHooksForContext(alpha)[0];
     assert.deepEqual(before.missingRequiredUserVariables, ['token']);
     assert.equal(before.enabled, false);
-    for (const userVariables of [undefined, {}, { token: '   ' }, { token: 123 }, { token: 'ok', unknown: 'value' }]) {
+    for (const userVariables of [undefined, {}, { token: '   ' }, { token: 123 }, { token: 'a\0b' }, { token: 'ok', unknown: 'value' }]) {
       assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables }), { statusCode: 400 });
     }
     assert.equal(service.getWorkspaceHookAssignment({ workspaceId: alpha.workspaceId, hookId }), null);
@@ -2250,5 +2250,54 @@ test('mandatory template Hooks wait for each user to configure required variable
     assert.equal(service.listEffectiveHooksForContext(alpha).length, 1);
     assert.deepEqual(service.listEffectiveHooksForContext({ ...alpha, userId: 1 }), []);
     assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false }), { statusCode: 409 });
+  } finally { database.close(); }
+});
+
+test('Hook environment uses enabled pinned definitions and isolates users, workspaces, tenants and unavailable Hooks', () => {
+  const { database, service, hookId, alpha, alphaSecond, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: personalVariables }) });
+    service.publishHook({ hookId, userId: 1 });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: {}, secretValues: [] });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'alpha-private' } });
+    service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: true, userVariables: { token: 'second-private' } });
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: [{ name: 'new_field' }] }) });
+    service.publishHook({ hookId, userId: 1 });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: { token: 'alpha-private' }, secretValues: ['alpha-private'] });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alphaSecond).env, { token: 'second-private' });
+    for (const context of [beta, { ...alpha, userId: 1 }]) {
+      assert.deepEqual(service.resolveWorkspaceHookEnvironment(context), { env: {}, secretValues: [] });
+    }
+    assert.throws(() => service.resolveWorkspaceHookEnvironment({ ...alpha, tenantId: beta.tenantId }), { statusCode: 403 });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'changed', project: '普通 值' } });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: { token: 'changed', project: '普通 值' }, secretValues: ['changed'] });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha).env, {});
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    service.markWorkspaceHookAssignmentFailed({ workspaceId: alpha.workspaceId, hookId, error: 'missing resource' });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha).env, {});
+  } finally { database.close(); }
+});
+
+test('Hook environment shares identical values but refuses ambiguous names without exposing values', () => {
+  const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: personalVariables }) });
+    service.publishHook({ hookId, userId: 1 });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'same-private' } });
+    const second = service.createHook({ input: publishableHook({ name: 'Second Hook', userVariables: personalVariables }), userId: 1 });
+    service.publishHook({ hookId: second.id, userId: 1 });
+    service.replaceHookBindings({ hookId: second.id, scope: 'tenants', tenantIds: [10], boundBy: 1 });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId: second.id, enabled: true, userVariables: { token: 'same-private' } });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: { token: 'same-private' }, secretValues: ['same-private'] });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId: second.id, enabled: true, userVariables: { token: 'different-private' } });
+    assert.throws(() => service.resolveWorkspaceHookEnvironment(alpha), (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.match(error.message, /token.*冲突/);
+      assert.doesNotMatch(error.message, /same-private|different-private/);
+      return true;
+    });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId: second.id, enabled: false });
+    assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha).env, { token: 'same-private' });
   } finally { database.close(); }
 });

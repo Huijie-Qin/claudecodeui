@@ -1,5 +1,7 @@
 import { spawn as spawnChildProcess } from 'node:child_process';
 
+import { createHookVariableRedactor } from './hook-user-variables.js';
+
 const DEFAULT_TAIL_LIMIT = 64 * 1024;
 const SECRET_ENV_NAME_PATTERN = /(TOKEN|KEY|SECRET|PASSWORD|AUTH|CREDENTIAL|PRIVATE)/i;
 const SECRET_VALUE_MIN_LENGTH = 6;
@@ -79,6 +81,8 @@ export function createClaudeProcessDiagnostics({
 } = {}) {
   let context = {};
   let redactionEnv = { ...env };
+  const secretValues = new Set();
+  let redactExplicitSecrets = (value) => value;
   let stdoutTail = '';
   let stderrTail = '';
   let lastSpawn = null;
@@ -94,6 +98,14 @@ export function createClaudeProcessDiagnostics({
 
   const addRedactionEnv = (nextEnv = {}) => {
     redactionEnv = { ...redactionEnv, ...nextEnv };
+  };
+
+  const addRedactionValues = (values = []) => {
+    for (const value of values) if (value) secretValues.add(value);
+    const entries = [...secretValues].map((value, index) => [String(index), value]);
+    redactExplicitSecrets = createHookVariableRedactor(
+      entries.map(([name]) => ({ name, secret: true })), Object.fromEntries(entries),
+    );
   };
 
   const appendOutput = (streamName, chunk) => {
@@ -190,16 +202,17 @@ export function createClaudeProcessDiagnostics({
       delete diagnostics.spawnError;
     }
 
-    return diagnostics;
+    return redactExplicitSecrets(diagnostics);
   };
 
   return {
     updateContext,
     addRedactionEnv,
+    addRedactionValues,
     appendOutput,
     createSpawn,
-    redactText: (value) => redactClaudeDiagnosticText(value, redactionEnv),
-    redactValue: (value) => redactClaudeDiagnosticValue(value, redactionEnv),
+    redactText: (value) => redactExplicitSecrets(redactClaudeDiagnosticText(value, redactionEnv)),
+    redactValue: (value) => redactExplicitSecrets(redactClaudeDiagnosticValue(value, redactionEnv)),
     snapshot,
     logSnapshot(reason, extraContext = {}) {
       try {

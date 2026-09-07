@@ -77,6 +77,7 @@ function createLayeredClaudeEnvResolver({ tenantEnvs = {}, personalEnv = {} } = 
           }
         }
         apply(personalEnv, 'personal');
+        apply(input.hookUserEnv, 'hook');
         apply(input.managedEnv, 'managed');
         return { env, sources, blockedVariables: [] };
       },
@@ -89,6 +90,7 @@ const testDefaultClaudeEnvService = createLayeredClaudeEnvResolver().service;
 function createAgentSessionRuntimeManager(options = {}) {
   return createAgentSessionRuntimeManagerImpl({
     claudeEnv: testDefaultClaudeEnvService,
+    hookConfigs: { resolveWorkspaceHookEnvironment: () => ({ env: {}, secretValues: [] }) },
     ...options,
   });
 }
@@ -590,6 +592,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
       ADMIN_CUSTOM: 'legacy-admin',
       TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
       PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+      hook_custom: 'hook-secret',
       W3_NAME: 'managed-user',
       PATH: '/untrusted/path',
       UNKNOWN_SOURCE: 'do-not-forward',
@@ -601,6 +604,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
       ADMIN_CUSTOM: 'adminUserEnv',
       TENANT_ENCRYPTED_TOKEN: 'tenant',
       PERSONAL_ENCRYPTED_TOKEN: 'personal',
+      hook_custom: 'hook',
       W3_NAME: 'managed',
       PATH: 'managed',
       UNKNOWN_SOURCE: 'unexpected',
@@ -613,6 +617,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
     ADMIN_CUSTOM: 'legacy-admin',
     TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
     PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+    hook_custom: 'hook-secret',
     W3_NAME: 'managed-user',
   });
   assert.deepEqual(buildClaudeDockerCreateEnv(resolvedEnv), {
@@ -1420,7 +1425,13 @@ test('docker mode resumes an existing runtime home for provider session id', asy
 
   let created = false;
   let startedContainer = null;
+  let hookValues = { personal_token: 'hook-first-value', custom_name: '中文 value\nwith spaces' };
+  const hookScopes = [];
   const manager = createAgentSessionRuntimeManager({
+    hookConfigs: { resolveWorkspaceHookEnvironment: (context) => {
+      hookScopes.push(context);
+      return { env: { ...hookValues }, secretValues: Object.values(hookValues) };
+    } },
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
@@ -1478,6 +1489,42 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(startedContainer, 'cloudcli-claude-existing');
   assert.equal(runtime.runtimeHomePath, runtimeHomePath);
   assert.equal(runtime.runtimeId, 'existing');
+  assert.equal(runtime.executionEnv.personal_token, 'hook-first-value');
+  assert.equal(runtime.hookCommandEnv.custom_name, hookValues.custom_name);
+  assert.deepEqual(runtime.secretEnvValues, Object.values(hookValues));
+  const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
+  assert.match(wrapper, /-e personal_token/);
+  assert.doesNotMatch(wrapper, /hook-first-value|中文 value/);
+  const options = { tenantId: 3, userId: 4, workspaceId: 5, cwd: workspacePath, sessionId: 'claude-session-1' };
+  hookValues = { personal_token: 'hook-updated-value' };
+  const updated = await manager.prepareClaudeRuntime(options);
+  assert.equal(updated.runtimeId, runtime.runtimeId);
+  assert.equal(updated.executionEnv.personal_token, 'hook-updated-value');
+  assert.equal(updated.executionEnv.custom_name, undefined);
+  hookValues = {};
+  const disabled = await manager.prepareClaudeRuntime(options);
+  assert.equal(disabled.executionEnv.personal_token, undefined);
+  assert.equal(disabled.hookCommandEnv.personal_token, undefined);
+  assert.deepEqual(disabled.secretEnvValues, []);
+  assert.deepEqual(hookScopes, Array(3).fill({ tenantId: 3, userId: 4, workspaceId: 5 }));
+});
+
+test('local execution resolves Hook variables with workspace scope and omits them without a workspace', async () => {
+  const scopes = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: { CLAUDE_EXECUTION_MODE: 'local' }, users: emptyUserEnvDb,
+    hookConfigs: { resolveWorkspaceHookEnvironment: (context) => {
+      scopes.push(context);
+      return { env: { personal_token: 'local-hook-value' }, secretValues: ['local-hook-value'] };
+    } },
+  });
+  const scoped = await manager.prepareClaudeRuntime({ userId: 4, workspaceId: 5 });
+  assert.equal(scoped.executionEnv.personal_token, 'local-hook-value');
+  assert.deepEqual(scoped.secretEnvValues, ['local-hook-value']);
+  const unscoped = await manager.prepareClaudeRuntime({ userId: 4 });
+  assert.equal(unscoped.executionEnv.personal_token, undefined);
+  assert.deepEqual(unscoped.secretEnvValues, []);
+  assert.deepEqual(scopes, [{ tenantId: null, userId: 4, workspaceId: 5 }]);
 });
 
 test('docker mode reuses the owner runtime home when another session replaced its current binding', async () => {

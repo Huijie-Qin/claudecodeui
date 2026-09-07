@@ -1660,6 +1660,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       hostWorkspacePath: runtimeContext.hostWorkspacePath || null,
     });
     processDiagnostics.addRedactionEnv(runtimeOptions.executionEnv || process.env);
+    processDiagnostics.addRedactionValues(runtimeContext.secretEnvValues);
     runtimeOptions.spawnClaudeCodeProcess = processDiagnostics.createSpawn(runtimeContext.spawnClaudeCodeProcess);
 
     updateHookActivity('running');

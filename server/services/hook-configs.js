@@ -2117,6 +2117,30 @@ export function createHookConfigService({
     validateWorkspaceUserHookVariables: (input) => { prepareWorkspaceUserHookVariables(input); },
 
     // Runtime-only access. HTTP responses expose configured names, never values.
+    resolveWorkspaceHookEnvironment: (context) => {
+      const env = {};
+      const secretValues = new Set();
+      const owners = new Map();
+      for (const hook of listAvailableHooksForContext(context)) {
+        if (!hook.enabled || hook.unavailableReason) continue;
+        const values = readUserVariables({ workspaceId: context.workspaceId, userId: context.userId, hook });
+        for (const variable of hook.userVariables || []) {
+          const value = values[variable.name];
+          if (!value) continue;
+          // Match the environment resolver's case-insensitive collision policy.
+          const key = variable.name.toUpperCase();
+          const previous = owners.get(key);
+          if (previous && (previous.name !== variable.name || env[previous.name] !== value)) {
+            throw createHttpError(`Hook「${previous.hookName}」与「${hook.name}」的个人变量 ${variable.name} 冲突，请使用不同变量名或填写相同的值`, 409);
+          }
+          env[variable.name] = value;
+          owners.set(key, { name: variable.name, hookName: hook.name });
+          if (variable.secret) secretValues.add(value);
+        }
+      }
+      return { env, secretValues: [...secretValues] };
+    },
+
     getWorkspaceHookUserVariables: ({ workspaceId, tenantId = null, userId, hook }) => {
       const workspace = requireWorkspaceContext({ workspaceId, tenantId });
       const normalizedUserId = requireInteger(userId, 'userId');

@@ -413,7 +413,7 @@ export function createClaudeEnvService({
     } : null;
   };
 
-  const findPersonalBlock = (name, value = null) => {
+  const findPersonalBlock = (name, value = null, { requireAllowlist = true } = {}) => {
     const builtin = findBuiltinBlock(name);
     if (builtin) return builtin;
 
@@ -430,14 +430,14 @@ export function createClaudeEnvService({
     const allowlist = database.prepare(`
       SELECT * FROM claude_env_allowlist WHERE name = ? COLLATE NOCASE
     `).get(name);
-    if (!allowlist) {
+    if (requireAllowlist && !allowlist) {
       return {
         code: 'NOT_ALLOWLISTED',
         ownerType: 'allowlist',
         reason: 'Environment variable is not on the personal allowlist',
       };
     }
-    if (value !== null && Buffer.byteLength(value, 'utf8') > allowlist.max_length) {
+    if (requireAllowlist && value !== null && Buffer.byteLength(value, 'utf8') > allowlist.max_length) {
       return {
         code: 'VALUE_TOO_LONG',
         ownerType: 'allowlist',
@@ -833,6 +833,7 @@ export function createClaudeEnvService({
     userId,
     baseEnv = {},
     adminUserEnv,
+    hookUserEnv = {},
     managedEnv = {},
   }) => {
     const normalizedTenantId = tenantId === null || tenantId === undefined || tenantId === ''
@@ -933,29 +934,40 @@ export function createClaudeEnvService({
       activePersonal.push({ name: row.name, value });
     }
 
-    const activePersonalCredentialKeys = new Set(
-      activePersonal
-        .map((entry) => envNameKey(entry.name))
-        .filter((nameKey) => PERSONAL_CREDENTIAL_ENV_NAME_KEYS.has(nameKey)),
-    );
-    if (activePersonalCredentialKeys.size > 0) {
-      for (const name of PERSONAL_CREDENTIAL_ENV_NAMES) {
-        const nameKey = envNameKey(name);
-        const deleted = deleteEffectiveValue(nameKey);
-        if (deleted && !activePersonalCredentialKeys.has(nameKey)) {
-          blockedVariables.push({
-            name: deleted.name,
-            source: deleted.source,
-            code: 'PERSONAL_CREDENTIAL_GROUP_ISOLATION',
-            reason: 'Removed to prevent mixing personal and lower-layer Anthropic credentials',
-            blockedBy: 'personal',
-          });
+    // Published Hook definitions authorize these names independently of the
+    // general personal allowlist; built-in and platform deny rules still apply.
+    const activeHook = [];
+    for (const [name, value] of Object.entries(copyStringEnvironment(hookUserEnv))) {
+      const block = findPersonalBlock(name, value, { requireAllowlist: false });
+      if (block) {
+        blockedVariables.push({ name, source: 'hook', code: block.code, reason: block.reason, blockedBy: block.ownerType });
+        continue;
+      }
+      activeHook.push({ name, value });
+    }
+
+    const applyPersonalLayer = (entries, source) => {
+      const credentialKeys = new Set(entries.map((entry) => envNameKey(entry.name))
+        .filter((nameKey) => PERSONAL_CREDENTIAL_ENV_NAME_KEYS.has(nameKey)));
+      if (credentialKeys.size > 0) {
+        for (const name of PERSONAL_CREDENTIAL_ENV_NAMES) {
+          const nameKey = envNameKey(name);
+          const deleted = deleteEffectiveValue(nameKey);
+          if (deleted && !credentialKeys.has(nameKey)) {
+            blockedVariables.push({
+              name: deleted.name,
+              source: deleted.source,
+              code: 'PERSONAL_CREDENTIAL_GROUP_ISOLATION',
+              reason: 'Removed to prevent mixing personal and lower-layer Anthropic credentials',
+              blockedBy: source,
+            });
+          }
         }
       }
-    }
-    for (const entry of activePersonal) {
-      setEffectiveValue(entry.name, entry.value, 'personal');
-    }
+      for (const entry of entries) setEffectiveValue(entry.name, entry.value, source);
+    };
+    applyPersonalLayer(activePersonal, 'personal');
+    applyPersonalLayer(activeHook, 'hook');
 
     applyLayer(managedEnv, 'managed');
     return { env, sources, blockedVariables };

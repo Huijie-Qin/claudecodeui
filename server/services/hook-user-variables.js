@@ -34,6 +34,7 @@ export function mergeHookUserVariableValues(definitions, stored, input, { requir
   for (const [name, value] of Object.entries(input || {})) {
     if (!names.has(name)) invalid(`未配置的用户个人变量：${name}`);
     if (typeof value !== 'string' || value.length > 8192) invalid(`变量 ${name} 的值须为字符串，最多 8192 个字符`);
+    if (value.includes('\0')) invalid(`变量 ${name} 的值不能包含 NUL 字符`);
     if (value.trim()) values[name] = value;
     else delete values[name];
   }
