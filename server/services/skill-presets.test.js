@@ -302,53 +302,111 @@ test('a different market Skill cannot silently reuse an occupied preset name', a
   }), (error) => error?.statusCode === 409 && /already in use/.test(error.message));
 });
 
-test('tenant Skill presets reject SKILL.md nested below the package root', async () => {
-  const database = createTestDb();
-  const multitenancy = createMultitenancyDb(database);
-  const workspacePath = await makeWorkspace();
-  const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
-  const marketService = createFakeMarketService({
-    skillName: null,
-    files: {
-      'repo-main/README.md': '# Repository\n',
-      'repo-main/skills/code-reviewer/SKILL.md': [
-        '---',
-        'name: code-reviewer',
-        'description: Review nested code changes.',
-        '---',
-      ].join('\n'),
-      'repo-main/skills/code-reviewer/references/checklist.md': 'Review carefully.\n',
-    },
-  });
-  const service = createSkillPresetService({ multitenancy, marketService });
-  await assert.rejects(() => service.createPreset({
-    tenantId: tenant.id,
-    userId: adminId,
-    input: { sourceRef: 'remote-code-reviewer' },
-    tenantCode: tenant.code,
-    accountId: 'admin',
-  }), (error) => error?.statusCode === 400
-    && /must be located at the package root/.test(error.message)
-    && /repo-main\/skills\/code-reviewer\/SKILL\.md/.test(error.message));
+test('tenant Skill preset preparation only requires retrievable files', async (t) => {
+  const cases = [
+    { name: 'nested manifest', files: { 'nested/SKILL.md': '# Nested skill\n' } },
+    { name: 'missing manifest', files: { 'README.md': '# Skill files\n' } },
+    { name: 'invalid manifest YAML', files: { 'SKILL.md': '---\nname: [\n---\n' } },
+    { name: 'empty manifest', files: { 'SKILL.md': '' } },
+    { name: 'uninspected file paths', files: { '../outside.txt': 'retrieved without writing to disk' } },
+  ];
+  for (const { name, files } of cases) {
+    await t.test(name, async (t) => {
+      const database = createTestDb();
+      const multitenancy = createMultitenancyDb(database);
+      const workspacePath = await makeWorkspace();
+      t.after(async () => {
+        database.close();
+        await fs.rm(workspacePath, { recursive: true, force: true });
+      });
+      const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+      const marketService = createFakeMarketService({ files, skillName: null });
+      const service = createSkillPresetService({ multitenancy, marketService });
+      const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+      const input = { sourceRef: REMOTE_SKILL.id };
+
+      const preset = await service.createPreset({ ...context, input });
+      const updated = await service.updatePreset({ ...context, presetId: preset.id, input });
+      assert.equal(updated.id, preset.id);
+
+      const validated = await service.validatePreset({ ...context, presetId: preset.id });
+      assert.equal(validated.validation.status, 'healthy');
+      assert.equal(validated.validation.displayName, REMOTE_SKILL.displayName);
+      assert.equal(validated.validation.description, REMOTE_SKILL.description);
+      assert.equal(validated.preset.lastValidationStatus, 'healthy');
+      assert.equal(service.publishPreset({ ...context, presetId: preset.id }).status, 'published');
+      assert.deepEqual(await fs.readdir(workspacePath), []);
+    });
+  }
 });
 
-test('tenant Skill presets report a clear error when SKILL.md is missing', async () => {
+test('tenant Skill presets reject empty downloads and record retrieval failures', async (t) => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const workspacePath = await makeWorkspace();
+  t.after(async () => {
+    database.close();
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  });
   const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const marketService = createFakeMarketService();
+  const service = createSkillPresetService({ multitenancy, marketService });
+  const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const input = { sourceRef: REMOTE_SKILL.id };
+  const preset = await service.createPreset({ ...context, input });
+  const originalDownload = marketService.downloadRemoteSkillFiles;
+  marketService.downloadRemoteSkillFiles = async () => ({ files: {} });
+
+  await assert.rejects(service.createPreset({ ...context, input }), /did not contain any files/);
+  await assert.rejects(service.updatePreset({ ...context, input, presetId: preset.id }), /did not contain any files/);
+  const emptyDownload = await service.validatePreset({ ...context, presetId: preset.id });
+  assert.equal(emptyDownload.validation.status, 'failed');
+  assert.match(emptyDownload.preset.lastValidationError, /did not contain any files/);
+  assert.throws(() => service.publishPreset({ ...context, presetId: preset.id }), /successful validation/);
+
+  marketService.downloadRemoteSkillFiles = async () => { throw new Error('Skill download unavailable'); };
+  const failedDownload = await service.validatePreset({ ...context, presetId: preset.id });
+  assert.equal(failedDownload.validation.status, 'failed');
+  assert.equal(failedDownload.preset.lastValidationError, 'Skill download unavailable');
+
+  marketService.fetchRemoteSkillDetail = async () => { throw new Error('Skill detail unavailable'); };
+  const failedDetail = await service.validatePreset({ ...context, presetId: preset.id });
+  assert.equal(failedDetail.validation.status, 'failed');
+  assert.equal(failedDetail.preset.lastValidationError, 'Skill detail unavailable');
+
+  marketService.fetchRemoteSkillDetail = async () => ({ ...REMOTE_SKILL });
+  marketService.downloadRemoteSkillFiles = originalDownload;
+  const recovered = await service.validatePreset({ ...context, presetId: preset.id });
+  assert.equal(recovered.preset.lastValidationStatus, 'healthy');
+  assert.equal(recovered.preset.lastValidationError, null);
+});
+
+test('installing a retrieved preset still prevents writing outside its directory', async (t) => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => {
+    database.close();
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
   const service = createSkillPresetService({
     multitenancy,
-    marketService: createFakeMarketService({ files: { 'README.md': '# Missing manifest\n' } }),
+    marketService: createFakeMarketService({ files: { 'SKILL.md': '# Skill', '../outside.txt': 'outside' } }),
   });
+  const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const preset = await service.createPreset({ ...context, input: { sourceRef: REMOTE_SKILL.id } });
+  await service.validatePreset({ ...context, presetId: preset.id });
+  service.publishPreset({ ...context, presetId: preset.id });
 
-  await assert.rejects(() => service.createPreset({
-    tenantId: tenant.id,
-    userId: adminId,
-    input: { sourceRef: 'remote-code-reviewer' },
-    tenantCode: tenant.code,
-    accountId: 'admin',
-  }), /SKILL\.md is required at the package root/);
+  await assert.rejects(service.installWorkspaceSkillPreset({
+    ...context,
+    userId,
+    workspaceId: workspace.id,
+    workspacePath,
+    presetId: preset.id,
+  }), /Skill file path is invalid/);
+  assert.deepEqual(await fs.readdir(workspacePath), []);
 });
 
 test('applying a published preset to existing workspaces skips unmanaged Skill name conflicts', async () => {
