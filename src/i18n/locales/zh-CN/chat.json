@@ -1,4 +1,47 @@
 {
+  "sessionSkill": {
+    "title": "会话 Skill",
+    "subtitle": "从会话生成、调优可复用技能 · POC",
+    "description": "以这次已保存会话最终的实质输出为目标，自动排除寒暄；汇总用户消息作为技能输入，再生成或调优技能，并运行验证是否达到目标。",
+    "operation": "操作",
+    "generate": "生成新技能",
+    "optimize": "调优已有技能",
+    "name": "新技能名称",
+    "existingName": "已有技能名称",
+    "scope": "POC 使用 Claude 验证自包含文本任务，最多尝试 {{count}} 轮。通过后保存到当前工作区的 Claude 技能库；未通过不会覆盖已有技能。",
+    "invalidName": "名称最多 63 个字符，使用小写字母、数字和单个连字符，例如 sales-report。",
+    "requestFailed": "无法读取技能任务，请重试。",
+    "close": "关闭",
+    "loading": "正在读取任务…",
+    "iteration": "第 {{current}} / {{total}} 轮",
+    "saved": "已保存 /{{name}}，可在新的 Claude 会话中调用。",
+    "input": "汇总后的用户输入",
+    "expectedOutput": "目标输出：会话最终结果",
+    "actualOutput": "技能实际输出",
+    "validation": "验证记录",
+    "passed": "通过",
+    "notPassed": "未通过",
+    "background": "可关闭弹窗，任务会继续在后台运行。",
+    "waitForCompletion": "请等待当前会话执行结束后再使用会话 Skill。",
+    "startGenerate": "以此结果为准 · 生成",
+    "startOptimize": "以此结果为准 · 调优",
+    "statuses": {
+      "queued": "任务已排队",
+      "running": "正在生成并验证…",
+      "succeeded": "验证通过，技能已保存",
+      "failed": "任务失败，未更新技能",
+      "exhausted": "已达到尝试上限，未更新技能"
+    },
+    "phases": {
+      "select-output": "正在选择最终实质输出",
+      "summarize": "正在汇总会话输入",
+      "generate": "正在生成技能",
+      "execute": "正在以汇总输入运行技能",
+      "judge": "正在与目标输出对比",
+      "optimize": "正在根据验证反馈调优",
+      "saving": "正在保存已验证的技能"
+    }
+  },
   "codeBlock": {
     "copy": "复制",
     "copied": "已复制",

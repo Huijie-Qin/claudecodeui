@@ -11,7 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
-import { ArrowDownIcon, Clock3Icon, SparklesIcon, TerminalSquareIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, BookOpenCheckIcon, Clock3Icon, SparklesIcon, TerminalSquareIcon, XIcon } from 'lucide-react';
 
 import {
   PromptInput,
@@ -103,6 +103,8 @@ interface ChatComposerProps {
   sendByCtrlEnter?: boolean;
   onOpenScheduledTasks?: () => void;
   scheduledTasksDisabledReason?: string;
+  onOpenSessionSkill?: () => void;
+  sessionSkillDisabledReason?: string;
 }
 
 export default function ChatComposer({
@@ -155,6 +157,8 @@ export default function ChatComposer({
   sendByCtrlEnter,
   onOpenScheduledTasks,
   scheduledTasksDisabledReason,
+  onOpenSessionSkill,
+  sessionSkillDisabledReason,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = isCommandMenuOpen ? textareaRef.current?.getBoundingClientRect() : undefined;
@@ -366,6 +370,18 @@ export default function ChatComposer({
                 <Clock3Icon />
               </PromptInputButton>
             ) : null}
+
+            {onOpenSessionSkill && (
+              <PromptInputButton
+                tooltip={{ content: sessionSkillDisabledReason || t('sessionSkill.title') }}
+                aria-label={t('sessionSkill.title')}
+                onClick={sessionSkillDisabledReason ? (event) => event.preventDefault() : onOpenSessionSkill}
+                aria-disabled={sessionSkillDisabledReason ? true : undefined}
+                className={sessionSkillDisabledReason ? 'cursor-not-allowed opacity-50' : undefined}
+              >
+                <BookOpenCheckIcon />
+              </PromptInputButton>
+            )}
 
             {hasInput && (
               <PromptInputButton
