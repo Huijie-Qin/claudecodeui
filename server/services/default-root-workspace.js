@@ -130,6 +130,8 @@ export async function ensureDefaultRootWorkspace({
   });
 
   const copiedDefaultPaths = await copyDefaultSkills(workspace.path);
+  // Tenant Skill presets bootstrap this user's default workspace only once.
+  // User-created projects do not inherit them; existing files are left in place.
   if (createdDefaultWorkspace) {
     await installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace });
     await installPreinstalledSkillPresets(skillPresets, {

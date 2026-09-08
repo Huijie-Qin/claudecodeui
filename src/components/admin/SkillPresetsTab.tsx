@@ -225,7 +225,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
             {t('skillPresets.description', {
-              defaultValue: 'Select Skill Market skills and preset them for the tenant.',
+              defaultValue: 'Install these Skills when a user’s default workspace is first initialized. Manually created projects do not inherit them; template projects use only their selected Skills.',
             })}
           </p>
         </div>

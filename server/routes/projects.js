@@ -79,32 +79,6 @@ function createWorkspaceProject(workspace) {
   };
 }
 
-async function installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user }) {
-  try {
-    const result = await skillPresetService.installPreinstalledSkillPresets({
-      tenantId: tenant.id,
-      workspaceId: workspace.id,
-      workspacePath: workspace.path,
-      userId: user.id,
-      tenantCode: tenant.code,
-      accountId: user.username,
-    });
-    if (result.errors?.length > 0) {
-      console.warn('Failed to preinstall some Skill presets for workspace:', {
-        workspaceId: workspace.id,
-        errors: result.errors,
-      });
-    }
-    return result;
-  } catch (error) {
-    console.warn('Failed to preinstall Skill presets for workspace:', {
-      workspaceId: workspace?.id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { installed: [], errors: [{ error: error instanceof Error ? error.message : String(error) }] };
-  }
-}
-
 export async function applyAgentTemplateHooksToWorkspace({
   hooks,
   templateId,
@@ -709,7 +683,6 @@ router.post('/create-workspace', async (req, res) => {
         displayName: requestedName || workspaceSlug,
         path: absolutePath,
       });
-      await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
 
       return res.json({
         success: true,
@@ -781,7 +754,6 @@ router.post('/create-workspace', async (req, res) => {
           displayName: requestedName || workspaceSlug,
           path: clonePath,
         });
-        await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
         const agentTemplate = await applyAgentTemplateToWorkspace({
           templateId,
           tenant,
@@ -814,7 +786,8 @@ router.post('/create-workspace', async (req, res) => {
         displayName: requestedName || workspaceSlug,
         path: absolutePath,
       });
-      await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
+      // Tenant Skill presets belong only to default-workspace onboarding.
+      // User-created projects receive only the capabilities explicitly selected by template.
       const agentTemplate = await applyAgentTemplateToWorkspace({
         templateId,
         tenant,
@@ -1065,7 +1038,6 @@ router.get('/clone-progress', async (req, res) => {
             displayName: requestedName || workspaceSlug,
             path: clonePath,
           });
-          await installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, user: req.user });
           await applyWorkspaceOwnership({
             workspaceRoot: workspace.path,
             targetPaths: [workspace.path],
