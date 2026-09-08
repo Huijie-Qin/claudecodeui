@@ -185,6 +185,7 @@ export function useProjectsState({
   useEffect(() => {
     if (!isLoadingProjects && projects.length === 1 && !selectedProject && !sessionId) {
       setSelectedProject(projects[0]);
+      setActiveTab('chat');
     }
   }, [isLoadingProjects, projects, selectedProject, sessionId]);
 
@@ -370,6 +371,9 @@ export function useProjectsState({
     (project: Project) => {
       setSelectedProject(project);
       setSelectedSession(null);
+      // Entering a project starts in chat, not the previous project's persisted tool tab.
+      // Keep this in the navigation action so background project refreshes do not reset tabs.
+      setActiveTab('chat');
       navigate('/');
 
       if (isMobile) {
