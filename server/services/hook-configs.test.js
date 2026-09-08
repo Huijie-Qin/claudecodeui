@@ -429,6 +429,71 @@ test('personal opt-outs and chat choices override admin defaults without affecti
   } finally { database.close(); }
 });
 
+test('changing only workspace chat visibility preserves activation against later admin defaults', () => {
+  for (const initiallyEnabled of [false, true]) {
+    const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+    try {
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: initiallyEnabled, boundBy: 1 });
+      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false });
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, initiallyEnabled);
+      assert.equal(service.getWorkspaceHookAssignment({ workspaceId: alpha.workspaceId, hookId }), null);
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: !initiallyEnabled, defaultShowInChat: true, boundBy: 1 });
+      const personalHook = service.listAvailableHooksForContext(alpha)[0];
+      assert.equal(personalHook.enabled, initiallyEnabled);
+      assert.equal(personalHook.showInChat, false);
+      assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].enabled, !initiallyEnabled);
+      assert.equal(service.listAvailableHooksForContext({ ...alpha, userId: 1 })[0].enabled, !initiallyEnabled);
+      // Toggling visibility again must not recapture the changed admin default.
+      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: true });
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, initiallyEnabled);
+      // The user can still explicitly change activation afterwards.
+      service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: !initiallyEnabled });
+      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false });
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, !initiallyEnabled);
+    } finally { database.close(); }
+  }
+});
+
+test('legacy chat visibility preferences also retain the users current activation', () => {
+  for (const initiallyEnabled of [false, true]) {
+    const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+    try {
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: initiallyEnabled, boundBy: 1 });
+      service.setUserHookChatVisibility({ hookId, userId: 2, showInChat: false });
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: !initiallyEnabled, defaultShowInChat: true, boundBy: 1 });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, false);
+      assert.equal(service.listHookBindings(hookId).users.find((user) => user.id === 2).enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForUser(1)[0].enabled, !initiallyEnabled);
+      service.setUserHookEnabled({ hookId, userId: 2, enabled: !initiallyEnabled });
+      service.setUserHookChatVisibility({ hookId, userId: 2, showInChat: true });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, !initiallyEnabled);
+    } finally { database.close(); }
+  }
+});
+
+test('admin saves preserve activation for preexisting chat-only records before changing defaults', () => {
+  for (const initiallyEnabled of [false, true]) {
+    const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+    try {
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: initiallyEnabled, boundBy: 1 });
+      // Simulate records saved by the previous release, without activation.
+      database.prepare(`INSERT INTO user_workspace_hook_preferences (workspace_id, user_id, hook_id, enabled, show_in_chat)
+        VALUES (?, ?, ?, NULL, 0)`).run(alpha.workspaceId, 2, hookId);
+      database.prepare('INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat) VALUES (1, ?, 0)').run(hookId);
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: !initiallyEnabled, boundBy: 1 });
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForUser(1)[0].enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].enabled, !initiallyEnabled);
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: initiallyEnabled, boundBy: 1 });
+      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: !initiallyEnabled, boundBy: 1 });
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, initiallyEnabled);
+      assert.equal(service.listAvailableHooksForUser(1)[0].enabled, initiallyEnabled);
+    } finally { database.close(); }
+  }
+});
+
 test('template defaults and unavailable pinned versions take precedence over administrator defaults', () => {
   const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
   try {

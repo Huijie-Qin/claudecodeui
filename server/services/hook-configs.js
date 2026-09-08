@@ -1702,7 +1702,7 @@ export function createHookConfigService({
     userId,
     hookId,
     showInChat,
-  }) => {
+  }) => database.transaction(() => {
     const normalizedUserId = Number(userId);
     if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
       throw createHttpError('userId must be a positive integer');
@@ -1714,16 +1714,22 @@ export function createHookConfigService({
       userId: normalizedUserId,
       hookId,
     });
+    const currentHook = listAvailableHooksForContext({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenantId,
+      userId: normalizedUserId,
+    }).find((candidate) => candidate.id === String(hookId));
     database.prepare(`
       INSERT INTO user_workspace_hook_preferences (
         workspace_id, user_id, hook_id, enabled, show_in_chat
-      ) VALUES (?, ?, ?, NULL, ?)
+      ) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
+        enabled = COALESCE(user_workspace_hook_preferences.enabled, excluded.enabled),
         show_in_chat = excluded.show_in_chat,
         updated_at = CURRENT_TIMESTAMP
-    `).run(workspace.id, normalizedUserId, String(hookId), showInChat ? 1 : 0);
+    `).run(workspace.id, normalizedUserId, String(hookId), currentHook?.enabled ? 1 : 0, showInChat ? 1 : 0);
     return { hookId: String(hookId), showInChat };
-  };
+  })();
   const getSqlCheckHookRow = ({ publishedOnly = false } = {}) => database.prepare(`
     SELECT *
     FROM hooks
@@ -2126,6 +2132,48 @@ export function createHookConfigService({
     }));
   };
 
+  // Changing chat visibility is a personal configuration action too. Capture
+  // activation before changing defaults so it no longer follows the admin.
+  const preserveUserHookActivation = ({ userId, hookId }) => {
+    const hasExplicitActivation = database.prepare(`
+      SELECT 1 FROM user_hook_bindings WHERE user_id = ? AND hook_id = ?
+      UNION ALL
+      SELECT 1 FROM user_hook_opt_outs WHERE user_id = ? AND hook_id = ?
+      LIMIT 1
+    `).get(userId, hookId, userId, hookId);
+    if (hasExplicitActivation) return;
+    const enabled = listAvailableHooksForUser(userId).find((hook) => hook.id === hookId)?.enabled;
+    if (enabled) {
+      database.prepare('INSERT INTO user_hook_bindings (user_id, hook_id, bound_by) VALUES (?, ?, ?)')
+        .run(userId, hookId, userId);
+    } else {
+      database.prepare('INSERT INTO user_hook_opt_outs (user_id, hook_id) VALUES (?, ?)')
+        .run(userId, hookId);
+    }
+  };
+
+  const preserveChatOnlyHookActivation = (hookId) => {
+    for (const row of database.prepare('SELECT user_id FROM user_hook_preferences WHERE hook_id = ?').all(hookId)) {
+      preserveUserHookActivation({ userId: row.user_id, hookId });
+    }
+    const preferences = database.prepare(`
+      SELECT preference.user_id, preference.workspace_id, workspace.tenant_id
+      FROM user_workspace_hook_preferences preference
+      JOIN workspaces workspace ON workspace.id = preference.workspace_id
+      WHERE preference.hook_id = ? AND preference.enabled IS NULL AND preference.show_in_chat IS NOT NULL
+    `).all(hookId);
+    const update = database.prepare(`
+      UPDATE user_workspace_hook_preferences SET enabled = ?
+      WHERE hook_id = ? AND user_id = ? AND workspace_id = ? AND enabled IS NULL
+    `);
+    for (const row of preferences) {
+      const hook = listAvailableHooksForContext({
+        userId: row.user_id, workspaceId: row.workspace_id, tenantId: row.tenant_id,
+      }).find((candidate) => candidate.id === hookId);
+      update.run(hook?.enabled ? 1 : 0, hookId, row.user_id, row.workspace_id);
+    }
+  };
+
   return {
     listHooks: () => {
       const rows = database
@@ -2394,6 +2442,9 @@ export function createHookConfigService({
       }
 
       const replace = database.transaction(() => {
+        // Older clients saved chat-only preferences with enabled = NULL.
+        // Retain their current activation before applying new admin defaults.
+        preserveChatOnlyHookActivation(hookId);
         database.prepare('DELETE FROM hook_user_scopes WHERE hook_id = ?').run(hookId);
         database.prepare('DELETE FROM hook_tenant_bindings WHERE hook_id = ?').run(hookId);
         const insert = database.prepare(
@@ -2513,13 +2564,16 @@ export function createHookConfigService({
       const eligible = hook.bindingController === 'sql_check'
         || isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
-      database.prepare(`
-        INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id, hook_id) DO UPDATE SET
-          show_in_chat = excluded.show_in_chat,
-          updated_at = CURRENT_TIMESTAMP
-      `).run(normalizedUserId, hookId, showInChat ? 1 : 0);
+      database.transaction(() => {
+        if (hook.bindingController === 'admin') preserveUserHookActivation({ userId: normalizedUserId, hookId });
+        database.prepare(`
+          INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)
+          VALUES (?, ?, ?)
+          ON CONFLICT(user_id, hook_id) DO UPDATE SET
+            show_in_chat = excluded.show_in_chat,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(normalizedUserId, hookId, showInChat ? 1 : 0);
+      })();
       return { hookId, showInChat };
     },
 

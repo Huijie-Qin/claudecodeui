@@ -621,7 +621,7 @@
       "loadError": "Failed to load Hook user scope",
       "saveError": "Failed to save Hook user scope",
       "defaultEnabled": "Enable directly for users in scope",
-      "defaultEnabledHint": "Users do not need to enable this Hook manually. Future users in scope inherit this default. Personal choices and workspace template settings take precedence; required personal variables must be filled in first.",
+      "defaultEnabledHint": "Users do not need to enable this Hook manually. Future users in scope inherit this default. Once a user changes activation or chat visibility, their personal activation state is preserved. Workspace template settings take precedence; required personal variables must be filled in first.",
       "defaultShowInChat": "Show in chat by default",
       "defaultShowInChatHint": "When off, the Hook still runs but its execution records are hidden in chat by default. Users can change their display preference."
     },
