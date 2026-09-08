@@ -199,43 +199,36 @@ export async function applyAgentTemplateHooksToWorkspace({
   return { snapshots, warnings };
 }
 
-async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, user }) {
-  if (templateId == null || templateId === '') return null;
-
-  const snapshot = agentTemplateService.resolveTemplateSnapshot({
-    templateId: Number(templateId),
-    tenantId: tenant.id,
-  });
+export async function applyAgentTemplateSkillsToWorkspace({
+  skills,
+  workspace,
+  user,
+  multitenancy = multitenancyDb,
+  skillPresets = skillPresetService,
+}) {
   const appliedSkills = [];
-  const appliedMcps = [];
-  const hookSnapshots = [];
-  const templateMcpOverrides = {};
-  const warnings = [...(snapshot.unavailableCapabilities || [])];
-
-  const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
-  if (instructions) {
-    // CLAUDE.md is the project memory source loaded natively by Claude Code SDK.
-    await writeWorkspaceAgentInstructions(workspace.path, `${instructions}\n`);
-  }
-
+  const warnings = [];
   const installedSkillPresetIds = new Set(
-    (multitenancyDb.skillPresetInstalls?.listInstallsForWorkspace?.({ workspaceId: workspace.id }) || [])
+    (multitenancy.skillPresetInstalls?.listInstallsForWorkspace?.({ workspaceId: workspace.id }) || [])
       .map((install) => Number(install.preset_id)),
   );
-  for (const preset of snapshot.skills) {
+  for (const preset of skills) {
     if (installedSkillPresetIds.has(preset.id)) {
       appliedSkills.push(preset);
       continue;
     }
     try {
-      const sourceTenant = multitenancyDb.tenants.getTenantById(preset.tenantId);
-      await skillPresetService.installWorkspaceSkillPreset({
+      const sourceTenant = multitenancy.tenants.getTenantById(preset.tenantId);
+      if (!sourceTenant?.code) throw new Error('Skill 来源租户不存在或缺少租户编码');
+      await skillPresets.installWorkspaceSkillPreset({
         tenantId: preset.tenantId,
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         presetId: preset.id,
         userId: user.id,
-        tenantCode: sourceTenant?.prod_code || sourceTenant?.code,
+        // Skill Market list, validation and download all use tenant.code.
+        // prod_code belongs to the Agent OpenAPI and may identify a different scope.
+        tenantCode: String(sourceTenant.code),
         accountId: user.username,
       });
       appliedSkills.push(preset);
@@ -248,6 +241,30 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
       });
     }
   }
+  return { appliedSkills, warnings };
+}
+
+async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, user }) {
+  if (templateId == null || templateId === '') return null;
+
+  const snapshot = agentTemplateService.resolveTemplateSnapshot({
+    templateId: Number(templateId),
+    tenantId: tenant.id,
+  });
+  const appliedMcps = [];
+  const hookSnapshots = [];
+  const templateMcpOverrides = {};
+  const warnings = [...(snapshot.unavailableCapabilities || [])];
+
+  const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
+  if (instructions) {
+    // CLAUDE.md is the project memory source loaded natively by Claude Code SDK.
+    await writeWorkspaceAgentInstructions(workspace.path, `${instructions}\n`);
+  }
+
+  const skillInstall = await applyAgentTemplateSkillsToWorkspace({ skills: snapshot.skills, workspace, user });
+  const appliedSkills = skillInstall.appliedSkills;
+  warnings.push(...skillInstall.warnings);
 
   for (const preset of snapshot.mcps) {
     try {

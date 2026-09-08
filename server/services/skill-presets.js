@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -44,23 +45,19 @@ function compactObject(value) {
   );
 }
 
-function normalizedIdentityRef(value) {
-  return firstString(value).toLowerCase();
+function skillSourceId(skill) {
+  return firstString(skill?.remoteId || skill?.remote_id || skill?.source?.id)
+    || firstString(skill?.skillId || skill?.skill_id || skill?.source?.skillId);
 }
 
 function isSameSkillPresetSource(existing, normalized) {
-  const existingRefs = new Set([
-    existing?.remote_id,
-    existing?.skill_id,
-    existing?.source?.id,
-    existing?.source?.skillId,
-  ].map(normalizedIdentityRef).filter(Boolean));
-  return [
-    normalized?.remoteId,
-    normalized?.skillId,
-    normalized?.source?.id,
-    normalized?.source?.skillId,
-  ].map(normalizedIdentityRef).filter(Boolean).some((ref) => existingRefs.has(ref));
+  const existingId = skillSourceId(existing);
+  return Boolean(existingId && existingId === skillSourceId(normalized));
+}
+
+function disambiguateSkillName(baseName, sourceId, attempt = 1) {
+  const suffix = `-${createHash('sha256').update(sourceId).digest('hex').slice(0, 10)}${attempt > 1 ? `-${attempt}` : ''}`;
+  return `${baseName.slice(0, 80 - suffix.length)}${suffix}`;
 }
 
 function normalizeSkillFolderName(value) {
@@ -180,6 +177,7 @@ function toAdminSkillPreset(row) {
     version: Number(row.version || 0),
     source: row.source || {},
     preinstallScope: row.preinstall_scope || 'none',
+    usage: row.preinstall_scope === 'all_workspaces' ? 'tenant' : 'agent_template',
     preinstall: row.preinstall_scope === 'all_workspaces',
     status: row.status,
     lastValidationStatus: row.last_validation_status || null,
@@ -457,7 +455,8 @@ async function resolveRemoteSkill(input, { tenantCode, accountId, marketService 
   if (!skillRef) {
     throw createHttpError('Skill reference is required', 400);
   }
-  return marketService.fetchRemoteSkillDetail(skillRef, { tenantCode, accountId });
+  const exactId = Boolean(input?.remoteId || input?.remote_id || input?.skill?.id || input?.skill?.skillId);
+  return marketService.fetchRemoteSkillDetail(skillRef, { tenantCode, accountId, ...(exactId ? { exactId: true } : {}) });
 }
 
 function getUserById(users, userId) {
@@ -501,6 +500,21 @@ export function createSkillPresetService({
     return preset;
   };
 
+  // Display names may repeat. References and internal folder names must not.
+  const resolvePresetIdentity = (tenantId, normalized, excludeId = null) => {
+    const presets = multitenancy.skillPresets.listPresets({ tenantId, includeDisabled: true });
+    const scope = normalized.preinstallScope ?? normalized.preinstall_scope ?? 'none';
+    const existing = presets.find((preset) => preset.id !== excludeId
+      && preset.preinstall_scope === scope && isSameSkillPresetSource(preset, normalized));
+    if (existing) return { existing, name: existing.name };
+    const occupied = new Set(presets.filter((preset) => preset.id !== excludeId).map((preset) => preset.name.toLowerCase()));
+    let name = normalized.name;
+    for (let attempt = 1; occupied.has(name.toLowerCase()); attempt += 1) {
+      name = disambiguateSkillName(normalized.name, skillSourceId(normalized), attempt);
+    }
+    return { existing: null, name };
+  };
+
   const installWorkspaceSkillPreset = async ({
     tenantId,
     workspaceId,
@@ -519,20 +533,57 @@ export function createSkillPresetService({
     if (preset.status !== 'published') {
       throw createHttpError('Skill preset is not published', 404);
     }
-    const existingPresetInstall = multitenancy.skillPresetInstalls
-      ?.listInstallsForWorkspace?.({ workspaceId: normalizedWorkspaceId, includeRemoved: true })
-      ?.find((install) => Number(install.preset_id) === Number(preset.id));
+    const workspaceInstalls = multitenancy.skillPresetInstalls
+      ?.listInstallsForWorkspace?.({ workspaceId: normalizedWorkspaceId, includeRemoved: true }) || [];
+    const existingPresetInstall = workspaceInstalls.find((install) => Number(install.preset_id) === Number(preset.id));
 
     let attemptedSkillName = preset.name;
     try {
       const remoteSkill = await marketService.fetchRemoteSkillDetail(
         preset.remote_id || preset.skill_id || preset.name,
-        { tenantCode, accountId },
+        { tenantCode, accountId, ...(skillSourceId(preset) ? { exactId: true } : {}) },
       );
+      // Independent configuration records can still refer to the exact same installed
+      // package. Do not duplicate or overwrite files when a tenant preset already installed it.
+      const reusableInstall = !overwrite && workspaceInstalls.find((install) => install.status === 'installed'
+        && Number(install.preset_id) !== Number(preset.id)
+        && Number(install.tenant_id) === normalizedTenantId
+        && isSameSkillPresetSource(install, preset)
+        && Number(install.installed_version) === Number(remoteSkill.version ?? preset.version ?? 0));
+      if (reusableInstall && await pathExists(path.join(workspacePath, '.claude', 'skills', reusableInstall.skill_name, 'SKILL.md'))) {
+        const install = multitenancy.skillPresetInstalls.upsertInstall({
+          workspaceId: normalizedWorkspaceId,
+          presetId: preset.id,
+          skillName: reusableInstall.skill_name,
+          installedByUserId: normalizedUserId,
+          installedVersion: reusableInstall.installed_version,
+          status: 'installed',
+          lastError: null,
+        });
+        return {
+          preset: toAdminSkillPreset(preset),
+          installed: { presetId: preset.id, skillName: reusableInstall.skill_name, displayName: preset.display_name,
+            version: reusableInstall.installed_version, install, reused: true, appliesOn: 'next_agent_turn' },
+        };
+      }
       const downloadedSkill = normalizeDownloadedSkillPackage(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
-      attemptedSkillName = resolveRemoteSkillPresetName(remoteSkill, downloadedSkill);
+      // Retain the preset's collision-safe name, and the path of legacy installs.
+      attemptedSkillName = existingPresetInstall?.skill_name || preset.name;
+      const occupiedByOtherPresets = new Set(workspaceInstalls
+        .filter((install) => install.status === 'installed' && Number(install.preset_id) !== Number(preset.id))
+        .map((install) => install.skill_name.toLowerCase()));
+      // A multi-tenant template can include two independently named presets.
+      if (occupiedByOtherPresets.has(attemptedSkillName.toLowerCase())) {
+        const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
+        let attempt = 0;
+        do {
+          attemptedSkillName = disambiguateSkillName(preset.name, `${normalizedTenantId}:${skillSourceId(preset)}`, ++attempt);
+        } while (occupiedByOtherPresets.has(attemptedSkillName.toLowerCase())
+          || await pathExists(path.join(runtimeRoot, attemptedSkillName))
+          || await pathExists(path.join(sourceRoot, attemptedSkillName)));
+      }
       const skill = await installDownloadedPresetSkill({
         workspacePath,
         skillName: attemptedSkillName,
@@ -612,11 +663,12 @@ export function createSkillPresetService({
       };
     },
 
-    listAdminPresets: ({ tenantId, includeDisabled = true, status = null }) => {
+    listAdminPresets: ({ tenantId, includeDisabled = true, status = null, preinstallScope = null }) => {
       return multitenancy.skillPresets.listPresets({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         includeDisabled,
         status,
+        preinstallScope,
       }).map(toAdminSkillPreset);
     },
 
@@ -627,47 +679,44 @@ export function createSkillPresetService({
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
-      const findExisting = () => multitenancy.skillPresets.findPresetByName({
-        tenantId: normalizedTenantId,
-        name: normalized.name,
-      });
-      const existing = findExisting();
-      if (existing) {
-        if (isSameSkillPresetSource(existing, normalized)) return toAdminSkillPreset(existing);
-        throw createHttpError(`Skill preset name "${normalized.name}" is already in use`, 409, 'SKILL_PRESET_NAME_CONFLICT');
-      }
-
-      try {
-        const preset = multitenancy.skillPresets.createPreset({
-          tenantId: normalizedTenantId,
-          ...normalized,
-          createdByUserId: requirePositiveInteger(userId, 'userId'),
-        });
-        return toAdminSkillPreset(preset);
-      } catch (error) {
-        const isUniqueConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE'
-          || error?.code === 'SQLITE_CONSTRAINT';
-        if (!isUniqueConstraint) throw error;
-        const concurrentlyCreated = findExisting();
-        if (!concurrentlyCreated) throw error;
-        if (!isSameSkillPresetSource(concurrentlyCreated, normalized)) {
-          throw createHttpError(`Skill preset name "${normalized.name}" is already in use`, 409, 'SKILL_PRESET_NAME_CONFLICT');
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { existing, name } = resolvePresetIdentity(normalizedTenantId, normalized);
+        if (existing) return toAdminSkillPreset(existing);
+        try {
+          return toAdminSkillPreset(multitenancy.skillPresets.createPreset({
+            tenantId: normalizedTenantId,
+            ...normalized,
+            name,
+            createdByUserId: requirePositiveInteger(userId, 'userId'),
+          }));
+        } catch (error) {
+          const isUniqueConstraint = error?.code === 'SQLITE_CONSTRAINT_UNIQUE'
+            || error?.code === 'SQLITE_CONSTRAINT';
+          if (!isUniqueConstraint || attempt === 2) throw error;
         }
-        return toAdminSkillPreset(concurrentlyCreated);
       }
     },
 
     updatePreset: async ({ tenantId, presetId, userId, input, tenantCode, accountId }) => {
       const existing = getExistingPreset({ tenantId, presetId });
+      if ((input?.preinstallScope !== undefined || input?.preinstall !== undefined)
+        && normalizePreinstallScope(input) !== existing.preinstall_scope) {
+        throw createHttpError('Skill 预置和 Agent 模板的用途不能互相转换，请在对应页面单独配置', 400);
+      }
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
       const downloadedSkill = requireDownloadedSkillFiles(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
-      const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
+      const normalized = normalizeRemotePresetInput({ ...input, preinstallScope: existing.preinstall_scope }, remoteSkill, downloadedSkill);
+      const identity = resolvePresetIdentity(requirePositiveInteger(tenantId, 'tenantId'), normalized, existing.id);
+      if (identity.existing) {
+        throw createHttpError('该技能已存在预置，请使用已有预置', 409, 'SKILL_PRESET_SOURCE_CONFLICT');
+      }
       const preset = multitenancy.skillPresets.updatePreset({
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),
         ...normalized,
+        name: isSameSkillPresetSource(existing, normalized) ? existing.name : identity.name,
         status: normalizeEditableStatus(input?.status, existing.status === 'disabled' ? 'disabled' : 'draft'),
         updatedByUserId: requirePositiveInteger(userId, 'userId'),
       });
@@ -679,7 +728,7 @@ export function createSkillPresetService({
       try {
         const remoteSkill = await marketService.fetchRemoteSkillDetail(
           preset.remote_id || preset.skill_id || preset.name,
-          { tenantCode, accountId },
+          { tenantCode, accountId, ...(skillSourceId(preset) ? { exactId: true } : {}) },
         );
         requireDownloadedSkillFiles(
           await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
@@ -773,10 +822,7 @@ export function createSkillPresetService({
         }
 
         try {
-          const existingPreset = multitenancy.skillPresets.findPresetByName({
-            tenantId: normalizedTargetTenantId,
-            name: sourcePreset.name,
-          });
+          const { existing: existingPreset, name } = resolvePresetIdentity(normalizedTargetTenantId, sourcePreset);
           const status = normalizeEditableStatus(
             sourcePreset.status,
             sourcePreset.status === 'disabled' ? 'disabled' : 'draft',
@@ -785,7 +831,7 @@ export function createSkillPresetService({
             ? multitenancy.skillPresets.updatePreset({
               tenantId: normalizedTargetTenantId,
               presetId: existingPreset.id,
-              name: sourcePreset.name,
+              name,
               displayName: sourcePreset.display_name,
               description: sourcePreset.description || '',
               sourceType: sourcePreset.source_type || 'skill-market-api',
@@ -800,7 +846,7 @@ export function createSkillPresetService({
             })
             : multitenancy.skillPresets.createPreset({
               tenantId: normalizedTargetTenantId,
-              name: sourcePreset.name,
+              name,
               displayName: sourcePreset.display_name,
               description: sourcePreset.description || '',
               sourceType: sourcePreset.source_type || 'skill-market-api',

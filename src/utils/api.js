@@ -641,8 +641,8 @@ export const api = {
       authenticatedFetch(`/api/admin/ai-code-mrs${buildQueryString(filters)}`),
     mcpPresets: (tenantId) =>
       authenticatedFetch(`/api/admin/mcp-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
-    skillPresets: (tenantId) =>
-      authenticatedFetch(`/api/admin/skill-presets?tenantId=${encodeURIComponent(String(tenantId))}`),
+    skillPresets: (tenantId, usage = 'tenant') =>
+      authenticatedFetch(`/api/admin/skill-presets?tenantId=${encodeURIComponent(String(tenantId))}&usage=${encodeURIComponent(usage)}`),
     searchSkillPresetMarket: (tenantId, {
       searchContent = '', page = 1, pageSize = 20, complete = false,
     } = {}) => {

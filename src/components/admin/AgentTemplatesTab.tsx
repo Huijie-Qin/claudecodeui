@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Webhook, X } from 'lucide-react';
 
 import { api } from '../../utils/api';
@@ -8,6 +8,15 @@ import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTool
 import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
 
 import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
+import {
+  buildSkillCandidates,
+  getSkillCandidateKey,
+  getUnavailableSkillSelections,
+  mergeSkillPresets,
+  type AdminSkillPreset,
+  type MarketSkill,
+  type SkillCandidate,
+} from './agentTemplateSkillCatalog';
 
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
@@ -41,34 +50,6 @@ type HookCatalogItem = {
   bindingController?: string;
   selectedFallback?: boolean;
 };
-type MarketSkill = {
-  id?: string;
-  skillId?: string;
-  name: string;
-  displayName?: string;
-  description?: string;
-  nspPath?: string;
-  createUserId?: string;
-  version?: number;
-};
-type AdminSkillPreset = {
-  id: number;
-  tenantId: number;
-  name: string;
-  displayName: string;
-  description?: string;
-  skillId?: string;
-  remoteId?: string;
-  source?: {
-    id?: string;
-    skillId?: string;
-    name?: string;
-    displayName?: string;
-    downloadedSkillName?: string;
-  };
-  status: 'draft' | 'published' | 'disabled';
-  lastValidationStatus?: string | null;
-};
 type AgentTemplate = {
   id: number;
   name: string;
@@ -99,14 +80,14 @@ type Preset = {
   toolCount?: number;
   tools?: WorkspaceMcpTool[];
 };
-type SkillCandidate = Preset & {
-  sourceRef: string;
-  presetId?: number;
-  status?: AdminSkillPreset['status'];
-  lastValidationStatus?: string | null;
-  marketSkill?: MarketSkill;
+type Catalog = {
+  skills: SkillCandidate[];
+  skillPresets: AdminSkillPreset[];
+  skillMarketLoaded: boolean;
+  mcps: Preset[];
+  hooks: HookCatalogItem[];
 };
-type Catalog = { skills: SkillCandidate[]; mcps: Preset[]; hooks: HookCatalogItem[] };
+const EMPTY_CATALOG: Catalog = { skills: [], skillPresets: [], skillMarketLoaded: false, mcps: [], hooks: [] };
 type TemplateCategory = { id: number; name: string; templateCount: number };
 type Toast = { type: 'success' | 'error'; message: string } | null;
 type CategoryFeedback = { type: 'success' | 'error'; message: string } | null;
@@ -190,85 +171,9 @@ function normalizeCatalog(payload: { skills?: Preset[]; mcps?: Preset[] }): Cata
     tenantId: normalizeId(preset.tenantId),
   });
   return {
-    skills: (payload.skills || []).map(normalizePreset)
-      .filter((preset) => preset.id && preset.tenantId)
-      .map((preset) => ({ ...preset, sourceRef: preset.name, presetId: preset.id, status: 'published' })),
+    ...EMPTY_CATALOG,
     mcps: (payload.mcps || []).map(normalizePreset).filter((preset) => preset.id && preset.tenantId),
-    hooks: [],
   };
-}
-
-function normalizedSkillRef(value: unknown) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function marketSkillRef(skill: MarketSkill) {
-  return String(skill.id || skill.skillId || skill.name || '').trim();
-}
-
-function buildSkillCandidates({
-  tenantId,
-  marketSkills,
-  presets,
-  publishedSkills,
-}: {
-  tenantId: number;
-  marketSkills: MarketSkill[];
-  presets: AdminSkillPreset[];
-  publishedSkills: SkillCandidate[];
-}) {
-  const candidateByKey = new Map<string, SkillCandidate>();
-  const findPreset = (skill: MarketSkill) => {
-    const refs = new Set([
-      skill.id,
-      skill.skillId,
-      skill.name,
-      skill.displayName,
-    ].map(normalizedSkillRef).filter(Boolean));
-    return presets.find((preset) => [
-      preset.remoteId,
-      preset.skillId,
-      preset.name,
-      preset.displayName,
-      preset.source?.id,
-      preset.source?.skillId,
-      preset.source?.name,
-      preset.source?.displayName,
-      preset.source?.downloadedSkillName,
-    ]
-      .map(normalizedSkillRef)
-      .some((ref) => refs.has(ref)));
-  };
-
-  for (const skill of marketSkills) {
-    const sourceRef = marketSkillRef(skill);
-    if (!sourceRef) continue;
-    const preset = findPreset(skill);
-    const presetId = normalizeId(preset?.id);
-    const key = normalizedSkillRef(sourceRef);
-    candidateByKey.set(key, {
-      id: presetId,
-      presetId: presetId || undefined,
-      tenantId,
-      sourceRef,
-      name: skill.name || sourceRef,
-      displayName: skill.displayName || skill.name || sourceRef,
-      description: skill.description || '',
-      status: preset?.status,
-      lastValidationStatus: preset?.lastValidationStatus,
-      marketSkill: skill,
-    });
-  }
-
-  // Keep already-published presets selectable if the market temporarily omits
-  // them (for example because of pagination or a transient remote failure).
-  for (const skill of publishedSkills) {
-    const key = normalizedSkillRef(skill.sourceRef || skill.name);
-    const alreadyMapped = Boolean(skill.presetId)
-      && [...candidateByKey.values()].some((candidate) => candidate.presetId === skill.presetId);
-    if (!alreadyMapped && !candidateByKey.has(key)) candidateByKey.set(key, skill);
-  }
-  return [...candidateByKey.values()];
 }
 
 const EMPTY_TEMPLATE: Omit<AgentTemplate, 'id'> = {
@@ -320,12 +225,14 @@ export default function AgentTemplatesTab({
   const [tenantFilterSearch, setTenantFilterSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [catalogTenantId, setCatalogTenantId] = useState<number | null>(normalizedCurrentTenantId || activeTenants[0]?.id || null);
-  const [catalog, setCatalog] = useState<Catalog>({ skills: [], mcps: [], hooks: [] });
+  const [catalog, setCatalog] = useState<Catalog>(EMPTY_CATALOG);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [preparingSkillKeys, setPreparingSkillKeys] = useState<Set<string>>(() => new Set());
+  const pendingSkills = useRef(new Map<string, symbol>());
+  const preparedPresets = useRef(new Map<string, AdminSkillPreset>());
   const [toast, setToast] = useState<Toast>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -392,18 +299,18 @@ export default function AgentTemplatesTab({
 
   useEffect(() => {
     if (!isEditing || !catalogTenantId) {
-      setCatalog({ skills: [], mcps: [], hooks: [] });
+      setCatalog(EMPTY_CATALOG);
       setIsCatalogLoading(false);
       return;
     }
     let cancelled = false;
-    setCatalog({ skills: [], mcps: [], hooks: [] });
+    setCatalog(EMPTY_CATALOG);
     setIsCatalogLoading(true);
     void Promise.allSettled([
       api.admin.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
       api.admin.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
       api.admin.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
-      api.admin.skillPresets(catalogTenantId).then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
+      api.admin.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
     ])
       .then(([presetResult, hookResult, marketResult, presetListResult]) => {
         if (cancelled) return;
@@ -411,15 +318,17 @@ export default function AgentTemplatesTab({
         const hookCatalog = hookResult.status === 'fulfilled' ? hookResult.value : {};
         const marketCatalog = marketResult.status === 'fulfilled' ? marketResult.value : {};
         const presetPayload = presetListResult.status === 'fulfilled' ? presetListResult.value : {};
+        const skillPresets = mergeSkillPresets(presetPayload.presets || [], [...preparedPresets.current.values()]);
         const normalized = normalizeCatalog(presetCatalog);
         setCatalog({
           ...normalized,
           hooks: normalizeHookCatalog(hookCatalog),
+          skillPresets,
+          skillMarketLoaded: marketResult.status === 'fulfilled',
           skills: buildSkillCandidates({
             tenantId: catalogTenantId,
             marketSkills: marketCatalog.skills || [],
-            presets: presetPayload.presets || [],
-            publishedSkills: normalized.skills,
+            presets: skillPresets,
           }),
         });
         const failedCatalogLabels = [
@@ -436,7 +345,16 @@ export default function AgentTemplatesTab({
     return () => { cancelled = true; };
   }, [catalogTenantId, isEditing]);
 
+  useEffect(() => () => { pendingSkills.current.clear(); }, []);
+
+  const resetSkillPreparation = () => {
+    pendingSkills.current.clear();
+    preparedPresets.current.clear();
+    setPreparingSkillKeys(new Set());
+  };
+
   const closeEditor = () => {
+    resetSkillPreparation();
     setConfiguringMcp(null);
     setEditing(null);
     setIsAddingCategory(false);
@@ -444,6 +362,7 @@ export default function AgentTemplatesTab({
   };
 
   const beginEdit = (template: AgentTemplate) => {
+    resetSkillPreparation();
     setListError(null);
     setEditorError(null);
     setEditing(template);
@@ -452,6 +371,7 @@ export default function AgentTemplatesTab({
   };
 
   const beginCreate = () => {
+    resetSkillPreparation();
     const initialTenantId = tenantFilterIds[0] || normalizedCurrentTenantId || activeTenants[0]?.id;
     setEditing({ ...EMPTY_TEMPLATE, tenantIds: initialTenantId ? [initialTenantId] : [] });
     setCatalogTenantId(initialTenantId || null);
@@ -468,6 +388,14 @@ export default function AgentTemplatesTab({
     if (!editing) return;
     const tenant = activeTenants.find((item) => item.id === tenantId);
     const selected = editing.tenantIds.includes(tenantId);
+    // Invalidate requests for removed tenants, even if they are selected again later.
+    for (const key of pendingSkills.current.keys()) {
+      if ((selected && key.startsWith(`${tenantId}:`))
+        || (!selected && isDataAgentTenant(tenant) && !key.startsWith(`${tenantId}:`))) {
+        pendingSkills.current.delete(key);
+      }
+    }
+    setPreparingSkillKeys(new Set(pendingSkills.current.keys()));
     if (!selected && isDataAgentTenant(tenant)) {
       setEditing({
         ...editing,
@@ -491,12 +419,14 @@ export default function AgentTemplatesTab({
   };
 
   const togglePreset = (kind: 'skillPresetRefs' | 'mcpPresetRefs', preset: Preset) => {
-    if (!editing || !editing.tenantIds.includes(preset.tenantId)) return;
-    const refs = editing[kind];
-    const selected = refs.some((ref) => ref.tenantId === preset.tenantId && ref.presetId === preset.id);
-    update(kind, selected
-      ? refs.filter((ref) => !(ref.tenantId === preset.tenantId && ref.presetId === preset.id))
-      : [...refs, { tenantId: preset.tenantId, presetId: preset.id }]);
+    setEditing((previous) => {
+      if (!previous || !previous.tenantIds.includes(preset.tenantId)) return previous;
+      const refs = previous[kind];
+      const selected = refs.some((ref) => ref.tenantId === preset.tenantId && ref.presetId === preset.id);
+      return { ...previous, [kind]: selected
+        ? refs.filter((ref) => !(ref.tenantId === preset.tenantId && ref.presetId === preset.id))
+        : [...refs, { tenantId: preset.tenantId, presetId: preset.id }] };
+    });
   };
 
   const toggleHook = (hook: HookCatalogItem) => {
@@ -558,12 +488,15 @@ export default function AgentTemplatesTab({
       return;
     }
 
-    const skillKey = `${skill.tenantId}:${skill.sourceRef}`;
-    if (preparingSkillKeys.has(skillKey)) return;
+    const skillKey = getSkillCandidateKey(skill);
+    if (pendingSkills.current.has(skillKey)) return;
+    const request = Symbol(skillKey);
+    pendingSkills.current.set(skillKey, request);
+    const isCurrentRequest = () => pendingSkills.current.get(skillKey) === request;
     setPreparingSkillKeys((previous) => new Set(previous).add(skillKey));
     setEditorError(null);
     try {
-      let preset: AdminSkillPreset | undefined = skill.presetId ? {
+      let preset: AdminSkillPreset | undefined = preparedPresets.current.get(skillKey) || (skill.presetId ? {
         id: skill.presetId,
         tenantId: skill.tenantId,
         name: skill.name,
@@ -571,7 +504,9 @@ export default function AgentTemplatesTab({
         description: skill.description,
         status: skill.status || 'draft',
         lastValidationStatus: skill.lastValidationStatus,
-      } : undefined;
+        remoteId: skill.marketSkill.id,
+        skillId: skill.marketSkill.skillId,
+      } : undefined);
 
       if (!preset) {
         const created = await readJson<{ preset: AdminSkillPreset }>(await api.admin.createSkillPreset({
@@ -583,6 +518,7 @@ export default function AgentTemplatesTab({
         }));
         preset = created.preset;
       }
+      if (!isCurrentRequest()) return;
       if (preset.lastValidationStatus !== 'healthy') {
         const validated = await readJson<{ preset: AdminSkillPreset; validation?: { status?: string; error?: string } }>(
           await api.admin.validateSkillPreset(preset.id, skill.tenantId),
@@ -592,16 +528,20 @@ export default function AgentTemplatesTab({
         }
         preset = validated.preset || preset;
       }
+      if (!isCurrentRequest()) return;
       if (preset.status !== 'published') {
         const published = await readJson<{ preset: AdminSkillPreset }>(
           await api.admin.publishSkillPreset(preset.id, skill.tenantId),
         );
         preset = published.preset;
       }
+      if (!isCurrentRequest()) return;
 
       const presetId = normalizeId(preset.id);
+      preparedPresets.current.set(skillKey, preset);
       setCatalog((previous) => ({
         ...previous,
+        skillPresets: mergeSkillPresets(previous.skillPresets, [preset]),
         skills: previous.skills.map((candidate) => candidate.tenantId === skill.tenantId
           && candidate.sourceRef === skill.sourceRef
           ? {
@@ -624,18 +564,21 @@ export default function AgentTemplatesTab({
         };
       });
     } catch (skillError) {
-      setEditorError(skillError instanceof Error ? skillError.message : 'Skill 准备失败');
+      if (isCurrentRequest()) setEditorError(skillError instanceof Error ? skillError.message : 'Skill 准备失败');
     } finally {
-      setPreparingSkillKeys((previous) => {
-        const next = new Set(previous);
-        next.delete(skillKey);
-        return next;
-      });
+      if (isCurrentRequest()) {
+        pendingSkills.current.delete(skillKey);
+        setPreparingSkillKeys(new Set(pendingSkills.current.keys()));
+      }
     }
   };
 
   const save = async (publish = false) => {
     if (!editing) return;
+    if (pendingSkills.current.size > 0) {
+      setEditorError('Skill 正在准备中，请完成后再保存模板');
+      return;
+    }
     if (!editing.category.trim()) {
       setEditorError('请选择或新建模板分类');
       return;
@@ -828,14 +771,27 @@ export default function AgentTemplatesTab({
   }
 
   const selectedCatalogTenant = activeTenants.find((tenant) => tenant.id === catalogTenantId);
+  const catalogSkills = buildSkillCandidates({
+    tenantId: catalogTenantId || 0,
+    marketSkills: catalog.skills.map((skill) => skill.marketSkill),
+    presets: catalog.skillPresets,
+    refs: editing.skillPresetRefs,
+  });
+  const unavailableSkillSelections = getUnavailableSkillSelections({
+    tenantId: catalogTenantId || 0,
+    skills: catalogSkills,
+    presets: catalog.skillPresets,
+    refs: editing?.skillPresetRefs || [],
+  });
   const dataAgentSelected = editing.tenantIds.some((id) => isDataAgentTenant(activeTenants.find((item) => item.id === id)));
 
   return (
     <div className="mx-auto max-w-6xl space-y-4 pb-10">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><button type="button" onClick={closeEditor} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
-        <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
+        <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving || preparingSkillKeys.size > 0}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving || preparingSkillKeys.size > 0}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
       </div>
+      {preparingSkillKeys.size > 0 ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在准备 {preparingSkillKeys.size} 个 Skill，完成后可保存模板。</div> : null}
       {editorError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{editorError}</div> : null}
       {editing.unavailableCapabilities?.length ? <div className="flex items-start gap-2 rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>以下模板能力当前不可用，新项目创建时会自动跳过：{editing.unavailableCapabilities.map((capability) => `${capability.name}（${capability.unavailableReason || '不可用'}）`).join('、')}</span></div> : null}
 
@@ -901,7 +857,20 @@ export default function AgentTemplatesTab({
         ) : selectedCatalogTenant && editing.tenantIds.includes(selectedCatalogTenant.id) ? (
           <div className="space-y-6">
             <div className="grid gap-5 lg:grid-cols-2">
-              <PresetList key={`${selectedCatalogTenant.id}:skills`} title="Skills" itemLabel="Skill" emptyText="该租户技能市场暂无可用 Skill" presets={catalog.skills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
+              <div className="min-w-0 space-y-3">
+                <PresetList key={`${selectedCatalogTenant.id}:skills`} title="Skills" itemLabel="Skill" emptyText={catalog.skillMarketLoaded ? '该租户技能市场暂无可用 Skill' : '技能市场加载失败，请重新加载后选择'} presets={catalogSkills} refs={editing.skillPresetRefs} loadingKeys={preparingSkillKeys} onToggle={(preset) => void toggleSkill(preset as SkillCandidate)} />
+                {unavailableSkillSelections.length > 0 ? (
+                  <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                    <p className="text-xs text-amber-700 dark:text-amber-300">{catalog.skillMarketLoaded ? '以下已选 Skill 当前不在技能市场可见目录中。可移除后重新选择。' : '以下已选 Skill 暂时无法确认可用性，配置已保留。'}</p>
+                    {unavailableSkillSelections.map((preset) => (
+                      <div key={preset.id} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="min-w-0 truncate text-foreground">{preset.displayName}</span>
+                        <button type="button" onClick={() => togglePreset('skillPresetRefs', preset)} className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`移除 ${preset.displayName}`}>移除</button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => setConfiguringMcp(preset)} />
             </div>
             <div className="border-t border-border pt-5">
@@ -1196,7 +1165,7 @@ function PresetList({
   const [viewMode, setViewMode] = useState<'all' | 'selected'>('all');
   const items = useMemo(() => presets.map((preset) => {
     const presetId = 'presetId' in preset ? preset.presetId : preset.id;
-    const skillKey = 'sourceRef' in preset ? `${preset.tenantId}:${preset.sourceRef}` : '';
+    const skillKey = 'sourceRef' in preset ? getSkillCandidateKey(preset) : '';
     const ref = presetId ? refs.find((candidate) => (
       candidate.tenantId === preset.tenantId && candidate.presetId === presetId
     )) : undefined;
@@ -1205,7 +1174,7 @@ function PresetList({
       presetId,
       skillKey,
       loading: loadingKeys.has(skillKey),
-      selected: Boolean(ref),
+      selected: Boolean(ref) || loadingKeys.has(skillKey),
       configured: Boolean(ref?.toolSettings),
     };
   }), [loadingKeys, presets, refs]);
@@ -1214,17 +1183,21 @@ function PresetList({
   const visibleItems = items.filter(({ preset, selected }) => {
     if (viewMode === 'selected' && !selected) return false;
     if (!normalizedSearch) return true;
-    return [preset.displayName, preset.name, preset.description]
+    return [preset.displayName, preset.name, preset.description,
+      ...('sourceRef' in preset ? [preset.sourceRef, preset.marketSkill.createUserId] : [])]
       .filter(Boolean)
       .join(' ')
       .toLocaleLowerCase()
       .includes(normalizedSearch);
   });
-  const noResultsText = viewMode === 'selected'
-    ? `当前租户暂无已选 ${itemLabel}`
-    : normalizedSearch
-      ? `没有匹配的 ${itemLabel}`
-      : emptyText;
+  const noResultsText = normalizedSearch
+    ? `没有匹配的${viewMode === 'selected' ? '已选 ' : ' '}${itemLabel}`
+    : viewMode === 'selected' ? `当前租户暂无已选 ${itemLabel}` : emptyText;
+  const displayNameCounts = new Map<string, number>();
+  presets.forEach((preset) => {
+    const name = preset.displayName || preset.name;
+    displayNameCounts.set(name, (displayNameCounts.get(name) || 0) + 1);
+  });
 
   return (
     <div className="min-w-0 space-y-3">
@@ -1245,10 +1218,10 @@ function PresetList({
         {visibleItems.length === 0 ? (
           <div className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{noResultsText}</div>
         ) : visibleItems.map(({ preset, presetId, skillKey, loading, selected, configured }) => (
-          <div key={presetId || skillKey} className={cn('flex items-center rounded-md border', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}>
-            <button type="button" disabled={loading} onClick={() => onToggle(preset)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70">
+          <div key={skillKey || `${preset.tenantId}:${presetId}`} className={cn('flex items-center rounded-md border', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}>
+            <button type="button" aria-pressed={selected} aria-busy={loading} disabled={loading} onClick={() => onToggle(preset)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left disabled:cursor-wait disabled:opacity-70">
               <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : selected ? <Check className="h-3.5 w-3.5" /> : null}</span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}{configured ? <span className="mt-1 block text-xs font-medium text-primary">已设置 Tool 权限与参数</span> : null}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{preset.displayName || preset.name}</span>{preset.description ? <span className="mt-0.5 block text-xs text-muted-foreground">{preset.description}</span> : null}{'sourceRef' in preset && (displayNameCounts.get(preset.displayName || preset.name) || 0) > 1 ? <span className="mt-1 block break-all text-xs text-muted-foreground">{preset.marketSkill.createUserId ? `创建者：${preset.marketSkill.createUserId} · ` : ''}ID：{preset.sourceRef}</span> : null}{loading ? <span className="mt-1 block text-xs text-muted-foreground">准备中…</span> : null}{configured ? <span className="mt-1 block text-xs font-medium text-primary">已设置 Tool 权限与参数</span> : null}</span>
             </button>
             {onConfigure && selected ? <button type="button" onClick={() => onConfigure(preset as Preset)} className="mr-2 inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-foreground hover:bg-muted"><SlidersHorizontal className="h-3.5 w-3.5" />设置</button> : null}
           </div>

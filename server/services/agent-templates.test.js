@@ -167,6 +167,18 @@ test('ordinary tenant templates stay isolated to selected tenants', () => {
   assert.equal(draft.category, '应用分析');
 });
 
+test('template catalog and saves cannot reuse tenant-preinstall records directly', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  assert.equal(fixture.service.listPresetCatalog({ tenantId: fixture.dataAgentTenantId }).skills.length, 1);
+  fixture.database.prepare("UPDATE tenant_skill_presets SET preinstall_scope = 'all_workspaces' WHERE id = ?").run(fixture.skillId);
+  assert.deepEqual(fixture.service.listPresetCatalog({ tenantId: fixture.dataAgentTenantId }).skills, []);
+  assert.throws(() => fixture.service.saveTemplate({ userId: 1, input: {
+    name: '独立技能模板', category: '测试', tenantIds: [fixture.dataAgentTenantId],
+    skillPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.skillId }],
+  } }), /不能直接引用租户 Skill 预置/);
+});
+
 test('published templates remain visible and skip MCPs that go offline later', () => {
   const fixture = createFixture();
   const draft = fixture.service.saveTemplate({

@@ -1002,7 +1002,7 @@ async function fetchCompleteRemoteSkillDirectory({ tenantCode, accountId }) {
 
 function getRemoteSkillSearchIdentity(skill) {
   const remoteId = firstNonEmptyString(skill?.id, skill?.skillId);
-  if (remoteId) return `id:${remoteId.toLowerCase()}`;
+  if (remoteId) return `id:${remoteId}`;
   return `name:${normalizeSkillIdentityKey(skill?.name || skill?.displayName)}`;
 }
 
@@ -1131,19 +1131,18 @@ function getSkillListExplicitHasNextPage(payload) {
   return undefined;
 }
 
-export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId } = {}) {
+export async function fetchRemoteSkillDetail(skillRef, { tenantCode, accountId, exactId = false } = {}) {
   const searchContent = String(skillRef || '').trim();
   if (!searchContent) {
     throw createHttpError('Skill name is required', 400);
   }
-  const normalizedRef = searchContent.toLowerCase();
   const sanitizedRef = safeNormalizeSkillFolderName(searchContent);
   const skills = await fetchRemoteSkillList({ searchContent, tenantCode, accountId });
-  let remoteSkill = findRemoteSkill(skills, normalizedRef, sanitizedRef);
+  let remoteSkill = findRemoteSkill(skills, searchContent, sanitizedRef, exactId);
 
   if (!remoteSkill) {
     const completeDirectory = await fetchCompleteRemoteSkillDirectory({ tenantCode, accountId });
-    remoteSkill = findRemoteSkill(completeDirectory, normalizedRef, sanitizedRef);
+    remoteSkill = findRemoteSkill(completeDirectory, searchContent, sanitizedRef, exactId);
   }
 
   if (!remoteSkill) {
@@ -1193,7 +1192,7 @@ async function listImportedSkillSummariesMissingFromRemotePage({
 }
 
 async function fetchRemoteSkillDetailOrNull(skillRef, { tenantCode, accountId } = {}) {
-  const normalizedRef = String(skillRef || '').trim().toLowerCase();
+  const normalizedRef = String(skillRef || '').trim();
   if (!normalizedRef) return null;
   const sanitizedRef = safeNormalizeSkillFolderName(skillRef);
   const skills = await fetchRemoteSkillList({
@@ -1274,15 +1273,17 @@ function matchesSkillSearch(skill, searchContent = '') {
     .some((value) => String(value).toLowerCase().includes(query));
 }
 
-function findRemoteSkill(skills, normalizedRef, sanitizedRef) {
+function findRemoteSkill(skills, reference, sanitizedRef, exactId = false) {
+  // Never let another Skill's display name shadow a stable, case-sensitive ID.
+  const byId = skills.find((skill) => String(skill.id || skill.skillId).trim() === reference);
+  if (byId || exactId) return byId;
+  const normalizedRef = reference.toLowerCase();
   return skills.find((skill) => {
     const normalizedSkillName = String(skill.name || '').trim().toLowerCase();
     const sanitizedSkillName = safeNormalizeSkillFolderName(skill.name);
     return (
       normalizedSkillName === normalizedRef
       || sanitizedSkillName === sanitizedRef
-      || String(skill.id).toLowerCase() === normalizedRef
-      || String(skill.skillId).toLowerCase() === normalizedRef
       || String(skill.displayName).trim().toLowerCase() === normalizedRef
     );
   });
