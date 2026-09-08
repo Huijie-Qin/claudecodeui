@@ -180,7 +180,7 @@ export default function AgentTemplatePicker({
             <div className="flex h-full min-h-[250px] flex-col items-center justify-center text-center">
               <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gray-100 text-gray-400 dark:bg-gray-700"><Minus className="h-5 w-5" /></span>
               <h4 className="text-sm font-medium text-gray-900 dark:text-white">使用默认空白Agent</h4>
-              <p className="mt-1 max-w-sm text-sm text-gray-500 dark:text-gray-400">创建普通 Agent，只安装租户默认 Skill，不会自动安装 MCP。</p>
+              <p className="mt-1 max-w-sm text-sm text-gray-500 dark:text-gray-400">创建空白 Agent，不自动安装 Skill 或 MCP，可在创建后自行添加。</p>
             </div>
           )}
         </div>

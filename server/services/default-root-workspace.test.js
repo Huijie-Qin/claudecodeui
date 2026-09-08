@@ -14,6 +14,7 @@ test('tenant assignment creates default root workspace with invited username pat
   try {
     const workspaces = [];
     const preinstallCalls = [];
+    const skillPreinstallCalls = [];
     const multitenancy = {
       tenants: {
         getTenantById: (tenantId) => ({ id: tenantId, code: 'team', name: 'Team', status: 'active' }),
@@ -48,18 +49,32 @@ test('tenant assignment creates default root workspace with invited username pat
         return { installed: [], errors: [] };
       },
     };
+    const skillPresets = {
+      installPreinstalledSkillPresets: async (args) => {
+        skillPreinstallCalls.push(args);
+        const skillPath = path.join(args.workspacePath, '.claude', 'skills', 'tenant-onboarding');
+        await fs.mkdir(skillPath, { recursive: true });
+        await fs.writeFile(path.join(skillPath, 'SKILL.md'), 'Tenant onboarding instructions.\n');
+        return { installed: [{ skillName: 'tenant-onboarding' }], errors: [] };
+      },
+    };
 
     const created = await ensureDefaultRootWorkspace({
       multitenancy,
       users,
       workspaceMcpTools,
+      skillPresets,
       tenantId: 3,
       userId: 7,
     });
+    const installedSkillPath = path.join(created.path, '.claude', 'skills', 'tenant-onboarding', 'SKILL.md');
+    assert.equal(await fs.readFile(installedSkillPath, 'utf8'), 'Tenant onboarding instructions.\n');
+    await fs.writeFile(installedSkillPath, 'User-customized instructions.\n');
     const existing = await ensureDefaultRootWorkspace({
       multitenancy,
       users,
       workspaceMcpTools,
+      skillPresets,
       tenantId: 3,
       userId: 7,
     });
@@ -70,6 +85,15 @@ test('tenant assignment creates default root workspace with invited username pat
     assert.equal(workspaces[0].path, path.join(workspaceRoot, 'team', 'new-user', 'workspace'));
     assert.equal(preinstallCalls.length, 1);
     assert.equal(preinstallCalls[0].workspaceId, 1);
+    assert.deepEqual(skillPreinstallCalls, [{
+      tenantId: 3,
+      workspaceId: 1,
+      workspacePath: created.path,
+      userId: 7,
+      tenantCode: 'team',
+      accountId: 'new-user',
+    }]);
+    assert.equal(await fs.readFile(installedSkillPath, 'utf8'), 'User-customized instructions.\n');
   } finally {
     if (previousRoot == null) {
       delete process.env.WORKSPACES_ROOT;

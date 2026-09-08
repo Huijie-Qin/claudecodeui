@@ -29,6 +29,7 @@
     "never": "从未"
   },
   "skillPresets": {
+    "description": "仅在用户默认空间首次初始化时安装。手动新建项目不继承预置 Skill；模板项目只安装模板选中的 Skill。",
     "pagination": {
       "page": "第 {{page}} 页",
       "pageWithTotal": "第 {{page}} / {{totalPages}} 页",

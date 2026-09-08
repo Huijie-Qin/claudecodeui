@@ -591,6 +591,9 @@ export function createAgentTemplateService(database = db) {
       SELECT * FROM tenant_skill_presets WHERE tenant_id = ? AND id = ?
     `).get(ref.tenantId, ref.presetId);
     if (!row) throw createHttpError(`Skill preset ${ref.presetId} was not found`, 404);
+    if (row.preinstall_scope !== 'none') {
+      throw createHttpError('请从模板技能目录选择 Skill，不能直接引用租户 Skill 预置', 400);
+    }
     if (requirePublished && row.status !== 'published') {
       throw createHttpError(`Skill preset ${row.display_name || row.name} is not published`);
     }
@@ -946,7 +949,7 @@ export function createAgentTemplateService(database = db) {
       return {
         skills: database.prepare(`
           SELECT id, tenant_id AS tenantId, name, display_name AS displayName, description, version
-          FROM tenant_skill_presets WHERE tenant_id = ? AND status = 'published'
+          FROM tenant_skill_presets WHERE tenant_id = ? AND status = 'published' AND preinstall_scope = 'none'
           ORDER BY display_name ASC, id ASC
         `).all(normalizedTenantId),
         mcps: database.prepare(`

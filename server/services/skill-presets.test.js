@@ -266,16 +266,70 @@ test('creating the same tenant Skill preset is idempotent', async () => {
   assert.equal(multitenancy.skillPresets.listPresets({ tenantId: tenant.id }).length, 1);
 });
 
-test('a different market Skill cannot silently reuse an occupied preset name', async () => {
+test('template and tenant uses of the same Skill have independent records and preserve preinstallation', async (t) => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const workspacePath = await makeWorkspace();
+  t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const service = createSkillPresetService({ multitenancy, marketService: createFakeMarketService() });
+  const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const source = { sourceRef: REMOTE_SKILL.id };
+  const template = await service.createPreset({ ...context, input: { ...source, preinstall: false } });
+  const tenantPreset = await service.createPreset({ ...context, input: { ...source, preinstall: true } });
+  assert.notEqual(template.id, tenantPreset.id);
+  assert.notEqual(template.name, tenantPreset.name);
+  assert.equal(template.usage, 'agent_template');
+  assert.equal(tenantPreset.usage, 'tenant');
+  for (const [preset, preinstall] of [[template, false], [tenantPreset, true]]) {
+    assert.equal((await service.createPreset({ ...context, input: { ...source, preinstall } })).id, preset.id);
+    await service.validatePreset({ ...context, presetId: preset.id });
+    service.publishPreset({ ...context, presetId: preset.id });
+  }
+  assert.deepEqual(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'all_workspaces' }).map((row) => row.id), [tenantPreset.id]);
+  assert.deepEqual(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'none' }).map((row) => row.id), [template.id]);
+  await assert.rejects(service.updatePreset({ ...context, presetId: template.id, input: { ...source, preinstall: true } }), /用途不能互相转换/);
+
+  const args = { ...context, userId, workspaceId: workspace.id, workspacePath };
+  const defaults = await service.installPreinstalledSkillPresets(args);
+  assert.equal(defaults.errors.length, 0);
+  assert.deepEqual(defaults.installed.map((row) => row.presetId), [tenantPreset.id]);
+  const installed = await service.installWorkspaceSkillPreset({ ...args, presetId: template.id });
+  assert.equal(installed.installed.reused, true);
+  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), [tenantPreset.name]);
+  service.deletePreset({ tenantId: tenant.id, presetId: template.id });
+  assert.equal(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'all_workspaces' })[0].status, 'published');
+  assert.ok(await fs.readFile(path.join(workspacePath, '.claude', 'skills', tenantPreset.name, 'SKILL.md'), 'utf8'));
+});
+
+test('selecting a template Skill cannot change or reuse an existing tenant preinstall', async (t) => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
   const { adminId, tenant } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const service = createSkillPresetService({ multitenancy, marketService: createFakeMarketService() });
+  const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const tenantPreset = await service.createPreset({ ...context, input: { sourceRef: REMOTE_SKILL.id, preinstall: true } });
+  const original = multitenancy.skillPresets.getPresetById({ tenantId: tenant.id, presetId: tenantPreset.id });
+  const template = await service.createPreset({ ...context, input: { sourceRef: REMOTE_SKILL.id, preinstall: false } });
+  assert.notEqual(template.id, tenantPreset.id);
+  assert.deepEqual(multitenancy.skillPresets.getPresetById({ tenantId: tenant.id, presetId: tenantPreset.id }), original);
+  service.deletePreset({ tenantId: tenant.id, presetId: tenantPreset.id });
+  assert.equal(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'none' })[0].id, template.id);
+});
+
+test('same-name market Skills have independent presets, references and install directories', async (t) => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
   const originalService = createSkillPresetService({
     multitenancy,
     marketService: createFakeMarketService(),
   });
-  await originalService.createPreset({
+  const original = await originalService.createPreset({
     tenantId: tenant.id,
     userId: adminId,
     input: { sourceRef: 'remote-code-reviewer' },
@@ -288,18 +342,86 @@ test('a different market Skill cannot silently reuse an occupied preset name', a
       remoteSkill: {
         ...REMOTE_SKILL,
         id: 'other-remote-skill',
-        skillId: 'other-skill-id',
+        // Even a legacy alias can repeat: the primary remote ID remains authoritative.
+        skillId: REMOTE_SKILL.skillId,
       },
+      files: { 'SKILL.md': '---\nname: code-reviewer\ndescription: Another author\n---\nSecond skill\n' },
     }),
   });
 
-  await assert.rejects(() => conflictingService.createPreset({
+  const input = {
     tenantId: tenant.id,
     userId: adminId,
     input: { sourceRef: 'other-remote-skill' },
     tenantCode: tenant.code,
     accountId: 'admin',
-  }), (error) => error?.statusCode === 409 && /already in use/.test(error.message));
+  };
+  const [second, repeated] = await Promise.all([
+    conflictingService.createPreset(input), conflictingService.createPreset(input),
+  ]);
+  assert.notEqual(second.id, original.id);
+  assert.equal(repeated.id, second.id);
+  assert.equal(second.displayName, original.displayName);
+  assert.notEqual(second.name, original.name);
+  assert.match(second.name, /^code-reviewer-[a-f0-9]{10}$/);
+  assert.equal(multitenancy.skillPresets.listPresets({ tenantId: tenant.id }).length, 2);
+  const renamedService = createSkillPresetService({ multitenancy, marketService: createFakeMarketService({
+    remoteSkill: { ...REMOTE_SKILL, id: 'other-remote-skill', name: 'renamed-skill' },
+    skillName: 'renamed-skill',
+  }) });
+  assert.equal((await renamedService.createPreset(input)).id, second.id);
+
+  const updated = await conflictingService.updatePreset({ ...input, presetId: second.id });
+  assert.equal(updated.name, second.name);
+  for (const [service, preset] of [[originalService, original], [conflictingService, second]]) {
+    await service.validatePreset({ ...input, presetId: preset.id });
+    service.publishPreset({ ...input, presetId: preset.id });
+    const installArgs = { tenantId: tenant.id, workspaceId: workspace.id, workspacePath, presetId: preset.id, userId, tenantCode: tenant.code, accountId: 'alice' };
+    const result = await service.installWorkspaceSkillPreset(installArgs);
+    assert.equal(result.installed.skillName, preset.name);
+    assert.equal((await service.installWorkspaceSkillPreset(installArgs)).installed.skillName, preset.name);
+  }
+  const files = await fs.readdir(path.join(workspacePath, '.claude', 'skills'));
+  assert.deepEqual(files.sort(), [original.name, second.name].sort());
+  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', original.name, 'SKILL.md'), 'utf8'), /Review code changes/);
+  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', second.name, 'SKILL.md'), 'utf8'), /Second skill/);
+  const installs = multitenancy.skillPresetInstalls.listInstallsForWorkspace({ workspaceId: workspace.id });
+  assert.deepEqual(new Set(installs.map((entry) => entry.preset_id)), new Set([original.id, second.id]));
+  assert.ok(installs.every((entry) => entry.status === 'installed'));
+
+  const target = multitenancy.tenants.createTenant({ code: 'copy-target', name: 'Copy target' });
+  originalService.copyPresetToTenants({ tenantId: tenant.id, presetId: original.id, targetTenantIds: [target.id], userId: adminId });
+  // A different source already occupies this internal name in the target tenant.
+  database.prepare('UPDATE tenant_skill_presets SET name = ? WHERE tenant_id = ?').run(second.name, target.id);
+  const copied = conflictingService.copyPresetToTenants({ tenantId: tenant.id, presetId: second.id, targetTenantIds: [target.id], userId: adminId });
+  assert.equal(copied.summary.created, 1);
+  assert.equal(conflictingService.copyPresetToTenants({ tenantId: tenant.id, presetId: second.id, targetTenantIds: [target.id], userId: adminId }).summary.updated, 1);
+  assert.equal(multitenancy.skillPresets.listPresets({ tenantId: target.id }).length, 2);
+});
+
+test('same-name presets from different tenants install separately in one workspace', async (t) => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const otherTenant = multitenancy.tenants.createTenant({ code: 'other', name: 'Other' });
+  const installedNames = [];
+  for (const sourceTenant of [tenant, otherTenant]) {
+    const remoteSkill = { ...REMOTE_SKILL, id: `tenant-${sourceTenant.id}-skill` };
+    const service = createSkillPresetService({ multitenancy, marketService: createFakeMarketService({ remoteSkill }) });
+    const context = { tenantId: sourceTenant.id, userId: adminId, tenantCode: sourceTenant.code, accountId: 'admin' };
+    const preset = await service.createPreset({ ...context, input: { skill: remoteSkill } });
+    assert.equal(preset.name, 'code-reviewer');
+    await service.validatePreset({ ...context, presetId: preset.id });
+    service.publishPreset({ ...context, presetId: preset.id });
+    const args = { ...context, userId, presetId: preset.id, workspaceId: workspace.id, workspacePath };
+    const result = await service.installWorkspaceSkillPreset(args);
+    installedNames.push(result.installed.skillName);
+    assert.equal((await service.installWorkspaceSkillPreset(args)).installed.skillName, result.installed.skillName);
+  }
+  assert.equal(new Set(installedNames).size, 2);
+  assert.deepEqual((await fs.readdir(path.join(workspacePath, '.claude', 'skills'))).sort(), installedNames.sort());
 });
 
 test('tenant Skill preset preparation only requires retrievable files', async (t) => {

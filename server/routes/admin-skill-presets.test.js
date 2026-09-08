@@ -89,8 +89,8 @@ test('admin skill preset routes pass tenant and user context through to the serv
         seen.search = args;
         return { skills: [{ id: 'remote-code-reviewer', name: 'code-reviewer' }] };
       },
-      listAdminPresets: ({ tenantId }) => {
-        seen.list = { tenantId };
+      listAdminPresets: ({ tenantId, preinstallScope }) => {
+        seen.list = { tenantId, preinstallScope };
         return [{ id: 1, name: 'code-reviewer', displayName: 'Code Reviewer' }];
       },
       createPreset: ({ tenantId, userId, input, tenantCode, accountId }) => {
@@ -188,7 +188,7 @@ test('admin skill preset routes pass tenant and user context through to the serv
     completeInventory: true,
   });
   assert.equal(list.response.status, 200);
-  assert.deepEqual(seen.list, { tenantId: 7 });
+  assert.deepEqual(seen.list, { tenantId: 7, preinstallScope: 'all_workspaces' });
   assert.equal(created.response.status, 201);
   assert.equal(seen.create.userId, 9);
   assert.equal(seen.create.tenantCode, 'team');
@@ -213,4 +213,16 @@ test('admin skill preset routes pass tenant and user context through to the serv
   assert.equal(deleted.payload.deleted, true);
   assert.deepEqual(seen.delete, { tenantId: 7, presetId: 2 });
   assert.deepEqual(seenTenantIds, [7, 7, 7, 7, 7]);
+});
+
+test('tenant presets and template Skill records are queried independently', async () => {
+  const seen = [];
+  const router = createRouter({ service: { listAdminPresets: (args) => { seen.push(args); return []; } } });
+  assert.equal((await requestJson(router, '/skill-presets?tenantId=7')).response.status, 200);
+  assert.equal((await requestJson(router, '/skill-presets?tenantId=7&usage=agent_template')).response.status, 200);
+  assert.equal((await requestJson(router, '/skill-presets?tenantId=7&usage=invalid')).response.status, 400);
+  assert.deepEqual(seen, [
+    { tenantId: 7, preinstallScope: 'all_workspaces' },
+    { tenantId: 7, preinstallScope: 'none' },
+  ]);
 });

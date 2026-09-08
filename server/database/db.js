@@ -43,6 +43,7 @@ import {
   migrateHookExecutionDiagnostics,
 } from './hook-config-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
+import { migrateAgentTemplateSkillIsolation } from './agent-template-skill-isolation.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
   decryptUserEnvRecord,
@@ -219,6 +220,7 @@ function runMultitenancyMigrations() {
   migrateSkillMarketImportBindingColumns(db);
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('agent_templates', 'hook_refs_json', "TEXT NOT NULL DEFAULT '[]'");
+  migrateAgentTemplateSkillIsolation(db);
   migrateAgentTemplateSnapshotsToHistoricalReferences();
   ensureColumn('workspace_agent_template_snapshots', 'hooks_json', "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`

@@ -305,6 +305,30 @@ test('listSkillMarket returns the OpenAPI skillList request body with page info'
   });
 });
 
+test('template Skill detail uses exact IDs instead of another Skill with the same name', async () => {
+  const previousApiUrl = process.env.SKILL_MARKET_API_URL;
+  const remoteSkills = [
+    { id: 'first-id', skillName: 'second-id' },
+    { id: 'second-id', skillName: 'same-name' },
+    { id: 'third-id', skillName: 'same-name' },
+    { id: 'lookalike', skillName: 'deleted-id' },
+  ];
+  const server = http.createServer((_req, res) => sendJson(res, {
+    code: 0, data: { list: remoteSkills, total: remoteSkills.length },
+  }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await fetchRemoteSkillDetail('second-id', withTenant({ exactId: true }))).id, 'second-id');
+    assert.equal((await fetchRemoteSkillDetail('third-id', withTenant({ exactId: true }))).id, 'third-id');
+    assert.equal((await fetchRemoteSkillDetail('second-id', withTenant())).id, 'second-id');
+    await assert.rejects(fetchRemoteSkillDetail('deleted-id', withTenant({ exactId: true })), (error) => error.statusCode === 404);
+  } finally {
+    restoreEnv('SKILL_MARKET_API_URL', previousApiUrl);
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('listSkillMarket searches the complete remote inventory before paginating results', async () => {
   const workspacePath = await makeWorkspace();
   const remoteSkills = Array.from({ length: 130 }, (_, index) => ({

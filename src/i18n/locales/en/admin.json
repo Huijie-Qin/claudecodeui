@@ -30,6 +30,7 @@
     "never": "Never"
   },
   "skillPresets": {
+    "description": "Install these Skills when a user’s default workspace is first initialized. Manually created projects do not inherit them; template projects use only their selected Skills.",
     "pagination": {
       "page": "Page {{page}}",
       "pageWithTotal": "Page {{page}} / {{totalPages}}",

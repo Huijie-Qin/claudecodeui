@@ -1481,7 +1481,14 @@ export function createAdminRouter(
   router.get('/skill-presets', (req, res) => {
     try {
       const tenantId = parsePositiveId(req.query?.tenantId, 'tenantId');
-      const presets = skillPresets.listAdminPresets({ tenantId });
+      const usage = req.query?.usage || 'tenant';
+      if (!['tenant', 'agent_template'].includes(usage)) {
+        return res.status(400).json({ error: 'usage must be tenant or agent_template' });
+      }
+      const presets = skillPresets.listAdminPresets({
+        tenantId,
+        preinstallScope: usage === 'tenant' ? 'all_workspaces' : 'none',
+      });
       return res.json({ presets });
     } catch (error) {
       return sendRouteError(res, error, 'Failed to list Skill presets');
