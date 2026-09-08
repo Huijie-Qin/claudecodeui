@@ -186,3 +186,13 @@ test('each SDK event template exposes every callback field once', () => {
     assert.equal(new Set(keys).size, keys.length, `${event.name} contains duplicate callback fields`);
   }
 });
+
+test('personal variables appear in references and are copied without sharing definitions', () => {
+  const userVariables = [{ name: 'personal_token', label: '个人 Token', description: '', required: true, secret: true }];
+  const configured = { ...draft, userVariables };
+  assert.ok(buildReferenceChoices(configured, resources).some((field) => field.path === 'ccui.env.userVariables.personal_token'));
+  const copy = createHookCopyDraft(configured as HookConfig, '副本');
+  assert.deepEqual(copy.userVariables, userVariables);
+  copy.userVariables![0].name = 'changed';
+  assert.equal(userVariables[0].name, 'personal_token');
+});

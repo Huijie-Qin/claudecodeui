@@ -11,6 +11,7 @@ import {
   WORKSPACE_HOST_ROOT_ENV,
   applyMcpToolOverrides,
   buildMcpToolOverridePreToolUseOutput,
+  mergeMcpToolOverridesConfig,
   parseMcpToolName,
   readMcpToolOverridesConfig,
 } from './mcp-tool-overrides.js';
@@ -49,6 +50,24 @@ test('parseMcpToolName extracts MCP server and tool names', () => {
     toolName: 'search_docs',
   });
   assert.equal(parseMcpToolName('Bash'), null);
+});
+
+test('MCP overrides resolve the longest configured server name containing separators', () => {
+  const config = { mcpServers: {
+    qa: { tools: { echo__search: { params: { limit: { mode: 'force', value: 99 } } } } },
+    qa__echo: { tools: { search: { params: {
+      topic: { mode: 'default', value: 'template-topic' },
+      limit: { mode: 'force', value: 7 },
+    } } } },
+  } };
+  const { output, overrideResult } = buildMcpToolOverridePreToolUseOutput({
+    toolName: 'mcp__qa__echo__search', input: { limit: 1 }, config,
+  });
+  assert.equal(overrideResult.serverName, 'qa__echo');
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, { topic: 'template-topic', limit: 7 });
+  assert.deepEqual(applyMcpToolOverrides({
+    toolName: 'mcp__qa__echo__search', input: { topic: '', limit: 0 }, config,
+  }).input, { topic: '', limit: 7 });
 });
 
 test('applyMcpToolOverrides replaces model parameters when custom is true', () => {
@@ -465,4 +484,30 @@ test('readMcpToolOverridesConfig logs trace marker and candidate paths', async (
     assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'workspace'));
     assert.ok(traceMeta.candidates.some((candidate) => candidate.source === 'relative'));
   });
+});
+
+test('mergeMcpToolOverridesConfig preserves other servers and writes template overrides', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-mcp-template-overrides-'));
+  try {
+    const targetPath = path.join(tempRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, JSON.stringify({
+      version: 1,
+      mcpServers: { existing: { tools: { ping: { params: {} } } } },
+    }));
+
+    const result = await mergeMcpToolOverridesConfig(tempRoot, {
+      'web-search': {
+        tools: { search_web: { params: { limit: { mode: 'force', value: 10 } } } },
+      },
+    });
+
+    assert.deepEqual(result.mcpServers.existing, { tools: { ping: { params: {} } } });
+    assert.deepEqual(result.mcpServers['web-search'], {
+      tools: { search_web: { params: { limit: { mode: 'force', value: 10 } } } },
+    });
+    assert.deepEqual(JSON.parse(await fs.readFile(targetPath, 'utf8')), result);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });

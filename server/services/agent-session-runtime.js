@@ -10,8 +10,10 @@ import { multitenancyDb } from '../database/multitenancy-db.js';
 import { USER_KEY_ENV_NAME } from '../database/user-env.js';
 
 import { claudeEnvService as defaultClaudeEnvService } from './claude-env.js';
+import { hookConfigService as defaultHookConfigService } from './hook-configs.js';
 import { codeHubService } from './codehub.js';
 import { resolveContainerUser } from './container-user.js';
+import { prepareClaudeDockerCa } from './claude-docker-ca.js';
 import {
   CODEHUB_EMAIL_ENV_NAMES,
   resolveManagedGitIdentity,
@@ -155,6 +157,7 @@ const CLAUDE_ENV_NON_BASE_SOURCES = new Set([
   'adminUserEnv',
   'tenant',
   'personal',
+  'hook',
   'managed',
 ]);
 const CLAUDE_DOCKER_BASE_ENV_ALLOWLIST = new Set([
@@ -1157,6 +1160,7 @@ export function createAgentSessionRuntimeManager({
   multitenancy = multitenancyDb,
   users = defaultUserDb,
   claudeEnv = defaultClaudeEnvService,
+  hookConfigs = defaultHookConfigService,
   codeHub = null,
   docker = new DockerCliClient({ env }),
   fs = fsPromises,
@@ -1302,11 +1306,15 @@ export function createAgentSessionRuntimeManager({
       managedEnv[WORKSPACE_ID_ENV_NAME] = String(workspaceId);
     }
 
+    const hookEnvironment = workspaceId != null
+      ? hookConfigs.resolveWorkspaceHookEnvironment({ tenantId, userId, workspaceId })
+      : { env: {}, secretValues: [] };
     const resolved = claudeEnv.resolveEffectiveEnv({
       tenantId,
       userId,
       baseEnv: env,
       adminUserEnv: readAdminUserEnv(users, userId, env),
+      hookUserEnv: hookEnvironment.env,
       managedEnv,
     });
     if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) {
@@ -1315,6 +1323,7 @@ export function createAgentSessionRuntimeManager({
     return {
       ...resolved,
       env: normalizeContainerEnvRecord(resolved.env),
+      secretEnvValues: hookEnvironment.secretValues,
     };
   }
 
@@ -1738,6 +1747,24 @@ export function createAgentSessionRuntimeManager({
       : persistedRuntime;
     const containerUser = resolveContainerUser(env);
     await ensureRuntimeHomeWritable(fs, desiredRuntime.runtime_home_path, containerUser);
+    const ca = await prepareClaudeDockerCa({
+      runtimeHomePath: desiredRuntime.runtime_home_path,
+      env,
+      containerEnv: execEnv,
+      fsImpl: fs,
+    });
+    Object.assign(execEnv, ca.env);
+    console.info('[MCP Runtime]', JSON.stringify({
+      event: 'ca_config',
+      requestId: runtimeContext.logRequestId || null,
+      workspaceId: desiredRuntime.workspace_id,
+      runtimeId: desiredRuntime.runtime_id,
+      mode: ca.mode,
+      systemStore: ca.systemStore || null,
+      certificateCount: ca.certificateCount,
+      fileSourceCount: ca.fileSourceCount || 0,
+      containerPath: ca.containerPath || null,
+    }));
     await ensureClaudeCleanupPeriod(fs, desiredRuntime.runtime_home_path, {
       ...containerUser,
       logger: console,
@@ -1823,6 +1850,7 @@ export function createAgentSessionRuntimeManager({
       // Claude (notably USER_KEY), which are intentionally absent from the
       // long-lived container's base environment.
       hookCommandEnv: { ...execEnv },
+      secretEnvValues: runtimeContext.secretEnvValues,
       executionEnv: buildWrapperHostEnv(buildDockerHostProcessEnv(env), execEnv),
       settingSources: ['project'],
       disableHostMcpConfig: true,
@@ -1833,6 +1861,7 @@ export function createAgentSessionRuntimeManager({
     runtimeContext,
     workspaceHostPath,
     executionEnv,
+    secretEnvValues,
     logRequestId = null,
   }) {
     const runtimeUser = resolveContainerUser(env);
@@ -1864,6 +1893,7 @@ export function createAgentSessionRuntimeManager({
       pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
       settingSources: ['project', 'user', 'local'],
       executionEnv,
+      secretEnvValues,
     };
   }
 
@@ -1934,12 +1964,14 @@ export function createAgentSessionRuntimeManager({
               runtimeContext,
               workspaceHostPath,
               executionEnv: resolvedEnv.env,
+              secretEnvValues: resolvedEnv.secretEnvValues,
               logRequestId: options.logRequestId || null,
             }));
           });
         }
 
         let executionEnv = null;
+        let secretEnvValues = [];
         if (options.userId != null) {
           const userId = requirePositiveInteger(options.userId, 'userId');
           const tenantId = options.tenantId == null
@@ -1950,6 +1982,7 @@ export function createAgentSessionRuntimeManager({
             : requirePositiveInteger(options.workspaceId, 'workspaceId');
           const resolvedEnv = await resolveClaudeRuntimeEnv({ tenantId, userId, workspaceId });
           executionEnv = resolvedEnv.env;
+          secretEnvValues = resolvedEnv.secretEnvValues;
         }
         return {
           mode: 'local',
@@ -1959,6 +1992,7 @@ export function createAgentSessionRuntimeManager({
           pathToClaudeCodeExecutable: env.CLAUDE_CLI_PATH || 'claude',
           settingSources: ['project', 'user', 'local'],
           ...(executionEnv ? { executionEnv } : {}),
+          secretEnvValues,
         };
       }
 
@@ -2020,6 +2054,7 @@ export function createAgentSessionRuntimeManager({
           }),
         );
         runtimeContext.execEnv = execEnv;
+        runtimeContext.secretEnvValues = resolvedEnv.secretEnvValues;
         runtimeContext.createEnv = createEnv;
         runtimeContext.logRequestId = options.logRequestId || null;
 

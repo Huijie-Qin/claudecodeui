@@ -424,6 +424,7 @@ export function createHookMcpCatalogService({
       Array.isArray(server.tools) ? server.tools.map((tool) => ({
         name: `mcp__${server.name}__${String(tool?.name || '').trim()}`,
         mcpServerId: server.id,
+        mcpServerContentHash: server.contentHash,
         serverName: server.name,
         serverDisplayName: server.displayName,
         runtimeAlias: buildHookMcpRuntimeAlias(server.id),

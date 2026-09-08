@@ -3,6 +3,8 @@ import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
+
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const EMPTY_MCP_CONFIG = Object.freeze({ mcpServers: {} });
@@ -379,10 +381,12 @@ export async function previewWorkspaceMcpJsonImport({ workspacePath, json }) {
 }
 
 export async function probeHttpMcpServer(config, {
-  fetchImpl = fetch,
+  fetchImpl = null,
   timeoutMs = HTTP_TIMEOUT_MS,
+  env = process.env,
 } = {}) {
   const startedAt = Date.now();
+  let proxyDispatcher = null;
   const initializePayload = {
     jsonrpc: '2.0',
     id: 1,
@@ -398,6 +402,11 @@ export async function probeHttpMcpServer(config, {
   };
 
   try {
+    const proxyOptions = fetchImpl ? null : resolveMcpProxyOptions(env);
+    proxyDispatcher = proxyOptions ? new EnvHttpProxyAgent(proxyOptions) : null;
+    const request = fetchImpl || (proxyDispatcher
+      ? (url, options) => undiciFetch(url, { ...options, dispatcher: proxyDispatcher })
+      : fetch);
     const normalized = normalizeHttpConfig(config);
     logMcpProbe('start', summarizeProbeConfig(normalized));
     const requestHeaders = await resolveRequestHeaders(normalized);
@@ -407,7 +416,7 @@ export async function probeHttpMcpServer(config, {
       headerKeys: Object.keys(requestHeaders),
     });
     const initialize = await postJsonRpc({
-      fetchImpl,
+      fetchImpl: request,
       timeoutMs,
       url: normalized.url,
       headers: requestHeaders,
@@ -434,7 +443,7 @@ export async function probeHttpMcpServer(config, {
     }
 
     await postJsonRpc({
-      fetchImpl,
+      fetchImpl: request,
       timeoutMs,
       url: normalized.url,
       headers: sessionId
@@ -454,7 +463,7 @@ export async function probeHttpMcpServer(config, {
     });
 
     const toolsList = await postJsonRpc({
-      fetchImpl,
+      fetchImpl: request,
       timeoutMs,
       url: normalized.url,
       headers: sessionId
@@ -502,17 +511,60 @@ export async function probeHttpMcpServer(config, {
       tools,
     };
   } catch (error) {
+    const probeError = describeNetworkProbeFailure(error, timeoutMs);
     logMcpProbe('failed', {
       name: config?.name || null,
       url: config?.url || null,
       statusCode: error?.statusCode || null,
-      error: error?.message || 'Network probe failed',
+      error: probeError,
     });
     if (error?.statusCode) {
       return failedProbe('static_validation', error.message, startedAt);
     }
-    return failedProbe('network', error?.message || 'Network probe failed', startedAt);
+    return failedProbe('network', probeError, startedAt);
+  } finally {
+    if (proxyDispatcher) {
+      await proxyDispatcher.close().catch(() => {});
+    }
   }
+}
+
+export function resolveMcpProxyOptions(env = process.env) {
+  const allProxy = firstString(env?.ALL_PROXY) || firstString(env?.all_proxy);
+  const httpProxy = firstString(env?.HTTP_PROXY) || firstString(env?.http_proxy) || allProxy;
+  const httpsProxy = firstString(env?.HTTPS_PROXY) || firstString(env?.https_proxy) || httpProxy || allProxy;
+  if (!httpProxy && !httpsProxy) return null;
+
+  return {
+    httpProxy: httpProxy || httpsProxy,
+    httpsProxy: httpsProxy || httpProxy,
+    noProxy: firstString(env?.NO_PROXY) || firstString(env?.no_proxy),
+  };
+}
+
+function describeNetworkProbeFailure(error, timeoutMs) {
+  if (error?.name === 'AbortError' || error?.cause?.name === 'AbortError') {
+    return `MCP request timed out after ${timeoutMs} ms`;
+  }
+
+  const cause = error?.cause;
+  const causeCode = firstString(cause?.code);
+  const causeMessage = firstString(cause?.message);
+  const message = firstString(error?.message);
+
+  if (causeCode === 'ENOTFOUND' || causeCode === 'EAI_AGAIN') {
+    return `MCP server DNS lookup failed${causeMessage ? `: ${causeMessage}` : ''}`;
+  }
+  if (causeCode === 'ECONNREFUSED') {
+    return `MCP server refused the connection${causeMessage ? `: ${causeMessage}` : ''}`;
+  }
+  if (causeCode === 'ETIMEDOUT' || causeCode === 'UND_ERR_CONNECT_TIMEOUT') {
+    return `MCP server connection timed out${causeMessage ? `: ${causeMessage}` : ''}`;
+  }
+  if (causeMessage && causeMessage !== message) {
+    return `${message || 'MCP request failed'}: ${causeMessage}`;
+  }
+  return message || 'Network probe failed';
 }
 
 function listMcpServersFromConfig(mcpConfig, status, drafts) {

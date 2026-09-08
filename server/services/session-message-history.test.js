@@ -725,6 +725,7 @@ test('Claude session history restores generic Hook cards from existing execution
 });
 
 test('Claude session history omits execution and persisted follow-up cards for Hooks hidden from chat', async () => {
+  const visibilityLookups = [];
   const service = createSessionMessageHistoryService({
     multitenancy: {
       runtimes: {
@@ -814,7 +815,10 @@ test('Claude session history omits execution and persisted follow-up cards for H
         extensionLogic: null,
         postActions: [{ type: 'invoke_skill' }],
       }),
-      getUserHookChatVisibility: ({ userId, hookId }) => userId !== 2 || hookId !== 'hidden-hook',
+      getUserHookChatVisibility: (lookup) => {
+        visibilityLookups.push(lookup);
+        return lookup.userId !== 2 || lookup.hookId !== 'hidden-hook';
+      },
     },
   });
 
@@ -831,6 +835,8 @@ test('Claude session history omits execution and persisted follow-up cards for H
   });
 
   assert.deepEqual(result.messages.map((message) => message.id), ['assistant-1']);
+  assert.ok(visibilityLookups.length > 0);
+  assert.ok(visibilityLookups.every((lookup) => lookup.workspaceId === 3 && lookup.tenantId === 1));
 });
 
 test('interactive Claude user and assistant messages are not persisted to the database', () => {

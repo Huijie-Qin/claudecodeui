@@ -3,6 +3,8 @@ import test from 'node:test';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import tls from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 
 import {
   buildClaudeDockerExecArgs,
@@ -75,6 +77,7 @@ function createLayeredClaudeEnvResolver({ tenantEnvs = {}, personalEnv = {} } = 
           }
         }
         apply(personalEnv, 'personal');
+        apply(input.hookUserEnv, 'hook');
         apply(input.managedEnv, 'managed');
         return { env, sources, blockedVariables: [] };
       },
@@ -87,6 +90,7 @@ const testDefaultClaudeEnvService = createLayeredClaudeEnvResolver().service;
 function createAgentSessionRuntimeManager(options = {}) {
   return createAgentSessionRuntimeManagerImpl({
     claudeEnv: testDefaultClaudeEnvService,
+    hookConfigs: { resolveWorkspaceHookEnvironment: () => ({ env: {}, secretValues: [] }) },
     ...options,
   });
 }
@@ -588,6 +592,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
       ADMIN_CUSTOM: 'legacy-admin',
       TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
       PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+      hook_custom: 'hook-secret',
       W3_NAME: 'managed-user',
       PATH: '/untrusted/path',
       UNKNOWN_SOURCE: 'do-not-forward',
@@ -599,6 +604,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
       ADMIN_CUSTOM: 'adminUserEnv',
       TENANT_ENCRYPTED_TOKEN: 'tenant',
       PERSONAL_ENCRYPTED_TOKEN: 'personal',
+      hook_custom: 'hook',
       W3_NAME: 'managed',
       PATH: 'managed',
       UNKNOWN_SOURCE: 'unexpected',
@@ -611,6 +617,7 @@ test('Claude Docker env split keeps scoped values exec-only and filters arbitrar
     ADMIN_CUSTOM: 'legacy-admin',
     TENANT_ENCRYPTED_TOKEN: 'tenant-secret',
     PERSONAL_ENCRYPTED_TOKEN: 'personal-secret',
+    hook_custom: 'hook-secret',
     W3_NAME: 'managed-user',
   });
   assert.deepEqual(buildClaudeDockerCreateEnv(resolvedEnv), {
@@ -1010,6 +1017,9 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   await fs.mkdir(workspacePath, { recursive: true });
   const workspaceRealPath = await fs.realpath(workspacePath);
 
+  const hostCaFile = path.join(tempRoot, 'host-ca.pem');
+  await fs.writeFile(hostCaFile, tls.rootCertificates[0]);
+
   const createdRuntimes = [];
   const dockerCalls = [];
   const pythonPackageInstalls = [];
@@ -1022,6 +1032,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       CLOUDCLI_RUNTIME_ROOT: runtimeRoot,
       CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT: sharedPythonRoot,
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
+      NODE_EXTRA_CA_CERTS: hostCaFile,
       CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests, httpx',
       ANTHROPIC_API_KEY: 'key-1',
       HTTP_PROXY: 'http://proxy.example:8080',
@@ -1115,6 +1126,13 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
+  const guestCaFile = runtime.executionEnv.NODE_EXTRA_CA_CERTS;
+  assert.match(guestCaFile, /^\/home\/cloudcli\/\.cloudcli-ca-[a-f0-9]+\.pem$/);
+  assert.notEqual(guestCaFile, hostCaFile);
+  assert.equal(runtime.hookCommandEnv.NODE_EXTRA_CA_CERTS, guestCaFile);
+  assert.ok((await fs.readFile(path.join(runtime.runtimeHomePath, path.basename(guestCaFile)), 'utf8'))
+    .includes(new X509Certificate(tls.rootCertificates[0]).toString().trim()));
+  assert.ok(dockerCalls[0].join(' ').includes(`src=${runtime.runtimeHomePath},dst=/home/cloudcli`));
   assert.equal(runtime.hookCommandEnv.USER_KEY, encryptedUserKey);
   assert.equal(runtime.hookCommandEnv.TENANT_ID, '3');
   assert.equal(runtime.hookCommandEnv.WORKSPACE_ID, '5');
@@ -1158,6 +1176,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.match(wrapper, /-e TENANT_ID/);
   assert.match(wrapper, /-e WORKSPACE_ID/);
   assert.match(wrapper, /-e MCP_DATA_SOURCE_KEY/);
+  assert.match(wrapper, /-e NODE_EXTRA_CA_CERTS/);
   assert.equal(wrapper.includes('EXTRA_SECRET'), false);
   assert.equal(wrapper.includes('BAD-NAME'), false);
 });
@@ -1406,7 +1425,13 @@ test('docker mode resumes an existing runtime home for provider session id', asy
 
   let created = false;
   let startedContainer = null;
+  let hookValues = { personal_token: 'hook-first-value', custom_name: '中文 value\nwith spaces' };
+  const hookScopes = [];
   const manager = createAgentSessionRuntimeManager({
+    hookConfigs: { resolveWorkspaceHookEnvironment: (context) => {
+      hookScopes.push(context);
+      return { env: { ...hookValues }, secretValues: Object.values(hookValues) };
+    } },
     env: {
       CLAUDE_EXECUTION_MODE: 'docker',
       CLOUDCLI_RUNTIME_ROOT: path.join(tempRoot, 'runtimes'),
@@ -1464,6 +1489,42 @@ test('docker mode resumes an existing runtime home for provider session id', asy
   assert.equal(startedContainer, 'cloudcli-claude-existing');
   assert.equal(runtime.runtimeHomePath, runtimeHomePath);
   assert.equal(runtime.runtimeId, 'existing');
+  assert.equal(runtime.executionEnv.personal_token, 'hook-first-value');
+  assert.equal(runtime.hookCommandEnv.custom_name, hookValues.custom_name);
+  assert.deepEqual(runtime.secretEnvValues, Object.values(hookValues));
+  const wrapper = await fs.readFile(runtime.pathToClaudeCodeExecutable, 'utf8');
+  assert.match(wrapper, /-e personal_token/);
+  assert.doesNotMatch(wrapper, /hook-first-value|中文 value/);
+  const options = { tenantId: 3, userId: 4, workspaceId: 5, cwd: workspacePath, sessionId: 'claude-session-1' };
+  hookValues = { personal_token: 'hook-updated-value' };
+  const updated = await manager.prepareClaudeRuntime(options);
+  assert.equal(updated.runtimeId, runtime.runtimeId);
+  assert.equal(updated.executionEnv.personal_token, 'hook-updated-value');
+  assert.equal(updated.executionEnv.custom_name, undefined);
+  hookValues = {};
+  const disabled = await manager.prepareClaudeRuntime(options);
+  assert.equal(disabled.executionEnv.personal_token, undefined);
+  assert.equal(disabled.hookCommandEnv.personal_token, undefined);
+  assert.deepEqual(disabled.secretEnvValues, []);
+  assert.deepEqual(hookScopes, Array(3).fill({ tenantId: 3, userId: 4, workspaceId: 5 }));
+});
+
+test('local execution resolves Hook variables with workspace scope and omits them without a workspace', async () => {
+  const scopes = [];
+  const manager = createAgentSessionRuntimeManager({
+    env: { CLAUDE_EXECUTION_MODE: 'local' }, users: emptyUserEnvDb,
+    hookConfigs: { resolveWorkspaceHookEnvironment: (context) => {
+      scopes.push(context);
+      return { env: { personal_token: 'local-hook-value' }, secretValues: ['local-hook-value'] };
+    } },
+  });
+  const scoped = await manager.prepareClaudeRuntime({ userId: 4, workspaceId: 5 });
+  assert.equal(scoped.executionEnv.personal_token, 'local-hook-value');
+  assert.deepEqual(scoped.secretEnvValues, ['local-hook-value']);
+  const unscoped = await manager.prepareClaudeRuntime({ userId: 4 });
+  assert.equal(unscoped.executionEnv.personal_token, undefined);
+  assert.deepEqual(unscoped.secretEnvValues, []);
+  assert.deepEqual(scopes, [{ tenantId: null, userId: 4, workspaceId: 5 }]);
 });
 
 test('docker mode reuses the owner runtime home when another session replaced its current binding', async () => {

@@ -2,8 +2,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
+
+import { mergeSystemCaCertificates } from './services/system-ca.js';
 import { applyEnvFileContents } from './utils/env-loader.js';
+import { findAppRoot, getModuleDir } from './utils/runtime-paths.js';
 
 const __dirname = getModuleDir(import.meta.url);
 // Resolve the repo/app root via the nearest /server folder so this file keeps finding the
@@ -25,3 +27,8 @@ const DEFAULT_DATABASE_PATH = path.join(os.homedir(), '.cloudcli', 'auth.db');
 if (!process.env.DATABASE_PATH) {
   process.env.DATABASE_PATH = DEFAULT_DATABASE_PATH;
 }
+
+// Node normally uses its bundled CA set. Include roots trusted by the host OS so
+// internal HTTPS services, including Admin MCP preset probes, behave like the
+// browser without weakening certificate verification.
+mergeSystemCaCertificates();

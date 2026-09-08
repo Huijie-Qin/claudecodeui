@@ -14,6 +14,7 @@ import {
   withTemporaryProcessEnv,
 } from './mcp-test-environment.js';
 import {
+  normalizeMcpServerConfigForProbeRuntime,
   probeHttpMcpServer,
   readMcpStatus,
   readWorkspaceMcpConfig,
@@ -426,6 +427,7 @@ export function createMcpPresetService({
   users = null,
   probeHttpMcpServer: probe = probeHttpMcpServer,
   resolveHelperConfig = resolvePresetProbeConfig,
+  probeRuntimeEnv = process.env,
 } = {}) {
   const getExistingPreset = ({ tenantId, presetId }) => {
     const preset = multitenancy.mcpPresets.getPresetById({
@@ -508,9 +510,12 @@ export function createMcpPresetService({
       const normalizedUserId = requirePositiveInteger(userId, 'userId');
       const preset = getExistingPreset({ tenantId, presetId });
       const normalizedInput = input ? normalizePresetInput(input) : null;
-      const baseProbeConfig = normalizedInput
+      const storedProbeConfig = normalizedInput
         ? { ...normalizedInput.config, name: normalizedInput.name }
         : { ...preset.config, name: preset.name };
+      const baseProbeConfig = normalizeMcpServerConfigForProbeRuntime(storedProbeConfig, {
+        env: probeRuntimeEnv,
+      });
       logPresetTest('start', {
         tenantId: requirePositiveInteger(tenantId, 'tenantId'),
         presetId: requirePositiveInteger(presetId, 'presetId'),

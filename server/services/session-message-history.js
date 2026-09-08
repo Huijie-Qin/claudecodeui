@@ -88,12 +88,24 @@ function isClaudeSyntheticMessage(message) {
     || (message?.origin === 'hook' && message?.mcpLoopReplacement === true);
 }
 
-function getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId) {
+function getUserHookActivityVisibility(
+  hookConfigs,
+  userId,
+  hookId,
+  visibilityByHookId,
+  workspaceId = null,
+  tenantId = null,
+) {
   if (typeof hookConfigs?.getUserHookChatVisibility !== 'function') return true;
   if (visibilityByHookId.has(hookId)) return visibilityByHookId.get(hookId);
   let visible = true;
   try {
-    visible = hookConfigs.getUserHookChatVisibility({ userId, hookId }) !== false;
+    visible = hookConfigs.getUserHookChatVisibility({
+      userId,
+      hookId,
+      workspaceId,
+      tenantId,
+    }) !== false;
   } catch {
     // Visibility preferences should never make the session history unavailable.
     visible = true;
@@ -102,10 +114,24 @@ function getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityBy
   return visible;
 }
 
-function isHookActivityVisible(message, hookConfigs, userId, visibilityByHookId) {
+function isHookActivityVisible(
+  message,
+  hookConfigs,
+  userId,
+  visibilityByHookId,
+  workspaceId = null,
+  tenantId = null,
+) {
   if (!isClaudeSyntheticMessage(message) || !message?.hookId) return true;
   const hookId = String(message.hookId);
-  return getUserHookActivityVisibility(hookConfigs, userId, hookId, visibilityByHookId);
+  return getUserHookActivityVisibility(
+    hookConfigs,
+    userId,
+    hookId,
+    visibilityByHookId,
+    workspaceId,
+    tenantId,
+  );
 }
 
 function getHookActivityIdentity(message) {
@@ -209,6 +235,8 @@ function listHistoricalHookActivities({
   hookConfigs,
   providerSessionId,
   userId,
+  workspaceId,
+  tenantId,
   hiddenHookExecutionPrefixes,
 }) {
   if (!providerSessionId || typeof hookConfigs?.listAllExecutions !== 'function') return [];
@@ -232,6 +260,8 @@ function listHistoricalHookActivities({
         userId,
         execution.hookId,
         visibilityByHookId,
+        workspaceId,
+        tenantId,
       )) {
         hiddenHookExecutionPrefixes.add(`hook_activity_${execution.id}_`);
         return [];
@@ -486,6 +516,8 @@ export function createSessionMessageHistoryService({
           hookConfigs,
           providerSessionId,
           userId,
+          workspaceId: ownedSession.workspace_id,
+          tenantId,
           hiddenHookExecutionPrefixes,
         });
         const visibilityByHookId = new Map();
@@ -497,6 +529,8 @@ export function createSessionMessageHistoryService({
             hookConfigs,
             userId,
             visibilityByHookId,
+            ownedSession.workspace_id,
+            tenantId,
           );
           if (!visible) {
             const identity = getHookActivityIdentity(message);

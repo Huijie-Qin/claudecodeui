@@ -78,11 +78,20 @@ export type HookClaudeResponse = {
 export type HookConfigDraft = {
   name: string;
   description: string;
+  userVariables?: HookUserVariable[];
   eventName: HookEventName;
   matcher: HookMatcher;
   extensionLogic: HookExtensionLogic | null;
   postActions: HookPostAction[];
   claudeResponse: HookClaudeResponse;
+};
+
+export type HookUserVariable = {
+  name: string;
+  label: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
 };
 
 export type HookConfig = HookConfigDraft & {

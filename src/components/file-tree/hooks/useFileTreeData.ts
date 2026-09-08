@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { api } from '../../../utils/api';
 import type { Project } from '../../../types/app';
 import type { FileTreeNode } from '../types/types';
@@ -9,12 +10,14 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 type UseFileTreeDataResult = {
   files: FileTreeNode[];
   loading: boolean;
+  error: string | null;
   refreshFiles: () => void;
 };
 
 export function useFileTreeData(selectedProject: Project | null): UseFileTreeDataResult {
   const [files, setFiles] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const { latestMessage } = useWebSocket();
@@ -25,11 +28,17 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   }, []);
 
   useEffect(() => {
+    setFiles([]);
+    setError(null);
+  }, [selectedProject?.name, selectedProject?.workspaceId]);
+
+  useEffect(() => {
     const projectName = selectedProject?.name;
 
     if (!projectName) {
       setFiles([]);
       setLoading(false);
+      setError(null);
       return;
     }
 
@@ -58,7 +67,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
           const errorText = await response.text();
           console.error('File fetch failed:', response.status, errorText);
           if (isActive) {
-            setFiles([]);
+            setError(`Failed to load files (${response.status})`);
           }
           return;
         }
@@ -66,6 +75,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
         const data = (await response.json()) as FileTreeNode[];
         if (isActive) {
           setFiles(data);
+          setError(null);
         }
       } catch (error) {
         if ((error as { name?: string }).name === 'AbortError') {
@@ -74,7 +84,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
         console.error('Error fetching files:', error);
         if (isActive) {
-          setFiles([]);
+          setError(error instanceof Error ? error.message : 'Failed to load files');
         }
       } finally {
         if (isActive) {
@@ -138,6 +148,7 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   return {
     files,
     loading,
+    error,
     refreshFiles,
   };
 }

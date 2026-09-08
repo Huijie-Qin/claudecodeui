@@ -15,8 +15,17 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function parseMcpToolName(toolName) {
+export function parseMcpToolName(toolName, serverNames = []) {
   if (typeof toolName !== 'string') return null;
+  // Server names may themselves contain the MCP separator. Resolve against
+  // configured names first, as the tool-access and Hook MCP paths do.
+  const serverName = serverNames
+    .filter((name) => toolName.startsWith(`mcp__${name}__`))
+    .sort((left, right) => right.length - left.length)[0];
+  if (serverName) {
+    const name = toolName.slice(`mcp__${serverName}__`.length);
+    return name ? { serverName, toolName: name } : null;
+  }
   const match = toolName.match(/^mcp__(.+?)__(.+)$/);
   if (!match) return null;
   return {
@@ -125,8 +134,44 @@ export async function readMcpToolOverridesConfig(workspaceRoot, { env = process.
   return null;
 }
 
+export async function mergeMcpToolOverridesConfig(workspaceRoot, mcpServers) {
+  if (typeof workspaceRoot !== 'string' || !workspaceRoot.trim()) {
+    throw new Error('workspaceRoot is required');
+  }
+  if (!isPlainObject(mcpServers)) {
+    throw new Error('mcpServers must be an object');
+  }
+
+  const targetPath = path.join(workspaceRoot, MCP_TOOL_OVERRIDES_RELATIVE_PATH);
+  let current = {};
+  try {
+    const content = (await fs.readFile(targetPath, 'utf8')).replace(/^\uFEFF/, '');
+    const parsed = content.trim() ? JSON.parse(content) : {};
+    current = isPlainObject(parsed) ? parsed : {};
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+  }
+
+  const nextConfig = {
+    ...current,
+    version: 1,
+    mcpServers: {
+      ...(isPlainObject(current.mcpServers) ? current.mcpServers : {}),
+      ...mcpServers,
+    },
+  };
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const temporaryPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, `${JSON.stringify(nextConfig, null, 2)}\n`, 'utf8');
+  await fs.rename(temporaryPath, targetPath);
+  return nextConfig;
+}
+
 export function applyMcpToolOverrides({ toolName, input, config }) {
-  const parsedToolName = parseMcpToolName(toolName);
+  const parsedToolName = parseMcpToolName(
+    toolName,
+    isPlainObject(config?.mcpServers) ? Object.keys(config.mcpServers) : [],
+  );
   if (!parsedToolName || !isPlainObject(config)) {
     return { input, applied: false, appliedParams: [] };
   }

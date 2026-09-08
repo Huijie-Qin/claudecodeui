@@ -95,10 +95,8 @@ import {agentTemplateService} from './services/agent-templates.js';
 import {workspaceAccess} from './services/workspace-access.js';
 import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/workspace-request.js';
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
-import {
-    parseShowInternalConfigFiles,
-    shouldHideWorkspaceInternalEntry
-} from './services/workspace-file-visibility.js';
+import {parseShowInternalConfigFiles} from './services/workspace-file-visibility.js';
+import {getFileTree} from './services/workspace-file-tree.js';
 import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
@@ -389,17 +387,29 @@ function attachTenantContextIfNeeded(req, res, next) {
   return tenantContext(req, res, next);
 }
 
+function safeSendWebSocket(client, message, context = 'message') {
+    if (client.readyState !== WebSocket.OPEN) return false;
+
+    try {
+        client.send(message, (error) => {
+            if (error) {
+                console.warn(`[WARN] Failed to send WebSocket ${context}:`, error.message);
+            }
+        });
+        return true;
+    } catch (error) {
+        console.warn(`[WARN] Failed to send WebSocket ${context}:`, error.message);
+        return false;
+    }
+}
+
 // Broadcast progress to all connected WebSocket clients
 function broadcastProgress(progress) {
     const message = JSON.stringify({
         type: 'loading_progress',
         ...progress
     });
-    connectedClients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    });
+    connectedClients.forEach(client => safeSendWebSocket(client, message, 'loading progress'));
 }
 
 function broadcastFilesChanged({ projectName, workspaceId, changedPath, reason }) {
@@ -412,11 +422,7 @@ function broadcastFilesChanged({ projectName, workspaceId, changedPath, reason }
         timestamp: new Date().toISOString(),
     });
 
-    connectedClients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    });
+    connectedClients.forEach(client => safeSendWebSocket(client, message, 'file change'));
 }
 
 // Setup file system watchers for Claude, Cursor, and Codex project/session folders
@@ -489,7 +495,7 @@ async function setupProjectsWatcher() {
                         clientProjects = tenantProjects.get(cacheKey);
                     }
 
-                    client.send(JSON.stringify({
+                    safeSendWebSocket(client, JSON.stringify({
                         type: 'projects_updated',
                         projects: clientProjects,
                         tenantId,
@@ -497,7 +503,7 @@ async function setupProjectsWatcher() {
                         changeType: eventType,
                         changedFile: path.relative(rootPath, filePath),
                         watchProvider: provider
-                    }));
+                    }), 'project update');
                 });
 
             } catch (error) {
@@ -563,6 +569,7 @@ const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, 10) || 30 * 60 * 1000;
 const GRACEFUL_SHUTDOWN_POLL_MS = parseInt(process.env.GRACEFUL_SHUTDOWN_POLL_MS, 10) || 1000;
 let isShuttingDown = false;
+let isServerReady = false;
 
 // Single WebSocket server that handles both paths
 const wss = new WebSocketServer({
@@ -619,6 +626,24 @@ const wss = new WebSocketServer({
     }
 });
 
+wss.on('error', (error) => {
+    // Transport errors are process-wide only when left unhandled by EventEmitter.
+    console.error('[ERROR] WebSocket server error:', error);
+});
+
+server.on('error', (error) => {
+    console.error('[ERROR] HTTP server error:', error);
+});
+
+server.on('clientError', (error, socket) => {
+    console.warn('[WARN] HTTP client connection error:', error.message);
+    if (!socket.writable) {
+        socket.destroy();
+        return;
+    }
+    socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+});
+
 // Make WebSocket server available to routes
 app.locals.wss = wss;
 app.locals.chatClients = connectedClients;
@@ -654,6 +679,15 @@ app.get('/health', (req, res) => {
     if (isShuttingDown) {
         res.status(503).json({
             status: 'draining',
+            timestamp: new Date().toISOString(),
+            installMode
+        });
+        return;
+    }
+
+    if (!isServerReady) {
+        res.status(503).json({
+            status: 'starting',
             timestamp: new Date().toISOString(),
             installMode
         });
@@ -1622,6 +1656,7 @@ app.post('/api/create-folder', authenticateToken, async (req, res) => {
 app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) => {
     try {
         const { filePath } = req.query;
+        const signal = createRequestAbortSignal(req, res);
 
 
         // Security: ensure the requested path is inside the project root
@@ -1631,9 +1666,10 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 
         const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
 
-        const content = await fsPromises.readFile(resolved, 'utf8');
+        const content = await fsPromises.readFile(resolved, { encoding: 'utf8', signal });
         res.json({ content, path: resolved });
     } catch (error) {
+        if (error.name === 'AbortError' || res.destroyed) return;
         console.error('Error reading file:', error);
         if (error.statusCode) {
             return handleWorkspaceError(res, error);
@@ -1746,6 +1782,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
 
 app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {
+        const signal = createRequestAbortSignal(req, res);
 
         // Using fsPromises from import
 
@@ -1760,9 +1797,10 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
         }
 
         const showInternalConfigFiles = parseShowInternalConfigFiles(req.query.showInternalConfigFiles);
-        const files = await getFileTree(actualPath, 10, 0, showInternalConfigFiles);
+        const files = await getFileTree(actualPath, 10, 0, showInternalConfigFiles, { signal });
         res.json(files);
     } catch (error) {
+        if (error.name === 'AbortError' || res.destroyed) return;
         console.error('[ERROR] File tree error:', error.message);
         if (error.statusCode) {
             return handleWorkspaceError(res, error);
@@ -1773,13 +1811,15 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
 
 app.get('/api/projects/:projectName/files/quota', authenticateToken, async (req, res) => {
     try {
+        const signal = createRequestAbortSignal(req, res);
         const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: false });
-        const quota = await getWorkspaceStorageQuota({ workspace, userStore: userDb });
+        const quota = await getWorkspaceStorageQuota({ workspace, userStore: userDb, signal });
         res.json({
             success: true,
             ...quota,
         });
     } catch (error) {
+        if (error.name === 'AbortError' || res.destroyed) return;
         console.error('[ERROR] File quota error:', error.message);
         if (error.statusCode) {
             return handleWorkspaceError(res, error);
@@ -1828,6 +1868,18 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
         throw error;
     }
     return { workspace, accessRole, resolvedPath: validation.resolved, runtimeMounted: false };
+}
+
+function createRequestAbortSignal(req, res) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+
+    req.once('aborted', abort);
+    res.once('close', () => {
+        if (!res.writableEnded) abort();
+    });
+
+    return controller.signal;
 }
 
 /**
@@ -2434,9 +2486,7 @@ class WebSocketWriter {
     }
 
     send(data) {
-        if (this.ws.readyState === 1) { // WebSocket.OPEN
-            this.ws.send(JSON.stringify(data));
-        }
+        safeSendWebSocket(this.ws, JSON.stringify(data), 'chat message');
     }
 
     updateWebSocket(newRawWs) {
@@ -2681,6 +2731,14 @@ function handleChatConnection(ws, request) {
 
     // Wrap WebSocket with writer for consistent interface with SSEStreamWriter
     const writer = new WebSocketWriter(ws, request?.user?.id ?? request?.user?.userId ?? null);
+
+    ws.on('error', (error) => {
+        // A browser/proxy disconnect is local to this socket. Without an error
+        // listener, ws emits an unhandled EventEmitter error and Node exits,
+        // dropping every HTTP request with ERR_EMPTY_RESPONSE.
+        console.warn('[WARN] Chat WebSocket connection error:', error.message);
+        connectedClients.delete(ws);
+    });
 
     ws.on('message', async (message) => {
         try {
@@ -3609,89 +3667,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Helper function to convert permissions to rwx format
-function permToRwx(perm) {
-    const r = perm & 4 ? 'r' : '-';
-    const w = perm & 2 ? 'w' : '-';
-    const x = perm & 1 ? 'x' : '-';
-    return r + w + x;
-}
-
-async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showInternalConfigFiles = false) {
-    // Using fsPromises from import
-    const items = [];
-
-    try {
-        const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
-
-        for (const entry of entries) {
-            if (shouldHideWorkspaceInternalEntry({
-                name: entry.name,
-                currentDepth,
-                showInternalConfigFiles
-            })) {
-                continue;
-            }
-            // Debug: log all entries including hidden files
-
-
-            const itemPath = path.join(dirPath, entry.name);
-            const item = {
-                name: entry.name,
-                path: itemPath,
-                type: entry.isDirectory() ? 'directory' : 'file'
-            };
-
-            // Get file stats for additional metadata
-            try {
-                const stats = await fsPromises.stat(itemPath);
-                item.size = stats.size;
-                item.modified = stats.mtime.toISOString();
-
-                // Convert permissions to rwx format
-                const mode = stats.mode;
-                const ownerPerm = (mode >> 6) & 7;
-                const groupPerm = (mode >> 3) & 7;
-                const otherPerm = mode & 7;
-                item.permissions = ((mode >> 6) & 7).toString() + ((mode >> 3) & 7).toString() + (mode & 7).toString();
-                item.permissionsRwx = permToRwx(ownerPerm) + permToRwx(groupPerm) + permToRwx(otherPerm);
-            } catch (statError) {
-                // If stat fails, provide default values
-                item.size = 0;
-                item.modified = null;
-                item.permissions = '000';
-                item.permissionsRwx = '---------';
-            }
-
-            if (entry.isDirectory() && currentDepth < maxDepth) {
-                // Recursively get subdirectories but limit depth
-                try {
-                    // Check if we can access the directory before trying to read it
-                    await fsPromises.access(item.path, fs.constants.R_OK);
-                    item.children = await getFileTree(item.path, maxDepth, currentDepth + 1, showInternalConfigFiles);
-                } catch (e) {
-                    // Silently skip directories we can't access (permission denied, etc.)
-                    item.children = [];
-                }
-            }
-
-            items.push(item);
-        }
-    } catch (error) {
-        // Only log non-permission errors to avoid spam
-        if (error.code !== 'EACCES' && error.code !== 'EPERM') {
-            console.error('Error reading directory:', error);
-        }
-    }
-
-    return items.sort((a, b) => {
-        if (a.type !== b.type) {
-            return a.type === 'directory' ? -1 : 1;
-        }
-        return a.name.localeCompare(b.name);
-    });
-}
-
 const SERVER_PORT = process.env.SERVER_PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
 const DISPLAY_HOST = getConnectableHost(HOST);
@@ -3805,6 +3780,7 @@ async function gracefulShutdown(signal) {
     }
 
     isShuttingDown = true;
+    isServerReady = false;
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
     runtimeSweeper.stop();
@@ -3859,31 +3835,41 @@ async function startServer() {
 
         console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
    
-        server.listen(SERVER_PORT, HOST, async () => {
-            const appInstallPath = APP_ROOT;
-
-            console.log('');
-            console.log(c.dim('═'.repeat(63)));
-            console.log(`  ${c.bright('CloudCLI Server - Ready')}`);
-            console.log(c.dim('═'.repeat(63)));
-            console.log('');
-            console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
-            console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
-            console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
-            console.log('');
-
-            // Start watching the projects folder for changes
-            await setupProjectsWatcher();
-
-            // Start server-side plugin processes for enabled plugins
-            startEnabledPluginServers().catch(err => {
-                console.error('[Plugins] Error during startup:', err.message);
+        await new Promise((resolve, reject) => {
+            const handleListenError = (error) => reject(error);
+            server.once('error', handleListenError);
+            server.listen(SERVER_PORT, HOST, () => {
+                server.off('error', handleListenError);
+                resolve();
             });
-
-            if (typeof process.send === 'function') {
-                process.send('ready');
-            }
         });
+
+        // Keep post-listen startup in this try/catch. Errors thrown from an
+        // async listen callback otherwise become unhandled rejections and can
+        // terminate the API process after it has started accepting requests.
+        await setupProjectsWatcher();
+
+        isServerReady = true;
+
+        const appInstallPath = APP_ROOT;
+
+        console.log('');
+        console.log(c.dim('═'.repeat(63)));
+        console.log(`  ${c.bright('CloudCLI Server - Ready')}`);
+        console.log(c.dim('═'.repeat(63)));
+        console.log('');
+        console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
+        console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
+        console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
+        console.log('');
+
+        startEnabledPluginServers().catch(err => {
+            console.error('[Plugins] Error during startup:', err.message);
+        });
+
+        if (typeof process.send === 'function') {
+            process.send('ready');
+        }
 
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {

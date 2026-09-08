@@ -378,7 +378,17 @@ export function useSessionStore() {
     const slot = getSlot(sessionId);
     const request = beginHistoryRequest(sessionId);
     try {
-      const url = buildSessionMessagesUrl(sessionId, opts);
+      // Preserve the currently loaded window while a paginated session is
+      // refreshed. Omitting the limit here used to reload the entire transcript
+      // after every reconnect or external update.
+      const refreshOptions = slot.hasMore
+        ? {
+            ...opts,
+            limit: Math.max(slot.serverMessages.length, 20),
+            offset: 0,
+          }
+        : opts;
+      const url = buildSessionMessagesUrl(sessionId, refreshOptions);
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

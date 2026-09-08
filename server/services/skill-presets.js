@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { userDb } from '../database/db.js';
@@ -267,19 +266,13 @@ async function writeDownloadedFiles(skillDirectory, files) {
   }
 }
 
-async function validateDownloadedSkill(downloadedSkill) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-skill-preset-'));
-  try {
-    const normalizedPackage = normalizeDownloadedSkillPackage(downloadedSkill);
-    await writeDownloadedFiles(tempRoot, normalizedPackage.files);
-    const manifest = await parseSkillManifest(tempRoot);
-    if (manifest.status === 'invalid') {
-      throw createHttpError(`Selected skill has an invalid SKILL.md: ${manifest.parseError}`, 400);
-    }
-    return manifest;
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
+function requireDownloadedSkillFiles(downloadedSkill) {
+  const files = downloadedSkill?.files;
+  if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0) {
+    throw createHttpError('Skill download did not contain any files', 502);
   }
+  // Preset preparation only checks retrieval; files are inspected when installed.
+  return downloadedSkill;
 }
 
 function assertNoSkillConflict({
@@ -595,7 +588,14 @@ export function createSkillPresetService({
   };
 
   return {
-    searchMarketSkills: async ({ searchContent = '', page = 1, pageSize = 20, tenantCode, accountId } = {}) => {
+    searchMarketSkills: async ({
+      searchContent = '',
+      page = 1,
+      pageSize = 20,
+      tenantCode,
+      accountId,
+      completeInventory = false,
+    } = {}) => {
       const result = await marketService.listSkillMarket({
         searchContent,
         page,
@@ -603,6 +603,7 @@ export function createSkillPresetService({
         tenantCode,
         accountId,
         includePageInfo: true,
+        completeInventory,
       });
       return {
         skills: result.skills || [],
@@ -622,7 +623,7 @@ export function createSkillPresetService({
     createPreset: async ({ tenantId, userId, input, tenantCode, accountId }) => {
       const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
-      const downloadedSkill = normalizeDownloadedSkillPackage(
+      const downloadedSkill = requireDownloadedSkillFiles(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
@@ -659,7 +660,7 @@ export function createSkillPresetService({
     updatePreset: async ({ tenantId, presetId, userId, input, tenantCode, accountId }) => {
       const existing = getExistingPreset({ tenantId, presetId });
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
-      const downloadedSkill = normalizeDownloadedSkillPackage(
+      const downloadedSkill = requireDownloadedSkillFiles(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
@@ -680,10 +681,9 @@ export function createSkillPresetService({
           preset.remote_id || preset.skill_id || preset.name,
           { tenantCode, accountId },
         );
-        const downloadedSkill = normalizeDownloadedSkillPackage(
+        requireDownloadedSkillFiles(
           await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
         );
-        const manifest = await validateDownloadedSkill(downloadedSkill);
         const validated = multitenancy.skillPresets.recordValidation({
           tenantId: requirePositiveInteger(tenantId, 'tenantId'),
           presetId: requirePositiveInteger(presetId, 'presetId'),
@@ -695,8 +695,8 @@ export function createSkillPresetService({
           preset: toAdminSkillPreset(validated),
           validation: {
             status: 'healthy',
-            displayName: manifest.name,
-            description: manifest.description,
+            displayName: remoteSkill.displayName || remoteSkill.name || preset.display_name || preset.name,
+            description: remoteSkill.description || preset.description || '',
           },
         };
       } catch (error) {

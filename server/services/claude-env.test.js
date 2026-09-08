@@ -21,6 +21,45 @@ const TEST_PERSONAL_ALLOWLIST = [
   ['DAS', 1024],
 ];
 
+test('Hook environment names need no personal allowlist but respect runtime and platform deny rules', () => {
+  const { database, service } = createFixture();
+  try {
+    service.createDenyRule({ ownerType: 'platform', matchType: 'exact', pattern: 'blocked_hook', reason: 'test policy', actorUserId: 9 });
+    service.updatePersonal(1, { upserts: [{ name: 'DAS', value: 'general-personal' }] });
+    const resolved = service.resolveEffectiveEnv({
+      tenantId: 10, userId: 1,
+      baseEnv: { PATH: '/system/bin', HOME: '/system/home' },
+      hookUserEnv: { personal_token: 'hook-private', DAS: 'hook-value', PATH: '/evil', HOME: '/evil',
+        USER_KEY: 'evil-identity', DOCKER_HOST: 'evil-host', NODE_OPTIONS: '--require=evil',
+        blocked_hook: 'denied', nul_value: 'a\0b' },
+      managedEnv: { USER_KEY: 'managed-identity' },
+    });
+    assert.equal(resolved.env.personal_token, 'hook-private');
+    assert.equal(resolved.sources.personal_token, 'hook');
+    assert.equal(resolved.env.DAS, 'hook-value');
+    assert.equal(resolved.env.PATH, '/system/bin');
+    assert.equal(resolved.env.HOME, '/system/home');
+    assert.equal(resolved.env.USER_KEY, 'managed-identity');
+    for (const name of ['DOCKER_HOST', 'NODE_OPTIONS', 'blocked_hook', 'nul_value']) assert.equal(Object.hasOwn(resolved.env, name), false);
+    assert.equal(resolved.blockedVariables.find((entry) => entry.name === 'blocked_hook').code, 'PLATFORM_DENY');
+    assert.equal(resolved.blockedVariables.find((entry) => entry.name === 'nul_value').code, 'VALUE_CONTAINS_NUL');
+  } finally { database.close(); }
+});
+
+test('Hook Anthropic credentials do not mix with lower-layer personal or tenant credentials', () => {
+  const { database, service } = createFixture();
+  try {
+    service.updatePersonal(1, { upserts: [
+      { name: 'ANTHROPIC_AUTH_TOKEN', value: 'personal-token' },
+      { name: 'ANTHROPIC_BASE_URL', value: 'https://personal.example' },
+    ] });
+    const resolved = service.resolveEffectiveEnv({ userId: 1, hookUserEnv: { ANTHROPIC_API_KEY: 'hook-key' } });
+    assert.equal(resolved.env.ANTHROPIC_API_KEY, 'hook-key');
+    assert.equal(resolved.env.ANTHROPIC_AUTH_TOKEN, undefined);
+    assert.equal(resolved.env.ANTHROPIC_BASE_URL, undefined);
+  } finally { database.close(); }
+});
+
 function createFixture({ adminUserEnv = {}, seedPersonalAllowlist = true } = {}) {
   const database = new Database(':memory:');
   database.pragma('foreign_keys = ON');

@@ -51,3 +51,10 @@ test('createHookDraftSignature ignores persisted metadata but detects editable c
     createHookDraftSignature({ ...draft, description: 'Changed locally' }),
   );
 });
+
+test('personal variable edits change the draft signature', () => {
+  const draft: HookConfigDraft = { name: 'Hook', description: '', eventName: 'Stop', matcher: {}, extensionLogic: null, postActions: [], claudeResponse: { bindings: {} } };
+  assert.notEqual(createHookDraftSignature(draft), createHookDraftSignature({ ...draft,
+    userVariables: [{ name: 'account', label: '账号', description: '', required: true, secret: false }],
+  }));
+});

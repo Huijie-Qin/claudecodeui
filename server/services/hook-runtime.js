@@ -3,9 +3,10 @@ import crypto from 'node:crypto';
 import { db as defaultDatabase } from '../database/db.js';
 
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
-import { allowedClaudeOutputs } from './hook-configs.js';
+import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
+import { createHookVariableRedactor, mergeHookUserVariableValues } from './hook-user-variables.js';
 
 const UNRESOLVED = Symbol('unresolved');
 const MAX_AUDIT_JSON_BYTES = 128 * 1024;
@@ -176,7 +177,7 @@ function normalizeScriptOutput(result, declarations = []) {
   return output;
 }
 
-function createExecutionRecord(database, hook, context, input, startedAtMs, toolUseId) {
+function createExecutionRecord(database, hook, context, input, startedAtMs, toolUseId, redact = (value) => value) {
   const executionId = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_executions (
@@ -193,7 +194,7 @@ function createExecutionRecord(database, hook, context, input, startedAtMs, tool
     input?.session_id || context.sessionId?.() || null,
     hook.eventName,
     input?.tool_use_id || toolUseId || null,
-    serializeForAudit(input),
+    serializeForAudit(redact(input)),
     startedAtMs,
   );
   return executionId;
@@ -395,6 +396,7 @@ async function executePostActions({
         event,
         executionId,
         messageText,
+        displayMessage: context.redact(messageText),
       });
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
@@ -446,7 +448,7 @@ async function executePostActions({
         executionId,
         argumentsText,
         modelContent,
-        displayCommand: `/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`,
+        displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
       });
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
@@ -466,6 +468,9 @@ export function createHookRuntimeSession({
   username,
   tenantId,
   workspaceId,
+  resolveUserVariables = ({ hook }) => workspaceId
+    ? hookConfigService.getWorkspaceHookUserVariables({ workspaceId, tenantId, userId, hook })
+    : {},
   sqlCheckRuleIds = [],
   workspaceRoot,
   sessionId = () => null,
@@ -528,10 +533,19 @@ export function createHookRuntimeSession({
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
-    const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId);
+    const definitions = hook.userVariables || [];
+    let userVariables = {};
+    let variableError = null;
+    try {
+      if (definitions.length) userVariables = await resolveUserVariables({ hook });
+    } catch {
+      variableError = new Error('无法读取 Hook 个人变量，请在辅助功能中重新配置');
+    }
+    const redact = createHookVariableRedactor(definitions, userVariables);
+    const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId, redact);
     reportExecutionActivity({
       hook,
-      event,
+      event: redact(event),
       executionId,
       status: 'running',
       startedAt,
@@ -545,6 +559,11 @@ export function createHookRuntimeSession({
       actions: {},
     };
     try {
+      if (variableError) throw variableError;
+      userVariables = mergeHookUserVariableValues(definitions, userVariables, undefined, { requireComplete: true });
+      if (definitions.length) references.ccui.env.userVariables = Object.fromEntries(
+        definitions.map((variable) => [variable.name, userVariables[variable.name] || '']),
+      );
       if (hook.extensionLogic?.code?.trim()) {
         const scriptResult = await scriptExecutor({
           hookId: hook.id,
@@ -561,12 +580,12 @@ export function createHookRuntimeSession({
             context,
             event,
             recordType,
-            data,
+            redact(data),
           ),
           onLog: async (message, data) => {
-            const entry = { timestamp: new Date().toISOString(), message, data };
+            const entry = { timestamp: new Date().toISOString(), message: redact(message), data: redact(data) };
             if (logs.length < MAX_LOG_ENTRIES) logs.push(entry);
-            console.info(`[Hook:${hook.id}] ${redactForAudit(message)}`, redactForAudit(data ?? ''));
+            console.info(`[Hook:${hook.id}] ${redactForAudit(entry.message)}`, redactForAudit(entry.data ?? ''));
             return entry;
           },
         });
@@ -577,7 +596,7 @@ export function createHookRuntimeSession({
         hook,
         executionId,
         references,
-        context,
+        context: { ...context, redact },
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
@@ -588,49 +607,49 @@ export function createHookRuntimeSession({
           context,
           event,
           recordType,
-          data,
+          redact(data),
         ),
       });
       const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);
       completeExecution(database, executionId, {
         status: 'succeeded',
         startedAt,
-        scriptOutput,
-        actions: references.actions,
-        response,
+        scriptOutput: redact(scriptOutput),
+        actions: redact(references.actions),
+        response: redact(response),
         logs,
       });
       reportExecutionActivity({
         hook,
-        event,
+        event: redact(event),
         executionId,
         status: 'succeeded',
         startedAt,
         completedAt: Date.now(),
-        actions: toAuditValue(references.actions),
+        actions: toAuditValue(redact(references.actions)),
       });
       return response;
     } catch (error) {
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
-        scriptOutput,
-        actions: references.actions,
+        scriptOutput: redact(scriptOutput),
+        actions: redact(references.actions),
         response: {},
         logs,
-        error: error?.stack || error?.message || String(error),
+        error: redact(error?.stack || error?.message || String(error)),
       });
       reportExecutionActivity({
         hook,
-        event,
+        event: redact(event),
         executionId,
         status: 'failed',
         startedAt,
         completedAt: Date.now(),
-        actions: toAuditValue(references.actions),
-        error: error?.message || String(error),
+        actions: toAuditValue(redact(references.actions)),
+        error: redact(error?.message || String(error)),
       });
-      console.error(`[Hook:${hook.id}] Runtime execution failed:`, error?.message || error);
+      console.error(`[Hook:${hook.id}] Runtime execution failed:`, redact(error?.message || String(error)));
       return {};
     }
   };

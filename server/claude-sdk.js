@@ -69,6 +69,7 @@ import { createClaudeMessageDisplayTracker } from './services/claude-message-dis
 import { userDb } from './database/db.js';
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
+import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.js';
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
@@ -115,6 +116,76 @@ function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
 
   const hookUserId = Number(runtimeOptions.userId ?? writerUserId);
   return Number.isInteger(hookUserId) && hookUserId > 0 ? hookUserId : null;
+}
+
+async function resolveConfiguredHooksForRuntime({
+  hookConfigs,
+  hookResources,
+  userId,
+  tenantId = null,
+  workspaceId = null,
+  workspacePath,
+  onMaterializeError = null,
+}) {
+  const candidates = tenantId && workspaceId
+    ? hookConfigs.listEffectiveHooksForContext({ userId, tenantId, workspaceId })
+    : hookConfigs.listActiveHooksForUser(userId);
+  const materializedByHookId = new Map();
+  const hooks = [];
+  for (const hook of candidates) {
+    try {
+      const preparedResources = typeof hookResources.prepareHook === 'function'
+        ? await hookResources.prepareHook({ hook })
+        : null;
+      if (hook.resourceRefs && !preparedResources) {
+        throw new Error('Hook resource service cannot safely validate the published resource snapshot');
+      }
+      if (typeof hookConfigs.validatePublishedHookMaterialization === 'function') {
+        // Validate the central Skill/MCP sources against the immutable published
+        // references before anything can be written into the project.
+        if (preparedResources) {
+          hookConfigs.validatePublishedHookMaterialization({
+            hook,
+            resources: preparedResources,
+          });
+        }
+      }
+      const resources = await hookResources.materializeHook({
+        hook,
+        workspacePath,
+        ...(preparedResources ? { preparedResources } : {}),
+      });
+      if (!preparedResources && typeof hookConfigs.validatePublishedHookMaterialization === 'function') {
+        // Compatibility for injected/legacy resource services without a
+        // read-only preparation phase.
+        hookConfigs.validatePublishedHookMaterialization({ hook, resources });
+      }
+      materializedByHookId.set(hook.id, resources);
+      hooks.push(hook);
+    } catch (error) {
+      if (
+        workspaceId
+        && hook.workspaceAssignment
+        && error?.statusCode === 409
+        && typeof hookConfigs.markWorkspaceHookAssignmentFailed === 'function'
+      ) {
+        try {
+          hookConfigs.markWorkspaceHookAssignmentFailed({
+            workspaceId,
+            hookId: hook.id,
+            error: error?.message,
+          });
+        } catch (statusError) {
+          console.warn(
+            `[HookResources] Failed to persist Hook ${hook.id} materialization error:`,
+            statusError?.message || statusError,
+          );
+        }
+      }
+      if (typeof onMaterializeError === 'function') await onMaterializeError(hook, error);
+    }
+  }
+  return { hooks, materializedByHookId };
 }
 
 function createHookActivityDescriptor({
@@ -1589,6 +1660,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       hostWorkspacePath: runtimeContext.hostWorkspacePath || null,
     });
     processDiagnostics.addRedactionEnv(runtimeOptions.executionEnv || process.env);
+    processDiagnostics.addRedactionValues(runtimeContext.secretEnvValues);
     runtimeOptions.spawnClaudeCodeProcess = processDiagnostics.createSpawn(runtimeContext.spawnClaudeCodeProcess);
 
     updateHookActivity('running');
@@ -1678,6 +1750,18 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       hookRecoveryToolNames = hookMcpRuntime.toolNames;
     }
     applyMcpConfigToSdkOptions(sdkOptions, mcpServers);
+    const mcpDiagnostics = createMcpRuntimeDiagnostics({
+      requestId: runtimeOptions.logRequestId || null,
+      workspaceId: runtimeOptions.workspaceId || null,
+      runtimeId: runtimeContext.runtimeId || null,
+      runtimeMode: runtimeContext.mode,
+      workspacePath: runtimeOptions.cwd || null,
+      containerName: runtimeContext.containerName || null,
+    });
+    mcpDiagnostics.logConfig(sdkOptions, {
+      sessionId: capturedSessionId || sessionId || null,
+      includeHostConfig: !runtimeContext.disableHostMcpConfig,
+    });
 
     inputQueue.push(buildClaudeUserMessage(command, options.images, {
       uuid: initialMessageId,
@@ -1834,20 +1918,19 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     let configuredSdkHooks = {};
     if (hookUserId !== null) {
       try {
-        const activeHooks = hookConfigService.listActiveHooksForUser(hookUserId);
+        const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
+        const { hooks: activeHooks, materializedByHookId } = await resolveConfiguredHooksForRuntime({
+          hookConfigs: hookConfigService,
+          hookResources: hookWorkspaceResourcesService,
+          userId: hookUserId,
+          tenantId: runtimeOptions.tenantId,
+          workspaceId: runtimeOptions.workspaceId,
+          workspacePath,
+          onMaterializeError: (hook, error) => {
+            console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
+          },
+        });
         if (activeHooks.length > 0) {
-          const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
-          const materializedByHookId = new Map();
-          for (const hook of activeHooks) {
-            try {
-              materializedByHookId.set(hook.id, await hookWorkspaceResourcesService.materializeHook({
-                hook,
-                workspacePath,
-              }));
-            } catch (error) {
-              console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
-            }
-          }
           const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
             diagnostics: processDiagnostics,
           });
@@ -1912,12 +1995,37 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               action,
               event,
               executionId,
-              argumentsText,
               modelContent,
+              displayCommand,
             }) => {
               let resources = materializedByHookId.get(hook.id);
               if (!resources) {
-                resources = await hookWorkspaceResourcesService.materializeHook({ hook, workspacePath });
+                const preparedResources = typeof hookWorkspaceResourcesService.prepareHook === 'function'
+                  ? await hookWorkspaceResourcesService.prepareHook({ hook })
+                  : null;
+                if (hook.resourceRefs && !preparedResources) {
+                  throw new Error('Hook resource service cannot safely validate the published resource snapshot');
+                }
+                if (
+                  preparedResources
+                  && typeof hookConfigService.validatePublishedHookMaterialization === 'function'
+                ) {
+                  hookConfigService.validatePublishedHookMaterialization({
+                    hook,
+                    resources: preparedResources,
+                  });
+                }
+                resources = await hookWorkspaceResourcesService.materializeHook({
+                  hook,
+                  workspacePath,
+                  ...(preparedResources ? { preparedResources } : {}),
+                });
+                if (
+                  !preparedResources
+                  && typeof hookConfigService.validatePublishedHookMaterialization === 'function'
+                ) {
+                  hookConfigService.validatePublishedHookMaterialization({ hook, resources });
+                }
                 materializedByHookId.set(hook.id, resources);
               }
               const skill = resources.skills.find((candidate) => candidate.skillId === action.config?.skillId);
@@ -1947,7 +2055,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                 hook,
                 action,
                 executionId,
-                summary: `/${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                summary: displayCommand,
                 skillName: action.config?.skillName || null,
                 queuedAt,
               });
@@ -1959,7 +2067,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: recoveryContent,
-                displayContent: `Hook · /${action.config?.skillName || 'skill'}${argumentsText ? ` ${argumentsText}` : ''}`,
+                displayContent: `Hook · ${displayCommand}`,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,
@@ -1984,6 +2092,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               event,
               executionId,
               messageText,
+              displayMessage,
             }) => {
               const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
               const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
@@ -1993,7 +2102,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                 hook,
                 action,
                 executionId,
-                summary: messageText,
+                summary: displayMessage,
                 queuedAt,
               });
               const hookRecovery = {
@@ -2003,7 +2112,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               };
               const queuePosition = enqueueClaudeFollowupTurn(activeSession, {
                 content: messageText,
-                displayContent: messageText,
+                displayContent: displayMessage,
                 mode: 'hook_recovery',
                 priority: 'next',
                 writer: ws,
@@ -2335,6 +2444,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }
 
       const message = next.value;
+      mcpDiagnostics.observe(message, queryInstance);
       if (pendingTurnCompletion) {
         turnCompletionScheduler.cancel();
       }
@@ -3273,6 +3383,7 @@ export {
   stopActiveClaudeSubagentTasks,
   resolveClaudeSupplementPayload,
   resolveConfiguredHookUserId,
+  resolveConfiguredHooksForRuntime,
   createHookHeadersHelperRunner,
   createHookCardActionResults,
   ClaudeInputQueue,

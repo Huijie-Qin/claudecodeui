@@ -9,6 +9,7 @@ const builtinSkill = {
   displayName: 'Hook Notification (Mock)',
   description: 'Local notification',
   version: 1,
+  contentHash: 'notification-skill-hash-v1',
   manifestPath: '/not/exposed/SKILL.md',
   content: 'not exposed',
 };
@@ -38,6 +39,7 @@ test('Hook configuration lists only registered built-in Skills', async () => {
       displayName: builtinSkill.displayName,
       description: builtinSkill.description,
       version: builtinSkill.version,
+      contentHash: builtinSkill.contentHash,
     }],
     source: { type: 'builtin', available: true },
   });
@@ -62,6 +64,7 @@ test('Hook publish accepts a registered built-in Skill', async () => {
     displayName: builtinSkill.displayName,
     description: builtinSkill.description,
     version: builtinSkill.version,
+    contentHash: builtinSkill.contentHash,
   }]);
 });
 

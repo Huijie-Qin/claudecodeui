@@ -323,6 +323,91 @@ test('admin preset publish requires a successful test result', async () => {
   assert.equal(published.status, 'published');
 });
 
+test('admin preset test rewrites Docker host URLs for a host-side probe', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  const probedConfigs = [];
+  const service = createMcpPresetService({
+    multitenancy,
+    users: createTestUsers(database),
+    probeRuntimeEnv: { CLOUDCLI_MCP_PROBE_RUNTIME: 'host' },
+    probeHttpMcpServer: async (config) => {
+      probedConfigs.push(config);
+      return {
+        status: 'healthy',
+        phase: 'tools_list',
+        toolCount: 1,
+        tools: [{ name: 'check' }],
+      };
+    },
+  });
+  const preset = service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: {
+      name: 'host_service',
+      displayName: 'Host Service',
+      type: 'http',
+      url: 'http://host.docker.internal:39999/mcp',
+    },
+  });
+
+  await service.testPreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+  });
+
+  assert.equal(probedConfigs[0].url, 'http://127.0.0.1:39999/mcp');
+  const stored = multitenancy.mcpPresets.getPresetById({
+    tenantId: tenant.id,
+    presetId: preset.id,
+  });
+  assert.equal(stored.config.url, 'http://host.docker.internal:39999/mcp');
+});
+
+test('admin preset test rewrites loopback URLs for a container-side probe', async () => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const adminId = seedUser(database, 'admin');
+  const tenant = multitenancy.tenants.createTenant({ code: 'team', name: 'Team' });
+  const probedConfigs = [];
+  const service = createMcpPresetService({
+    multitenancy,
+    users: createTestUsers(database),
+    probeRuntimeEnv: { CLOUDCLI_MCP_PROBE_RUNTIME: 'docker' },
+    probeHttpMcpServer: async (config) => {
+      probedConfigs.push(config);
+      return {
+        status: 'healthy',
+        phase: 'tools_list',
+        toolCount: 1,
+        tools: [{ name: 'check' }],
+      };
+    },
+  });
+  const preset = service.createPreset({
+    tenantId: tenant.id,
+    userId: adminId,
+    input: {
+      name: 'host_service',
+      displayName: 'Host Service',
+      type: 'http',
+      url: 'http://localhost:39999/mcp',
+    },
+  });
+
+  await service.testPreset({
+    tenantId: tenant.id,
+    presetId: preset.id,
+    userId: adminId,
+  });
+
+  assert.equal(probedConfigs[0].url, 'http://host.docker.internal:39999/mcp');
+});
+
 test('admin preset test temporarily injects user env into host process', async () => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);

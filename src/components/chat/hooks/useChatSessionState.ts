@@ -416,18 +416,18 @@ export function useChatSessionState({
 
     const existingSlot = sessionStore.getSessionSlot(selectedSession.id);
 
-    // Skip if already loaded, fresh, and complete.
+    // Reuse a fresh page instead of forcing the complete transcript back into
+    // memory. Older pages remain available through the existing scroll loader.
     if (
       lastLoadedSessionKeyRef.current === sessionKey &&
       sessionStore.has(selectedSession.id) &&
       !sessionStore.isStale(selectedSession.id) &&
-      existingSlot &&
-      !existingSlot.hasMore
+      existingSlot
     ) {
       setVisibleMessageCount(Infinity);
-      setAllMessagesLoaded(true);
-      allMessagesLoadedRef.current = true;
-      setHasMoreMessages(false);
+      setAllMessagesLoaded(!existingSlot.hasMore);
+      allMessagesLoadedRef.current = !existingSlot.hasMore;
+      setHasMoreMessages(existingSlot.hasMore);
       setTotalMessages(existingSlot.total);
       return;
     }
@@ -445,8 +445,8 @@ export function useChatSessionState({
     setHasMoreMessages(false);
     setTotalMessages(0);
     setVisibleMessageCount(Infinity);
-    setAllMessagesLoaded(true);
-    allMessagesLoadedRef.current = true;
+    setAllMessagesLoaded(false);
+    allMessagesLoadedRef.current = false;
     setIsLoadingAllMessages(false);
     setLoadAllJustFinished(false);
     setShowLoadAllOverlay(false);
@@ -480,16 +480,16 @@ export function useChatSessionState({
       projectName: selectedProject.name,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
       workspaceId: selectedProject.workspaceId,
-      limit: null,
+      limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
       if (slot) {
-        setHasMoreMessages(false);
+        setHasMoreMessages(slot.hasMore);
         setTotalMessages(slot.total);
-        messagesOffsetRef.current = slot.total;
+        messagesOffsetRef.current = slot.offset;
         setVisibleMessageCount(Infinity);
-        setAllMessagesLoaded(true);
-        allMessagesLoadedRef.current = true;
+        setAllMessagesLoaded(!slot.hasMore);
+        allMessagesLoadedRef.current = !slot.hasMore;
         if (slot.tokenUsage) setTokenBudget(slot.tokenUsage as Record<string, unknown>);
       }
       setIsLoadingSessionMessages(false);

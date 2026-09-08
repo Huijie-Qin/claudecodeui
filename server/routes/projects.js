@@ -10,6 +10,8 @@ import { userDb } from '../database/db.js';
 import { tenantContext } from '../middleware/tenant-context.js';
 import { checkOpenApiAgentList } from '../services/openapi-agent.js';
 import { agentTemplateService } from '../services/agent-templates.js';
+import { hookConfigService } from '../services/hook-configs.js';
+import { hookWorkspaceResourcesService } from '../services/hook-workspace-resources.js';
 import { skillPresetService } from '../services/skill-presets.js';
 import { createWorkspaceMcpToolsService } from '../services/workspace-mcp-tools.js';
 import { workspaceAccess } from '../services/workspace-access.js';
@@ -19,6 +21,7 @@ import {
   writeWorkspaceAgentInstructions,
 } from '../services/workspace-agent-instructions.js';
 import { resolveCloneDestinationPath, resolveWorkspaceTarget } from '../services/workspace-projects.js';
+import { mergeMcpToolOverridesConfig } from '../services/mcp-tool-overrides.js';
 
 const router = express.Router();
 const MAX_AGENT_MARKDOWN_BYTES = 1024 * 1024;
@@ -102,6 +105,100 @@ async function installPreinstalledSkillPresetsForWorkspace({ tenant, workspace, 
   }
 }
 
+export async function applyAgentTemplateHooksToWorkspace({
+  hooks,
+  templateId,
+  workspace,
+  user,
+  hookConfigs = hookConfigService,
+  hookResources = hookWorkspaceResourcesService,
+}) {
+  const snapshots = [];
+  const warnings = [];
+  for (const hookRef of hooks || []) {
+    let assignmentCreated = false;
+    try {
+      const hook = hookConfigs.getPublishedHookVersion({
+        hookId: hookRef.id,
+        version: hookRef.version,
+      });
+      if (!hook || hook.revokedAt) {
+        throw new Error(`Hook version ${hookRef.version} is unavailable`);
+      }
+      hookConfigs.assignWorkspaceHook({
+        workspaceId: workspace.id,
+        hookId: hookRef.id,
+        hookVersion: hookRef.version,
+        source: 'agent_template',
+        sourceTemplateId: templateId,
+        defaultEnabled: hookRef.defaultEnabled,
+        defaultShowInChat: hookRef.showInChat,
+        allowUserDisable: hookRef.allowUserDisable,
+        sortOrder: hookRef.order,
+        installStatus: 'pending',
+        createdBy: user.id,
+      });
+      assignmentCreated = true;
+      const preparedResources = typeof hookResources.prepareHook === 'function'
+        ? await hookResources.prepareHook({ hook })
+        : null;
+      if (hook.resourceRefs && !preparedResources) {
+        throw new Error('Hook resource service cannot safely validate the published resource snapshot');
+      }
+      if (
+        preparedResources
+        && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+      ) {
+        hookConfigs.validatePublishedHookMaterialization({
+          hook,
+          resources: preparedResources,
+        });
+      }
+      const resources = await hookResources.materializeHook({
+        hook,
+        workspacePath: workspace.path,
+        ...(preparedResources ? { preparedResources } : {}),
+      });
+      if (
+        !preparedResources
+        && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+      ) {
+        hookConfigs.validatePublishedHookMaterialization({ hook, resources });
+      }
+      hookConfigs.markWorkspaceHookAssignmentReady({
+        workspaceId: workspace.id,
+        hookId: hookRef.id,
+      });
+      snapshots.push({ ...hookRef, installStatus: 'ready' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '安装失败';
+      if (assignmentCreated) {
+        try {
+          hookConfigs.markWorkspaceHookAssignmentFailed({
+            workspaceId: workspace.id,
+            hookId: hookRef.id,
+            error: message,
+          });
+        } catch (statusError) {
+          console.warn('Failed to mark Agent template Hook assignment as unavailable:', {
+            workspaceId: workspace.id,
+            hookId: hookRef.id,
+            error: statusError instanceof Error ? statusError.message : String(statusError),
+          });
+        }
+      }
+      snapshots.push({ ...hookRef, installStatus: 'failed', failureCode: 'resource_install_failed' });
+      warnings.push({
+        type: 'hook',
+        id: hookRef.id,
+        name: hookRef.name,
+        unavailableReason: message,
+      });
+    }
+  }
+  return { snapshots, warnings };
+}
+
 async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, user }) {
   if (templateId == null || templateId === '') return null;
 
@@ -111,6 +208,8 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
   });
   const appliedSkills = [];
   const appliedMcps = [];
+  const hookSnapshots = [];
+  const templateMcpOverrides = {};
   const warnings = [...(snapshot.unavailableCapabilities || [])];
 
   const instructions = (snapshot.template.claudeMarkdown ?? snapshot.template.agentMarkdown ?? '').trim();
@@ -165,6 +264,16 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
         presetId: preset.id,
         templateId: snapshot.template.id,
       });
+      multitenancyDb.mcpInstalls.updateToolSettings({
+        workspaceId: workspace.id,
+        presetId: preset.id,
+        toolSettings: preset.toolSettings || {},
+      });
+      if (preset.toolSettings) {
+        if (preset.serverName && Object.keys(preset.toolSettings.tools || {}).length > 0) {
+          templateMcpOverrides[preset.serverName] = { tools: preset.toolSettings.tools };
+        }
+      }
       appliedMcps.push(preset);
     } catch (error) {
       warnings.push({
@@ -176,10 +285,28 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
     }
   }
 
+  if (Object.keys(templateMcpOverrides).length > 0) {
+    await mergeMcpToolOverridesConfig(workspace.path, templateMcpOverrides);
+  }
+
+  const hookInstall = await applyAgentTemplateHooksToWorkspace({
+    hooks: snapshot.hooks,
+    templateId: snapshot.template.id,
+    workspace,
+    user,
+  });
+  hookSnapshots.push(...hookInstall.snapshots);
+  warnings.push(...hookInstall.warnings);
+
   agentTemplateService.saveWorkspaceSnapshot({
     workspaceId: workspace.id,
     userId: user.id,
-    snapshot: { ...snapshot, skills: appliedSkills, mcps: appliedMcps },
+    snapshot: {
+      ...snapshot,
+      skills: appliedSkills,
+      mcps: appliedMcps,
+      hooks: hookSnapshots,
+    },
   });
 
   if (warnings.length > 0) {
