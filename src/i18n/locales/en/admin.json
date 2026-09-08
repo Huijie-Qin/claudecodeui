@@ -575,8 +575,8 @@
       }
     },
     "bindings": {
-      "title": "Set user visibility",
-      "manage": "User scope",
+      "title": "Set user scope and defaults",
+      "manage": "Users & activation",
       "boundCountShort": "Visible to {{count}}",
       "boundTenantCountShort": "{{count}} tenants (dynamic)",
       "allUsersShort": "Visible to all users",
@@ -589,9 +589,9 @@
         "all_users": "All users"
       },
       "scopeHints": {
-        "users": "Only selected users can see this Hook in Settings; each user decides whether to enable it.",
+        "users": "Selected users can use this Hook and inherit the activation and chat display defaults below.",
         "tenants": "Every active member of the selected tenants can see this Hook in Settings; future tenant members are included automatically.",
-        "all_users": "Every active user can see this Hook in Settings and decide whether to enable it."
+        "all_users": "All active users can use this Hook, including future users."
       },
       "search": "Search username",
       "searchTenant": "Search tenant name or code",
@@ -605,21 +605,25 @@
       "inactive": "Inactive",
       "tenantUsers": "{{count}} members",
       "allUsersTitle": "Visible to all users",
-      "allUsersDescription": "All {{count}} active users can choose whether to enable this Hook in Settings; future active users can also see it.",
+      "allUsersDescription": "Currently covers {{count}} active users; future active users will inherit these defaults.",
       "selectionSummary": {
         "users": "{{count}} users selected",
         "tenants": "{{count}} tenants selected",
         "all_users": "Currently covers {{count}} active users"
       },
       "clear": "Clear selection",
-      "save": "Save scope",
+      "save": "Save settings",
       "savedScopes": {
-        "users": "Specific-user visibility saved",
-        "tenants": "Dynamic tenant bindings saved",
-        "all_users": "Visible to all users"
+        "users": "User scope and defaults saved",
+        "tenants": "User scope and defaults saved",
+        "all_users": "User scope and defaults saved"
       },
       "loadError": "Failed to load Hook user scope",
-      "saveError": "Failed to save Hook user scope"
+      "saveError": "Failed to save Hook user scope",
+      "defaultEnabled": "Enable directly for users in scope",
+      "defaultEnabledHint": "Users do not need to enable this Hook manually. Future users in scope inherit this default. Personal choices and workspace template settings take precedence; required personal variables must be filled in first.",
+      "defaultShowInChat": "Show in chat by default",
+      "defaultShowInChatHint": "When off, the Hook still runs but its execution records are hidden in chat by default. Users can change their display preference."
     },
     "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",

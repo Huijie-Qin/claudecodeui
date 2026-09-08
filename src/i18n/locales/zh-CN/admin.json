@@ -529,8 +529,8 @@
       }
     },
     "bindings": {
-      "title": "设置用户可见范围",
-      "manage": "用户范围",
+      "title": "设置用户范围与默认行为",
+      "manage": "用户与启用",
       "boundCountShort": "{{count}} 人可见",
       "boundTenantCountShort": "{{count}} 个租户（动态）",
       "allUsersShort": "全部用户可见",
@@ -543,9 +543,9 @@
         "all_users": "全部用户"
       },
       "scopeHints": {
-        "users": "只有选中的用户能在设置中看到此 Hook；是否启用由用户自己决定。",
+        "users": "选定用户可使用此 Hook，并继承下方的默认启用和对话展示设置。",
         "tenants": "所选租户的全部有效成员都能在设置中看到此 Hook；以后加入租户的新用户也会自动获得可见权限。",
-        "all_users": "全部有效用户都能在设置中看到此 Hook；是否启用由用户自己决定。"
+        "all_users": "全部有效用户均可使用此 Hook，包括以后新增的用户。"
       },
       "search": "搜索用户名",
       "searchTenant": "搜索租户名称或编码",
@@ -559,21 +559,25 @@
       "inactive": "已停用",
       "tenantUsers": "{{count}} 名成员",
       "allUsersTitle": "对全部用户可见",
-      "allUsersDescription": "当前 {{count}} 名有效用户都可以在设置中选择是否开启此 Hook；以后新增并激活的用户也可看到。",
+      "allUsersDescription": "当前覆盖 {{count}} 名有效用户；以后新增并激活的用户也会继承这里的默认设置。",
       "selectionSummary": {
         "users": "已选择 {{count}} 人",
         "tenants": "已选择 {{count}} 个租户",
         "all_users": "当前覆盖 {{count}} 名有效用户"
       },
       "clear": "清空选择",
-      "save": "保存范围",
+      "save": "保存配置",
       "savedScopes": {
-        "users": "已保存指定用户可见范围",
-        "tenants": "已保存租户动态绑定",
-        "all_users": "已设为全部用户可见"
+        "users": "已保存用户范围与默认行为",
+        "tenants": "已保存用户范围与默认行为",
+        "all_users": "已保存用户范围与默认行为"
       },
       "loadError": "加载 Hook 用户范围失败",
-      "saveError": "保存 Hook 用户范围失败"
+      "saveError": "保存 Hook 用户范围失败",
+      "defaultEnabled": "为范围内用户直接启用",
+      "defaultEnabledHint": "开启后，无需用户手动启用；新加入范围的用户也会自动继承。保留已有个人选择和工作区模板设置；缺少必填个人变量时需先补齐。",
+      "defaultShowInChat": "默认在对话中展示",
+      "defaultShowInChatHint": "关闭后，Hook 仍会执行，但默认不在对话中展示执行记录。用户可自行调整展示设置。"
     },
     "deleteTitle": "删除 Hook",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",

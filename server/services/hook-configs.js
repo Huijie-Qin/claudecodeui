@@ -657,6 +657,8 @@ function mapHookRow(row) {
     userVariables: normalizeHookUserVariables(parseJson(row.user_variables_json, [])),
     status: row.status,
     activationScope: row.activation_scope === 'all_users' ? 'all_users' : 'manual',
+    defaultEnabled: row.default_enabled === 1,
+    defaultShowInChat: row.default_show_in_chat !== 0,
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
     eventName: row.event_name,
     matcher: parseJson(row.matcher_json, {}),
@@ -1298,12 +1300,13 @@ export function createHookConfigService({
           WHERE legacy_binding.hook_id = h.id
             AND legacy_binding.user_id = ?
         ) AS legacy_user_enabled,
+        user_opt_out.user_id AS opted_out_user_id,
         COALESCE((
           SELECT preference.show_in_chat
           FROM user_hook_preferences preference
           WHERE preference.hook_id = h.id
             AND preference.user_id = ?
-        ), 1) AS legacy_show_in_chat,
+        ), h.default_show_in_chat) AS legacy_show_in_chat,
         workspace_assignment.hook_version AS assignment_hook_version,
         workspace_assignment.source AS assignment_source,
         workspace_assignment.source_template_id AS assignment_source_template_id,
@@ -1322,6 +1325,8 @@ export function createHookConfigService({
           SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
         ) AS has_data_records
       FROM hooks h
+      LEFT JOIN user_hook_opt_outs user_opt_out
+        ON user_opt_out.hook_id = h.id AND user_opt_out.user_id = ?
       LEFT JOIN workspace_hook_assignments workspace_assignment
         ON workspace_assignment.hook_id = h.id
        AND workspace_assignment.workspace_id = ?
@@ -1364,6 +1369,7 @@ export function createHookConfigService({
     `).all(
       normalizedUserId,
       normalizedUserId,
+      normalizedUserId,
       workspace.id,
       workspace.id,
       normalizedUserId,
@@ -1394,7 +1400,8 @@ export function createHookConfigService({
       const versionHook = assignment
         ? getPublishedHookVersion({ hookId: row.id, version: assignment.hookVersion })
         : null;
-      const hook = versionHook || mapHookRow(row);
+      const latestHook = mapHookRow(row);
+      const hook = versionHook || latestHook;
       const versionReady = !assignment || Boolean(
         versionHook
         && !versionHook.revokedAt
@@ -1403,22 +1410,27 @@ export function createHookConfigService({
       const explicitEnabled = row.workspace_user_enabled == null
         ? null
         : row.workspace_user_enabled === 1;
+      // Personal enablement installs a shared pinned version, but must not
+      // erase the administrator defaults for other eligible members.
+      const inheritsAdminDefaults = assignment?.source === 'manual'
+        && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
+      const adminEnabled = row.default_enabled === 1 && row.opted_out_user_id == null;
       let enabled;
       if (hook.bindingController === 'sql_check') {
         enabled = row.legacy_user_enabled === 1;
       } else if (assignment) {
         enabled = explicitEnabled == null
-          ? assignment.defaultEnabled
+          ? assignment.defaultEnabled || (inheritsAdminDefaults && adminEnabled)
           : explicitEnabled || !assignment.allowUserDisable;
         enabled = enabled && versionReady;
       } else {
         enabled = explicitEnabled == null
-          ? row.legacy_user_enabled === 1
+          ? row.legacy_user_enabled === 1 || adminEnabled
           : explicitEnabled;
       }
       const showInChat = row.workspace_user_show_in_chat != null
         ? row.workspace_user_show_in_chat === 1
-        : assignment
+        : assignment && !inheritsAdminDefaults
           ? assignment.defaultShowInChat
           : row.legacy_show_in_chat !== 0;
       let unavailableReason = null;
@@ -2048,6 +2060,72 @@ export function createHookConfigService({
       }),
     };
   };
+  const listAvailableHooksForUser = (userId) => {
+    const rows = database
+      .prepare(
+        `
+      SELECT h.*,
+        (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
+        (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
+        (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count,
+        EXISTS (
+          SELECT 1 FROM user_hook_bindings enabled_binding
+          WHERE enabled_binding.hook_id = h.id
+            AND enabled_binding.user_id = ?
+        ) AS user_enabled,
+        user_opt_out.user_id AS opted_out_user_id,
+        COALESCE((
+          SELECT preference.show_in_chat
+          FROM user_hook_preferences preference
+          WHERE preference.hook_id = h.id
+            AND preference.user_id = ?
+        ), h.default_show_in_chat) AS user_show_in_chat,
+        EXISTS (
+          SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
+        ) AS has_data_records
+      FROM hooks h
+      LEFT JOIN user_hook_opt_outs user_opt_out
+        ON user_opt_out.hook_id = h.id AND user_opt_out.user_id = ?
+      WHERE h.status = 'published'
+        AND (
+          h.binding_controller = 'sql_check'
+          OR (
+            h.binding_controller = 'admin'
+            AND (
+              h.activation_scope = 'all_users'
+              OR EXISTS (
+                SELECT 1
+                FROM hook_user_scopes scope
+                WHERE scope.hook_id = h.id
+                  AND scope.user_id = ?
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM hook_tenant_bindings tenant_scope
+                INNER JOIN tenant_users membership
+                  ON membership.tenant_id = tenant_scope.tenant_id
+                 AND membership.user_id = ?
+                 AND membership.status = 'active'
+                INNER JOIN tenants tenant
+                  ON tenant.id = tenant_scope.tenant_id
+                 AND tenant.status = 'active'
+                WHERE tenant_scope.hook_id = h.id
+              )
+            )
+          )
+        )
+      ORDER BY h.updated_at DESC, h.created_at DESC
+    `,
+      )
+      .all(userId, userId, userId, userId, userId);
+    return rows.map((row) => ({
+      ...mapHookRow(row),
+      enabled: (row.user_enabled === 1 || (row.binding_controller === 'admin' && row.default_enabled === 1 && row.opted_out_user_id == null))
+        && !normalizeHookUserVariables(parseJson(row.user_variables_json, [])).some((variable) => variable.required),
+      showInChat: row.user_show_in_chat !== 0,
+    }));
+  };
+
   return {
     listHooks: () => {
       const rows = database
@@ -2160,125 +2238,23 @@ export function createHookConfigService({
       `).get(workspace.id, normalizedUserId, String(hookId));
       if (preference?.show_in_chat != null) return preference.show_in_chat !== 0;
       const assignment = getWorkspaceHookAssignment({ workspaceId: workspace.id, hookId });
-      if (assignment) return assignment.defaultShowInChat;
+      const hook = getHook(hookId);
+      const inheritsAdminDefaults = assignment?.source === 'manual' && hook
+        && isAdminHookAvailableToUser({ hook, userId: normalizedUserId, tenantId: workspace.tenantId });
+      if (assignment && !inheritsAdminDefaults) return assignment.defaultShowInChat;
       const legacyPreference = database.prepare(`
         SELECT show_in_chat
         FROM user_hook_preferences
         WHERE user_id = ? AND hook_id = ?
       `).get(normalizedUserId, String(hookId));
-      return legacyPreference?.show_in_chat !== 0;
+      return (legacyPreference?.show_in_chat ?? getRow(hookId)?.default_show_in_chat) !== 0;
     },
 
-    listAvailableHooksForUser: (userId) => {
-      const rows = database
-        .prepare(
-          `
-        SELECT h.*,
-          (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
-          (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
-          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_bindings WHERE all_tenant_bindings.hook_id = h.id) AS bound_tenant_count,
-          EXISTS (
-            SELECT 1 FROM user_hook_bindings enabled_binding
-            WHERE enabled_binding.hook_id = h.id
-              AND enabled_binding.user_id = ?
-          ) AS user_enabled,
-          COALESCE((
-            SELECT preference.show_in_chat
-            FROM user_hook_preferences preference
-            WHERE preference.hook_id = h.id
-              AND preference.user_id = ?
-          ), 1) AS user_show_in_chat,
-          EXISTS (
-            SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
-          ) AS has_data_records
-        FROM hooks h
-        WHERE h.status = 'published'
-          AND (
-            h.binding_controller = 'sql_check'
-            OR (
-              h.binding_controller = 'admin'
-              AND (
-                h.activation_scope = 'all_users'
-                OR EXISTS (
-                  SELECT 1
-                  FROM hook_user_scopes scope
-                  WHERE scope.hook_id = h.id
-                    AND scope.user_id = ?
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM hook_tenant_bindings tenant_scope
-                  INNER JOIN tenant_users membership
-                    ON membership.tenant_id = tenant_scope.tenant_id
-                   AND membership.user_id = ?
-                   AND membership.status = 'active'
-                  INNER JOIN tenants tenant
-                    ON tenant.id = tenant_scope.tenant_id
-                   AND tenant.status = 'active'
-                  WHERE tenant_scope.hook_id = h.id
-                )
-              )
-            )
-          )
-        ORDER BY h.updated_at DESC, h.created_at DESC
-      `,
-        )
-        .all(userId, userId, userId, userId);
-      return rows.map((row) => ({
-        ...mapHookRow(row),
-        enabled: row.user_enabled === 1,
-        showInChat: row.user_show_in_chat !== 0,
-      }));
-    },
+    listAvailableHooksForUser,
 
-    listActiveHooksForUser: (userId) => {
-      const rows = database.prepare(`
-        SELECT h.*,
-          (SELECT COUNT(*) FROM user_hook_bindings all_bindings WHERE all_bindings.hook_id = h.id) AS bound_user_count,
-          (SELECT COUNT(*) FROM hook_user_scopes all_scopes WHERE all_scopes.hook_id = h.id) AS scoped_user_count,
-          (SELECT COUNT(*) FROM hook_tenant_bindings all_tenant_scopes WHERE all_tenant_scopes.hook_id = h.id) AS bound_tenant_count,
-          COALESCE((
-            SELECT preference.show_in_chat
-            FROM user_hook_preferences preference
-            WHERE preference.hook_id = h.id
-              AND preference.user_id = ?
-          ), 1) AS user_show_in_chat,
-          EXISTS (
-            SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
-          ) AS has_data_records
-        FROM hooks h
-        INNER JOIN user_hook_bindings binding
-          ON binding.hook_id = h.id
-         AND binding.user_id = ?
-        WHERE h.status = 'published'
-          AND (
-            h.binding_controller = 'sql_check'
-            OR h.activation_scope = 'all_users'
-            OR EXISTS (
-              SELECT 1 FROM hook_user_scopes scope
-              WHERE scope.hook_id = h.id
-                AND scope.user_id = ?
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM hook_tenant_bindings tenant_scope
-              INNER JOIN tenant_users membership
-                ON membership.tenant_id = tenant_scope.tenant_id
-               AND membership.user_id = ?
-               AND membership.status = 'active'
-              INNER JOIN tenants tenant
-                ON tenant.id = tenant_scope.tenant_id
-               AND tenant.status = 'active'
-              WHERE tenant_scope.hook_id = h.id
-            )
-          )
-        ORDER BY h.updated_at DESC, h.created_at DESC
-      `).all(userId, userId, userId, userId);
-      return rows.map((row) => ({
-        ...mapHookRow(row),
-        showInChat: row.user_show_in_chat !== 0,
-      }));
-    },
+    listActiveHooksForUser: (userId) => listAvailableHooksForUser(userId)
+      .filter((hook) => hook.enabled)
+      .map(({ enabled: _enabled, ...hook }) => hook),
 
     getHook,
 
@@ -2296,25 +2272,30 @@ export function createHookConfigService({
           users.is_active,
           users.is_system_admin,
           CASE WHEN scope.user_id IS NULL THEN 0 ELSE 1 END AS is_scoped,
-          CASE WHEN enabled.user_id IS NULL THEN 0 ELSE 1 END AS is_enabled
+          CASE WHEN enabled.user_id IS NULL THEN 0 ELSE 1 END AS is_enabled,
+          user_opt_out.user_id AS opted_out_user_id
         FROM users
         LEFT JOIN hook_user_scopes scope
           ON scope.user_id = users.id
          AND scope.hook_id = ?
+        LEFT JOIN user_hook_opt_outs user_opt_out
+          ON user_opt_out.user_id = users.id AND user_opt_out.hook_id = ?
         LEFT JOIN user_hook_bindings enabled
           ON enabled.user_id = users.id
          AND enabled.hook_id = ?
         ORDER BY users.username COLLATE NOCASE ASC, users.id ASC
       `,
         )
-        .all(hookId, hookId)
+        .all(hookId, hookId, hookId)
         .map((row) => ({
           id: row.id,
           username: row.username,
           isActive: row.is_active === 1,
           isSystemAdmin: row.is_system_admin === 1,
           bound: row.is_scoped === 1,
-          enabled: row.is_enabled === 1,
+          enabled: !hook.userVariables.some((variable) => variable.required) && (row.is_enabled === 1
+            || (hook.defaultEnabled && row.opted_out_user_id == null
+              && isAdminHookAvailableToUser({ hook, userId: row.id }))),
         }));
       const tenants = database
         .prepare(
@@ -2356,12 +2337,14 @@ export function createHookConfigService({
           : hook.boundTenantCount > 0
             ? 'tenants'
             : 'users',
+        defaultEnabled: hook.defaultEnabled,
+        defaultShowInChat: hook.defaultShowInChat,
         users,
         tenants,
       };
     },
 
-    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], boundBy }) => {
+    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, boundBy }) => {
       const hook = requireHook(hookId);
       if (hook.bindingController === 'sql_check') {
         throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
@@ -2371,6 +2354,12 @@ export function createHookConfigService({
       }
       if (!['users', 'tenants', 'all_users'].includes(scope)) {
         throw createHttpError('scope must be users, tenants, or all_users');
+      }
+      if (defaultEnabled !== undefined && typeof defaultEnabled !== 'boolean') {
+        throw createHttpError('defaultEnabled must be a boolean');
+      }
+      if (defaultShowInChat !== undefined && typeof defaultShowInChat !== 'boolean') {
+        throw createHttpError('defaultShowInChat must be a boolean');
       }
       if (!Array.isArray(userIds)) throw createHttpError('userIds must be an array');
       if (!Array.isArray(tenantIds)) throw createHttpError('tenantIds must be an array');
@@ -2452,11 +2441,18 @@ export function createHookConfigService({
           .prepare(
             `
           UPDATE hooks
-          SET activation_scope = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+          SET activation_scope = ?, default_enabled = ?, default_show_in_chat = ?,
+              updated_at = CURRENT_TIMESTAMP, updated_by = ?
           WHERE id = ?
         `,
           )
-          .run(scope === 'all_users' ? 'all_users' : 'manual', boundBy, hookId);
+          .run(
+            scope === 'all_users' ? 'all_users' : 'manual',
+            (defaultEnabled ?? hook.defaultEnabled) ? 1 : 0,
+            (defaultShowInChat ?? hook.defaultShowInChat) ? 1 : 0,
+            boundBy,
+            hookId,
+          );
       });
       replace();
       return {
@@ -2481,18 +2477,24 @@ export function createHookConfigService({
       if (enabled && hook.userVariables.some((variable) => variable.required)) {
         throw createHttpError('请在工作区辅助功能中填写个人变量后启用此 Hook', 409);
       }
-      if (enabled) {
-        database.prepare(`
-          INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
-          VALUES (?, ?, ?)
-          ON CONFLICT(user_id, hook_id) DO UPDATE SET
-            bound_by = excluded.bound_by,
-            updated_at = CURRENT_TIMESTAMP
-        `).run(normalizedUserId, hookId, normalizedUserId);
-      } else {
-        database.prepare('DELETE FROM user_hook_bindings WHERE user_id = ? AND hook_id = ?')
-          .run(normalizedUserId, hookId);
-      }
+      database.transaction(() => {
+        if (enabled) {
+          database.prepare('DELETE FROM user_hook_opt_outs WHERE user_id = ? AND hook_id = ?')
+            .run(normalizedUserId, hookId);
+          database.prepare(`
+            INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, hook_id) DO UPDATE SET
+              bound_by = excluded.bound_by,
+              updated_at = CURRENT_TIMESTAMP
+          `).run(normalizedUserId, hookId, normalizedUserId);
+        } else {
+          database.prepare('DELETE FROM user_hook_bindings WHERE user_id = ? AND hook_id = ?')
+            .run(normalizedUserId, hookId);
+          database.prepare('INSERT OR IGNORE INTO user_hook_opt_outs (user_id, hook_id) VALUES (?, ?)')
+            .run(normalizedUserId, hookId);
+        }
+      })();
       return {
         hookId,
         enabled,
@@ -2537,7 +2539,7 @@ export function createHookConfigService({
         FROM user_hook_preferences
         WHERE user_id = ? AND hook_id = ?
       `).get(normalizedUserId, hookId);
-      return preference?.show_in_chat !== 0;
+      return (preference?.show_in_chat ?? getRow(hookId)?.default_show_in_chat) !== 0;
     },
 
     getSqlCheckEnforcement,

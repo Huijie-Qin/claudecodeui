@@ -16,6 +16,7 @@ import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createHookConfigService } from './hook-configs.js';
 import { executeHookScript } from './hook-script-executor.js';
+import { createHookRuntimeSession } from './hook-runtime.js';
 
 const MCP_LOOP_TERMINATION_SCRIPT = `async def run(event, ccui):
     status = (event.get("result") or {}).get("status")
@@ -323,6 +324,161 @@ function createTenantScopedWorkspaceHookFixture() {
     beta: { userId: 2, tenantId: 20, workspaceId: 200 },
   };
 }
+
+test('admin defaults directly enable selected users and hidden Hooks still execute and record data', async () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hook-admin-defaults-'));
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({
+      extensionLogic: null,
+      postActions: [{ id: 'record', type: 'write_record', config: {
+        recordType: 'admin_default_execution',
+        fields: { status: { source: 'literal', value: 'done' } },
+      } }],
+    }) });
+    service.publishHook({ hookId, userId: 1 });
+    const saved = service.replaceHookBindings({
+      hookId, userIds: [2], defaultEnabled: true, defaultShowInChat: false, boundBy: 1,
+    });
+    assert.equal(saved.hook.defaultEnabled, true);
+    assert.equal(saved.hook.defaultShowInChat, false);
+    const bindings = service.listHookBindings(hookId);
+    assert.equal(bindings.defaultEnabled, true);
+    assert.equal(bindings.defaultShowInChat, false);
+    assert.equal(bindings.users.find((user) => user.id === 2).enabled, true);
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
+    assert.deepEqual(service.listEffectiveHooksForContext({ ...alpha, userId: 1 }), []);
+    assert.equal(service.listActiveHooksForUser(2)[0].showInChat, false);
+    for (const context of [alpha, beta]) {
+      assert.equal(service.listEffectiveHooksForContext(context)[0].showInChat, false);
+      assert.equal(service.getUserHookChatVisibility({ ...context, hookId }), false);
+      assert.equal(service.getWorkspaceUserHookChatVisibility({ ...context, hookId }), false);
+    }
+    assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), false);
+    const hook = service.listEffectiveHooksForContext(alpha)[0];
+    const runtime = createHookRuntimeSession({ hooks: [hook], ...alpha, workspaceRoot, database });
+    await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'admin-defaults', last_assistant_message: 'done' });
+    const record = database.prepare('SELECT record_type, data_json FROM hook_data_records WHERE hook_id = ?').get(hookId);
+    assert.equal(record.record_type, 'admin_default_execution');
+    assert.deepEqual(JSON.parse(record.data_json), { status: 'done' });
+    assert.equal(database.prepare('SELECT status FROM hook_executions WHERE hook_id = ?').get(hookId).status, 'succeeded');
+  } finally {
+    database.close();
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('admin tenant and all-user defaults include future users while keeping tenant scope and validation', () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.replaceHookBindings({ hookId, scope: 'tenants', tenantIds: [10], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].id, hookId);
+    assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
+    database.prepare("INSERT INTO users (id, username) VALUES (3, 'future-member')").run();
+    database.prepare("INSERT INTO tenant_users (tenant_id, user_id, status) VALUES (10, 3, 'active')").run();
+    assert.equal(service.listActiveHooksForUser(3)[0].showInChat, false);
+    assert.equal(service.listEffectiveHooksForContext({ ...alpha, userId: 3 })[0].id, hookId);
+    database.prepare("UPDATE tenant_users SET status = 'disabled' WHERE tenant_id = 10 AND user_id = 3").run();
+    assert.deepEqual(service.listActiveHooksForUser(3), []);
+    assert.deepEqual(service.listEffectiveHooksForContext({ ...alpha, userId: 3 }), []);
+    const before = service.listHookBindings(hookId);
+    for (const invalid of [{ defaultEnabled: 'true' }, { defaultShowInChat: 0 }, { defaultShowInChat: null }]) {
+      assert.throws(() => service.replaceHookBindings({ hookId, scope: 'all_users', boundBy: 1, ...invalid }), { statusCode: 400 });
+      assert.deepEqual(service.listHookBindings(hookId), before);
+    }
+    // Older clients that only save scope must not reset defaults.
+    service.replaceHookBindings({ hookId, scope: 'all_users', boundBy: 1 });
+    database.prepare("INSERT INTO users (id, username) VALUES (4, 'future-global-member')").run();
+    assert.equal(service.listActiveHooksForUser(4)[0].showInChat, false);
+    assert.equal(service.listEffectiveHooksForContext(beta)[0].showInChat, false);
+    service.replaceHookBindings({ hookId, userIds: [], boundBy: 1 });
+    assert.deepEqual(service.listActiveHooksForUser(4), []);
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+  } finally { database.close(); }
+});
+
+test('personal opt-outs and chat choices override admin defaults without affecting other users or projects', () => {
+  const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    service.setUserHookEnabled({ hookId, userId: 2, enabled: false });
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    assert.equal(service.listActiveHooksForUser(1)[0].id, hookId);
+    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, boundBy: 1 });
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+    service.setUserHookEnabled({ hookId, userId: 2, enabled: true });
+    assert.equal(service.listActiveHooksForUser(2)[0].showInChat, false);
+    service.setUserHookChatVisibility({ hookId, userId: 2, showInChat: true });
+    assert.equal(service.listActiveHooksForUser(2)[0].showInChat, true);
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, true);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    assert.equal(service.listEffectiveHooksForContext(alphaSecond)[0].id, hookId);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false });
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
+    assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), false);
+    // The manual install by user 2 must not turn off auto-enablement for user 1.
+    assert.equal(service.listEffectiveHooksForContext({ ...alpha, userId: 1 })[0].showInChat, false);
+    assert.equal(service.listEffectiveHooksForContext(alphaSecond)[0].showInChat, true);
+    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: false, defaultShowInChat: true, boundBy: 1 });
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
+    assert.equal(service.listActiveHooksForUser(2)[0].id, hookId);
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
+  } finally { database.close(); }
+});
+
+test('template defaults and unavailable pinned versions take precedence over administrator defaults', () => {
+  const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, source: 'agent_template', sourceTemplateId: 88,
+      defaultEnabled: false, defaultShowInChat: true, installStatus: 'ready', createdBy: 1 });
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, false);
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, true);
+    assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), true);
+    assert.equal(service.listEffectiveHooksForContext(beta)[0].showInChat, false);
+    service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: true });
+    service.markWorkspaceHookAssignmentFailed({ workspaceId: beta.workspaceId, hookId, error: 'missing resource' });
+    assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
+  } finally { database.close(); }
+});
+
+test('direct enablement waits for required personal variables', () => {
+  const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: [{ name: 'token', required: true, secret: true }] }) });
+    service.publishHook({ hookId, userId: 1 });
+    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    assert.deepEqual(service.listAvailableHooksForContext(alpha)[0].missingRequiredUserVariables, ['token']);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'test-token' } });
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
+    assert.deepEqual(service.listEffectiveHooksForContext(alphaSecond), []);
+  } finally { database.close(); }
+});
+
+test('admin Hook defaults migrate safely and persist across repeated startup migrations', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    service.publishHook({ hookId: hook.id, userId: 1 });
+    database.exec('ALTER TABLE hooks DROP COLUMN default_enabled; ALTER TABLE hooks DROP COLUMN default_show_in_chat; DROP TABLE user_hook_opt_outs;');
+    migrateHookConfigurationModel(database);
+    assert.equal(service.getHook(hook.id).defaultEnabled, false);
+    assert.equal(service.getHook(hook.id).defaultShowInChat, true);
+    service.replaceHookBindings({ hookId: hook.id, scope: 'all_users', defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    service.setUserHookEnabled({ hookId: hook.id, userId: 2, enabled: false });
+    migrateHookConfigurationModel(database);
+    migrateHookActivationModel(database);
+    assert.equal(service.getHook(hook.id).defaultEnabled, true);
+    assert.equal(service.getHook(hook.id).defaultShowInChat, false);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
+    assert.equal(service.listActiveHooksForUser(1)[0].showInChat, false);
+  } finally { database.close(); }
+});
 
 test('workspace Hook tenant scopes use the current project tenant while legacy visibility stays user-wide', () => {
   const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
@@ -1856,7 +2012,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat'],
+      ['id', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
     );
     assert.equal(
       database

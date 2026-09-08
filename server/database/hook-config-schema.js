@@ -190,6 +190,8 @@ CREATE TABLE IF NOT EXISTS hooks (
   post_actions_json TEXT NOT NULL DEFAULT '[]',
   claude_response_json TEXT NOT NULL DEFAULT '{"bindings":{}}',
   show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1)),
+  default_enabled INTEGER NOT NULL DEFAULT 0 CHECK (default_enabled IN (0, 1)),
+  default_show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (default_show_in_chat IN (0, 1)),
   version INTEGER NOT NULL DEFAULT 0,
   activation_scope TEXT NOT NULL DEFAULT 'manual' CHECK (activation_scope IN ('manual', 'all_users')),
   binding_controller TEXT NOT NULL DEFAULT 'admin' CHECK (binding_controller IN ('admin', 'sql_check')),
@@ -255,6 +257,15 @@ CREATE TABLE IF NOT EXISTS user_hook_preferences (
 
 CREATE INDEX IF NOT EXISTS idx_user_hook_preferences_hook
   ON user_hook_preferences(hook_id, user_id);
+
+-- Keep a user's explicit opt-out separate from administrator defaults.
+CREATE TABLE IF NOT EXISTS user_hook_opt_outs (
+  user_id INTEGER NOT NULL,
+  hook_id TEXT NOT NULL,
+  PRIMARY KEY (user_id, hook_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+);
 
 -- Project defaults are separate from a member's project-specific override.
 -- Legacy user_hook_bindings remain as a compatibility fallback and continue
@@ -450,7 +461,20 @@ export function migrateHookConfigurationModel(database) {
         ADD COLUMN show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (show_in_chat IN (0, 1))
       `);
     }
+    if (!columns.some((column) => column.name === 'default_enabled')) {
+      database.exec('ALTER TABLE hooks ADD COLUMN default_enabled INTEGER NOT NULL DEFAULT 0 CHECK (default_enabled IN (0, 1))');
+    }
+    if (!columns.some((column) => column.name === 'default_show_in_chat')) {
+      database.exec('ALTER TABLE hooks ADD COLUMN default_show_in_chat INTEGER NOT NULL DEFAULT 1 CHECK (default_show_in_chat IN (0, 1))');
+    }
     database.exec(`
+      CREATE TABLE IF NOT EXISTS user_hook_opt_outs (
+        user_id INTEGER NOT NULL,
+        hook_id TEXT NOT NULL,
+        PRIMARY KEY (user_id, hook_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS user_hook_preferences (
         user_id INTEGER NOT NULL,
         hook_id TEXT NOT NULL,

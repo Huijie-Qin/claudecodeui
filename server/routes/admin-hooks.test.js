@@ -397,7 +397,7 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
   const tenants = [
     { id: 3, code: 'tenant-3', name: 'Tenant 3', active: true, activeUserCount: 2, bound: false },
   ];
-  const bindings = { scope: 'users', users, tenants };
+  const bindings = { scope: 'users', defaultEnabled: true, defaultShowInChat: false, users, tenants };
   const router = createRouter({
     hookConfigs: {
       listHookBindings: (hookId) => {
@@ -416,6 +416,8 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
   assert.equal(listed.response.status, 200);
   assert.equal(seen.listHookId, 'hook-1');
   assert.equal(listed.payload.scope, 'users');
+  assert.equal(listed.payload.defaultEnabled, true);
+  assert.equal(listed.payload.defaultShowInChat, false);
   assert.deepEqual(listed.payload.users, users);
   assert.deepEqual(listed.payload.tenants, tenants);
 
@@ -429,12 +431,14 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
     scope: 'tenants',
     userIds: [],
     tenantIds: [3],
+    defaultEnabled: undefined,
+    defaultShowInChat: undefined,
     boundBy: 9,
   });
 
   const updated = await requestJson(router, '/hooks/hook-1/bindings', {
     method: 'PUT',
-    body: { scope: 'all_users', userIds: [], tenantIds: [] },
+    body: { scope: 'all_users', userIds: [], tenantIds: [], defaultEnabled: true, defaultShowInChat: false },
   });
   assert.equal(updated.response.status, 200);
   assert.deepEqual(seen.replace, {
@@ -442,6 +446,8 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
     scope: 'all_users',
     userIds: [],
     tenantIds: [],
+    defaultEnabled: true,
+    defaultShowInChat: false,
     boundBy: 9,
   });
   assert.equal(updated.payload.scope, 'all_users');

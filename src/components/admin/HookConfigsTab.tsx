@@ -556,6 +556,8 @@ function SkillDeleteDialog({
 function HookUserBindingsDialog({
   hook,
   scope,
+  defaultEnabled,
+  defaultShowInChat,
   users,
   tenants,
   selectedUserIds,
@@ -565,6 +567,8 @@ function HookUserBindingsDialog({
   error,
   onClose,
   onScopeChange,
+  onDefaultEnabledChange,
+  onDefaultShowInChatChange,
   onToggle,
   onToggleTenant,
   onBatchChange,
@@ -573,6 +577,8 @@ function HookUserBindingsDialog({
 }: {
   hook: HookConfig | null;
   scope: HookBindingScope;
+  defaultEnabled: boolean;
+  defaultShowInChat: boolean;
   users: HookBindingUser[];
   tenants: HookBindingTenant[];
   selectedUserIds: number[];
@@ -582,6 +588,8 @@ function HookUserBindingsDialog({
   error: string | null;
   onClose: () => void;
   onScopeChange: (scope: HookBindingScope) => void;
+  onDefaultEnabledChange: (enabled: boolean) => void;
+  onDefaultShowInChatChange: (showInChat: boolean) => void;
   onToggle: (userId: number) => void;
   onToggleTenant: (tenantId: number) => void;
   onBatchChange: (ids: number[], selected: boolean) => void;
@@ -631,10 +639,10 @@ function HookUserBindingsDialog({
   ];
 
   return (
-    <Dialog open={Boolean(hook)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[86vh] max-w-xl overflow-hidden p-0">
+    <Dialog open={Boolean(hook)} onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
+      <DialogContent className="flex max-h-[86vh] max-w-xl flex-col overflow-hidden p-0">
         <DialogTitle className="sr-only">{t('hooks.bindings.title')}</DialogTitle>
-        <div className="border-b border-border bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4">
+        <div className="shrink-0 border-b border-border bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4">
           <div className="flex items-start gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
               <UsersRound className="h-5 w-5" />
@@ -643,7 +651,7 @@ function HookUserBindingsDialog({
               <h3 className="text-sm font-semibold text-foreground">{t('hooks.bindings.title')}</h3>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{hook?.name}</p>
             </div>
-            <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label={t('hooks.close')}>
+            <Button type="button" variant="ghost" size="icon" onClick={onClose} disabled={saving} aria-label={t('hooks.close')}>
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -653,7 +661,7 @@ function HookUserBindingsDialog({
           </div>
         </div>
 
-        <div className="space-y-3 p-4 sm:p-5">
+        <div className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-5">
           <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/60 p-1.5">
             {scopeOptions.map((option) => {
               const Icon = option.icon;
@@ -662,6 +670,7 @@ function HookUserBindingsDialog({
                 <button
                   key={option.value}
                   type="button"
+                  disabled={loading || saving}
                   onClick={() => {
                     setQuery('');
                     onScopeChange(option.value);
@@ -678,6 +687,35 @@ function HookUserBindingsDialog({
                 </button>
               );
             })}
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-border p-3">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={defaultEnabled}
+                disabled={loading || saving}
+                onChange={(event) => onDefaultEnabledChange(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
+              />
+              <span>
+                <span className="block text-xs font-medium">{t('hooks.bindings.defaultEnabled')}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{t('hooks.bindings.defaultEnabledHint')}</span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={defaultShowInChat}
+                disabled={loading || saving}
+                onChange={(event) => onDefaultShowInChatChange(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
+              />
+              <span>
+                <span className="block text-xs font-medium">{t('hooks.bindings.defaultShowInChat')}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{t('hooks.bindings.defaultShowInChatHint')}</span>
+              </span>
+            </label>
           </div>
 
           {error ? (
@@ -759,7 +797,7 @@ function HookUserBindingsDialog({
                   <input
                     type="checkbox"
                     checked={checked}
-                    disabled={cannotAdd}
+                    disabled={cannotAdd || saving}
                     onChange={() => onToggle(user.id)}
                     className="h-4 w-4 rounded border-input accent-primary"
                   />
@@ -792,7 +830,7 @@ function HookUserBindingsDialog({
                   <input
                     type="checkbox"
                     checked={checked}
-                    disabled={cannotAdd}
+                    disabled={cannotAdd || saving}
                     onChange={() => onToggleTenant(tenant.id)}
                     className="h-4 w-4 rounded border-input accent-primary"
                   />
@@ -814,7 +852,7 @@ function HookUserBindingsDialog({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/10 px-5 py-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-muted/10 px-5 py-3">
           <span className="mr-auto text-xs text-muted-foreground">
             {t(`hooks.bindings.selectionSummary.${scope}`, { count: selectionCount })}
           </span>
@@ -1130,6 +1168,8 @@ export default function HookConfigsTab() {
   const [activeView, setActiveView] = useState<'configs' | 'diagnostics'>('configs');
   const [bindingsHook, setBindingsHook] = useState<HookConfig | null>(null);
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
+  const [bindingDefaultEnabled, setBindingDefaultEnabled] = useState(false);
+  const [bindingDefaultShowInChat, setBindingDefaultShowInChat] = useState(true);
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
   const [bindingTenants, setBindingTenants] = useState<HookBindingTenant[]>([]);
   const [selectedBindingUserIds, setSelectedBindingUserIds] = useState<number[]>([]);
@@ -1311,6 +1351,8 @@ export default function HookConfigsTab() {
   const openHookBindings = async (hook: HookConfig) => {
     setBindingsHook(hook);
     setBindingScope('users');
+    setBindingDefaultEnabled(false);
+    setBindingDefaultShowInChat(true);
     setBindingUsers([]);
     setBindingTenants([]);
     setSelectedBindingUserIds([]);
@@ -1322,12 +1364,16 @@ export default function HookConfigsTab() {
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.loadError')));
       const payload = await response.json() as {
         scope?: HookBindingScope;
+        defaultEnabled?: boolean;
+        defaultShowInChat?: boolean;
         users?: HookBindingUser[];
         tenants?: HookBindingTenant[];
       };
       const users = payload.users || [];
       const tenants = payload.tenants || [];
       setBindingScope(payload.scope || 'users');
+      setBindingDefaultEnabled(payload.defaultEnabled === true);
+      setBindingDefaultShowInChat(payload.defaultShowInChat !== false);
       setBindingUsers(users);
       setBindingTenants(tenants);
       setSelectedBindingUserIds(users.filter((user) => user.bound).map((user) => user.id));
@@ -1348,6 +1394,8 @@ export default function HookConfigsTab() {
         scope: bindingScope,
         userIds: bindingScope === 'users' ? selectedBindingUserIds : [],
         tenantIds: bindingScope === 'tenants' ? selectedBindingTenantIds : [],
+        defaultEnabled: bindingDefaultEnabled,
+        defaultShowInChat: bindingDefaultShowInChat,
       });
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.saveError')));
       const payload = await response.json() as { hook: HookConfig };
@@ -1755,6 +1803,8 @@ export default function HookConfigsTab() {
     <HookUserBindingsDialog
       hook={bindingsHook}
       scope={bindingScope}
+      defaultEnabled={bindingDefaultEnabled}
+      defaultShowInChat={bindingDefaultShowInChat}
       users={bindingUsers}
       tenants={bindingTenants}
       selectedUserIds={selectedBindingUserIds}
@@ -1772,6 +1822,8 @@ export default function HookConfigsTab() {
         setBindingsError(null);
       }}
       onScopeChange={setBindingScope}
+      onDefaultEnabledChange={setBindingDefaultEnabled}
+      onDefaultShowInChatChange={setBindingDefaultShowInChat}
       onToggle={(userId) => setSelectedBindingUserIds((current) => (
         current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]
       ))}

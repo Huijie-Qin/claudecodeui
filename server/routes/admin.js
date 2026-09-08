@@ -887,6 +887,8 @@ export function createAdminRouter(
         scope: req.body?.scope,
         userIds: req.body?.userIds,
         tenantIds: req.body?.tenantIds,
+        defaultEnabled: req.body?.defaultEnabled,
+        defaultShowInChat: req.body?.defaultShowInChat,
         boundBy: req.user.id,
       }));
     } catch (error) {
