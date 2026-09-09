@@ -83,9 +83,11 @@ test('new batches preserve the existing folders and reject duplicate root names'
 test('saved metadata counts toward size and survives appending uploads without loading file contents', async () => {
   const existing: AgentTemplateFolder[] = [{
     name: 'saved-rules',
-    version: 'b'.repeat(64),
     directories: ['empty'],
-    files: [{ path: 'rule.md', size: 1234, sha256: 'a'.repeat(64) }],
+    files: [{
+      path: 'rule.md', size: 1234, sha256: 'a'.repeat(64),
+      storagePath: 'templates/3/folders/saved-rules/rule.md',
+    }],
   }];
   const before = structuredClone(existing);
   const added = await readTemplateFolderFiles([uploadFile('new-rules/rule.md', 'new')], existing);
@@ -93,8 +95,10 @@ test('saved metadata counts toward size and survives appending uploads without l
   assert.equal(folders.reduce((total, folder) => total + templateFolderBytes(folder), 0), 1237);
   assert.deepEqual(existing, before);
   assert.deepEqual(JSON.parse(JSON.stringify(folders))[0], before[0]);
+  assert.equal(folders[0].files[0].storagePath, before[0].files[0].storagePath);
   assert.equal(Object.prototype.hasOwnProperty.call(folders[0].files[0], 'contentBase64'), false);
   assert.equal(added[0].files[0].contentBase64, 'bmV3');
+  assert.equal(Object.prototype.hasOwnProperty.call(added[0].files[0], 'storagePath'), false);
   assert.equal(templateFolderBytes({
     name: 'mixed', directories: [], files: [...existing[0].files, ...added[0].files],
   }), 1237);
@@ -127,7 +131,10 @@ test('enforces aggregate byte and root limits across existing and added folders 
   const existing = [{ name: 'rules', directories: [], files: [{ path: 'one.txt', contentBase64: 'YQ==' }] }];
   await assert.rejects(readTemplateFolderFiles([file], existing), /文件总大小不能超过/);
   const stored: AgentTemplateFolder[] = [{
-    name: 'saved-rules', directories: [], files: [{ path: 'one.txt', size: 1, sha256: 'a'.repeat(64) }],
+    name: 'saved-rules', directories: [], files: [{
+      path: 'one.txt', size: 1, sha256: 'a'.repeat(64),
+      storagePath: 'templates/3/folders/saved-rules/one.txt',
+    }],
   }];
   await assert.rejects(readTemplateFolderFiles([file], stored), /文件总大小不能超过/);
   const mixed = [...stored, ...existing];

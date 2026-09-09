@@ -1,21 +1,82 @@
+import { createHash } from 'node:crypto';
+
 import { agentTemplateFolderAssetStore } from '../services/agent-template-folder-assets.js';
 import { normalizeTemplateFolders } from '../services/agent-template-folders.js';
 
-/** Return migrated metadata, or null when the record already contains no inline files. */
-export function migrateStoredTemplateFolderJson(value, {
-  folderAssets = agentTemplateFolderAssetStore,
-} = {}) {
-  const folders = JSON.parse(value || '[]');
-  const hasInlineContent = Array.isArray(folders) && folders.some((folder) => (
-    Array.isArray(folder?.files) && folder.files.some((file) => (
-      file !== null && typeof file === 'object' && Object.hasOwn(file, 'contentBase64')
-    ))
-  ));
-  if (!hasInlineContent) return null;
-  return folderAssets.persistFolders(normalizeTemplateFolders(folders), { trusted: true });
+/** Workspace history records what was copied; it never points back to mutable template files. */
+export function toTemplateFolderAudit(value = []) {
+  return normalizeTemplateFolders(value).map((folder) => ({
+    name: folder.name,
+    directories: folder.directories,
+    files: folder.files.map((file) => {
+      if (!Object.hasOwn(file, 'contentBase64')) {
+        return { path: file.path, size: file.size, sha256: file.sha256 };
+      }
+      const bytes = Buffer.from(file.contentBase64, 'base64');
+      return { path: file.path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    }),
+  }));
 }
 
-/** Migrate one record at a time so historical snapshots never load as one large batch. */
+export function needsTemplateFolderStorageMigration(value, {
+  folderAssets = agentTemplateFolderAssetStore,
+  templateId,
+} = {}) {
+  const rawFolders = JSON.parse(value || '[]');
+  const folders = normalizeTemplateFolders(rawFolders);
+  if (folders.length === 0) return false;
+  if (rawFolders.some((folder) => Object.hasOwn(folder, 'version'))) return true;
+  if (folders.some((folder) => folder.files.some((file) => (
+    Object.hasOwn(file, 'contentBase64')
+    || file.storagePath !== `templates/${templateId}/folders/${folder.name}/${file.path}`
+  )))) return true;
+  if (folders.some((folder) => folder.files.length > 0)) return false;
+  // Empty legacy folders have no file paths with which to distinguish the old format.
+  return !folderAssets.isCurrentTemplate(folders, { templateId });
+}
+
+/** Keep the current directory and database row in step, with the SQLite writer lock held. */
+export function withAgentTemplateFolderUpdate(database, folderAssets, operation) {
+  let change;
+  const replaceFolders = (folders, options) => {
+    if (change) throw new Error('Only one template folder replacement is allowed per transaction');
+    change = folderAssets.beginUpdate(folders, options);
+    return change.folders;
+  };
+  const rollbackFolders = () => {
+    if (!change) return;
+    change.rollback();
+    change = undefined;
+  };
+  let result;
+  try {
+    result = database.transaction(() => {
+      try {
+        return operation({ replaceFolders, rollbackFolders });
+      } catch (error) {
+        // Restore files before releasing the writer lock, so another process sees a consistent row and directory.
+        try {
+          rollbackFolders();
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], 'Template save failed and its file rollback also failed');
+        }
+        throw error;
+      }
+    }).immediate();
+  } catch (error) {
+    try {
+      rollbackFolders();
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], 'Template save failed and its file rollback also failed');
+    }
+    throw error;
+  }
+  // The database has committed. A cleanup failure must not restore obsolete files over its row.
+  change?.commit();
+  return result;
+}
+
+/** Migrate one record at a time; historical snapshots only become audit metadata. */
 export function migrateAgentTemplateFolderStorage(database, {
   folderAssets = agentTemplateFolderAssetStore,
   onError,
@@ -29,9 +90,7 @@ export function migrateAgentTemplateFolderStorage(database, {
     if (!columns.some((column) => column.name === 'claude_folders_json')) continue;
     const next = database.prepare(`
       SELECT ${keyColumn} AS migration_id, claude_folders_json
-      FROM ${tableName}
-      WHERE ${keyColumn} > ?
-      ORDER BY ${keyColumn} ASC LIMIT 1
+      FROM ${tableName} WHERE ${keyColumn} > ? ORDER BY ${keyColumn} ASC LIMIT 1
     `);
     const update = database.prepare(`
       UPDATE ${tableName} SET claude_folders_json = ?
@@ -41,15 +100,29 @@ export function migrateAgentTemplateFolderStorage(database, {
     for (let row; (row = next.get(lastId));) {
       lastId = row.migration_id;
       try {
-        const metadata = migrateStoredTemplateFolderJson(row.claude_folders_json, { folderAssets });
-        if (metadata === null) continue;
-        // Persisting all bytes must succeed before replacing the only inline copy.
-        const result = update.run(JSON.stringify(metadata), row.migration_id, row.claude_folders_json);
-        migrated[countKey] += result.changes;
+        if (countKey === 'snapshots') {
+          const auditJson = JSON.stringify(toTemplateFolderAudit(JSON.parse(row.claude_folders_json || '[]')));
+          if (auditJson !== row.claude_folders_json) {
+            migrated.snapshots += update.run(auditJson, row.migration_id, row.claude_folders_json).changes;
+          }
+          continue;
+        }
+        migrated.templates += withAgentTemplateFolderUpdate(database, folderAssets, ({ replaceFolders, rollbackFolders }) => {
+          const current = database.prepare('SELECT id, name, claude_folders_json FROM agent_templates WHERE id = ?')
+            .get(row.migration_id);
+          if (!current || !needsTemplateFolderStorageMigration(current.claude_folders_json, {
+            folderAssets, templateId: current.id,
+          })) return 0;
+          const metadata = replaceFolders(normalizeTemplateFolders(JSON.parse(current.claude_folders_json)), {
+            templateId: current.id, templateName: current.name, trusted: true,
+          });
+          const result = update.run(JSON.stringify(metadata), current.id, current.claude_folders_json);
+          if (result.changes === 0) rollbackFolders();
+          return result.changes;
+        });
       } catch (cause) {
         const error = new Error(`Failed to migrate Agent template folders in ${tableName} (${row.migration_id}): ${cause.message}`, { cause });
         if (typeof onError !== 'function') throw error;
-        // Server startup reports a bad row but can still migrate healthy rows and other schemas.
         onError(error);
       }
     }

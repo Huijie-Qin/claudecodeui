@@ -53,8 +53,11 @@ test('Agent template details return folder metadata and require system admin acc
     id: 3,
     name: 'Folder template',
     claudeFolders: [{
-      name: 'rules', directories: [], version: 'a'.repeat(64),
-      files: [{ path: 'rule.md', size: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' }],
+      name: 'rules', directories: [],
+      files: [{
+        path: 'rule.md', size: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        storagePath: 'templates/3/folders/rules/rule.md',
+      }],
     }],
   };
   const router = createRouter({

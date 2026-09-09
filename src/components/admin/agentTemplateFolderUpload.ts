@@ -10,12 +10,14 @@ export type AgentTemplateUploadedFile = {
   contentBase64: string;
   size?: never;
   sha256?: never;
+  storagePath?: never;
 };
 
 export type AgentTemplateStoredFile = {
   path: string;
   size: number;
   sha256: string;
+  storagePath: string;
   contentBase64?: never;
 };
 
@@ -23,10 +25,9 @@ export type AgentTemplateFolder = {
   name: string;
   directories: string[];
   files: Array<AgentTemplateUploadedFile | AgentTemplateStoredFile>;
-  version?: string;
 };
 
-export type AgentTemplateUploadedFolder = Omit<AgentTemplateFolder, 'files' | 'version'> & {
+export type AgentTemplateUploadedFolder = Omit<AgentTemplateFolder, 'files'> & {
   files: AgentTemplateUploadedFile[];
 };
 

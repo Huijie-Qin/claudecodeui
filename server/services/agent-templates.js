@@ -1,6 +1,10 @@
 import { db } from '../database/db.js';
 import { isMcpParameterValueCompatible } from '../../shared/mcpParameterValue.js';
-import { migrateStoredTemplateFolderJson } from '../database/agent-template-folder-migration.js';
+import {
+  needsTemplateFolderStorageMigration,
+  toTemplateFolderAudit,
+  withAgentTemplateFolderUpdate,
+} from '../database/agent-template-folder-migration.js';
 
 import { normalizeTemplateFolders } from './agent-template-folders.js';
 import { agentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
@@ -390,21 +394,33 @@ export function createAgentTemplateService(database = db, {
   folderAssets = agentTemplateFolderAssetStore,
 } = {}) {
   const getTemplate = (templateId) => {
-    const row = database.prepare(`
-      SELECT * FROM agent_templates WHERE id = ?
-    `).get(positiveInteger(templateId, 'templateId'));
-    if (!row) return null;
-    const metadata = migrateStoredTemplateFolderJson(row.claude_folders_json, { folderAssets });
-    if (metadata !== null) {
+    const normalizedId = positiveInteger(templateId, 'templateId');
+    const readRow = () => database.prepare('SELECT * FROM agent_templates WHERE id = ?').get(normalizedId);
+    const needsMigration = (row) => needsTemplateFolderStorageMigration(row.claude_folders_json, {
+      folderAssets, templateId: normalizedId,
+    });
+    const initial = readRow();
+    if (!initial || !needsMigration(initial)) return hydrateTemplate(initial);
+    const retry = Symbol('template changed during folder migration');
+    const result = withAgentTemplateFolderUpdate(database, folderAssets, ({ replaceFolders, rollbackFolders }) => {
+      const row = readRow();
+      if (!row || !needsMigration(row)) return hydrateTemplate(row);
+      const metadata = replaceFolders(normalizeTemplateFolders(JSON.parse(row.claude_folders_json)), {
+        templateId: normalizedId, templateName: row.name, trusted: true,
+      });
       const metadataJson = JSON.stringify(metadata);
-      const result = database.prepare(`
+      const updated = database.prepare(`
         UPDATE agent_templates SET claude_folders_json = ?
         WHERE id = ? AND claude_folders_json = ?
       `).run(metadataJson, row.id, row.claude_folders_json);
-      if (result.changes === 0) return getTemplate(row.id);
+      if (updated.changes === 0) {
+        rollbackFolders();
+        return retry;
+      }
       row.claude_folders_json = metadataJson;
-    }
-    return hydrateTemplate(row);
+      return hydrateTemplate(row);
+    });
+    return result === retry ? getTemplate(normalizedId) : result;
   };
 
   const getWorkspaceTemplateInfo = ({ workspaceId }) => {
@@ -760,63 +776,54 @@ export function createAgentTemplateService(database = db, {
 
   const saveTemplate = ({ templateId = null, input, userId }) => {
     const normalizedUserId = positiveInteger(userId, 'userId');
-    const existing = templateId == null ? null : getTemplate(templateId);
-    if (templateId != null && !existing) throw createHttpError('Agent template not found', 404);
-    const values = normalizeInput(input || {}, existing);
-    assertUniqueTemplateName(values.name, existing?.id ?? null);
-    values.category = ensureCategory({ name: values.category, userId: normalizedUserId }).name;
-    values.claudeFolders = folderAssets.persistFolders(values.claudeFolders, {
-      existingFolders: existing?.claudeFolders ?? [],
+    return withAgentTemplateFolderUpdate(database, folderAssets, ({ replaceFolders }) => {
+      const existing = templateId == null ? null : hydrateTemplate(database.prepare(
+        'SELECT * FROM agent_templates WHERE id = ?',
+      ).get(positiveInteger(templateId, 'templateId')));
+      if (templateId != null && !existing) throw createHttpError('Agent template not found', 404);
+      const values = normalizeInput(input || {}, existing);
+      assertUniqueTemplateName(values.name, existing?.id ?? null);
+      values.category = ensureCategory({ name: values.category, userId: normalizedUserId }).name;
+      let savedTemplateId = existing?.id;
+      if (!existing) {
+        const result = database.prepare(`
+          INSERT INTO agent_templates (
+            name, category, summary, agent_markdown, guide_text, tenant_ids_json,
+            skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, claude_folders_json, global_visible,
+            status, created_by_user_id, updated_by_user_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        `).run(
+          values.name, values.category, values.summary, values.claudeMarkdown, values.guideText,
+          JSON.stringify(values.tenantIds), JSON.stringify(values.skillPresetRefs),
+          JSON.stringify(values.mcpPresetRefs), JSON.stringify(values.hookRefs), '[]',
+          values.globalVisible ? 1 : 0, normalizedUserId, normalizedUserId,
+        );
+        savedTemplateId = Number(result.lastInsertRowid);
+      }
+      values.claudeFolders = replaceFolders(values.claudeFolders, {
+        templateId: savedTemplateId, templateName: values.name,
+        existingFolders: existing?.claudeFolders ?? [],
+      });
+      if (!existing) {
+        database.prepare('UPDATE agent_templates SET claude_folders_json = ? WHERE id = ?')
+          .run(JSON.stringify(values.claudeFolders), savedTemplateId);
+      } else {
+        database.prepare(`
+          UPDATE agent_templates SET
+            name = ?, category = ?, summary = ?, agent_markdown = ?, guide_text = ?,
+            tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?, hook_refs_json = ?,
+            claude_folders_json = ?, global_visible = ?, status = 'draft', updated_by_user_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(
+          values.name, values.category, values.summary, values.claudeMarkdown, values.guideText,
+          JSON.stringify(values.tenantIds), JSON.stringify(values.skillPresetRefs),
+          JSON.stringify(values.mcpPresetRefs), JSON.stringify(values.hookRefs),
+          JSON.stringify(values.claudeFolders), values.globalVisible ? 1 : 0, normalizedUserId, savedTemplateId,
+        );
+      }
+      return hydrateTemplate(database.prepare('SELECT * FROM agent_templates WHERE id = ?').get(savedTemplateId));
     });
-
-    if (!existing) {
-      const result = database.prepare(`
-        INSERT INTO agent_templates (
-          name, category, summary, agent_markdown, guide_text, tenant_ids_json,
-          skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, claude_folders_json, global_visible,
-          status, created_by_user_id, updated_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-      `).run(
-        values.name,
-        values.category,
-        values.summary,
-        values.claudeMarkdown,
-        values.guideText,
-        JSON.stringify(values.tenantIds),
-        JSON.stringify(values.skillPresetRefs),
-        JSON.stringify(values.mcpPresetRefs),
-        JSON.stringify(values.hookRefs),
-        JSON.stringify(values.claudeFolders),
-        values.globalVisible ? 1 : 0,
-        normalizedUserId,
-        normalizedUserId,
-      );
-      return getTemplate(result.lastInsertRowid);
-    }
-
-    database.prepare(`
-      UPDATE agent_templates SET
-        name = ?, category = ?, summary = ?, agent_markdown = ?, guide_text = ?,
-        tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?, hook_refs_json = ?,
-        claude_folders_json = ?, global_visible = ?, status = 'draft', updated_by_user_id = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      values.name,
-      values.category,
-      values.summary,
-      values.claudeMarkdown,
-      values.guideText,
-      JSON.stringify(values.tenantIds),
-      JSON.stringify(values.skillPresetRefs),
-      JSON.stringify(values.mcpPresetRefs),
-      JSON.stringify(values.hookRefs),
-      JSON.stringify(values.claudeFolders),
-      values.globalVisible ? 1 : 0,
-      normalizedUserId,
-      existing.id,
-    );
-    return getTemplate(existing.id);
   };
 
   const publishTemplate = ({ templateId, userId, hookResourceCatalog = null }) => {
@@ -1017,10 +1024,7 @@ export function createAgentTemplateService(database = db, {
     saveWorkspaceSnapshot: ({ workspaceId, userId, snapshot }) => {
       const normalizedWorkspaceId = positiveInteger(workspaceId, 'workspaceId');
       const normalizedUserId = positiveInteger(userId, 'userId');
-      const claudeFolders = folderAssets.persistFolders(
-        normalizeTemplateFolders(snapshot.template.claudeFolders || []),
-        { trusted: true },
-      );
+      const claudeFolders = toTemplateFolderAudit(snapshot.template.claudeFolders || []);
       database.prepare(`
         INSERT INTO workspace_agent_template_snapshots (
           workspace_id, template_id, template_name, template_updated_at,
