@@ -286,6 +286,9 @@ function normalizeMatcher(value, eventName) {
 
 function normalizeExtensionLogic(value) {
   if (!isPlainObject(value)) return null;
+  if (value.failClosed !== undefined && typeof value.failClosed !== 'boolean') {
+    throw createHttpError('extensionLogic.failClosed must be boolean');
+  }
   const code = typeof value.code === 'string' ? value.code : '';
   if (Buffer.byteLength(code, 'utf8') > MAX_SCRIPT_BYTES) {
     throw createHttpError('extensionLogic.code is too large');
@@ -320,6 +323,7 @@ function normalizeExtensionLogic(value) {
     language: value.language === 'python' ? 'python' : 'javascript',
     code,
     outputs,
+    ...(value.failClosed === undefined ? {} : { failClosed: value.failClosed }),
   };
 }
 

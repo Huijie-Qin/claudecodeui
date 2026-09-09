@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>区域经营日报</title>
+  <style>
+    body { margin: 0; background: #f5f7fa; color: #142132; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 960px; margin: 40px auto; padding: 24px; }
+    .report-header { border-bottom: 3px solid #2463a6; margin-bottom: 28px; }
+    .report-section { background: white; border: 1px solid #d9e1eb; border-radius: 12px; padding: 24px; margin-top: 20px; }
+    .metrics { display: flex; flex-wrap: wrap; gap: 32px; }
+    .metric-label { color: #526579; font-size: 14px; }
+    .metric-value { font-size: 28px; font-weight: 650; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; border-bottom: 1px solid #d9e1eb; text-align: left; }
+    th { background: #edf3fb; }
+    .report-note { color: #526579; font-size: 14px; }
+  </style>
+</head>
+<body>
+<main>
+  <header class="report-header">
+    <h1>区域经营日报</h1>
+    <p>统计日期：<span data-field="report-period">2026-09-08</span></p>
+  </header>
+  <section id="overview" class="report-section">
+    <h2>经营概览</h2>
+    <div class="metrics">
+      <div><div class="metric-label">收入合计（元）</div><div class="metric-value" data-field="total-revenue">1000.00</div></div>
+      <div><div class="metric-label">订单合计（笔）</div><div class="metric-value" data-field="total-orders">2</div></div>
+    </div>
+  </section>
+  <section id="regional-results" class="report-section">
+    <h2>区域明细</h2>
+    <div class="table-scroll">
+      <table data-table="regional-results">
+        <thead><tr><th>区域</th><th>收入（元）</th><th>订单数</th></tr></thead>
+        <tbody>
+          <tr><td>华东</td><td>800.00</td><td>1</td></tr>
+          <tr><td>华南</td><td>200.00</td><td>1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="report-note" data-field="data-note">口径：按当日已支付订单汇总，零值表示当日无已支付订单。</p>
+  </section>
+</main>
+</body>
+</html>

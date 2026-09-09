@@ -867,6 +867,8 @@
     },
     "script": {
       "enable": "Enable advanced script",
+      "failClosed": "Stop with a failed check if this Hook encounters an error",
+      "failClosedHint": "For Stop Hooks only. Execution errors terminate the task with an explicit check failure instead of allowing completion without verification.",
       "optional": "Enable this only when basic actions cannot express the requirement.",
       "outputsCount": "{{count}} output fields",
       "availableInputs": "Available inputs",

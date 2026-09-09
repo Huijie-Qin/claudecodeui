@@ -2,6 +2,8 @@
 .github
 .husky
 .claude
+!examples/report-quality/.claude
+!examples/report-quality/.claude/**
 .cloudcli-data
 
 node_modules

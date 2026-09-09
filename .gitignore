@@ -103,6 +103,8 @@ temp/
 
 # AI specific
 .claude/
+!examples/report-quality/.claude/
+!examples/report-quality/.claude/**
 .cursor/
 .roo/
 .taskmaster/

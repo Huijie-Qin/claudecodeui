@@ -470,7 +470,7 @@ test('Hook example endpoints list choices and create only the selected drafts', 
 
   const catalog = await requestJson(router, '/hooks/examples');
   assert.equal(catalog.response.status, 200);
-  assert.equal(catalog.payload.examples.length, 5);
+  assert.equal(catalog.payload.examples.length, 6);
   assert.equal(catalog.payload.examples.every((example) => example.exists === false), true);
 
   const selectedIds = catalog.payload.examples.map((example) => example.id);
@@ -480,7 +480,7 @@ test('Hook example endpoints list choices and create only the selected drafts', 
   });
 
   assert.equal(response.status, 201);
-  assert.equal(payload.createdCount, 5);
+  assert.equal(payload.createdCount, 6);
   assert.equal(payload.hooks.every((hook) => hook.status === 'draft'), true);
   const sqlCheckExample = payload.hooks.find((hook) => hook.name.includes('SQL Check'));
   const sqlRecordExample = payload.hooks.find((hook) => hook.name.includes('SQL 行数'));

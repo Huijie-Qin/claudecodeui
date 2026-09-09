@@ -1,3 +1,5 @@
+import { REPORT_QUALITY_HOOK_EXAMPLE } from './report-quality-hook.js';
+
 const SQL_EXTRACTION_SCRIPT_LINES = [
   "  const message = String(event.last_assistant_message || '');",
   "  const sqlKeywords = '(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE|REPLACE|UPSERT|TRUNCATE|EXPLAIN|SHOW|DESCRIBE|PRAGMA|GRANT|REVOKE|CALL|EXECUTE|VALUES|VACUUM)';",
@@ -270,6 +272,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
     }],
     claudeResponse: { bindings: {} },
   },
+  REPORT_QUALITY_HOOK_EXAMPLE,
 ]);
 
 function cloneExample(example) {

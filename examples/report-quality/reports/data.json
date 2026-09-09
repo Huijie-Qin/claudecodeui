@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "title": "区域经营日报",
+  "fields": {
+    "report-period": "2026-09-09",
+    "total-revenue": "1234.50",
+    "total-orders": 3,
+    "data-note": "口径：按当日已支付订单汇总，零值表示当日无已支付订单。"
+  },
+  "tables": {
+    "regional-results": {
+      "headers": ["区域", "收入（元）", "订单数"],
+      "rows": [
+        ["华东", "1234.50", 3],
+        ["华南", "0.00", 0]
+      ]
+    }
+  }
+}

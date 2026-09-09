@@ -1564,6 +1564,9 @@ export default function HookConfigEditor({
                     updateDraft({
                       eventName,
                       matcher: {},
+                      extensionLogic: hook.extensionLogic
+                        ? { ...hook.extensionLogic, failClosed: eventName === 'Stop' ? hook.extensionLogic.failClosed : undefined }
+                        : null,
                       postActions: eventName === 'Stop' || eventName === 'StopFailure'
                         ? hook.postActions
                         : hook.postActions.filter((action) => (
@@ -1664,6 +1667,23 @@ export default function HookConfigEditor({
           >
             {hook.extensionLogic ? (
               <div className="space-y-4">
+                {hook.eventName === 'Stop' && (
+                  <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                    <input
+                      type="checkbox"
+                      checked={hook.extensionLogic.failClosed === true}
+                      disabled={busy}
+                      onChange={(event) => updateDraft({
+                        extensionLogic: { ...hook.extensionLogic!, failClosed: event.target.checked },
+                      })}
+                      className="mt-0.5 h-4 w-4 rounded border-input accent-primary"
+                    />
+                    <span className="space-y-1">
+                      <span className="block text-xs font-medium text-foreground">{t('hooks.script.failClosed')}</span>
+                      <span className="block text-xs leading-5 text-muted-foreground">{t('hooks.script.failClosedHint')}</span>
+                    </span>
+                  </label>
+                )}
                 <ScriptOutputsEditor
                   outputs={hook.extensionLogic.outputs}
                   onChange={(outputs) => updateDraft({ extensionLogic: { ...hook.extensionLogic!, outputs } })}
@@ -1679,6 +1699,7 @@ export default function HookConfigEditor({
                             key={item}
                             type="button"
                             onClick={() => updateDraft({ extensionLogic: {
+                              ...hook.extensionLogic!,
                               language: item,
                               outputs: hook.extensionLogic!.outputs,
                               code: buildTemplate(hook.eventName, item, hook.extensionLogic!.outputs),

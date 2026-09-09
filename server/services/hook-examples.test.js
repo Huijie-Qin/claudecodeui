@@ -33,7 +33,7 @@ function createHarness(initialHooks = []) {
   };
 }
 
-test('requested Hook presets create five ready-to-edit drafts with configured resources', () => {
+test('requested Hook presets create ready-to-edit drafts with configured resources', () => {
   const harness = createHarness();
   const result = createRequestedHookExamples({
     hookConfigs: harness.hookConfigs,
@@ -41,7 +41,7 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
     exampleIds: REQUESTED_HOOK_EXAMPLES.map((example) => example.id),
   });
 
-  assert.equal(result.createdCount, 5);
+  assert.equal(result.createdCount, REQUESTED_HOOK_EXAMPLES.length);
   assert.equal(result.skippedCount, 0);
   assert.deepEqual(result.visibleEvents, ['Stop', 'StopFailure']);
   assert.equal(result.hooks.every((hook) => hook.status === 'draft'), true);
@@ -199,11 +199,11 @@ test('creating Hook examples is idempotent and never overwrites an existing exam
   const first = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
   const second = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
 
-  assert.equal(first.createdCount, 4);
+  assert.equal(first.createdCount, REQUESTED_HOOK_EXAMPLES.length - 1);
   assert.equal(first.skippedCount, 1);
   assert.equal(second.createdCount, 0);
-  assert.equal(second.skippedCount, 5);
-  assert.equal(harness.hooks.length, 5);
+  assert.equal(second.skippedCount, REQUESTED_HOOK_EXAMPLES.length);
+  assert.equal(harness.hooks.length, REQUESTED_HOOK_EXAMPLES.length);
   assert.equal(harness.hooks[0].description, '管理员已经修改的说明');
 });
 

@@ -93,6 +93,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/dist-server ./dist-server
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/examples/report-quality ./examples/report-quality
 COPY scripts/docker-entrypoint.sh /usr/local/bin/cloudcli-docker-entrypoint
 
 RUN sed -i 's/\r$//' /usr/local/bin/cloudcli-docker-entrypoint \

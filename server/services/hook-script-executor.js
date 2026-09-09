@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -17,6 +18,7 @@ const HOOK_SCRIPT_API_METHODS = Object.freeze([
   'workspace.writeJson',
   'workspace.list',
   'workspace.exists',
+  'workspace.sha256',
   'records.write',
   'log.info',
 ]);
@@ -89,6 +91,13 @@ function requireText(value, name, maxBytes = MAX_FILE_BYTES) {
 
 function createScriptApiHandler({ workspaceRoot, onRecord, onLog }) {
   return async (method, args) => {
+    if (method === 'workspace.sha256') {
+      const { target } = await resolveWorkspacePath(workspaceRoot, args[0]);
+      const stats = await fs.stat(target);
+      if (!stats.isFile()) throw new Error('Workspace path is not a file');
+      if (stats.size > MAX_FILE_BYTES) throw new Error('Workspace file is larger than 2 MB');
+      return createHash('sha256').update(await fs.readFile(target)).digest('hex');
+    }
     if (method === 'workspace.readText') {
       const { target } = await resolveWorkspacePath(workspaceRoot, args[0]);
       const stats = await fs.stat(target);

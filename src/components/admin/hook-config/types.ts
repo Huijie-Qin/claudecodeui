@@ -48,6 +48,7 @@ export type HookExtensionLogic = {
   language: HookScriptLanguage;
   code: string;
   outputs: HookScriptOutput[];
+  failClosed?: boolean;
 };
 
 export type HookValueBinding =

@@ -13,6 +13,7 @@
     "dist/",
     "dist-server/",
     "scripts/",
+    "examples/report-quality/",
     "README.md"
   ],
   "homepage": "https://cloudcli.ai",
@@ -45,6 +46,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "test:codehub": "node --test server/services/codehub-git.test.js",
     "test:hooks": "node --test --test-force-exit --test-isolation=none server/routes/admin-hooks.test.js server/services/claude-turn-boundary.test.js server/services/hook-builtin-skills.test.js server/services/hook-configs.test.js server/services/hook-examples.test.js server/services/hook-mcp-catalog.test.js server/services/hook-mcp-client.test.js server/services/hook-runtime.test.js server/services/hook-skill-catalog.test.js server/services/hook-workspace-resources.test.js && node --test --test-force-exit --test-isolation=none server/services/hook-scenarios.test.js && tsx --test src/components/admin/hook-config/catalog.test.ts",
+    "test:report-quality": "node --test server/services/report-quality-hook.test.js server/services/claude-hook-policy.test.js scripts/report-quality-check.test.mjs",
     "seed:hook-examples": "node scripts/configure-requested-hooks.mjs",
     "seed:hook-examples:db": "node scripts/configure-requested-hooks.mjs --direct-database",
     "seed:hook-test-configs": "node scripts/seed-hook-test-configs.js",

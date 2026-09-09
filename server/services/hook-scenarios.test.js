@@ -597,6 +597,7 @@ const FULL_MATRIX_SCRIPT_OUTPUTS = Object.freeze([
 ]);
 
 const SCRIPT_API_METHODS_EXERCISED = Object.freeze([
+  'workspace.sha256',
   'workspace.readText',
   'workspace.writeText',
   'workspace.readJson',
@@ -611,6 +612,7 @@ const JAVASCRIPT_FULL_API_SCRIPT = `export async function run(event, ccui) {
   const base = 'matrix/' + event.hook_event_name + '-javascript';
   await ccui.workspace.writeText(base + '.txt', event.hook_event_name);
   const text = await ccui.workspace.readText(base + '.txt');
+  if ((await ccui.workspace.sha256(base + '.txt')).length !== 64) throw new Error('Missing fingerprint');
   await ccui.workspace.writeJson(base + '.json', { eventName: event.hook_event_name, language: 'javascript' });
   const json = await ccui.workspace.readJson(base + '.json');
   const exists = await ccui.workspace.exists(base + '.txt');
@@ -624,6 +626,8 @@ const PYTHON_FULL_API_SCRIPT = `async def run(event, ccui):
     base = "matrix/" + event["hook_event_name"] + "-python"
     await ccui.workspace.write_text(base + ".txt", event["hook_event_name"])
     text = await ccui.workspace.read_text(base + ".txt")
+    if len(await ccui.workspace.sha256(base + ".txt")) != 64:
+        raise ValueError("Missing fingerprint")
     await ccui.workspace.write_json(base + ".json", {"eventName": event["hook_event_name"], "language": "python"})
     json_value = await ccui.workspace.read_json(base + ".json")
     exists = await ccui.workspace.exists(base + ".txt")

@@ -560,6 +560,11 @@ export function getClaudeOutputFields(eventName: HookEventName): HookOutputField
 
 export const CCUI_SCRIPT_APIS = [
   {
+    javascript: 'ccui.workspace.sha256(path)',
+    python: 'ccui.workspace.sha256(path)',
+    description: '计算工作空间内文件原始字节的 SHA-256 指纹（最大 2 MB）',
+  },
+  {
     javascript: 'ccui.workspace.readText(path)',
     python: 'ccui.workspace.read_text(path)',
     description: '读取工作空间内的 UTF-8 文本文件',
