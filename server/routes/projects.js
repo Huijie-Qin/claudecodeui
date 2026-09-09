@@ -10,6 +10,7 @@ import { userDb } from '../database/db.js';
 import { tenantContext } from '../middleware/tenant-context.js';
 import { checkOpenApiAgentList } from '../services/openapi-agent.js';
 import { agentTemplateService } from '../services/agent-templates.js';
+import { writeWorkspaceTemplateFolders } from '../services/agent-template-folders.js';
 import { hookConfigService } from '../services/hook-configs.js';
 import { hookWorkspaceResourcesService } from '../services/hook-workspace-resources.js';
 import { skillPresetService } from '../services/skill-presets.js';
@@ -218,7 +219,7 @@ export async function applyAgentTemplateSkillsToWorkspace({
   return { appliedSkills, warnings };
 }
 
-async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, user }) {
+async function applyAgentTemplateSnapshotToWorkspace({ templateId, tenant, workspace, user }) {
   if (templateId == null || templateId === '') return null;
 
   const snapshot = agentTemplateService.resolveTemplateSnapshot({
@@ -289,6 +290,8 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
   hookSnapshots.push(...hookInstall.snapshots);
   warnings.push(...hookInstall.warnings);
 
+  await writeWorkspaceTemplateFolders(workspace.path, snapshot.template.claudeFolders || []);
+
   agentTemplateService.saveWorkspaceSnapshot({
     workspaceId: workspace.id,
     userId: user.id,
@@ -313,6 +316,30 @@ async function applyAgentTemplateToWorkspace({ templateId, tenant, workspace, us
     name: snapshot.template.name,
     guideText: snapshot.template.guideText,
   };
+}
+
+export async function applyAgentTemplateToWorkspace({
+  templateId, tenant, workspace, user, removeDirectoryOnFailure = false,
+  applyTemplate = applyAgentTemplateSnapshotToWorkspace,
+  workspaceStore = multitenancyDb.workspaces,
+}) {
+  if (templateId == null || templateId === '') return null;
+  try {
+    return await applyTemplate({ templateId, tenant, workspace, user });
+  } catch (error) {
+    // A failed template must not leave an active, partially configured workspace.
+    try {
+      workspaceStore.markDeleted({ workspaceId: workspace.id });
+      // Existing directories can contain user data; only remove ones this request created.
+      if (removeDirectoryOnFailure) await fs.rm(workspace.path, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.error('Failed to clean up workspace after Agent template failure:', {
+        workspaceId: workspace.id,
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+    }
+    throw error;
+  }
 }
 
 function resolveProjectSettingsWorkspace(req, { requireEdit = false } = {}) {
@@ -759,6 +786,7 @@ router.post('/create-workspace', async (req, res) => {
           tenant,
           workspace,
           user: req.user,
+          removeDirectoryOnFailure: true,
         });
         await applyWorkspaceOwnership({
           workspaceRoot: workspace.path,
@@ -778,7 +806,7 @@ router.post('/create-workspace', async (req, res) => {
       }
 
       // Add the new workspace to the project list (no clone)
-      await fs.mkdir(absolutePath, { recursive: true });
+      const createdWorkspaceDirectory = await fs.mkdir(absolutePath, { recursive: true });
       const workspace = multitenancyDb.workspaces.createWorkspace({
         tenantId,
         ownerUserId: req.user.id,
@@ -793,6 +821,7 @@ router.post('/create-workspace', async (req, res) => {
         tenant,
         workspace,
         user: req.user,
+        removeDirectoryOnFailure: createdWorkspaceDirectory !== undefined,
       });
       await applyWorkspaceOwnership({
         workspaceRoot: workspace.path,

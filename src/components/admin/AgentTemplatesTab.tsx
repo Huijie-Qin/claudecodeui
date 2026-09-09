@@ -17,6 +17,8 @@ import {
   type MarketSkill,
   type SkillCandidate,
 } from './agentTemplateSkillCatalog';
+import AgentTemplateFolders from './AgentTemplateFolders';
+import type { AgentTemplateFolder } from './agentTemplateFolderUpload';
 
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
@@ -57,6 +59,7 @@ type AgentTemplate = {
   summary: string;
   claudeMarkdown: string;
   agentMarkdown?: string;
+  claudeFolders: AgentTemplateFolder[];
   guideText: string;
   tenantIds: number[];
   skillPresetRefs: PresetRef[];
@@ -152,6 +155,7 @@ function normalizeTemplate(template: AgentTemplate): AgentTemplate {
     id: normalizeId(template.id),
     category: template.category || '',
     claudeMarkdown: template.claudeMarkdown ?? template.agentMarkdown ?? '',
+    claudeFolders: Array.isArray(template.claudeFolders) ? template.claudeFolders : [],
     tenantIds: [...new Set((template.tenantIds || []).map(normalizeId).filter(Boolean))],
     skillPresetRefs: (template.skillPresetRefs || []).map(normalizePresetRef)
       .filter((ref) => ref.tenantId && ref.presetId),
@@ -181,6 +185,7 @@ const EMPTY_TEMPLATE: Omit<AgentTemplate, 'id'> = {
   category: '',
   summary: '',
   claudeMarkdown: '',
+  claudeFolders: [],
   guideText: '',
   tenantIds: [],
   skillPresetRefs: [],
@@ -229,6 +234,12 @@ export default function AgentTemplatesTab({
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isReadingFolders, setIsReadingFolders] = useState(false);
+  const [openingTemplateId, setOpeningTemplateId] = useState<number | null>(null);
+  const savingRef = useRef(false);
+  const readingFoldersRef = useRef(false);
+  const editorSessionRef = useRef(0);
+  const editorSession = editorSessionRef.current;
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [preparingSkillKeys, setPreparingSkillKeys] = useState<Set<string>>(() => new Set());
   const pendingSkills = useRef(new Map<string, symbol>());
@@ -355,23 +366,43 @@ export default function AgentTemplatesTab({
 
   const closeEditor = () => {
     resetSkillPreparation();
+    editorSessionRef.current += 1;
+    readingFoldersRef.current = false;
+    setIsReadingFolders(false);
     setConfiguringMcp(null);
     setEditing(null);
     setIsAddingCategory(false);
     setEditorError(null);
   };
 
-  const beginEdit = (template: AgentTemplate) => {
+  const beginEdit = async (template: AgentTemplate) => {
     resetSkillPreparation();
+    const session = ++editorSessionRef.current;
     setListError(null);
     setEditorError(null);
-    setEditing(template);
-    setIsAddingCategory(false);
-    setCatalogTenantId(template.tenantIds[0] || null);
+    setOpeningTemplateId(template.id);
+    try {
+      const payload = await readJson<{ template: AgentTemplate }>(await api.admin.getAgentTemplate(template.id));
+      if (editorSessionRef.current !== session) return;
+      const detail = normalizeTemplate({ ...payload.template, unavailableCapabilities: template.unavailableCapabilities });
+      setEditing(detail);
+      setIsAddingCategory(false);
+      setCatalogTenantId(detail.tenantIds[0] || null);
+    } catch (loadError) {
+      if (editorSessionRef.current === session) {
+        setListError(loadError instanceof Error ? loadError.message : '模板详情加载失败');
+      }
+    } finally {
+      if (editorSessionRef.current === session) setOpeningTemplateId(null);
+    }
   };
 
   const beginCreate = () => {
     resetSkillPreparation();
+    editorSessionRef.current += 1;
+    readingFoldersRef.current = false;
+    setIsReadingFolders(false);
+    setOpeningTemplateId(null);
     const initialTenantId = tenantFilterIds[0] || normalizedCurrentTenantId || activeTenants[0]?.id;
     setEditing({ ...EMPTY_TEMPLATE, tenantIds: initialTenantId ? [initialTenantId] : [] });
     setCatalogTenantId(initialTenantId || null);
@@ -574,7 +605,7 @@ export default function AgentTemplatesTab({
   };
 
   const save = async (publish = false) => {
-    if (!editing) return;
+    if (!editing || savingRef.current || readingFoldersRef.current) return;
     if (pendingSkills.current.size > 0) {
       setEditorError('Skill 正在准备中，请完成后再保存模板');
       return;
@@ -583,6 +614,7 @@ export default function AgentTemplatesTab({
       setEditorError('请选择或新建模板分类');
       return;
     }
+    savingRef.current = true;
     setIsSaving(true);
     setEditorError(null);
     try {
@@ -606,6 +638,7 @@ export default function AgentTemplatesTab({
     } catch (saveError) {
       setEditorError(saveError instanceof Error ? saveError.message : '模板保存失败');
     } finally {
+      savingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -748,8 +781,8 @@ export default function AgentTemplatesTab({
               const actionLoading = actionTemplateId === template.id;
               return (
                 <div key={template.id} className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/30">
-                  <button type="button" onClick={() => beginEdit(template)} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles className="h-5 w-5" /></span>
+                  <button type="button" onClick={() => void beginEdit(template)} disabled={openingTemplateId === template.id} className="flex min-w-0 flex-1 items-center gap-4 rounded-md px-1 py-2 text-left disabled:cursor-wait">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">{openingTemplateId === template.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}</span>
                     <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="block font-medium text-foreground">{template.name}</span><span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{template.category || '未分类'}</span>{template.hookRefs.length ? <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary"><Webhook className="h-3 w-3" />{template.hookRefs.length} Hooks</span> : null}{unavailableHooks.length ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{unavailableHooks.length} Hook 不可用</span> : null}{otherUnavailableCount > 0 ? <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />{otherUnavailableCount} 项能力不可用</span> : null}</span><span className="mt-1 block truncate text-sm text-muted-foreground">{template.summary || '暂无描述'}</span><span className="mt-1 block truncate text-xs text-muted-foreground">配置租户：{template.globalVisible ? `全部租户可见（${tenantNames.join('、') || 'DataAgent管理'}）` : tenantNames.join('、') || '未知租户'}</span></span>
                     <span className={cn('rounded-full px-2.5 py-1 text-xs', template.status === 'published' ? 'bg-emerald-100 text-emerald-700' : template.status === 'disabled' ? 'bg-amber-100 text-amber-700' : 'bg-muted text-muted-foreground')}>{statusLabel(template.status)}</span>
                   </button>
@@ -788,8 +821,8 @@ export default function AgentTemplatesTab({
   return (
     <div className="mx-auto max-w-6xl space-y-4 pb-10">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><button type="button" onClick={closeEditor} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
-        <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving || preparingSkillKeys.size > 0}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving || preparingSkillKeys.size > 0}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
+        <div><button type="button" onClick={closeEditor} disabled={isSaving} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-50"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
+        <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving || isReadingFolders || preparingSkillKeys.size > 0}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving || isReadingFolders || preparingSkillKeys.size > 0}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
       </div>
       {preparingSkillKeys.size > 0 ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在准备 {preparingSkillKeys.size} 个 Skill，完成后可保存模板。</div> : null}
       {editorError ? <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">{editorError}</div> : null}
@@ -830,6 +863,20 @@ export default function AgentTemplatesTab({
         <div><h3 className="font-semibold text-foreground">Agent 配置</h3><p className="mt-1 text-sm text-muted-foreground">内容会写入新项目的 CLAUDE.md，作为 Claude Code SDK 加载的项目记忆。</p></div>
         <label className="block space-y-1.5"><span className="text-sm font-medium text-foreground">CLAUDE.md</span><textarea value={editing.claudeMarkdown} onChange={(event) => update('claudeMarkdown', event.target.value)} rows={10} className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:ring-2 focus:ring-ring" placeholder="# Project Memory&#10;你是一名应用市场分析专家……" /></label>
       </section>
+
+      <AgentTemplateFolders
+        key={editorSession}
+        folders={editing.claudeFolders}
+        disabled={isSaving}
+        onChange={(folders) => {
+          if (editorSessionRef.current === editorSession && !savingRef.current) update('claudeFolders', folders);
+        }}
+        onReadingChange={(reading) => {
+          if (editorSessionRef.current !== editorSession) return;
+          readingFoldersRef.current = reading;
+          setIsReadingFolders(reading);
+        }}
+      />
 
       <section className="space-y-3 rounded-lg border border-border bg-card p-5">
         <div><h3 className="font-semibold text-foreground">引导语</h3><p className="mt-1 text-sm text-muted-foreground">项目创建后展示给用户，不会自动发送给模型。</p></div>

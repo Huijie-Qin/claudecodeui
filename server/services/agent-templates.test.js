@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import Database from 'better-sqlite3';
 
+import { migrateAgentTemplateSnapshotsToHistoricalReferences } from '../database/db.js';
 import { createMultitenancyDb } from '../database/multitenancy-db.js';
 import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
@@ -177,6 +178,60 @@ test('template catalog and saves cannot reuse tenant-preinstall records directly
     name: '独立技能模板', category: '测试', tenantIds: [fixture.dataAgentTenantId],
     skillPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.skillId }],
   } }), /不能直接引用租户 Skill 预置/);
+});
+
+test('template folders retain binary contents and empty directories through save and partial updates', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const folders = [{
+    name: 'resources',
+    directories: ['empty', 'nested'],
+    files: [{ path: 'nested/data.bin', contentBase64: Buffer.from([0, 255, 128, 10]).toString('base64') }],
+  }, { name: 'commands', directories: [], files: [] }];
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: { name: '文件夹模板', category: '通用助手', tenantIds: [fixture.appTenantId], claudeFolders: folders },
+  });
+  assert.deepEqual(draft.claudeFolders, folders);
+  assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, folders);
+  assert.deepEqual(fixture.service.listAdminTemplates()[0].claudeFolders, [], 'admin lists load file contents on demand');
+  assert.deepEqual(JSON.parse(fixture.database.prepare(
+    'SELECT claude_folders_json FROM agent_templates WHERE id = ?',
+  ).get(draft.id).claude_folders_json), folders);
+
+  const updated = fixture.service.saveTemplate({
+    templateId: draft.id, userId: 1, input: { summary: '只编辑简介' },
+  });
+  assert.deepEqual(updated.claudeFolders, folders, 'older clients must not discard uploaded folders');
+  fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+  const [listed] = fixture.service.listAvailableTemplates({ tenantId: fixture.appTenantId });
+  assert.equal(Object.hasOwn(listed, 'claudeFolders'), false, 'the picker must not transfer file contents');
+  assert.deepEqual(fixture.service.resolveTemplateSnapshot({
+    templateId: draft.id, tenantId: fixture.appTenantId,
+  }).template.claudeFolders, folders);
+
+  const cleared = fixture.service.saveTemplate({
+    templateId: draft.id, userId: 1, input: { claudeFolders: [] },
+  });
+  assert.deepEqual(cleared.claudeFolders, []);
+  assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, []);
+});
+
+test('invalid folder updates fail without replacing stored template content', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const folders = [{ name: 'resources', directories: [], files: [] }];
+  const draft = fixture.service.saveTemplate({
+    userId: 1,
+    input: { name: '保留文件夹', category: '通用助手', tenantIds: [fixture.appTenantId], claudeFolders: folders },
+  });
+  for (const claudeFolders of [null, [{ name: '../escape', files: [] }]]) {
+    assert.throws(() => fixture.service.saveTemplate({
+      templateId: draft.id, userId: 1, input: { name: '非法更新', claudeFolders },
+    }), (error) => error.statusCode === 400);
+    assert.equal(fixture.service.getTemplate(draft.id).name, draft.name);
+    assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, folders);
+  }
 });
 
 test('published templates remain visible and skip MCPs that go offline later', () => {
@@ -357,6 +412,11 @@ test('workspace snapshot preserves template content and preset versions', () => 
       category: '通用助手',
       claudeMarkdown: '# v1',
       guideText: '告诉我你想完成的任务。',
+      claudeFolders: [{
+        name: 'commands',
+        directories: ['empty'],
+        files: [{ path: 'review.md', contentBase64: Buffer.from('Review v1').toString('base64') }],
+      }],
       tenantIds: [fixture.dataAgentTenantId],
       skillPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.skillId }],
       mcpPresetRefs: [{ tenantId: fixture.dataAgentTenantId, presetId: fixture.mcpId }],
@@ -386,15 +446,16 @@ test('workspace snapshot preserves template content and preset versions', () => 
   fixture.service.saveTemplate({
     templateId: draft.id,
     userId: 1,
-    input: { ...draft, claudeMarkdown: '# v2' },
+    input: { ...draft, claudeMarkdown: '# v2', claudeFolders: [] },
   });
   const stored = fixture.database.prepare(`
-    SELECT agent_markdown, skill_presets_json, mcp_presets_json
+    SELECT agent_markdown, skill_presets_json, mcp_presets_json, claude_folders_json
     FROM workspace_agent_template_snapshots WHERE workspace_id = ?
   `).get(workspaceId);
   assert.equal(stored.agent_markdown, '# v1');
   assert.equal(JSON.parse(stored.skill_presets_json)[0].id, fixture.skillId);
   assert.equal(JSON.parse(stored.mcp_presets_json)[0].id, fixture.mcpId);
+  assert.deepEqual(JSON.parse(stored.claude_folders_json), draft.claudeFolders);
   assert.equal(createMultitenancyDb(fixture.database).mcpInstalls.listInstallsForPreset({
     tenantId: fixture.dataAgentTenantId,
     presetId: fixture.mcpId,
@@ -413,11 +474,64 @@ test('workspace snapshot preserves template content and preset versions', () => 
     name: '快照模板',
     guideText: '告诉我你想完成的任务。',
   }, 'deleting the management template must preserve the project snapshot');
+  assert.deepEqual(JSON.parse(fixture.database.prepare(
+    'SELECT claude_folders_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?',
+  ).get(workspaceId).claude_folders_json), draft.claudeFolders, 'folder snapshots survive template deletion');
   assert.equal(Number(fixture.database.prepare(`
     SELECT COUNT(*) AS count FROM workspace_agent_template_mcp_installs
     WHERE workspace_id = ? AND template_id = ?
   `).get(workspaceId, draft.id).count), 1, 'template MCP install markers must remain historical records');
 });
+
+for (const hasAdvancedColumns of [false, true]) {
+  test(`legacy workspace snapshot migration preserves folders and hooks (columns present: ${hasAdvancedColumns})`, (t) => {
+    const database = new Database(':memory:');
+    t.after(() => database.close());
+    database.pragma('foreign_keys = ON');
+    database.exec(`
+      CREATE TABLE users (id INTEGER PRIMARY KEY);
+      CREATE TABLE workspaces (id INTEGER PRIMARY KEY);
+      CREATE TABLE agent_templates (id INTEGER PRIMARY KEY);
+      INSERT INTO users VALUES (1);
+      INSERT INTO workspaces VALUES (1);
+      INSERT INTO agent_templates VALUES (1);
+      CREATE TABLE workspace_agent_template_snapshots (
+        workspace_id INTEGER PRIMARY KEY,
+        template_id INTEGER NOT NULL,
+        template_name TEXT NOT NULL,
+        template_updated_at DATETIME,
+        agent_markdown TEXT NOT NULL DEFAULT '',
+        guide_text TEXT NOT NULL DEFAULT '',
+        skill_presets_json TEXT NOT NULL DEFAULT '[]',
+        mcp_presets_json TEXT NOT NULL DEFAULT '[]',
+        ${hasAdvancedColumns ? "hooks_json TEXT NOT NULL DEFAULT '[]', claude_folders_json TEXT NOT NULL DEFAULT '[]'," : ''}
+        created_by_user_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (template_id) REFERENCES agent_templates(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      INSERT INTO workspace_agent_template_snapshots (workspace_id, template_id, template_name, created_by_user_id)
+      VALUES (1, 1, '历史模板', 1);
+    `);
+    const folders = [{ name: 'commands', directories: [], files: [] }];
+    const hooks = [{ id: 'hook-history', version: 2 }];
+    if (hasAdvancedColumns) {
+      database.prepare(`
+        UPDATE workspace_agent_template_snapshots SET hooks_json = ?, claude_folders_json = ?
+      `).run(JSON.stringify(hooks), JSON.stringify(folders));
+    }
+    migrateAgentTemplateSnapshotsToHistoricalReferences(database);
+    migrateAgentTemplateSnapshotsToHistoricalReferences(database);
+    database.prepare('DELETE FROM agent_templates WHERE id = 1').run();
+    const snapshot = database.prepare('SELECT * FROM workspace_agent_template_snapshots').get();
+    assert.equal(snapshot.template_name, '历史模板');
+    assert.deepEqual(JSON.parse(snapshot.hooks_json), hasAdvancedColumns ? hooks : []);
+    assert.deepEqual(JSON.parse(snapshot.claude_folders_json), hasAdvancedColumns ? folders : []);
+    assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
+    assert.deepEqual(database.pragma('foreign_key_check'), []);
+  });
+}
 
 test('MCP tool settings are validated and preserved in template snapshots', () => {
   const fixture = createFixture();

@@ -1380,6 +1380,17 @@ export function createAdminRouter(
     }
   });
 
+  router.get('/agent-templates/:templateId', (req, res) => {
+    try {
+      const templateId = parsePositiveId(req.params.templateId, 'templateId');
+      const template = agentTemplates.getTemplate(templateId);
+      if (!template) return res.status(404).json({ error: 'Agent template not found' });
+      return res.json({ template });
+    } catch (error) {
+      return sendRouteError(res, error, 'Failed to load Agent template');
+    }
+  });
+
   router.get('/agent-template-categories', (_req, res) => {
     try {
       return res.json({ categories: agentTemplates.listCategories() });

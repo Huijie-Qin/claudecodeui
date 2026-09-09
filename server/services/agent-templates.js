@@ -1,9 +1,16 @@
 import { db } from '../database/db.js';
 import { isMcpParameterValueCompatible } from '../../shared/mcpParameterValue.js';
+import { normalizeTemplateFolders } from './agent-template-folders.js';
 
 const TEMPLATE_STATUSES = new Set(['draft', 'published', 'disabled']);
 const GLOBAL_TENANT_CODES = new Set(['dataagent', 'dataagent-admin', 'dataagent-management']);
 const MAX_TEMPLATE_HOOKS = 20;
+// Folder file contents are loaded only for template details and application.
+const TEMPLATE_LIST_COLUMNS = `
+  id, name, category, summary, agent_markdown, guide_text, tenant_ids_json,
+  skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, global_visible,
+  status, created_at, updated_at
+`;
 const HOOK_CAPABILITY_LABELS = Object.freeze({
   call_mcp_tool: 'MCP',
   mcp_loop_run: 'MCP 循环',
@@ -319,6 +326,7 @@ function hydrateTemplate(row) {
     skillPresetRefs: parseJson(row.skill_preset_refs_json, []),
     mcpPresetRefs: parseJson(row.mcp_preset_refs_json, []),
     hookRefs: parseJson(row.hook_refs_json, []),
+    claudeFolders: parseJson(row.claude_folders_json, []),
     globalVisible: row.global_visible === 1,
     status: row.status,
     createdAt: row.created_at,
@@ -724,6 +732,9 @@ export function createAgentTemplateService(database = db) {
       skillPresetRefs,
       mcpPresetRefs,
       hookRefs,
+      claudeFolders: normalizeTemplateFolders(
+        input.claudeFolders === undefined ? existing?.claudeFolders ?? [] : input.claudeFolders,
+      ),
       globalVisible: tenants.some(isGlobalTenant),
     };
   };
@@ -740,9 +751,9 @@ export function createAgentTemplateService(database = db) {
       const result = database.prepare(`
         INSERT INTO agent_templates (
           name, category, summary, agent_markdown, guide_text, tenant_ids_json,
-          skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, global_visible,
+          skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, claude_folders_json, global_visible,
           status, created_by_user_id, updated_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
       `).run(
         values.name,
         values.category,
@@ -753,6 +764,7 @@ export function createAgentTemplateService(database = db) {
         JSON.stringify(values.skillPresetRefs),
         JSON.stringify(values.mcpPresetRefs),
         JSON.stringify(values.hookRefs),
+        JSON.stringify(values.claudeFolders),
         values.globalVisible ? 1 : 0,
         normalizedUserId,
         normalizedUserId,
@@ -764,7 +776,7 @@ export function createAgentTemplateService(database = db) {
       UPDATE agent_templates SET
         name = ?, category = ?, summary = ?, agent_markdown = ?, guide_text = ?,
         tenant_ids_json = ?, skill_preset_refs_json = ?, mcp_preset_refs_json = ?, hook_refs_json = ?,
-        global_visible = ?, status = 'draft', updated_by_user_id = ?,
+        claude_folders_json = ?, global_visible = ?, status = 'draft', updated_by_user_id = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -777,6 +789,7 @@ export function createAgentTemplateService(database = db) {
       JSON.stringify(values.skillPresetRefs),
       JSON.stringify(values.mcpPresetRefs),
       JSON.stringify(values.hookRefs),
+      JSON.stringify(values.claudeFolders),
       values.globalVisible ? 1 : 0,
       normalizedUserId,
       existing.id,
@@ -810,7 +823,7 @@ export function createAgentTemplateService(database = db) {
   const listAvailableTemplates = ({ tenantId }) => {
     const normalizedTenantId = positiveInteger(tenantId, 'tenantId');
     const visibleTemplates = database.prepare(`
-      SELECT * FROM agent_templates
+      SELECT ${TEMPLATE_LIST_COLUMNS} FROM agent_templates
       WHERE status = 'published'
       ORDER BY updated_at DESC, id DESC
     `).all()
@@ -870,7 +883,7 @@ export function createAgentTemplateService(database = db) {
     getWorkspaceTemplateInfo,
     listAdminTemplates: ({ tenantId, hookResourceCatalog = null } = {}) => {
       const templates = database.prepare(`
-        SELECT * FROM agent_templates ORDER BY updated_at DESC, id DESC
+        SELECT ${TEMPLATE_LIST_COLUMNS} FROM agent_templates ORDER BY updated_at DESC, id DESC
       `).all().map(hydrateTemplate).map((template) => ({
         ...template,
         unavailableCapabilities: [
@@ -983,9 +996,9 @@ export function createAgentTemplateService(database = db) {
       database.prepare(`
         INSERT INTO workspace_agent_template_snapshots (
           workspace_id, template_id, template_name, template_updated_at,
-          agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json,
+          agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json, claude_folders_json,
           created_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         positiveInteger(workspaceId, 'workspaceId'),
         snapshot.template.id,
@@ -996,6 +1009,7 @@ export function createAgentTemplateService(database = db) {
         JSON.stringify(snapshot.skills),
         JSON.stringify(snapshot.mcps),
         JSON.stringify(snapshot.hooks || []),
+        JSON.stringify(snapshot.template.claudeFolders || []),
         positiveInteger(userId, 'userId'),
       );
     },
