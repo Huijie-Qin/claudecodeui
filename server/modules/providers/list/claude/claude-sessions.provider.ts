@@ -496,11 +496,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         console.warn(`[ClaudeProvider] Failed to load display metadata for ${sessionId}:`, String(error));
       }
     }
-    // Apply display relationships before pagination so an anchor and its user
-    // messages cannot be separated by the transcript's timestamp ordering.
-    const hasDisplayAnchors = [...displayMetadata.values()].some(record => record.displayAfterAssistantId);
-    const historyLimit = hasDisplayAnchors ? null : limit;
-    const historyOffset = hasDisplayAnchors ? 0 : offset;
+    // Clients advance their offset by the number of normalized messages returned.
+    // Normalize before pagination: hidden skill bodies consume JSONL rows, while
+    // a single assistant row can expand into multiple messages. Raw-row offsets
+    // would otherwise repeat or skip messages on the next page.
 
     let result: ClaudeHistoryResult;
     try {
@@ -508,10 +507,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         ? await loadClaudeRuntimeSessionMessages(
           path.join(options.runtimeHomePath, '.claude', 'projects'),
           sessionId,
-          historyLimit,
-          historyOffset,
+          null,
+          0,
         )
-        : await loadClaudeSessionMessages(projectStorageName, sessionId, historyLimit, historyOffset);
+        : await loadClaudeSessionMessages(projectStorageName, sessionId, null, 0);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
@@ -519,8 +518,6 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     }
 
     const rawMessages = Array.isArray(result) ? result : (result.messages || []);
-    const total = Array.isArray(result) ? rawMessages.length : (result.total || 0);
-    const hasMore = Array.isArray(result) ? false : Boolean(result.hasMore);
 
     const toolResultMap = new Map<string, ClaudeToolResult>();
     for (const raw of rawMessages) {
@@ -600,18 +597,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
       }
     }
 
-    if (hasDisplayAnchors) {
-      const ordered = orderSupplementMessages(normalized);
-      const end = Math.max(0, ordered.length - Math.max(0, offset));
-      const start = limit === null ? 0 : Math.max(0, end - Math.max(0, limit));
-      return { messages: ordered.slice(start, end), total: ordered.length, hasMore: start > 0, offset, limit };
-    }
-    return {
-      messages: normalized,
-      total,
-      hasMore,
-      offset,
-      limit,
-    };
+    const ordered = orderSupplementMessages(normalized);
+    const end = Math.max(0, ordered.length - Math.max(0, offset));
+    const start = limit === null ? 0 : Math.max(0, end - Math.max(0, limit));
+    return { messages: ordered.slice(start, end), total: ordered.length, hasMore: start > 0, offset, limit };
   }
 }
