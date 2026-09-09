@@ -10,6 +10,47 @@ import {
 } from './claude-sessions.provider.js';
 import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
 
+test('skill history pagination counts normalized messages without repeating queries', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-skill-pages-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = 'skill-pages';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  const rows = [
+    { uuid: 'query-1', type: 'user', message: { role: 'user', content: '/report weekly' } },
+    { uuid: 'answer-1', type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text: 'First report' },
+      { type: 'text', text: 'Report details' },
+    ] } },
+    { uuid: 'query-2', type: 'user', message: { role: 'user', content: '<command-message>report</command-message>\n<command-name>/report</command-name>\n<command-args>weekly</command-args>' } },
+    { uuid: 'body-2', type: 'user', isMeta: true, message: { role: 'user', content: 'Base directory for this skill: /skills/report\nInstructions.' } },
+    { uuid: 'answer-2', type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Second report' }] } },
+    { uuid: 'internal', type: 'system', subtype: 'turn_duration' },
+  ].map((row, index) => ({ ...row, sessionId, timestamp: `2026-09-09T10:00:0${index}.000Z` }));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+
+  const provider = new ClaudeSessionsProvider();
+  const full = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  assert.equal(full.total, full.messages.length);
+  assert.equal(full.messages.length, 5);
+  for (const limit of [1, 2, 3]) {
+    let loaded = [] as typeof full.messages;
+    let hasMore = true;
+    while (hasMore) {
+      const page = await provider.fetchHistory(sessionId, { runtimeHomePath, limit, offset: loaded.length });
+      assert.equal(page.total, full.total);
+      assert.ok(page.messages.length > 0);
+      assert.equal(page.messages.length, Math.min(limit, full.total - loaded.length));
+      loaded = [...page.messages, ...loaded];
+      hasMore = page.hasMore;
+      assert.ok(loaded.length <= full.total);
+    }
+    assert.deepEqual(loaded, full.messages);
+    // Identical queries with different request IDs are intentional submissions.
+    assert.equal(loaded.filter(message => message.content === '/report weekly').length, 2);
+  }
+});
+
 test('supplement display anchors survive JSONL reload and are applied before pagination', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-supplement-order-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
