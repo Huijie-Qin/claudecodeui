@@ -1,47 +1,4 @@
 {
-  "sessionSkill": {
-    "title": "Session Skill",
-    "subtitle": "Generate and tune a reusable skill · POC",
-    "description": "Use the final substantive output in this saved conversation as the accepted target, automatically excluding pleasantries. User messages are summarized into the skill input, then the skill is generated or tuned and replayed against that target.",
-    "operation": "Operation",
-    "generate": "Generate a new skill",
-    "optimize": "Tune an existing skill",
-    "name": "New skill name",
-    "existingName": "Existing skill name",
-    "scope": "This POC validates self-contained text tasks using Claude, for up to {{count}} attempts. A passing skill is saved to this workspace's Claude skills. An unsuccessful attempt will not replace an existing skill.",
-    "invalidName": "Use up to 63 lowercase letters, numbers and single hyphens, for example sales-report.",
-    "requestFailed": "Unable to load the skill job. Please try again.",
-    "close": "Close",
-    "loading": "Loading job…",
-    "iteration": "Attempt {{current}} / {{total}}",
-    "saved": "Saved /{{name}}. Start a new Claude conversation to use it.",
-    "input": "Summarized user input",
-    "expectedOutput": "Target: final conversation output",
-    "actualOutput": "Actual skill output",
-    "validation": "Validation history",
-    "passed": "Passed",
-    "notPassed": "Not passed",
-    "background": "You can close this dialog; the job continues in the background.",
-    "waitForCompletion": "Wait until the conversation finishes before using Session Skill.",
-    "startGenerate": "Use this result · Generate",
-    "startOptimize": "Use this result · Tune",
-    "statuses": {
-      "queued": "Queued",
-      "running": "Generating and validating…",
-      "succeeded": "Validation passed; skill saved",
-      "failed": "Job failed; skill not updated",
-      "exhausted": "Attempt limit reached; skill not updated"
-    },
-    "phases": {
-      "select-output": "Selecting the final substantive output",
-      "summarize": "Summarizing conversation input",
-      "generate": "Generating skill",
-      "execute": "Running skill with the summarized input",
-      "judge": "Comparing against the target output",
-      "optimize": "Tuning skill from validation feedback",
-      "saving": "Saving validated skill"
-    }
-  },
   "codeBlock": {
     "copy": "Copy",
     "copied": "Copied",

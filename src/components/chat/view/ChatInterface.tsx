@@ -26,7 +26,6 @@ import { useSubagentPanelLayout } from '../subagent/useSubagentPanelLayout';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 import ScheduledTasksDialog from './subcomponents/ScheduledTasksDialog';
-import SessionSkillDialog from './subcomponents/SessionSkillDialog';
 
 
 type PendingViewSession = {
@@ -81,7 +80,6 @@ function ChatInterface({
   const lastSessionStatusProbeAtRef = useRef(0);
   const subagentReturnFocusRef = useRef<HTMLElement | null>(null);
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
-  const [showSessionSkill, setShowSessionSkill] = useState(false);
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
   const [selectedSubagentTraceId, setSelectedSubagentTraceId] = useState<string | null>(null);
 
@@ -226,7 +224,6 @@ function ChatInterface({
   useEffect(() => {
     setSelectedSubagentTraceId(null);
     setIsQuickSettingsOpen(false);
-    setShowSessionSkill(false);
     subagentReturnFocusRef.current = null;
   }, [selectedSession?.id]);
 
@@ -600,13 +597,6 @@ function ChatInterface({
     );
   }
 
-  const sessionSkillSessionId = selectedSession?.id || currentSessionId;
-  const canUseSessionSkill = Boolean(
-    selectedProject.workspaceId
-      && selectedProject.accessRole !== 'view'
-      && isConcreteSessionId(sessionSkillSessionId),
-  );
-
   return (
     <PermissionContext.Provider value={permissionContextValue}>
       <div
@@ -754,8 +744,6 @@ function ChatInterface({
           sendByCtrlEnter={sendByCtrlEnter}
           onOpenScheduledTasks={canCreateScheduledTask ? () => setShowScheduledTasks(true) : undefined}
           scheduledTasksDisabledReason={scheduledTasksDisabledReason}
-          onOpenSessionSkill={canUseSessionSkill ? () => setShowSessionSkill(true) : undefined}
-          sessionSkillDisabledReason={isLoading ? t('sessionSkill.waitForCompletion') : undefined}
         />
         </div>
 
@@ -848,19 +836,6 @@ function ChatInterface({
         open={isQuickSettingsOpen}
         onOpenChange={handleQuickSettingsOpenChange}
       />
-
-      {canUseSessionSkill && sessionSkillSessionId && selectedProject.workspaceId ? (
-        <SessionSkillDialog
-          key={`${selectedProject.workspaceId}:${provider}:${sessionSkillSessionId}`}
-          open={showSessionSkill}
-          workspaceId={selectedProject.workspaceId}
-          projectName={selectedProject.name}
-          sessionId={sessionSkillSessionId}
-          provider={provider}
-          sessionBusy={isLoading}
-          onClose={() => setShowSessionSkill(false)}
-        />
-      ) : null}
     </PermissionContext.Provider>
   );
 }

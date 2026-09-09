@@ -52,7 +52,6 @@ import adminRoutes from './routes/admin.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
-import { createSessionSkillJobsRouter } from './routes/session-skill-jobs.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
@@ -736,13 +735,6 @@ app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
 app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
-app.use('/api/workspaces', authenticateToken, createSessionSkillJobsRouter({
-    providerSessions: sessionsService,
-    isSessionActive: (provider, sessionId) => ({
-        claude: isClaudeSDKSessionActive, codex: isCodexSessionActive,
-        cursor: isCursorSessionActive, gemini: isGeminiSessionActive,
-    })[provider]?.(sessionId) || false,
-}));
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
 app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);

@@ -899,18 +899,6 @@ export const api = {
       }),
   },
 
-  sessionSkillJobs: {
-    create: (workspaceId, payload) => authenticatedFetch(withTenantParam(
-      `/api/workspaces/${encodeURIComponent(String(workspaceId))}/session-skill-jobs`,
-    ), {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-    get: (workspaceId, jobId) => authenticatedFetch(withTenantParam(
-      `/api/workspaces/${encodeURIComponent(String(workspaceId))}/session-skill-jobs/${encodeURIComponent(jobId)}`,
-    )),
-  },
-
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
     detail: (workspaceId, name) =>
