@@ -208,7 +208,7 @@ test('template folders retain binary contents and empty directories through save
     folders.map(({ name, directories }) => ({ name, directories })));
   assert.equal(metadata[0].files[0].size, 4);
   assert.match(metadata[0].files[0].sha256, /^[a-f0-9]{64}$/);
-  assert.ok(metadata.every((folder) => folder.version));
+  assert.ok(metadata.every((folder) => !Object.hasOwn(folder, 'version')));
   assert.deepEqual(fixture.folderAssets.readFile(metadata[0].files[0]), Buffer.from([0, 255, 128, 10]));
   assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, metadata);
   assert.deepEqual(fixture.service.listAdminTemplates()[0].claudeFolders, [], 'admin lists omit folder manifests');
@@ -217,30 +217,43 @@ test('template folders retain binary contents and empty directories through save
   ).get(draft.id).claude_folders_json;
   assert.equal(storedJson.includes('contentBase64'), false);
   assert.deepEqual(JSON.parse(storedJson), metadata);
-  const storedFiles = fs.readdirSync(fixture.folderAssetPath, { recursive: true });
+  assert.equal(metadata[0].files[0].storagePath,
+    `templates/${draft.id}/folders/resources/nested/data.bin`);
+  const templateRoot = path.join(fixture.folderAssetPath, 'templates', String(draft.id));
+  const manifest = JSON.parse(fs.readFileSync(path.join(templateRoot, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.templateId, draft.id);
+  assert.equal(manifest.templateName, draft.name);
+  const withoutStorage = (value) => value.map(({ name, directories, files }) => ({
+    name, directories, files: files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })),
+  }));
 
   const updated = fixture.service.saveTemplate({
     templateId: draft.id, userId: 1, input: { summary: '只编辑简介' },
   });
-  assert.deepEqual(updated.claudeFolders, metadata, 'older clients must not discard uploaded folders');
+  assert.deepEqual(withoutStorage(updated.claudeFolders), withoutStorage(metadata), 'older clients must not discard uploaded folders');
   const reused = fixture.service.saveTemplate({
-    templateId: draft.id, userId: 1, input: { claudeFolders: metadata },
+    templateId: draft.id, userId: 1, input: { claudeFolders: updated.claudeFolders },
   });
-  assert.deepEqual(reused.claudeFolders, metadata);
-  assert.deepEqual(fs.readdirSync(fixture.folderAssetPath, { recursive: true }), storedFiles,
-    'editing existing folder metadata does not create duplicate assets');
+  assert.deepEqual(withoutStorage(reused.claudeFolders), withoutStorage(metadata));
+  assert.equal(fs.existsSync(path.join(templateRoot, 'versions')), false);
+  assert.deepEqual(fs.readdirSync(path.dirname(templateRoot)), [String(draft.id)], 'saves leave only the current directory');
+  for (const versionedFolders of [metadata, updated.claudeFolders, reused.claudeFolders]) {
+    assert.deepEqual(fixture.folderAssets.readFile(versionedFolders[0].files[0]), Buffer.from([0, 255, 128, 10]));
+  }
   fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
   const [listed] = fixture.service.listAvailableTemplates({ tenantId: fixture.appTenantId });
   assert.equal(Object.hasOwn(listed, 'claudeFolders'), false, 'the picker must not transfer file contents');
   assert.deepEqual(fixture.service.resolveTemplateSnapshot({
     templateId: draft.id, tenantId: fixture.appTenantId,
-  }).template.claudeFolders, metadata);
+  }).template.claudeFolders, reused.claudeFolders);
 
   const cleared = fixture.service.saveTemplate({
     templateId: draft.id, userId: 1, input: { claudeFolders: [] },
   });
   assert.deepEqual(cleared.claudeFolders, []);
   assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, []);
+  assert.equal(fs.existsSync(path.join(templateRoot, 'folders', 'resources')), false);
+  assert.equal(fs.existsSync(path.join(templateRoot, 'folders', 'commands')), false);
 });
 
 test('invalid folder updates fail without replacing stored template content', (t) => {
@@ -260,7 +273,7 @@ test('invalid folder updates fail without replacing stored template content', (t
   }
 });
 
-test('new template requests cannot reference arbitrary stored file hashes', (t) => {
+test('new template requests cannot reference another template stored files', (t) => {
   const fixture = createFixture();
   t.after(() => fixture.database.close());
   const baseInput = { category: '通用助手', tenantIds: [fixture.appTenantId] };
@@ -287,7 +300,7 @@ test('template validation runs before uploaded assets are persisted', (t) => {
   t.after(() => fixture.database.close());
   let persistCalls = 0;
   const service = createAgentTemplateService(fixture.database, { folderAssets: {
-    persistFolders() { persistCalls += 1; throw new Error('should not write assets'); },
+    beginUpdate() { persistCalls += 1; throw new Error('should not write assets'); },
   } });
   const input = { name: '无效模板', category: '', tenantIds: [fixture.appTenantId],
     claudeFolders: [{ name: 'commands', files: [{ path: 'review.md', contentBase64: 'YQ==' }] }],
@@ -297,6 +310,79 @@ test('template validation runs before uploaded assets are persisted', (t) => {
   assert.throws(() => service.saveTemplate({ userId: 1, input: { ...input, category: '通用助手' } }),
     (error) => error.statusCode === 409);
   assert.equal(persistCalls, 0);
+});
+
+test('new templates allocate their id without storing inline content and roll back failed file writes', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  let allocatedId;
+  const service = createAgentTemplateService(fixture.database, { folderAssets: {
+    beginUpdate(folders, { templateId, templateName }) {
+      allocatedId = templateId;
+      assert.equal(templateName, '落盘失败模板');
+      assert.equal(folders[0].files[0].contentBase64, 'YQ==');
+      const row = fixture.database.prepare('SELECT * FROM agent_templates WHERE id = ?').get(templateId);
+      assert.equal(row.claude_folders_json, '[]');
+      throw new Error('simulated disk failure');
+    },
+  } });
+  assert.throws(() => service.saveTemplate({ userId: 1, input: {
+    name: '落盘失败模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+    claudeFolders: [{ name: 'commands', files: [{ path: 'readme.txt', contentBase64: 'YQ==' }] }],
+  } }), /simulated disk failure/);
+  assert.ok(Number.isSafeInteger(allocatedId));
+  assert.equal(fixture.database.prepare('SELECT COUNT(*) AS count FROM agent_templates').get().count, 0);
+});
+
+test('SQL save failures restore the original current files and roll back new templates', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const draft = fixture.service.saveTemplate({ userId: 1, input: {
+    name: '当前模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+    claudeFolders: [{ name: 'commands', files: [{ path: 'readme.txt', contentBase64: 'b2xk' }] }],
+  } });
+  const stored = fixture.database.prepare('SELECT * FROM agent_templates WHERE id = ?').get(draft.id);
+  fixture.database.exec(`CREATE TRIGGER reject_folder_save BEFORE UPDATE OF claude_folders_json ON agent_templates
+    WHEN NEW.summary = 'reject' BEGIN SELECT RAISE(ABORT, 'simulated SQL failure'); END;`);
+  assert.throws(() => fixture.service.saveTemplate({ templateId: draft.id, userId: 1, input: {
+    summary: 'reject', category: '应当回滚分类',
+    claudeFolders: [{ name: 'commands', files: [{ path: 'new.txt', contentBase64: 'bmV3' }] }],
+  } }), /simulated SQL failure/);
+  assert.deepEqual(fixture.database.prepare('SELECT * FROM agent_templates WHERE id = ?').get(draft.id), stored);
+  assert.equal(fixture.folderAssets.readFile(draft.claudeFolders[0].files[0]).toString(), 'old');
+  assert.equal(fs.existsSync(path.join(fixture.folderAssetPath, 'templates', String(draft.id), 'folders', 'commands', 'new.txt')), false);
+  assert.equal(fixture.service.listCategories().some((category) => category.name === '应当回滚分类'), false);
+  assert.throws(() => fixture.service.saveTemplate({ userId: 1, input: {
+    name: '回滚新模板', summary: 'reject', category: '通用助手', tenantIds: [fixture.appTenantId],
+    claudeFolders: [{ name: 'commands', files: [{ path: 'readme.txt', contentBase64: 'bmV3' }] }],
+  } }), /simulated SQL failure/);
+  assert.equal(fixture.database.prepare('SELECT COUNT(*) AS count FROM agent_templates').get().count, 1);
+  assert.deepEqual(fs.readdirSync(path.join(fixture.folderAssetPath, 'templates')), [String(draft.id)]);
+});
+
+test('failed edits of legacy versioned templates restore their original readable files', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const draft = fixture.service.saveTemplate({ userId: 1, input: {
+    name: '旧版本模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+    claudeFolders: [{ name: 'commands', files: [{ path: 'readme.txt', contentBase64: 'b2xk' }] }],
+  } });
+  const legacyPath = `templates/${draft.id}/versions/legacy-v1/folders/commands/readme.txt`;
+  fs.mkdirSync(path.dirname(path.join(fixture.folderAssetPath, legacyPath)), { recursive: true });
+  fs.writeFileSync(path.join(fixture.folderAssetPath, legacyPath), 'old');
+  const legacy = [{ ...draft.claudeFolders[0], version: 'legacy-v1',
+    files: [{ ...draft.claudeFolders[0].files[0], storagePath: legacyPath }],
+  }];
+  const legacyJson = JSON.stringify(legacy);
+  fixture.database.prepare('UPDATE agent_templates SET claude_folders_json = ? WHERE id = ?').run(legacyJson, draft.id);
+  fixture.database.exec(`CREATE TRIGGER reject_legacy_edit BEFORE UPDATE OF claude_folders_json ON agent_templates
+    WHEN NEW.summary = 'reject' BEGIN SELECT RAISE(ABORT, 'legacy SQL failure'); END;`);
+  assert.throws(() => fixture.service.saveTemplate({ templateId: draft.id, userId: 1, input: { summary: 'reject' } }), /legacy SQL failure/);
+  assert.equal(fixture.database.prepare('SELECT claude_folders_json FROM agent_templates WHERE id = ?').get(draft.id).claude_folders_json, legacyJson);
+  assert.equal(fixture.folderAssets.readFile(legacy[0].files[0]).toString(), 'old');
+  const restored = fixture.service.getTemplate(draft.id);
+  assert.equal(fixture.folderAssets.readFile(restored.claudeFolders[0].files[0]).toString(), 'old');
+  assert.equal(restored.claudeFolders[0].files[0].storagePath, `templates/${draft.id}/folders/commands/readme.txt`);
 });
 
 test('legacy template details migrate inline files without changing the template timestamp', (t) => {
@@ -318,7 +404,7 @@ test('legacy template details migrate inline files without changing the template
 
   fixture.database.prepare('UPDATE agent_templates SET claude_folders_json = ? WHERE id = ?').run(legacyJson, draft.id);
   const failingService = createAgentTemplateService(fixture.database, { folderAssets: {
-    persistFolders() { throw new Error('asset disk unavailable'); },
+    beginUpdate() { throw new Error('asset disk unavailable'); },
   } });
   assert.throws(() => failingService.getTemplate(draft.id), /asset disk unavailable/);
   assert.equal(fixture.database.prepare('SELECT claude_folders_json FROM agent_templates WHERE id = ?')
@@ -338,16 +424,17 @@ test('lazy legacy migration does not overwrite a concurrent template save', (t) 
     .run(JSON.stringify(legacyFolders), draft.id);
   const newFolders = fixture.folderAssets.persistFolders([{ name: 'commands', directories: [],
     files: [{ path: 'review.md', contentBase64: Buffer.from('new saved content').toString('base64') }],
-  }]);
+  }], { templateId: draft.id, templateName: draft.name });
   const newJson = JSON.stringify(newFolders);
   let persistCalls = 0;
   const service = createAgentTemplateService(fixture.database, { folderAssets: {
-    persistFolders(folders, options) {
+    beginUpdate(folders, options) {
       persistCalls += 1;
-      const oldMetadata = fixture.folderAssets.persistFolders(folders, options);
+      assert.equal(fixture.database.inTransaction, true);
+      const change = fixture.folderAssets.beginUpdate(folders, options);
       fixture.database.prepare('UPDATE agent_templates SET name = ?, claude_folders_json = ?, updated_at = ? WHERE id = ?')
         .run('并发保存的新模板', newJson, '2025-01-02 03:04:05', draft.id);
-      return oldMetadata;
+      return change;
     },
   } });
   const resolved = service.getTemplate(draft.id);
@@ -552,7 +639,10 @@ test('workspace snapshot preserves template content and preset versions', () => 
     templateId: draft.id,
     tenantId: fixture.appTenantId,
   });
+  const savedFiles = fs.readdirSync(fixture.folderAssetPath, { recursive: true });
   fixture.service.saveWorkspaceSnapshot({ workspaceId, userId: 1, snapshot });
+  assert.deepEqual(fs.readdirSync(fixture.folderAssetPath, { recursive: true }), savedFiles,
+    'workspace snapshots store audit metadata without touching template files');
   assert.deepEqual(fixture.service.getWorkspaceTemplateInfo({ workspaceId }), {
     id: draft.id,
     name: '快照模板',
@@ -576,7 +666,7 @@ test('workspace snapshot preserves template content and preset versions', () => 
       files: [{ path: 'review.md', contentBase64: Buffer.from('Review v2').toString('base64') }],
     }] },
   });
-  assert.notEqual(updatedTemplate.claudeFolders[0].version, draft.claudeFolders[0].version);
+  assert.notEqual(updatedTemplate.claudeFolders[0].files[0].sha256, draft.claudeFolders[0].files[0].sha256);
   assert.equal(fixture.folderAssets.readFile(updatedTemplate.claudeFolders[0].files[0]).toString(), 'Review v2');
   const stored = fixture.database.prepare(`
     SELECT agent_markdown, skill_presets_json, mcp_presets_json, claude_folders_json
@@ -585,9 +675,13 @@ test('workspace snapshot preserves template content and preset versions', () => 
   assert.equal(stored.agent_markdown, '# v1');
   assert.equal(JSON.parse(stored.skill_presets_json)[0].id, fixture.skillId);
   assert.equal(JSON.parse(stored.mcp_presets_json)[0].id, fixture.mcpId);
-  assert.deepEqual(JSON.parse(stored.claude_folders_json), draft.claudeFolders);
+  const expectedAudit = draft.claudeFolders.map(({ name, directories, files }) => ({
+    name, directories, files: files.map(({ path: filePath, size, sha256 }) => ({ path: filePath, size, sha256 })),
+  }));
+  assert.deepEqual(JSON.parse(stored.claude_folders_json), expectedAudit);
   assert.equal(stored.claude_folders_json.includes('contentBase64'), false);
-  assert.equal(fixture.folderAssets.readFile(JSON.parse(stored.claude_folders_json)[0].files[0]).toString(), 'Review v1');
+  assert.equal(stored.claude_folders_json.includes('storagePath'), false);
+  assert.equal(stored.claude_folders_json.includes('version'), false);
   assert.equal(createMultitenancyDb(fixture.database).mcpInstalls.listInstallsForPreset({
     tenantId: fixture.dataAgentTenantId,
     presetId: fixture.mcpId,
@@ -608,9 +702,7 @@ test('workspace snapshot preserves template content and preset versions', () => 
   }, 'deleting the management template must preserve the project snapshot');
   assert.deepEqual(JSON.parse(fixture.database.prepare(
     'SELECT claude_folders_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?',
-  ).get(workspaceId).claude_folders_json), draft.claudeFolders, 'folder snapshots survive template deletion');
-  assert.equal(fixture.folderAssets.readFile(draft.claudeFolders[0].files[0]).toString(), 'Review v1',
-    'historical file versions survive management template deletion');
+  ).get(workspaceId).claude_folders_json), expectedAudit, 'folder audit snapshots survive template deletion');
   assert.equal(Number(fixture.database.prepare(`
     SELECT COUNT(*) AS count FROM workspace_agent_template_mcp_installs
     WHERE workspace_id = ? AND template_id = ?

@@ -77,7 +77,8 @@ test('rejects malformed content and enforces batch count, entry count, and decod
 });
 
 test('validates stored references and counts their size together with new uploads', () => {
-  const reference = { path: 'nested/stored.bin', size: 12, sha256: 'a'.repeat(64) };
+  const reference = { path: 'nested/stored.bin', size: 12, sha256: 'a'.repeat(64),
+    storagePath: 'templates/1/folders/assets/nested/stored.bin' };
   const normalized = normalizeTemplateFolders([folder('assets', [reference, file('new.txt', 'new')])]);
   assert.deepEqual(normalized[0].files, [reference, file('new.txt', 'new')]);
   assert.deepEqual(normalized[0].directories, ['nested']);
@@ -88,20 +89,30 @@ test('validates stored references and counts their size together with new upload
     { ...reference, sha256: '../outside' },
     { ...reference, sha256: 'A'.repeat(64) },
     { ...reference, contentBase64: '' },
+    { ...reference, storagePath: '/absolute/file' },
+    { ...reference, storagePath: 'templates/1/versions/../folders/assets/nested/stored.bin' },
+    { ...reference, storagePath: 'templates/1/folders/other/nested/stored.bin' },
+    { ...reference, storagePath: 'templates/1/folders/assets/another.bin' },
+    { ...reference, storagePath: 'templates/1/folders/assets/../nested/stored.bin' },
   ]) assert.throws(() => normalizeTemplateFolders([folder('assets', [invalid])]), { statusCode: 400 });
+  const legacyReference = { ...reference,
+    storagePath: 'templates/1/versions/legacy-version/folders/assets/nested/stored.bin' };
+  const [legacy] = normalizeTemplateFolders([{ ...folder('assets', [legacyReference]), version: 'legacy-version' }]);
+  assert.equal(Object.hasOwn(legacy, 'version'), false);
+  assert.deepEqual(legacy.files, [legacyReference]);
   assert.throws(() => normalizeTemplateFolders([
-    folder('stored', [{ ...reference, size: MAX_TEMPLATE_FOLDER_BYTES }]),
+    folder('assets', [{ ...reference, size: MAX_TEMPLATE_FOLDER_BYTES }]),
     folder('uploaded', [file('new.txt', 'a')]),
   ]), { statusCode: 400 });
 });
 
-test('materializes persisted binary objects and keeps workspace edits independent from templates', async () => {
+test('materializes persisted template files and keeps workspace edits independent from templates', async () => {
   await withWorkspace(async (workspace, root) => {
     const folderAssets = createAgentTemplateFolderAssetStore({ rootPath: path.join(root, 'assets') });
     const binary = Buffer.from([0, 255, 128, 42]);
     const metadata = folderAssets.persistFolders(normalizeTemplateFolders([
       folder('resources', [file('nested/data.bin', binary), file('empty', '')], ['empty-dir']),
-    ]));
+    ]), { templateId: 1, templateName: 'Workspace fixture' });
     assert.ok(!JSON.stringify(metadata).includes('contentBase64'));
     await writeWorkspaceTemplateFolders(workspace, metadata, { folderAssets });
     const materialized = path.join(workspace, '.claude/resources/nested/data.bin');
@@ -119,11 +130,10 @@ test('missing or corrupted stored content fails before creating any workspace fo
       const folderAssets = createAgentTemplateFolderAssetStore({ rootPath: assetsRoot });
       const metadata = folderAssets.persistFolders(normalizeTemplateFolders([
         folder('first', [file('good', 'good')]), folder('second', [file('bad', 'original')]),
-      ]));
-      const { sha256 } = metadata[1].files[0];
-      const objectPath = path.join(assetsRoot, 'objects', sha256.slice(0, 2), sha256);
-      if (corrupt) await fs.writeFile(objectPath, 'tampered');
-      else await fs.unlink(objectPath);
+      ]), { templateId: 1, templateName: 'Corruption fixture' });
+      const filePath = path.join(assetsRoot, metadata[1].files[0].storagePath);
+      if (corrupt) await fs.writeFile(filePath, 'tampered');
+      else await fs.unlink(filePath);
       await assert.rejects(writeWorkspaceTemplateFolders(workspace, metadata, { folderAssets }));
       assert.deepEqual(await fs.readdir(workspace), []);
     });

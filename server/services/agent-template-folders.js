@@ -96,13 +96,24 @@ export function normalizeTemplateFolders(value = []) {
           || !Number.isSafeInteger(file.size) || file.size < 0) {
           throw folderError(`文件资源信息无效：${name}/${filePath}`);
         }
+        let storagePath;
+        if (Object.hasOwn(file, 'storagePath')) {
+          const match = typeof file.storagePath === 'string'
+            ? /^templates\/[1-9]\d*\/(?:versions\/[A-Za-z0-9_-]{1,128}\/)?folders\/(.+)$/.exec(file.storagePath)
+            : null;
+          if (!match || match[1] !== `${name}/${filePath}`) {
+            throw folderError(`文件存储路径无效：${name}/${filePath}`);
+          }
+          storagePath = file.storagePath;
+        }
         totalBytes += file.size;
         if (totalBytes > MAX_TEMPLATE_FOLDER_BYTES) {
           throw folderError(`文件夹总大小不能超过 ${MAX_TEMPLATE_FOLDER_BYTES / 1024 / 1024} MiB`);
         }
-        return { path: filePath, size: file.size, sha256: file.sha256 };
+        return { path: filePath, size: file.size, sha256: file.sha256,
+          ...(storagePath === undefined ? {} : { storagePath }) };
       }
-      if (Object.hasOwn(file, 'sha256') || Object.hasOwn(file, 'size')) {
+      if (Object.hasOwn(file, 'sha256') || Object.hasOwn(file, 'size') || Object.hasOwn(file, 'storagePath')) {
         throw folderError(`文件内容与资源引用不能同时提供：${name}/${filePath}`);
       }
       const content = file.contentBase64;
@@ -161,7 +172,7 @@ export async function writeWorkspaceTemplateFolders(workspacePath, value, {
     files.push(...folder.files.map((file) => ({
       relativePath: `${root}/${file.path}`,
       // Old inline snapshots remain readable during an interrupted migration.
-      // New templates and snapshots reference immutable files in the asset store.
+      // Templates reference current files; workspace snapshots keep audit metadata only.
       content: Object.hasOwn(file, 'contentBase64')
         ? Buffer.from(file.contentBase64, 'base64')
         : folderAssets.readFile(file),
