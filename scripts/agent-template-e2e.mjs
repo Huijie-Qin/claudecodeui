@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 
 import express from 'express';
 import bcrypt from 'bcrypt';
@@ -21,6 +22,7 @@ await import('../server/load-env.js');
 const testRoot = path.resolve(process.env.AGENT_TEMPLATE_E2E_ROOT || '.tmp');
 await fs.mkdir(testRoot, { recursive: true });
 const root = await fs.mkdtemp(path.join(testRoot, 'ccui-agent-template-e2e-'));
+const assetsRoot = path.join(root, 'agent-template-assets');
 const port = Number(process.env.AGENT_TEMPLATE_E2E_PORT || 3901);
 const serve = process.argv.includes('--serve');
 const skipSdk = process.argv.includes('--skip-sdk');
@@ -30,6 +32,7 @@ Object.assign(process.env, {
   CLOUDCLI_RUNTIME_ROOT: path.join(root, 'runtimes'),
   CLOUDCLI_MCP_HELPER_ROOT: path.join(root, 'mcp-helper-scripts'),
   CLOUDCLI_HOOK_SKILLS_ROOT: path.join(root, 'hook-skills'),
+  CLOUDCLI_AGENT_TEMPLATE_ASSETS_ROOT: assetsRoot,
   CLOUDCLI_DATA_ROOT: path.join(root, 'data'),
   CLAUDE_EXECUTION_MODE: 'local',
   VITE_IS_PLATFORM: 'false',
@@ -145,6 +148,7 @@ await import('../server/index.js');
 const { WORKSPACES_ROOT: configuredWorkspaceRoot } = await import('../server/routes/projects.js');
 assert.equal(configuredWorkspaceRoot, path.join(root, 'workspaces'), 'E2E workspaces must stay inside the isolated test root');
 assert.equal(process.env.DATABASE_PATH, path.join(root, 'auth.db'), 'E2E database must stay inside the isolated test root');
+assert.equal(process.env.CLOUDCLI_AGENT_TEMPLATE_ASSETS_ROOT, assetsRoot, 'E2E template assets must stay inside the isolated test root');
 const base = `http://127.0.0.1:${port}`;
 async function request(route, { method = 'GET', body, token = adminToken, status = 200 } = {}) {
   const response = await fetch(`${base}/api${route}`, {
@@ -249,26 +253,82 @@ const claudeFolders = [
 function folderTemplateInput(name, folders = claudeFolders) {
   return { name, category: '端到端测试', summary: '批量文件夹高级配置', tenantIds: [tenant.id], claudeFolders: folders };
 }
-await check('高级配置批量文件夹：管理员创建、读取、编辑、发布及完整内容保留', async () => {
+function assertStoredFolders(actual, uploaded) {
+  assert.equal(JSON.stringify(actual).includes('contentBase64'), false, 'Stored folder manifests must not include Base64 content');
+  assert.deepEqual(actual.map(({ version, ...folder }) => {
+    assert.match(version, /^[a-f0-9]{64}$/);
+    return folder;
+  }), uploaded.map((folder) => ({
+    name: folder.name,
+    directories: folder.directories,
+    files: folder.files.map(({ path: filePath, contentBase64 }) => {
+      const bytes = Buffer.from(contentBase64, 'base64');
+      return { path: filePath, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    }),
+  })));
+}
+async function assertAssetBytes(uploaded) {
+  for (const folder of uploaded) {
+    for (const file of folder.files) {
+      const bytes = Buffer.from(file.contentBase64, 'base64');
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      assert.deepEqual(await fs.readFile(path.join(assetsRoot, 'objects', digest.slice(0, 2), digest)), bytes);
+    }
+  }
+}
+async function assetInventory() {
+  const objectRoot = path.join(assetsRoot, 'objects');
+  const entries = await fs.readdir(objectRoot, { recursive: true, withFileTypes: true });
+  const files = await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
+    const filePath = path.join(entry.parentPath, entry.name);
+    const stat = await fs.stat(filePath);
+    return { path: path.relative(objectRoot, filePath), size: stat.size, ino: stat.ino, mtimeMs: stat.mtimeMs };
+  }));
+  return files.sort((left, right) => left.path.localeCompare(right.path));
+}
+function assertTemplateManifest(selected) {
+  const stored = db.prepare('SELECT claude_folders_json FROM agent_templates WHERE id = ?').get(selected.id);
+  assert.equal(stored.claude_folders_json.includes('contentBase64'), false);
+  assert.deepEqual(JSON.parse(stored.claude_folders_json), selected.claudeFolders);
+}
+function assertWorkspaceManifest(project, folders) {
+  const stored = db.prepare('SELECT claude_folders_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?').get(project.workspaceId);
+  assert.equal(stored.claude_folders_json.includes('contentBase64'), false);
+  assert.deepEqual(JSON.parse(stored.claude_folders_json), folders);
+}
+await check('高级配置批量文件夹：文件落盘、metadata读取编辑、相同内容复用和发布', async () => {
   folderTemplate = (await request('/admin/agent-templates', {
     method: 'POST', status: 201, body: folderTemplateInput('QA 批量文件夹模板'),
   })).template;
-  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  assertStoredFolders(folderTemplate.claudeFolders, claudeFolders);
+  await assertAssetBytes(claudeFolders);
+  const initialAssets = await assetInventory();
+  assert.equal(initialAssets.length, 3);
   const detail = (await request(`/admin/agent-templates/${folderTemplate.id}`)).template;
-  assert.deepEqual(detail.claudeFolders, claudeFolders);
+  assert.deepEqual(detail.claudeFolders, folderTemplate.claudeFolders);
   folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
-    method: 'PUT', body: { ...folderTemplateInput(folderTemplate.name), summary: '编辑后保留全部文件夹' },
+    method: 'PUT', body: { ...folderTemplateInput(folderTemplate.name, detail.claudeFolders), summary: '编辑时原样提交文件metadata' },
   })).template;
-  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  assert.deepEqual(folderTemplate.claudeFolders, detail.claudeFolders);
+  assertTemplateManifest(folderTemplate);
+  // Older clients may upload the same payload again instead of keeping metadata.
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
+    method: 'PUT', body: folderTemplateInput(folderTemplate.name),
+  })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, detail.claudeFolders);
+  assert.deepEqual(await assetInventory(), initialAssets);
   // Older clients omit this field when editing other template settings.
   folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
     method: 'PUT', body: { name: folderTemplate.name, summary: '省略文件夹字段时保持配置', tenantIds: [tenant.id] },
   })).template;
-  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  assert.deepEqual(folderTemplate.claudeFolders, detail.claudeFolders);
   folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}/publish`, { method: 'POST' })).template;
-  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  assert.deepEqual(folderTemplate.claudeFolders, detail.claudeFolders);
+  assertTemplateManifest(folderTemplate);
+  assert.deepEqual(await assetInventory(), initialAssets);
 });
 await check('选择模板创建工作区：.claude 下保留多个根、嵌套文件、二进制和空目录', async () => {
+  const initialAssets = await assetInventory();
   folderWorkspace = await createWorkspace(folderTemplate, 'qa-template-folders');
   const folderPath = path.join(folderWorkspace.path, '.claude');
   assert.equal(await fs.readFile(path.join(folderPath, 'qa-resources/nested/readme.txt'), 'utf8'), folderText);
@@ -278,19 +338,35 @@ await check('选择模板创建工作区：.claude 下保留多个根、嵌套�
     assert.equal((await fs.stat(path.join(folderPath, emptyPath))).isDirectory(), true);
     assert.deepEqual(await fs.readdir(path.join(folderPath, emptyPath)), []);
   }
+  assertWorkspaceManifest(folderWorkspace, folderTemplate.claudeFolders);
+  const sameTemplateWorkspace = await createWorkspace(folderTemplate, 'qa-template-folders-reused');
+  assert.deepEqual(await fs.readFile(path.join(sameTemplateWorkspace.path, '.claude/qa-resources/sample.bin')), folderBytes);
+  assertWorkspaceManifest(sameTemplateWorkspace, folderTemplate.claudeFolders);
+  assert.deepEqual(await assetInventory(), initialAssets);
 });
 await check('发布文件夹新版本只作用于新工作区，未选择模板不创建文件夹', async () => {
   const updatedText = '已更新的模板内容\n';
   const updatedFolders = structuredClone(claudeFolders);
   updatedFolders[0].files[0].contentBase64 = Buffer.from(updatedText).toString('base64');
+  const mixedFolders = structuredClone(folderTemplate.claudeFolders);
+  mixedFolders[0].files[0] = updatedFolders[0].files[0];
+  const oldManifest = structuredClone(folderTemplate.claudeFolders);
   folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
-    method: 'PUT', body: folderTemplateInput(folderTemplate.name, updatedFolders),
+    method: 'PUT', body: folderTemplateInput(folderTemplate.name, mixedFolders),
   })).template;
-  assert.deepEqual(folderTemplate.claudeFolders, updatedFolders);
+  assertStoredFolders(folderTemplate.claudeFolders, updatedFolders);
+  assert.notEqual(folderTemplate.claudeFolders[0].version, oldManifest[0].version);
+  assert.equal(folderTemplate.claudeFolders[1].version, oldManifest[1].version);
+  assertTemplateManifest(folderTemplate);
+  await assertAssetBytes(updatedFolders);
+  assert.equal((await assetInventory()).length, 4);
   folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}/publish`, { method: 'POST' })).template;
   const nextWorkspace = await createWorkspace(folderTemplate, 'qa-template-folders-updated');
   assert.equal(await fs.readFile(path.join(nextWorkspace.path, '.claude/qa-resources/nested/readme.txt'), 'utf8'), updatedText);
   assert.equal(await fs.readFile(path.join(folderWorkspace.path, '.claude/qa-resources/nested/readme.txt'), 'utf8'), folderText);
+  assertWorkspaceManifest(nextWorkspace, folderTemplate.claudeFolders);
+  assertWorkspaceManifest(folderWorkspace, oldManifest);
+  assert.equal((await assetInventory()).length, 4);
   const plain = (await request(`/projects/create-workspace${query}`, {
     method: 'POST', token: memberToken, body: { workspaceType: 'new', path: 'qa-plain-no-folders' },
   })).project;
@@ -459,7 +535,7 @@ if (!skipSdk) await check('真实 Claude SDK 会话：Skill 调用、MCP 参数�
   }
 });
 
-const report = { root, base, results, calls, modelRequestCount: modelRequests.length, skipSdk, fixtureUrl, tenantId: tenant.id, workspace, template, folderWorkspace, folderTemplate };
+const report = { root, assetsRoot, base, results, calls, modelRequestCount: modelRequests.length, skipSdk, fixtureUrl, tenantId: tenant.id, workspace, template, folderWorkspace, folderTemplate };
 const reportPath = process.env.AGENT_TEMPLATE_E2E_REPORT || path.join(root, 'report.json');
 await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(`E2E RESULT ${results.filter((item) => item.status === 'passed').length}/${results.length}; report=${reportPath}`);

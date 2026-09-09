@@ -1,11 +1,14 @@
 import { db } from '../database/db.js';
 import { isMcpParameterValueCompatible } from '../../shared/mcpParameterValue.js';
+import { migrateStoredTemplateFolderJson } from '../database/agent-template-folder-migration.js';
+
 import { normalizeTemplateFolders } from './agent-template-folders.js';
+import { agentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
 
 const TEMPLATE_STATUSES = new Set(['draft', 'published', 'disabled']);
 const GLOBAL_TENANT_CODES = new Set(['dataagent', 'dataagent-admin', 'dataagent-management']);
 const MAX_TEMPLATE_HOOKS = 20;
-// Folder file contents are loaded only for template details and application.
+// Folder manifests are needed only for template details and application.
 const TEMPLATE_LIST_COLUMNS = `
   id, name, category, summary, agent_markdown, guide_text, tenant_ids_json,
   skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, global_visible,
@@ -383,10 +386,26 @@ function buildHookSnapshot(inspections) {
   });
 }
 
-export function createAgentTemplateService(database = db) {
-  const getTemplate = (templateId) => hydrateTemplate(database.prepare(`
-    SELECT * FROM agent_templates WHERE id = ?
-  `).get(positiveInteger(templateId, 'templateId')));
+export function createAgentTemplateService(database = db, {
+  folderAssets = agentTemplateFolderAssetStore,
+} = {}) {
+  const getTemplate = (templateId) => {
+    const row = database.prepare(`
+      SELECT * FROM agent_templates WHERE id = ?
+    `).get(positiveInteger(templateId, 'templateId'));
+    if (!row) return null;
+    const metadata = migrateStoredTemplateFolderJson(row.claude_folders_json, { folderAssets });
+    if (metadata !== null) {
+      const metadataJson = JSON.stringify(metadata);
+      const result = database.prepare(`
+        UPDATE agent_templates SET claude_folders_json = ?
+        WHERE id = ? AND claude_folders_json = ?
+      `).run(metadataJson, row.id, row.claude_folders_json);
+      if (result.changes === 0) return getTemplate(row.id);
+      row.claude_folders_json = metadataJson;
+    }
+    return hydrateTemplate(row);
+  };
 
   const getWorkspaceTemplateInfo = ({ workspaceId }) => {
     const row = database.prepare(`
@@ -746,6 +765,9 @@ export function createAgentTemplateService(database = db) {
     const values = normalizeInput(input || {}, existing);
     assertUniqueTemplateName(values.name, existing?.id ?? null);
     values.category = ensureCategory({ name: values.category, userId: normalizedUserId }).name;
+    values.claudeFolders = folderAssets.persistFolders(values.claudeFolders, {
+      existingFolders: existing?.claudeFolders ?? [],
+    });
 
     if (!existing) {
       const result = database.prepare(`
@@ -993,6 +1015,12 @@ export function createAgentTemplateService(database = db) {
     listAvailableTemplates,
     resolveTemplateSnapshot,
     saveWorkspaceSnapshot: ({ workspaceId, userId, snapshot }) => {
+      const normalizedWorkspaceId = positiveInteger(workspaceId, 'workspaceId');
+      const normalizedUserId = positiveInteger(userId, 'userId');
+      const claudeFolders = folderAssets.persistFolders(
+        normalizeTemplateFolders(snapshot.template.claudeFolders || []),
+        { trusted: true },
+      );
       database.prepare(`
         INSERT INTO workspace_agent_template_snapshots (
           workspace_id, template_id, template_name, template_updated_at,
@@ -1000,7 +1028,7 @@ export function createAgentTemplateService(database = db) {
           created_by_user_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        positiveInteger(workspaceId, 'workspaceId'),
+        normalizedWorkspaceId,
         snapshot.template.id,
         snapshot.template.name,
         snapshot.template.updatedAt,
@@ -1009,8 +1037,8 @@ export function createAgentTemplateService(database = db) {
         JSON.stringify(snapshot.skills),
         JSON.stringify(snapshot.mcps),
         JSON.stringify(snapshot.hooks || []),
-        JSON.stringify(snapshot.template.claudeFolders || []),
-        positiveInteger(userId, 'userId'),
+        JSON.stringify(claudeFolders),
+        normalizedUserId,
       );
     },
     markTemplateMcpInstall: ({ workspaceId, presetId, templateId }) => {

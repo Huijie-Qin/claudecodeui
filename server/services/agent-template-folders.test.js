@@ -11,6 +11,7 @@ import {
 } from '../../shared/agentTemplateFolders.js';
 
 import { normalizeTemplateFolders, writeWorkspaceTemplateFolders } from './agent-template-folders.js';
+import { createAgentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
 
 const file = (filePath, content = 'hello') => ({
   path: filePath,
@@ -73,6 +74,60 @@ test('rejects malformed content and enforces batch count, entry count, and decod
   assert.throws(() => normalizeTemplateFolders([folder('safe', Array.from({ length: MAX_TEMPLATE_FOLDER_ENTRIES }, (_, index) => file(`parent/file-${index}`, '')))]), { statusCode: 400 });
   const chunk = Buffer.alloc(MAX_TEMPLATE_FOLDER_BYTES / 2 + 1);
   assert.throws(() => normalizeTemplateFolders([folder('one', [file('a', chunk)]), folder('two', [file('b', chunk)])]), { statusCode: 400 });
+});
+
+test('validates stored references and counts their size together with new uploads', () => {
+  const reference = { path: 'nested/stored.bin', size: 12, sha256: 'a'.repeat(64) };
+  const normalized = normalizeTemplateFolders([folder('assets', [reference, file('new.txt', 'new')])]);
+  assert.deepEqual(normalized[0].files, [reference, file('new.txt', 'new')]);
+  assert.deepEqual(normalized[0].directories, ['nested']);
+  for (const invalid of [
+    { ...reference, size: -1 },
+    { ...reference, size: 1.5 },
+    { ...reference, size: Number.MAX_SAFE_INTEGER + 1 },
+    { ...reference, sha256: '../outside' },
+    { ...reference, sha256: 'A'.repeat(64) },
+    { ...reference, contentBase64: '' },
+  ]) assert.throws(() => normalizeTemplateFolders([folder('assets', [invalid])]), { statusCode: 400 });
+  assert.throws(() => normalizeTemplateFolders([
+    folder('stored', [{ ...reference, size: MAX_TEMPLATE_FOLDER_BYTES }]),
+    folder('uploaded', [file('new.txt', 'a')]),
+  ]), { statusCode: 400 });
+});
+
+test('materializes persisted binary objects and keeps workspace edits independent from templates', async () => {
+  await withWorkspace(async (workspace, root) => {
+    const folderAssets = createAgentTemplateFolderAssetStore({ rootPath: path.join(root, 'assets') });
+    const binary = Buffer.from([0, 255, 128, 42]);
+    const metadata = folderAssets.persistFolders(normalizeTemplateFolders([
+      folder('resources', [file('nested/data.bin', binary), file('empty', '')], ['empty-dir']),
+    ]));
+    assert.ok(!JSON.stringify(metadata).includes('contentBase64'));
+    await writeWorkspaceTemplateFolders(workspace, metadata, { folderAssets });
+    const materialized = path.join(workspace, '.claude/resources/nested/data.bin');
+    assert.deepEqual(await fs.readFile(materialized), binary);
+    assert.deepEqual(await fs.readdir(path.join(workspace, '.claude/resources/empty-dir')), []);
+    await fs.writeFile(materialized, 'workspace change');
+    assert.deepEqual(folderAssets.readFile(metadata[0].files.find((entry) => entry.path === 'nested/data.bin')), binary);
+  });
+});
+
+test('missing or corrupted stored content fails before creating any workspace folders', async () => {
+  for (const corrupt of [false, true]) {
+    await withWorkspace(async (workspace, root) => {
+      const assetsRoot = path.join(root, 'assets');
+      const folderAssets = createAgentTemplateFolderAssetStore({ rootPath: assetsRoot });
+      const metadata = folderAssets.persistFolders(normalizeTemplateFolders([
+        folder('first', [file('good', 'good')]), folder('second', [file('bad', 'original')]),
+      ]));
+      const { sha256 } = metadata[1].files[0];
+      const objectPath = path.join(assetsRoot, 'objects', sha256.slice(0, 2), sha256);
+      if (corrupt) await fs.writeFile(objectPath, 'tampered');
+      else await fs.unlink(objectPath);
+      await assert.rejects(writeWorkspaceTemplateFolders(workspace, metadata, { folderAssets }));
+      assert.deepEqual(await fs.readdir(workspace), []);
+    });
+  }
 });
 
 test('materializes several folders under .claude preserving nested, hidden, binary and empty contents', async () => {

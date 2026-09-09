@@ -8,6 +8,8 @@ import {
   MAX_TEMPLATE_FOLDER_DEPTH,
 } from '../../shared/agentTemplateFolders.js';
 
+import { agentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
+
 function folderError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -89,6 +91,20 @@ export function normalizeTemplateFolders(value = []) {
       const filePath = validateRelativePath(file?.path);
       addParents(filePath);
       addEntry(filePath, 'file', true);
+      if (!Object.hasOwn(file, 'contentBase64')) {
+        if (typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256)
+          || !Number.isSafeInteger(file.size) || file.size < 0) {
+          throw folderError(`文件资源信息无效：${name}/${filePath}`);
+        }
+        totalBytes += file.size;
+        if (totalBytes > MAX_TEMPLATE_FOLDER_BYTES) {
+          throw folderError(`文件夹总大小不能超过 ${MAX_TEMPLATE_FOLDER_BYTES / 1024 / 1024} MiB`);
+        }
+        return { path: filePath, size: file.size, sha256: file.sha256 };
+      }
+      if (Object.hasOwn(file, 'sha256') || Object.hasOwn(file, 'size')) {
+        throw folderError(`文件内容与资源引用不能同时提供：${name}/${filePath}`);
+      }
       const content = file.contentBase64;
       if (typeof content !== 'string' || content.length > Math.ceil(MAX_TEMPLATE_FOLDER_BYTES / 3) * 4) {
         throw folderError(`文件夹总大小不能超过 ${MAX_TEMPLATE_FOLDER_BYTES / 1024 / 1024} MiB`);
@@ -130,7 +146,9 @@ function assertDirectory(stats, relativePath) {
 }
 
 /** Merge folders without replacing existing files or traversing symbolic links. */
-export async function writeWorkspaceTemplateFolders(workspacePath, value) {
+export async function writeWorkspaceTemplateFolders(workspacePath, value, {
+  folderAssets = agentTemplateFolderAssetStore,
+} = {}) {
   const folders = normalizeTemplateFolders(value);
   if (folders.length === 0) return [];
   const workspaceRoot = await fs.realpath(workspacePath);
@@ -142,7 +160,11 @@ export async function writeWorkspaceTemplateFolders(workspacePath, value) {
     directories.push(root, ...folder.directories.map((directory) => `${root}/${directory}`));
     files.push(...folder.files.map((file) => ({
       relativePath: `${root}/${file.path}`,
-      content: Buffer.from(file.contentBase64, 'base64'),
+      // Old inline snapshots remain readable during an interrupted migration.
+      // New templates and snapshots reference immutable files in the asset store.
+      content: Object.hasOwn(file, 'contentBase64')
+        ? Buffer.from(file.contentBase64, 'base64')
+        : folderAssets.readFile(file),
     })));
   }
 

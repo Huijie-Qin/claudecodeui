@@ -113,6 +113,12 @@ sbx exec -d my-project cloudcli start --port 3001
 | `SERVER_PORT` | `3001` | Web UI port |
 | `HOST` | `0.0.0.0` | Bind address (must be `0.0.0.0` for `sbx ports`) |
 | `DATABASE_PATH` | `~/.cloudcli/auth.db` | SQLite database location |
+| `CLOUDCLI_AGENT_TEMPLATE_ASSETS_ROOT` | `agent-template-assets` under `CLOUDCLI_DATA_ROOT`, beside `DATABASE_PATH`, or under the application `data` directory | Absolute path for uploaded Agent template files |
+
+Persist the Agent template asset directory and back it up together with SQLite.
+With Docker Compose, keep it under an existing mounted root or add an explicit
+same-path bind mount. See [Agent template file storage](../docs/agent-template-file-storage.md)
+for migration and storage details.
 
 ## Advanced usage
 
