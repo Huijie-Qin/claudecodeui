@@ -221,8 +221,10 @@ function runMultitenancyMigrations() {
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('agent_templates', 'hook_refs_json', "TEXT NOT NULL DEFAULT '[]'");
   migrateAgentTemplateSkillIsolation(db);
+  ensureColumn('agent_templates', 'claude_folders_json', "TEXT NOT NULL DEFAULT '[]'");
   migrateAgentTemplateSnapshotsToHistoricalReferences();
   ensureColumn('workspace_agent_template_snapshots', 'hooks_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('workspace_agent_template_snapshots', 'claude_folders_json', "TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
     INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
     SELECT TRIM(category), MIN(created_by_user_id)
@@ -289,8 +291,8 @@ function runMultitenancyMigrations() {
 
 }
 
-function migrateAgentTemplateSnapshotsToHistoricalReferences() {
-  const hasAgentTemplateForeignKey = (tableName) => db
+export function migrateAgentTemplateSnapshotsToHistoricalReferences(database = db) {
+  const hasAgentTemplateForeignKey = (tableName) => database
     .prepare(`PRAGMA foreign_key_list(${tableName})`)
     .all()
     .some((foreignKey) => foreignKey.table === 'agent_templates');
@@ -301,11 +303,16 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
   }
 
   console.log('Running migration: Preserving Agent template project snapshots after template deletion');
-  db.exec('PRAGMA foreign_keys = OFF');
+  const foreignKeysEnabled = database.pragma('foreign_keys', { simple: true });
+  database.exec('PRAGMA foreign_keys = OFF');
   try {
-    const migrate = db.transaction(() => {
+    const migrate = database.transaction(() => {
       if (migrateSnapshots) {
-        db.exec(`
+        const legacyColumns = new Set(database.prepare('PRAGMA table_info(workspace_agent_template_snapshots)')
+          .all().map((column) => column.name));
+        const hooksJson = legacyColumns.has('hooks_json') ? 'hooks_json' : "'[]'";
+        const claudeFoldersJson = legacyColumns.has('claude_folders_json') ? 'claude_folders_json' : "'[]'";
+        database.exec(`
           ALTER TABLE workspace_agent_template_snapshots
             RENAME TO workspace_agent_template_snapshots_legacy;
           CREATE TABLE workspace_agent_template_snapshots (
@@ -318,6 +325,7 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
             skill_presets_json TEXT NOT NULL DEFAULT '[]',
             mcp_presets_json TEXT NOT NULL DEFAULT '[]',
             hooks_json TEXT NOT NULL DEFAULT '[]',
+            claude_folders_json TEXT NOT NULL DEFAULT '[]',
             created_by_user_id INTEGER NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -325,12 +333,12 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
           );
           INSERT INTO workspace_agent_template_snapshots (
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json, claude_folders_json,
             created_by_user_id, created_at
           )
           SELECT
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, '[]',
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, ${hooksJson}, ${claudeFoldersJson},
             created_by_user_id, created_at
           FROM workspace_agent_template_snapshots_legacy;
           DROP TABLE workspace_agent_template_snapshots_legacy;
@@ -340,7 +348,7 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
       }
 
       if (migrateMcpInstalls) {
-        db.exec(`
+        database.exec(`
           ALTER TABLE workspace_agent_template_mcp_installs
             RENAME TO workspace_agent_template_mcp_installs_legacy;
           CREATE TABLE workspace_agent_template_mcp_installs (
@@ -363,7 +371,7 @@ function migrateAgentTemplateSnapshotsToHistoricalReferences() {
     });
     migrate();
   } finally {
-    db.exec('PRAGMA foreign_keys = ON');
+    database.pragma(`foreign_keys = ${foreignKeysEnabled ? 'ON' : 'OFF'}`);
   }
 }
 

@@ -1,5 +1,6 @@
 // Run against an isolated application and local Skill Market/MCP fixtures.
 // `npm run test:agent-templates:e2e -- --serve` leaves it open for UI QA.
+// Add `--skip-sdk` to run application integration checks without an Agent session.
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -11,12 +12,18 @@ import bcrypt from 'bcrypt';
 
 import { ECHO_SETTINGS_TOOL } from './mcp-tool-settings-mock.mjs';
 import { createTestSkills } from './skill-market-test-server.mjs';
+import { MAX_TEMPLATE_FOLDER_BYTES, MAX_TEMPLATE_FOLDERS, MAX_TEMPLATE_FOLDER_ENTRIES } from '../shared/agentTemplateFolders.js';
+
+// The application .env loader overrides process.env. Load it before applying
+// fixture isolation, so importing server/index.js cannot restore real paths.
+await import('../server/load-env.js');
 
 const testRoot = path.resolve(process.env.AGENT_TEMPLATE_E2E_ROOT || '.tmp');
 await fs.mkdir(testRoot, { recursive: true });
 const root = await fs.mkdtemp(path.join(testRoot, 'ccui-agent-template-e2e-'));
 const port = Number(process.env.AGENT_TEMPLATE_E2E_PORT || 3901);
 const serve = process.argv.includes('--serve');
+const skipSdk = process.argv.includes('--skip-sdk');
 Object.assign(process.env, {
   DATABASE_PATH: path.join(root, 'auth.db'),
   WORKSPACES_ROOT: path.join(root, 'workspaces'),
@@ -31,6 +38,7 @@ Object.assign(process.env, {
   API_KEY: '',
   SKILL_MARKET_AUTH_APPID: '',
   SKILL_MARKET_AUTH_KEY: '',
+  CODEHUB_MCP_URL: '',
 });
 // An existing empty file prevents the legacy database migration copying real data.
 await fs.writeFile(process.env.DATABASE_PATH, '');
@@ -104,7 +112,7 @@ fixtureApp.all('/mcp', (req, res) => {
 });
 const fixtureServer = http.createServer(fixtureApp);
 await new Promise((resolve) => fixtureServer.listen(0, '0.0.0.0', resolve));
-const fixtureHost = Object.values(os.networkInterfaces()).flat().find((address) => address.family === 'IPv4' && !address.internal)?.address || '127.0.0.1';
+const fixtureHost = skipSdk ? '127.0.0.1' : Object.values(os.networkInterfaces()).flat().find((address) => address.family === 'IPv4' && !address.internal)?.address || '127.0.0.1';
 const fixtureUrl = `http://${fixtureHost}:${fixtureServer.address().port}`;
 process.env.SKILL_MARKET_BASE_URL = fixtureUrl;
 Object.assign(process.env, {
@@ -134,6 +142,9 @@ for (const user of [admin, member]) {
 const adminToken = generateToken(admin);
 const memberToken = generateToken(member);
 await import('../server/index.js');
+const { WORKSPACES_ROOT: configuredWorkspaceRoot } = await import('../server/routes/projects.js');
+assert.equal(configuredWorkspaceRoot, path.join(root, 'workspaces'), 'E2E workspaces must stay inside the isolated test root');
+assert.equal(process.env.DATABASE_PATH, path.join(root, 'auth.db'), 'E2E database must stay inside the isolated test root');
 const base = `http://127.0.0.1:${port}`;
 async function request(route, { method = 'GET', body, token = adminToken, status = 200 } = {}) {
   const response = await fetch(`${base}/api${route}`, {
@@ -157,7 +168,7 @@ async function check(name, run) {
 }
 const tenantBody = { tenantId: tenant.id };
 const query = `?tenantId=${tenant.id}`;
-let skill, mcp, hook, template, workspace;
+let skill, mcp, hook, template, workspace, folderTemplate, folderWorkspace;
 await check('管理员 Skill 全量目录与第 137 项导入、校验、发布', async () => {
   const catalog = await request(`/admin/skill-presets/market${query}&complete=true`);
   assert.equal(catalog.skills.length, 137);
@@ -222,6 +233,101 @@ await check('模板配置、重新编辑保存、发布及租户可见性', asyn
   await request('/admin/agent-templates', { method: 'POST', token: memberToken, body: templateInput('无权限'), status: 403 });
   template = (await request(`/admin/agent-templates/${template.id}`, { method: 'PUT', body: { ...templateInput(template.name), summary: '已编辑并保存' } })).template;
   template = (await request(`/admin/agent-templates/${template.id}/publish`, { method: 'POST' })).template;
+});
+const folderBytes = Buffer.from([0x00, 0xff, 0x80, 0x01, 0x0a, 0x42]);
+const folderText = '高级配置中的嵌套文件\n';
+const claudeFolders = [
+  { name: 'qa-resources', directories: ['empty', 'nested'], files: [
+    { path: 'nested/readme.txt', contentBase64: Buffer.from(folderText).toString('base64') },
+    { path: 'sample.bin', contentBase64: folderBytes.toString('base64') },
+  ] },
+  { name: '批量资料', directories: ['保留空目录'], files: [
+    { path: '说明.md', contentBase64: Buffer.from('# 第二个文件夹\n').toString('base64') },
+  ] },
+  { name: 'qa-empty-folder', directories: [], files: [] },
+];
+function folderTemplateInput(name, folders = claudeFolders) {
+  return { name, category: '端到端测试', summary: '批量文件夹高级配置', tenantIds: [tenant.id], claudeFolders: folders };
+}
+await check('高级配置批量文件夹：管理员创建、读取、编辑、发布及完整内容保留', async () => {
+  folderTemplate = (await request('/admin/agent-templates', {
+    method: 'POST', status: 201, body: folderTemplateInput('QA 批量文件夹模板'),
+  })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  const detail = (await request(`/admin/agent-templates/${folderTemplate.id}`)).template;
+  assert.deepEqual(detail.claudeFolders, claudeFolders);
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
+    method: 'PUT', body: { ...folderTemplateInput(folderTemplate.name), summary: '编辑后保留全部文件夹' },
+  })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  // Older clients omit this field when editing other template settings.
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
+    method: 'PUT', body: { name: folderTemplate.name, summary: '省略文件夹字段时保持配置', tenantIds: [tenant.id] },
+  })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}/publish`, { method: 'POST' })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, claudeFolders);
+});
+await check('选择模板创建工作区：.claude 下保留多个根、嵌套文件、二进制和空目录', async () => {
+  folderWorkspace = await createWorkspace(folderTemplate, 'qa-template-folders');
+  const folderPath = path.join(folderWorkspace.path, '.claude');
+  assert.equal(await fs.readFile(path.join(folderPath, 'qa-resources/nested/readme.txt'), 'utf8'), folderText);
+  assert.deepEqual(await fs.readFile(path.join(folderPath, 'qa-resources/sample.bin')), folderBytes);
+  assert.equal(await fs.readFile(path.join(folderPath, '批量资料/说明.md'), 'utf8'), '# 第二个文件夹\n');
+  for (const emptyPath of ['qa-resources/empty', '批量资料/保留空目录', 'qa-empty-folder']) {
+    assert.equal((await fs.stat(path.join(folderPath, emptyPath))).isDirectory(), true);
+    assert.deepEqual(await fs.readdir(path.join(folderPath, emptyPath)), []);
+  }
+});
+await check('发布文件夹新版本只作用于新工作区，未选择模板不创建文件夹', async () => {
+  const updatedText = '已更新的模板内容\n';
+  const updatedFolders = structuredClone(claudeFolders);
+  updatedFolders[0].files[0].contentBase64 = Buffer.from(updatedText).toString('base64');
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}`, {
+    method: 'PUT', body: folderTemplateInput(folderTemplate.name, updatedFolders),
+  })).template;
+  assert.deepEqual(folderTemplate.claudeFolders, updatedFolders);
+  folderTemplate = (await request(`/admin/agent-templates/${folderTemplate.id}/publish`, { method: 'POST' })).template;
+  const nextWorkspace = await createWorkspace(folderTemplate, 'qa-template-folders-updated');
+  assert.equal(await fs.readFile(path.join(nextWorkspace.path, '.claude/qa-resources/nested/readme.txt'), 'utf8'), updatedText);
+  assert.equal(await fs.readFile(path.join(folderWorkspace.path, '.claude/qa-resources/nested/readme.txt'), 'utf8'), folderText);
+  const plain = (await request(`/projects/create-workspace${query}`, {
+    method: 'POST', token: memberToken, body: { workspaceType: 'new', path: 'qa-plain-no-folders' },
+  })).project;
+  for (const folder of claudeFolders) {
+    await assert.rejects(fs.stat(path.join(plain.path, '.claude', folder.name)), { code: 'ENOENT' });
+  }
+  const clearedDraft = (await request('/admin/agent-templates', {
+    method: 'POST', status: 201, body: folderTemplateInput('QA 移除文件夹模板'),
+  })).template;
+  const cleared = (await request(`/admin/agent-templates/${clearedDraft.id}`, {
+    method: 'PUT', body: folderTemplateInput(clearedDraft.name, []),
+  })).template;
+  assert.deepEqual(cleared.claudeFolders, []);
+});
+await check('文件夹 API 拒绝路径穿越、绝对路径、非法编码、冲突及超出数量/大小限制', async () => {
+  const file = { path: 'ok.txt', contentBase64: 'b2s=' };
+  const invalidFolders = [
+    [{ name: '../escape', directories: [], files: [file] }],
+    [{ name: '/absolute', directories: [], files: [file] }],
+    [{ name: 'safe', directories: [], files: [{ ...file, path: '../escape.txt' }] }],
+    [{ name: 'safe', directories: [], files: [{ ...file, path: '/absolute.txt' }] }],
+    [{ name: 'safe', directories: [], files: [{ ...file, path: '..\\escape.txt' }] }],
+    [{ name: 'safe', directories: ['nested/../../escape'], files: [] }],
+    [{ name: 'safe', directories: [], files: [{ ...file, contentBase64: '@bad' }] }],
+    [{ name: 'safe', directories: ['ok.txt'], files: [file] }],
+    Array.from({ length: MAX_TEMPLATE_FOLDERS + 1 }, (_, index) => ({ name: `folder-${index}`, directories: [], files: [] })),
+    [{ name: 'safe', directories: Array.from({ length: MAX_TEMPLATE_FOLDER_ENTRIES + 1 }, (_, index) => `directory-${index}`), files: [] }],
+    [{ name: 'safe', directories: [], files: [{ ...file, contentBase64: Buffer.alloc(MAX_TEMPLATE_FOLDER_BYTES + 1).toString('base64') }] }],
+  ];
+  for (const folders of invalidFolders) {
+    await request('/admin/agent-templates', { method: 'POST', status: 400, body: folderTemplateInput('QA 非法文件夹', folders) });
+  }
+  await request(`/admin/agent-templates/${folderTemplate.id}`, {
+    method: 'PUT', status: 400, body: folderTemplateInput(folderTemplate.name, invalidFolders[2]),
+  });
+  const preserved = (await request(`/admin/agent-templates/${folderTemplate.id}`)).template;
+  assert.deepEqual(preserved.claudeFolders, folderTemplate.claudeFolders);
 });
 await check('模板拒绝非法参数类型、未知 tools 和未知参数', async () => {
   for (const patch of [
@@ -323,7 +429,7 @@ await check('Hook 默认关闭和禁止用户关闭，以及项目隔离', async
   assert.equal(hookConfigService.listEffectiveHooksForContext({ userId: member.id, tenantId: tenant.id, workspaceId: plain.workspaceId }).length, 0);
 });
 
-await check('真实 Claude SDK 会话：Skill 调用、MCP 参数覆盖、禁用工具与 Stop Hook', async () => {
+if (!skipSdk) await check('真实 Claude SDK 会话：Skill 调用、MCP 参数覆盖、禁用工具与 Stop Hook', async () => {
   const { queryClaudeSDK, abortClaudeSDKSession } = await import('../server/claude-sdk.js');
   const messages = [];
   const beforeCalls = calls.length;
@@ -353,7 +459,7 @@ await check('真实 Claude SDK 会话：Skill 调用、MCP 参数覆盖、禁用
   }
 });
 
-const report = { root, base, results, calls, modelRequestCount: modelRequests.length, fixtureUrl, tenantId: tenant.id, workspace, template };
+const report = { root, base, results, calls, modelRequestCount: modelRequests.length, skipSdk, fixtureUrl, tenantId: tenant.id, workspace, template, folderWorkspace, folderTemplate };
 const reportPath = process.env.AGENT_TEMPLATE_E2E_REPORT || path.join(root, 'report.json');
 await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(`E2E RESULT ${results.filter((item) => item.status === 'passed').length}/${results.length}; report=${reportPath}`);

@@ -509,6 +509,8 @@ export const api = {
         ? `/api/admin/agent-templates?tenantId=${encodeURIComponent(String(tenantId))}`
         : '/api/admin/agent-templates',
     ),
+    getAgentTemplate: (templateId) =>
+      authenticatedFetch(`/api/admin/agent-templates/${encodeURIComponent(String(templateId))}`),
     agentTemplatePresetCatalog: (tenantId) =>
       authenticatedFetch(`/api/admin/agent-templates/preset-catalog?tenantId=${encodeURIComponent(String(tenantId))}`),
     agentTemplateHookCatalog: (tenantId) =>

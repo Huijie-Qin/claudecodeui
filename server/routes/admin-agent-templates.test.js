@@ -5,12 +5,12 @@ import express from 'express';
 
 import { createAdminRouter } from './admin.js';
 
-async function requestJson(router, path, { method = 'GET' } = {}) {
+async function requestJson(router, path, { method = 'GET', isSystemAdmin = true } = {}) {
   return new Promise((resolve, reject) => {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
-      req.user = { id: 9, username: 'admin-user', is_system_admin: 1 };
+      req.user = { id: 9, username: 'admin-user', is_system_admin: isSystemAdmin ? 1 : 0 };
       next();
     });
     app.use(router);
@@ -46,6 +46,29 @@ function createRouter({ agentTemplates, hookSkillCatalog, hookMcpCatalog }) {
     hookMcpCatalog,
   );
 }
+
+test('Agent template details load folder contents on demand and require system admin access', async () => {
+  const calls = [];
+  const template = {
+    id: 3,
+    name: 'Folder template',
+    claudeFolders: [{ name: 'rules', directories: [], files: [{ path: 'rule.md', contentBase64: 'aGVsbG8=' }] }],
+  };
+  const router = createRouter({
+    agentTemplates: {
+      getTemplate: (id) => { calls.push(id); return id === 3 ? template : null; },
+    },
+  });
+  const result = await requestJson(router, '/agent-templates/3');
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.payload.template, template);
+  assert.deepEqual(calls, [3]);
+  assert.equal((await requestJson(router, '/agent-templates/4')).response.status, 404);
+  assert.equal((await requestJson(router, '/agent-templates/invalid')).response.status, 400);
+  const callCount = calls.length;
+  assert.equal((await requestJson(router, '/agent-templates/3', { isSystemAdmin: false })).response.status, 403);
+  assert.equal(calls.length, callCount);
+});
 
 test('Agent template Hook catalog passes tenant and current resource inventory to the service', async () => {
   const calls = [];
