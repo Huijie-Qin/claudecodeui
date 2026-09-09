@@ -5,10 +5,29 @@ import {
   MAX_TEMPLATE_FOLDERS,
 } from '../../../shared/agentTemplateFolders.js';
 
+export type AgentTemplateUploadedFile = {
+  path: string;
+  contentBase64: string;
+  size?: never;
+  sha256?: never;
+};
+
+export type AgentTemplateStoredFile = {
+  path: string;
+  size: number;
+  sha256: string;
+  contentBase64?: never;
+};
+
 export type AgentTemplateFolder = {
   name: string;
   directories: string[];
-  files: Array<{ path: string; contentBase64: string }>;
+  files: Array<AgentTemplateUploadedFile | AgentTemplateStoredFile>;
+  version?: string;
+};
+
+export type AgentTemplateUploadedFolder = Omit<AgentTemplateFolder, 'files' | 'version'> & {
+  files: AgentTemplateUploadedFile[];
 };
 
 export type FolderUploadEntry = {
@@ -46,8 +65,11 @@ function checkAborted(signal?: AbortSignal) {
 }
 
 export function templateFolderBytes(folder: AgentTemplateFolder) {
-  return folder.files.reduce((total, file) => total + file.contentBase64.length * 3 / 4
-    - (file.contentBase64.endsWith('==') ? 2 : file.contentBase64.endsWith('=') ? 1 : 0), 0);
+  return folder.files.reduce((total, file) => {
+    if (typeof file.contentBase64 !== 'string') return total + file.size;
+    return total + file.contentBase64.length * 3 / 4
+      - (file.contentBase64.endsWith('==') ? 2 : file.contentBase64.endsWith('=') ? 1 : 0);
+  }, 0);
 }
 
 export function formatTemplateFolderBytes(bytes: number) {
@@ -127,10 +149,10 @@ class FolderUploadBatch {
     folder.files.push({ path, file });
   }
 
-  async encode(): Promise<AgentTemplateFolder[]> {
-    const result: AgentTemplateFolder[] = [];
+  async encode(): Promise<AgentTemplateUploadedFolder[]> {
+    const result: AgentTemplateUploadedFolder[] = [];
     for (const folder of this.folders) {
-      const files: AgentTemplateFolder['files'] = [];
+      const files: AgentTemplateUploadedFile[] = [];
       for (const { path, file } of folder.files) {
         checkAborted(this.signal);
         let content: ArrayBuffer;
@@ -162,7 +184,7 @@ export async function readTemplateFolderFiles(
   files: File[],
   existing: AgentTemplateFolder[] = [],
   signal?: AbortSignal,
-): Promise<AgentTemplateFolder[]> {
+): Promise<AgentTemplateUploadedFolder[]> {
   const batch = new FolderUploadBatch(existing, signal);
   const roots = new Map<string, PendingFolder>();
   for (const file of files) {
@@ -184,7 +206,7 @@ export async function readTemplateFolderEntries(
   entries: FolderUploadEntry[],
   existing: AgentTemplateFolder[] = [],
   signal?: AbortSignal,
-): Promise<AgentTemplateFolder[]> {
+): Promise<AgentTemplateUploadedFolder[]> {
   const batch = new FolderUploadBatch(existing, signal);
   const visit = async (entry: FolderUploadEntry, folder: PendingFolder, path: string): Promise<void> => {
     checkAborted(signal);

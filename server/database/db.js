@@ -43,6 +43,7 @@ import {
   migrateHookExecutionDiagnostics,
 } from './hook-config-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
+import { migrateAgentTemplateFolderStorage } from './agent-template-folder-migration.js';
 import { migrateAgentTemplateSkillIsolation } from './agent-template-skill-isolation.js';
 import { DEFAULT_MODEL_RESPONSE_HOOK_CONFIG, normalizeModelResponseHookConfig } from './model-response-hooks.js';
 import {
@@ -225,6 +226,9 @@ function runMultitenancyMigrations() {
   migrateAgentTemplateSnapshotsToHistoricalReferences();
   ensureColumn('workspace_agent_template_snapshots', 'hooks_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('workspace_agent_template_snapshots', 'claude_folders_json', "TEXT NOT NULL DEFAULT '[]'");
+  migrateAgentTemplateFolderStorage(db, {
+    onError: (error) => console.error(error.message),
+  });
   db.exec(`
     INSERT OR IGNORE INTO agent_template_categories (name, created_by_user_id)
     SELECT TRIM(category), MIN(created_by_user_id)

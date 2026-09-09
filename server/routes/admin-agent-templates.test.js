@@ -47,12 +47,15 @@ function createRouter({ agentTemplates, hookSkillCatalog, hookMcpCatalog }) {
   );
 }
 
-test('Agent template details load folder contents on demand and require system admin access', async () => {
+test('Agent template details return folder metadata and require system admin access', async () => {
   const calls = [];
   const template = {
     id: 3,
     name: 'Folder template',
-    claudeFolders: [{ name: 'rules', directories: [], files: [{ path: 'rule.md', contentBase64: 'aGVsbG8=' }] }],
+    claudeFolders: [{
+      name: 'rules', directories: [], version: 'a'.repeat(64),
+      files: [{ path: 'rule.md', size: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' }],
+    }],
   };
   const router = createRouter({
     agentTemplates: {
@@ -62,6 +65,7 @@ test('Agent template details load folder contents on demand and require system a
   const result = await requestJson(router, '/agent-templates/3');
   assert.equal(result.response.status, 200);
   assert.deepEqual(result.payload.template, template);
+  assert.equal(Object.hasOwn(result.payload.template.claudeFolders[0].files[0], 'contentBase64'), false);
   assert.deepEqual(calls, [3]);
   assert.equal((await requestJson(router, '/agent-templates/4')).response.status, 404);
   assert.equal((await requestJson(router, '/agent-templates/invalid')).response.status, 400);

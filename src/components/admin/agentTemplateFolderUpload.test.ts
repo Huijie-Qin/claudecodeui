@@ -80,6 +80,26 @@ test('new batches preserve the existing folders and reject duplicate root names'
   assert.deepEqual(existing, before);
 });
 
+test('saved metadata counts toward size and survives appending uploads without loading file contents', async () => {
+  const existing: AgentTemplateFolder[] = [{
+    name: 'saved-rules',
+    version: 'b'.repeat(64),
+    directories: ['empty'],
+    files: [{ path: 'rule.md', size: 1234, sha256: 'a'.repeat(64) }],
+  }];
+  const before = structuredClone(existing);
+  const added = await readTemplateFolderFiles([uploadFile('new-rules/rule.md', 'new')], existing);
+  const folders = [...existing, ...added];
+  assert.equal(folders.reduce((total, folder) => total + templateFolderBytes(folder), 0), 1237);
+  assert.deepEqual(existing, before);
+  assert.deepEqual(JSON.parse(JSON.stringify(folders))[0], before[0]);
+  assert.equal(Object.prototype.hasOwnProperty.call(folders[0].files[0], 'contentBase64'), false);
+  assert.equal(added[0].files[0].contentBase64, 'bmV3');
+  assert.equal(templateFolderBytes({
+    name: 'mixed', directories: [], files: [...existing[0].files, ...added[0].files],
+  }), 1237);
+});
+
 test('rejects conflicting file names, file/directory paths and differently cased parents', async () => {
   await assert.rejects(readTemplateFolderFiles([
     uploadFile('commands/test.md'), uploadFile('commands/TEST.md'),
@@ -106,6 +126,15 @@ test('enforces aggregate byte and root limits across existing and added folders 
   Object.defineProperty(file, 'arrayBuffer', { value: () => { throw new Error('Must not read over-limit payload'); } });
   const existing = [{ name: 'rules', directories: [], files: [{ path: 'one.txt', contentBase64: 'YQ==' }] }];
   await assert.rejects(readTemplateFolderFiles([file], existing), /文件总大小不能超过/);
+  const stored: AgentTemplateFolder[] = [{
+    name: 'saved-rules', directories: [], files: [{ path: 'one.txt', size: 1, sha256: 'a'.repeat(64) }],
+  }];
+  await assert.rejects(readTemplateFolderFiles([file], stored), /文件总大小不能超过/);
+  const mixed = [...stored, ...existing];
+  const mixedFile = uploadFile('commands/mixed.bin');
+  Object.defineProperty(mixedFile, 'size', { value: MAX_TEMPLATE_FOLDER_BYTES - 1 });
+  Object.defineProperty(mixedFile, 'arrayBuffer', { value: () => { throw new Error('Must not read over-limit payload'); } });
+  await assert.rejects(readTemplateFolderFiles([mixedFile], mixed), /文件总大小不能超过/);
   const roots = Array.from({ length: MAX_TEMPLATE_FOLDERS }, (_, index) => emptyFolder(`folder-${index}`));
   await assert.rejects(readTemplateFolderEntries([directory('extra')], roots), /最多上传/);
 });

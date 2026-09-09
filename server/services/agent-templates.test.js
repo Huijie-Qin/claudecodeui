@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test, { after } from 'node:test';
 
 import Database from 'better-sqlite3';
 
@@ -9,9 +12,15 @@ import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
 import { createAgentTemplateService } from './agent-templates.js';
+import { createAgentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
+
+const folderAssetTestRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-template-service-assets-'));
+after(() => fs.rmSync(folderAssetTestRoot, { recursive: true, force: true }));
 
 function createFixture() {
   const database = new Database(':memory:');
+  const folderAssetPath = fs.mkdtempSync(path.join(folderAssetTestRoot, 'fixture-'));
+  const folderAssets = createAgentTemplateFolderAssetStore({ rootPath: folderAssetPath });
   database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL);');
   database.exec(MULTITENANCY_SCHEMA_SQL);
   database.exec(HOOK_CONFIG_SCHEMA_SQL);
@@ -107,7 +116,9 @@ function createFixture() {
 
   return {
     database,
-    service: createAgentTemplateService(database),
+    folderAssets,
+    folderAssetPath,
+    service: createAgentTemplateService(database, { folderAssets }),
     dataAgentTenantId,
     appTenantId,
     otherTenantId,
@@ -192,23 +203,38 @@ test('template folders retain binary contents and empty directories through save
     userId: 1,
     input: { name: '文件夹模板', category: '通用助手', tenantIds: [fixture.appTenantId], claudeFolders: folders },
   });
-  assert.deepEqual(draft.claudeFolders, folders);
-  assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, folders);
-  assert.deepEqual(fixture.service.listAdminTemplates()[0].claudeFolders, [], 'admin lists load file contents on demand');
-  assert.deepEqual(JSON.parse(fixture.database.prepare(
+  const metadata = draft.claudeFolders;
+  assert.deepEqual(metadata.map(({ name, directories }) => ({ name, directories })),
+    folders.map(({ name, directories }) => ({ name, directories })));
+  assert.equal(metadata[0].files[0].size, 4);
+  assert.match(metadata[0].files[0].sha256, /^[a-f0-9]{64}$/);
+  assert.ok(metadata.every((folder) => folder.version));
+  assert.deepEqual(fixture.folderAssets.readFile(metadata[0].files[0]), Buffer.from([0, 255, 128, 10]));
+  assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, metadata);
+  assert.deepEqual(fixture.service.listAdminTemplates()[0].claudeFolders, [], 'admin lists omit folder manifests');
+  const storedJson = fixture.database.prepare(
     'SELECT claude_folders_json FROM agent_templates WHERE id = ?',
-  ).get(draft.id).claude_folders_json), folders);
+  ).get(draft.id).claude_folders_json;
+  assert.equal(storedJson.includes('contentBase64'), false);
+  assert.deepEqual(JSON.parse(storedJson), metadata);
+  const storedFiles = fs.readdirSync(fixture.folderAssetPath, { recursive: true });
 
   const updated = fixture.service.saveTemplate({
     templateId: draft.id, userId: 1, input: { summary: '只编辑简介' },
   });
-  assert.deepEqual(updated.claudeFolders, folders, 'older clients must not discard uploaded folders');
+  assert.deepEqual(updated.claudeFolders, metadata, 'older clients must not discard uploaded folders');
+  const reused = fixture.service.saveTemplate({
+    templateId: draft.id, userId: 1, input: { claudeFolders: metadata },
+  });
+  assert.deepEqual(reused.claudeFolders, metadata);
+  assert.deepEqual(fs.readdirSync(fixture.folderAssetPath, { recursive: true }), storedFiles,
+    'editing existing folder metadata does not create duplicate assets');
   fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
   const [listed] = fixture.service.listAvailableTemplates({ tenantId: fixture.appTenantId });
   assert.equal(Object.hasOwn(listed, 'claudeFolders'), false, 'the picker must not transfer file contents');
   assert.deepEqual(fixture.service.resolveTemplateSnapshot({
     templateId: draft.id, tenantId: fixture.appTenantId,
-  }).template.claudeFolders, folders);
+  }).template.claudeFolders, metadata);
 
   const cleared = fixture.service.saveTemplate({
     templateId: draft.id, userId: 1, input: { claudeFolders: [] },
@@ -230,8 +256,107 @@ test('invalid folder updates fail without replacing stored template content', (t
       templateId: draft.id, userId: 1, input: { name: '非法更新', claudeFolders },
     }), (error) => error.statusCode === 400);
     assert.equal(fixture.service.getTemplate(draft.id).name, draft.name);
-    assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, folders);
+    assert.deepEqual(fixture.service.getTemplate(draft.id).claudeFolders, draft.claudeFolders);
   }
+});
+
+test('new template requests cannot reference arbitrary stored file hashes', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const baseInput = { category: '通用助手', tenantIds: [fixture.appTenantId] };
+  const source = fixture.service.saveTemplate({ userId: 1, input: {
+    ...baseInput, name: '原资源模板',
+    claudeFolders: [{ name: 'commands', files: [{ path: 'review.md', contentBase64: Buffer.from('private command').toString('base64') }] }],
+  } });
+  const recipient = fixture.service.saveTemplate({ userId: 1, input: { ...baseInput, name: '另一个模板' } });
+  assert.throws(() => fixture.service.saveTemplate({ userId: 1, input: {
+    ...baseInput, name: '伪造资源模板', claudeFolders: source.claudeFolders,
+  } }), (error) => error.statusCode === 400);
+  assert.throws(() => fixture.service.saveTemplate({ templateId: recipient.id, userId: 1, input: {
+    claudeFolders: source.claudeFolders,
+  } }), (error) => error.statusCode === 400);
+  assert.throws(() => fixture.service.saveTemplate({ templateId: source.id, userId: 1, input: {
+    claudeFolders: source.claudeFolders.map((folder) => ({ ...folder, name: 'renamed' })),
+  } }), (error) => error.statusCode === 400);
+  assert.deepEqual(fixture.service.getTemplate(recipient.id).claudeFolders, []);
+  assert.equal(fixture.service.listAdminTemplates().length, 2);
+});
+
+test('template validation runs before uploaded assets are persisted', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  let persistCalls = 0;
+  const service = createAgentTemplateService(fixture.database, { folderAssets: {
+    persistFolders() { persistCalls += 1; throw new Error('should not write assets'); },
+  } });
+  const input = { name: '无效模板', category: '', tenantIds: [fixture.appTenantId],
+    claudeFolders: [{ name: 'commands', files: [{ path: 'review.md', contentBase64: 'YQ==' }] }],
+  };
+  assert.throws(() => service.saveTemplate({ userId: 1, input }), /category is required/);
+  fixture.service.saveTemplate({ userId: 1, input: { ...input, category: '通用助手', claudeFolders: [] } });
+  assert.throws(() => service.saveTemplate({ userId: 1, input: { ...input, category: '通用助手' } }),
+    (error) => error.statusCode === 409);
+  assert.equal(persistCalls, 0);
+});
+
+test('legacy template details migrate inline files without changing the template timestamp', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const draft = fixture.service.saveTemplate({ userId: 1, input: {
+    name: '历史文件模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+  } });
+  const legacyJson = JSON.stringify([{ name: 'commands', directories: ['empty'],
+    files: [{ path: 'review.md', contentBase64: Buffer.from('legacy content').toString('base64') }],
+  }]);
+  fixture.database.prepare('UPDATE agent_templates SET claude_folders_json = ?, updated_at = ? WHERE id = ?')
+    .run(legacyJson, '2024-01-02 03:04:05', draft.id);
+  const migrated = fixture.service.getTemplate(draft.id);
+  assert.equal(migrated.updatedAt, '2024-01-02 03:04:05');
+  assert.equal(fixture.folderAssets.readFile(migrated.claudeFolders[0].files[0]).toString(), 'legacy content');
+  assert.equal(JSON.stringify(migrated).includes('contentBase64'), false);
+  assert.deepEqual(fixture.service.getTemplate(draft.id), migrated);
+
+  fixture.database.prepare('UPDATE agent_templates SET claude_folders_json = ? WHERE id = ?').run(legacyJson, draft.id);
+  const failingService = createAgentTemplateService(fixture.database, { folderAssets: {
+    persistFolders() { throw new Error('asset disk unavailable'); },
+  } });
+  assert.throws(() => failingService.getTemplate(draft.id), /asset disk unavailable/);
+  assert.equal(fixture.database.prepare('SELECT claude_folders_json FROM agent_templates WHERE id = ?')
+    .get(draft.id).claude_folders_json, legacyJson);
+});
+
+test('lazy legacy migration does not overwrite a concurrent template save', (t) => {
+  const fixture = createFixture();
+  t.after(() => fixture.database.close());
+  const draft = fixture.service.saveTemplate({ userId: 1, input: {
+    name: '并发迁移模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+  } });
+  const legacyFolders = [{ name: 'commands', directories: [],
+    files: [{ path: 'review.md', contentBase64: Buffer.from('legacy content').toString('base64') }],
+  }];
+  fixture.database.prepare('UPDATE agent_templates SET claude_folders_json = ? WHERE id = ?')
+    .run(JSON.stringify(legacyFolders), draft.id);
+  const newFolders = fixture.folderAssets.persistFolders([{ name: 'commands', directories: [],
+    files: [{ path: 'review.md', contentBase64: Buffer.from('new saved content').toString('base64') }],
+  }]);
+  const newJson = JSON.stringify(newFolders);
+  let persistCalls = 0;
+  const service = createAgentTemplateService(fixture.database, { folderAssets: {
+    persistFolders(folders, options) {
+      persistCalls += 1;
+      const oldMetadata = fixture.folderAssets.persistFolders(folders, options);
+      fixture.database.prepare('UPDATE agent_templates SET name = ?, claude_folders_json = ?, updated_at = ? WHERE id = ?')
+        .run('并发保存的新模板', newJson, '2025-01-02 03:04:05', draft.id);
+      return oldMetadata;
+    },
+  } });
+  const resolved = service.getTemplate(draft.id);
+  assert.equal(persistCalls, 1);
+  assert.equal(resolved.name, '并发保存的新模板');
+  assert.equal(resolved.updatedAt, '2025-01-02 03:04:05');
+  assert.deepEqual(resolved.claudeFolders, newFolders);
+  assert.equal(fixture.database.prepare('SELECT claude_folders_json FROM agent_templates WHERE id = ?')
+    .get(draft.id).claude_folders_json, newJson);
 });
 
 test('published templates remain visible and skip MCPs that go offline later', () => {
@@ -443,11 +568,16 @@ test('workspace snapshot preserves template content and preset versions', () => 
     templateId: draft.id,
   });
 
-  fixture.service.saveTemplate({
+  const updatedTemplate = fixture.service.saveTemplate({
     templateId: draft.id,
     userId: 1,
-    input: { ...draft, claudeMarkdown: '# v2', claudeFolders: [] },
+    input: { ...draft, claudeMarkdown: '# v2', claudeFolders: [{
+      name: 'commands', directories: ['empty'],
+      files: [{ path: 'review.md', contentBase64: Buffer.from('Review v2').toString('base64') }],
+    }] },
   });
+  assert.notEqual(updatedTemplate.claudeFolders[0].version, draft.claudeFolders[0].version);
+  assert.equal(fixture.folderAssets.readFile(updatedTemplate.claudeFolders[0].files[0]).toString(), 'Review v2');
   const stored = fixture.database.prepare(`
     SELECT agent_markdown, skill_presets_json, mcp_presets_json, claude_folders_json
     FROM workspace_agent_template_snapshots WHERE workspace_id = ?
@@ -456,6 +586,8 @@ test('workspace snapshot preserves template content and preset versions', () => 
   assert.equal(JSON.parse(stored.skill_presets_json)[0].id, fixture.skillId);
   assert.equal(JSON.parse(stored.mcp_presets_json)[0].id, fixture.mcpId);
   assert.deepEqual(JSON.parse(stored.claude_folders_json), draft.claudeFolders);
+  assert.equal(stored.claude_folders_json.includes('contentBase64'), false);
+  assert.equal(fixture.folderAssets.readFile(JSON.parse(stored.claude_folders_json)[0].files[0]).toString(), 'Review v1');
   assert.equal(createMultitenancyDb(fixture.database).mcpInstalls.listInstallsForPreset({
     tenantId: fixture.dataAgentTenantId,
     presetId: fixture.mcpId,
@@ -477,6 +609,8 @@ test('workspace snapshot preserves template content and preset versions', () => 
   assert.deepEqual(JSON.parse(fixture.database.prepare(
     'SELECT claude_folders_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?',
   ).get(workspaceId).claude_folders_json), draft.claudeFolders, 'folder snapshots survive template deletion');
+  assert.equal(fixture.folderAssets.readFile(draft.claudeFolders[0].files[0]).toString(), 'Review v1',
+    'historical file versions survive management template deletion');
   assert.equal(Number(fixture.database.prepare(`
     SELECT COUNT(*) AS count FROM workspace_agent_template_mcp_installs
     WHERE workspace_id = ? AND template_id = ?
