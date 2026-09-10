@@ -214,11 +214,11 @@ export default function ChatComposer({
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-4xl">
         {isUserScrolledUp && hasMessages && (
-          <div className="absolute -top-10 left-0 right-0 z-10 flex justify-center">
+          <div className="pointer-events-none absolute -top-10 left-0 right-0 z-10 flex justify-center">
             <button
               type="button"
               onClick={onScrollToBottom}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
+              className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-card text-muted-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:text-foreground"
               title={t('input.scrollToBottom', { defaultValue: 'Scroll to bottom' })}
             >
               <ArrowDownIcon className="h-4 w-4" />
