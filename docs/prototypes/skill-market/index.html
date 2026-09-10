@@ -368,7 +368,7 @@
       const name=String(input.name||'').trim(),title=String(input.title||'').trim(),description=String(input.description||'').trim();
       if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)||name.length>63||!title||title.length>80||!description||description.length>500)throw Error('请填写有效的技能标识、名称和描述（标识最多 63 字符）');
       if(s.skills.some(k=>k.local&&k.name===name))throw Error('当前工作区已有同名技能');
-      if(s.generationJobs.some(j=>j.user===s.user&&j.state==='running'))throw Error('请先完成或取消当前生成任务');
+      if(s.generationJobs.some(j=>j.user===s.user&&['running','refining'].includes(j.state)))throw Error('请先完成或取消当前生成任务');
       const supplied=input.values||{},values={};
       if(Object.keys(supplied).some(key=>!t.fields.some(f=>f.key===key)))throw Error('存在模板未声明的字段');
       for(const f of t.fields){const value=String(supplied[f.key]??f.defaultValue).trim();if(f.required&&!value)throw Error('请填写“'+f.label+'”');if(value.length>4000||f.kind==='select'&&value&&!f.options.includes(value))throw Error('“'+f.label+'”的值无效');values[f.key]=value;}
@@ -391,6 +391,30 @@
       j.state='ready';return j;
     }
     function cancelGeneration(s,id){const j=generationJob(s,id);if(j.state!=='running')throw Error('生成任务已结束');j.state='cancelled';j.files=null;j.cleanup='complete';return j}
+    function startGenerationRefinement(s,id,request,expectedContent){
+      const j=generationJob(s,id),text=String(request||'').trim();
+      if(!s.memberIds.includes(s.user))throw Error('没有当前工作区创建权限');
+      if(j.state!=='ready'||j.cleanup!=='complete'||!j.files?.['SKILL.md'])throw Error('请等待生成完成；已保存的技能请在我的技能中编辑');
+      if(!text||text.length>4000)throw Error('请填写 1–4000 字的修改要求');
+      if(canonical(j.files)!==expectedContent)throw Error('预览内容已变化，请重新核对');
+      if(s.generationJobs.some(x=>x.user===s.user&&['running','refining'].includes(x.state)))throw Error('请先结束当前生成或修改任务');
+      const attempt={id:(j.refinementSeq||0)+1,request:text,baseContent:expectedContent,status:'running'};
+      j.refinementSeq=attempt.id;j.refinement=attempt;j.state='refining';j.phase=0;j.cleanup='pending';j.refinementNotice='';return attempt;
+    }
+    function finishGenerationRefinement(s,id,attemptId,outcome='success'){
+      const j=s.generationJobs.find(x=>x.id===id),a=j?.refinement;
+      if(!j||j.state!=='refining'||a?.id!==attemptId)return false;
+      if(!['success','error','invalid'].includes(outcome))throw Error('修改结果场景无效');
+      j.state='ready';j.cleanup='complete';
+      if(!s.memberIds.includes(j.user)||s.tenantId!==j.tenantId||s.workspaceId!==j.workspaceId||canonical(j.files)!==a.baseContent){a.status='error';j.refinementNotice='权限或候选内容已变化，本次修改未应用。';return j}
+      if(outcome!=='success'){a.status=outcome;j.refinementNotice=outcome==='error'?'本次修改失败，上一份可用结果已保留。可以重试或直接保存。':'本次修改未通过基础检查，上一份可用结果已保留。';return j}
+      // Offline demonstration: append the request, not an actual semantic rewrite by AI.
+      const candidate=clone(j.files);
+      candidate['SKILL.md']+='\n## 补充要求\n'+a.request+'\n';
+      j.files=candidate;a.status='succeeded';j.refinementNotes=j.refinementNotes||[];j.refinementNotes.push(a.request);
+      j.refinementNotice='本次调整：已将补充要求加入 SKILL.md，保留现有文件与模板要求；基础检查通过（模拟）。';return j;
+    }
+    function cancelGenerationRefinement(s,id){const j=generationJob(s,id);if(j.state!=='refining')throw Error('当前没有正在进行的修改');j.refinement.status='cancelled';j.state='ready';j.cleanup='complete';j.refinementNotice='本次修改已取消，上一份可用结果已保留。';return j}
     function adoptGeneration(s,id){
       const j=generationJob(s,id);if(j.state==='adopted')return skill(s,j.createdSkillId);if(j.state!=='ready'||j.cleanup!=='complete'||!j.files?.['SKILL.md'])throw Error('仅可保存检查通过且环境已回收的生成结果');
       if(!s.memberIds.includes(s.user))throw Error('没有当前工作区创建权限');
@@ -502,7 +526,7 @@
       k.files=clone(j.files);k.report=clone(j.report);delete k.optimizationPending;k.localEditedAt=new Date().toISOString();j.state='adopted';j.message='已采用到本地正文。发布仍需你最后确认。';return k;
     }
 
-    globalThis.SkillMarketModel={caseTarget,saveUserCaseDraft,generateUserCaseDraft,confirmUserCaseDraft,deleteUserCase,canLocalEdit,localState,evaluationSuite,evaluationSuiteKey,localResultAllowed,evaluateLocal,prepareOptimization,startOptimization,optimizationJob,stepOptimization,cancelOptimization,adoptOptimization,optimizationStamp,createState,skill,owner,collaborator,modified,updateState,save,sync,removeLocal,evaluate,eligible,publish,publishedReport,contribute,visiblePrs,protectedCase,caseStamp,saveCaseDraft,generateCaseDraft,confirmCaseDraft,deleteCase,managementStamp,updateManagement,transferOwner,snippetWrite,snippetDelete,template,templateStamp,templateWrite,startGeneration,generationJob,finishGeneration,cancelGeneration,adoptGeneration,canonical,clone,manifest,makeCases,suiteKey,normalizeReview,reviewExample,consensus};
+    globalThis.SkillMarketModel={startGenerationRefinement,finishGenerationRefinement,cancelGenerationRefinement,caseTarget,saveUserCaseDraft,generateUserCaseDraft,confirmUserCaseDraft,deleteUserCase,canLocalEdit,localState,evaluationSuite,evaluationSuiteKey,localResultAllowed,evaluateLocal,prepareOptimization,startOptimization,optimizationJob,stepOptimization,cancelOptimization,adoptOptimization,optimizationStamp,createState,skill,owner,collaborator,modified,updateState,save,sync,removeLocal,evaluate,eligible,publish,publishedReport,contribute,visiblePrs,protectedCase,caseStamp,saveCaseDraft,generateCaseDraft,confirmCaseDraft,deleteCase,managementStamp,updateManagement,transferOwner,snippetWrite,snippetDelete,template,templateStamp,templateWrite,startGeneration,generationJob,finishGeneration,cancelGeneration,adoptGeneration,canonical,clone,manifest,makeCases,suiteKey,normalizeReview,reviewExample,consensus};
   })();
   </script>
   <script id="prototype-ui">
@@ -521,7 +545,7 @@
     let marketFile='SKILL.md',marketMode='preview',marketFolders=new Set(),renderedPageKey='';
     let managementContext=null;
     let resultPick=0,evalJob=null,chosenSnippet=null,snippetQuery='',caseBuffer=null;
-    let templateBuffer=null,templateContext=null,useTemplateContext=null,generationFile='SKILL.md';const generationTimers=new Map();
+    let templateBuffer=null,templateContext=null,useTemplateContext=null,generationFile='SKILL.md';const generationTimers=new Map(),refinementDrafts=new Map();
     let optimizationPlan=null;const optimizationTimers=new Map();
     const generationSteps=['固定模板正文与填写内容','准备独立临时环境','调用 skill-creator 生成文件','检查产物结构与路径','回收环境，等待用户确认'];
     const fieldKinds={text:'单行文本',textarea:'多行文本',select:'下拉选择'};
@@ -714,13 +738,19 @@
       return `<div class="page-head"><div><h1>模板中心</h1><p>选一个适合的模板，补充少量业务信息，AI 帮你写好技能。</p></div>${S.user==='admin'?button('新建模板','template-new','','primary'):''}</div><div class="template-grid">${S.templates.filter(t=>t.tenantId===S.tenantId).map(t=>`<section class="panel template-card"><span class="skill-icon">${icon('code')}</span><h2>${esc(t.title)}</h2><p>${esc(t.description)}</p>${S.user==='admin'?`<div class="small muted">${t.fields.length} 个填写项 · ${t.blocks.length} 段常用要求</div>`:''}<div class="row">${button('使用模板','template-use',t.id,'primary')}${S.user==='admin'?button('编辑模板','template-edit',t.id):''}</div></section>`).join('')}</div><p class="footer-note">模板由管理员维护，当前租户共享。生成后是独立的普通 Skill 文件；不会自动发布，也不持续关联模板或片段。</p>${j?generationView(j):''}`;
     }
     function generationView(j){
-      const running=j.state==='running',ready=j.state==='ready',adopted=j.state==='adopted',label=({running:'生成中',ready:'生成完成，待你确认',adopted:'已保存到我的技能',error:'生成失败',invalid:'生成内容不完整',cancelled:'已取消'})[j.state];
+      const running=j.state==='running',refining=j.state==='refining',ready=j.state==='ready',adopted=j.state==='adopted',label=({running:'生成中',refining:'正在按要求修改',ready:'待你确认',adopted:'已保存到我的技能',error:'生成失败',invalid:'生成内容不完整',cancelled:'已取消'})[j.state];
       const paths=Object.keys(j.files||{});if(!paths.includes(generationFile))generationFile=paths[0]||'SKILL.md';
-      return `<section class="panel section-gap" aria-label="模板生成任务"><div class="section-heading"><div><h2>${esc(j.input.title)}</h2><p class="small muted">${esc(j.template.title)} · ${esc(names[j.user])} 创建</p></div>${badge(running?'running':ready?'warning':adopted?'passed':'error',label)}</div>
-        ${running?`<p aria-live="polite">正在为你生成技能，请稍候。</p>${button('取消生成','generation-cancel',j.id,'section-gap danger')}`:''}<details class="section-gap"><summary>查看生成详情</summary><p class="small muted">${running?generationSteps[j.phase]:'临时环境已回收（模拟）'} · ${esc(j.id)}</p></details>
+      return `<section class="panel section-gap" aria-label="模板生成任务"><div class="section-heading"><div><h2>${esc(j.input.title)}</h2><p class="small muted">${esc(j.template.title)} · ${esc(names[j.user])} 创建</p></div>${badge(running||refining?'running':ready?'warning':adopted?'passed':'error',label)}</div>
+        ${running?`<p aria-live="polite">正在为你生成技能，请稍候。</p>${button('取消生成','generation-cancel',j.id,'section-gap danger')}`:''}
+        ${refining?`<p aria-live="polite">正在结合当前内容和你的补充要求修改；下方仍显示上一份可用结果。</p>${button('取消本次修改','generation-refine-cancel',j.id,'section-gap danger')}`:''}
+        <details class="section-gap"><summary>查看生成详情</summary><p class="small muted">${running?generationSteps[j.phase]:refining?'独立环境修改与基础检查中（模拟）':'临时环境已回收（模拟）'} · ${esc(j.id)}</p>${j.refinementNotes?.length?`<h3>已采纳的补充要求</h3>${j.refinementNotes.map(n=>'<p>'+esc(n)+'</p>').join('')}`:''}</details>
         ${j.message?notice(j.state==='invalid'?'生成内容不完整，请重新生成。':'暂时无法完成生成，请稍后重试。','error'):''}
-        ${ready||adopted?`${notice('技能已生成。保存后，你可以直接修改 Markdown，或让 AI 检查并优化。现在还没有发布。','success')}<div class="editor-layout section-gap"><aside class="file-sidebar" aria-label="生成文件"><h3>生成文件</h3>${paths.map(path=>`<button class="file-item ${generationFile===path?'active':''}" data-action="generation-file" data-id="${esc(path)}">${esc(path)}</button>`).join('')}</aside><div class="editor-main"><div class="editor-bar"><span class="mono">${esc(generationFile)}</span>${badge('','只读预览')}</div>${/\.md$/i.test(generationFile)?`<article class="editor-preview document">${markdown(j.files[generationFile])}</article>`:`<pre class="code generated-source">${esc(j.files[generationFile])}</pre>`}</div></div><div class="row section-gap">${ready?button('确认保存到我的技能','generation-adopt',j.id,'primary'):button('查看已创建 Skill','open-mine',j.createdSkillId,'primary')}</div>`:''}
-        ${['error','invalid','cancelled'].includes(j.state)?`<div class="section-gap">${button('重新填写并生成','generation-retry',j.id)}</div>`:''}<p class="footer-note">此处是模拟生成的示例内容，不代表已调用真实 AI。</p></section>`;
+        ${j.refinementNotice?`<div class="section-gap" role="status">${notice(esc(j.refinementNotice),j.refinement?.status==='succeeded'?'success':'warning')}</div>`:''}
+        ${ready||refining||adopted?`<div class="editor-layout section-gap"><aside class="file-sidebar" aria-label="生成文件"><h3>生成文件</h3>${paths.map(path=>`<button class="file-item ${generationFile===path?'active':''}" data-action="generation-file" data-id="${esc(path)}">${esc(path)}</button>`).join('')}</aside><div class="editor-main"><div class="editor-bar"><span class="mono">${esc(generationFile)}</span>${badge('','只读预览')}</div>${/\.md$/i.test(generationFile)?`<article class="editor-preview document">${markdown(j.files[generationFile])}</article>`:`<pre class="code generated-source">${esc(j.files[generationFile])}</pre>`}</div></div>
+        ${!adopted?`<div class="section-gap"><label class="field">还需要调整什么？<textarea id="generation-feedback" data-job="${esc(j.id)}" rows="3" maxlength="4000" placeholder="例如：增加退款分析、输出改成表格、不要使用专业术语。" ${refining?'disabled':''}>${esc(refinementDrafts.get(j.id)||'')}</textarea></label><p class="footer-note">基于当前结果继续修改，不会重新从零生成。满意后再保存，不会自动发布。</p>
+        <details class="section-gap"><summary>原型演示选项</summary><label class="field">模拟修改结果<select id="refine-scenario" ${refining?'disabled':''}><option value="success">修改成功</option><option value="error">修改服务异常</option><option value="invalid">基础检查不通过</option></select></label></details>
+        <div class="row section-gap">${button('继续修改','generation-refine',j.id,'',refining)}${button('确认保存到我的技能','generation-adopt',j.id,'primary',refining)}</div></div>`:button('查看已创建 Skill','open-mine',j.createdSkillId,'section-gap primary')}`:''}
+        ${['error','invalid','cancelled'].includes(j.state)?`<div class="section-gap">${button('重新填写并生成','generation-retry',j.id)}</div>`:''}<p class="footer-note">原型仅将补充要求写入示例文件，未调用真实 AI 改写或运行测评；刷新会清空创建任务。</p></section>`;
     }
     function adminView(){if(S.user!=='admin')return'<div class="empty">仅系统管理员可进入。</div>';return`<div class="page-head"><div><h1>公共片段管理</h1><p>全平台共享的固定 Markdown 正文，由系统管理员统一维护。</p></div>${button('新增片段','snippet-new','','primary')}</div>${notice('请勿填写租户专属信息、密钥或私人数据。修改或删除不影响已插入的 Skill，以及已复制正文的模板。')}<div class="table-wrap section-gap" style="border-top:1px solid var(--line)"><table class="data-table"><thead><tr><th>片段</th><th>管理</th></tr></thead><tbody>${S.snippets.map(s=>`<tr><td><strong>${esc(s.title)}</strong><div class="small muted">${esc(s.description)}</div></td><td><div class="row">${button('编辑','snippet-edit',s.id,'sm')}${button('删除','snippet-delete',s.id,'sm danger')}</div></td></tr>`).join('')||'<tr><td colspan="2">暂无片段，点击“新增片段”创建。</td></tr>'}</tbody></table></div><p class="footer-note">不单设片段分类或类型，不展示版本、历史、使用次数，不建立反向引用。模板请在模板中心管理。</p>`}
     function render(){navigationView();main.className='main'+(selected?' detail-page':!selectedPr&&['market','mine'].includes(route)?' list-page':'');main.innerHTML=selectedPr?prView():selected?detailView():route==='market'||route==='mine'?listView():route==='contributions'?contributionsView():route==='templates'?templatesView():adminView();const pageKey=JSON.stringify([route,selected,selectedPr,detailTab,reportTab,evalArea,prScope,prTab,caseTab]);if(pageKey!==renderedPageKey){main.scrollTop=0;renderedPageKey=pageKey}}
@@ -860,6 +890,12 @@
       }
       if(a==='generation-cancel'){M.cancelGeneration(S,id);clearTimeout(generationTimers.get(id));generationTimers.delete(id);render();toast('模拟任务已取消并回收环境，没有创建 Skill。');return}
       if(a==='generation-file'){generationFile=id;render();return}
+      if(a==='generation-refine'){
+        const job=M.generationJob(S,id),request=document.getElementById('generation-feedback').value,scenario=document.getElementById('refine-scenario').value;
+        refinementDrafts.set(id,request);const attempt=M.startGenerationRefinement(S,id,request,M.canonical(job.files));render();
+        const tick=()=>{if(job.state!=='refining'||job.refinement.id!==attempt.id)return;if(job.phase<3){job.phase++;render();generationTimers.set(id,setTimeout(tick,650));return}M.finishGenerationRefinement(S,id,attempt.id,scenario);if(job.refinement.status==='succeeded')refinementDrafts.delete(id);generationTimers.delete(id);render()};generationTimers.set(id,setTimeout(tick,650));return;
+      }
+      if(a==='generation-refine-cancel'){M.cancelGenerationRefinement(S,id);clearTimeout(generationTimers.get(id));generationTimers.delete(id);render();return}
       if(a==='generation-adopt'){const k=M.adoptGeneration(S,id);openSkill(k.id,'mine');detailTab='evaluation';evalArea='optimize';render();toast('技能已保存。确认验证要求后，即可让 AI 检查和优化。');return}
       if(a==='generation-retry'){const j=M.generationJob(S,id);useTemplateDialog(j.template.id,j.input);return}
 
@@ -977,6 +1013,7 @@ if(a==='snippet-new'||a==='snippet-edit'){if(S.user!=='admin')throw Error('仅�
       if(a==='confirm-snippet-delete'){M.snippetDelete(S,id);modal.close();render();toast('示例片段已删除；刷新页面可重置原型数据。');return}
       throw Error('当前操作不可用');
     }
+    document.addEventListener('input',event=>{if(event.target.id==='generation-feedback')refinementDrafts.set(event.target.dataset.job,event.target.value)});
     document.addEventListener('click',event=>{document.querySelectorAll('.eval-add[open]').forEach(menu=>{if(!menu.contains(event.target)||event.target.closest('[data-action]'))menu.open=false});const b=event.target.closest('[data-action]');if(!b||b.disabled)return;Promise.resolve(action(b.dataset.action,b.dataset.id)).catch(reportError)});
     document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const menu=document.querySelector('.eval-add[open]');if(menu){menu.open=false;menu.querySelector('summary').focus();event.preventDefault()}});
     document.addEventListener('toggle',event=>{const e=event.target;if(!e.matches?.('.tree-folder'))return;if(e.open)marketFolders.delete(e.dataset.folder);else marketFolders.add(e.dataset.folder)},true);
