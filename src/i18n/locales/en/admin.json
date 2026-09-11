@@ -627,12 +627,13 @@
       },
       "loadError": "Failed to load Hook user scope",
       "saveError": "Failed to save Hook user scope",
-      "overwriteUserPreferences": "Overwrite user preferences for this save",
-      "overwriteUserPreferencesHint": "Off by default. Normal publishing and saving preserve existing activation and chat visibility preferences. Turn this on to apply both settings below to users in the selected scope for this save only. Users can still change them afterward.",
+      "overwriteUserPreferences": "Overwrite user settings",
+      "overwriteUserPreferencesHint": "Apply the current activation and chat visibility settings to users in the selected scope, replacing their existing choices. Users can change them afterward.",
+      "overwritten": "Activation and chat visibility settings overwritten for users in scope",
       "defaultEnabled": "Enabled by default",
-      "defaultEnabledHint": "Without overwrite, existing user activation choices are preserved and only the default is updated. Required personal variables must be completed first.",
+      "defaultEnabledHint": "Save settings updates defaults while preserving existing user activation choices. Use Overwrite user settings to replace them. Required personal variables must be completed first.",
       "defaultShowInChat": "Show in chat",
-      "defaultShowInChatHint": "Without overwrite, existing visibility choices are preserved and only the default is updated. Hiding cards does not affect Hook execution or records."
+      "defaultShowInChatHint": "Save settings preserves existing visibility choices. Use Overwrite user settings to replace them. Hiding cards does not affect Hook execution or records."
     },
     "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
