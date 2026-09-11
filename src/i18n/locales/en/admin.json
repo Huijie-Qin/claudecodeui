@@ -621,9 +621,9 @@
       "loadError": "Failed to load Hook user scope",
       "saveError": "Failed to save Hook user scope",
       "defaultEnabled": "Enable directly for users in scope",
-      "defaultEnabledHint": "Administrator activation takes precedence over personal opt-outs and workspace template defaults. Activation and chat visibility are controlled by the administrator. Clearing it restores personal or template settings; required personal variables must be completed first.",
+      "defaultEnabledHint": "Saving overwrites activation settings for users in the selected scope. Users can change them afterward; the last save wins. Required personal variables must be completed first.",
       "defaultShowInChat": "Show in chat",
-      "defaultShowInChatHint": "When directly enabled by the administrator, this setting overrides personal and template visibility choices and cannot be changed by users. Hiding chat cards does not affect execution or records. Otherwise, it is the default visibility setting."
+      "defaultShowInChatHint": "Saving overwrites chat visibility for users in the selected scope. Users can change it afterward. Activation and visibility are saved independently; hiding cards does not affect execution or records."
     },
     "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
