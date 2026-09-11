@@ -1242,12 +1242,6 @@ export function createHookConfigService({
       )
     `).get(hook.id, userId, userId, hook.id, tenantId, tenantId))
   );
-  const isAdminHookEnforced = ({ hook, userId, tenantId = null }) => (
-    hook.bindingController === 'admin'
-    && hook.status === 'published'
-    && hook.defaultEnabled
-    && isAdminHookAvailableToUser({ hook, userId, tenantId })
-  );
   const requireWorkspaceContext = ({ workspaceId, tenantId = null }) => {
     const normalizedWorkspaceId = Number(workspaceId);
     if (!Number.isSafeInteger(normalizedWorkspaceId) || normalizedWorkspaceId <= 0) {
@@ -1424,31 +1418,26 @@ export function createHookConfigService({
       // erase the administrator defaults for other eligible members.
       const inheritsAdminDefaults = assignment?.source === 'manual'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
-      const adminEnforced = isAdminHookEnforced({
-        hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId,
-      });
+      const adminDefaultEnabled = latestHook.status === 'published' && latestHook.defaultEnabled
+        && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       let enabled;
       if (hook.bindingController === 'sql_check') {
         enabled = row.legacy_user_enabled === 1;
-      } else if (adminEnforced) {
-        enabled = versionReady;
       } else if (assignment) {
         enabled = explicitEnabled == null
-          ? assignment.defaultEnabled
+          ? (adminDefaultEnabled && row.opted_out_user_id == null) || assignment.defaultEnabled
           : explicitEnabled || !assignment.allowUserDisable;
         enabled = enabled && versionReady;
       } else {
         enabled = explicitEnabled == null
-          ? row.legacy_user_enabled === 1
+          ? row.legacy_user_enabled === 1 || (adminDefaultEnabled && row.opted_out_user_id == null)
           : explicitEnabled;
       }
-      const showInChat = adminEnforced
-        ? latestHook.defaultShowInChat
-        : row.workspace_user_show_in_chat != null
-          ? row.workspace_user_show_in_chat === 1
-          : assignment && !inheritsAdminDefaults
-            ? assignment.defaultShowInChat
-            : row.legacy_show_in_chat !== 0;
+      const showInChat = row.workspace_user_show_in_chat != null
+        ? row.workspace_user_show_in_chat === 1
+        : assignment && !inheritsAdminDefaults
+          ? assignment.defaultShowInChat
+          : row.legacy_show_in_chat !== 0;
       let unavailableReason = null;
       if (assignment?.installStatus === 'pending') unavailableReason = 'resources_pending';
       else if (assignment?.installStatus === 'failed') unavailableReason = 'resources_unavailable';
@@ -1462,7 +1451,6 @@ export function createHookConfigService({
       return {
         ...hook,
         enabled: enabled && missingRequiredUserVariables.length === 0,
-        adminEnforced,
         configuredUserVariables,
         missingRequiredUserVariables,
         showInChat,
@@ -1654,11 +1642,6 @@ export function createHookConfigService({
       userId: normalizedUserId,
       hookId,
     });
-    if (!enabled && isAdminHookEnforced({
-      hook: eligible.hook, userId: normalizedUserId, tenantId: workspace.tenantId,
-    })) {
-      throw createHttpError('管理员已强制启用此 Hook，需由管理员取消直接启用后才能关闭', 409);
-    }
     const hook = eligible.assignment
       ? getPublishedHookVersion({ hookId, version: eligible.assignment.hookVersion })
       : eligible.hook;
@@ -1731,14 +1714,11 @@ export function createHookConfigService({
     }
     if (typeof showInChat !== 'boolean') throw createHttpError('showInChat must be a boolean');
     const workspace = requireWorkspaceContext({ workspaceId, tenantId });
-    const { hook } = ensureWorkspaceHookEligible({
+    ensureWorkspaceHookEligible({
       workspaceId: workspace.id,
       userId: normalizedUserId,
       hookId,
     });
-    if (isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId: workspace.tenantId })) {
-      throw createHttpError('此 Hook 的对话展示由管理员配置，无法自行修改', 409);
-    }
     database.prepare(`
       INSERT INTO user_workspace_hook_preferences (
         workspace_id, user_id, hook_id, enabled, show_in_chat
@@ -2145,12 +2125,9 @@ export function createHookConfigService({
       .all(userId, userId, userId, userId, userId);
     return rows.map((row) => ({
       ...mapHookRow(row),
-      enabled: (row.user_enabled === 1 || (row.binding_controller === 'admin' && row.default_enabled === 1))
+      enabled: (row.user_enabled === 1 || (row.binding_controller === 'admin' && row.default_enabled === 1 && row.opted_out_user_id == null))
         && !normalizeHookUserVariables(parseJson(row.user_variables_json, [])).some((variable) => variable.required),
-      adminEnforced: row.binding_controller === 'admin' && row.default_enabled === 1,
-      showInChat: row.binding_controller === 'admin' && row.default_enabled === 1
-        ? row.default_show_in_chat !== 0
-        : row.user_show_in_chat !== 0,
+      showInChat: row.user_show_in_chat !== 0,
     }));
   };
 
@@ -2260,9 +2237,6 @@ export function createHookConfigService({
       if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0 || !hookId) return true;
       const workspace = requireWorkspaceContext({ workspaceId });
       const hook = getHook(hookId);
-      if (hook && isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId: workspace.tenantId })) {
-        return hook.defaultShowInChat;
-      }
       const preference = database.prepare(`
         SELECT show_in_chat
         FROM user_workspace_hook_preferences
@@ -2325,7 +2299,7 @@ export function createHookConfigService({
           isSystemAdmin: row.is_system_admin === 1,
           bound: row.is_scoped === 1,
           enabled: !hook.userVariables.some((variable) => variable.required) && (row.is_enabled === 1
-            || (hook.defaultEnabled
+            || (hook.defaultEnabled && row.opted_out_user_id == null
               && isAdminHookAvailableToUser({ hook, userId: row.id }))),
         }));
       const tenants = database
@@ -2484,6 +2458,48 @@ export function createHookConfigService({
             boundBy,
             hookId,
           );
+        if (defaultEnabled === undefined && defaultShowInChat === undefined) return;
+        const updatedHook = getHook(hookId);
+        const scopedUsers = database.prepare('SELECT id FROM users WHERE is_active = 1').all()
+          .filter(({ id }) => isAdminHookAvailableToUser({ hook: updatedHook, userId: id }));
+        const contexts = database.prepare(`
+          SELECT preference.workspace_id FROM user_workspace_hook_preferences preference
+          JOIN workspaces workspace ON workspace.id = preference.workspace_id
+          WHERE preference.user_id = ? AND preference.hook_id = ? AND workspace.status != 'deleted'
+          UNION
+          SELECT assignment.workspace_id FROM workspace_hook_assignments assignment
+          JOIN workspaces workspace ON workspace.id = assignment.workspace_id
+          WHERE assignment.hook_id = ? AND workspace.status != 'deleted'
+            AND (workspace.owner_user_id = ? OR EXISTS (
+              SELECT 1 FROM workspace_acl acl WHERE acl.workspace_id = workspace.id AND acl.user_id = ?
+            ))
+        `);
+        const saveWorkspacePreference = database.prepare(`
+          INSERT INTO user_workspace_hook_preferences (workspace_id, user_id, hook_id, enabled, show_in_chat)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
+            enabled = COALESCE(excluded.enabled, user_workspace_hook_preferences.enabled),
+            show_in_chat = COALESCE(excluded.show_in_chat, user_workspace_hook_preferences.show_in_chat),
+            updated_at = CURRENT_TIMESTAMP
+        `);
+        for (const { id: userId } of scopedUsers) {
+          // Unassigned contexts inherit the new defaults. Existing workspace
+          // choices are overwritten only for fields included in this save.
+          if (defaultEnabled !== undefined) {
+            database.prepare('DELETE FROM user_hook_bindings WHERE hook_id = ? AND user_id = ?').run(hookId, userId);
+            database.prepare('DELETE FROM user_hook_opt_outs WHERE hook_id = ? AND user_id = ?').run(hookId, userId);
+          }
+          if (defaultShowInChat !== undefined) {
+            database.prepare('DELETE FROM user_hook_preferences WHERE hook_id = ? AND user_id = ?').run(hookId, userId);
+          }
+          for (const { workspace_id: workspaceId } of contexts.all(userId, hookId, hookId, userId, userId)) {
+            const workspace = requireWorkspaceContext({ workspaceId });
+            if (!isAdminHookAvailableToUser({ hook: updatedHook, userId, tenantId: workspace.tenantId })) continue;
+            saveWorkspacePreference.run(workspaceId, userId, hookId,
+              defaultEnabled === undefined ? null : Number(defaultEnabled),
+              defaultShowInChat === undefined ? null : Number(defaultShowInChat));
+          }
+        }
       });
       replace();
       return {
@@ -2505,13 +2521,13 @@ export function createHookConfigService({
       if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
       const eligible = isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
-      if (!enabled && isAdminHookEnforced({ hook, userId: normalizedUserId })) {
-        throw createHttpError('管理员已强制启用此 Hook，需由管理员取消直接启用后才能关闭', 409);
-      }
       if (enabled && hook.userVariables.some((variable) => variable.required)) {
         throw createHttpError('请在工作区辅助功能中填写个人变量后启用此 Hook', 409);
       }
       database.transaction(() => {
+        database.prepare(`UPDATE user_workspace_hook_preferences
+          SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND hook_id = ?`)
+          .run(Number(enabled), normalizedUserId, hookId);
         if (enabled) {
           database.prepare('DELETE FROM user_hook_opt_outs WHERE user_id = ? AND hook_id = ?')
             .run(normalizedUserId, hookId);
@@ -2547,9 +2563,6 @@ export function createHookConfigService({
       const eligible = hook.bindingController === 'sql_check'
         || isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
-      if (isAdminHookEnforced({ hook, userId: normalizedUserId })) {
-        throw createHttpError('此 Hook 的对话展示由管理员配置，无法自行修改', 409);
-      }
       database.transaction(() => {
         database.prepare(`
           INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)
@@ -2558,6 +2571,9 @@ export function createHookConfigService({
             show_in_chat = excluded.show_in_chat,
             updated_at = CURRENT_TIMESTAMP
         `).run(normalizedUserId, hookId, showInChat ? 1 : 0);
+        database.prepare(`UPDATE user_workspace_hook_preferences
+          SET show_in_chat = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND hook_id = ?`)
+          .run(Number(showInChat), normalizedUserId, hookId);
       })();
       return { hookId, showInChat };
     },
@@ -2572,12 +2588,6 @@ export function createHookConfigService({
           workspaceId,
         }).find((candidate) => candidate.id === String(hookId));
         if (workspaceHook) return workspaceHook.showInChat !== false;
-      }
-      if (workspaceId == null || workspaceId === '') {
-        const hook = getHook(hookId);
-        if (hook && isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId })) {
-          return hook.defaultShowInChat;
-        }
       }
       const preference = database.prepare(`
         SELECT show_in_chat
