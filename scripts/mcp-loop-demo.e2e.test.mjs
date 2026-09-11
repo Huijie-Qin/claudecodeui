@@ -298,3 +298,107 @@ test('mcp_loop_run terminates as failed when the Python script returns failed', 
     database.close();
   }
 });
+
+test('a subagent JSON-string tool response runs the real HTTP/Python loop and replaces only its own result', async () => {
+  const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-subagent-mcp-loop-e2e-'));
+  process.env.DATABASE_PATH = path.join(testRoot, 'app.db');
+  await fs.writeFile(process.env.DATABASE_PATH, '');
+  const [
+    { HOOK_CONFIG_SCHEMA_SQL },
+    { callHookMcpTool },
+    { createHookRuntimeSession },
+  ] = await Promise.all([
+    importServerModule('database/hook-config-schema.js'),
+    importServerModule('services/hook-mcp-client.js'),
+    importServerModule('services/hook-runtime.js'),
+  ]);
+  const taskServer = createMcpLoopDemoTaskServer({ durationMs: 300 });
+  const taskAddress = await listen(taskServer);
+  const mcpServer = createMcpLoopDemoMcpServer({
+    taskServiceUrl: `http://127.0.0.1:${taskAddress.port}`,
+  });
+  const mcpAddress = await listen(mcpServer);
+  const mcpServers = { loopdemo: { type: 'http', url: `http://127.0.0.1:${mcpAddress.port}/mcp` } };
+  const qualifiedStatusTool = 'mcp__loopdemo__get_task_status';
+  const database = new Database(':memory:');
+  database.pragma('foreign_keys = ON');
+  database.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)');
+  database.exec(HOOK_CONFIG_SCHEMA_SQL);
+  database.prepare('INSERT INTO users (id, username) VALUES (1, ?)').run('alice');
+  database.prepare(`
+    INSERT INTO hooks (id, name, event_name, include_subagents, created_by, updated_by, status, activation_scope)
+    VALUES ('wait-for-child-task', '等待子代理模拟任务', 'PostToolUse', 1, 1, 1, 'published', 'all_users')
+  `).run();
+  try {
+    const submitted = await callHookMcpTool({
+      qualifiedToolName: 'mcp__loopdemo__execute_task',
+      input: {}, mcpServers, cwd: testRoot, timeoutMs: 2_000,
+    });
+    const initialStatus = await callHookMcpTool({
+      qualifiedToolName: qualifiedStatusTool,
+      input: { task_id: submitted.task_id }, mcpServers, cwd: testRoot, timeoutMs: 2_000,
+    });
+    assert.equal(initialStatus.status, 'running');
+    const hook = {
+      id: 'wait-for-child-task', name: '等待子代理模拟任务', version: 1,
+      eventName: 'PostToolUse', includeSubagents: true,
+      matcher: { mode: 'exact', value: qualifiedStatusTool },
+      postActions: [{
+        id: 'wait-until-terminal', type: 'mcp_loop_run', position: 0,
+        config: {
+          pollIntervalMs: 30, perCallTimeoutMs: 2_000, maxWaitMs: 5_000,
+          terminationScript: TERMINATION_SCRIPT,
+        },
+      }],
+      claudeResponse: { bindings: {} },
+    };
+    const runtime = createHookRuntimeSession({
+      hooks: [hook], userId: 1, workspaceRoot: testRoot, database, mcpServers,
+      enqueueMcpLoop: async () => assert.fail('A child loop must never enqueue the parent scheduler'),
+    });
+    const response = await runtime.hooks.PostToolUse[0].hooks[0]({
+      hook_event_name: 'PostToolUse', session_id: 'parent-session',
+      agent_id: 'child-loop-http', agent_type: 'general-purpose',
+      tool_name: qualifiedStatusTool, tool_use_id: 'child-tool-status',
+      tool_input: { task_id: submitted.task_id },
+      // The real Claude CLI callback serializes MCP output before delivering it.
+      tool_response: JSON.stringify(initialStatus),
+    }, 'child-tool-status', { signal: new AbortController().signal });
+
+    assert.equal(response.hookSpecificOutput.hookEventName, 'PostToolUse');
+    const replacementBlocks = response.hookSpecificOutput.updatedMCPToolOutput;
+    assert.ok(Array.isArray(replacementBlocks), 'The CLI expects MCP content blocks at the native hook boundary');
+    assert.equal(replacementBlocks.length, 1);
+    assert.equal(replacementBlocks[0].type, 'text');
+    assert.equal(typeof replacementBlocks[0].text, 'string');
+    const replacement = JSON.parse(replacementBlocks[0].text);
+    assert.equal(replacement.status, 'success');
+    assert.equal(replacement.task_id, submitted.task_id);
+    const statusCalls = mcpServer.demoState.calls.filter(({ toolName }) => toolName === 'get_task_status');
+    assert.ok(statusCalls.length >= 2, 'The initial running query must be followed by real HTTP polls');
+    assert.ok(statusCalls.every(({ input }) => input.task_id === submitted.task_id));
+    assert.equal(statusCalls.at(-1).output.status, 'success');
+    const execution = database.prepare('SELECT * FROM hook_executions').get();
+    assert.equal(execution.status, 'succeeded');
+    assert.equal(execution.tool_use_id, 'child-tool-status');
+    assert.equal(JSON.parse(execution.input_json).agent_id, 'child-loop-http');
+    const outcome = JSON.parse(execution.actions_json)['wait-until-terminal'].output;
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(outcome.scheduled, false);
+    assert.equal(outcome.deliveredTo, 'subagent');
+    assert.equal(outcome.agentId, 'child-loop-http');
+    assert.deepEqual(outcome.initialResult, initialStatus);
+    assert.deepEqual(outcome.toolUseResult, replacement, 'Audit retains business data rather than native content blocks');
+    const attempts = database.prepare("SELECT data_json FROM hook_data_records WHERE record_type = 'mcp_loop_attempt' ORDER BY rowid")
+      .all().map(({ data_json }) => JSON.parse(data_json));
+    assert.equal(attempts[0].attemptCount, 0);
+    assert.equal(attempts[0].scriptInput.result.status, 'running');
+    assert.equal(attempts[0].scriptOutput.output.status, 'running');
+    assert.equal(attempts.at(-1).scriptOutput.output.status, 'success');
+    assert.ok(attempts.every(({ agentId }) => agentId === 'child-loop-http'));
+  } finally {
+    database.close();
+    await Promise.all([close(mcpServer), close(taskServer)]);
+    await fs.rm(testRoot, { recursive: true, force: true });
+  }
+});

@@ -1,3 +1,5 @@
+import { resolveIncludeSubagents } from '../../../../shared/hookSubagents.js';
+
 import type { HookConfigDraft } from './types';
 
 type HookItemIdRuntime = {
@@ -12,6 +14,7 @@ export function createHookDraftSignature(hook: HookConfigDraft): string {
     description: hook.description,
     userVariables: hook.userVariables || [],
     eventName: hook.eventName,
+    includeSubagents: resolveIncludeSubagents(hook),
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,
     postActions: hook.postActions,

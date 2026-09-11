@@ -564,6 +564,76 @@ test('ClaudeSessionsProvider restores nested subagent tools into the Agent histo
   )));
 });
 
+test('ClaudeSessionsProvider restores running children separately before either Agent result exists', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-provider-active-subagents-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = 'active-subagent-session';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const childDirectory = path.join(projectDirectory, sessionId, 'subagents');
+  await fs.mkdir(childDirectory, { recursive: true });
+  const parentRow = {
+    sessionId, uuid: 'parallel-agent-use', type: 'assistant', timestamp: '2026-09-11T08:00:00.000Z',
+    message: { role: 'assistant', content: ['a', 'b'].map((label) => ({
+      type: 'tool_use', id: `agent-tool-${label}`, name: label === 'a' ? 'Agent' : 'Task',
+      input: { description: `Wait for task ${label}` },
+    })) },
+  };
+  const mainTranscript = `${JSON.stringify(parentRow)}\n`;
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), mainTranscript);
+  for (const label of ['a', 'b']) {
+    const childRows = [
+      { uuid: `child-${label}-text`, type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: `Waiting ${label}` }] } },
+      { uuid: `child-${label}-execute`, type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', id: `execute-${label}`, name: 'mcp__tasks__execute_task', input: {} }] } },
+      { uuid: `child-${label}-result`, type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `execute-${label}`, content: JSON.stringify({ task_id: `task-${label}`, status: 'running' }) }] } },
+      { uuid: `child-${label}-status`, type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', id: `status-${label}`, name: 'mcp__tasks__get_task_status', input: { task_id: `task-${label}` } }] } },
+    ];
+    await fs.writeFile(path.join(childDirectory, `agent-child-${label}.meta.json`), JSON.stringify({ toolUseId: `agent-tool-${label}` }));
+    await fs.writeFile(path.join(childDirectory, `agent-child-${label}.jsonl`), `${childRows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+  }
+
+  const result = await new ClaudeSessionsProvider().fetchHistory(sessionId, { runtimeHomePath });
+  assert.equal(result.messages.length, 2);
+  for (const label of ['a', 'b']) {
+    const agent = result.messages.find((message) => message.toolId === `agent-tool-${label}`);
+    assert.ok(agent);
+    assert.equal(agent.agentId, `child-${label}`);
+    assert.equal(agent.toolResult, undefined, 'Running Agent must not receive a synthetic completion');
+    const tools = agent.subagentTools as Array<{ toolId: string; toolResult?: { content: string } }>;
+    assert.deepEqual(tools.map((tool) => tool.toolId), [`execute-${label}`, `status-${label}`]);
+    assert.equal(JSON.parse(tools[0].toolResult!.content).task_id, `task-${label}`);
+    assert.equal(tools[1].toolResult, undefined, 'The child status call is still waiting for its Hook');
+    assert.deepEqual(agent.subagentMessages?.map((message) => message.kind), ['text', 'tool_use', 'tool_result', 'tool_use']);
+    assert.equal(agent.subagentMessages?.[0].content, `Waiting ${label}`);
+    assert.ok(agent.subagentMessages?.every((message) => message.parentToolUseId === `agent-tool-${label}`));
+    assert.ok(agent.subagentMessages?.every((message) => !String(message.id).includes(`child-${label === 'a' ? 'b' : 'a'}-`)));
+  }
+  assert.equal(await fs.readFile(path.join(projectDirectory, `${sessionId}.jsonl`), 'utf8'), mainTranscript);
+});
+
+test('ClaudeSessionsProvider attaches indexed history only to its matching Agent or Task part', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'assistant', uuid: 'indexed-parts',
+    subagentInvocations: {
+      'agent-a': { agentId: 'child-a', subagentTools: [{ toolId: 'child-tool-a' }], subagentMessages: [] },
+      'bash-b': { agentId: 'not-a-child', subagentTools: [{ toolId: 'wrong-tool' }] },
+    },
+    message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'agent-a', name: 'Agent', input: {} },
+      { type: 'tool_use', id: 'agent-c', name: 'Agent', input: {} },
+      { type: 'tool_use', id: 'bash-b', name: 'Bash', input: {} },
+    ] },
+  }, 'session');
+  assert.deepEqual(messages[0].subagentTools, [{ toolId: 'child-tool-a' }]);
+  assert.deepEqual(messages[0].subagentMessages, []);
+  assert.equal(messages[0].agentId, 'child-a');
+  for (const message of messages.slice(1)) {
+    assert.equal(message.agentId, undefined);
+    assert.equal(message.subagentTools, undefined);
+    assert.equal(message.subagentMessages, undefined);
+  }
+});
+
 test('ClaudeSessionsProvider does not infer skill names from unmarked markdown headings', () => {
   const provider = new ClaudeSessionsProvider();
   const content = [

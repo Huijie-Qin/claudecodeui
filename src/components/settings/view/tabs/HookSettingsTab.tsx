@@ -3,6 +3,7 @@ import { History, RefreshCw, Webhook } from 'lucide-react';
 
 import { api } from '../../../../utils/api';
 import type { HookUserVariable } from '../../../admin/hook-config/types';
+import { getHookSubagentLabel } from '../../../admin/hook-config/catalog';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
 import SettingsSection from '../SettingsSection';
@@ -21,6 +22,7 @@ type AvailableHook = {
   name: string;
   description: string;
   eventName: string;
+  includeSubagents?: boolean;
   version: number;
   enabled: boolean;
   showInChat: boolean;
@@ -286,6 +288,7 @@ export default function HookSettingsTab({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{hook.name}</span>
                   <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{hook.eventName}</span>
+                  {getHookSubagentLabel(hook) ? <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{getHookSubagentLabel(hook)}</span> : null}
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}

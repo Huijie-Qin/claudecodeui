@@ -255,8 +255,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
   const hookActivity = message.hookActivity;
-  const hookStatus = hookActivity?.status || 'running';
   const isHookExecution = hookActivity?.activityKind === 'execution';
+  const isSubagentHook = Boolean(hookActivity?.agentId)
+    || hookActivity?.eventName === 'SubagentStart' || hookActivity?.eventName === 'SubagentStop';
+  const inlineLoopStatus = isHookExecution && isSubagentHook ? hookActivity?.loopStatus : undefined;
+  const terminalInlineLoopStatus = inlineLoopStatus === 'succeeded' || inlineLoopStatus === 'failed'
+    || inlineLoopStatus === 'timed_out' || inlineLoopStatus === 'cancelled' ? inlineLoopStatus : undefined;
+  const hookStatus = hookActivity?.status === 'failed'
+    ? 'failed'
+    : terminalInlineLoopStatus || hookActivity?.status || 'running';
+  const hookHasFailure = hookStatus === 'failed' || hookStatus === 'timed_out' || hookStatus === 'cancelled';
   const hookActionResults = hookActivity?.actionResults || [];
   const loopResult = hookActivity?.loopResult !== undefined
     ? hookActivity.loopResult
@@ -276,6 +284,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     running: t('hookActivity.status.running', { defaultValue: 'Running' }),
     succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
     failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+    timed_out: t('hookActivity.status.timed_out', { defaultValue: 'Timed out' }),
+    cancelled: t('hookActivity.status.cancelled', { defaultValue: 'Cancelled' }),
   }[hookStatus];
   const cancelMcpLoop = (jobId: string, sessionId?: string) => {
     setCancellingLoopJobs((current) => new Set(current).add(jobId));
@@ -351,6 +361,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
           className="w-full rounded-lg border border-l-4 border-violet-200/80 border-l-violet-500 bg-violet-50/60 px-3 py-2.5 dark:border-violet-900/70 dark:border-l-violet-400 dark:bg-violet-950/20"
           data-hook-activity={hookActivity.jobId || hookActivity.hookId || 'hook'}
           data-hook-status={hookStatus}
+          data-hook-execution-status={hookActivity.status}
+          data-hook-agent-id={hookActivity.agentId}
         >
           <div className="flex min-w-0 items-start gap-2.5">
             <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
@@ -366,14 +378,24 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 <span className="min-w-0 truncate text-sm font-medium text-foreground">
                   {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
                 </span>
-                <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${hookStatus === 'failed'
+                {(isHookExecution || isSubagentHook) ? (
+                  <span
+                    className="max-w-full truncate rounded border border-violet-200 px-1.5 py-0.5 text-[10px] text-violet-700 dark:border-violet-800 dark:text-violet-300"
+                    title={hookActivity.agentId}
+                  >
+                    {isSubagentHook ? t('hookActivity.subagent') : t('hookActivity.mainAgent')}
+                    {isSubagentHook && hookActivity.agentType ? ` · ${hookActivity.agentType}` : ''}
+                    {hookActivity.agentId ? ` · ${hookActivity.agentId.length > 12 ? `${hookActivity.agentId.slice(0, 8)}…${hookActivity.agentId.slice(-4)}` : hookActivity.agentId}` : ''}
+                  </span>
+                ) : null}
+                <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${hookHasFailure
                   ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
                   : hookStatus === 'succeeded'
                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
                     : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
                   }`}
                 >
-                  {hookStatus === 'failed' ? (
+                  {hookHasFailure ? (
                     <XCircle className="h-3 w-3" aria-hidden="true" />
                   ) : hookStatus === 'succeeded' ? (
                     <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
@@ -444,10 +466,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
               {loopResult !== undefined && (
                 <section
-                  className="mt-2 rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2.5 py-2 dark:border-emerald-900/70 dark:bg-emerald-950/20"
+                  className={`mt-2 rounded-md border px-2.5 py-2 ${hookHasFailure
+                    ? 'border-red-200/80 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/20'
+                    : 'border-emerald-200/80 bg-emerald-50/70 dark:border-emerald-900/70 dark:bg-emerald-950/20'}`}
                   data-hook-loop-result
                 >
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                  <div className={`text-[10px] font-semibold uppercase tracking-wide ${hookHasFailure
+                    ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'}`}>
                     {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
                   </div>
                   <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">

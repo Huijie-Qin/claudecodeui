@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 
@@ -73,8 +74,11 @@ async function requestTaskService(taskServiceUrl, pathname, init) {
 export function createMcpLoopDemoMcpServer({
   taskServiceUrl = DEFAULT_TASK_SERVICE_URL,
   requiredAuthorization = null,
+  now = () => Date.now(),
 } = {}) {
   const calls = [];
+  const startedAtMs = now();
+  const instanceId = crypto.randomUUID();
   const server = http.createServer(async (request, response) => {
     const pathname = new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname;
     if (request.method === 'GET' && pathname === '/health') {
@@ -140,6 +144,18 @@ export function createMcpLoopDemoMcpServer({
 
     const toolName = rpc.params?.name;
     const input = rpc.params?.arguments || {};
+    const callStartedAtMs = now();
+    const recordCall = (outcome) => {
+      const completedAtMs = now();
+      calls.push({
+        toolName,
+        input: structuredClone(input),
+        startedAtMs: callStartedAtMs,
+        completedAtMs,
+        durationMs: Math.max(0, completedAtMs - callStartedAtMs),
+        ...outcome,
+      });
+    };
     try {
       let payload;
       if (toolName === EXECUTE_TASK_TOOL.name) {
@@ -155,7 +171,7 @@ export function createMcpLoopDemoMcpServer({
         sendJson(response, 200, rpcError(rpc.id, -32601, `Unknown tool ${toolName || ''}`), sessionHeaders);
         return;
       }
-      calls.push({ toolName, input: structuredClone(input), output: structuredClone(payload) });
+      recordCall({ output: structuredClone(payload) });
       sendJson(response, 200, {
         jsonrpc: '2.0',
         id: rpc.id,
@@ -166,6 +182,7 @@ export function createMcpLoopDemoMcpServer({
       }, sessionHeaders);
     } catch (error) {
       const message = error?.message || String(error);
+      recordCall({ error: message });
       sendJson(response, 200, {
         jsonrpc: '2.0',
         id: rpc.id,
@@ -173,7 +190,7 @@ export function createMcpLoopDemoMcpServer({
       }, sessionHeaders);
     }
   });
-  server.demoState = { calls, taskServiceUrl };
+  server.demoState = { calls, taskServiceUrl, startedAtMs, instanceId };
   return server;
 }
 

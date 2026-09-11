@@ -195,9 +195,10 @@ function buildHistoricalHookActionResults(hook, execution, records = []) {
   const availableRecords = [...records];
 
   return (hook?.postActions || []).flatMap((action) => {
-    if (!['call_mcp_tool', 'write_record'].includes(action?.type)) return [];
-    if (!Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
+    if (!action?.id || !Object.prototype.hasOwnProperty.call(actions, action.id)) return [];
     const output = actions[action.id]?.output;
+    const isInlineSubagentLoop = action.type === 'mcp_loop_run' && output?.deliveredTo === 'subagent';
+    if (!['call_mcp_tool', 'write_record'].includes(action.type) && !isInlineSubagentLoop) return [];
     const result = {
       actionId: action.id,
       actionType: action.type,
@@ -276,6 +277,8 @@ function listHistoricalHookActivities({
         ? hookConfigs.listExecutionDataRecords(execution.id)
         : [];
       const actionResults = buildHistoricalHookActionResults(hook, execution, records);
+      const agentId = execution.agentId || execution.input?.agent_id;
+      const agentType = execution.agentType || execution.input?.agent_type;
       return [{
         id: `hook_activity_${execution.id}_execution`,
         sessionId: providerSessionId,
@@ -292,6 +295,9 @@ function listHistoricalHookActivities({
         hookId: execution.hookId,
         hookName: execution.hookName || hook?.name || null,
         eventName: execution.eventName || hook?.eventName || null,
+        ...(typeof agentId === 'string' && agentId
+          ? { agentId, agentType: typeof agentType === 'string' && agentType ? agentType : null }
+          : {}),
         actionTypes: [...new Set((hook?.postActions || []).map((action) => action.type).filter(Boolean))],
         ...(actionResults.length > 0 ? { actionResults } : {}),
         hasScript: Boolean(hook?.extensionLogic?.code?.trim()),

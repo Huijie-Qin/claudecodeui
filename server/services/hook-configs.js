@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import { canIncludeSubagents, resolveIncludeSubagents } from '../../shared/hookSubagents.js';
 import { appConfigDb, db } from '../database/db.js';
 import { decryptSecretString, encryptSecretString } from '../database/user-env.js';
 
@@ -622,6 +623,12 @@ function validateHookReferences(hook) {
 function normalizeHookInput(input, { strict = false } = {}) {
   if (!isPlainObject(input)) throw createHttpError('Hook payload must be an object');
   const eventName = normalizeEventName(input.eventName);
+  if (input.includeSubagents !== undefined && typeof input.includeSubagents !== 'boolean') {
+    throw createHttpError('includeSubagents must be boolean');
+  }
+  if (input.includeSubagents === true && !canIncludeSubagents(eventName)) {
+    throw createHttpError(`${eventName} 不支持同时对子代理生效`);
+  }
   const matcher = normalizeMatcher(input.matcher, eventName);
   const normalized = {
     name: requireString(input.name, 'name', { max: 120 }),
@@ -630,6 +637,7 @@ function normalizeHookInput(input, { strict = false } = {}) {
       allowEmpty: true,
     }),
     eventName,
+    includeSubagents: input.includeSubagents === true,
     matcher,
     userVariables: normalizeHookUserVariables(input.userVariables),
     extensionLogic: normalizeExtensionLogic(input.extensionLogic),
@@ -665,6 +673,10 @@ function mapHookRow(row) {
     defaultShowInChat: row.default_show_in_chat !== 0,
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
     eventName: row.event_name,
+    includeSubagents: resolveIncludeSubagents({
+      eventName: row.event_name,
+      includeSubagents: row.include_subagents == null ? undefined : row.include_subagents === 1,
+    }),
     matcher: parseJson(row.matcher_json, {}),
     extensionLogic: normalizeExtensionLogic(parseJson(row.extension_logic_json, null)),
     // Historical records must remain readable so administrators can repair an
@@ -750,6 +762,7 @@ function publishedHookConfig(hook) {
     description: hook.description || '',
     userVariables: hook.userVariables || [],
     eventName: hook.eventName,
+    includeSubagents: resolveIncludeSubagents(hook),
     matcher: hook.matcher || {},
     extensionLogic: hook.extensionLogic || null,
     postActions: hook.postActions || [],
@@ -766,6 +779,7 @@ function mapPublishedHookVersionRow(row) {
     description: config.description || '',
     userVariables: config.userVariables || [],
     eventName: config.eventName,
+    includeSubagents: resolveIncludeSubagents(config),
     matcher: config.matcher || {},
     extensionLogic: config.extensionLogic || null,
     postActions: config.postActions || [],
@@ -942,6 +956,8 @@ function mapExecutionRow(row, { summary = false } = {}) {
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
     username: row.username || null,
     toolName: typeof input.tool_name === 'string' ? input.tool_name : null,
+    agentId: typeof input.agent_id === 'string' && input.agent_id ? input.agent_id : null,
+    agentType: typeof input.agent_type === 'string' && input.agent_type ? input.agent_type : null,
     input: summary ? null : input,
     scriptOutput: summary ? null : parseJson(row.script_output_json, null),
     actions: summary ? {} : actions,
@@ -1907,7 +1923,9 @@ export function createHookConfigService({
 
     const groupKeySql = `CASE
       WHEN NULLIF(e.tool_use_id, '') IS NOT NULL THEN
-        'tool:' || COALESCE(e.session_id, '') || CHAR(31) || e.event_name || CHAR(31) || e.tool_use_id
+        'tool:' || COALESCE(e.session_id, '') || CHAR(31)
+          || COALESCE(json_extract(${safeInputJson}, '$.agent_id'), '') || CHAR(31)
+          || e.event_name || CHAR(31) || e.tool_use_id
       ELSE 'execution:' || e.id
     END`;
     const sortTimeSql = `COALESCE(
@@ -2715,10 +2733,10 @@ export function createHookConfigService({
         .prepare(
           `
         INSERT INTO hooks (
-          id, name, description, status, event_name, matcher_json,
+          id, name, description, status, event_name, include_subagents, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json, user_variables_json,
           binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2726,6 +2744,7 @@ export function createHookConfigService({
           normalized.name,
           normalized.description,
           normalized.eventName,
+          normalized.includeSubagents ? 1 : 0,
           JSON.stringify(normalized.matcher),
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),
@@ -2739,13 +2758,18 @@ export function createHookConfigService({
     },
 
     updateHook: ({ hookId, input, userId }) => {
-      requireHook(hookId);
-      const normalized = normalizeWithMcpIdentity(input);
+      const existing = requireHook(hookId);
+      const normalized = normalizeWithMcpIdentity({
+        ...input,
+        includeSubagents: input?.includeSubagents === undefined && input?.eventName === existing.eventName
+          ? existing.includeSubagents
+          : input?.includeSubagents,
+      });
       database
         .prepare(
           `
         UPDATE hooks
-        SET name = ?, description = ?, status = 'draft', event_name = ?,
+        SET name = ?, description = ?, status = 'draft', event_name = ?, include_subagents = ?,
             matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
             claude_response_json = ?, user_variables_json = ?,
             updated_by = ?, updated_at = CURRENT_TIMESTAMP
@@ -2756,6 +2780,7 @@ export function createHookConfigService({
           normalized.name,
           normalized.description,
           normalized.eventName,
+          normalized.includeSubagents ? 1 : 0,
           JSON.stringify(normalized.matcher),
           JSON.stringify(normalized.extensionLogic),
           JSON.stringify(normalized.postActions),

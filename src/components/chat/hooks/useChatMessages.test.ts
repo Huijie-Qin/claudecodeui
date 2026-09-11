@@ -262,6 +262,54 @@ test('normalizedToChatMessages recovers pre-marker Skill output within the Stop 
   assert.equal(chatMessages[1].id, 'next-user');
 });
 
+test('child Hook cards preserve agent identity without consuming main-agent output as a Skill follow-up', () => {
+  const childExecution: NormalizedMessage = {
+    id: 'hook_activity_child-execution_execution', sessionId: 'session-1',
+    timestamp: '2026-06-30T00:00:01.000Z', provider: 'claude', kind: 'hook_activity',
+    origin: 'hook', activityKind: 'execution', status: 'succeeded',
+    jobId: 'hook_activity_child-execution_execution', executionId: 'child-execution',
+    hookName: '子代理完成校验', eventName: 'SubagentStop', agentId: 'child-one', agentType: 'reviewer',
+    actionTypes: ['invoke_skill'],
+  };
+  const parentAnswer: NormalizedMessage = {
+    id: 'parent-answer', sessionId: 'session-1', timestamp: '2026-06-30T00:00:02.000Z',
+    provider: 'claude', kind: 'text', role: 'assistant', content: 'All child tasks are complete.',
+  };
+  for (const identity of [
+    { agentId: 'child-one', agentType: 'reviewer', eventName: 'SubagentStop' },
+    { agentId: 'child-one', agentType: 'reviewer', eventName: 'Stop' },
+    { agentId: undefined, agentType: undefined, eventName: 'SubagentStop' },
+  ]) {
+    const result = normalizedToChatMessages([{ ...childExecution, ...identity }, parentAnswer]);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].hookActivity?.agentId, identity.agentId);
+    assert.equal(result[0].hookActivity?.agentType, identity.agentType);
+    assert.deepEqual(result[0].hookActivity?.followups, []);
+    assert.equal(result[1].id, 'parent-answer');
+    assert.equal(result[1].content, parentAnswer.content);
+  }
+});
+
+test('child inline feedback does not create a recovered parent Skill card from an activity marker', () => {
+  const result = normalizedToChatMessages([
+    {
+      id: 'hook_activity_child-execution_execution', sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z', provider: 'claude', kind: 'hook_activity',
+      origin: 'hook', activityKind: 'execution', status: 'succeeded',
+      jobId: 'hook_activity_child-execution_execution', executionId: 'child-execution',
+      agentId: 'child-one', agentType: 'reviewer', eventName: 'SubagentStop', actionTypes: ['invoke_skill'],
+    },
+    {
+      id: 'later-answer', sessionId: 'session-1', timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude', kind: 'text', role: 'assistant', content: 'Main answer remains visible.',
+      hookActivityId: 'hook_activity_child-execution_skill-action',
+    },
+  ]);
+  assert.equal(result.length, 2);
+  assert.deepEqual(result[0].hookActivity?.followups, []);
+  assert.equal(result[1].id, 'later-answer');
+});
+
 test('normalizedToChatMessages groups legacy Hook activities by their shared job id prefix', () => {
   const executionId = 'e412c904-92d8-4551-9e6f-b1359d7e017b';
   const chatMessages = normalizedToChatMessages([
@@ -487,6 +535,35 @@ test('normalizedToChatMessages hides persisted mcp loop scheduling metadata from
   }]);
 
   assert.deepEqual(hookMessage.hookActivity?.actionResults?.map((result) => result.actionId), ['audit']);
+});
+
+test('inline child MCP loop terminal outcomes remain visible when Hook transport succeeded', () => {
+  for (const loopStatus of ['succeeded', 'failed', 'timed_out', 'cancelled']) {
+    const finalResult = loopStatus === 'succeeded'
+      ? { status: 'done', answer: 42 }
+      : loopStatus === 'failed'
+        ? { state: 'Rejected', reason: 'Quality check failed' }
+        : { mcpLoop: true, status: loopStatus, error: `Loop ${loopStatus}` };
+    const [message] = normalizedToChatMessages([{
+      id: 'child-loop-execution', sessionId: 'loop-session', provider: 'claude',
+      timestamp: '2026-09-10T00:00:00.000Z', kind: 'hook_activity', activityKind: 'execution',
+      status: 'succeeded', agentId: 'child-one', agentType: 'worker', eventName: 'PostToolUse',
+      actionTypes: ['mcp_loop_run'],
+      actionResults: [{
+        actionId: 'loop', actionType: 'mcp_loop_run',
+        output: {
+          scheduled: false, deliveredTo: 'subagent', agentId: 'child-one',
+          status: loopStatus, attemptCount: 3, toolUseResult: finalResult,
+        },
+      }],
+    }]);
+    assert.equal(message.hookActivity?.status, 'succeeded', 'The Hook transport status remains unchanged');
+    assert.equal(message.hookActivity?.loopStatus, loopStatus);
+    assert.equal(message.hookActivity?.loopAttemptCount, 3);
+    assert.deepEqual(message.hookActivity?.loopResult, finalResult);
+    assert.equal(message.hookActivity?.actionResults, undefined, 'Scheduling metadata is not duplicated as a raw result');
+    assert.deepEqual(message.hookActivity?.followups, [], 'Inline child loops do not create a main-session follow-up');
+  }
 });
 
 test('normalizedToChatMessages preserves queued user message state', () => {
@@ -879,6 +956,41 @@ test('normalizedToChatMessages keeps an async Agent card running before its noti
   assert.equal(agentCard.subagentState?.isComplete, false);
   assert.equal(agentCard.subagentState?.agentId, 'agent-1');
   assert.equal(agentCard.toolResult, null);
+});
+
+test('normalizedToChatMessages preserves a restored running child identity and two tools without a parent result', () => {
+  const invocation: NormalizedMessage = {
+    id: 'running-agent', sessionId: 'session-1', timestamp: '2026-09-11T08:00:00.000Z', provider: 'claude',
+    kind: 'tool_use', toolName: 'Agent', toolId: 'parent-agent-tool', agentId: 'restored-child',
+    toolInput: { description: 'Wait for the twenty-minute task', run_in_background: false },
+    subagentTools: [
+      {
+        toolId: 'execute-task', toolName: 'mcp__tasks__execute_task', toolInput: {},
+        timestamp: '2026-09-11T08:00:01.000Z',
+        toolResult: { content: '{"task_id":"task-1","status":"running"}', isError: false },
+      },
+      {
+        toolId: 'get-status', toolName: 'mcp__tasks__get_task_status', toolInput: { task_id: 'task-1' },
+        timestamp: '2026-09-11T08:00:02.000Z',
+      },
+    ],
+  };
+  const [agentCard] = normalizedToChatMessages([invocation]);
+  assert.equal(agentCard.subagentState?.agentId, 'restored-child');
+  assert.equal(agentCard.subagentState?.isComplete, false);
+  assert.equal(agentCard.toolResult, null);
+  assert.equal(agentCard.toolCompletedAt, undefined);
+  assert.deepEqual(agentCard.subagentState?.childTools.map((tool) => tool.toolId), ['execute-task', 'get-status']);
+  assert.equal(agentCard.subagentState?.childTools[0].toolResult?.content, '{"task_id":"task-1","status":"running"}');
+  assert.equal(agentCard.subagentState?.childTools[1].toolResult, null);
+
+  const cardsWithProgress = normalizedToChatMessages([invocation, {
+    id: 'child-progress', sessionId: 'session-1', timestamp: '2026-09-11T08:01:00.000Z', provider: 'claude',
+    kind: 'task_notification', taskId: 'restored-child', status: 'running', summary: 'Still waiting for the task',
+  }]);
+  assert.equal(cardsWithProgress.length, 1, 'A later task-id-only update must associate with the restored invocation');
+  assert.equal(cardsWithProgress[0].taskNotification?.summary, 'Still waiting for the task');
+  assert.equal(cardsWithProgress[0].subagentState?.isComplete, false);
 });
 
 test('normalizedToChatMessages attaches a task notification to its Agent card', () => {

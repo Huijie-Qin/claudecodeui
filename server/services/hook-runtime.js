@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import { canIncludeSubagents } from '../../shared/hookSubagents.js';
 import { db as defaultDatabase } from '../database/db.js';
 
 import { isRequiredStopHook } from './claude-hook-policy.js';
@@ -7,6 +8,7 @@ import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skill
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
+import { runSubagentMcpLoop, subagentHookTimeoutSeconds } from './hook-subagent-mcp-loop.js';
 import { createHookVariableRedactor, mergeHookUserVariableValues } from './hook-user-variables.js';
 
 const UNRESOLVED = Symbol('unresolved');
@@ -157,6 +159,29 @@ function buildClaudeHookOutput(hook, references) {
   return output;
 }
 
+function resolveEffectiveHook(hook, event) {
+  if (!event) return null;
+  if (hook.eventName === 'Stop' && hook.includeSubagents === true
+      && event.hook_event_name === 'SubagentStop' && event.agent_id) {
+    return { ...hook, eventName: 'SubagentStop' };
+  }
+  if (event.hook_event_name !== hook.eventName) return null;
+  if (event.agent_id && canIncludeSubagents(hook.eventName)) {
+    if (hook.includeSubagents === false) return null;
+    // An inherited Stop runs through its SubagentStop registration only.
+    if (hook.eventName === 'Stop' && hook.includeSubagents === true) return null;
+  }
+  return hook;
+}
+
+function recoveryKeyFor(hook, action, event) {
+  return JSON.stringify([hook.id, action.id, event?.agent_id || null]);
+}
+
+function isSubagentStop(event) {
+  return event?.hook_event_name === 'SubagentStop' && Boolean(event.agent_id);
+}
+
 function outputMatchesType(value, type) {
   if (type === 'array') return Array.isArray(value);
   if (type === 'object') return isPlainObject(value);
@@ -283,6 +308,8 @@ async function executePostActions({
   event,
   signal,
   recoveryKeys,
+  subagentFeedback,
+  subagentMcpResults,
   writeRecord,
 }) {
   for (const action of hook.postActions || []) {
@@ -320,13 +347,37 @@ async function executePostActions({
     }
     if (action.type === 'mcp_loop_run') {
       const input = isPlainObject(event?.tool_input) ? event.tool_input : {};
-      const schedulingResult = await context.enqueueMcpLoop({
+      const schedulingResult = event?.agent_id
+        ? await runSubagentMcpLoop({
+          hook,
+          action,
+          event,
+          input,
+          signal,
+          workspaceRoot: context.workspaceRoot,
+          env: references.ccui.env,
+          resolveTarget: () => context.resolveMcpAction({
+            hook,
+            action: { ...action, config: { ...action.config, toolName: hook.matcher?.value } },
+          }),
+          mcpCaller: context.mcpCaller,
+          scriptExecutor: context.scriptExecutor,
+          headersHelperRunner: context.headersHelperRunner,
+          onAttempt: (attempt) => writeRecord('mcp_loop_attempt', {
+            agentId: event.agent_id,
+            actionId: action.id,
+            ...attempt,
+          }),
+        })
+        : await context.enqueueMcpLoop({
         hook,
         action,
         event,
         executionId,
         input,
+        signal,
       });
+      if (event?.agent_id) subagentMcpResults.push(schedulingResult.toolUseResult);
       references.actions[action.id] = {
         output: {
           scheduled: Boolean(schedulingResult?.scheduled),
@@ -379,7 +430,11 @@ async function executePostActions({
         };
         continue;
       }
-      const recoveryKey = `${hook.id}:${action.id}`;
+      const recoveryKey = recoveryKeyFor(hook, action, event);
+      if (isSubagentStop(event) && event.stop_hook_active) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
+        continue;
+      }
       if (recoveryKeys.has(recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
@@ -391,7 +446,9 @@ async function executePostActions({
       if (!messageText.trim()) {
         throw new Error(`Post action ${action.id} message is empty`);
       }
-      const schedulingResult = await context.enqueueAgentMessage({
+      const schedulingResult = isSubagentStop(event)
+        ? { deliveredTo: 'subagent', agentId: event.agent_id }
+        : await context.enqueueAgentMessage({
         hook,
         action,
         event,
@@ -399,6 +456,7 @@ async function executePostActions({
         messageText,
         displayMessage: context.redact(messageText),
       });
+      if (isSubagentStop(event)) subagentFeedback.push(messageText);
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
         output: {
@@ -428,7 +486,11 @@ async function executePostActions({
         };
         continue;
       }
-      const recoveryKey = `${hook.id}:${action.id}`;
+      const recoveryKey = recoveryKeyFor(hook, action, event);
+      if (isSubagentStop(event) && event.stop_hook_active) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
+        continue;
+      }
       if (recoveryKeys.has(recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
@@ -437,20 +499,40 @@ async function executePostActions({
       if (argumentsText === UNRESOLVED) {
         throw new Error(`Post action ${action.id} arguments contain an unresolved variable`);
       }
-      const modelContent = await context.skillContentLoader(
-        action.config.skillId,
-        action.config.skillName,
-        argumentsText,
-      );
-      const schedulingResult = await context.enqueueSkillRecovery({
-        hook,
-        action,
-        event,
-        executionId,
-        argumentsText,
-        modelContent,
-        displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
-      });
+      let schedulingResult;
+      const childRecovery = isSubagentStop(event);
+      // Reserve before asynchronous content loading so duplicate callbacks for
+      // the same child cannot both deliver the same recovery Skill.
+      if (childRecovery) recoveryKeys.add(recoveryKey);
+      try {
+        const modelContent = await context.skillContentLoader(
+          action.config.skillId,
+          action.config.skillName,
+          argumentsText,
+        );
+        const recoveryRequest = {
+          hook,
+          action,
+          event,
+          executionId,
+          argumentsText,
+          modelContent,
+          displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
+        };
+        if (childRecovery) {
+          const content = await context.prepareSubagentSkillRecovery(recoveryRequest);
+          if (typeof content !== 'string' || !content.trim()) {
+            throw new Error('Subagent Skill recovery must provide nonempty content');
+          }
+          subagentFeedback.push(content);
+          schedulingResult = { deliveredTo: 'subagent', agentId: event.agent_id };
+        } else {
+          schedulingResult = await context.enqueueSkillRecovery(recoveryRequest);
+        }
+      } catch (error) {
+        if (childRecovery) recoveryKeys.delete(recoveryKey);
+        throw error;
+      }
       recoveryKeys.add(recoveryKey);
       references.actions[action.id] = {
         output: {
@@ -486,12 +568,16 @@ export function createHookRuntimeSession({
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
   },
+  prepareSubagentSkillRecovery = async () => {
+    throw new Error('Subagent Skill recovery is not available in this runtime');
+  },
   enqueueAgentMessage = async () => {
     throw new Error('Agent messaging is not available in this runtime');
   },
   enqueueMcpLoop = async () => {
     throw new Error('MCP loop scheduling is not available in this runtime');
   },
+  onSubagentLoopWait = () => {},
   onExecutionActivity = () => {},
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
@@ -512,10 +598,12 @@ export function createHookRuntimeSession({
     suppressSkillRecovery,
     skillContentLoader,
     enqueueSkillRecovery,
+    prepareSubagentSkillRecovery,
     enqueueAgentMessage,
     enqueueMcpLoop,
     onExecutionActivity,
     mcpCaller,
+    scriptExecutor,
   };
 
   const reportExecutionActivity = (activity) => {
@@ -531,8 +619,9 @@ export function createHookRuntimeSession({
     }
   };
 
-  const executeHookWithAudit = async (hook, event, toolUseId, callbackOptions = {}) => {
-    if (!event || event.hook_event_name !== hook.eventName) return {};
+  const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}) => {
+    const hook = resolveEffectiveHook(configuredHook, event);
+    if (!hook) return {};
     const startedAt = Date.now();
     const definitions = hook.userVariables || [];
     let userVariables = {};
@@ -552,6 +641,8 @@ export function createHookRuntimeSession({
       startedAt,
     });
     const logs = [];
+    const subagentFeedback = [];
+    const subagentMcpResults = [];
     let scriptOutput = {};
     const references = {
       event,
@@ -601,6 +692,8 @@ export function createHookRuntimeSession({
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
+        subagentFeedback,
+        subagentMcpResults,
         writeRecord: async (recordType, data) => writeDataRecord(
           database,
           executionId,
@@ -612,6 +705,25 @@ export function createHookRuntimeSession({
         ),
       });
       const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);
+      if (subagentMcpResults.length > 0) {
+        response.hookSpecificOutput = {
+          ...response.hookSpecificOutput,
+          hookEventName: 'PostToolUse',
+          // The CLI puts this value directly into tool_result.content. Keep
+          // business data in audit actions, but send valid MCP content blocks.
+          updatedMCPToolOutput: [{
+            type: 'text',
+            text: JSON.stringify(subagentMcpResults.at(-1)) ?? 'null',
+          }],
+        };
+      }
+      if (subagentFeedback.length > 0 && response.continue !== false) {
+        response.decision = 'block';
+        response.reason = [response.reason, ...subagentFeedback].filter(Boolean).join('\n\n');
+      }
+      if (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_CLAUDE_OUTPUT_BYTES) {
+        throw new Error('Claude Hook response is larger than 2 MB');
+      }
       completeExecution(database, executionId, {
         status: 'succeeded',
         startedAt,
@@ -659,14 +771,21 @@ export function createHookRuntimeSession({
   };
 
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
+    const effectiveHook = resolveEffectiveHook(hook, event);
+    const waitId = effectiveHook && event.agent_id
+      && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')
+      ? `subagent-hook-${crypto.randomUUID()}` : null;
+    if (waitId) onSubagentLoopWait({ id: waitId, waiting: true });
     try {
       return await executeHookWithAudit(hook, event, toolUseId, callbackOptions);
     } catch (error) {
-      if (!isRequiredStopHook(hook)) throw error;
+      if (!isRequiredStopHook(resolveEffectiveHook(hook, event))) throw error;
       // An audit/database failure must not turn a required check into a rejected
       // SDK callback, which the SDK can otherwise ignore as a Hook error.
       console.error(`[Hook:${hook.id}] Required Stop check could not persist its execution.`);
       return { continue: false, stopReason: '必需的 Stop 校验无法执行或保存验收记录，已终止当前执行。请修复 Hook 服务后重试。' };
+    } finally {
+      if (waitId) onSubagentLoopWait({ id: waitId, waiting: false });
     }
   };
 
@@ -677,10 +796,15 @@ export function createHookRuntimeSession({
     const entry = {
       ...(matcher ? { matcher } : {}),
       hooks: [(event, toolUseId, options) => executeHook(hook, event, toolUseId, options)],
-      timeout: 60,
+      timeout: subagentHookTimeoutSeconds(hook),
     };
     if (!sdkHooks[hook.eventName]) sdkHooks[hook.eventName] = [];
     sdkHooks[hook.eventName].push(entry);
+    if (hook.eventName === 'Stop' && hook.includeSubagents === true) {
+      if (!sdkHooks.SubagentStop) sdkHooks.SubagentStop = [];
+      // Stop has no matcher; a SubagentStop matcher would filter agent types.
+      sdkHooks.SubagentStop.push({ hooks: entry.hooks, timeout: entry.timeout });
+    }
   }
 
   return { hooks: sdkHooks, executeHook, hasRequiredStopHook: hooks.some(isRequiredStopHook) };

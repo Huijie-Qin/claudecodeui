@@ -27,6 +27,8 @@
   "hookActivity": {
     "title": "Follow-up message",
     "executionTitle": "Hook execution",
+    "subagent": "Subagent",
+    "mainAgent": "Main agent",
     "script": "Script",
     "actions": {
       "call_mcp_tool": "MCP call",
@@ -60,7 +62,9 @@
       "queued": "Queued",
       "running": "Running",
       "succeeded": "Completed",
-      "failed": "Failed"
+      "failed": "Failed",
+      "timed_out": "Timed out",
+      "cancelled": "Cancelled"
     }
   },
   "tools": {

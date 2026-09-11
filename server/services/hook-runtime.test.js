@@ -12,6 +12,209 @@ import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
 
+test('subagent inheritance filters tool callbacks before scripts, variables, or audit side effects', async () => {
+  for (const eventName of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']) {
+    for (const includeSubagents of [false, true, undefined]) {
+      const database = createDatabase();
+      const executed = [];
+      const hook = {
+        id: 'hook-1', eventName, includeSubagents, matcher: { value: 'Bash' },
+        extensionLogic: { language: 'javascript', code: 'test' },
+      };
+      try {
+        const runtime = createHookRuntimeSession({ hooks: [hook], database,
+          scriptExecutor: async ({ event }) => { executed.push(event.agent_id || 'main'); return {}; },
+        });
+        assert.equal(runtime.hooks[eventName][0].matcher, 'Bash');
+        const callback = runtime.hooks[eventName][0].hooks[0];
+        for (const agentId of [undefined, 'child-a', 'child-b']) {
+          await callback({ hook_event_name: eventName, agent_id: agentId, agent_type: 'code-reviewer' });
+        }
+        const expected = includeSubagents === false ? ['main'] : ['main', 'child-a', 'child-b'];
+        assert.deepEqual(executed, expected);
+        assert.equal(database.prepare('SELECT COUNT(*) AS count FROM hook_executions').get().count, expected.length);
+      } finally { database.close(); }
+    }
+  }
+});
+
+test('inherited Stop runs once per child as SubagentStop and preserves original script input', async () => {
+  const database = createDatabase();
+  const seen = [];
+  const hook = { id: 'hook-1', eventName: 'Stop', includeSubagents: true,
+    extensionLogic: { language: 'javascript', code: 'test' },
+  };
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database,
+      scriptExecutor: async ({ event }) => { seen.push(event); return {}; },
+    });
+    assert.equal(runtime.hooks.Stop.length, 1);
+    assert.equal(runtime.hooks.SubagentStop.length, 1);
+    assert.equal(runtime.hooks.SubagentStop[0].matcher, undefined);
+    await runtime.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', agent_type: 'reviewer' });
+    for (const agentId of ['child-a', 'child-b']) {
+      await runtime.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', agent_id: agentId });
+      await runtime.hooks.SubagentStop[0].hooks[0]({ hook_event_name: 'SubagentStop', agent_id: agentId });
+    }
+    assert.deepEqual(seen.map((event) => event.hook_event_name), ['Stop', 'SubagentStop', 'SubagentStop']);
+    assert.deepEqual(database.prepare('SELECT event_name FROM hook_executions ORDER BY rowid').all()
+      .map((row) => row.event_name), ['Stop', 'SubagentStop', 'SubagentStop']);
+    for (const includeSubagents of [false, undefined]) {
+      const direct = createHookRuntimeSession({ hooks: [{ ...hook, includeSubagents }], database });
+      assert.equal(direct.hooks.SubagentStop, undefined);
+    }
+  } finally { database.close(); }
+});
+
+test('explicit subagent lifecycle hooks remain active regardless of inheritance toggle', async () => {
+  const database = createDatabase();
+  try {
+    for (const eventName of ['SubagentStart', 'SubagentStop']) {
+      for (const includeSubagents of [false, true, undefined]) {
+        let executions = 0;
+        const hook = { id: 'hook-1', eventName, includeSubagents,
+          extensionLogic: { language: 'javascript', code: 'test' },
+        };
+        const runtime = createHookRuntimeSession({ hooks: [hook], database,
+          scriptExecutor: async () => { executions += 1; return {}; },
+        });
+        await runtime.hooks[eventName][0].hooks[0]({ hook_event_name: eventName, agent_id: 'child' });
+        assert.equal(executions, 1);
+        assert.equal(runtime.hooks[eventName].length, 1);
+      }
+    }
+  } finally { database.close(); }
+});
+
+test('inherited Stop sends messages and materialized Skills to each child without queueing the main session', async () => {
+  const database = createDatabase();
+  const preparedAgents = [];
+  const mainMessages = [];
+  const hook = {
+    id: 'hook-1', eventName: 'Stop', includeSubagents: true,
+    postActions: [
+      { id: 'message', type: 'send_agent_message', config: { messageTemplate: 'Review {{event.agent_id}}' } },
+      { id: 'skill', type: 'invoke_skill', config: { skillId: 'builtin:test', skillName: 'test', argumentsTemplate: '{{event.agent_id}}' } },
+    ],
+  };
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database,
+      skillContentLoader: loadTestHookSkill,
+      prepareSubagentSkillRecovery: async ({ event, modelContent }) => {
+        preparedAgents.push(event.agent_id);
+        return `Skill root: /workspace/.cloudcli/hook-config/skills/test\n${modelContent}`;
+      },
+      enqueueAgentMessage: async (request) => { mainMessages.push(request); },
+      enqueueSkillRecovery: async () => assert.fail('Child Skill must not enqueue main session'),
+    });
+    const callback = runtime.hooks.SubagentStop[0].hooks[0];
+    for (const agentId of ['child-a', 'child-b']) {
+      const event = { hook_event_name: 'SubagentStop', agent_id: agentId, stop_hook_active: false };
+      const response = await callback(event);
+      assert.equal(response.decision, 'block');
+      assert.match(response.reason, new RegExp(`Review ${agentId}`));
+      assert.match(response.reason, /Skill root: \/workspace/);
+      assert.match(response.reason, /HOOK_NOTIFICATION_SKILL_EXECUTED/);
+      assert.deepEqual(await callback(event), {}, 'Same child does not receive duplicate followups');
+    }
+    assert.deepEqual(mainMessages, []);
+    assert.deepEqual(preparedAgents, ['child-a', 'child-b']);
+    assert.deepEqual(await callback({ hook_event_name: 'SubagentStop', agent_id: 'recovery-child', stop_hook_active: true }), {});
+    assert.deepEqual(preparedAgents, ['child-a', 'child-b']);
+  } finally { database.close(); }
+});
+
+test('required inherited Stop checks fail closed on child script and audit errors', async () => {
+  for (const failAudit of [false, true]) {
+    const database = createDatabase();
+    const hook = { id: 'hook-1', eventName: 'Stop', includeSubagents: true,
+      extensionLogic: { language: 'javascript', code: 'validate', failClosed: true },
+    };
+    try {
+      const runtime = createHookRuntimeSession({ hooks: [hook],
+        database: failAudit ? { prepare: () => { throw new Error('Audit unavailable'); } } : database,
+        scriptExecutor: async () => { throw new Error('Validation unavailable'); },
+      });
+      assert.equal(runtime.hasRequiredStopHook, true);
+      const response = await runtime.hooks.SubagentStop[0].hooks[0]({ hook_event_name: 'SubagentStop', agent_id: 'child' });
+      assert.equal(response.continue, false);
+      assert.equal(response.decision, undefined);
+    } finally { database.close(); }
+  }
+});
+
+test('concurrent Stop callbacks deliver a recovery Skill only once to the same child', async () => {
+  const database = createDatabase();
+  let prepared = 0;
+  const hook = { id: 'hook-1', eventName: 'Stop', includeSubagents: true,
+    postActions: [{ id: 'skill', type: 'invoke_skill', config: { skillId: 'builtin:test', skillName: 'test', argumentsTemplate: '' } }],
+  };
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database,
+      skillContentLoader: loadTestHookSkill,
+      prepareSubagentSkillRecovery: async ({ modelContent }) => { prepared += 1; return modelContent; },
+    });
+    const callback = runtime.hooks.SubagentStop[0].hooks[0];
+    const event = { hook_event_name: 'SubagentStop', agent_id: 'child-a' };
+    const responses = await Promise.all([callback(event), callback(event)]);
+    assert.equal(prepared, 1);
+    assert.equal(responses.filter((response) => response.decision === 'block').length, 1);
+  } finally { database.close(); }
+});
+
+test('subagent MCP loops return the final tool output to the same child without scheduling the root', async () => {
+  const database = createDatabase();
+  const waits = new Map();
+  const hook = { id: 'hook-1', eventName: 'PostToolUse', includeSubagents: true,
+    matcher: { value: 'mcp__status__poll' },
+    postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {
+      pollIntervalMs: 1, perCallTimeoutMs: 100, maxWaitMs: 2000,
+      successWhen: { field: 'status', equals: 'done' },
+    } }],
+  };
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database,
+      onSubagentLoopWait: ({ id, waiting }) => {
+        if (waiting) waits.set(id, true);
+        else assert.equal(waits.delete(id), true, 'Every wait releases exactly once');
+      },
+      resolveMcpAction: async ({ action }) => {
+        assert.equal(action.config.toolName, hook.matcher.value);
+        return { qualifiedToolName: action.config.toolName };
+      },
+      mcpCaller: async ({ input }) => ({ status: 'done', child: input.child }),
+      enqueueMcpLoop: async () => assert.fail('Child loop must not schedule root'),
+    });
+    assert.equal(runtime.hooks.PostToolUse[0].timeout, 62);
+    const responses = await Promise.all(['child-a', 'child-b'].map((agentId) => runtime.hooks.PostToolUse[0].hooks[0]({
+      hook_event_name: 'PostToolUse', agent_id: agentId, tool_use_id: `${agentId}-tool`,
+      tool_input: { child: agentId }, tool_response: { status: 'running' },
+    })));
+    assert.deepEqual(responses.map((response) => response.hookSpecificOutput.updatedMCPToolOutput), [
+      [{ type: 'text', text: JSON.stringify({ status: 'done', child: 'child-a' }) }],
+      [{ type: 'text', text: JSON.stringify({ status: 'done', child: 'child-b' }) }],
+    ]);
+    assert.equal(waits.size, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_data_records WHERE record_type = 'mcp_loop_attempt'").get().count, 4);
+  } finally { database.close(); }
+});
+
+test('a failed subagent loop hook releases the stream watchdog wait', async () => {
+  const transitions = [];
+  const hook = { id: 'broken-audit', eventName: 'PostToolUse', includeSubagents: true,
+    postActions: [{ id: 'loop', type: 'mcp_loop_run', config: { maxWaitMs: 2000 } }],
+  };
+  const runtime = createHookRuntimeSession({ hooks: [hook],
+    database: { prepare: () => { throw new Error('Audit unavailable'); } },
+    onSubagentLoopWait: (transition) => transitions.push(transition),
+  });
+  await assert.rejects(runtime.hooks.PostToolUse[0].hooks[0]({
+    hook_event_name: 'PostToolUse', agent_id: 'child',
+  }), /Audit unavailable/);
+  assert.deepEqual(transitions.map(({ waiting }) => waiting), [true, false]);
+  assert.equal(transitions[0].id, transitions[1].id);
+});
+
 test('required Stop checks still terminate if the audit database is unavailable', async () => {
   const hook = {
     id: 'broken-audit', eventName: 'Stop',

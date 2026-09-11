@@ -80,6 +80,7 @@ export type HookConfigDraft = {
   description: string;
   userVariables?: HookUserVariable[];
   eventName: HookEventName;
+  includeSubagents?: boolean;
   matcher: HookMatcher;
   extensionLogic: HookExtensionLogic | null;
   postActions: HookPostAction[];
@@ -154,6 +155,8 @@ export type HookExecution = {
   workspaceId: number | null;
   sessionId: string | null;
   eventName: HookEventName;
+  agentId?: string | null;
+  agentType?: string | null;
   toolUseId: string | null;
   toolName: string | null;
   status: 'running' | 'succeeded' | 'failed';
@@ -300,6 +303,7 @@ export type HookEventDefinition = {
   fields: Array<{
     key: string;
     type: FieldType;
+    description?: string;
     options?: string[];
   }>;
 };

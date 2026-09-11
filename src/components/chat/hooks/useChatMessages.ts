@@ -157,6 +157,10 @@ function hookActivityIdentity(message: NormalizedMessage): string {
   return message.jobId || message.id;
 }
 
+function isSubagentHookActivity(message: NormalizedMessage): boolean {
+  return Boolean(message.agentId) || message.eventName === 'SubagentStart' || message.eventName === 'SubagentStop';
+}
+
 function hookExecutionActivityPrefix(message: NormalizedMessage): string | null {
   const identity = hookActivityIdentity(message);
   return identity.endsWith('_execution')
@@ -426,6 +430,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     if (!groupedFollowup && !recoveredExecution) {
       continue;
     }
+    if (recoveredExecution && isSubagentHookActivity(recoveredExecution)) {
+      continue;
+    }
     if (recoveredExecution) {
       hookRecoveryExecutionMessageByActivityId.set(message.hookActivityId, recoveredExecution);
     }
@@ -443,6 +450,11 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     'error',
   ]);
   for (const executionMessage of hookExecutionMessages) {
+    // Child Skill feedback continues that child's task. Later main-agent text
+    // is not a queued Skill recovery turn belonging to this execution.
+    if (isSubagentHookActivity(executionMessage)) {
+      continue;
+    }
     const alreadyHasFollowup = (hookFollowupsByExecutionMessageId.get(executionMessage.id) || []).length > 0
       || [...hookRecoveryExecutionMessageByActivityId.values()].some((message) => (
         message.id === executionMessage.id
@@ -543,7 +555,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       (mappedToolResult as any)?.toolUseResult ||
       inlineToolResult ||
       mappedToolResult,
-    ) || readSubagentTaskId(msg.toolInput);
+    ) || readSubagentTaskId(msg.toolInput) || msg.agentId;
     registerSubagentToolCandidate(taskId, msg, index);
   });
 
@@ -938,7 +950,8 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             readSubagentTaskId((tr as any)?.toolUseResult) ||
             readSubagentTaskId(inlineToolResult) ||
             readSubagentTaskId(mappedToolResult) ||
-            readSubagentTaskId(msg.toolInput)
+            readSubagentTaskId(msg.toolInput) ||
+            msg.agentId
           : undefined;
         const realtimeChildToolRecords = isSubagentContainer && !isSubagentDetailsAlias && msg.toolId
           ? subagentChildToolsByParentToolId.get(msg.toolId) || []
@@ -1181,6 +1194,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           break;
         }
         const status = normalizeHookActivityStatus(msg.status);
+        const inlineChildLoop = msg.agentId
+          ? (msg.actionResults || []).map((result) => (
+            result.actionType === 'mcp_loop_run' ? readObject(result.output) : null
+          )).find((output) => output?.deliveredTo === 'subagent'
+            && (!output.agentId || output.agentId === msg.agentId))
+          : undefined;
         const visibleActionResults = (msg.actionResults || []).filter((result) => (
           result.actionType !== 'mcp_loop_run' && wasRecordOrMcpActionPerformed(result)
         ));
@@ -1226,9 +1245,9 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
         const followups = msg.activityKind === 'execution'
           ? [...(persistedFollowups || []), ...recoveredFollowups]
           : undefined;
-        const loopResult = msg.loopJobId
-          ? mcpLoopResults.get(msg.loopJobId)
-          : undefined;
+        const loopResult = inlineChildLoop
+          ? inlineChildLoop.toolUseResult ?? inlineChildLoop.lastResult
+          : msg.loopJobId ? mcpLoopResults.get(msg.loopJobId) : undefined;
         converted.push({
           ...getMessageIdentity(msg),
           type: 'hook',
@@ -1240,6 +1259,8 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             executionId: msg.executionId,
             hookId: msg.hookId,
             hookName: msg.hookName,
+            ...(msg.agentId ? { agentId: msg.agentId } : {}),
+            ...(msg.agentType ? { agentType: msg.agentType } : {}),
             activityKind: msg.activityKind,
             actionId: msg.actionId,
             actionType: msg.actionType,
@@ -1257,6 +1278,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             ...(msg.loopJobId ? { loopJobId: msg.loopJobId } : {}),
             ...(msg.loopStatus ? { loopStatus: msg.loopStatus } : {}),
             ...(typeof msg.loopAttemptCount === 'number' ? { loopAttemptCount: msg.loopAttemptCount } : {}),
+            ...(inlineChildLoop && typeof inlineChildLoop.status === 'string'
+              ? { loopStatus: inlineChildLoop.status }
+              : {}),
+            ...(inlineChildLoop && typeof inlineChildLoop.attemptCount === 'number'
+              ? { loopAttemptCount: inlineChildLoop.attemptCount }
+              : {}),
             ...(typeof msg.loopStartedAtMs === 'number' ? { loopStartedAtMs: msg.loopStartedAtMs } : {}),
             ...(typeof msg.loopNextPollAtMs === 'number' ? { loopNextPollAtMs: msg.loopNextPollAtMs } : {}),
             ...(msg.loopTargetTool ? { loopTargetTool: msg.loopTargetTool } : {}),

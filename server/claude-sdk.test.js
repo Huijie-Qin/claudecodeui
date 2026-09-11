@@ -171,6 +171,21 @@ test('Hook execution cards omit mcp loop scheduling metadata from action results
   assert.equal(results.some((result) => result.actionType === 'mcp_loop_run'), false);
 });
 
+test('Hook execution cards preserve terminal inline child loop outcomes alongside arbitrary tool results', async () => {
+  const { createHookCardActionResults } = await import('./claude-sdk.js');
+  for (const status of ['succeeded', 'failed', 'timed_out', 'cancelled']) {
+    const output = {
+      scheduled: false, deliveredTo: 'subagent', agentId: 'child-a', status, attemptCount: 3,
+      toolUseResult: { rows: 3 },
+    };
+    assert.deepEqual(createHookCardActionResults({
+      postActions: [{ id: 'child-loop', type: 'mcp_loop_run' }],
+    }, {
+      'child-loop': { output },
+    }), [{ actionId: 'child-loop', actionType: 'mcp_loop_run', output }]);
+  }
+});
+
 test('Docker Hook headersHelper receives the same per-exec USER_KEY as Claude', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const calls = [];
