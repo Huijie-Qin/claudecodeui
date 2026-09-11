@@ -33,6 +33,7 @@ import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '
 import { api } from '../../utils/api';
 
 import { parseHelperEnvText } from './adminMcpPresetUtils';
+import { parseBatchUsernames } from './adminPanelUtils';
 import HookConfigEditor from './hook-config/HookConfigEditor';
 import HookDiagnosticsPanel from './hook-config/HookDiagnosticsPanel';
 import {
@@ -598,10 +599,25 @@ function HookUserBindingsDialog({
 }) {
   const { t } = useTranslation('admin');
   const [query, setQuery] = useState('');
+  const [batchUsernames, setBatchUsernames] = useState('');
 
   useEffect(() => {
-    if (hook?.id) setQuery('');
+    setQuery('');
+    setBatchUsernames('');
   }, [hook?.id]);
+
+  const batchUsers = useMemo(() => {
+    const activeUsers = new Map(users.filter((user) => user.isActive)
+      .map((user) => [user.username.toLowerCase(), user.id]));
+    const ids: number[] = [];
+    const missing: string[] = [];
+    for (const username of parseBatchUsernames(batchUsernames)) {
+      const id = activeUsers.get(username.toLowerCase());
+      if (id != null) ids.push(id);
+      else missing.push(username);
+    }
+    return { ids, missing };
+  }, [batchUsernames, users]);
 
   const selectedUsers = useMemo(() => new Set(selectedUserIds), [selectedUserIds]);
   const selectedTenants = useMemo(() => new Set(selectedTenantIds), [selectedTenantIds]);
@@ -722,6 +738,45 @@ function HookUserBindingsDialog({
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>
           ) : null}
 
+          {scope === 'users' ? (
+            <div className="space-y-2 rounded-xl border border-border p-3">
+              <label className="block space-y-2">
+                <span className="text-xs font-medium">{t('hooks.bindings.batchUsernames')}</span>
+                <textarea
+                  value={batchUsernames}
+                  onChange={(event) => setBatchUsernames(event.target.value)}
+                  disabled={loading || saving}
+                  placeholder={t('hooks.bindings.batchUsernamesHint')}
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  rows={3}
+                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+              {batchUsers.missing.length > 0 && !loading ? (
+                <p role="alert" className="text-xs text-destructive">
+                  {t('hooks.bindings.batchMissingUsers', { usernames: batchUsers.missing.join(', ') })}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm"
+                  disabled={loading || saving || batchUsers.ids.length === 0 || batchUsers.missing.length > 0}
+                  onClick={() => onBatchChange(batchUsers.ids, true)}>
+                  {t('hooks.bindings.selectNames')}
+                </Button>
+                <Button type="button" variant="ghost" size="sm"
+                  disabled={loading || saving || batchUsers.missing.length > 0
+                    || !batchUsers.ids.some((id) => selectedUsers.has(id))}
+                  onClick={() => onBatchChange(batchUsers.ids, false)}>
+                  {t('hooks.bindings.deselectNames')}
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  {t('hooks.bindings.batchMatchedCount', { count: batchUsers.ids.length })}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           {scope !== 'all_users' ? (
             <div className="flex flex-col gap-2 sm:flex-row">
               <div className="relative min-w-0 flex-1">
@@ -739,7 +794,7 @@ function HookUserBindingsDialog({
                   variant="outline"
                   size="sm"
                   className="h-10 flex-1 sm:flex-none"
-                  disabled={!hasUnselectedVisible || saving}
+                  disabled={loading || !hasUnselectedVisible || saving}
                   onClick={() => onBatchChange(visibleSelectableIds, true)}
                 >
                   {t('hooks.bindings.selectVisible')}
@@ -749,7 +804,7 @@ function HookUserBindingsDialog({
                   variant="ghost"
                   size="sm"
                   className="h-10 flex-1 sm:flex-none"
-                  disabled={!hasSelectedVisible || saving}
+                  disabled={loading || !hasSelectedVisible || saving}
                   onClick={() => onBatchChange(visibleSelectableIds, false)}
                 >
                   {t('hooks.bindings.deselectVisible')}
@@ -856,9 +911,9 @@ function HookUserBindingsDialog({
           <span className="mr-auto text-xs text-muted-foreground">
             {t(`hooks.bindings.selectionSummary.${scope}`, { count: selectionCount })}
           </span>
-          {scope !== 'all_users' && selectionCount > 0 ? (
-            <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={saving}>
-              {t('hooks.bindings.clear')}
+          {(scope === 'all_users' || selectionCount > 0) ? (
+            <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={loading || saving}>
+              {t(scope === 'all_users' ? 'hooks.bindings.cancelAllUsers' : 'hooks.bindings.clear')}
             </Button>
           ) : null}
           <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
@@ -1853,6 +1908,11 @@ export default function HookConfigsTab() {
         }
       }}
       onClear={() => {
+        if (bindingScope === 'all_users') {
+          setBindingScope('users');
+          setSelectedBindingUserIds([]);
+          setSelectedBindingTenantIds([]);
+        }
         if (bindingScope === 'users') setSelectedBindingUserIds([]);
         if (bindingScope === 'tenants') setSelectedBindingTenantIds([]);
       }}
