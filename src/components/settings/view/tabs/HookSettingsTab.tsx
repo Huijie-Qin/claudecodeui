@@ -23,6 +23,7 @@ type AvailableHook = {
   eventName: string;
   version: number;
   enabled: boolean;
+  adminEnforced?: boolean;
   showInChat: boolean;
   userVariables?: HookUserVariable[];
   configuredUserVariables?: string[];
@@ -294,6 +295,11 @@ export default function HookSettingsTab({
                       SQL Check 强制校验管理
                     </span>
                   ) : null}
+                  {hook.adminEnforced ? (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      管理员强制启用
+                    </span>
+                  ) : null}
                   {isTemplateMandatory ? (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
                       模板强制启用
@@ -335,6 +341,7 @@ export default function HookSettingsTab({
                     checked={hook.enabled}
                     disabled={Boolean(busyHookId)
                       || isSqlCheckManaged
+                      || (hook.adminEnforced === true && hook.enabled)
                       || (isTemplateMandatory && hook.enabled && !canRetryResources)
                       || (resourcesUnavailable && !canRetryResources)}
                     ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
