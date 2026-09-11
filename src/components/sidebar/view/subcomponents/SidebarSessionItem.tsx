@@ -4,7 +4,7 @@ import type { MouseEvent } from 'react';
 
 import { Badge, Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
-import { formatBeijingDateTime } from '../../../../utils/dateUtils';
+import { formatBeijingDate } from '../../../../utils/dateUtils';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { SessionWithProvider } from '../../types/types';
 import { createSessionViewModel } from '../../utils/utils';
@@ -103,7 +103,7 @@ export default function SidebarSessionItem({
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
-                  {formatBeijingDateTime(sessionView.sessionTime)}
+                  {formatBeijingDate(sessionView.sessionTime)}
                 </span>
                 {sessionView.messageCount > 0 && (
                   <Badge variant="secondary" className="ml-auto px-1 py-0 text-xs">
@@ -162,7 +162,7 @@ export default function SidebarSessionItem({
               <div className="mt-0.5 flex items-center gap-1">
                 <Clock className="h-2.5 w-2.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">
-                  {formatBeijingDateTime(sessionView.sessionTime)}
+                  {formatBeijingDate(sessionView.sessionTime)}
                 </span>
                 {sessionView.messageCount > 0 && (
                   <Badge

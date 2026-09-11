@@ -72,7 +72,7 @@ import { useUiPreferences } from '../../hooks/useUiPreferences';
 import type { LLMProvider, Project, ProjectScheduledTask, ProjectSession } from '../../types/app';
 import { api } from '../../utils/api';
 import { createClientMessageId } from '../../utils/clientMessageId';
-import { formatBeijingDateTime } from '../../utils/dateUtils';
+import { formatBeijingDate } from '../../utils/dateUtils';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import {
   CLAUDE_MODELS,
@@ -625,7 +625,7 @@ function DataAgentSidebar({
                       >
                         <span className={`da-status-dot ${isProcessing ? 'is-processing' : 'is-idle'}`} />
                         <span className="da-session-title">{getSessionLabel(session)}</span>
-                        <span className="da-session-time">{formatBeijingDateTime(String(session.updated_at || session.lastActivity || session.created_at || session.createdAt || ''))}</span>
+                        <span className="da-session-time">{formatBeijingDate(String(session.updated_at || session.lastActivity || session.created_at || session.createdAt || ''))}</span>
                       </button>
                     );
                   })}

@@ -35,6 +35,10 @@ export const formatBeijingDateTime = (value?: string | number | Date | null): st
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 };
 
+export const formatBeijingDate = (value?: string | number | Date | null): string => (
+  formatBeijingDateTime(value).slice(0, 10)
+);
+
 export const formatTimeAgo = (dateString: string, currentTime: Date, t: TFunction) => {
   const date = parseTimestamp(dateString);
   const now = currentTime;
