@@ -1442,11 +1442,13 @@ export function createHookConfigService({
           ? row.legacy_user_enabled === 1
           : explicitEnabled;
       }
-      const showInChat = row.workspace_user_show_in_chat != null
-        ? row.workspace_user_show_in_chat === 1
-        : assignment && !inheritsAdminDefaults
-          ? assignment.defaultShowInChat
-          : row.legacy_show_in_chat !== 0;
+      const showInChat = adminEnforced
+        ? latestHook.defaultShowInChat
+        : row.workspace_user_show_in_chat != null
+          ? row.workspace_user_show_in_chat === 1
+          : assignment && !inheritsAdminDefaults
+            ? assignment.defaultShowInChat
+            : row.legacy_show_in_chat !== 0;
       let unavailableReason = null;
       if (assignment?.installStatus === 'pending') unavailableReason = 'resources_pending';
       else if (assignment?.installStatus === 'failed') unavailableReason = 'resources_unavailable';
@@ -1729,11 +1731,14 @@ export function createHookConfigService({
     }
     if (typeof showInChat !== 'boolean') throw createHttpError('showInChat must be a boolean');
     const workspace = requireWorkspaceContext({ workspaceId, tenantId });
-    ensureWorkspaceHookEligible({
+    const { hook } = ensureWorkspaceHookEligible({
       workspaceId: workspace.id,
       userId: normalizedUserId,
       hookId,
     });
+    if (isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId: workspace.tenantId })) {
+      throw createHttpError('此 Hook 的对话展示由管理员配置，无法自行修改', 409);
+    }
     database.prepare(`
       INSERT INTO user_workspace_hook_preferences (
         workspace_id, user_id, hook_id, enabled, show_in_chat
@@ -2143,7 +2148,9 @@ export function createHookConfigService({
       enabled: (row.user_enabled === 1 || (row.binding_controller === 'admin' && row.default_enabled === 1))
         && !normalizeHookUserVariables(parseJson(row.user_variables_json, [])).some((variable) => variable.required),
       adminEnforced: row.binding_controller === 'admin' && row.default_enabled === 1,
-      showInChat: row.user_show_in_chat !== 0,
+      showInChat: row.binding_controller === 'admin' && row.default_enabled === 1
+        ? row.default_show_in_chat !== 0
+        : row.user_show_in_chat !== 0,
     }));
   };
 
@@ -2252,6 +2259,10 @@ export function createHookConfigService({
       const normalizedUserId = Number(userId);
       if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0 || !hookId) return true;
       const workspace = requireWorkspaceContext({ workspaceId });
+      const hook = getHook(hookId);
+      if (hook && isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId: workspace.tenantId })) {
+        return hook.defaultShowInChat;
+      }
       const preference = database.prepare(`
         SELECT show_in_chat
         FROM user_workspace_hook_preferences
@@ -2259,7 +2270,6 @@ export function createHookConfigService({
       `).get(workspace.id, normalizedUserId, String(hookId));
       if (preference?.show_in_chat != null) return preference.show_in_chat !== 0;
       const assignment = getWorkspaceHookAssignment({ workspaceId: workspace.id, hookId });
-      const hook = getHook(hookId);
       const inheritsAdminDefaults = assignment?.source === 'manual' && hook
         && isAdminHookAvailableToUser({ hook, userId: normalizedUserId, tenantId: workspace.tenantId });
       if (assignment && !inheritsAdminDefaults) return assignment.defaultShowInChat;
@@ -2537,6 +2547,9 @@ export function createHookConfigService({
       const eligible = hook.bindingController === 'sql_check'
         || isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
       if (!eligible) throw createHttpError('Hook is not available to this user', 403);
+      if (isAdminHookEnforced({ hook, userId: normalizedUserId })) {
+        throw createHttpError('此 Hook 的对话展示由管理员配置，无法自行修改', 409);
+      }
       database.transaction(() => {
         database.prepare(`
           INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat)
@@ -2559,6 +2572,12 @@ export function createHookConfigService({
           workspaceId,
         }).find((candidate) => candidate.id === String(hookId));
         if (workspaceHook) return workspaceHook.showInChat !== false;
+      }
+      if (workspaceId == null || workspaceId === '') {
+        const hook = getHook(hookId);
+        if (hook && isAdminHookEnforced({ hook, userId: normalizedUserId, tenantId })) {
+          return hook.defaultShowInChat;
+        }
       }
       const preference = database.prepare(`
         SELECT show_in_chat
