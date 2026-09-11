@@ -350,12 +350,16 @@ export default function HookSettingsTab({
                 </div>
                 <div
                   className="flex min-h-7 items-center gap-2"
-                  title="只控制你自己的对话展示，不影响 Hook 执行和执行记录"
+                  title={hook.adminEnforced
+                    ? '对话展示由管理员配置'
+                    : '只控制你自己的对话展示，不影响 Hook 执行和执行记录'}
                 >
-                  <span className="text-[11px] font-medium text-foreground">对话展示</span>
+                  <span className="text-[11px] font-medium text-foreground">
+                    {hook.adminEnforced ? '对话展示（管理员配置）' : '对话展示'}
+                  </span>
                   <SettingsToggle
                     checked={hook.showInChat}
-                    disabled={visibilityBusyHookId === hook.id}
+                    disabled={hook.adminEnforced === true || visibilityBusyHookId === hook.id}
                     ariaLabel={`${hook.showInChat ? '关闭' : '开启'} ${hook.name} 的对话展示`}
                     onChange={(showInChat) => void toggleHookVisibility(hook, showInChat)}
                   />
