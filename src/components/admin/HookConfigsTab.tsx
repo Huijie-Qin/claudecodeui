@@ -33,6 +33,7 @@ import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '
 import { api } from '../../utils/api';
 
 import { parseHelperEnvText } from './adminMcpPresetUtils';
+import { parseBatchUsernames } from './adminPanelUtils';
 import HookConfigEditor from './hook-config/HookConfigEditor';
 import HookDiagnosticsPanel from './hook-config/HookDiagnosticsPanel';
 import {
@@ -558,6 +559,7 @@ function HookUserBindingsDialog({
   scope,
   defaultEnabled,
   defaultShowInChat,
+  overwriteUserPreferences,
   users,
   tenants,
   selectedUserIds,
@@ -569,6 +571,7 @@ function HookUserBindingsDialog({
   onScopeChange,
   onDefaultEnabledChange,
   onDefaultShowInChatChange,
+  onOverwriteUserPreferencesChange,
   onToggle,
   onToggleTenant,
   onBatchChange,
@@ -579,6 +582,7 @@ function HookUserBindingsDialog({
   scope: HookBindingScope;
   defaultEnabled: boolean;
   defaultShowInChat: boolean;
+  overwriteUserPreferences: boolean;
   users: HookBindingUser[];
   tenants: HookBindingTenant[];
   selectedUserIds: number[];
@@ -590,6 +594,7 @@ function HookUserBindingsDialog({
   onScopeChange: (scope: HookBindingScope) => void;
   onDefaultEnabledChange: (enabled: boolean) => void;
   onDefaultShowInChatChange: (showInChat: boolean) => void;
+  onOverwriteUserPreferencesChange: (overwrite: boolean) => void;
   onToggle: (userId: number) => void;
   onToggleTenant: (tenantId: number) => void;
   onBatchChange: (ids: number[], selected: boolean) => void;
@@ -598,10 +603,25 @@ function HookUserBindingsDialog({
 }) {
   const { t } = useTranslation('admin');
   const [query, setQuery] = useState('');
+  const [batchUsernames, setBatchUsernames] = useState('');
 
   useEffect(() => {
-    if (hook?.id) setQuery('');
+    setQuery('');
+    setBatchUsernames('');
   }, [hook?.id]);
+
+  const batchUsers = useMemo(() => {
+    const activeUsers = new Map(users.filter((user) => user.isActive)
+      .map((user) => [user.username.toLowerCase(), user.id]));
+    const ids: number[] = [];
+    const missing: string[] = [];
+    for (const username of parseBatchUsernames(batchUsernames)) {
+      const id = activeUsers.get(username.toLowerCase());
+      if (id != null) ids.push(id);
+      else missing.push(username);
+    }
+    return { ids, missing };
+  }, [batchUsernames, users]);
 
   const selectedUsers = useMemo(() => new Set(selectedUserIds), [selectedUserIds]);
   const selectedTenants = useMemo(() => new Set(selectedTenantIds), [selectedTenantIds]);
@@ -690,6 +710,19 @@ function HookUserBindingsDialog({
           </div>
 
           <div className="space-y-3 rounded-xl border border-border p-3">
+            <label className="flex cursor-pointer items-start gap-3 border-b border-border pb-3">
+              <input
+                type="checkbox"
+                checked={overwriteUserPreferences}
+                disabled={loading || saving}
+                onChange={(event) => onOverwriteUserPreferencesChange(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
+              />
+              <span>
+                <span className="block text-xs font-medium">{t('hooks.bindings.overwriteUserPreferences')}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{t('hooks.bindings.overwriteUserPreferencesHint')}</span>
+              </span>
+            </label>
             <label className="flex cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
@@ -722,6 +755,45 @@ function HookUserBindingsDialog({
             <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>
           ) : null}
 
+          {scope === 'users' ? (
+            <div className="space-y-2 rounded-xl border border-border p-3">
+              <label className="block space-y-2">
+                <span className="text-xs font-medium">{t('hooks.bindings.batchUsernames')}</span>
+                <textarea
+                  value={batchUsernames}
+                  onChange={(event) => setBatchUsernames(event.target.value)}
+                  disabled={loading || saving}
+                  placeholder={t('hooks.bindings.batchUsernamesHint')}
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  rows={3}
+                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+              {batchUsers.missing.length > 0 && !loading ? (
+                <p role="alert" className="text-xs text-destructive">
+                  {t('hooks.bindings.batchMissingUsers', { usernames: batchUsers.missing.join(', ') })}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm"
+                  disabled={loading || saving || batchUsers.ids.length === 0 || batchUsers.missing.length > 0}
+                  onClick={() => onBatchChange(batchUsers.ids, true)}>
+                  {t('hooks.bindings.selectNames')}
+                </Button>
+                <Button type="button" variant="ghost" size="sm"
+                  disabled={loading || saving || batchUsers.missing.length > 0
+                    || !batchUsers.ids.some((id) => selectedUsers.has(id))}
+                  onClick={() => onBatchChange(batchUsers.ids, false)}>
+                  {t('hooks.bindings.deselectNames')}
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  {t('hooks.bindings.batchMatchedCount', { count: batchUsers.ids.length })}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           {scope !== 'all_users' ? (
             <div className="flex flex-col gap-2 sm:flex-row">
               <div className="relative min-w-0 flex-1">
@@ -739,7 +811,7 @@ function HookUserBindingsDialog({
                   variant="outline"
                   size="sm"
                   className="h-10 flex-1 sm:flex-none"
-                  disabled={!hasUnselectedVisible || saving}
+                  disabled={loading || !hasUnselectedVisible || saving}
                   onClick={() => onBatchChange(visibleSelectableIds, true)}
                 >
                   {t('hooks.bindings.selectVisible')}
@@ -749,7 +821,7 @@ function HookUserBindingsDialog({
                   variant="ghost"
                   size="sm"
                   className="h-10 flex-1 sm:flex-none"
-                  disabled={!hasSelectedVisible || saving}
+                  disabled={loading || !hasSelectedVisible || saving}
                   onClick={() => onBatchChange(visibleSelectableIds, false)}
                 >
                   {t('hooks.bindings.deselectVisible')}
@@ -856,9 +928,9 @@ function HookUserBindingsDialog({
           <span className="mr-auto text-xs text-muted-foreground">
             {t(`hooks.bindings.selectionSummary.${scope}`, { count: selectionCount })}
           </span>
-          {scope !== 'all_users' && selectionCount > 0 ? (
-            <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={saving}>
-              {t('hooks.bindings.clear')}
+          {(scope === 'all_users' || selectionCount > 0) ? (
+            <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={loading || saving}>
+              {t(scope === 'all_users' ? 'hooks.bindings.cancelAllUsers' : 'hooks.bindings.clear')}
             </Button>
           ) : null}
           <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
@@ -1170,6 +1242,7 @@ export default function HookConfigsTab() {
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
   const [bindingDefaultEnabled, setBindingDefaultEnabled] = useState(false);
   const [bindingDefaultShowInChat, setBindingDefaultShowInChat] = useState(true);
+  const [bindingOverwriteUserPreferences, setBindingOverwriteUserPreferences] = useState(false);
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
   const [bindingTenants, setBindingTenants] = useState<HookBindingTenant[]>([]);
   const [selectedBindingUserIds, setSelectedBindingUserIds] = useState<number[]>([]);
@@ -1353,6 +1426,7 @@ export default function HookConfigsTab() {
     setBindingScope('users');
     setBindingDefaultEnabled(false);
     setBindingDefaultShowInChat(true);
+    setBindingOverwriteUserPreferences(false);
     setBindingUsers([]);
     setBindingTenants([]);
     setSelectedBindingUserIds([]);
@@ -1396,6 +1470,7 @@ export default function HookConfigsTab() {
         tenantIds: bindingScope === 'tenants' ? selectedBindingTenantIds : [],
         defaultEnabled: bindingDefaultEnabled,
         defaultShowInChat: bindingDefaultShowInChat,
+        overwriteUserPreferences: bindingOverwriteUserPreferences,
       });
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.saveError')));
       const payload = await response.json() as { hook: HookConfig };
@@ -1805,6 +1880,7 @@ export default function HookConfigsTab() {
       scope={bindingScope}
       defaultEnabled={bindingDefaultEnabled}
       defaultShowInChat={bindingDefaultShowInChat}
+      overwriteUserPreferences={bindingOverwriteUserPreferences}
       users={bindingUsers}
       tenants={bindingTenants}
       selectedUserIds={selectedBindingUserIds}
@@ -1824,6 +1900,7 @@ export default function HookConfigsTab() {
       onScopeChange={setBindingScope}
       onDefaultEnabledChange={setBindingDefaultEnabled}
       onDefaultShowInChatChange={setBindingDefaultShowInChat}
+      onOverwriteUserPreferencesChange={setBindingOverwriteUserPreferences}
       onToggle={(userId) => setSelectedBindingUserIds((current) => (
         current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]
       ))}
@@ -1853,6 +1930,11 @@ export default function HookConfigsTab() {
         }
       }}
       onClear={() => {
+        if (bindingScope === 'all_users') {
+          setBindingScope('users');
+          setSelectedBindingUserIds([]);
+          setSelectedBindingTenantIds([]);
+        }
         if (bindingScope === 'users') setSelectedBindingUserIds([]);
         if (bindingScope === 'tenants') setSelectedBindingTenantIds([]);
       }}

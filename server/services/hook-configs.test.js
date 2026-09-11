@@ -422,77 +422,141 @@ test('admin tenant and all-user defaults include future users while keeping tena
   } finally { database.close(); }
 });
 
-test('admin activation overrides existing personal opt-outs in every scoped workspace and administrator visibility', () => {
-  const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
-  try {
-    service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: false, boundBy: 1 });
-    service.setUserHookEnabled({ hookId, userId: 2, enabled: false });
-    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
-    service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: false });
-    service.setUserHookChatVisibility({ hookId, userId: 2, showInChat: false });
-    service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: true });
-    service.replaceHookBindings({ hookId, userIds: [2], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
-    for (const context of [alpha, alphaSecond]) {
-      const hook = service.listEffectiveHooksForContext(context)[0];
-      assert.equal(hook.id, hookId);
-      assert.equal(hook.adminEnforced, true);
-      assert.throws(() => service.setWorkspaceUserHookEnabled({ ...context, hookId, enabled: false }), { statusCode: 409 });
+test('normal saves and publication preserve personal choices; overwrite requires an explicit opt-in each time', () => {
+  for (const enabled of [false, true]) {
+    for (const showInChat of [false, true]) {
+      const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+      try {
+        service.replaceHookBindings({ hookId, userIds: [2], boundBy: 1 });
+        service.setUserHookEnabled({ hookId, userId: 2, enabled });
+        service.setUserHookChatVisibility({ hookId, userId: 2, showInChat });
+        for (const context of [alpha, alphaSecond]) {
+          service.setWorkspaceUserHookEnabled({ ...context, hookId, enabled });
+          service.setWorkspaceUserHookChatVisibility({ ...context, hookId, showInChat });
+        }
+        const preferences = () => Object.fromEntries([
+          'user_hook_bindings', 'user_hook_opt_outs', 'user_hook_preferences', 'user_workspace_hook_preferences',
+        ].map(table => [table, database.prepare(`SELECT * FROM ${table} WHERE hook_id = ?`).all(hookId)]));
+        const initialPreferences = preferences();
+        const check = (expectedEnabled, expectedShowInChat) => {
+          for (const context of [alpha, alphaSecond]) {
+            const hook = service.listAvailableHooksForContext(context)[0];
+            assert.equal(hook.enabled, expectedEnabled);
+            assert.equal(hook.showInChat, expectedShowInChat);
+            assert.equal(service.getUserHookChatVisibility({ ...context, hookId }), expectedShowInChat);
+          }
+          assert.equal(service.listAvailableHooksForUser(2)[0].enabled, expectedEnabled);
+          assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), expectedShowInChat);
+        };
+        const save = (options = {}) => service.replaceHookBindings({
+          hookId, userIds: [2], defaultEnabled: !enabled, defaultShowInChat: !showInChat, boundBy: 1, ...options,
+        });
+        // Omitted and explicitly disabled overwrite flags are both safe.
+        for (const options of [{}, { overwriteUserPreferences: false }]) {
+          save(options);
+          check(enabled, showInChat);
+          assert.deepEqual(preferences(), initialPreferences);
+          assert.equal(service.getHook(hookId).defaultEnabled, !enabled);
+          assert.equal(service.getHook(hookId).defaultShowInChat, !showInChat);
+        }
+        // The editor saves a draft and republishes before opening the bindings dialog.
+        service.updateHook({ hookId, userId: 1, input: publishableHook({ description: 'Republished without overwriting users' }) });
+        service.publishHook({ hookId, userId: 1 });
+        save();
+        check(enabled, showInChat);
+        assert.deepEqual(preferences(), initialPreferences);
+        save({ overwriteUserPreferences: true });
+        check(!enabled, !showInChat);
+        // Opt-in is not persisted; a later normal save cannot repeat it.
+        service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled });
+        service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat });
+        const afterUserChange = preferences();
+        save();
+        assert.deepEqual(preferences(), afterUserChange);
+        assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, enabled);
+        assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, showInChat);
+      } finally { database.close(); }
     }
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
-    assert.equal(service.listEffectiveHooksForContext(alphaSecond)[0].showInChat, false);
-    assert.equal(service.listActiveHooksForUser(2)[0].adminEnforced, true);
-    assert.equal(service.listHookBindings(hookId).users.find(user => user.id === 2).enabled, true);
-    assert.throws(() => service.setUserHookEnabled({ hookId, userId: 2, enabled: false }), { statusCode: 409 });
-    assert.deepEqual(service.listActiveHooksForUser(1), []);
-    assert.throws(() => service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false }), { statusCode: 409 });
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
-    // Releasing the administrator policy restores the saved personal choices.
-    service.replaceHookBindings({ hookId, userIds: [2], defaultEnabled: false, boundBy: 1 });
-    assert.deepEqual(service.listActiveHooksForUser(2), []);
-    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
-    assert.deepEqual(service.listEffectiveHooksForContext(alphaSecond), []);
-    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].adminEnforced, false);
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, true);
-    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
-    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+  }
+});
+
+test('invalid overwrite flags are rejected before modifying defaults or preferences', () => {
+  const { database, service, hookId } = createTenantScopedWorkspaceHookFixture();
+  try {
+    const before = service.getHook(hookId);
+    for (const overwriteUserPreferences of [null, 'true', 1, {}]) {
+      assert.throws(() => service.replaceHookBindings({
+        hookId, scope: 'all_users', defaultEnabled: true, overwriteUserPreferences, boundBy: 1,
+      }), /overwriteUserPreferences must be a boolean/);
+      assert.deepEqual(service.getHook(hookId), before);
+    }
   } finally { database.close(); }
 });
 
-test('administrator chat visibility overrides both personal choices and all visibility readers, then restores them on release', () => {
-  for (const personalShowInChat of [false, true]) {
-    const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
-    try {
-      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: false, boundBy: 1 });
-      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: personalShowInChat });
-      service.setUserHookChatVisibility({ hookId, userId: 2, showInChat: personalShowInChat });
-      assert.equal(database.prepare('SELECT enabled FROM user_workspace_hook_preferences WHERE hook_id = ?').get(hookId).enabled, null);
-      assert.equal(database.prepare('SELECT COUNT(*) AS n FROM user_hook_opt_outs WHERE hook_id = ?').get(hookId).n, 0);
-      assert.equal(database.prepare('SELECT COUNT(*) AS n FROM user_hook_bindings WHERE hook_id = ?').get(hookId).n, 0);
-      for (const defaultShowInChat of [!personalShowInChat, personalShowInChat]) {
-        service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, defaultShowInChat, boundBy: 1 });
-        for (const context of [alpha, alphaSecond]) {
-          assert.equal(service.listAvailableHooksForContext(context)[0].enabled, true);
-          assert.equal(service.listAvailableHooksForContext(context)[0].showInChat, defaultShowInChat);
-          assert.equal(service.getWorkspaceUserHookChatVisibility({ ...context, hookId }), defaultShowInChat);
-          assert.equal(service.getUserHookChatVisibility({ ...context, hookId }), defaultShowInChat);
-          assert.throws(() => service.setWorkspaceUserHookChatVisibility({ ...context, hookId, showInChat: !defaultShowInChat }), { statusCode: 409 });
-        }
-        assert.equal(service.listAvailableHooksForUser(2)[0].showInChat, defaultShowInChat);
-        assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), defaultShowInChat);
-        assert.throws(() => service.setUserHookChatVisibility({ userId: 2, hookId, showInChat: !defaultShowInChat }), { statusCode: 409 });
-      }
-      assert.equal(database.prepare('SELECT show_in_chat FROM user_workspace_hook_preferences WHERE hook_id = ?').get(hookId).show_in_chat, Number(personalShowInChat));
-      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: false, defaultShowInChat: !personalShowInChat, boundBy: 1 });
-      assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, personalShowInChat);
-      assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), personalShowInChat);
-      assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), personalShowInChat);
-      assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), personalShowInChat);
-      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: !personalShowInChat });
-      service.setUserHookChatVisibility({ userId: 2, hookId, showInChat: !personalShowInChat });
-      assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), !personalShowInChat);
-    } finally { database.close(); }
-  }
+test('administrator and workspace user saves overwrite each other independently, including unchanged admin values', () => {
+  const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', boundBy: 1 });
+    service.setUserHookEnabled({ hookId, userId: 2, enabled: false });
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: false });
+    const saveAdmin = (settings) => service.replaceHookBindings({ overwriteUserPreferences: true, hookId, userIds: [2], boundBy: 1, ...settings });
+    const check = (context, enabled, showInChat) => {
+      const hook = service.listAvailableHooksForContext(context)[0];
+      assert.equal(hook.enabled, enabled);
+      assert.equal(hook.showInChat, showInChat);
+      assert.equal(service.getWorkspaceUserHookChatVisibility({ ...context, hookId }), showInChat);
+      assert.equal(service.getUserHookChatVisibility({ ...context, hookId }), showInChat);
+      assert.equal(service.listEffectiveHooksForContext(context).length, Number(enabled));
+    };
+    for (const adminEnabled of [true, false, true]) {
+      saveAdmin({ defaultEnabled: adminEnabled, defaultShowInChat: false });
+      check(alpha, adminEnabled, false);
+      check(alphaSecond, adminEnabled, false);
+      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: true });
+      check(alpha, adminEnabled, true);
+      service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: !adminEnabled });
+      check(alpha, !adminEnabled, true);
+      check(alphaSecond, adminEnabled, false);
+      // Re-saving the same admin values must still overwrite newer user choices.
+      saveAdmin({ defaultEnabled: adminEnabled, defaultShowInChat: false });
+      check(alpha, adminEnabled, false);
+      service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: !adminEnabled });
+      saveAdmin({ defaultShowInChat: true });
+      check(alpha, !adminEnabled, true);
+      saveAdmin({ defaultEnabled: adminEnabled });
+      check(alpha, adminEnabled, true);
+      service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: false });
+      saveAdmin({}); // Older clients changing only scope must preserve both choices.
+      check(alpha, adminEnabled, false);
+    }
+    assert.deepEqual(service.listActiveHooksForUser(1), []);
+  } finally { database.close(); }
+});
+
+test('legacy user saves can override administrator activation and visibility, then be overwritten again', () => {
+  const { database, service, hookId, alpha } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, defaultEnabled: true, createdBy: 1 });
+    for (const defaultEnabled of [true, false]) {
+      service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', defaultEnabled, defaultShowInChat: false, boundBy: 1 });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, defaultEnabled);
+      service.setUserHookChatVisibility({ userId: 2, hookId, showInChat: true });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, defaultEnabled);
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, defaultEnabled);
+      service.setUserHookEnabled({ userId: 2, hookId, enabled: !defaultEnabled });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, !defaultEnabled);
+      assert.equal(service.listHookBindings(hookId).users.find(user => user.id === 2).enabled, !defaultEnabled);
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, !defaultEnabled);
+      assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), true);
+      assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), true);
+      service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', defaultEnabled, defaultShowInChat: false, boundBy: 1 });
+      assert.equal(service.listAvailableHooksForUser(2)[0].enabled, defaultEnabled);
+      assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, defaultEnabled);
+      assert.equal(service.getUserHookChatVisibility({ userId: 2, hookId }), false);
+      assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), false);
+    }
+  } finally { database.close(); }
 });
 
 test('administrator activation overrides historical chat-only and captured-off records without a migration', () => {
@@ -503,13 +567,13 @@ test('administrator activation overrides historical chat-only and captured-off r
         VALUES (?, ?, ?, ?, 0)`).run(alpha.workspaceId, 2, hookId, enabled);
       database.prepare('INSERT INTO user_hook_preferences (user_id, hook_id, show_in_chat) VALUES (2, ?, 0)').run(hookId);
       database.prepare('INSERT INTO user_hook_opt_outs (user_id, hook_id) VALUES (2, ?)').run(hookId);
-      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, boundBy: 1 });
+      service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', defaultEnabled: true, boundBy: 1 });
       assert.equal(service.listEffectiveHooksForContext(alpha)[0].id, hookId);
-      assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, true);
+      assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
       assert.equal(service.listActiveHooksForUser(2)[0].id, hookId);
-      service.replaceHookBindings({ hookId, scope: 'all_users', defaultEnabled: true, boundBy: 1 });
+      service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', defaultEnabled: true, boundBy: 1 });
       assert.equal(service.listEffectiveHooksForContext(alpha)[0].id, hookId);
-      assert.equal(database.prepare('SELECT enabled FROM user_workspace_hook_preferences WHERE hook_id = ?').get(hookId).enabled, enabled);
+      assert.equal(database.prepare('SELECT enabled FROM user_workspace_hook_preferences WHERE hook_id = ?').get(hookId).enabled, 1);
     } finally { database.close(); }
   }
 });
@@ -520,10 +584,9 @@ test('administrator activation overrides template defaults only inside its scope
     for (const context of [alpha, beta]) {
       service.assignWorkspaceHook({ workspaceId: context.workspaceId, hookId, source: 'agent_template', sourceTemplateId: 88,
         defaultEnabled: false, defaultShowInChat: true, installStatus: 'ready', createdBy: 1 });
-      service.setWorkspaceUserHookEnabled({ ...context, hookId, enabled: false });
     }
-    service.replaceHookBindings({ hookId, scope: 'tenants', tenantIds: [10], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].adminEnforced, true);
+    service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'tenants', tenantIds: [10], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    assert.equal(service.listEffectiveHooksForContext(alpha)[0].enabled, true);
     assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
     assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), false);
     assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), false);
@@ -531,7 +594,7 @@ test('administrator activation overrides template defaults only inside its scope
     assert.equal(service.getUserHookChatVisibility({ ...beta, hookId }), true);
     service.setWorkspaceUserHookChatVisibility({ ...beta, hookId, showInChat: false });
     assert.equal(service.getUserHookChatVisibility({ ...beta, hookId }), false);
-    assert.equal(service.listAvailableHooksForContext(beta)[0].adminEnforced, false);
+    assert.equal(service.listAvailableHooksForContext(beta)[0].enabled, false);
     assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
     service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: true });
     assert.equal(service.listEffectiveHooksForContext(beta)[0].id, hookId);
@@ -542,6 +605,30 @@ test('administrator activation overrides template defaults only inside its scope
     }
     database.prepare('UPDATE hook_published_versions SET revoked_at = CURRENT_TIMESTAMP WHERE hook_id = ?').run(hookId);
     assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+  } finally { database.close(); }
+});
+
+test('admin saves cover shared assignments, skip deleted projects, and preserve users outside the selected scope', () => {
+  const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+  try {
+    service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', boundBy: 1 });
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, source: 'agent_template',
+      sourceTemplateId: 88, defaultEnabled: true, defaultShowInChat: true, createdBy: 1 });
+    database.prepare('INSERT INTO workspace_acl (workspace_id, user_id, permission, created_by_user_id) VALUES (?, 1, ?, 1)')
+      .run(alpha.workspaceId, 'view');
+    service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: true });
+    database.prepare("UPDATE workspaces SET status = 'deleted' WHERE id = ?").run(alphaSecond.workspaceId);
+    service.replaceHookBindings({ overwriteUserPreferences: true, hookId, userIds: [1], defaultEnabled: false, defaultShowInChat: false, boundBy: 1 });
+    assert.equal(service.listAvailableHooksForContext({ ...alpha, userId: 1 })[0].enabled, false);
+    assert.equal(service.listAvailableHooksForContext({ ...alpha, userId: 1 })[0].showInChat, false);
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, true);
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, true);
+    service.replaceHookBindings({ overwriteUserPreferences: true, hookId, userIds: [2], defaultEnabled: false, defaultShowInChat: false, boundBy: 1 });
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, false);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: true });
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, true);
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, true);
   } finally { database.close(); }
 });
 
@@ -575,7 +662,7 @@ test('admin Hook defaults migrate safely and persist across repeated startup mig
     migrateHookActivationModel(database);
     assert.equal(service.getHook(hook.id).defaultEnabled, true);
     assert.equal(service.getHook(hook.id).defaultShowInChat, false);
-    assert.equal(service.listActiveHooksForUser(2)[0].id, hook.id);
+    assert.deepEqual(service.listActiveHooksForUser(2), []);
     assert.equal(service.listActiveHooksForUser(1)[0].showInChat, false);
   } finally { database.close(); }
 });

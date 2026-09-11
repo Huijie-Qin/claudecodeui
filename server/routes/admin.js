@@ -889,6 +889,7 @@ export function createAdminRouter(
         tenantIds: req.body?.tenantIds,
         defaultEnabled: req.body?.defaultEnabled,
         defaultShowInChat: req.body?.defaultShowInChat,
+        overwriteUserPreferences: req.body?.overwriteUserPreferences,
         boundBy: req.user.id,
       }));
     } catch (error) {
