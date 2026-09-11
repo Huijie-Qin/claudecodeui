@@ -12,7 +12,7 @@ import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
 import { useWorkspaceStorageQuota } from '../hooks/useWorkspaceStorageQuota';
 import type { FileTreeImageSelection, FileTreeNode, FileTreeSort, FileTreeSortField } from '../types/types';
-import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import { formatFileSize, isImageFile } from '../utils/fileTreeUtils';
 import { nextFileTreeSort, sortFileTree } from '../utils/fileTreeSort';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
@@ -193,11 +193,6 @@ export default function FileTree({
       onFileOpen?.(item.path);
     },
     [onFileOpen, presentation, selectedProject, toggleDirectory],
-  );
-
-  const formatRelativeTimeLabel = useCallback(
-    (date?: string) => formatRelativeTime(date, t),
-    [t],
   );
 
   const handleSelectionChange = useCallback((item: FileTreeNode) => {
@@ -470,7 +465,6 @@ export default function FileTree({
           onItemClick={handleItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
-          formatRelativeTime={formatRelativeTimeLabel}
           onRename={isReadOnly ? undefined : operations.handleStartRename}
           onDelete={isReadOnly ? undefined : operations.handleStartDelete}
           onNewFile={isReadOnly ? undefined : (path) => operations.handleStartCreate(path, 'file')}

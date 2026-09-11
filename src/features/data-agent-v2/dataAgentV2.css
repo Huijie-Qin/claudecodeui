@@ -345,9 +345,11 @@
 }
 
 .da-session-row {
-  height: 31px;
-  gap: 8px;
-  padding: 0 6px 0 37px;
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  min-height: 44px;
+  gap: 2px 8px;
+  padding: 5px 6px 5px 37px;
   border-radius: 7px;
   color: #66635c;
   font-size: 11.5px;
@@ -390,9 +392,11 @@
 }
 
 .da-session-time {
-  flex: 0 0 auto;
+  grid-column: 2;
   color: var(--da-muted);
   font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
 }
 
 .da-sidebar-empty {
@@ -3867,6 +3871,11 @@
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.data-agent-file-tree .data-agent-file-modified {
+  overflow: visible;
+  white-space: normal;
 }
 
 .data-agent-file-view-switch {

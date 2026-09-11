@@ -5,6 +5,7 @@ import { cn } from '../../../lib/utils';
 import { FILE_TREE_DROP_TARGET_ATTRIBUTE } from '../constants/constants';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
 import { Input } from '../../../shared/view/ui';
+import { formatBeijingDateTime } from '../../../utils/dateUtils';
 
 import FileContextMenu from './FileContextMenu';
 import FileTreeCreateInput from './FileTreeCreateInput';
@@ -28,7 +29,6 @@ type FileTreeNodeProps = {
   onItemClick: (item: FileTreeNodeType) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
-  formatRelativeTime: (date?: string) => string;
   onRename?: (item: FileTreeNodeType) => void;
   onDelete?: (item: FileTreeNodeType) => void;
   onNewFile?: (path: string) => void;
@@ -106,7 +106,6 @@ export default function FileTreeNode({
   onItemClick,
   renderFileIcon,
   formatFileSize,
-  formatRelativeTime,
   onRename,
   onDelete,
   onNewFile,
@@ -270,7 +269,9 @@ export default function FileTreeNode({
           <div className="data-agent-file-meta col-span-2 text-sm tabular-nums text-muted-foreground">
             {item.type === 'file' ? formatFileSize(item.size) : ''}
           </div>
-          <div className="data-agent-file-meta col-span-3 text-sm text-muted-foreground">{formatRelativeTime(item.modified)}</div>
+          <div className="data-agent-file-meta data-agent-file-modified col-span-3 text-sm tabular-nums text-muted-foreground">
+            {formatBeijingDateTime(item.modified)}
+          </div>
           <div className="data-agent-file-meta col-span-2 font-mono text-sm text-muted-foreground">{item.permissionsRwx || ''}</div>
         </>
       ) : viewMode === 'compact' ? (
@@ -375,7 +376,6 @@ export default function FileTreeNode({
               onItemClick={onItemClick}
               renderFileIcon={renderFileIcon}
               formatFileSize={formatFileSize}
-              formatRelativeTime={formatRelativeTime}
               onRename={onRename}
               onDelete={onDelete}
               onNewFile={onNewFile}

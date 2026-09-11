@@ -22,7 +22,6 @@ type FileTreeListProps = {
   onItemClick: (item: FileTreeNodeType) => void;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
-  formatRelativeTime: (date?: string) => string;
   onRename?: (item: FileTreeNodeType) => void;
   onDelete?: (item: FileTreeNodeType) => void;
   onNewFile?: (path: string) => void;
@@ -71,7 +70,6 @@ export default function FileTreeList({
   onItemClick,
   renderFileIcon,
   formatFileSize,
-  formatRelativeTime,
   onRename,
   onDelete,
   onNewFile,
@@ -123,7 +121,6 @@ export default function FileTreeList({
           onItemClick={onItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
-          formatRelativeTime={formatRelativeTime}
           onRename={onRename}
           onDelete={onDelete}
           onNewFile={onNewFile}

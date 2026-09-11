@@ -2,6 +2,17 @@ import { TFunction } from 'i18next';
 
 const SQLITE_UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
+const beijingDateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
 export const parseTimestamp = (value: string | number | Date): Date => {
   if (value instanceof Date) {
     return value;
@@ -12,6 +23,16 @@ export const parseTimestamp = (value: string | number | Date): Date => {
   }
 
   return new Date(value);
+};
+
+export const formatBeijingDateTime = (value?: string | number | Date | null): string => {
+  if (value === undefined || value === null || value === '') return '-';
+  const date = parseTimestamp(value);
+  if (!Number.isFinite(date.getTime())) return '-';
+
+  const parts = Object.fromEntries(beijingDateTimeFormatter.formatToParts(date)
+    .map(({ type, value: part }) => [type, part]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 };
 
 export const formatTimeAgo = (dateString: string, currentTime: Date, t: TFunction) => {

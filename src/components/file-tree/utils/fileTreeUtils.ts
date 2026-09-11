@@ -1,4 +1,3 @@
-import type { TFunction } from 'i18next';
 import { IMAGE_FILE_EXTENSIONS } from '../constants/constants';
 import type { FileTreeNode } from '../types/types';
 
@@ -48,36 +47,7 @@ export function formatFileSize(bytes?: number): string {
   return `${(bytes / Math.pow(base, index)).toFixed(1).replace(/\.0$/, '')} ${sizes[index]}`;
 }
 
-export function formatRelativeTime(date: string | undefined, t: TFunction): string {
-  if (!date) {
-    return '-';
-  }
-
-  const now = new Date();
-  const past = new Date(date);
-  const diffInSeconds = Math.floor((now.getTime() - past.getTime()) / 1000);
-
-  if (diffInSeconds < 60) {
-    return t('fileTree.justNow');
-  }
-
-  if (diffInSeconds < 3600) {
-    return t('fileTree.minAgo', { count: Math.floor(diffInSeconds / 60) });
-  }
-
-  if (diffInSeconds < 86400) {
-    return t('fileTree.hoursAgo', { count: Math.floor(diffInSeconds / 3600) });
-  }
-
-  if (diffInSeconds < 2592000) {
-    return t('fileTree.daysAgo', { count: Math.floor(diffInSeconds / 86400) });
-  }
-
-  return past.toLocaleDateString();
-}
-
 export function isImageFile(filename: string): boolean {
   const extension = filename.split('.').pop()?.toLowerCase();
   return Boolean(extension && IMAGE_FILE_EXTENSIONS.has(extension));
 }
-
