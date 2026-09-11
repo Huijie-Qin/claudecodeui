@@ -414,6 +414,10 @@
     "name": "Name",
     "size": "Size",
     "modified": "Modified",
+    "sort": {
+      "asc": "Ascending",
+      "desc": "Descending"
+    },
     "permissions": "Permissions",
     "noFilesFound": "No files found",
     "checkProjectPath": "Check if the project path is accessible",

@@ -11,8 +11,9 @@ import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
 import { useWorkspaceStorageQuota } from '../hooks/useWorkspaceStorageQuota';
-import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
+import type { FileTreeImageSelection, FileTreeNode, FileTreeSort, FileTreeSortField } from '../types/types';
 import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import { nextFileTreeSort, sortFileTree } from '../utils/fileTreeSort';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
 import { api } from '../../../utils/api';
@@ -45,6 +46,7 @@ export default function FileTree({
 }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
+  const [sort, setSort] = useState<FileTreeSort>({ field: 'name', direction: 'asc' });
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [focusedDirectoryPath, setFocusedDirectoryPath] = useState<string | null>(null);
@@ -81,6 +83,8 @@ export default function FileTree({
     files,
     expandDirectories,
   });
+  const sortedFiles = useMemo(() => sortFileTree(filteredFiles, sort), [filteredFiles, sort]);
+  const changeSort = (field: FileTreeSortField) => setSort((current) => nextFileTreeSort(current, field));
 
   const allItemsByPath = useMemo(() => {
     const result = new Map<string, FileTreeNode>();
@@ -422,7 +426,9 @@ export default function FileTree({
         onChange={upload.handleFileInputChange}
       />
 
-      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
+      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && (
+        <FileTreeDetailedColumns sort={sort} onSortChange={changeSort} />
+      )}
 
       <ScrollArea className="flex-1 px-2 py-1">
         <div className="min-h-full" onClick={() => setFocusedDirectoryPath(null)}>
@@ -444,7 +450,7 @@ export default function FileTree({
 
         <FileTreeBody
           files={files}
-          filteredFiles={filteredFiles}
+          filteredFiles={sortedFiles}
           searchQuery={searchQuery}
           activePath={activePath}
           showSelectionControls={presentation === 'data-agent' && !isReadOnly}

@@ -414,6 +414,10 @@
     "name": "名称",
     "size": "大小",
     "modified": "修改时间",
+    "sort": {
+      "asc": "升序",
+      "desc": "降序"
+    },
     "permissions": "权限",
     "noFilesFound": "未找到文件",
     "checkProjectPath": "检查项目路径是否可访问",

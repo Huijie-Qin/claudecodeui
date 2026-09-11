@@ -2,6 +2,13 @@ import type { LucideIcon } from 'lucide-react';
 
 export type FileTreeViewMode = 'simple' | 'compact' | 'detailed';
 
+export type FileTreeSortField = 'name' | 'modified';
+
+export type FileTreeSort = {
+  field: FileTreeSortField;
+  direction: 'asc' | 'desc';
+};
+
 export type FileTreeItemType = 'file' | 'directory';
 
 export interface FileTreeNode {
