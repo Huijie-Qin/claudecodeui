@@ -2349,7 +2349,7 @@ export function createHookConfigService({
       };
     },
 
-    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, boundBy }) => {
+    replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, overwriteUserPreferences = false, boundBy }) => {
       const hook = requireHook(hookId);
       if (hook.bindingController === 'sql_check') {
         throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
@@ -2365,6 +2365,9 @@ export function createHookConfigService({
       }
       if (defaultShowInChat !== undefined && typeof defaultShowInChat !== 'boolean') {
         throw createHttpError('defaultShowInChat must be a boolean');
+      }
+      if (typeof overwriteUserPreferences !== 'boolean') {
+        throw createHttpError('overwriteUserPreferences must be a boolean');
       }
       if (!Array.isArray(userIds)) throw createHttpError('userIds must be an array');
       if (!Array.isArray(tenantIds)) throw createHttpError('tenantIds must be an array');
@@ -2458,7 +2461,9 @@ export function createHookConfigService({
             boundBy,
             hookId,
           );
-        if (defaultEnabled === undefined && defaultShowInChat === undefined) return;
+        // Overwriting is an explicit action for this save, never a stored policy.
+        // Ordinary publication and older clients preserve personal preferences.
+        if (!overwriteUserPreferences || (defaultEnabled === undefined && defaultShowInChat === undefined)) return;
         const updatedHook = getHook(hookId);
         const scopedUsers = database.prepare('SELECT id FROM users WHERE is_active = 1').all()
           .filter(({ id }) => isAdminHookAvailableToUser({ hook: updatedHook, userId: id }));

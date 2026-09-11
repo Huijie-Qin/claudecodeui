@@ -433,12 +433,13 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
     tenantIds: [3],
     defaultEnabled: undefined,
     defaultShowInChat: undefined,
+    overwriteUserPreferences: undefined,
     boundBy: 9,
   });
 
   const updated = await requestJson(router, '/hooks/hook-1/bindings', {
     method: 'PUT',
-    body: { scope: 'all_users', userIds: [], tenantIds: [], defaultEnabled: true, defaultShowInChat: false },
+    body: { scope: 'all_users', userIds: [], tenantIds: [], defaultEnabled: true, defaultShowInChat: false, overwriteUserPreferences: true },
   });
   assert.equal(updated.response.status, 200);
   assert.deepEqual(seen.replace, {
@@ -448,9 +449,17 @@ test('Hook user scope supports selected users, tenants, and all users', async ()
     tenantIds: [],
     defaultEnabled: true,
     defaultShowInChat: false,
+    overwriteUserPreferences: true,
     boundBy: 9,
   });
   assert.equal(updated.payload.scope, 'all_users');
+  const preserved = await requestJson(router, '/hooks/hook-1/bindings', {
+    method: 'PUT',
+    body: { scope: 'users', userIds: [10], overwriteUserPreferences: false },
+  });
+  assert.equal(preserved.response.status, 200);
+  assert.equal(seen.replace.overwriteUserPreferences, false);
+
 
 });
 
