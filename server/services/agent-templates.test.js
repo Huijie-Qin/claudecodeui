@@ -1177,3 +1177,46 @@ test('workspace Agent template snapshot stores non-secret Hook audit metadata', 
   assert.equal(Object.hasOwn(stored[0], 'extensionLogic'), false);
   assert.equal(Object.hasOwn(stored[0], 'postActions'), false);
 });
+
+test('template snapshots retain the pinned subagent switch after a newer Hook changes it', () => {
+  const fixture = createFixture();
+  try {
+    const versionTwo = JSON.parse(fixture.database.prepare(`
+      SELECT config_json FROM hook_published_versions WHERE hook_id = ? AND version = 2
+    `).get(fixture.hookId).config_json);
+    versionTwo.eventName = 'Stop';
+    versionTwo.includeSubagents = true;
+    fixture.database.prepare('UPDATE hook_published_versions SET config_json = ? WHERE hook_id = ? AND version = 2')
+      .run(JSON.stringify(versionTwo), fixture.hookId);
+    fixture.database.prepare("UPDATE hooks SET event_name = 'Stop', include_subagents = 0, version = 3 WHERE id = ?")
+      .run(fixture.hookId);
+    fixture.database.prepare(`
+      INSERT INTO hook_published_versions (hook_id, version, config_json, resource_refs_json)
+      VALUES (?, 3, ?, '{"skills":[],"mcpServers":[],"mcpTools":[]}')
+    `).run(fixture.hookId, JSON.stringify({ ...versionTwo, includeSubagents: false }));
+
+    assert.equal(fixture.service.listHookCatalog({ tenantId: fixture.appTenantId })[0].includeSubagents, false);
+    const draft = fixture.service.saveTemplate({
+      userId: 1,
+      input: {
+        name: '子代理开关版本模板', category: '通用助手', tenantIds: [fixture.appTenantId],
+        skillPresetRefs: [], mcpPresetRefs: [], hookRefs: [{ hookId: fixture.hookId, version: 2 }],
+      },
+    });
+    fixture.service.publishTemplate({ templateId: draft.id, userId: 1 });
+    const snapshot = fixture.service.resolveTemplateSnapshot({ templateId: draft.id, tenantId: fixture.appTenantId });
+    assert.equal(snapshot.hooks[0].version, 2);
+    assert.equal(snapshot.hooks[0].includeSubagents, true);
+
+    const workspaceId = Number(fixture.database.prepare(`
+      INSERT INTO workspaces (tenant_id, owner_user_id, slug, display_name, path)
+      VALUES (?, 1, 'subagent-switch', 'subagent-switch', '/tmp/subagent-switch-snapshot')
+    `).run(fixture.appTenantId).lastInsertRowid);
+    fixture.service.saveWorkspaceSnapshot({ workspaceId, userId: 1, snapshot });
+    const stored = JSON.parse(fixture.database.prepare(`
+      SELECT hooks_json FROM workspace_agent_template_snapshots WHERE workspace_id = ?
+    `).get(workspaceId).hooks_json);
+    assert.equal(stored[0].version, 2);
+    assert.equal(stored[0].includeSubagents, true);
+  } finally { fixture.database.close(); }
+});

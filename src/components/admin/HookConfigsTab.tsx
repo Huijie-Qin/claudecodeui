@@ -41,6 +41,7 @@ import {
   EVENT_GROUPS,
   createEmptyHook,
   createHookCopyDraft,
+  getHookSubagentLabel,
   shouldShowBusinessData,
 } from './hook-config/catalog';
 import { createHookDraftSignature } from './hook-config/editorUtils';
@@ -2393,6 +2394,7 @@ export default function HookConfigsTab() {
 
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
+                    {getHookSubagentLabel(hook) ? <Badge variant="outline">{getHookSubagentLabel(hook)}</Badge> : null}
                     <span>
                       {hook.extensionLogic
                         ? hook.extensionLogic.language === 'python' ? 'Python' : 'JavaScript'

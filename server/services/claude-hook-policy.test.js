@@ -3,8 +3,9 @@ import test from 'node:test';
 
 import { createClaudeQueryWithHookFallback, isRequiredStopHook } from './claude-hook-policy.js';
 
-test('only explicitly fail-closed Stop hooks are required', () => {
+test('only explicitly fail-closed Stop and SubagentStop hooks are required', () => {
   assert.equal(isRequiredStopHook({ eventName: 'Stop', extensionLogic: { failClosed: true } }), true);
+  assert.equal(isRequiredStopHook({ eventName: 'SubagentStop', extensionLogic: { failClosed: true } }), true);
   for (const hook of [
     null, { eventName: 'Stop' },
     { eventName: 'Stop', extensionLogic: { failClosed: false } },

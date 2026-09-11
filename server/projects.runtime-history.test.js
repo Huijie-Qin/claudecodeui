@@ -204,6 +204,122 @@ test('runtime Claude history restores tools from the current nested subagent tra
   assert.equal(agentResult?.subagentMessages?.[0]?.message?.content?.[0]?.text, 'Inspecting the authentication flow.');
 });
 
+test('runtime Claude history restores two active child tools before a parent result and keeps completed history compatible', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-active-subagent-history-'));
+  const projectsRoot = path.join(root, 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-active-child';
+  const subagentsDir = path.join(projectDir, sessionId, 'subagents');
+  const parent = {
+    sessionId, uuid: 'parent-agent-use', type: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'parent-agent', name: 'Agent', input: {} }] },
+  };
+  const childRows = [
+    { sessionId, agentId: 'child-a', type: 'assistant', uuid: 'child-submit', timestamp: '2026-01-01T00:00:01.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'submit', name: 'mcp__tasks__execute_task', input: {} }] } },
+    { sessionId, agentId: 'child-a', type: 'user', uuid: 'child-submitted', timestamp: '2026-01-01T00:00:02.000Z',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'submit', content: '{"task_id":"task-a","status":"running"}' }] } },
+    { sessionId, agentId: 'child-a', type: 'assistant', uuid: 'child-status', timestamp: '2026-01-01T00:00:03.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'status', name: 'mcp__tasks__get_task_status', input: { task_id: 'task-a' } }] } },
+  ];
+  try {
+    await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [parent]);
+    await writeJsonl(path.join(subagentsDir, 'agent-child-a.jsonl'), [
+      ...childRows,
+      { ...childRows[0], sessionId: 'other-session', uuid: 'foreign-session' },
+      { ...childRows[0], agentId: 'other-agent', uuid: 'foreign-agent' },
+    ]);
+    await fs.writeFile(path.join(subagentsDir, 'agent-child-a.meta.json'), JSON.stringify({ toolUseId: 'parent-agent' }));
+    const active = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+    assert.equal(active.total, 1, 'Restoration must not invent a parent result or alter pagination');
+    const restored = active.messages[0].subagentInvocations['parent-agent'];
+    assert.equal(restored.agentId, 'child-a');
+    assert.deepEqual(restored.subagentTools.map(({ toolId }) => toolId), ['submit', 'status']);
+    assert.equal(restored.subagentTools[0].toolResult.content, '{"task_id":"task-a","status":"running"}');
+    assert.equal(restored.subagentTools[1].toolResult, undefined, 'The waiting status call remains pending');
+    assert.deepEqual(restored.subagentMessages, childRows);
+    assert.equal(active.messages[0].toolUseResult, undefined);
+
+    await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [parent, {
+      sessionId, uuid: 'parent-result', type: 'user', timestamp: '2026-01-01T00:20:00.000Z',
+      toolUseResult: { agentId: 'child-a', status: 'completed' },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'parent-agent', content: 'Completed' }] },
+    }]);
+    const completed = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+    assert.equal(completed.messages[0].subagentInvocations, undefined);
+    assert.deepEqual(completed.messages[1].subagentTools.map(({ toolId }) => toolId), ['submit', 'status']);
+    assert.deepEqual(completed.messages[1].subagentMessages, childRows);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('active subagent metadata keeps parallel Agents in one assistant message separate', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-parallel-active-history-'));
+  const projectsRoot = path.join(root, 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-parallel';
+  const subagentsDir = path.join(projectDir, sessionId, 'subagents');
+  try {
+    await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [{
+      sessionId, uuid: 'parallel-use', type: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+      message: { role: 'assistant', content: ['a', 'b'].map((key) => ({ type: 'tool_use', id: `parent-${key}`, name: 'Agent', input: {} })) },
+    }]);
+    for (const key of ['a', 'b']) {
+      await writeJsonl(path.join(subagentsDir, `agent-child-${key}.jsonl`), [{
+        sessionId, agentId: `child-${key}`, uuid: `use-${key}`, type: 'assistant', timestamp: '2026-01-01T00:00:01.000Z',
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: `status-${key}`, name: 'mcp__tasks__get_task_status', input: { task_id: `task-${key}` } }] },
+      }]);
+      await fs.writeFile(path.join(subagentsDir, `agent-child-${key}.meta.json`), JSON.stringify({ toolUseId: `parent-${key}` }));
+    }
+    const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+    const invocations = result.messages[0].subagentInvocations;
+    assert.deepEqual(Object.keys(invocations).sort(), ['parent-a', 'parent-b']);
+    for (const key of ['a', 'b']) {
+      assert.equal(invocations[`parent-${key}`].agentId, `child-${key}`);
+      assert.deepEqual(invocations[`parent-${key}`].subagentTools.map(({ toolId }) => toolId), [`status-${key}`]);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('active subagent restoration ignores malformed, ambiguous, unrelated and symlink metadata', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-active-history-safety-'));
+  const projectsRoot = path.join(root, 'projects');
+  const projectDir = path.join(projectsRoot, '-workspace');
+  const sessionId = 'session-safe';
+  const subagentsDir = path.join(projectDir, sessionId, 'subagents');
+  try {
+    await writeJsonl(path.join(projectDir, `${sessionId}.jsonl`), [{
+      sessionId, uuid: 'uses', type: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+      message: { role: 'assistant', content: [
+        ...['ambiguous', 'linked', 'malformed'].map((id) => ({ type: 'tool_use', id, name: 'Agent', input: {} })),
+        { type: 'tool_use', id: 'ordinary', name: 'Bash', input: {} },
+      ] },
+    }]);
+    for (const [agentId, toolUseId] of [['a', 'ambiguous'], ['b', 'ambiguous'], ['orphan', 'missing'], ['ordinary', 'ordinary'], ['linked', 'linked'], ['bad', 'malformed']]) {
+      await writeJsonl(path.join(subagentsDir, `agent-${agentId}.jsonl`), [{
+        sessionId, agentId, uuid: `use-${agentId}`, type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: `status-${agentId}`, name: 'mcp__tasks__get_task_status', input: {} }] },
+      }]);
+      const metadataPath = path.join(subagentsDir, `agent-${agentId}.meta.json`);
+      if (agentId === 'linked') {
+        const outsideMetadata = path.join(root, 'outside.json');
+        await fs.writeFile(outsideMetadata, JSON.stringify({ toolUseId }));
+        await fs.symlink(outsideMetadata, metadataPath);
+      } else {
+        await fs.writeFile(metadataPath, agentId === 'bad' ? '{"toolUseId":' : JSON.stringify({ toolUseId }));
+      }
+    }
+    const result = await getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, null, 0);
+    assert.equal(result.messages[0].subagentInvocations, undefined);
+    assert.equal(result.messages[0].subagentTools, undefined);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('runtime Claude history keeps resumed agent generations separated by parent tool id', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-resumed-agent-'));
   const projectsRoot = path.join(root, '.claude', 'projects');

@@ -27,6 +27,8 @@
   "hookActivity": {
     "title": "后置消息",
     "executionTitle": "Hook 执行",
+    "subagent": "子代理",
+    "mainAgent": "主代理",
     "script": "脚本",
     "actions": {
       "call_mcp_tool": "MCP 调用",
@@ -58,7 +60,9 @@
       "queued": "等待中",
       "running": "执行中",
       "succeeded": "已完成",
-      "failed": "失败"
+      "failed": "失败",
+      "timed_out": "已超时",
+      "cancelled": "已取消"
     }
   },
   "tools": {

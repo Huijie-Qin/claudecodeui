@@ -724,6 +724,52 @@ test('Claude session history restores generic Hook cards from existing execution
   });
 });
 
+test('Claude history restores each child Hook identity and terminal loop result without labeling the main agent as a child', async () => {
+  const executions = [
+    { id: 'main-execution', eventName: 'Stop', agentType: 'reviewer', input: { agent_type: 'reviewer' } },
+    { id: 'child-a-execution', eventName: 'SubagentStop', agentId: 'child-a', agentType: 'reviewer' },
+    { id: 'child-b-execution', eventName: 'PostToolUse', input: { agent_id: 'child-b', agent_type: 'worker' },
+      actions: {
+        'wait-status': { output: { scheduled: false, deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
+          toolUseResult: { rows: 7 },
+        } },
+      },
+    },
+  ];
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: { findByProviderSession: () => null },
+      sessionMessages: { listMessages: () => ({ messages: [], total: 0, hasMore: false, offset: 0, limit: null }) },
+    },
+    hookConfigs: {
+      listAllExecutions: () => executions.map((execution, index) => ({
+        hookId: 'shared-hook', status: 'succeeded', startedAtMs: 1000 + index, ...execution,
+      })),
+      getHook: () => ({ id: 'shared-hook', name: 'Shared Hook', eventName: 'Stop',
+        postActions: [{ id: 'wait-status', type: 'mcp_loop_run' }],
+      }),
+    },
+  });
+  const result = await service.fetchHistory({
+    tenantId: 1, userId: 2, provider: 'claude', providerSessionId: 's1',
+    ownedSession: { workspace_id: 3, workspace_slug: 'repo', workspace_path: '/tmp/repo' },
+  });
+  assert.equal(result.messages.length, 3);
+  assert.equal(Object.hasOwn(result.messages[0], 'agentId'), false);
+  assert.equal(Object.hasOwn(result.messages[0], 'agentType'), false);
+  assert.deepEqual(result.messages.slice(1).map(({ agentId, agentType, eventName }) => ({ agentId, agentType, eventName })), [
+    { agentId: 'child-a', agentType: 'reviewer', eventName: 'SubagentStop' },
+    { agentId: 'child-b', agentType: 'worker', eventName: 'PostToolUse' },
+  ]);
+  assert.deepEqual(result.messages[2].actionResults, [{
+    actionId: 'wait-status', actionType: 'mcp_loop_run', output: {
+      scheduled: false, deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
+      toolUseResult: { rows: 7 },
+    },
+  }]);
+  assert.equal(result.messages[2].status, 'succeeded', 'Hook transport success does not erase a failed child loop outcome');
+});
+
 test('Claude session history omits execution and persisted follow-up cards for Hooks hidden from chat', async () => {
   const visibilityLookups = [];
   const service = createSessionMessageHistoryService({

@@ -20,7 +20,7 @@ import { cn } from '../../../lib/utils';
 import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input } from '../../../shared/view/ui';
 import { api } from '../../../utils/api';
 
-import { groupHookExecutions, likelyWinningUpdatedInput, paginationWindow } from './diagnostics';
+import { getHookExecutionAgent, groupHookExecutions, likelyWinningUpdatedInput, paginationWindow } from './diagnostics';
 import type {
   HookConfig,
   HookExecution,
@@ -185,6 +185,7 @@ function HookExecutionDetail({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-sm font-semibold text-foreground">{execution.hookName || execution.hookId}</h3>
+                    <Badge variant="outline">{getHookExecutionAgent(execution).label}</Badge>
                     {execution.bindingController === 'sql_check' ? (
                       <Badge variant="outline">{t('hooks.builtin')}</Badge>
                     ) : null}
@@ -206,6 +207,7 @@ function HookExecutionDetail({
                 <span>{t('hooks.diagnostics.duration')}: {execution.durationMs == null ? '—' : `${execution.durationMs}ms`}</span>
                 <span>{t('hooks.diagnostics.user')}: {execution.username || execution.userId || '—'}</span>
                 <span className="truncate" title={execution.sessionId || ''}>{t('hooks.diagnostics.session')}: {execution.sessionId || '—'}</span>
+                {getHookExecutionAgent(execution).id ? <span className="truncate" title={getHookExecutionAgent(execution).id || ''}>代理 ID: {getHookExecutionAgent(execution).id}</span> : null}
               </div>
             </div>
 
@@ -527,6 +529,7 @@ export default function HookDiagnosticsPanel({
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-xs font-medium text-foreground">{execution.hookName || execution.hookId}</span>
+                          <Badge variant="outline">{getHookExecutionAgent(execution).label}</Badge>
                           {execution.bindingController === 'sql_check' ? <Badge variant="outline">{t('hooks.builtin')}</Badge> : null}
                           <Badge variant={outcomeVariant(execution.diagnostics.outcome)}>
                             {t(`hooks.diagnostics.outcomes.${execution.diagnostics.outcome}`)}

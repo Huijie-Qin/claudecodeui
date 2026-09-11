@@ -76,6 +76,62 @@ function publishableHook(overrides = {}) {
   };
 }
 
+test('subagent switch persists across edits and immutable published versions', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({ userId: 1, input: publishableHook({ eventName: 'PreToolUse' }) });
+    assert.equal(created.includeSubagents, false);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const updated = service.updateHook({
+      hookId: created.id, userId: 1,
+      input: publishableHook({ eventName: 'PreToolUse', includeSubagents: true }),
+    });
+    assert.equal(updated.includeSubagents, true);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).includeSubagents, false);
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).includeSubagents, true);
+    // An older client changing a description must not silently turn it off.
+    assert.equal(service.updateHook({
+      hookId: created.id, userId: 1, input: publishableHook({ eventName: 'PreToolUse', description: 'Edited' }),
+    }).includeSubagents, true);
+    assert.equal(service.updateHook({
+      hookId: created.id, userId: 1,
+      input: publishableHook({ eventName: 'PreToolUse', includeSubagents: false }),
+    }).includeSubagents, false);
+  } finally { database.close(); }
+});
+
+test('legacy subagent defaults preserve tool callbacks without adding Stop callbacks', () => {
+  const { database, service } = createFixture();
+  try {
+    for (const eventName of ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop']) {
+      const created = service.createHook({ userId: 1, input: publishableHook({ eventName }) });
+      database.prepare('UPDATE hooks SET include_subagents = NULL WHERE id = ?').run(created.id);
+      const expected = ['PreToolUse', 'PostToolUse'].includes(eventName);
+      assert.equal(service.getHook(created.id).includeSubagents, expected);
+      service.publishHook({ hookId: created.id, userId: 1 });
+      const snapshot = JSON.parse(database.prepare('SELECT config_json FROM hook_published_versions WHERE hook_id = ?').get(created.id).config_json);
+      delete snapshot.includeSubagents;
+      database.prepare('UPDATE hook_published_versions SET config_json = ? WHERE hook_id = ?').run(JSON.stringify(snapshot), created.id);
+      assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).includeSubagents, expected);
+      migrateHookConfigurationModel(database);
+      assert.equal(service.getHook(created.id).includeSubagents, expected);
+    }
+  } finally { database.close(); }
+});
+
+test('subagent switch rejects invalid values and events with no equivalent child callback', () => {
+  const { database, service } = createFixture();
+  try {
+    for (const includeSubagents of ['true', 1, null, {}]) {
+      assert.throws(() => service.createHook({ userId: 1, input: publishableHook({ includeSubagents }) }), /includeSubagents must be boolean/);
+    }
+    for (const eventName of ['UserPromptSubmit', 'SessionStart', 'StopFailure', 'SubagentStop']) {
+      assert.throws(() => service.createHook({ userId: 1, input: publishableHook({ eventName, includeSubagents: true }) }), /不支持同时对子代理生效/);
+    }
+  } finally { database.close(); }
+});
+
 test('extensionLogic failClosed is optional, strictly boolean, and survives persistence', () => {
   const { database, service } = createFixture();
   try {
@@ -1312,7 +1368,7 @@ test('Hook execution diagnostics expose outcomes, millisecond timestamps, and gl
     `).run(
       'execution-1',
       hook.id,
-      JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' } }),
+      JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pwd' }, agent_id: 'child-1', agent_type: 'worker' }),
       JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -1339,6 +1395,8 @@ test('Hook execution diagnostics expose outcomes, millisecond timestamps, and gl
     assert.equal(execution.hookName, hook.name);
     assert.equal(execution.username, 'admin');
     assert.equal(execution.toolName, 'Bash');
+    assert.equal(execution.agentId, 'child-1');
+    assert.equal(execution.agentType, 'worker');
     assert.equal(execution.startedAtMs, 1000);
     assert.equal(execution.completedAtMs, 1025);
     assert.equal(execution.diagnostics.outcome, 'denied');
@@ -1383,6 +1441,9 @@ test('user Hook execution history is scoped to the authenticated workspace and i
       ) VALUES (?, ?, 1, ?, ?, ?, ?, 'Stop', 'succeeded', '{}', '{}', '{}', 12, ?, ?)
     `);
     insertExecution.run('mine', hook.id, 2, 7, 10, 'session-mine', 1000, 1012);
+    database.prepare('UPDATE hook_executions SET input_json = ? WHERE id = ?').run(
+      JSON.stringify({ agent_id: 'child-2', agent_type: 'reviewer', tool_input: { private: 'not-in-summary' } }), 'mine',
+    );
     insertExecution.run('other-user', hook.id, 1, 7, 10, 'session-other-user', 2000, 2012);
     insertExecution.run('other-workspace', hook.id, 2, 7, 11, 'session-other-workspace', 3000, 3012);
     insertExecution.run('legacy-source', otherHook.id, 2, 7, 10, 'session-legacy', 4000, 4012);
@@ -1453,6 +1514,8 @@ test('user Hook execution history is scoped to the authenticated workspace and i
     }]);
     assert.ok(page.executions[0].records[0].createdAt);
     assert.equal(page.executions[0].input, null);
+    assert.equal(page.executions[0].agentId, 'child-2');
+    assert.equal(page.executions[0].agentType, 'reviewer');
     assert.deepEqual(page.executions[0].actions, {});
     assert.deepEqual(page.standaloneRecords.map(({ createdAt, ...record }) => record), [{
       id: 'record-legacy-owner',
@@ -2199,7 +2262,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
+      ['id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
     );
     assert.equal(
       database
@@ -2642,5 +2705,33 @@ test('Hook environment shares identical values but refuses ambiguous names witho
     });
     service.setWorkspaceUserHookEnabled({ ...alpha, hookId: second.id, enabled: false });
     assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha).env, { token: 'same-private' });
+  } finally { database.close(); }
+});
+
+test('execution pagination keeps identical tool ids in different agents separate', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook({ eventName: 'PreToolUse', includeSubagents: true }), userId: 1 });
+    const insertExecution = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, session_id, event_name, tool_use_id,
+        status, input_json, started_at_ms
+      ) VALUES (?, ?, 1, 1, 'shared-session', 'PreToolUse', 'shared-tool', 'succeeded', ?, ?)
+    `);
+    insertExecution.run('main-callback', hook.id, JSON.stringify({ tool_name: 'Bash' }), 1000);
+    insertExecution.run('child-one-callback', hook.id, JSON.stringify({ tool_name: 'Bash', agent_id: 'child-one' }), 2000);
+    insertExecution.run('child-two-callback', hook.id, JSON.stringify({ tool_name: 'Bash', agent_id: 'child-two' }), 3000);
+    insertExecution.run('child-two-second-hook', hook.id, JSON.stringify({ tool_name: 'Bash', agent_id: 'child-two' }), 3010);
+
+    const newest = service.listExecutionPage(hook.id, { limit: 1, offset: 0 });
+    assert.equal(newest.total, 3);
+    assert.equal(newest.executionTotal, 4);
+    assert.deepEqual(newest.executions.map((item) => item.id), ['child-two-second-hook', 'child-two-callback']);
+    assert.equal(newest.executions.every((item) => item.agentId === 'child-two'), true);
+    const middle = service.listExecutionPage(hook.id, { limit: 1, offset: 1 });
+    assert.deepEqual(middle.executions.map((item) => item.id), ['child-one-callback']);
+    const oldest = service.listExecutionPage(hook.id, { limit: 1, offset: 2 });
+    assert.deepEqual(oldest.executions.map((item) => item.id), ['main-callback']);
+    assert.equal(oldest.executions[0].agentId, null);
   } finally { database.close(); }
 });

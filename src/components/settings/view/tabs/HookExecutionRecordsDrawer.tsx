@@ -10,6 +10,8 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import { getHookExecutionAgent } from '../../../admin/hook-config/diagnostics';
+
 export type UserHookDataRecord = {
   id: string;
   type: string;
@@ -26,6 +28,8 @@ export type UserHookExecution = {
   eventName: string;
   sessionId: string | null;
   status: 'running' | 'succeeded' | 'failed';
+  agentId?: string | null;
+  agentType?: string | null;
   durationMs: number | null;
   startedAtMs: number | null;
   startedAt: string | null;
@@ -303,6 +307,9 @@ export default function HookExecutionRecordsDrawer({
                         {isFailed ? '失败' : isSucceeded ? '已完成' : '执行中'}
                       </span>
                       <span className="text-xs text-muted-foreground">{execution.eventName}</span>
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {getHookExecutionAgent(execution).label}
+                      </span>
                       <span className="ml-auto text-[11px] text-muted-foreground">{formatExecutionTime(execution)}</span>
                     </div>
                     <div className="space-y-3 p-3">
@@ -311,6 +318,7 @@ export default function HookExecutionRecordsDrawer({
                         {execution.sessionId ? (
                           <code className="truncate" title={execution.sessionId}>会话 {shortSessionId(execution.sessionId)}</code>
                         ) : <span>无会话标识</span>}
+                        {execution.agentId ? <code className="truncate" title={execution.agentId}>代理 {shortSessionId(execution.agentId)}</code> : null}
                       </div>
 
                       {execution.records.map(renderDataRecord)}

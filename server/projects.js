@@ -1004,7 +1004,7 @@ async function parseJsonlSessions(filePath) {
 
 // Parse an agent JSONL file once so history restoration can recover the full
 // subagent conversation (text/thinking/errors as well as tool activity).
-async function parseAgentTranscript(filePath) {
+async function parseAgentTranscript(filePath, { sessionId, agentId } = {}) {
   const tools = [];
   const entries = [];
 
@@ -1021,6 +1021,9 @@ async function parseAgentTranscript(filePath) {
       if (line.trim()) {
         try {
           const entry = JSON.parse(line);
+          if (sessionId && entry.sessionId && entry.sessionId !== sessionId) continue;
+          const entryAgentId = entry.agentId || entry.agent_id;
+          if (agentId && entryAgentId && entryAgentId !== agentId) continue;
           if (!entry.uuid) {
             entry.uuid = `subagent-${path.basename(filePath)}-${lineNumber}`;
           }
@@ -1096,6 +1099,7 @@ async function getSessionMessagesFromProjectDirectory(
       ? transcriptFiles.filter((file) => files.includes(file))
       : files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'));
     const agentTranscriptPaths = new Map();
+    const agentMetadataPaths = new Map();
     for (const file of files) {
       const match = file.match(/^agent-(.+)\.jsonl$/);
       if (match?.[1]) {
@@ -1118,6 +1122,13 @@ async function getSessionMessagesFromProjectDirectory(
         const match = file.match(/^agent-(.+)\.jsonl$/);
         if (match?.[1]) {
           agentTranscriptPaths.set(match[1], path.join(subagentsDir, file));
+        }
+        const metadataMatch = file.match(/^agent-([a-zA-Z0-9._-]+)\.meta\.json$/);
+        if (metadataMatch?.[1]) {
+          agentMetadataPaths.set(metadataMatch[1], resolveDirectChildPath(subagentsDir, file, {
+            label: 'Claude subagent metadata filename',
+            pattern: /^agent-[a-zA-Z0-9._-]+\.meta\.json$/,
+          }));
         }
       }
     } catch (error) {
@@ -1181,11 +1192,19 @@ async function getSessionMessagesFromProjectDirectory(
       return Number.isFinite(timestamp) ? timestamp : null;
     };
     const mainToolUseStartTimes = new Map();
-    for (const message of messages) {
+    const mainAgentToolUses = new Map();
+    const completedParentToolIds = new Set();
+    for (const [sequence, message] of messages.entries()) {
       if (!Array.isArray(message.message?.content)) continue;
       for (const part of message.message.content) {
         if (part?.type === 'tool_use' && typeof part.id === 'string' && part.id.trim()) {
           mainToolUseStartTimes.set(part.id.trim(), parseTimestamp(message.timestamp));
+          if (part.name === 'Agent' || part.name === 'Task') {
+            mainAgentToolUses.set(part.id.trim(), { message, sequence });
+          }
+        }
+        if (part?.type === 'tool_result' && typeof part.tool_use_id === 'string') {
+          completedParentToolIds.add(part.tool_use_id.trim());
         }
       }
     }
@@ -1214,6 +1233,41 @@ async function getSessionMessagesFromProjectDirectory(
         agentInvocations.set(normalizedAgentId, invocations);
       }
     }
+    // Foreground Agent calls have no parent tool result until they finish. The
+    // CLI already persists their transcript and a metadata file tying it to
+    // the exact parent tool_use_id, so restore that history while it is active.
+    const activeMetadataByParentToolId = new Map();
+    for (const [agentId, metadataPath] of agentMetadataPaths) {
+      const transcriptPath = agentTranscriptPaths.get(agentId);
+      if (!transcriptPath) continue;
+      try {
+        const [metadataStat, transcriptStat] = await Promise.all([
+          fs.lstat(metadataPath), fs.lstat(transcriptPath),
+        ]);
+        if (!metadataStat.isFile() || !transcriptStat.isFile() || metadataStat.size > 64 * 1024) continue;
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+        const parentToolUseId = typeof metadata?.toolUseId === 'string' ? metadata.toolUseId.trim() : '';
+        if (!mainAgentToolUses.has(parentToolUseId) || completedParentToolIds.has(parentToolUseId)) continue;
+        const candidates = activeMetadataByParentToolId.get(parentToolUseId) || [];
+        candidates.push(agentId);
+        activeMetadataByParentToolId.set(parentToolUseId, candidates);
+      } catch {
+        // Metadata may be concurrently written or removed. An uncertain
+        // association must not borrow another agent's transcript.
+      }
+    }
+    for (const [parentToolUseId, candidates] of activeMetadataByParentToolId) {
+      if (candidates.length !== 1) continue;
+      const agentId = candidates[0];
+      const { message, sequence } = mainAgentToolUses.get(parentToolUseId);
+      const invocations = agentInvocations.get(agentId) || [];
+      invocations.push({
+        message, parentToolUseId, sequence, active: true,
+        startedAt: mainToolUseStartTimes.get(parentToolUseId) ?? parseTimestamp(message.timestamp),
+      });
+      agentInvocations.set(agentId, invocations);
+      agentIds.add(agentId);
+    }
     for (const invocations of agentInvocations.values()) {
       invocations.sort((left, right) => {
         if (left.startedAt !== null && right.startedAt !== null) {
@@ -1229,23 +1283,20 @@ async function getSessionMessagesFromProjectDirectory(
     for (const agentId of agentIds) {
       const agentFilePath = agentTranscriptPaths.get(agentId);
       if (agentFilePath) {
-        const transcript = await parseAgentTranscript(agentFilePath);
+        const transcript = await parseAgentTranscript(agentFilePath, { sessionId: safeSessionId, agentId });
         agentTranscriptCache.set(agentId, transcript);
       }
     }
 
-    // Attach agent tools to their parent Task messages
-    for (const message of messages) {
-      const toolUseResult = message.toolUseResult || message.tool_use_result;
-      const rawAgentId = toolUseResult?.agentId || toolUseResult?.agent_id;
-      const agentId = typeof rawAgentId === 'string' ? rawAgentId.trim() : '';
-      if (agentId) {
+    // Attach completed histories to their result as before. Active histories
+    // are indexed by tool ID so parallel Agents in one assistant message stay
+    // separate and are not mistaken for completed tool calls.
+    for (const [agentId, invocations] of agentInvocations) {
+      for (const [invocationIndex, invocation] of invocations.entries()) {
+        const { message } = invocation;
         const agentTranscript = agentTranscriptCache.get(agentId);
         if (agentTranscript) {
-          const invocations = agentInvocations.get(agentId) || [];
-          const invocationIndex = invocations.findIndex((invocation) => invocation.message === message);
-          const invocation = invocationIndex >= 0 ? invocations[invocationIndex] : null;
-          const nextInvocation = invocationIndex >= 0 ? invocations[invocationIndex + 1] : null;
+          const nextInvocation = invocations[invocationIndex + 1];
           const belongsToInvocation = (item) => {
             const parentToolUseId = item.parentToolUseId || item.parent_tool_use_id;
             if (parentToolUseId) {
@@ -1274,6 +1325,14 @@ async function getSessionMessagesFromProjectDirectory(
           };
           const scopedTools = agentTranscript.tools.filter(belongsToInvocation);
           const scopedMessages = agentTranscript.entries.filter(belongsToInvocation);
+
+          if (invocation.active) {
+            message.subagentInvocations ||= Object.create(null);
+            message.subagentInvocations[invocation.parentToolUseId] = {
+              agentId, subagentTools: scopedTools, subagentMessages: scopedMessages,
+            };
+            continue;
+          }
 
           // Resumed agents reuse their agent ID and transcript file. Current
           // transcripts retain parent_tool_use_id, which lets each invocation

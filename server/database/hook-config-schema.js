@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { resolveIncludeSubagents } from '../../shared/hookSubagents.js';
 
 const LEGACY_SQL_CHECK_HOOK_NAME = 'SQL 响应指标记录';
 const SQL_CHECK_HOOK_NAME = 'SQL Check 强制校验';
@@ -148,6 +149,10 @@ function publishedVersionConfigFromRow(row) {
     description: row.description || '',
     userVariables: parseHookJson(row.user_variables_json, []),
     eventName: row.event_name,
+    includeSubagents: resolveIncludeSubagents({
+      eventName: row.event_name,
+      includeSubagents: row.include_subagents == null ? undefined : row.include_subagents === 1,
+    }),
     matcher: parseHookJson(row.matcher_json, {}),
     extensionLogic: parseHookJson(row.extension_logic_json, null),
     postActions: parseHookJson(row.post_actions_json, []),
@@ -185,6 +190,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   user_variables_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
   event_name TEXT NOT NULL,
+  include_subagents INTEGER DEFAULT NULL CHECK (include_subagents IN (0, 1)),
   matcher_json TEXT NOT NULL DEFAULT '{}',
   extension_logic_json TEXT NOT NULL DEFAULT 'null',
   post_actions_json TEXT NOT NULL DEFAULT '[]',
@@ -420,6 +426,7 @@ ${MCP_LOOP_JOB_SCHEMA_SQL}
 
 export function migrateHookConfigurationModel(database) {
   const columns = database.prepare('PRAGMA table_info(hooks)').all();
+  const hasIncludeSubagents = columns.some((column) => column.name === 'include_subagents');
   const hasExtensionLogic = columns.some((column) => column.name === 'extension_logic_json');
   const hasPostActions = columns.some((column) => column.name === 'post_actions_json');
   const hasClaudeResponse = columns.some((column) => column.name === 'claude_response_json');
@@ -433,6 +440,11 @@ export function migrateHookConfigurationModel(database) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_bindings'")
     .get());
   const migrate = database.transaction(() => {
+    if (!hasIncludeSubagents) {
+      // NULL preserves the historical event-specific behavior. New API-created
+      // Hooks explicitly store 0 until the administrator enables the switch.
+      database.exec('ALTER TABLE hooks ADD COLUMN include_subagents INTEGER DEFAULT NULL CHECK (include_subagents IN (0, 1))');
+    }
     if (!columns.some((column) => column.name === 'user_variables_json')) {
       database.exec("ALTER TABLE hooks ADD COLUMN user_variables_json TEXT NOT NULL DEFAULT '[]'");
     }

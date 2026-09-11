@@ -113,6 +113,15 @@ function mapJob(row) {
 }
 
 export function normalizeMcpLoopResult(value) {
+  // The CLI may flatten an MCP text result into a JSON string before invoking
+  // PostToolUse. Termination scripts must receive the same data as later polls.
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
   if (value?.isError) {
     return normalizeToolOutput(value);
   }
@@ -155,7 +164,7 @@ export function evaluateMcpLoopResult(result, { successWhen, failureWhen } = {})
   return 'running';
 }
 
-function normalizeTerminationScriptOutcome(value) {
+export function normalizeTerminationScriptOutcome(value) {
   const output = isPlainObject(value?.output) ? value.output : value;
   const status = typeof output === 'string' ? output : output?.status;
   if (status === 'running' || status === 'continue') return 'running';

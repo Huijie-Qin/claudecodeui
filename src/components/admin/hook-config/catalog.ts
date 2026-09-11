@@ -1,3 +1,5 @@
+import { canIncludeSubagents, resolveIncludeSubagents } from '../../../../shared/hookSubagents.js';
+
 import type {
   FieldChoice,
   FieldType,
@@ -59,6 +61,7 @@ export const EVENT_DEFINITIONS: HookEventDefinition[] = [
     group: 'session',
     fields: [
       { key: 'stop_hook_active', type: 'boolean' },
+      { key: 'agent_transcript_path', type: 'string', description: '仅子代理结束回调提供，指向该子代理的独立会话记录。' },
       { key: 'last_assistant_message', type: 'string' },
     ],
   }),
@@ -625,11 +628,18 @@ export function inferNativeMatcherMode(eventName: HookEventName, value?: string)
 
 export const EVENT_GROUPS = ['session', 'prompt', 'tool', 'agent', 'context', 'mcp', 'workspace'];
 
+export function getHookSubagentLabel(hook: { eventName?: string; includeSubagents?: boolean }): string | null {
+  if (hook.eventName === 'SubagentStart' || hook.eventName === 'SubagentStop') return '子代理';
+  if (!canIncludeSubagents(hook.eventName)) return null;
+  return resolveIncludeSubagents(hook) ? '主代理和子代理' : '仅主代理';
+}
+
 export function createEmptyHook(eventName: HookEventName): HookConfigDraft {
   return {
     name: '',
     description: '',
     eventName,
+    includeSubagents: false,
     matcher: {},
     extensionLogic: null,
     postActions: [],
@@ -643,6 +653,7 @@ export function createHookCopyDraft(hook: HookConfig, name: string): HookConfigD
     description: hook.description,
     userVariables: hook.userVariables || [],
     eventName: hook.eventName,
+    includeSubagents: resolveIncludeSubagents(hook),
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,
     postActions: hook.postActions,
@@ -678,6 +689,7 @@ export function buildFieldChoices(draft: HookConfigDraft, resources: HookResourc
   const fields: FieldChoice[] = (event?.fields || []).map((field) => ({
     path: `event.${field.key}`,
     labelKey: `hooks.fields.${field.key}`,
+    ...(field.description ? { description: field.description } : {}),
     type: field.type,
     options: field.options?.map((value) => ({ value, label: value })),
     group: 'event',
