@@ -23,6 +23,7 @@ type AvailableHook = {
   eventName: string;
   version: number;
   enabled: boolean;
+  adminEnforced?: boolean;
   showInChat: boolean;
   userVariables?: HookUserVariable[];
   configuredUserVariables?: string[];
@@ -294,6 +295,11 @@ export default function HookSettingsTab({
                       SQL Check 强制校验管理
                     </span>
                   ) : null}
+                  {hook.adminEnforced ? (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      管理员强制启用
+                    </span>
+                  ) : null}
                   {isTemplateMandatory ? (
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
                       模板强制启用
@@ -335,6 +341,7 @@ export default function HookSettingsTab({
                     checked={hook.enabled}
                     disabled={Boolean(busyHookId)
                       || isSqlCheckManaged
+                      || (hook.adminEnforced === true && hook.enabled)
                       || (isTemplateMandatory && hook.enabled && !canRetryResources)
                       || (resourcesUnavailable && !canRetryResources)}
                     ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}
@@ -343,12 +350,16 @@ export default function HookSettingsTab({
                 </div>
                 <div
                   className="flex min-h-7 items-center gap-2"
-                  title="只控制你自己的对话展示，不影响 Hook 执行和执行记录"
+                  title={hook.adminEnforced
+                    ? '对话展示由管理员配置'
+                    : '只控制你自己的对话展示，不影响 Hook 执行和执行记录'}
                 >
-                  <span className="text-[11px] font-medium text-foreground">对话展示</span>
+                  <span className="text-[11px] font-medium text-foreground">
+                    {hook.adminEnforced ? '对话展示（管理员配置）' : '对话展示'}
+                  </span>
                   <SettingsToggle
                     checked={hook.showInChat}
-                    disabled={visibilityBusyHookId === hook.id}
+                    disabled={hook.adminEnforced === true || visibilityBusyHookId === hook.id}
                     ariaLabel={`${hook.showInChat ? '关闭' : '开启'} ${hook.name} 的对话展示`}
                     onChange={(showInChat) => void toggleHookVisibility(hook, showInChat)}
                   />
