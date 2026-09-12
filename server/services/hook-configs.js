@@ -6,6 +6,7 @@ import { decryptSecretString, encryptSecretString } from '../database/user-env.j
 
 import { isBuiltinHookSkillId } from './hook-builtin-skills.js';
 import { hookMcpCatalogService } from './hook-mcp-catalog.js';
+import { userHookExecutionOutput } from './hook-execution-output.js';
 import { mergeHookUserVariableValues, normalizeHookUserVariables } from './hook-user-variables.js';
 
 const HOOK_EVENTS = Object.freeze([
@@ -2679,6 +2680,25 @@ export function createHookConfigService({
     listAllExecutionPage: (filters = {}) => queryExecutions({ ...filters, summary: true }),
 
     listUserExecutionPage,
+
+    getUserExecution: ({ executionId, hookId, userId, tenantId, workspaceId }) => {
+      const scope = [userId, tenantId, workspaceId].map(Number);
+      if (scope.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+        throw createHttpError('A valid user, tenant and workspace are required');
+      }
+      if (!executionId || !hookId || !hasTable(database, 'hook_executions')) return null;
+      const row = database.prepare(`
+        SELECT e.*, h.name AS hook_name
+        FROM hook_executions e
+        LEFT JOIN hooks h ON h.id = e.hook_id
+        WHERE e.id = ? AND e.hook_id = ?
+          AND e.user_id = ? AND e.tenant_id = ? AND e.workspace_id = ?
+      `).get(String(executionId), String(hookId), ...scope);
+      return row ? userHookExecutionOutput({
+        ...mapExecutionRow(row),
+        response: parseJson(row.response_json, null),
+      }) : null;
+    },
 
     getExecution: (executionId) => {
       if (!hasTable(database, 'hook_executions')) return null;

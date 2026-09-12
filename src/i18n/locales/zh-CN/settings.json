@@ -1,5 +1,11 @@
 {
   "title": "设置",
+  "hookDisplay": {
+    "showExecutionDetails": {
+      "label": "显示脚本与响应",
+      "description": "在 Hook 的“执行过程”中显示脚本输出与返回 Claude 的内容，并允许在历史记录中查看。默认关闭，仅保存在当前浏览器；后置行为的进度、取消操作和结果不受影响。"
+    }
+  },
   "tabs": {
     "account": "账户",
     "permissions": "权限",

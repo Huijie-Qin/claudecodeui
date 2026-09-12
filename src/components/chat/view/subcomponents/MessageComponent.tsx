@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, ChevronDown, Clock3, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
+import HookExecutionProcess from '../../../hooks/HookExecutionProcess';
 import type {
   ChatMessage,
   ClaudeProcessDiagnostics,
@@ -167,8 +168,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       (prevMessage.type === 'error'));
   const messageRef = useRef<HTMLDivElement | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [hookFollowupsOpen, setHookFollowupsOpen] = useState(false);
-  const [hookResultsOpen, setHookResultsOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const [cancellingLoopJobs, setCancellingLoopJobs] = useState<Set<string>>(() => new Set());
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
@@ -380,16 +379,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 <span className="min-w-0 truncate text-sm font-medium text-foreground">
                   {hookActivity.hookName || hookActivity.hookId || t('hookActivity.unnamed', { defaultValue: 'Unnamed Hook' })}
                 </span>
-                {(isHookExecution || isSubagentHook) ? (
-                  <span
-                    className="max-w-full truncate rounded border border-violet-200 px-1.5 py-0.5 text-[10px] text-violet-700 dark:border-violet-800 dark:text-violet-300"
-                    title={hookActivity.agentId}
-                  >
-                    {isSubagentHook ? t('hookActivity.subagent') : t('hookActivity.mainAgent')}
-                    {isSubagentHook && hookActivity.agentType ? ` · ${hookActivity.agentType}` : ''}
-                    {hookActivity.agentId ? ` · ${hookActivity.agentId.length > 12 ? `${hookActivity.agentId.slice(0, 8)}…${hookActivity.agentId.slice(-4)}` : hookActivity.agentId}` : ''}
-                  </span>
-                ) : null}
                 <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${hookHasFailure
                   ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
                   : hookStatus === 'succeeded'
@@ -477,234 +466,203 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 </div>
               )}
 
-              {loopResult !== undefined && (
-                <section
-                  className={`mt-2 rounded-md border px-2.5 py-2 ${hookHasFailure
-                    ? 'border-red-200/80 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/20'
-                    : 'border-emerald-200/80 bg-emerald-50/70 dark:border-emerald-900/70 dark:bg-emerald-950/20'}`}
-                  data-hook-loop-result
-                >
-                  <div className={`text-[10px] font-semibold uppercase tracking-wide ${hookHasFailure
-                    ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'}`}>
-                    {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
-                  </div>
-                  <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
-                    {formattedLoopResult || t('hookActivity.emptyResult')}
-                  </pre>
-                </section>
-              )}
-
-              {isHookExecution && hookActionResults.length > 0 && (
-                <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-900/70">
-                  <button
-                    type="button"
-                    aria-expanded={hookResultsOpen}
-                    aria-label={t(hookResultsOpen ? 'hookActivity.collapseResults' : 'hookActivity.expandResults')}
-                    data-hook-result-toggle
-                    onClick={() => setHookResultsOpen((current) => !current)}
-                    className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-violet-700 outline-none transition-colors hover:bg-violet-100/70 focus-visible:ring-2 focus-visible:ring-violet-400/60 dark:text-violet-300 dark:hover:bg-violet-900/30"
+              <HookExecutionProcess
+                isExecution={isHookExecution}
+                hasPostActions={Boolean(loopResult !== undefined || hookActionResults.length || hookActivity.followups?.length || hookActivity.loopJobId)}
+                defaultOpen={Boolean(hookActivity.actionTypes?.includes('mcp_loop_run') || loopResult !== undefined)}
+                workspaceId={selectedProject?.workspaceId}
+                hookId={hookActivity.hookId}
+                hookName={hookActivity.hookName || hookActivity.hookId || ''}
+                executionId={hookActivity.executionId}
+                executionStatus={hookActivity.status}
+              >
+                {loopResult !== undefined && (
+                  <section
+                    className={`mt-2 rounded-md border px-2.5 py-2 ${hookHasFailure
+                      ? 'border-red-200/80 bg-red-50/70 dark:border-red-900/70 dark:bg-red-950/20'
+                      : 'border-emerald-200/80 bg-emerald-50/70 dark:border-emerald-900/70 dark:bg-emerald-950/20'}`}
+                    data-hook-loop-result
                   >
-                    <span>{t('hookActivity.resultCount', { count: hookActionResults.length })}</span>
-                    <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                      {t(hookResultsOpen ? 'hookActivity.collapseResults' : 'hookActivity.expandResults')}
-                    </span>
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 transition-transform ${hookResultsOpen ? 'rotate-180' : ''}`}
-                      aria-hidden="true"
-                    />
-                  </button>
-                  {hookResultsOpen ? (
-                    <div className="mt-2 space-y-2" data-hook-result-list>
-                      {hookActionResults.map((result) => {
-                        const isRecord = result.actionType === 'write_record';
-                        const value = isRecord && result.record
-                          ? result.record.data
-                          : result.output;
-                        const formattedValue = formatHookActivityValue(value);
-                        return (
-                          <section
-                            key={`${result.actionId}-${result.actionType}`}
-                            className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
-                            data-hook-action-result={result.actionId}
-                            data-hook-action-type={result.actionType}
-                          >
-                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
-                                {t(isRecord ? 'hookActivity.recordInfo' : 'hookActivity.returnInfo')}
-                              </span>
-                              {isRecord && result.record?.type ? (
-                                <code className="truncate text-[11px] text-muted-foreground">{result.record.type}</code>
+                    <div className={`text-[10px] font-semibold uppercase tracking-wide ${hookHasFailure
+                      ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'}`}>
+                      {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
+                    </div>
+                    <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
+                      {formattedLoopResult || t('hookActivity.emptyResult')}
+                    </pre>
+                  </section>
+                )}
+
+                {isHookExecution && hookActionResults.length > 0 && (
+                  <div className="mt-2 space-y-2" data-hook-result-list>
+                    {hookActionResults.map((result) => {
+                      const isRecord = result.actionType === 'write_record';
+                      const value = isRecord && result.record
+                        ? result.record.data
+                        : result.output;
+                      const formattedValue = formatHookActivityValue(value);
+                      return (
+                        <section
+                          key={`${result.actionId}-${result.actionType}`}
+                          className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
+                          data-hook-action-result={result.actionId}
+                          data-hook-action-type={result.actionType}
+                        >
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                              {t(isRecord ? 'hookActivity.recordInfo' : 'hookActivity.returnInfo')}
+                            </span>
+                            {isRecord && result.record?.type ? (
+                              <code className="truncate text-[11px] text-muted-foreground">{result.record.type}</code>
+                            ) : null}
+                            <code className="ml-auto max-w-full truncate text-[10px] text-muted-foreground/70" title={result.actionId}>
+                              {result.actionId}
+                            </code>
+                          </div>
+                          {isRecord && result.record?.id ? (
+                            <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-[10px] text-muted-foreground">
+                              <span>{t('hookActivity.recordId')}</span>
+                              <code className="truncate" title={result.record.id}>{result.record.id}</code>
+                              {result.record.createdAt ? (
+                                <span className="ml-auto">{formatHookRecordTimestamp(result.record.createdAt)}</span>
                               ) : null}
-                              <code className="ml-auto max-w-full truncate text-[10px] text-muted-foreground/70" title={result.actionId}>
-                                {result.actionId}
-                              </code>
                             </div>
-                            {isRecord && result.record?.id ? (
-                              <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-[10px] text-muted-foreground">
-                                <span>{t('hookActivity.recordId')}</span>
-                                <code className="truncate" title={result.record.id}>{result.record.id}</code>
-                                {result.record.createdAt ? (
-                                  <span className="ml-auto">{formatHookRecordTimestamp(result.record.createdAt)}</span>
+                          ) : null}
+                          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
+                            {formattedValue || t('hookActivity.emptyResult')}
+                          </pre>
+                        </section>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {isHookExecution && hookActivity.followups && hookActivity.followups.length > 0 && (
+                  <div className="mt-2 space-y-2" data-hook-followup-list>
+                    {hookActivity.followups.map((followup) => {
+                      const followupStatus = followup.status || 'running';
+                      const followupStatusLabel = {
+                        queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
+                        running: t('hookActivity.status.running', { defaultValue: 'Running' }),
+                        succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
+                        failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+                      }[followupStatus];
+
+                      return (
+                        <div
+                          key={followup.jobId || followup.actionId || String(followup.timestamp)}
+                          className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
+                          data-hook-followup={followup.jobId || followup.actionId || 'followup'}
+                          data-hook-status={followupStatus}
+                        >
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                              {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
+                            </span>
+                            <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupStatus === 'failed'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                              : followupStatus === 'succeeded'
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
+                              }`}
+                            >
+                              {followupStatus === 'failed' ? (
+                                <XCircle className="h-3 w-3" aria-hidden="true" />
+                              ) : followupStatus === 'succeeded' ? (
+                                <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                              ) : (
+                                <Loader2 className={`h-3 w-3 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                              )}
+                                  {followupStatusLabel}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                                {followup.skillName ? (
+                                  <span className="truncate">
+                                    {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{followup.skillName}</code>
+                                  </span>
+                                ) : followup.actionType === 'send_agent_message' ? (
+                                  <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
+                                ) : followup.actionType === 'mcp_loop_run' ? (
+                                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                                    <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                    <span className="truncate">
+                                      {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
+                                    </span>
+                                    {typeof followup.loopAttemptCount === 'number' ? (
+                                      <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
+                                    ) : null}
+                                  </span>
+                                ) : null}
+                                {followupStatus === 'queued' && typeof followup.queuePosition === 'number' && (
+                                  <span>
+                                    {t('hookActivity.queuePosition', {
+                                      defaultValue: 'Queue position {{position}}',
+                                      position: followup.queuePosition,
+                                    })}
+                                  </span>
+                                )}
+                                <span className="text-[11px] text-muted-foreground/70">
+                                  {new Date(followup.timestamp).toLocaleTimeString()}
+                                </span>
+                                {followup.actionType === 'mcp_loop_run' && followupStatus === 'running' && followup.loopJobId ? (
+                                  <button
+                                    type="button"
+                                    className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
+                                    disabled={!isConnected || cancellingLoopJobs.has(followup.loopJobId)}
+                                    onClick={() => cancelMcpLoop(followup.loopJobId!)}
+                                  >
+                                    {cancellingLoopJobs.has(followup.loopJobId)
+                                      ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
+                                      : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
+                                  </button>
                                 ) : null}
                               </div>
-                            ) : null}
-                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
-                              {formattedValue || t('hookActivity.emptyResult')}
-                            </pre>
-                          </section>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              )}
-
-              {isHookExecution && hookActivity.followups && hookActivity.followups.length > 0 && (
-                <div className="mt-2 border-t border-violet-200/70 pt-2 dark:border-violet-900/70">
-                  <button
-                    type="button"
-                    aria-expanded={hookFollowupsOpen}
-                    aria-label={t(hookFollowupsOpen ? 'hookActivity.collapseFollowups' : 'hookActivity.expandFollowups')}
-                    data-hook-followup-toggle
-                    onClick={() => setHookFollowupsOpen((current) => !current)}
-                    className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-violet-700 outline-none transition-colors hover:bg-violet-100/70 focus-visible:ring-2 focus-visible:ring-violet-400/60 dark:text-violet-300 dark:hover:bg-violet-900/30"
-                  >
-                    <span>{t('hookActivity.followupCount', { count: hookActivity.followups.length })}</span>
-                    <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                      {t(hookFollowupsOpen ? 'hookActivity.collapseFollowups' : 'hookActivity.expandFollowups')}
-                    </span>
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 transition-transform ${hookFollowupsOpen ? 'rotate-180' : ''}`}
-                      aria-hidden="true"
-                    />
-                  </button>
-                  {hookFollowupsOpen ? (
-                    <div className="mt-2 space-y-2" data-hook-followup-list>
-                      {hookActivity.followups.map((followup) => {
-                        const followupStatus = followup.status || 'running';
-                        const followupStatusLabel = {
-                          queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
-                          running: t('hookActivity.status.running', { defaultValue: 'Running' }),
-                          succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
-                          failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
-                        }[followupStatus];
-
-                        return (
-                          <div
-                            key={followup.jobId || followup.actionId || String(followup.timestamp)}
-                            className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
-                            data-hook-followup={followup.jobId || followup.actionId || 'followup'}
-                            data-hook-status={followupStatus}
-                          >
-                            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
-                                {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
-                              </span>
-                              <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupStatus === 'failed'
-                                ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
-                                : followupStatus === 'succeeded'
-                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                  : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
-                                }`}
-                              >
-                                {followupStatus === 'failed' ? (
-                                  <XCircle className="h-3 w-3" aria-hidden="true" />
-                                ) : followupStatus === 'succeeded' ? (
-                                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                                ) : (
-                                  <Loader2 className={`h-3 w-3 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
-                                )}
-                                {followupStatusLabel}
-                              </span>
-                            </div>
-                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                              {followup.skillName ? (
-                                <span className="truncate">
-                                  {t('hookActivity.skill', { defaultValue: 'Skill' })}: <code>/{followup.skillName}</code>
-                                </span>
-                              ) : followup.actionType === 'send_agent_message' ? (
-                                <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
-                              ) : followup.actionType === 'mcp_loop_run' ? (
-                                <span className="inline-flex min-w-0 items-center gap-1.5">
-                                  <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
-                                  <span className="truncate">
-                                    {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
-                                  </span>
-                                  {typeof followup.loopAttemptCount === 'number' ? (
-                                    <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
-                                  ) : null}
-                                </span>
-                              ) : null}
-                              {followupStatus === 'queued' && typeof followup.queuePosition === 'number' && (
-                                <span>
-                                  {t('hookActivity.queuePosition', {
-                                    defaultValue: 'Queue position {{position}}',
-                                    position: followup.queuePosition,
-                                  })}
-                                </span>
+                              {followup.summary && (
+                                <div className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground/80">
+                                  {redactVisibleSecretText(followup.summary)}
+                                </div>
                               )}
-                              <span className="text-[11px] text-muted-foreground/70">
-                                {new Date(followup.timestamp).toLocaleTimeString()}
-                              </span>
-                              {followup.actionType === 'mcp_loop_run' && followupStatus === 'running' && followup.loopJobId ? (
-                                <button
-                                  type="button"
-                                  className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
-                                  disabled={!isConnected || cancellingLoopJobs.has(followup.loopJobId)}
-                                  onClick={() => cancelMcpLoop(followup.loopJobId!)}
-                                >
-                                  {cancellingLoopJobs.has(followup.loopJobId)
-                                    ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
-                                    : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
-                                </button>
-                              ) : null}
+                              {followup.error && (
+                                <div className="mt-2 whitespace-pre-wrap break-words rounded bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                                  {redactVisibleSecretText(followup.error)}
+                                </div>
+                              )}
+                              {followup.messages && followup.messages.length > 0 && (
+                                <div className="mt-2 border-t border-violet-100 pt-2 dark:border-violet-900/60" data-hook-recovery-list>
+                                  <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    {t('hookActivity.recoveryProcess')}
+                                  </div>
+                                  <div className="space-y-1 rounded-md bg-background/70 py-1.5" data-hook-recovery-messages>
+                                    {followup.messages.map((recoveryMessage, recoveryIndex) => (
+                                      <div key={recoveryMessage.id || `${followup.jobId || 'recovery'}-${recoveryIndex}`} data-hook-recovery-message>
+                                        <MessageComponent
+                                          message={recoveryMessage}
+                                          prevMessage={recoveryIndex > 0
+                                            ? followup.messages?.[recoveryIndex - 1] || recoveryMessage
+                                            : recoveryMessage}
+                                          createDiff={createDiff}
+                                          onFileOpen={onFileOpen}
+                                          onOpenSubagent={onOpenSubagent}
+                                          onShowSettings={onShowSettings}
+                                          onGrantToolPermission={onGrantToolPermission}
+                                          autoExpandTools={autoExpandTools}
+                                          showRawParameters={showRawParameters}
+                                          showThinking={showThinking}
+                                          selectedProject={selectedProject}
+                                          provider={provider}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                            {followup.summary && (
-                              <div className="mt-2 whitespace-pre-wrap break-words text-xs text-foreground/80">
-                                {redactVisibleSecretText(followup.summary)}
-                              </div>
-                            )}
-                            {followup.error && (
-                              <div className="mt-2 whitespace-pre-wrap break-words rounded bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                                {redactVisibleSecretText(followup.error)}
-                              </div>
-                            )}
-                            {followup.messages && followup.messages.length > 0 && (
-                              <div className="mt-2 border-t border-violet-100 pt-2 dark:border-violet-900/60" data-hook-recovery-list>
-                                <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                  {t('hookActivity.recoveryProcess')}
-                                </div>
-                                <div className="space-y-1 rounded-md bg-background/70 py-1.5" data-hook-recovery-messages>
-                                  {followup.messages.map((recoveryMessage, recoveryIndex) => (
-                                    <div key={recoveryMessage.id || `${followup.jobId || 'recovery'}-${recoveryIndex}`} data-hook-recovery-message>
-                                      <MessageComponent
-                                        message={recoveryMessage}
-                                        prevMessage={recoveryIndex > 0
-                                          ? followup.messages?.[recoveryIndex - 1] || recoveryMessage
-                                          : recoveryMessage}
-                                        createDiff={createDiff}
-                                        onFileOpen={onFileOpen}
-                                        onOpenSubagent={onOpenSubagent}
-                                        onShowSettings={onShowSettings}
-                                        onGrantToolPermission={onGrantToolPermission}
-                                        autoExpandTools={autoExpandTools}
-                                        showRawParameters={showRawParameters}
-                                        showThinking={showThinking}
-                                        selectedProject={selectedProject}
-                                        provider={provider}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              )}
+                          );
+                        })}
+                      </div>
+                )}
+              </HookExecutionProcess>
 
               {hookActivity.error && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">

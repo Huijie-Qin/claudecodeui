@@ -155,6 +155,9 @@ export const api = {
   workspaceHookExecutions: (workspaceId, hookId, filters = {}) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/executions${buildQueryString(filters)}`,
   )),
+  workspaceHookExecution: (workspaceId, hookId, executionId, options = {}) => authenticatedFetch(withTenantParam(
+    `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}/executions/${encodeURIComponent(String(executionId))}`,
+  ), options),
   updateWorkspaceHook: (workspaceId, hookId, enabled, userVariables) => authenticatedFetch(withTenantParam(
     `/api/workspaces/${encodeURIComponent(String(workspaceId))}/hooks/${encodeURIComponent(String(hookId))}`,
   ), {

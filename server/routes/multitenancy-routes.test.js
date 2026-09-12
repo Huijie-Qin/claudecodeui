@@ -949,6 +949,44 @@ test('workspace Hook execution history is forced to the current user, tenant, an
   ]);
 });
 
+test('ordinary members can read Hook returns with authenticated scope and cannot bypass access checks', async () => {
+  const seen = [];
+  let workspaceDenied = false;
+  const router = createWorkspacesRouter({
+    tenantMiddleware: (req, _res, next) => { req.tenant = { id: 2, permission: 'view' }; next(); },
+    access: {
+      requireWorkspace: (args) => {
+        seen.push(['access', args]);
+        if (workspaceDenied) throw Object.assign(new Error('Workspace not found'), { statusCode: 404 });
+        return { workspace: { id: 10, tenant_id: 2 }, accessRole: 'view' };
+      },
+    },
+    hookConfigs: {
+      listAvailableHooksForContext: (scope) => { seen.push(['available', scope]); return [{ id: 'hook' }]; },
+      getUserExecution: (scope) => {
+        seen.push(['detail', scope]);
+        return scope.executionId === 'own' ? { id: 'own', scriptOutput: {}, response: {} } : null;
+      },
+    },
+  });
+  const loaded = await requestJson(router, '/10/hooks/hook/executions/own?userId=999&tenantId=999&workspaceId=999');
+  assert.equal(loaded.response.status, 200);
+  assert.deepEqual(loaded.payload.execution, { id: 'own', scriptOutput: {}, response: {} });
+  assert.deepEqual(seen, [
+    ['access', { tenantId: 2, userId: 1, workspaceId: 10 }],
+    ['available', { userId: 1, tenantId: 2, workspaceId: 10 }],
+    ['detail', { executionId: 'own', hookId: 'hook', userId: 1, tenantId: 2, workspaceId: 10 }],
+  ]);
+  assert.equal((await requestJson(router, '/10/hooks/hook/executions/foreign')).response.status, 404);
+  seen.length = 0;
+  assert.equal((await requestJson(router, '/10/hooks/unavailable/executions/own')).response.status, 404);
+  assert.equal(seen.some(([name]) => name === 'detail'), false);
+  seen.length = 0;
+  workspaceDenied = true;
+  assert.equal((await requestJson(router, '/10/hooks/hook/executions/own')).response.status, 404);
+  assert.deepEqual(seen.map(([name]) => name), ['access']);
+});
+
 test('workspace Hook variables use authenticated scope and validate before resource installation', async () => {
   let saved;
   let installed = 0;

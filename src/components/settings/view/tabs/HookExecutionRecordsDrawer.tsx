@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { getHookExecutionAgent } from '../../../admin/hook-config/diagnostics';
+import UserHookExecutionDetails from '../../../hooks/UserHookExecutionDetails';
 
 export type UserHookDataRecord = {
   id: string;
@@ -42,6 +43,7 @@ type RecordsHook = {
 };
 
 type HookExecutionRecordsDrawerProps = {
+  workspaceId: number;
   hook: RecordsHook;
   executions: UserHookExecution[];
   standaloneRecords: UserHookStandaloneRecord[];
@@ -106,6 +108,7 @@ function recordEntries(data: unknown) {
 }
 
 export default function HookExecutionRecordsDrawer({
+  workspaceId,
   hook,
   executions,
   standaloneRecords,
@@ -119,13 +122,14 @@ export default function HookExecutionRecordsDrawer({
   onLoadMore,
 }: HookExecutionRecordsDrawerProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const detailsOpenRef = useRef(false);
   const [copiedRecordId, setCopiedRecordId] = useState<string | null>(null);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || detailsOpenRef.current) return;
       event.stopPropagation();
       onClose();
     };
@@ -322,6 +326,13 @@ export default function HookExecutionRecordsDrawer({
                       </div>
 
                       {execution.records.map(renderDataRecord)}
+                      <UserHookExecutionDetails
+                        workspaceId={workspaceId}
+                        hookId={hook.id}
+                        hookName={hook.name}
+                        executionId={execution.id}
+                        onOpenChange={(open) => { detailsOpenRef.current = open; }}
+                      />
                     </div>
                   </article>
                 );
