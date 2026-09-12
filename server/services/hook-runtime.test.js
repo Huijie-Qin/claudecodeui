@@ -12,6 +12,20 @@ import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
 
+test('required Stop checks still terminate if the audit database is unavailable', async () => {
+  const hook = {
+    id: 'broken-audit', eventName: 'Stop',
+    extensionLogic: { language: 'javascript', code: 'unused', failClosed: true },
+  };
+  const runtime = createHookRuntimeSession({
+    hooks: [hook], workspaceRoot: process.cwd(), userId: 1,
+    database: { prepare: () => { throw new Error('Database is unavailable'); } },
+  });
+  const response = await runtime.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', session_id: 'audit-failure' });
+  assert.equal(response.continue, false);
+  assert.match(response.stopReason, /验收记录/);
+});
+
 async function loadTestHookSkill(skillId, skillName, argumentsText) {
   assert.equal(skillId, `builtin:${skillName}`);
   return `Run the test Hook Skill.\nHOOK_NOTIFICATION_SKILL_EXECUTED\nPayload: ${argumentsText}\n`;
@@ -456,6 +470,81 @@ test('Hook failures are audited and fail open to Claude', async () => {
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test('fail-closed Stop errors terminate execution and audit the exact response', async () => {
+  const database = createDatabase();
+  const hook = {
+    id: 'hook-1', name: 'Report validator', version: 1, eventName: 'Stop', matcher: {},
+    extensionLogic: { language: 'javascript', code: 'validate', outputs: [], failClosed: true },
+    postActions: [], claudeResponse: { bindings: {} },
+  };
+  try {
+    const runtime = createHookRuntimeSession({
+      hooks: [hook], userId: 1, database,
+      scriptExecutor: async () => { throw new Error('validator failed with private details'); },
+    });
+    assert.equal(runtime.hasRequiredStopHook, true);
+    const response = await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'report-session' });
+    assert.equal(response.continue, false);
+    assert.match(response.stopReason, /校验失败/);
+    assert.doesNotMatch(response.stopReason, /private details/);
+    assert.equal(response.decision, undefined, 'A broken validator terminates; it does not ask the agent to retry indefinitely');
+    const audit = database.prepare('SELECT status, response_json FROM hook_executions').get();
+    assert.equal(audit.status, 'failed');
+    assert.deepEqual(JSON.parse(audit.response_json), response);
+  } finally { database.close(); }
+});
+
+test('legacy Stop and non-Stop hooks retain their existing fail-open behavior', async () => {
+  for (const [eventName, failClosed] of [['Stop', undefined], ['Stop', false], ['StopFailure', true], ['PreToolUse', true]]) {
+    const database = createDatabase();
+    const hook = {
+      id: 'hook-1', name: 'Optional Hook', version: 1, eventName, matcher: {},
+      extensionLogic: { language: 'javascript', code: 'validate', outputs: [], failClosed },
+      postActions: [], claudeResponse: { bindings: {} },
+    };
+    try {
+      const runtime = createHookRuntimeSession({
+        hooks: [hook], userId: 1, database,
+        scriptExecutor: async () => { throw new Error('optional failure'); },
+      });
+      assert.equal(runtime.hasRequiredStopHook, false);
+      assert.deepEqual(await runtime.executeHook(hook, { hook_event_name: eventName }), {});
+      assert.deepEqual(JSON.parse(database.prepare('SELECT response_json FROM hook_executions').get().response_json), {});
+    } finally { database.close(); }
+  }
+});
+
+test('required Stop checks can block repeatedly and then pass in the same runtime', async () => {
+  const database = createDatabase();
+  const hook = {
+    id: 'hook-1', name: 'Report validator', version: 1, eventName: 'Stop', matcher: {},
+    extensionLogic: {
+      language: 'javascript', code: 'validate', failClosed: true,
+      outputs: [{ name: 'decision', type: 'string' }, { name: 'reason', type: 'string' }],
+    },
+    postActions: [],
+    claudeResponse: { bindings: {
+      decision: { source: 'reference', path: 'script.output.decision' },
+      reason: { source: 'reference', path: 'script.output.reason' },
+    } },
+  };
+  let attempts = 0;
+  try {
+    const runtime = createHookRuntimeSession({
+      hooks: [hook], userId: 1, database,
+      scriptExecutor: async () => ({ output: ++attempts < 3 ? { decision: 'block', reason: 'Missing required report section' } : {} }),
+    });
+    for (const stop_hook_active of [false, true]) {
+      assert.deepEqual(await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'same-session', stop_hook_active }), {
+        decision: 'block', reason: 'Missing required report section',
+      });
+    }
+    assert.deepEqual(await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'same-session', stop_hook_active: true }), {});
+    assert.equal(attempts, 3);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM hook_executions').get().count, 3);
+  } finally { database.close(); }
 });
 
 test('StopFailure Skill recovery appends one new turn and never returns fields to Claude', async () => {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import { db as defaultDatabase } from '../database/db.js';
 
+import { isRequiredStopHook } from './claude-hook-policy.js';
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
@@ -530,7 +531,7 @@ export function createHookRuntimeSession({
     }
   };
 
-  const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
+  const executeHookWithAudit = async (hook, event, toolUseId, callbackOptions = {}) => {
     if (!event || event.hook_event_name !== hook.eventName) return {};
     const startedAt = Date.now();
     const definitions = hook.userVariables || [];
@@ -630,12 +631,15 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
+      const response = isRequiredStopHook(hook)
+        ? { continue: false, stopReason: '必需的 Stop 校验失败，已终止当前执行。请查看 Hook 执行记录并修复后重试。' }
+        : {};
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
         scriptOutput: redact(scriptOutput),
         actions: redact(references.actions),
-        response: {},
+        response,
         logs,
         error: redact(error?.stack || error?.message || String(error)),
       });
@@ -650,7 +654,19 @@ export function createHookRuntimeSession({
         error: redact(error?.message || String(error)),
       });
       console.error(`[Hook:${hook.id}] Runtime execution failed:`, redact(error?.message || String(error)));
-      return {};
+      return response;
+    }
+  };
+
+  const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
+    try {
+      return await executeHookWithAudit(hook, event, toolUseId, callbackOptions);
+    } catch (error) {
+      if (!isRequiredStopHook(hook)) throw error;
+      // An audit/database failure must not turn a required check into a rejected
+      // SDK callback, which the SDK can otherwise ignore as a Hook error.
+      console.error(`[Hook:${hook.id}] Required Stop check could not persist its execution.`);
+      return { continue: false, stopReason: '必需的 Stop 校验无法执行或保存验收记录，已终止当前执行。请修复 Hook 服务后重试。' };
     }
   };
 
@@ -667,7 +683,7 @@ export function createHookRuntimeSession({
     sdkHooks[hook.eventName].push(entry);
   }
 
-  return { hooks: sdkHooks, executeHook };
+  return { hooks: sdkHooks, executeHook, hasRequiredStopHook: hooks.some(isRequiredStopHook) };
 }
 
 export function mergeSdkHooks(...hookMaps) {

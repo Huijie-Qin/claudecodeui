@@ -73,6 +73,7 @@ import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
+import { createClaudeQueryWithHookFallback, createRequiredStopHookError, isRequiredStopHook } from './services/claude-hook-policy.js';
 import { hookWorkspaceResourcesService } from './services/hook-workspace-resources.js';
 import { buildMcpLoopReplacement, mcpLoopService } from './services/mcp-loop-service.js';
 import {
@@ -183,6 +184,7 @@ async function resolveConfiguredHooksForRuntime({
         }
       }
       if (typeof onMaterializeError === 'function') await onMaterializeError(hook, error);
+      if (isRequiredStopHook(hook)) throw createRequiredStopHookError(error);
     }
   }
   return { hooks, materializedByHookId };
@@ -1916,6 +1918,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     // event execute every user Hook a second time.
     const hookUserId = resolveConfiguredHookUserId(runtimeOptions, ws?.userId);
     let configuredSdkHooks = {};
+    let hasRequiredStopHook = false;
     if (hookUserId !== null) {
       try {
         const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
@@ -1930,6 +1933,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
             console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
           },
         });
+        hasRequiredStopHook = activeHooks.some(isRequiredStopHook);
         if (activeHooks.length > 0) {
           const headersHelperRunner = createHookHeadersHelperRunner(runtimeContext, runtimeOptions, {
             diagnostics: processDiagnostics,
@@ -2242,10 +2246,13 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
             }),
           });
           configuredSdkHooks = hookRuntime.hooks;
+          hasRequiredStopHook = hookRuntime.hasRequiredStopHook;
           console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);
         }
       } catch (error) {
         console.error('[HookRuntime] Failed to load configured Hooks:', error?.message || error);
+        if (error?.code === 'REQUIRED_STOP_HOOK_UNAVAILABLE') throw error;
+        if (hasRequiredStopHook) throw createRequiredStopHookError(error);
       }
     }
     sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, configuredSdkHooks);
@@ -2371,21 +2378,15 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
 
     let queryInstance;
     try {
-      try {
-        queryInstance = query({
-          prompt: inputQueue,
-          options: sdkOptions
-        });
-      } catch (hookError) {
-        // Older/newer SDK versions may not accept hook shapes yet.
-        // Keep notification behavior operational via runtime events even if hook registration fails.
-        console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
-        delete sdkOptions.hooks;
-        queryInstance = query({
-          prompt: inputQueue,
-          options: sdkOptions
-        });
-      }
+      queryInstance = createClaudeQueryWithHookFallback({
+        query,
+        prompt: inputQueue,
+        options: sdkOptions,
+        hasRequiredStopHook,
+        onFallback: (hookError) => {
+          console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
+        },
+      });
     } finally {
       // Query construction has captured the host value; avoid leaking it into
       // unrelated requests after either initialization attempt.
