@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../../../utils/api';
 import { useUiPreferences } from '../../../../hooks/useUiPreferences';
 import type { HookUserVariable } from '../../../admin/hook-config/types';
-import { getHookSubagentLabel } from '../../../admin/hook-config/catalog';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
 import SettingsRow from '../SettingsRow';
@@ -237,7 +236,6 @@ export default function HookSettingsTab({
       <SettingsCard>
         <SettingsRow
           label={t('hookDisplay.showExecutionDetails.label')}
-          description={t('hookDisplay.showExecutionDetails.description')}
         >
           <SettingsToggle
             checked={preferences.showHookExecutionDetails}
@@ -301,7 +299,6 @@ export default function HookSettingsTab({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{hook.name}</span>
                   <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{hook.eventName}</span>
-                  {getHookSubagentLabel(hook) ? <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{getHookSubagentLabel(hook)}</span> : null}
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}
