@@ -1,5 +1,11 @@
 {
   "title": "Settings",
+  "hookDisplay": {
+    "showExecutionDetails": {
+      "label": "Show script and response",
+      "description": "Show script output and the response returned to Claude within the Hook execution process and in execution history. Off by default and saved in this browser only; post-action progress, cancellation and results are unaffected."
+    }
+  },
   "tabs": {
     "account": "Account",
     "permissions": "Permissions",

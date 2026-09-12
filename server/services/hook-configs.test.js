@@ -1529,6 +1529,46 @@ test('user Hook execution history is scoped to the authenticated workspace and i
   }
 });
 
+test('users can read only their own Hook script returns within the exact tenant and workspace', () => {
+  const { database, service } = createFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook(), userId: 1 });
+    const insert = database.prepare(`
+      INSERT INTO hook_executions (
+        id, hook_id, hook_version, user_id, tenant_id, workspace_id,
+        event_name, status, input_json, script_output_json, response_json, logs_json
+      ) VALUES (?, ?, 1, 2, 7, 10, 'Stop', ?, '{"env":"private-input"}', ?, ?, '["private-log"]')
+    `);
+    insert.run('own', hook.id, 'succeeded', '{"decision":"block","USER_KEY":"private-key"}', '{"decision":"block","reason":"Run the review Skill"}');
+    insert.run('empty', hook.id, 'succeeded', '{}', '{}');
+    insert.run('pending', hook.id, 'running', null, '{}');
+    insert.run('failed', hook.id, 'failed', null, '{}');
+    database.prepare('UPDATE hook_executions SET error_message = ? WHERE id = ?').run('Error: token=private-token', 'failed');
+    const scope = { hookId: hook.id, userId: 2, tenantId: 7, workspaceId: 10 };
+    const own = service.getUserExecution({ ...scope, executionId: 'own' });
+    assert.equal(own.hookName, hook.name);
+    assert.deepEqual(own.scriptOutput, { decision: 'block', USER_KEY: '[redacted]' });
+    assert.deepEqual(own.response, { decision: 'block', reason: 'Run the review Skill' });
+    assert.doesNotMatch(JSON.stringify(own), /private-/);
+    for (const key of ['input', 'actions', 'logs', 'userId', 'tenantId', 'workspaceId']) {
+      assert.equal(Object.hasOwn(own, key), false);
+    }
+    for (const override of [{ userId: 1 }, { tenantId: 8 }, { workspaceId: 11 }, { hookId: 'wrong' }, { executionId: 'missing' }]) {
+      assert.equal(service.getUserExecution({ ...scope, executionId: 'own', ...override }), null);
+    }
+    for (const override of [{ userId: null }, { tenantId: undefined }, { workspaceId: 0 }, { workspaceId: 'invalid' }]) {
+      assert.throws(() => service.getUserExecution({ ...scope, executionId: 'own', ...override }), /valid user, tenant and workspace/);
+    }
+    assert.deepEqual(service.getUserExecution({ ...scope, executionId: 'empty' }).scriptOutput, {});
+    assert.deepEqual(service.getUserExecution({ ...scope, executionId: 'empty' }).response, {});
+    assert.equal(service.getUserExecution({ ...scope, executionId: 'pending' }).scriptOutput, null);
+    assert.deepEqual(service.getUserExecution({ ...scope, executionId: 'pending' }).response, {});
+    assert.equal(service.getUserExecution({ ...scope, executionId: 'failed' }).errorMessage, 'Error: token=[redacted]');
+  } finally {
+    database.close();
+  }
+});
+
 test('Hook execution diagnostics paginate correlated event groups without splitting parallel Hooks', () => {
   const { database, service } = createFixture();
   try {

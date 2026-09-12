@@ -6,6 +6,7 @@ type UiPreferences = {
   showRawParameters: boolean;
   showThinking: boolean;
   showInternalConfigFiles: boolean;
+  showHookExecutionDetails: boolean;
   autoScrollToBottom: boolean;
   sendByCtrlEnter: boolean;
   sidebarVisible: boolean;
@@ -40,6 +41,7 @@ const DEFAULTS: UiPreferences = {
   showRawParameters: false,
   showThinking: true,
   showInternalConfigFiles: false,
+  showHookExecutionDetails: false,
   autoScrollToBottom: true,
   sendByCtrlEnter: false,
   sidebarVisible: true,
