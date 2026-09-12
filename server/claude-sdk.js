@@ -254,7 +254,7 @@ function createHookCardActionResults(hook, actions) {
   });
 }
 
-function createHookExecutionActivityDescriptor({ hook, event, executionId, startedAt, actions, parentToolUseId }) {
+function createHookExecutionActivityDescriptor({ hook, event, executionId, startedAt, actions, parentToolUseId, loop }) {
   const actionResults = createHookCardActionResults(hook, actions);
   return {
     id: `hook_activity_${executionId}_execution`,
@@ -272,6 +272,7 @@ function createHookExecutionActivityDescriptor({ hook, event, executionId, start
     hasScript: Boolean(hook.extensionLogic?.code?.trim()),
     summary: String(hook.description || '').slice(0, 8000),
     ...(actionResults.length > 0 ? { actionResults } : {}),
+    ...(loop ? { loop } : {}),
   };
 }
 
@@ -2118,6 +2119,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               input,
               signal,
               environment,
+              onProgress,
             }) => {
               const isSubagentLoop = Boolean(event?.agent_id);
               const loopSessionId = event?.session_id || capturedSessionId || sessionId;
@@ -2150,6 +2152,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                   headersHelperRunner,
                   scriptEnv: environment,
                   ...(isSubagentLoop ? {
+                    onProgress,
                     scriptContext: {
                       agent_id: event.agent_id,
                       agent_type: event.agent_type || null,
@@ -2249,6 +2252,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               startedAt,
               actions,
               error,
+              loop,
             }) => emitHookActivity({
               hookRecovery: {
                 activity: createHookExecutionActivityDescriptor({
@@ -2257,6 +2261,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                   executionId,
                   startedAt,
                   actions,
+                  loop,
                   parentToolUseId: event?.agent_id
                     ? turnLifecycle.getActiveTasks().find((task) => task.taskId === event.agent_id)?.toolUseId
                     : undefined,

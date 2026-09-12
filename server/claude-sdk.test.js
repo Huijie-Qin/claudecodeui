@@ -191,12 +191,14 @@ test('Hook activity preserves the owning Agent invocation only for child events'
   const input = {
     hook: { id: 'hook', name: 'Wait', eventName: 'PostToolUse' },
     executionId: 'execution', startedAt: 1000, parentToolUseId: 'agent-invocation',
+    loop: { jobId: 'child-loop', status: 'queued', attemptCount: 1 },
   };
   const child = createHookExecutionActivityDescriptor({
     ...input, event: { agent_id: 'child-a', agent_type: 'worker', tool_use_id: 'status-call' },
   });
   assert.equal(child.parentToolUseId, 'agent-invocation');
   assert.equal(child.toolUseId, 'status-call');
+  assert.deepEqual(child.loop, input.loop);
   const main = createHookExecutionActivityDescriptor({ ...input, event: { tool_use_id: 'main-call' } });
   assert.equal(Object.hasOwn(main, 'parentToolUseId'), false);
 });

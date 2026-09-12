@@ -13,6 +13,7 @@ import type {
 import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications';
+import { getCancellableHookLoopJobId } from '../../utils/hookLoopControls';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -255,6 +256,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
   const hookActivity = message.hookActivity;
+  const cancellableLoopJobId = getCancellableHookLoopJobId(hookActivity);
   const isHookExecution = hookActivity?.activityKind === 'execution';
   const isSubagentHook = Boolean(hookActivity?.agentId)
     || hookActivity?.eventName === 'SubagentStart' || hookActivity?.eventName === 'SubagentStop';
@@ -444,19 +446,30 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </span>
                 )}
                 <span className="text-[11px] text-muted-foreground/70">{formattedTime}</span>
-                {!isHookExecution && hookActivity.actionType === 'mcp_loop_run' && hookStatus === 'running' && hookActivity.loopJobId ? (
+                {cancellableLoopJobId ? (
                   <button
                     type="button"
+                    title={t('hookActivity.cancelLoopHint')}
                     className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
-                    disabled={!isConnected || cancellingLoopJobs.has(hookActivity.loopJobId)}
-                    onClick={() => cancelMcpLoop(hookActivity.loopJobId!)}
+                    disabled={!isConnected || cancellingLoopJobs.has(cancellableLoopJobId)}
+                    onClick={() => cancelMcpLoop(cancellableLoopJobId)}
                   >
-                    {cancellingLoopJobs.has(hookActivity.loopJobId)
+                    {cancellingLoopJobs.has(cancellableLoopJobId)
                       ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
                       : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
                   </button>
                 ) : null}
               </div>
+
+              {isHookExecution && isSubagentHook && hookActivity.loopJobId && (
+                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <RefreshCcw className={`h-3 w-3 shrink-0 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <span className="truncate">{hookActivity.loopTargetTool}</span>
+                  {typeof hookActivity.loopAttemptCount === 'number' && (
+                    <span>{t('hookActivity.loopAttempts', { count: hookActivity.loopAttemptCount })}</span>
+                  )}
+                </div>
+              )}
 
               {!isHookExecution && hookActivity.summary && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">

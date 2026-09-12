@@ -2,8 +2,39 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
+import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
 
 import { normalizedToChatMessages } from './useChatMessages';
+
+test('live and restored child activity exposes cancellation only while its own loop is active', () => {
+  const agent: NormalizedMessage = {
+    id: 'agent', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-12T00:00:01.000Z',
+    kind: 'tool_use', toolId: 'agent-call', toolName: 'Agent', toolInput: { description: 'Child' },
+  };
+  const running: NormalizedMessage = {
+    id: 'child-hook', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-12T00:00:02.000Z',
+    kind: 'hook_activity', activityKind: 'execution', agentId: 'child-a', parentToolUseId: 'agent-call',
+    toolUseId: 'child-status', actionTypes: ['mcp_loop_run'], status: 'running',
+    loopJobId: 'child-loop', loopStatus: 'queued', loopAttemptCount: 2,
+  };
+  for (const messages of [[agent, running], JSON.parse(JSON.stringify([agent, running]))]) {
+    const chat = normalizedToChatMessages(messages);
+    assert.equal(chat.length, 1, 'The main timeline has no duplicate child Hook');
+    const hook = chat[0].subagentState?.messages?.find((message) => message.type === 'hook')?.hookActivity;
+    assert.equal(hook?.loopAttemptCount, 2);
+    assert.equal(getCancellableHookLoopJobId(hook), 'child-loop');
+  }
+  const cancelled: NormalizedMessage = { ...running, status: 'succeeded', loopStatus: 'cancelled',
+    actionResults: [{ actionId: 'loop', actionType: 'mcp_loop_run', output: {
+      deliveredTo: 'subagent', agentId: 'child-a', status: 'cancelled',
+      toolUseResult: { mcpLoop: true, status: 'cancelled', replacesToolUseId: 'child-status' },
+    } }],
+  };
+  const hook = normalizedToChatMessages([agent, cancelled])[0].subagentState?.messages?.[0]?.hookActivity;
+  assert.equal(hook?.loopStatus, 'cancelled');
+  assert.equal(getCancellableHookLoopJobId(hook), undefined);
+  assert.equal((hook?.loopResult as { status: string }).status, 'cancelled');
+});
 
 test('normalizedToChatMessages renders an orphan Hook follow-up as a distinct message type', () => {
   const [hookMessage] = normalizedToChatMessages([{
