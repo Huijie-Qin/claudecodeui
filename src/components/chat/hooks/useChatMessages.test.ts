@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
+import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -23,6 +24,11 @@ test('live and restored child activity exposes cancellation only while its own l
     const hook = chat[0].subagentState?.messages?.find((message) => message.type === 'hook')?.hookActivity;
     assert.equal(hook?.loopAttemptCount, 2);
     assert.equal(getCancellableHookLoopJobId(hook), 'child-loop');
+    const followups = getHookDisplayFollowups(hook, running.timestamp);
+    assert.equal(followups.length, 1, 'Inline child progress fills the shared post-action section');
+    assert.equal(followups[0].loopAttemptCount, 2);
+    assert.equal(getCancellableHookLoopJobId(followups[0]), 'child-loop');
+    assert.deepEqual(hook?.followups, [], 'No main-session follow-up is persisted');
   }
   const cancelled: NormalizedMessage = { ...running, status: 'succeeded', loopStatus: 'cancelled',
     actionResults: [{ actionId: 'loop', actionType: 'mcp_loop_run', output: {

@@ -15,6 +15,7 @@ import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications';
 import { getCancellableHookLoopJobId } from '../../utils/hookLoopControls';
+import { getHookDisplayFollowups, getHookFollowupDisplayStatus } from '../../utils/hookFollowupPresentation';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -255,8 +256,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const shouldShowErrorDiagnostics = message.type === 'error' && hasDiagnosticDetails(errorDiagnostics);
   const diagnosticCopyContent = useMemo(() => formatDiagnosticsForCopy(errorDiagnostics), [errorDiagnostics]);
   const hookActivity = message.hookActivity;
-  const cancellableLoopJobId = getCancellableHookLoopJobId(hookActivity);
   const isHookExecution = hookActivity?.activityKind === 'execution';
+  const hookFollowups = getHookDisplayFollowups(hookActivity, message.timestamp);
+  const cancellableLoopJobId = isHookExecution ? undefined : getCancellableHookLoopJobId(hookActivity);
   const isSubagentHook = Boolean(hookActivity?.agentId)
     || hookActivity?.eventName === 'SubagentStart' || hookActivity?.eventName === 'SubagentStop';
   const inlineLoopStatus = isHookExecution && isSubagentHook ? hookActivity?.loopStatus : undefined;
@@ -450,16 +452,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 ) : null}
               </div>
 
-              {isHookExecution && isSubagentHook && hookActivity.loopJobId && (
-                <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <RefreshCcw className={`h-3 w-3 shrink-0 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
-                  <span className="truncate">{hookActivity.loopTargetTool}</span>
-                  {typeof hookActivity.loopAttemptCount === 'number' && (
-                    <span>{t('hookActivity.loopAttempts', { count: hookActivity.loopAttemptCount })}</span>
-                  )}
-                </div>
-              )}
-
               {!isHookExecution && hookActivity.summary && (
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 text-xs text-foreground/80 dark:border-violet-900/60 dark:bg-black/10">
                   {redactVisibleSecretText(hookActivity.summary)}
@@ -468,7 +460,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
               <HookExecutionProcess
                 isExecution={isHookExecution}
-                hasPostActions={Boolean(loopResult !== undefined || hookActionResults.length || hookActivity.followups?.length || hookActivity.loopJobId)}
+                hasPostActions={Boolean(loopResult !== undefined || hookActionResults.length || hookFollowups.length)}
                 defaultOpen={Boolean(hookActivity.actionTypes?.includes('mcp_loop_run') || loopResult !== undefined)}
                 workspaceId={selectedProject?.workspaceId}
                 hookId={hookActivity.hookId}
@@ -537,15 +529,19 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </div>
                 )}
 
-                {isHookExecution && hookActivity.followups && hookActivity.followups.length > 0 && (
+                {isHookExecution && hookFollowups.length > 0 && (
                   <div className="mt-2 space-y-2" data-hook-followup-list>
-                    {hookActivity.followups.map((followup) => {
-                      const followupStatus = followup.status || 'running';
+                    {hookFollowups.map((followup) => {
+                      const followupStatus = getHookFollowupDisplayStatus(followup);
+                      const followupHasFailure = ['failed', 'timed_out', 'cancelled'].includes(followupStatus);
+                      const followupLoopJobId = getCancellableHookLoopJobId(followup);
                       const followupStatusLabel = {
                         queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
                         running: t('hookActivity.status.running', { defaultValue: 'Running' }),
                         succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
                         failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
+                        timed_out: t('hookActivity.status.timed_out', { defaultValue: 'Timed out' }),
+                        cancelled: t('hookActivity.status.cancelled', { defaultValue: 'Cancelled' }),
                       }[followupStatus];
 
                       return (
@@ -554,19 +550,20 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                           className="rounded-md border border-violet-100 bg-white/70 px-2.5 py-2 dark:border-violet-900/60 dark:bg-black/10"
                           data-hook-followup={followup.jobId || followup.actionId || 'followup'}
                           data-hook-status={followupStatus}
+                          data-hook-loop-job-id={followup.loopJobId}
                         >
                           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                             <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
                               {t('hookActivity.title', { defaultValue: 'Follow-up message' })}
                             </span>
-                            <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupStatus === 'failed'
+                            <span className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${followupHasFailure
                               ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
                               : followupStatus === 'succeeded'
                                 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
                                 : 'bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200'
                               }`}
                             >
-                              {followupStatus === 'failed' ? (
+                              {followupHasFailure ? (
                                 <XCircle className="h-3 w-3" aria-hidden="true" />
                               ) : followupStatus === 'succeeded' ? (
                                 <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
@@ -584,13 +581,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                 ) : followup.actionType === 'send_agent_message' ? (
                                   <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
                                 ) : followup.actionType === 'mcp_loop_run' ? (
-                                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                                  <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
                                     <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
-                                    <span className="truncate">
+                                    <span className="min-w-0 truncate" title={followup.loopTargetTool}>
                                       {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
                                     </span>
                                     {typeof followup.loopAttemptCount === 'number' ? (
-                                      <span>{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
+                                      <span className="shrink-0 whitespace-nowrap">{t('hookActivity.loopAttempts', { defaultValue: '{{count}} polls', count: followup.loopAttemptCount })}</span>
                                     ) : null}
                                   </span>
                                 ) : null}
@@ -605,14 +602,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                 <span className="text-[11px] text-muted-foreground/70">
                                   {new Date(followup.timestamp).toLocaleTimeString()}
                                 </span>
-                                {followup.actionType === 'mcp_loop_run' && followupStatus === 'running' && followup.loopJobId ? (
+                                {followupLoopJobId ? (
                                   <button
                                     type="button"
+                                    title={t('hookActivity.cancelLoopHint')}
                                     className="ml-auto rounded-md border border-violet-200 bg-white/70 px-2 py-0.5 text-[10px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800 dark:bg-black/10 dark:text-violet-200"
-                                    disabled={!isConnected || cancellingLoopJobs.has(followup.loopJobId)}
-                                    onClick={() => cancelMcpLoop(followup.loopJobId!)}
+                                    disabled={!isConnected || cancellingLoopJobs.has(followupLoopJobId)}
+                                    onClick={() => cancelMcpLoop(followupLoopJobId)}
                                   >
-                                    {cancellingLoopJobs.has(followup.loopJobId)
+                                    {cancellingLoopJobs.has(followupLoopJobId)
                                       ? t('hookActivity.cancellingLoop', { defaultValue: 'Cancelling…' })
                                       : t('hookActivity.cancelLoop', { defaultValue: 'Cancel wait' })}
                                   </button>
