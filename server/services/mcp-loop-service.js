@@ -271,6 +271,7 @@ export function createMcpLoopService({
   let timer = null;
   let runningCount = 0;
   const runtimeContexts = new Map();
+  const terminalWaiters = new Map();
   let handlers = {
     onStarted: async () => {},
     onProgress: async () => {},
@@ -377,6 +378,54 @@ export function createMcpLoopService({
     return mapJob(selectById.get(String(jobId)));
   }
 
+  function settleTerminalWaiters(job) {
+    if (!job || !TERMINAL_STATUSES.has(job.status)) return;
+    const waiters = terminalWaiters.get(job.id);
+    if (!waiters) return;
+    terminalWaiters.delete(job.id);
+    for (const waiter of waiters) waiter.resolve(job);
+  }
+
+  function waitForTerminal({ jobId, signal } = {}) {
+    const normalizedJobId = String(jobId || '');
+    const existing = getJob(normalizedJobId);
+    if (!existing) return Promise.reject(new Error(`MCP loop job ${normalizedJobId || '(empty)'} is unavailable`));
+    if (TERMINAL_STATUSES.has(existing.status)) return Promise.resolve(existing);
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason || new Error('MCP loop wait was cancelled'));
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const waiters = terminalWaiters.get(normalizedJobId) || new Set();
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+        waiters.delete(waiter);
+        if (waiters.size === 0 && terminalWaiters.get(normalizedJobId) === waiters) {
+          terminalWaiters.delete(normalizedJobId);
+        }
+      };
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+      const onAbort = () => finish(reject, signal.reason || new Error('MCP loop wait was cancelled'));
+      const waiter = {
+        resolve: (job) => finish(resolve, job),
+      };
+      waiters.add(waiter);
+      terminalWaiters.set(normalizedJobId, waiters);
+      signal?.addEventListener('abort', onAbort, { once: true });
+
+      // Close the enqueue/wait race: the scheduler may have completed the job
+      // immediately before this waiter was registered.
+      const latest = getJob(normalizedJobId);
+      if (latest && TERMINAL_STATUSES.has(latest.status)) settleTerminalWaiters(latest);
+    });
+  }
+
   async function notify(handlerName, job) {
     try {
       await handlers[handlerName]?.(job);
@@ -403,18 +452,20 @@ export function createMcpLoopService({
     });
     const terminalJob = getJob(job.id);
     if (update.changes !== 1) return terminalJob;
+    settleTerminalWaiters(terminalJob);
     await notify('onTerminal', terminalJob);
     runtimeContexts.delete(job.id);
     return terminalJob;
   }
 
-  function buildTerminationScriptInput(job, result, attemptCount) {
+  function buildTerminationScriptInput(job, result, attemptCount, runtimeContext = null) {
     return {
       result,
       initial_result: job.initialResult,
       inputs: job.inputs,
       attempt_count: attemptCount,
       elapsed_ms: Math.max(0, now() - job.startedAtMs),
+      ...(isPlainObject(runtimeContext?.scriptContext) ? runtimeContext.scriptContext : {}),
     };
   }
 
@@ -459,7 +510,7 @@ export function createMcpLoopService({
     }
   }
 
-  async function evaluateTermination(job, scriptInput) {
+  async function evaluateTermination(job, scriptInput, runtimeContext = runtimeContexts.get(job.id) || null) {
     if (!job.terminationScript.trim()) {
       // Active jobs created by the equality-based first release remain
       // resumable after an upgrade.
@@ -477,7 +528,7 @@ export function createMcpLoopService({
       language: 'python',
       code: job.terminationScript,
       event: scriptInput,
-      env: {
+      env: runtimeContext?.scriptEnv || {
         userId: job.userId,
         tenantId: job.tenantId,
         workspaceId: job.workspaceId,
@@ -514,7 +565,7 @@ export function createMcpLoopService({
       attemptResult = normalizeMcpLoopResult(await callTarget(job, runtimeContexts.get(job.id) || null));
       hasAttemptResult = true;
       attemptStage = 'termination_script';
-      scriptInput = buildTerminationScriptInput(job, attemptResult, attemptCount);
+      scriptInput = buildTerminationScriptInput(job, attemptResult, attemptCount, runtimeContexts.get(job.id) || null);
       const evaluation = await evaluateTermination(job, scriptInput);
       const { outcome } = evaluation;
       scriptOutput = evaluation.scriptOutput;
@@ -679,10 +730,11 @@ export function createMcpLoopService({
       initialEvaluationJob,
       normalizedInitialResult,
       0,
+      runtimeContext,
     );
     let initialEvaluation;
     try {
-      initialEvaluation = await evaluateTermination(initialEvaluationJob, initialScriptInput);
+      initialEvaluation = await evaluateTermination(initialEvaluationJob, initialScriptInput, runtimeContext);
     } catch (error) {
       const initialAttemptCompletedAtMs = now();
       trySaveAttempt({
@@ -776,6 +828,7 @@ export function createMcpLoopService({
     const result = cancelJob.run(completedAtMs, String(jobId), Number(userId));
     if (result.changes !== 1) return { success: false, job: getJob(jobId) };
     const job = getJob(jobId);
+    settleTerminalWaiters(job);
     await notify('onTerminal', job);
     runtimeContexts.delete(String(jobId));
     return { success: true, job };
@@ -822,6 +875,7 @@ export function createMcpLoopService({
     stop,
     cancel,
     getJob,
+    waitForTerminal,
     listActiveForSession,
     setHandlers,
     isActiveStatus: (status) => ACTIVE_STATUSES.has(status),

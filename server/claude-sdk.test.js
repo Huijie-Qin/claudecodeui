@@ -175,7 +175,7 @@ test('Hook execution cards preserve terminal inline child loop outcomes alongsid
   const { createHookCardActionResults } = await import('./claude-sdk.js');
   for (const status of ['succeeded', 'failed', 'timed_out', 'cancelled']) {
     const output = {
-      scheduled: false, deliveredTo: 'subagent', agentId: 'child-a', status, attemptCount: 3,
+      scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-a', status, attemptCount: 3,
       toolUseResult: { rows: 3 },
     };
     assert.deepEqual(createHookCardActionResults({
@@ -184,6 +184,21 @@ test('Hook execution cards preserve terminal inline child loop outcomes alongsid
       'child-loop': { output },
     }), [{ actionId: 'child-loop', actionType: 'mcp_loop_run', output }]);
   }
+});
+
+test('Hook activity preserves the owning Agent invocation only for child events', async () => {
+  const { createHookExecutionActivityDescriptor } = await import('./claude-sdk.js');
+  const input = {
+    hook: { id: 'hook', name: 'Wait', eventName: 'PostToolUse' },
+    executionId: 'execution', startedAt: 1000, parentToolUseId: 'agent-invocation',
+  };
+  const child = createHookExecutionActivityDescriptor({
+    ...input, event: { agent_id: 'child-a', agent_type: 'worker', tool_use_id: 'status-call' },
+  });
+  assert.equal(child.parentToolUseId, 'agent-invocation');
+  assert.equal(child.toolUseId, 'status-call');
+  const main = createHookExecutionActivityDescriptor({ ...input, event: { tool_use_id: 'main-call' } });
+  assert.equal(Object.hasOwn(main, 'parentToolUseId'), false);
 });
 
 test('Docker Hook headersHelper receives the same per-exec USER_KEY as Claude', async () => {

@@ -728,9 +728,9 @@ test('Claude history restores each child Hook identity and terminal loop result 
   const executions = [
     { id: 'main-execution', eventName: 'Stop', agentType: 'reviewer', input: { agent_type: 'reviewer' } },
     { id: 'child-a-execution', eventName: 'SubagentStop', agentId: 'child-a', agentType: 'reviewer' },
-    { id: 'child-b-execution', eventName: 'PostToolUse', input: { agent_id: 'child-b', agent_type: 'worker' },
+    { id: 'child-b-execution', eventName: 'PostToolUse', input: { agent_id: 'child-b', agent_type: 'worker', tool_use_id: 'child-status-tool' },
       actions: {
-        'wait-status': { output: { scheduled: false, deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
+        'wait-status': { output: { scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
           toolUseResult: { rows: 7 },
         } },
       },
@@ -763,11 +763,12 @@ test('Claude history restores each child Hook identity and terminal loop result 
   ]);
   assert.deepEqual(result.messages[2].actionResults, [{
     actionId: 'wait-status', actionType: 'mcp_loop_run', output: {
-      scheduled: false, deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
+      scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-b', status: 'failed', attemptCount: 2,
       toolUseResult: { rows: 7 },
     },
   }]);
   assert.equal(result.messages[2].status, 'succeeded', 'Hook transport success does not erase a failed child loop outcome');
+  assert.equal(result.messages[2].toolUseId, 'child-status-tool', 'Restore exact tool identity for the original result display');
 });
 
 test('Claude session history omits execution and persisted follow-up cards for Hooks hidden from chat', async () => {

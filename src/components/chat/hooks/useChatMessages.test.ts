@@ -552,7 +552,7 @@ test('inline child MCP loop terminal outcomes remain visible when Hook transport
       actionResults: [{
         actionId: 'loop', actionType: 'mcp_loop_run',
         output: {
-          scheduled: false, deliveredTo: 'subagent', agentId: 'child-one',
+          scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-one',
           status: loopStatus, attemptCount: 3, toolUseResult: finalResult,
         },
       }],
@@ -707,6 +707,158 @@ test('normalizedToChatMessages keeps the original MCP result on the tool card af
     status: 'running',
   });
   assert.match(String(chatMessages[0].toolResult?.content || ''), /running/);
+});
+
+test('child loop panels retain the initial result in live and restored transcripts without changing model data', () => {
+  for (const restored of [false, true]) {
+    const common = { sessionId: 'session-loop', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+    const initial = { status: 'running', task_id: 'task-child', elapsed_ms: 10 };
+    const final = { status: 'success', task_id: 'task-child', elapsed_ms: 30000 };
+    const childMessages: NormalizedMessage[] = [{
+      ...common, id: 'child-status-use', kind: 'tool_use', toolId: 'child-status',
+      toolName: 'mcp__demo__get_task_status', parentToolUseId: 'parent-agent',
+      toolResult: { content: JSON.stringify(final), isError: false, toolUseResult: final },
+    }, {
+      ...common, id: 'child-status-result', kind: 'tool_result', toolId: 'child-status',
+      content: JSON.stringify(final), toolUseResult: final, parentToolUseId: 'parent-agent',
+    }, {
+      ...common, id: 'unrelated-use', kind: 'tool_use', toolId: 'other-status',
+      toolName: 'mcp__demo__get_task_status', parentToolUseId: 'parent-agent',
+      toolResult: { content: 'unrelated-result', isError: false },
+    }];
+    const messages: NormalizedMessage[] = [{
+      ...common, id: 'parent-agent', kind: 'tool_use', toolId: 'parent-agent', toolName: 'Agent',
+      ...(restored ? {
+        subagentMessages: childMessages,
+        subagentTools: [{ toolId: 'child-status', toolName: 'mcp__demo__get_task_status',
+          toolResult: childMessages[0].toolResult, timestamp: common.timestamp }],
+      } : {}),
+    }, ...(restored ? [] : childMessages), {
+      ...common, id: 'loop-hook', kind: 'hook_activity', activityKind: 'execution',
+      agentId: 'child-agent', toolUseId: 'child-status', status: 'succeeded',
+      actionTypes: ['mcp_loop_run'], actionResults: [{
+        actionId: 'loop', actionType: 'mcp_loop_run', output: {
+          deliveredTo: 'subagent', agentId: 'child-agent', status: 'succeeded',
+          initialResult: initial, toolUseResult: final,
+        },
+      }],
+    }];
+    const before = JSON.stringify(messages);
+    const cards = normalizedToChatMessages(messages);
+    const agent = cards.find((card) => card.toolId === 'parent-agent');
+    const panelTool = agent?.subagentState?.messages?.find((card) => card.toolId === 'child-status');
+    assert.deepEqual(panelTool?.toolResult?.toolUseResult, initial);
+    assert.deepEqual(JSON.parse(String(panelTool?.toolResult?.content)), initial);
+    assert.deepEqual(JSON.parse(String(agent?.subagentState?.childTools?.find((tool) => tool.toolId === 'child-status')?.toolResult?.content)), initial);
+    assert.equal(agent?.subagentState?.messages?.find((card) => card.toolId === 'other-status')?.toolResult?.content, 'unrelated-result');
+    assert.equal(cards.some((card) => card.type === 'hook'), false, 'Child Hooks do not duplicate into the main conversation');
+    assert.deepEqual(agent?.subagentState?.messages?.find((card) => card.type === 'hook')?.hookActivity?.loopResult, final);
+    assert.equal(JSON.stringify(messages), before, 'Rendering must not mutate model-facing data');
+  }
+});
+
+test('child Hook cards route into concurrent child timelines for live and historical tool events', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const history of ['live', 'transcript', 'compact']) {
+    for (const status of ['running', 'succeeded', 'failed']) {
+      const messages: NormalizedMessage[] = [];
+      for (const child of ['a', 'b']) {
+        const tool: NormalizedMessage = {
+          ...common, id: `tool-${child}`, kind: 'tool_use', toolId: `tool-${child}`,
+          toolName: 'mcp__demo__status', parentToolUseId: `agent-${child}`,
+          toolResult: { content: 'running', isError: false },
+        };
+        messages.push({
+          ...common, id: `agent-${child}`, toolId: `agent-${child}`, kind: 'tool_use', toolName: 'Agent',
+          toolInput: { subagent_type: 'general-purpose' },
+          ...(history === 'transcript' ? { subagentMessages: [tool] } : {}),
+          ...(history === 'compact' ? { subagentTools: [tool] } : {}),
+        });
+        if (history === 'live') messages.push(tool);
+      }
+      for (const child of ['b', 'a']) {
+        messages.push({
+          ...common, id: `hook-${child}`, kind: 'hook_activity', activityKind: 'execution',
+          timestamp: '2026-09-12T00:00:01.000Z', status, agentId: `child-${child}`,
+          agentType: 'general-purpose', toolUseId: `tool-${child}`, actionTypes: ['mcp_loop_run'],
+        });
+      }
+      messages.push({ ...common, id: 'main-hook', kind: 'hook_activity', status, eventName: 'Stop' });
+      const result = normalizedToChatMessages(messages);
+      assert.deepEqual(result.map((card) => card.id), ['agent-a', 'agent-b', 'main-hook']);
+      for (const child of ['a', 'b']) {
+        const timeline = result.find((card) => card.toolId === `agent-${child}`)?.subagentState?.messages || [];
+        assert.deepEqual(timeline.map((card) => card.toolId || card.id), [`tool-${child}`, `hook-${child}`]);
+        assert.equal(timeline[1].hookActivity?.status, status);
+        assert.equal(timeline[1].hookActivity?.agentId, `child-${child}`);
+      }
+    }
+  }
+});
+
+test('child Hooks route by explicit parent before tools arrive and by agent identity on SubagentStop', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const hookIdentity of [
+    { parentToolUseId: 'agent-tool', agentId: 'child-a', eventName: 'PreToolUse' },
+    { agentId: 'child-a', eventName: 'SubagentStop' },
+  ]) {
+    const result = normalizedToChatMessages([{
+      ...common, id: 'agent', toolId: 'agent-tool', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    }, {
+      ...common, id: 'child-hook', kind: 'hook_activity', status: 'running', ...hookIdentity,
+    }, {
+      ...common, id: 'main-answer', kind: 'text', role: 'assistant', content: 'Parent answer',
+    }]);
+    assert.deepEqual(result.map((card) => card.id), ['agent', 'main-answer']);
+    assert.equal(result[0].subagentState?.messages?.[0].id, 'child-hook');
+  }
+});
+
+test('unresolved child Hooks stay visible and do not attach to a same-type unrelated agent', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  const result = normalizedToChatMessages([{
+    ...common, id: 'agent', toolId: 'agent-tool', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    toolInput: { subagent_type: 'general-purpose' },
+  }, {
+    ...common, id: 'orphan', kind: 'hook_activity', agentId: 'unknown-child', agentType: 'general-purpose',
+  }, {
+    ...common, id: 'other-session', kind: 'hook_activity', sessionId: 's2', agentId: 'child-a',
+  }]);
+  assert.deepEqual(result.map((card) => card.id), ['agent', 'orphan', 'other-session']);
+  assert.deepEqual(result[0].subagentState?.messages, []);
+});
+
+test('child Hook cards follow a legacy Task alias into the canonical Agent panel without duplication', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const explicitParent of [false, true]) {
+    const result = normalizedToChatMessages([{
+      ...common, id: 'legacy', toolId: 'legacy', kind: 'tool_use', toolName: 'Task', agentId: 'child-a',
+    }, {
+      ...common, id: 'hook', kind: 'hook_activity', agentId: 'child-a', status: 'succeeded',
+      ...(explicitParent ? { parentToolUseId: 'legacy' } : {}),
+    }, {
+      ...common, id: 'agent', toolId: 'agent', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    }]);
+    assert.equal(result.some((card) => card.type === 'hook'), false);
+    assert.deepEqual(result.find((card) => card.toolId === 'agent')?.subagentState?.messages?.map((card) => card.id), ['hook']);
+  }
+});
+
+test('child loop display snapshots require the exact session, tool and child identity', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const mismatch of [
+    { sessionId: 'other-session' }, { toolUseId: 'other-tool' }, { agentId: 'other-agent' },
+  ]) {
+    const cards = normalizedToChatMessages([{
+      ...common, id: 'tool', kind: 'tool_use', toolId: 'tool', toolName: 'mcp__demo__status',
+      toolResult: { content: 'original', isError: false },
+    }, {
+      ...common, id: 'hook', kind: 'hook_activity', toolUseId: 'tool', agentId: 'child', ...mismatch,
+      actionResults: [{ actionId: 'loop', actionType: 'mcp_loop_run',
+        output: { deliveredTo: 'subagent', agentId: 'child', initialResult: { status: 'running' } } }],
+    }]);
+    assert.equal(cards[0].toolResult?.content, 'original');
+  }
 });
 
 test('normalizedToChatMessages attaches the final MCP loop result to its Hook card', () => {

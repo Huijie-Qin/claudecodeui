@@ -8,7 +8,7 @@ import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skill
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
-import { runSubagentMcpLoop, subagentHookTimeoutSeconds } from './hook-subagent-mcp-loop.js';
+import { subagentHookTimeoutSeconds } from './hook-subagent-mcp-loop.js';
 import { createHookVariableRedactor, mergeHookUserVariableValues } from './hook-user-variables.js';
 
 const UNRESOLVED = Symbol('unresolved');
@@ -347,37 +347,18 @@ async function executePostActions({
     }
     if (action.type === 'mcp_loop_run') {
       const input = isPlainObject(event?.tool_input) ? event.tool_input : {};
-      const schedulingResult = event?.agent_id
-        ? await runSubagentMcpLoop({
-          hook,
-          action,
-          event,
-          input,
-          signal,
-          workspaceRoot: context.workspaceRoot,
-          env: references.ccui.env,
-          resolveTarget: () => context.resolveMcpAction({
-            hook,
-            action: { ...action, config: { ...action.config, toolName: hook.matcher?.value } },
-          }),
-          mcpCaller: context.mcpCaller,
-          scriptExecutor: context.scriptExecutor,
-          headersHelperRunner: context.headersHelperRunner,
-          onAttempt: (attempt) => writeRecord('mcp_loop_attempt', {
-            agentId: event.agent_id,
-            actionId: action.id,
-            ...attempt,
-          }),
-        })
-        : await context.enqueueMcpLoop({
+      const schedulingResult = await context.enqueueMcpLoop({
         hook,
         action,
         event,
         executionId,
         input,
         signal,
+        environment: references.ccui.env,
       });
-      if (event?.agent_id) subagentMcpResults.push(schedulingResult.toolUseResult);
+      if (event?.agent_id && Object.prototype.hasOwnProperty.call(schedulingResult || {}, 'toolUseResult')) {
+        subagentMcpResults.push(schedulingResult.toolUseResult);
+      }
       references.actions[action.id] = {
         output: {
           scheduled: Boolean(schedulingResult?.scheduled),

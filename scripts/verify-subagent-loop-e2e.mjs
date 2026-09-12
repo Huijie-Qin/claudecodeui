@@ -86,14 +86,19 @@ export function verifySubagentLoopEvidence(evidence, { run, expectedStatus = 'su
   assert.ok(replacedTasks.length > 0 && replacedTasks.every((task) => task.task_id === taskId && task.status === expectedStatus), 'Native updatedMCPToolOutput must contain only the final task status and same task_id');
   assert.equal(execution.response.hookSpecificOutput.hookEventName, 'PostToolUse');
   const action = exactlyOne(Object.values(execution.actions || {}).map((entry) => entry.output).filter((output) => output?.deliveredTo === 'subagent'), 'The loop result must be delivered inline to the subagent');
-  assert.equal(action.scheduled, false, 'Child loop must not schedule a parent continuation');
+  assert.equal(action.scheduled, true, 'Child loop must use the shared persisted scheduler');
   assert.equal(action.agentId, execution.input.agent_id, 'Loop result must stay with the originating subagent');
   assert.equal(action.status, expectedStatus === 'success' ? 'succeeded' : 'failed');
   assert.ok(action.attemptCount > 1, 'The Hook must perform repeated MCP polling');
 
   const jobs = evidence.mcpLoopJobs ?? evidence.loopDemo?.jobs;
   assert.ok(Array.isArray(jobs), 'Evidence must include persisted MCP loop jobs for isolation verification');
-  assert.equal(jobs.filter((job) => job.session_id === execution.session_id || job.tool_use_id === statusTool.id).length, 0, 'Subagent loop must create no parent scheduled loop job');
+  const scheduledJob = exactlyOne(jobs.filter((job) => job.tool_use_id === statusTool.id), 'Subagent loop must persist exactly one shared scheduler job');
+  assert.equal(scheduledJob.id, action.jobId, 'Hook output must reference its persisted scheduler job');
+  assert.equal(scheduledJob.session_id, execution.session_id, 'Persisted loop job must stay in the originating session');
+  assert.equal(scheduledJob.status, expectedStatus === 'success' ? 'succeeded' : 'failed');
+  assert.equal(scheduledJob.attempt_count, action.attemptCount);
+  assert.equal(jobs.filter((job) => job.session_id === execution.session_id).length, 1, 'The child run must not create an additional parent loop job');
   const demo = evidence.loopDemo;
   assert.ok(demo?.taskService && demo?.mcp, 'Evidence must include the independent task and MCP services');
   const task = exactlyOne(demo.taskService.tasks.filter((item) => item.id === taskId), 'The submitted task must exist in the task server');
@@ -144,6 +149,7 @@ export function verifySubagentLoopEvidence(evidence, { run, expectedStatus = 'su
     taskSubmissions: submissions.length, childModelStatusCalls: 1,
     actualMcpStatusCalls: polls.length, hookPollAttempts: action.attemptCount,
     childModelTurnsDuringWait: 0, parentMcpCalls: 0, parentScheduledLoopJobs: 0,
+    persistedChildLoopJobs: 1,
     originalStatus: initial.status, replacedStatus: expectedStatus,
     taskServiceInstanceId: demo.taskService.instanceId,
     mcpServiceInstanceId: demo.mcp.instanceId,

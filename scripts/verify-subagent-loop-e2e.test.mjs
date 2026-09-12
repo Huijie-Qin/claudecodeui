@@ -34,11 +34,14 @@ function sample() {
         id: 'execution-1', session_id: 'session-1', tool_use_id: statusId, event_name: 'PostToolUse', status: 'succeeded',
         input: { agent_id: 'child-agent-1', tool_input: { task_id: taskId }, tool_response: initial },
         response: { hookSpecificOutput: { hookEventName: 'PostToolUse', updatedMCPToolOutput: [{ type: 'text', text: JSON.stringify(final) }] } },
-        actions: { loop: { output: { deliveredTo: 'subagent', scheduled: false, agentId: 'child-agent-1', status: 'succeeded', attemptCount: 2 } } },
+        actions: { loop: { output: { deliveredTo: 'subagent', scheduled: true, jobId: 'child-loop-job-1', agentId: 'child-agent-1', status: 'succeeded', attemptCount: 2 } } },
         started_at_ms: created + 101, completed_at_ms: created + 1_200_003, duration_ms: 1_199_902,
       }],
       loopDemo: {
-        jobs: [],
+        jobs: [{
+          id: 'child-loop-job-1', session_id: 'session-1', tool_use_id: statusId,
+          status: 'succeeded', attempt_count: 2,
+        }],
         taskService: {
           durationMs: 1_200_000, instanceId: 'task-server-1',
           tasks: [{ id: taskId, createdAtMs: created, durationMs: 1_200_000 }],
@@ -82,10 +85,10 @@ test('rejects repeated remote submissions even when the model submitted only onc
   assert.throws(() => verifySubagentLoopEvidence(evidence, { run }), /only one submission/);
 });
 
-test('rejects accidentally scheduled parent loop jobs', () => {
+test('rejects an additional parent loop job in the child session', () => {
   const { evidence, run } = sample();
-  evidence.loopDemo.jobs.push({ session_id: 'session-1' });
-  assert.throws(() => verifySubagentLoopEvidence(evidence, { run }), /no parent scheduled loop job/);
+  evidence.loopDemo.jobs.push({ id: 'parent-job', session_id: 'session-1', tool_use_id: 'parent-tool' });
+  assert.throws(() => verifySubagentLoopEvidence(evidence, { run }), /additional parent loop job/);
 });
 
 test('rejects native replacement for a different task', () => {

@@ -15,6 +15,7 @@ import bcrypt from 'bcrypt';
 import { TWENTY_MINUTES_MS, createMcpLoopDemoTaskServer } from './mcp-loop-demo-task-service.mjs';
 import { createMcpLoopDemoMcpServer } from './mcp-loop-demo-mcp.mjs';
 import { findTaskResult } from './hook-subagents-fixture-payload.mjs';
+import { nextGetstatusResponse } from './hook-subagents-getstatus-fixture.mjs';
 
 const moduleRoot = process.env.HOOK_SUBAGENTS_E2E_DIST === '1' ? '../dist-server/server/' : '../server/';
 const appImport = (name) => import(new URL(`${moduleRoot}${name}`, import.meta.url));
@@ -45,6 +46,12 @@ const loopMcpUrl = `http://${process.env.HOOK_SUBAGENTS_E2E_MCP_HOSTNAME || host
 const loopPresetName = 'qa_subagent_loop20';
 const loopStatusTool = `mcp__${loopPresetName}__get_task_status`;
 const loopExecuteTool = `mcp__${loopPresetName}__execute_task`;
+const getstatusMcpUrl = process.env.HOOK_SUBAGENTS_E2E_GETSTATUS_MCP_URL;
+const getstatusApiUrl = process.env.HOOK_SUBAGENTS_E2E_GETSTATUS_API_URL;
+assert.equal(Boolean(getstatusMcpUrl), Boolean(getstatusApiUrl), 'The independent getstatus MCP and API URLs must be configured together');
+const getstatusDemoEnabled = Boolean(getstatusMcpUrl && getstatusApiUrl);
+const getstatusPresetName = 'qa_getstatus20';
+const getstatusTool = `mcp__${getstatusPresetName}__getstatus`;
 const modelUrl = `http://127.0.0.1:${modelPort}`;
 const base = `http://127.0.0.1:${port}`;
 const password = 'Subagent-QA-only-20260910';
@@ -189,6 +196,9 @@ function nextResponse(body) {
   });
   const history = JSON.stringify(messages);
   const correctionSeen = history.includes(correctionMarker);
+  if (getstatusDemoEnabled && run.startsWith('getstatus20') && tools.has('Bash')) {
+    return nextGetstatusResponse({ tools, messages, child, actor, run, usedId, tool, statusToolName: getstatusTool });
+  }
   if (loopDemoEnabled && run.startsWith('loop20') && tools.has('Bash')) {
     return nextLoopResponse({ tools, messages, child, actor, run, usedId, tool });
   }
@@ -225,9 +235,18 @@ function jsonColumns(row) {
   }));
 }
 
-function evidence() {
+async function evidence() {
   const table = (name) => database ? database.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(jsonColumns) : [];
   const optionalTable = (name) => database?.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) ? table(name) : [];
+  let getstatusDemo;
+  if (getstatusDemoEnabled) {
+    const [api, mcp] = await Promise.all([getstatusApiUrl, getstatusMcpUrl].map(async (url) => {
+      const response = await fetch(new URL('/evidence', url), { signal: AbortSignal.timeout(5_000) });
+      assert.ok(response.ok, `Independent getstatus evidence returned HTTP ${response.status}`);
+      return response.json();
+    }));
+    getstatusDemo = { api, mcp, jobs: optionalTable('mcp_loop_jobs'), attempts: optionalTable('mcp_loop_attempts') };
+  }
   return {
     state,
     modelRequests: requests,
@@ -238,6 +257,7 @@ function evidence() {
     hookDataRecords: table('hook_data_records'),
     workspaceAssignments: table('workspace_hook_assignments'),
     userPreferences: table('user_workspace_hook_preferences'),
+    ...(getstatusDemo ? { getstatusDemo } : {}),
     ...(loopDemoEnabled ? { loopDemo: {
       taskService: { ...loopTaskServer.demoState, tasks: [...loopTaskServer.demoState.tasks.values()] },
       mcp: loopMcpServer.demoState,
@@ -248,7 +268,7 @@ function evidence() {
 }
 const fixture = express();
 fixture.use(express.json({ limit: '30mb' }));
-fixture.get('/evidence', (_req, res) => res.json(evidence()));
+fixture.get('/evidence', (_req, res, next) => { evidence().then((value) => res.json(value), next); });
 fixture.get('/state', (_req, res) => res.json(state || { root, starting: true }));
 fixture.post('/v1/messages/count_tokens', (_req, res) => res.json({ input_tokens: 100 }));
 fixture.post('/v1/messages', async (req, res) => {
@@ -318,6 +338,42 @@ const workspace = priorState?.workspace || (await request(`/projects/create-work
 multitenancyDb.workspaceAcl.replaceAcl({ workspaceId: workspace.workspaceId, ownerUserId: admin.id, entries: [{ userId: member.id, permission: 'edit' }] });
 assert.ok(workspace.path.startsWith(`${root}${path.sep}`), 'Workspace must be inside isolated fixture root');
 let loopDemo;
+let getstatusDemo;
+if (getstatusDemoEnabled) {
+  const tenantBody = { tenantId: tenant.id };
+  const presetInput = { ...tenantBody, name: getstatusPresetName, displayName: '独立容器 getstatus MCP', description: 'One real getstatus tool forwards the same ID to a separate twenty-minute HTTP service', config: { type: 'http', url: getstatusMcpUrl, alwaysLoad: true } };
+  const presets = (await request(`/admin/mcp-presets?tenantId=${tenant.id}`)).presets;
+  let preset = presets.find((item) => item.name === getstatusPresetName);
+  if (!preset) preset = (await request('/admin/mcp-presets', { method: 'POST', status: 201, body: presetInput })).preset;
+  else if (preset.config.url !== getstatusMcpUrl) preset = (await request(`/admin/mcp-presets/${preset.id}`, { method: 'PUT', body: presetInput })).preset;
+  const probe = await request(`/admin/mcp-presets/${preset.id}/test`, { method: 'POST', body: tenantBody });
+  assert.equal(probe.preset.toolCount, 1);
+  if (preset.status !== 'published') preset = (await request(`/admin/mcp-presets/${preset.id}/publish`, { method: 'POST', body: tenantBody })).preset;
+  await request(`/workspaces/${workspace.workspaceId}/mcp-tools/${preset.id}/install?tenantId=${tenant.id}`, { method: 'POST', status: 201 });
+  const { hookMcpCatalogService } = await appImport('services/hook-mcp-catalog.js');
+  const existingHookServer = hookMcpCatalogService.getServerByName(getstatusPresetName);
+  if (!existingHookServer) {
+    await request('/admin/hooks/mcp-servers', { method: 'POST', status: 201, body: presetInput });
+  } else if (existingHookServer.config.url !== getstatusMcpUrl) {
+    await request(`/admin/hooks/mcp-servers/${getstatusPresetName}`, { method: 'PUT', body: presetInput });
+  }
+  const hookProbe = await request(`/admin/hooks/mcp-servers/${getstatusPresetName}/test`, { method: 'POST', body: tenantBody });
+  assert.equal(hookProbe.server.toolCount, 1);
+  getstatusDemo = {
+    apiUrl: getstatusApiUrl, mcpUrl: getstatusMcpUrl, durationMs: TWENTY_MINUTES_MS,
+    presetId: preset.id, hookMcpServerId: hookProbe.server.id, statusToolName: getstatusTool,
+    prompt: 'HOOK_SUBAGENTS_E2E RUN=getstatus20_browser. Delegate to one child agent. It must call getstatus exactly once with a new random UUID in id. The independent HTTP service starts tracking the ID on the first call, returns running before twenty minutes, and success after twenty minutes. Let the Hook poll getstatus with the same ID until success, then report the real final id and status.',
+    hookExample: {
+      name: 'E2E 子代理轮询独立 getstatus 服务', eventName: 'PostToolUse', includeSubagents: true,
+      matcher: { mode: 'exact', value: getstatusTool }, extensionLogic: null,
+      postActions: [{ id: 'poll-independent-getstatus', type: 'mcp_loop_run', position: 0, config: {
+        pollIntervalMs: 10_000, perCallTimeoutMs: 15_000, maxWaitMs: 3_600_000,
+        terminationScript: 'async def run(event, ccui):\n    status = (event.get("result") or {}).get("status")\n    if status in ("success", "failed"):\n        return {"output": {"status": status}}\n    return {"output": {"status": "running"}}\n',
+        waitingLabel: '轮询独立 getstatus 服务直到 success',
+      } }], claudeResponse: { bindings: {} },
+    },
+  };
+}
 if (loopDemoEnabled) {
   const tenantBody = { tenantId: tenant.id };
   const presetInput = { ...tenantBody, name: loopPresetName, displayName: '子代理20分钟任务 MCP', description: 'Real execute_task and get_task_status on an isolated twenty-minute service', config: { type: 'http', url: loopMcpUrl, alwaysLoad: true } };
@@ -365,6 +421,7 @@ state = {
   admin: { id: admin.id, username: admin.username }, member: { id: member.id, username: member.username },
   password, tenantId: tenant.id, workspace,
   ...(loopDemo ? { loopDemo } : {}),
+  ...(getstatusDemo ? { getstatusDemo } : {}),
   prompt: 'HOOK_SUBAGENTS_E2E RUN=ui_off. Run the main Bash check and two child agents, each with its own Bash check, and finish.',
   hookExample: { name: 'QA Stop 子代理', eventName: 'Stop', includeSubagents: false, matcher: {}, activationScope: 'all_users', extensionLogic: { language: 'javascript', code: hookScript, outputs: [{ name: 'decision', type: 'string' }, { name: 'reason', type: 'string' }] }, postActions: [], claudeResponse: { bindings: { decision: { source: 'reference', path: 'script.output.decision' }, reason: { source: 'reference', path: 'script.output.reason' } } } },
 };
@@ -393,10 +450,10 @@ if (smoke && !priorState) {
     clearTimeout(timer);
     const sessionId = sdkMessages.find((message) => message.sessionId)?.sessionId;
     if (sessionId) await abortClaudeSDKSession(sessionId);
-    await fs.writeFile(path.join(root, 'smoke-evidence.json'), `${JSON.stringify(evidence(), null, 2)}\n`);
+    await fs.writeFile(path.join(root, 'smoke-evidence.json'), `${JSON.stringify(await evidence(), null, 2)}\n`);
   }
 }
 if (!serve) {
-  await fs.writeFile(path.join(root, 'evidence.json'), `${JSON.stringify(evidence(), null, 2)}\n`);
+  await fs.writeFile(path.join(root, 'evidence.json'), `${JSON.stringify(await evidence(), null, 2)}\n`);
   process.exit(0);
 }

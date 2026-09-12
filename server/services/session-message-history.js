@@ -295,6 +295,9 @@ function listHistoricalHookActivities({
         hookId: execution.hookId,
         hookName: execution.hookName || hook?.name || null,
         eventName: execution.eventName || hook?.eventName || null,
+        ...((execution.toolUseId || execution.input?.tool_use_id)
+          ? { toolUseId: execution.toolUseId || execution.input.tool_use_id }
+          : {}),
         ...(typeof agentId === 'string' && agentId
           ? { agentId, agentType: typeof agentType === 'string' && agentType ? agentType : null }
           : {}),
