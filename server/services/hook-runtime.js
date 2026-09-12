@@ -310,6 +310,7 @@ async function executePostActions({
   recoveryKeys,
   subagentFeedback,
   subagentMcpResults,
+  onLoopProgress,
   writeRecord,
 }) {
   for (const action of hook.postActions || []) {
@@ -355,6 +356,7 @@ async function executePostActions({
         input,
         signal,
         environment: references.ccui.env,
+        onProgress: event?.agent_id ? onLoopProgress : undefined,
       });
       if (event?.agent_id && Object.prototype.hasOwnProperty.call(schedulingResult || {}, 'toolUseResult')) {
         subagentMcpResults.push(schedulingResult.toolUseResult);
@@ -624,6 +626,22 @@ export function createHookRuntimeSession({
     const logs = [];
     const subagentFeedback = [];
     const subagentMcpResults = [];
+    let loop;
+    const onLoopProgress = (job) => {
+      loop = {
+        jobId: job.id,
+        status: job.status,
+        attemptCount: job.attemptCount,
+        startedAtMs: job.startedAtMs,
+        nextPollAtMs: job.nextPollAtMs,
+        targetTool: job.toolName,
+        toolUseId: job.toolUseId,
+      };
+      reportExecutionActivity({
+        hook, event: redact(event), executionId, startedAt,
+        status: 'running', loop,
+      });
+    };
     let scriptOutput = {};
     const references = {
       event,
@@ -675,6 +693,7 @@ export function createHookRuntimeSession({
         recoveryKeys,
         subagentFeedback,
         subagentMcpResults,
+        onLoopProgress,
         writeRecord: async (recordType, data) => writeDataRecord(
           database,
           executionId,
@@ -721,6 +740,7 @@ export function createHookRuntimeSession({
         startedAt,
         completedAt: Date.now(),
         actions: toAuditValue(redact(references.actions)),
+        ...(loop ? { loop } : {}),
       });
       return response;
     } catch (error) {
@@ -744,6 +764,7 @@ export function createHookRuntimeSession({
         startedAt,
         completedAt: Date.now(),
         actions: toAuditValue(redact(references.actions)),
+        ...(loop ? { loop } : {}),
         error: redact(error?.message || String(error)),
       });
       console.error(`[Hook:${hook.id}] Runtime execution failed:`, redact(error?.message || String(error)));

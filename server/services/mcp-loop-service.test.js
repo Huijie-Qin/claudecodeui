@@ -381,6 +381,58 @@ test('MCP loop waiters receive the terminal job produced by the shared scheduler
   }
 });
 
+test('cancelling an in-flight child poll cannot overwrite cancellation or stop its sibling', async () => {
+  const database = new Database(':memory:');
+  let now = 1_000;
+  let sequence = 0;
+  let finishCall;
+  let beganCall;
+  const started = new Promise((resolve) => { beganCall = resolve; });
+  const pendingCall = new Promise((resolve) => { finishCall = resolve; });
+  const updates = [];
+  const calls = [];
+  let childWaiting = true;
+  const service = createMcpLoopService({
+    database, now: () => now, maxConcurrent: 1, createId: () => `cancel-job-${++sequence}`,
+    resolveTargetIdentity: async () => ({ mcpServerId: 'server', toolName: 'status' }),
+    callTarget: async (job) => {
+      calls.push(job.id);
+      if (job.inputs.child === 'a') { beganCall(); return pendingCall; }
+      return { status: 'success' };
+    },
+    scriptExecutor: async ({ event }) => ({ output: { status: event.result.status } }),
+    logger: { info: () => {}, error: () => {} },
+  });
+  service.setHandlers({ onTerminal: (job) => {
+    if (job.id === 'cancel-job-1') assert.equal(childWaiting, true, 'Ownership is retained until terminal dispatch');
+  } });
+  const enqueue = (child) => service.enqueue({
+    hook: { id: 'hook', matcher: { value: 'status' } },
+    action: { id: 'loop', config: { terminationScript: 'fixture', pollIntervalMs: 10, perCallTimeoutMs: 100, maxWaitMs: 10_000 } },
+    executionId: `execution-${child}`, userId: 1, sessionId: 'session', toolUseId: child, workspaceRoot: '/workspace',
+    inputs: { child }, initialResult: { status: 'running' },
+    runtimeContext: { onProgress: (job) => updates.push({ child, status: job.status }) },
+  });
+  try {
+    const a = await enqueue('a');
+    const b = await enqueue('b');
+    const waiting = service.waitForTerminal({ jobId: a.job.id }).then((job) => { childWaiting = false; return job; });
+    now += 10;
+    const polling = service.tick();
+    await started;
+    assert.equal((await service.cancel({ jobId: a.job.id, userId: 1 })).success, true);
+    assert.equal((await waiting).status, 'cancelled');
+    assert.equal(service.getJob(b.job.id).status, 'queued');
+    finishCall({ status: 'success' });
+    await polling;
+    assert.equal(service.getJob(a.job.id).status, 'cancelled');
+    await service.tick();
+    assert.equal(service.getJob(b.job.id).status, 'succeeded');
+    assert.deepEqual(calls, [a.job.id, b.job.id]);
+    assert.deepEqual(updates.filter((update) => update.child === 'a').map((update) => update.status), ['queued', 'cancelled']);
+  } finally { service.stop(); database.close(); }
+});
+
 test('aborting one MCP loop waiter does not cancel or consume the persisted job', async () => {
   const database = new Database(':memory:');
   const service = createMcpLoopService({

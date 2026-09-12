@@ -11,6 +11,7 @@ import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
+import { buildMcpLoopReplacement, createMcpLoopService } from './mcp-loop-service.js';
 
 test('subagent inheritance filters tool callbacks before scripts, variables, or audit side effects', async () => {
   for (const eventName of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']) {
@@ -215,6 +216,81 @@ test('subagent MCP loops use the shared scheduler and return the final output to
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_data_records WHERE record_type = 'mcp_loop_attempt'").get().count, 0,
       'Attempts belong to the shared mcp_loop_attempts table, not generic Hook records');
   } finally { database.close(); }
+});
+
+test('cancelling one child loop updates its Hook card and returns cancellation only to that child', async () => {
+  const database = createDatabase();
+  let now = 1_000;
+  let complete = false;
+  const activities = [];
+  const jobs = new Map();
+  const completedChildren = [];
+  const loopService = createMcpLoopService({
+    database, now: () => now, maxConcurrent: 3,
+    resolveTargetIdentity: async () => ({ mcpServerId: 'tasks', toolName: 'status' }),
+    callTarget: async (job) => ({ status: complete ? 'success' : 'running', task: job.inputs.task }),
+    scriptExecutor: async ({ event }) => ({ output: { status: event.result.status } }),
+    logger: { info: () => {}, error: () => {} },
+  });
+  const hook = { id: 'hook-1', name: 'Wait', eventName: 'PostToolUse', includeSubagents: true,
+    postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {
+      terminationScript: 'fixture', pollIntervalMs: 10, perCallTimeoutMs: 100, maxWaitMs: 10_000,
+    } }],
+  };
+  const enqueue = (event, executionId, onProgress) => loopService.enqueue({
+    hook, action: hook.postActions[0], executionId, userId: 1, sessionId: 'shared-session',
+    toolUseId: event.tool_use_id, inputs: event.tool_input, initialResult: { status: 'running' },
+    workspaceRoot: '/workspace', runtimeContext: { onProgress },
+  });
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      onExecutionActivity: (activity) => activities.push(activity),
+      enqueueMcpLoop: async ({ event, executionId, onProgress }) => {
+        const scheduled = await enqueue(event, executionId, onProgress);
+        jobs.set(event.agent_id, scheduled.job);
+        const job = await loopService.waitForTerminal({ jobId: scheduled.job.id });
+        return { scheduled: true, jobId: job.id, status: job.status, deliveredTo: 'subagent',
+          agentId: event.agent_id, initialResult: job.initialResult, lastResult: job.lastResult,
+          toolUseResult: buildMcpLoopReplacement(job).toolUseResult,
+        };
+      },
+    });
+    const run = (agentId) => runtime.hooks.PostToolUse[0].hooks[0]({
+      hook_event_name: 'PostToolUse', session_id: 'shared-session', agent_id: agentId,
+      tool_use_id: `${agentId}-status`, tool_input: { task: agentId }, tool_response: { status: 'running' },
+    }).then((response) => { completedChildren.push(agentId); return response; });
+    const childA = run('child-a');
+    const childB = run('child-b');
+    const parent = await enqueue({ tool_use_id: 'parent-status', tool_input: { task: 'parent' } }, 'parent-execution');
+    // Drain microtasks only; no wall-clock polling or model calls are involved.
+    while (jobs.size < 2) await new Promise((resolve) => setImmediate(resolve));
+    const firstId = jobs.get('child-a').id;
+    assert.ok(activities.some((activity) => activity.event.agent_id === 'child-a'
+      && activity.loop?.jobId === firstId && activity.status === 'running'));
+    now += 10;
+    await loopService.tick();
+    assert.ok(activities.some((activity) => activity.event.agent_id === 'child-a' && activity.loop?.attemptCount === 1));
+    assert.equal((await loopService.cancel({ jobId: firstId, userId: 999 })).success, false);
+    assert.deepEqual(completedChildren, []);
+    assert.equal((await loopService.cancel({ jobId: firstId, userId: 1 })).success, true);
+    const response = await childA;
+    const result = JSON.parse(response.hookSpecificOutput.updatedMCPToolOutput[0].text);
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.replacesToolUseId, 'child-a-status');
+    assert.deepEqual(completedChildren, ['child-a']);
+    const childEvents = activities.filter((activity) => activity.event.agent_id === 'child-a');
+    assert.equal(new Set(childEvents.map((activity) => activity.executionId)).size, 1);
+    assert.equal(childEvents.at(-1).loop.status, 'cancelled');
+    assert.equal(childEvents.at(-1).status, 'succeeded', 'The Hook delivered the cancellation successfully');
+    assert.equal(loopService.getJob(parent.job.id).status, 'queued');
+    assert.equal(loopService.getJob(jobs.get('child-b').id).status, 'queued');
+    assert.equal((await loopService.cancel({ jobId: firstId, userId: 1 })).success, false);
+    complete = true;
+    now += 10;
+    await loopService.tick();
+    assert.equal(JSON.parse((await childB).hookSpecificOutput.updatedMCPToolOutput[0].text).status, 'success');
+    assert.equal(loopService.getJob(parent.job.id).status, 'succeeded');
+  } finally { loopService.stop(); database.close(); }
 });
 
 test('a failed subagent loop hook releases the stream watchdog wait', async () => {

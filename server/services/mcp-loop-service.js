@@ -427,11 +427,21 @@ export function createMcpLoopService({
   }
 
   async function notify(handlerName, job) {
-    try {
-      await handlers[handlerName]?.(job);
-    } catch (error) {
-      logger.error?.(`[McpLoop] ${handlerName} failed for ${job.id}:`, error?.message || error);
-    }
+    // An inline child waits on this job without a parent-session resume context.
+    // Publish its own card updates independently of the global parent handlers.
+    const invoke = async (callback, label) => {
+      try {
+        await callback?.(job);
+      } catch (error) {
+        logger.error?.(`[McpLoop] ${label} failed for ${job.id}:`, error?.message || error);
+      }
+    };
+    // Start both callbacks before yielding: a terminal waiter may otherwise
+    // finish and release its child ownership before the global handler runs.
+    await Promise.all([
+      invoke(runtimeContexts.get(job.id)?.onProgress, 'job progress'),
+      invoke(handlers[handlerName], handlerName),
+    ]);
   }
 
   async function transitionTerminal(job, status, {

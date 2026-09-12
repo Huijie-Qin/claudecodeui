@@ -40,6 +40,7 @@
     "loopAttempts": "已轮询 {{count}} 次",
     "loopResult": "最终结果",
     "cancelLoop": "取消等待",
+    "cancelLoopHint": "仅取消这次轮询等待，不会取消外部任务或停止其他代理。",
     "cancellingLoop": "正在取消…",
     "unnamed": "未命名 Hook",
     "skill": "技能",

@@ -40,6 +40,7 @@
     "loopAttempts": "{{count}} polls",
     "loopResult": "Final result",
     "cancelLoop": "Cancel wait",
+    "cancelLoopHint": "Cancel only this polling wait, without cancelling the external task or stopping other agents.",
     "cancellingLoop": "Cancelling…",
     "unnamed": "Unnamed Hook",
     "skill": "Skill",
