@@ -358,8 +358,36 @@ function readTaskNotificationMessage(msg: NormalizedMessage): ChatMessage['taskN
  * Internal/system content (e.g. <system-reminder>, <command-name>) is already
  * filtered server-side by the Claude provider module.
  */
-export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMessage[] {
+export function normalizedToChatMessages(
+  messages: NormalizedMessage[],
+  inheritedLoopInitialResults: ReadonlyMap<string, NonNullable<NormalizedMessage['toolResult']>> = new Map(),
+): ChatMessage[] {
   const converted: ChatMessage[] = [];
+  // Child CLI transcripts contain the model-facing replacement, not the first
+  // response. Keep the persisted Hook snapshot for display only, including
+  // nested/history panels; never rewrite the session store or model transcript.
+  const loopInitialResults = new Map(inheritedLoopInitialResults);
+  for (const message of messages) {
+    if (message.kind !== 'hook_activity' || !message.agentId || !message.toolUseId) continue;
+    for (const action of message.actionResults || []) {
+      const output = action.actionType === 'mcp_loop_run' ? readObject(action.output) : null;
+      if (output?.deliveredTo !== 'subagent'
+        || (output.agentId && output.agentId !== message.agentId)
+        || !Object.prototype.hasOwnProperty.call(output, 'initialResult')) continue;
+      const initialResult = output.initialResult;
+      const key = `${message.sessionId}:${message.toolUseId}`;
+      if (!loopInitialResults.has(key)) {
+        loopInitialResults.set(key, {
+          content: typeof initialResult === 'string' ? initialResult : JSON.stringify(initialResult, null, 2) ?? '',
+          isError: readObject(initialResult)?.isError === true,
+          toolUseResult: initialResult,
+        });
+      }
+    }
+  }
+  const initialResultFor = (sessionId: string, toolId: string | undefined) => (
+    toolId ? loopInitialResults.get(`${sessionId}:${toolId}`) : undefined
+  );
   const mcpLoopResults = new Map<string, unknown>();
   for (const message of messages) {
     if (message.mcpLoopReplacement !== true || !message.mcpLoopJobId) continue;
@@ -661,7 +689,10 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     if (!message.parentToolUseId) return;
     const parentToolId = resolveRootSubagentToolIdAt(message.parentToolUseId, index);
     if (!parentToolId) return;
-    appendSubagentTranscript(parentToolId, [message]);
+    const detailsParentToolId = message.kind === 'hook_activity'
+      ? subagentDetailsOwnerByAliasToolId.get(parentToolId) || parentToolId
+      : parentToolId;
+    appendSubagentTranscript(detailsParentToolId, [message]);
     associatedSubagentMessages.add(message);
   });
 
@@ -679,7 +710,21 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
 
   const buildSubagentTranscript = (parentToolId: string): ChatMessage[] => {
     const seen = new Set<string>();
-    const transcript = (subagentTranscriptByParentToolId.get(parentToolId) || [])
+    const entries = [...(subagentTranscriptByParentToolId.get(parentToolId) || [])];
+    // Older history may only contain compact tool records. A newly attached
+    // Hook must not turn that panel into a Hook-only timeline and hide tools.
+    const owner = subagentToolMessageById.get(parentToolId);
+    const transcriptToolIds = new Set(entries.filter((entry) => entry.kind === 'tool_use').map((entry) => entry.toolId));
+    for (const tool of historicalSubagentToolsByParentToolId.get(parentToolId) || []) {
+      if (!owner || !tool?.toolId || transcriptToolIds.has(tool.toolId)) continue;
+      entries.push({
+        id: `subagent-tool-${tool.toolId}`, sessionId: owner.sessionId, provider: owner.provider,
+        kind: 'tool_use', timestamp: tool.timestamp || owner.timestamp,
+        toolId: tool.toolId, toolName: tool.toolName, toolInput: tool.toolInput, toolResult: tool.toolResult,
+      });
+      transcriptToolIds.add(tool.toolId);
+    }
+    const transcript = entries
       .filter((message) => {
         const key = `${message.id}:${message.kind}:${message.toolId || ''}`;
         if (seen.has(key)) return false;
@@ -693,7 +738,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       // routing metadata lets the normal renderer show every nested event in
       // sequence instead of hiding it behind another ownership pass.
       .map(({ parentToolUseId: _parentToolUseId, subagentMessages: _nested, ...message }) => message);
-    return transcript.length > 0 ? normalizedToChatMessages(transcript) : [];
+    return transcript.length > 0 ? normalizedToChatMessages(transcript, loopInitialResults) : [];
   };
 
   const resolveSubagentToolIdAt = ({
@@ -765,6 +810,41 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     records.push(...historicalTools);
     historicalSubagentToolsByParentToolId.set(detailsParentToolId, records);
   }
+
+  // Hook callbacks are emitted outside the child's SDK message stream. Route
+  // them by exact invocation/tool/agent identity, never by agent type (parallel
+  // children often share the same type). Keep unresolved records visible until
+  // their owning invocation arrives instead of silently dropping audit cards.
+  messages.forEach((message, index) => {
+    if (message.kind !== 'hook_activity' || !message.agentId || associatedSubagentMessages.has(message)) return;
+    const sameSession = (parentToolId: string | undefined) => (
+      parentToolId && subagentToolMessageById.get(parentToolId)?.sessionId === message.sessionId
+        ? parentToolId
+        : undefined
+    );
+    const triggeringTool = message.toolUseId ? toolUseById.get(message.toolUseId) : undefined;
+    let owner = triggeringTool?.message.parentToolUseId
+      ? sameSession(resolveRootSubagentToolIdAt(triggeringTool.message.parentToolUseId, index))
+      : undefined;
+    if (!owner && message.toolUseId) {
+      const matches = new Set<string>();
+      for (const [parentToolId, transcript] of subagentTranscriptByParentToolId) {
+        if (sameSession(parentToolId) && transcript.some((entry) => entry.toolId === message.toolUseId)) {
+          matches.add(parentToolId);
+        }
+      }
+      for (const [parentToolId, tools] of historicalSubagentToolsByParentToolId) {
+        if (sameSession(parentToolId) && tools.some((tool) => tool.toolId === message.toolUseId)) {
+          matches.add(parentToolId);
+        }
+      }
+      if (matches.size === 1) owner = [...matches][0];
+    }
+    owner ||= sameSession(resolveSubagentToolIdAt({ eventIndex: index, taskId: message.agentId }));
+    if (!owner) return;
+    appendSubagentTranscript(subagentDetailsOwnerByAliasToolId.get(owner) || owner, [message]);
+    associatedSubagentMessages.add(message);
+  });
 
   const taskNotificationsByToolId = new Map<string, {
     index: number;
@@ -906,7 +986,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           : mappedToolResult;
         // The model still receives the Hook-generated replacement, while the
         // original tool card keeps showing its first response (for example running).
-        const tr = displayedMappedResult || inlineToolResult;
+        const tr = initialResultFor(msg.sessionId, msg.toolId) || displayedMappedResult || inlineToolResult;
         const explicitCompletedAt = displayedMappedResult?.timestamp ||
           readTimestampField(inlineToolResult) ||
           readTimestampField((tr as any)?.toolUseResult);
@@ -1038,7 +1118,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
             toolId: tool.toolId,
             toolName: tool.toolName,
             toolInput: tool.toolInput,
-            toolResult: tool.toolResult || null,
+            toolResult: initialResultFor(msg.sessionId, tool.toolId) || tool.toolResult || null,
             timestamp: new Date(tool.timestamp || Date.now()),
           });
           existingChildToolIds.add(tool.toolId);
@@ -1052,12 +1132,12 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
               toolId: childToolRecord.toolUse.toolId,
               toolName: childToolRecord.toolUse.toolName || 'UnknownTool',
               toolInput: childToolRecord.toolUse.toolInput,
-              toolResult: childToolRecord.toolResult
+              toolResult: initialResultFor(msg.sessionId, childToolRecord.toolUse.toolId) || (childToolRecord.toolResult
                 ? {
                     content: childToolRecord.toolResult.content,
                     isError: Boolean(childToolRecord.toolResult.isError),
                   }
-                : null,
+                : null),
               timestamp: new Date(childToolRecord.toolUse.timestamp),
             });
             existingChildToolIds.add(childToolRecord.toolUse.toolId);

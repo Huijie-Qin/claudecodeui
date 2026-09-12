@@ -193,6 +193,11 @@ function getContentVersion(
       `${traceKey}:${String(message.id || message.toolId || message.timestamp)}:tool-result`,
       message.toolResult,
     ),
+    observeContentRevision(
+      revisionCache,
+      `${traceKey}:${String(message.id || message.timestamp)}:hook-activity`,
+      message.hookActivity,
+    ),
   ].join(':')).join('|');
   const usageVersion = Object.entries(trace.usage)
     .map(([name, value]) => `${name}:${String(value)}`)

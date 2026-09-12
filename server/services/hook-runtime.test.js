@@ -162,9 +162,10 @@ test('concurrent Stop callbacks deliver a recovery Skill only once to the same c
   } finally { database.close(); }
 });
 
-test('subagent MCP loops return the final tool output to the same child without scheduling the root', async () => {
+test('subagent MCP loops use the shared scheduler and return the final output to the same child without resuming the root', async () => {
   const database = createDatabase();
   const waits = new Map();
+  const scheduledLoops = [];
   const hook = { id: 'hook-1', eventName: 'PostToolUse', includeSubagents: true,
     matcher: { value: 'mcp__status__poll' },
     postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {
@@ -178,12 +179,18 @@ test('subagent MCP loops return the final tool output to the same child without 
         if (waiting) waits.set(id, true);
         else assert.equal(waits.delete(id), true, 'Every wait releases exactly once');
       },
-      resolveMcpAction: async ({ action }) => {
-        assert.equal(action.config.toolName, hook.matcher.value);
-        return { qualifiedToolName: action.config.toolName };
+      enqueueMcpLoop: async ({ event, executionId, input, environment }) => {
+        scheduledLoops.push({ event, executionId, input, environment });
+        return {
+          scheduled: true,
+          jobId: `job-${event.agent_id}`,
+          deliveredTo: 'subagent',
+          agentId: event.agent_id,
+          status: 'succeeded',
+          attemptCount: 2,
+          toolUseResult: { status: 'done', child: input.child },
+        };
       },
-      mcpCaller: async ({ input }) => ({ status: 'done', child: input.child }),
-      enqueueMcpLoop: async () => assert.fail('Child loop must not schedule root'),
     });
     assert.equal(runtime.hooks.PostToolUse[0].timeout, 62);
     const responses = await Promise.all(['child-a', 'child-b'].map((agentId) => runtime.hooks.PostToolUse[0].hooks[0]({
@@ -195,7 +202,18 @@ test('subagent MCP loops return the final tool output to the same child without 
       [{ type: 'text', text: JSON.stringify({ status: 'done', child: 'child-b' }) }],
     ]);
     assert.equal(waits.size, 0);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_data_records WHERE record_type = 'mcp_loop_attempt'").get().count, 4);
+    assert.deepEqual(scheduledLoops.map(({ event, input }) => ({ agentId: event.agent_id, input })), [
+      { agentId: 'child-a', input: { child: 'child-a' } },
+      { agentId: 'child-b', input: { child: 'child-b' } },
+    ]);
+    assert.ok(scheduledLoops.every(({ environment }) => (
+      environment.userId === null && environment.sessionId === null
+    )), 'The shared scheduler receives the same Hook script environment as the original callback');
+    const actions = database.prepare('SELECT actions_json FROM hook_executions ORDER BY started_at_ms, id').all()
+      .map(({ actions_json }) => JSON.parse(actions_json).loop.output);
+    assert.ok(actions.every((output) => output.scheduled === true && output.deliveredTo === 'subagent'));
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_data_records WHERE record_type = 'mcp_loop_attempt'").get().count, 0,
+      'Attempts belong to the shared mcp_loop_attempts table, not generic Hook records');
   } finally { database.close(); }
 });
 

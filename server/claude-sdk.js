@@ -98,6 +98,7 @@ const activeSessions = new Map();
 const abortedSessions = new Set();
 const mcpLoopSuspensionsBySession = new Map();
 const mcpLoopContextsByJob = new Map();
+const inlineSubagentMcpLoopJobs = new Set();
 const pendingToolApprovals = new Map();
 const sessionExecutionQueue = createClaudeSessionExecutionQueue();
 
@@ -253,7 +254,7 @@ function createHookCardActionResults(hook, actions) {
   });
 }
 
-function createHookExecutionActivityDescriptor({ hook, event, executionId, startedAt, actions }) {
+function createHookExecutionActivityDescriptor({ hook, event, executionId, startedAt, actions, parentToolUseId }) {
   const actionResults = createHookCardActionResults(hook, actions);
   return {
     id: `hook_activity_${executionId}_execution`,
@@ -264,6 +265,8 @@ function createHookExecutionActivityDescriptor({ hook, event, executionId, start
     hookName: hook.name,
     showInChat: hook.showInChat !== false,
     eventName: hook.eventName,
+    ...(event?.tool_use_id ? { toolUseId: event.tool_use_id } : {}),
+    ...(event?.agent_id && parentToolUseId ? { parentToolUseId } : {}),
     ...(event?.agent_id ? { agentId: event.agent_id, agentType: event.agent_type || null } : {}),
     actionTypes: [...new Set((hook.postActions || []).map((action) => action.type).filter(Boolean))],
     hasScript: Boolean(hook.extensionLogic?.code?.trim()),
@@ -300,6 +303,8 @@ function emitHookActivity({
     actionType: activity.actionType,
     skillName: activity.skillName,
     eventName: activity.eventName,
+    ...(activity.toolUseId ? { toolUseId: activity.toolUseId } : {}),
+    ...(activity.parentToolUseId ? { parentToolUseId: activity.parentToolUseId } : {}),
     ...(activity.agentId ? { agentId: activity.agentId, agentType: activity.agentType || null } : {}),
     actionTypes: activity.actionTypes,
     actionResults: activity.actionResults,
@@ -2111,12 +2116,12 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               event,
               executionId,
               input,
+              signal,
+              environment,
             }) => {
-              if (event?.agent_id) {
-                throw new Error('mcp_loop_run is only supported for the main Claude session');
-              }
+              const isSubagentLoop = Boolean(event?.agent_id);
               const loopSessionId = event?.session_id || capturedSessionId || sessionId;
-              mcpLoopToolBatchTracker.addExpected(event?.tool_use_id);
+              if (!isSubagentLoop) mcpLoopToolBatchTracker.addExpected(event?.tool_use_id);
               const activeSession = loopSessionId ? getSession(loopSessionId) : null;
               if (!activeSession) {
                 throw new Error('Original Claude session is unavailable for mcp_loop_run');
@@ -2143,17 +2148,67 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                     ? { uid: runtimeContext.runtimeUid, gid: runtimeContext.runtimeGid }
                     : null,
                   headersHelperRunner,
+                  scriptEnv: environment,
+                  ...(isSubagentLoop ? {
+                    scriptContext: {
+                      agent_id: event.agent_id,
+                      agent_type: event.agent_type || null,
+                    },
+                  } : {}),
                 },
               });
               if (!scheduled.scheduled) {
-                return {
+                const result = {
                   scheduled: false,
                   status: scheduled.status,
                   initialResult: scheduled.initialResult,
                 };
+                if (isSubagentLoop) {
+                  Object.assign(result, {
+                    deliveredTo: 'subagent',
+                    agentId: event.agent_id,
+                    attemptCount: 0,
+                    elapsedMs: 0,
+                    lastResult: scheduled.initialResult,
+                    toolUseResult: scheduled.initialResult,
+                  });
+                }
+                return result;
               }
 
               const job = scheduled.job;
+              if (isSubagentLoop) {
+                let terminalJob;
+                inlineSubagentMcpLoopJobs.add(job.id);
+                try {
+                  terminalJob = await mcpLoopService.waitForTerminal({ jobId: job.id, signal });
+                } catch (error) {
+                  if (!signal?.aborted) throw error;
+                  const cancelled = await mcpLoopService.cancel({
+                    jobId: job.id,
+                    userId: runtimeOptions.userId ?? ws?.userId,
+                  });
+                  terminalJob = cancelled.job || mcpLoopService.getJob(job.id);
+                  if (!terminalJob || mcpLoopService.isActiveStatus(terminalJob.status)) throw error;
+                } finally {
+                  inlineSubagentMcpLoopJobs.delete(job.id);
+                }
+                const replacement = buildMcpLoopReplacement(terminalJob);
+                return {
+                  scheduled: true,
+                  jobId: terminalJob.id,
+                  deliveredTo: 'subagent',
+                  agentId: event.agent_id,
+                  status: terminalJob.status,
+                  attemptCount: terminalJob.attemptCount,
+                  elapsedMs: Math.max(0, (terminalJob.completedAtMs || Date.now()) - terminalJob.startedAtMs),
+                  initialResult: terminalJob.initialResult,
+                  lastResult: terminalJob.lastResult,
+                  toolUseResult: replacement.toolUseResult,
+                  ...(terminalJob.error ? { error: terminalJob.error } : {}),
+                };
+              }
+
               const activity = createHookActivityDescriptor({
                 hook,
                 action,
@@ -2202,6 +2257,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
                   executionId,
                   startedAt,
                   actions,
+                  parentToolUseId: event?.agent_id
+                    ? turnLifecycle.getActiveTasks().find((task) => task.taskId === event.agent_id)?.toolUseId
+                    : undefined,
                 }),
               },
               sessionId: event?.session_id || capturedSessionId || sessionId || null,
@@ -3009,6 +3067,9 @@ mcpLoopService.setHandlers({
     if (context) emitMcpLoopActivity(context, job, 'running', job.error);
   },
   onTerminal: async (job) => {
+    // Subagent Hook callbacks await the shared scheduler job and return its
+    // replacement inline to that child. They must never resume the root session.
+    if (inlineSubagentMcpLoopJobs.has(job.id)) return;
     // The scheduler slot only covers the MCP call. Agent resume continues via
     // the per-session execution queue without occupying loop concurrency.
     void handleMcpLoopTerminalJob(job);
@@ -3119,6 +3180,14 @@ async function abortClaudeSDKSession(sessionId) {
     // cleanup because SDK interrupt can leave docker exec alive.
     session.status = 'aborted';
     abortedSessions.add(sessionId);
+    const waitingBatch = mcpLoopSuspensionsBySession.get(sessionId);
+    if (waitingBatch) waitingBatch.skipResume = true;
+    const loopUserId = session.runtimeOptions?.userId ?? session.writer?.userId;
+    const activeLoopJobs = mcpLoopService.listActiveForSession(sessionId);
+    await Promise.all(activeLoopJobs.map((job) => mcpLoopService.cancel({
+      jobId: job.id,
+      userId: loopUserId,
+    })));
     if (session.idleCloseTimer) {
       clearTimeout(session.idleCloseTimer);
       session.idleCloseTimer = null;
@@ -3423,5 +3492,6 @@ export {
   resolveConfiguredHooksForRuntime,
   createHookHeadersHelperRunner,
   createHookCardActionResults,
+  createHookExecutionActivityDescriptor,
   ClaudeInputQueue,
 };

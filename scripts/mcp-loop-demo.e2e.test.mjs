@@ -22,6 +22,18 @@ const TERMINATION_SCRIPT = `async def run(event, ccui):
         return {"output": {"status": "failed"}}
     return {"output": {"status": "running"}}
 `;
+const SUBAGENT_TERMINATION_SCRIPT = `async def run(event, ccui):
+    if event.get("agent_id") != "child-loop-http" or event.get("agent_type") != "general-purpose":
+        return {"output": {"status": "failed"}}
+    if ccui.env.userId != 1:
+        return {"output": {"status": "failed"}}
+    status = (event.get("result") or {}).get("status")
+    if status == "success":
+        return {"output": {"status": "success"}}
+    if status == "failed":
+        return {"output": {"status": "failed"}}
+    return {"output": {"status": "running"}}
+`;
 const execFileAsync = promisify(execFile);
 const serverModuleRoot = process.env.CCUI_TEST_DIST_SERVER === '1'
   ? '../dist-server/server'
@@ -307,10 +319,12 @@ test('a subagent JSON-string tool response runs the real HTTP/Python loop and re
     { HOOK_CONFIG_SCHEMA_SQL },
     { callHookMcpTool },
     { createHookRuntimeSession },
+    { buildMcpLoopReplacement, createMcpLoopService },
   ] = await Promise.all([
     importServerModule('database/hook-config-schema.js'),
     importServerModule('services/hook-mcp-client.js'),
     importServerModule('services/hook-runtime.js'),
+    importServerModule('services/mcp-loop-service.js'),
   ]);
   const taskServer = createMcpLoopDemoTaskServer({ durationMs: 300 });
   const taskAddress = await listen(taskServer);
@@ -329,6 +343,22 @@ test('a subagent JSON-string tool response runs the real HTTP/Python loop and re
     INSERT INTO hooks (id, name, event_name, include_subagents, created_by, updated_by, status, activation_scope)
     VALUES ('wait-for-child-task', '等待子代理模拟任务', 'PostToolUse', 1, 1, 1, 'published', 'all_users')
   `).run();
+  const loopService = createMcpLoopService({
+    database,
+    schedulerIntervalMs: 10,
+    resolveTargetIdentity: ({ hook }) => ({
+      mcpServerId: 'loop-demo-server',
+      toolName: hook.matcher.value,
+    }),
+    callTarget: (job) => callHookMcpTool({
+      qualifiedToolName: qualifiedStatusTool,
+      input: job.inputs,
+      mcpServers,
+      cwd: testRoot,
+      timeoutMs: job.perCallTimeoutMs,
+    }),
+  });
+  loopService.start();
   try {
     const submitted = await callHookMcpTool({
       qualifiedToolName: 'mcp__loopdemo__execute_task',
@@ -347,14 +377,57 @@ test('a subagent JSON-string tool response runs the real HTTP/Python loop and re
         id: 'wait-until-terminal', type: 'mcp_loop_run', position: 0,
         config: {
           pollIntervalMs: 30, perCallTimeoutMs: 2_000, maxWaitMs: 5_000,
-          terminationScript: TERMINATION_SCRIPT,
+          terminationScript: SUBAGENT_TERMINATION_SCRIPT,
         },
       }],
       claudeResponse: { bindings: {} },
     };
     const runtime = createHookRuntimeSession({
       hooks: [hook], userId: 1, workspaceRoot: testRoot, database, mcpServers,
-      enqueueMcpLoop: async () => assert.fail('A child loop must never enqueue the parent scheduler'),
+      enqueueMcpLoop: async ({ hook: triggeredHook, action, event, executionId, input, signal, environment }) => {
+        const scheduled = await loopService.enqueue({
+          hook: triggeredHook,
+          action,
+          executionId,
+          userId: 1,
+          sessionId: event.session_id,
+          toolUseId: event.tool_use_id,
+          workspaceRoot: testRoot,
+          inputs: input,
+          initialResult: event.tool_response,
+          runtimeContext: {
+            scriptEnv: environment,
+            scriptContext: {
+              agent_id: event.agent_id,
+              agent_type: event.agent_type || null,
+            },
+          },
+        });
+        if (!scheduled.scheduled) {
+          return {
+            scheduled: false,
+            deliveredTo: 'subagent',
+            agentId: event.agent_id,
+            status: scheduled.status,
+            attemptCount: 0,
+            initialResult: scheduled.initialResult,
+            lastResult: scheduled.initialResult,
+            toolUseResult: scheduled.initialResult,
+          };
+        }
+        const job = await loopService.waitForTerminal({ jobId: scheduled.job.id, signal });
+        return {
+          scheduled: true,
+          jobId: job.id,
+          deliveredTo: 'subagent',
+          agentId: event.agent_id,
+          status: job.status,
+          attemptCount: job.attemptCount,
+          initialResult: job.initialResult,
+          lastResult: job.lastResult,
+          toolUseResult: buildMcpLoopReplacement(job).toolUseResult,
+        };
+      },
     });
     const response = await runtime.hooks.PostToolUse[0].hooks[0]({
       hook_event_name: 'PostToolUse', session_id: 'parent-session',
@@ -384,19 +457,26 @@ test('a subagent JSON-string tool response runs the real HTTP/Python loop and re
     assert.equal(JSON.parse(execution.input_json).agent_id, 'child-loop-http');
     const outcome = JSON.parse(execution.actions_json)['wait-until-terminal'].output;
     assert.equal(outcome.status, 'succeeded');
-    assert.equal(outcome.scheduled, false);
+    assert.equal(outcome.scheduled, true);
     assert.equal(outcome.deliveredTo, 'subagent');
     assert.equal(outcome.agentId, 'child-loop-http');
     assert.deepEqual(outcome.initialResult, initialStatus);
     assert.deepEqual(outcome.toolUseResult, replacement, 'Audit retains business data rather than native content blocks');
-    const attempts = database.prepare("SELECT data_json FROM hook_data_records WHERE record_type = 'mcp_loop_attempt' ORDER BY rowid")
-      .all().map(({ data_json }) => JSON.parse(data_json));
-    assert.equal(attempts[0].attemptCount, 0);
-    assert.equal(attempts[0].scriptInput.result.status, 'running');
-    assert.equal(attempts[0].scriptOutput.output.status, 'running');
-    assert.equal(attempts.at(-1).scriptOutput.output.status, 'success');
-    assert.ok(attempts.every(({ agentId }) => agentId === 'child-loop-http'));
+    const job = database.prepare('SELECT * FROM mcp_loop_jobs WHERE hook_execution_id = ?').get(execution.id);
+    assert.equal(job.status, 'succeeded');
+    assert.equal(job.session_id, 'parent-session');
+    assert.equal(job.tool_use_id, 'child-tool-status');
+    const attempts = database.prepare('SELECT * FROM mcp_loop_attempts WHERE hook_execution_id = ? ORDER BY attempt_count')
+      .all(execution.id);
+    assert.equal(attempts[0].attempt_count, 0);
+    assert.equal(JSON.parse(attempts[0].script_input_json).result.status, 'running');
+    assert.equal(JSON.parse(attempts[0].script_input_json).agent_id, 'child-loop-http');
+    assert.equal(JSON.parse(attempts.at(-1).script_input_json).agent_type, 'general-purpose');
+    assert.equal(JSON.parse(attempts[0].script_output_json).output.status, 'running');
+    assert.equal(JSON.parse(attempts.at(-1).script_output_json).output.status, 'success');
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_data_records WHERE record_type = 'mcp_loop_attempt'").get().count, 0);
   } finally {
+    loopService.stop();
     database.close();
     await Promise.all([close(mcpServer), close(taskServer)]);
     await fs.rm(testRoot, { recursive: true, force: true });

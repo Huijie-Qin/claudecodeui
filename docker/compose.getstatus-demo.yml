@@ -1,0 +1,24 @@
+# Two independent demo services. No task duration override: the API always waits
+# for 20 real minutes after an ID's first request. Repeated reads never reset it.
+services:
+  api:
+    image: ${GETSTATUS_DEMO_IMAGE:-node:22-alpine}
+    working_dir: /demo
+    entrypoint: [node]
+    command: [scripts/mcp-getstatus-demo-api.mjs]
+    volumes:
+      - ../scripts:/demo/scripts:ro
+    ports:
+      - "127.0.0.1:40150:40150"
+  mcp:
+    image: ${GETSTATUS_DEMO_IMAGE:-node:22-alpine}
+    working_dir: /demo
+    entrypoint: [node]
+    command: [scripts/mcp-getstatus-demo-mcp.mjs]
+    environment:
+      MCP_GETSTATUS_DEMO_API_URL: http://api:40150
+    volumes:
+      - ../scripts:/demo/scripts:ro
+    ports:
+      - "127.0.0.1:40151:40151"
+    depends_on: [api]
