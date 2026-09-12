@@ -76,6 +76,31 @@ function publishableHook(overrides = {}) {
   };
 }
 
+test('extensionLogic failClosed is optional, strictly boolean, and survives persistence', () => {
+  const { database, service } = createFixture();
+  try {
+    const legacy = publishableHook();
+    const original = service.createHook({ input: legacy, userId: 1 });
+    assert.deepEqual(original.extensionLogic, legacy.extensionLogic);
+    assert.equal(Object.hasOwn(original.extensionLogic, 'failClosed'), false);
+    for (const failClosed of [true, false]) {
+      const created = service.createHook({
+        userId: 1,
+        input: publishableHook({ extensionLogic: { ...legacy.extensionLogic, failClosed } }),
+      });
+      assert.equal(created.extensionLogic.failClosed, failClosed);
+      assert.equal(service.getHook(created.id).extensionLogic.failClosed, failClosed);
+      assert.equal(service.publishHook({ hookId: created.id, userId: 1 }).extensionLogic.failClosed, failClosed);
+    }
+    for (const failClosed of ['true', 1, null, {}]) {
+      assert.throws(() => service.createHook({
+        userId: 1,
+        input: publishableHook({ extensionLogic: { ...legacy.extensionLogic, failClosed } }),
+      }), /failClosed must be boolean/);
+    }
+  } finally { database.close(); }
+});
+
 test('Hook configuration CRUD persists scripts, post actions, Claude response, and publication state', () => {
   const { database, service } = createFixture();
   try {
