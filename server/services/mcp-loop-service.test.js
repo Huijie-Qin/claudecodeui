@@ -3,7 +3,16 @@ import test from 'node:test';
 
 import Database from 'better-sqlite3';
 
-import { createMcpLoopService } from './mcp-loop-service.js';
+import { createMcpLoopService, normalizeMcpLoopResult } from './mcp-loop-service.js';
+
+test('CLI JSON string results normalize like MCP structured and text results', () => {
+  const result = { task_id: 'task-1', status: 'running', elapsed_ms: 25 };
+  assert.deepEqual(normalizeMcpLoopResult(JSON.stringify(result)), result);
+  assert.deepEqual(normalizeMcpLoopResult({ structuredContent: result }), result);
+  assert.deepEqual(normalizeMcpLoopResult({ content: [{ type: 'text', text: JSON.stringify(result) }] }), result);
+  assert.equal(normalizeMcpLoopResult('Task is still running'), 'Task is still running');
+  assert.equal(normalizeMcpLoopResult('{invalid JSON'), '{invalid JSON');
+});
 
 test('MCP loop prints a redacted execution record for every polling attempt', async () => {
   const database = new Database(':memory:');
@@ -219,6 +228,244 @@ test('MCP loop prints the MCP result when the termination script fails', async (
     assert.equal(entries[0].details.result.state, 'running');
     assert.equal(entries[0].details.result.password, '[redacted]');
     assert.equal(entries[0].details.error, 'termination failed');
+  } finally {
+    database.close();
+  }
+});
+
+test('MCP loop executes two jobs from the same Claude session concurrently', async () => {
+  const database = new Database(':memory:');
+  let currentTime = 3_000;
+  const jobIds = ['loop-job-first', 'loop-job-second'];
+  const calls = [];
+  const terminalJobs = [];
+  const service = createMcpLoopService({
+    database,
+    now: () => currentTime,
+    createId: () => jobIds.shift(),
+    maxConcurrent: 2,
+    resolveTargetIdentity: async ({ hook }) => ({
+      mcpServerId: `server-${hook.id}`,
+      toolName: hook.matcher.value,
+    }),
+    callTarget: async (job) => {
+      calls.push(job.id);
+      return { state: 'success', jobId: job.id };
+    },
+    scriptExecutor: async ({ event }) => ({
+      output: { status: event.result.state === 'success' ? 'success' : 'running' },
+    }),
+    logger: { info: () => {}, error: () => {} },
+  });
+  service.setHandlers({
+    onTerminal: async (job) => terminalJobs.push(job.id),
+  });
+
+  const enqueue = (suffix) => service.enqueue({
+    hook: {
+      id: `hook-${suffix}`,
+      name: `Wait for ${suffix}`,
+      matcher: { value: `mcp__tasks__${suffix}_status` },
+    },
+    action: {
+      id: `action-${suffix}`,
+      config: {
+        terminationScript: 'async def run(event, ccui): pass',
+        pollIntervalMs: 10,
+        perCallTimeoutMs: 1_000,
+        maxWaitMs: 60_000,
+      },
+    },
+    executionId: `execution-${suffix}`,
+    sessionId: 'shared-session',
+    toolUseId: `tool-use-${suffix}`,
+    workspaceRoot: '/workspace',
+    inputs: { task: suffix },
+    initialResult: { state: 'running' },
+  });
+
+  try {
+    const [first, second] = await Promise.all([enqueue('first'), enqueue('second')]);
+    assert.equal(first.scheduled, true);
+    assert.equal(second.scheduled, true);
+    assert.deepEqual(
+      service.listActiveForSession('shared-session').map((job) => job.id).sort(),
+      ['loop-job-first', 'loop-job-second'],
+    );
+
+    currentTime = 3_010;
+    await service.tick();
+
+    assert.deepEqual(calls.sort(), ['loop-job-first', 'loop-job-second']);
+    assert.deepEqual(terminalJobs.sort(), ['loop-job-first', 'loop-job-second']);
+    assert.equal(service.getJob('loop-job-first').status, 'succeeded');
+    assert.equal(service.getJob('loop-job-second').status, 'succeeded');
+    assert.deepEqual(service.listActiveForSession('shared-session'), []);
+  } finally {
+    database.close();
+  }
+});
+
+test('MCP loop waiters receive the terminal job produced by the shared scheduler', async () => {
+  const database = new Database(':memory:');
+  let currentTime = 4_000;
+  const scriptCalls = [];
+  const scriptEnv = {
+    userId: 7,
+    tenantId: 8,
+    workspaceId: 9,
+    sessionId: 'parent-session',
+    userVariables: { USER_KEY: 'test-key' },
+  };
+  const service = createMcpLoopService({
+    database,
+    now: () => currentTime,
+    createId: () => 'shared-loop-job',
+    resolveTargetIdentity: async () => ({ mcpServerId: 'server-1', toolName: 'status' }),
+    callTarget: async () => ({ status: 'success', value: 42 }),
+    scriptExecutor: async ({ event, env }) => {
+      scriptCalls.push({ event, env });
+      return {
+        output: { status: event.result.status === 'success' ? 'success' : 'running' },
+      };
+    },
+    logger: { info: () => {}, error: () => {} },
+  });
+
+  try {
+    const scheduled = await service.enqueue({
+      hook: { id: 'hook-1', matcher: { value: 'status' } },
+      action: { id: 'loop', config: {
+        terminationScript: 'async def run(event, ccui): pass',
+        pollIntervalMs: 10,
+        perCallTimeoutMs: 1_000,
+        maxWaitMs: 60_000,
+      } },
+      executionId: 'child-execution',
+      sessionId: 'parent-session',
+      toolUseId: 'child-tool-use',
+      workspaceRoot: '/workspace',
+      inputs: { task_id: 'task-1' },
+      initialResult: { status: 'running' },
+      runtimeContext: {
+        scriptEnv,
+        scriptContext: {
+          agent_id: 'child-a',
+          agent_type: 'worker',
+        },
+      },
+    });
+    const waiting = service.waitForTerminal({ jobId: scheduled.job.id });
+
+    currentTime = 4_010;
+    await service.tick();
+    const terminal = await waiting;
+
+    assert.equal(terminal.id, 'shared-loop-job');
+    assert.equal(terminal.status, 'succeeded');
+    assert.equal(terminal.attemptCount, 1);
+    assert.deepEqual(terminal.lastResult, { status: 'success', value: 42 });
+    assert.deepEqual(await service.waitForTerminal({ jobId: terminal.id }), terminal);
+    assert.equal(scriptCalls.length, 2, 'The initial result and first poll both run the termination script');
+    assert.deepEqual(scriptCalls.map(({ event }) => ({
+      agent_id: event.agent_id,
+      agent_type: event.agent_type,
+      task_id: event.inputs.task_id,
+    })), [
+      { agent_id: 'child-a', agent_type: 'worker', task_id: 'task-1' },
+      { agent_id: 'child-a', agent_type: 'worker', task_id: 'task-1' },
+    ]);
+    assert.ok(scriptCalls.every(({ env }) => env === scriptEnv), 'Every script run receives the child Hook environment');
+  } finally {
+    database.close();
+  }
+});
+
+test('cancelling an in-flight child poll cannot overwrite cancellation or stop its sibling', async () => {
+  const database = new Database(':memory:');
+  let now = 1_000;
+  let sequence = 0;
+  let finishCall;
+  let beganCall;
+  const started = new Promise((resolve) => { beganCall = resolve; });
+  const pendingCall = new Promise((resolve) => { finishCall = resolve; });
+  const updates = [];
+  const calls = [];
+  let childWaiting = true;
+  const service = createMcpLoopService({
+    database, now: () => now, maxConcurrent: 1, createId: () => `cancel-job-${++sequence}`,
+    resolveTargetIdentity: async () => ({ mcpServerId: 'server', toolName: 'status' }),
+    callTarget: async (job) => {
+      calls.push(job.id);
+      if (job.inputs.child === 'a') { beganCall(); return pendingCall; }
+      return { status: 'success' };
+    },
+    scriptExecutor: async ({ event }) => ({ output: { status: event.result.status } }),
+    logger: { info: () => {}, error: () => {} },
+  });
+  service.setHandlers({ onTerminal: (job) => {
+    if (job.id === 'cancel-job-1') assert.equal(childWaiting, true, 'Ownership is retained until terminal dispatch');
+  } });
+  const enqueue = (child) => service.enqueue({
+    hook: { id: 'hook', matcher: { value: 'status' } },
+    action: { id: 'loop', config: { terminationScript: 'fixture', pollIntervalMs: 10, perCallTimeoutMs: 100, maxWaitMs: 10_000 } },
+    executionId: `execution-${child}`, userId: 1, sessionId: 'session', toolUseId: child, workspaceRoot: '/workspace',
+    inputs: { child }, initialResult: { status: 'running' },
+    runtimeContext: { onProgress: (job) => updates.push({ child, status: job.status }) },
+  });
+  try {
+    const a = await enqueue('a');
+    const b = await enqueue('b');
+    const waiting = service.waitForTerminal({ jobId: a.job.id }).then((job) => { childWaiting = false; return job; });
+    now += 10;
+    const polling = service.tick();
+    await started;
+    assert.equal((await service.cancel({ jobId: a.job.id, userId: 1 })).success, true);
+    assert.equal((await waiting).status, 'cancelled');
+    assert.equal(service.getJob(b.job.id).status, 'queued');
+    finishCall({ status: 'success' });
+    await polling;
+    assert.equal(service.getJob(a.job.id).status, 'cancelled');
+    await service.tick();
+    assert.equal(service.getJob(b.job.id).status, 'succeeded');
+    assert.deepEqual(calls, [a.job.id, b.job.id]);
+    assert.deepEqual(updates.filter((update) => update.child === 'a').map((update) => update.status), ['queued', 'cancelled']);
+  } finally { service.stop(); database.close(); }
+});
+
+test('aborting one MCP loop waiter does not cancel or consume the persisted job', async () => {
+  const database = new Database(':memory:');
+  const service = createMcpLoopService({
+    database,
+    now: () => 5_000,
+    createId: () => 'abortable-wait-job',
+    resolveTargetIdentity: async () => ({ mcpServerId: 'server-1', toolName: 'status' }),
+    scriptExecutor: async () => ({ output: { status: 'running' } }),
+    logger: { info: () => {}, error: () => {} },
+  });
+
+  try {
+    const scheduled = await service.enqueue({
+      hook: { id: 'hook-1', matcher: { value: 'status' } },
+      action: { id: 'loop', config: {
+        terminationScript: 'async def run(event, ccui): pass',
+        pollIntervalMs: 10,
+        perCallTimeoutMs: 1_000,
+        maxWaitMs: 60_000,
+      } },
+      executionId: 'child-execution',
+      sessionId: 'parent-session',
+      toolUseId: 'child-tool-use',
+      workspaceRoot: '/workspace',
+      inputs: {},
+      initialResult: { status: 'running' },
+    });
+    const controller = new AbortController();
+    const waiting = service.waitForTerminal({ jobId: scheduled.job.id, signal: controller.signal });
+    controller.abort(new Error('Child stopped'));
+
+    await assert.rejects(waiting, /Child stopped/);
+    assert.equal(service.getJob(scheduled.job.id).status, 'queued');
   } finally {
     database.close();
   }

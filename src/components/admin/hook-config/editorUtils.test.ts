@@ -58,3 +58,12 @@ test('personal variable edits change the draft signature', () => {
     userVariables: [{ name: 'account', label: '账号', description: '', required: true, secret: false }],
   }));
 });
+
+test('draft signatures track subagent edits and preserve equivalent historical defaults', () => {
+  const draft: HookConfigDraft = { name: 'Hook', description: '', eventName: 'PreToolUse', matcher: {}, extensionLogic: null, postActions: [], claudeResponse: { bindings: {} } };
+  assert.equal(createHookDraftSignature(draft), createHookDraftSignature({ ...draft, includeSubagents: true }));
+  assert.notEqual(createHookDraftSignature(draft), createHookDraftSignature({ ...draft, includeSubagents: false }));
+  const stopDraft: HookConfigDraft = { ...draft, eventName: 'Stop' };
+  assert.equal(createHookDraftSignature(stopDraft), createHookDraftSignature({ ...stopDraft, includeSubagents: false }));
+  assert.notEqual(createHookDraftSignature(stopDraft), createHookDraftSignature({ ...stopDraft, includeSubagents: true }));
+});

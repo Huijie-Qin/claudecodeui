@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { History, RefreshCw, Webhook } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../utils/api';
+import { useUiPreferences } from '../../../../hooks/useUiPreferences';
 import type { HookUserVariable } from '../../../admin/hook-config/types';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
+import SettingsRow from '../SettingsRow';
 import SettingsSection from '../SettingsSection';
 import SettingsToggle from '../SettingsToggle';
 
@@ -21,6 +24,7 @@ type AvailableHook = {
   name: string;
   description: string;
   eventName: string;
+  includeSubagents?: boolean;
   version: number;
   enabled: boolean;
   showInChat: boolean;
@@ -53,6 +57,8 @@ export default function HookSettingsTab({
   projects: SettingsProject[];
   workspaceTerminology?: 'workspace' | 'expert';
 }) {
+  const { t } = useTranslation('settings');
+  const { preferences, setPreference } = useUiPreferences();
   const availableProjects = useMemo(
     () => projects.filter((project) => Number.isInteger(project.workspaceId) && Number(project.workspaceId) > 0),
     [projects],
@@ -227,6 +233,17 @@ export default function HookSettingsTab({
   return (
     <>
       <SettingsSection title="辅助功能">
+      <SettingsCard>
+        <SettingsRow
+          label={t('hookDisplay.showExecutionDetails.label')}
+        >
+          <SettingsToggle
+            checked={preferences.showHookExecutionDetails}
+            onChange={(value) => setPreference('showHookExecutionDetails', value)}
+            ariaLabel={t('hookDisplay.showExecutionDetails.label')}
+          />
+        </SettingsRow>
+      </SettingsCard>
       {availableProjects.length > 1 ? (
         <label className="block space-y-1.5">
           <span className="text-xs font-medium text-muted-foreground">{workspaceTerminology === 'expert' ? '专家' : '工作区'}</span>
@@ -249,10 +266,6 @@ export default function HookSettingsTab({
           {error}
         </div>
       ) : null}
-
-      <p className="text-xs leading-5 text-muted-foreground">
-        对话展示只影响你自己的紫色 Hook 卡片；关闭后 Hook 仍会执行，并可在执行记录中查看结果。
-      </p>
 
       <SettingsCard divided>
         {!workspaceId ? (
@@ -373,8 +386,9 @@ export default function HookSettingsTab({
         />
       ) : null}
 
-      {recordsHook ? (
+      {recordsHook && workspaceId ? (
         <HookExecutionRecordsDrawer
+          workspaceId={workspaceId}
           hook={recordsHook}
           executions={executions}
           standaloneRecords={standaloneRecords}

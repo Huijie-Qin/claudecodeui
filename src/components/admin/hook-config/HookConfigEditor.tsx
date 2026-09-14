@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { canIncludeSubagents, resolveIncludeSubagents } from '../../../../shared/hookSubagents.js';
 import { cn } from '../../../lib/utils';
 import { Badge, Button, Card, Dialog, DialogContent, DialogTitle, Input, Tooltip } from '../../../shared/view/ui';
 
@@ -494,10 +495,12 @@ const DEFAULT_MCP_LOOP_TERMINATION_SCRIPT = `async def run(event, ccui):
 function McpLoopActionEditor({
   action,
   matchedTool,
+  includeSubagents,
   onChange,
 }: {
   action: HookPostAction;
   matchedTool?: HookResources['mcpTools'][number];
+  includeSubagents: boolean;
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
@@ -598,6 +601,7 @@ function McpLoopActionEditor({
 
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
         <code>mcp_loop_run</code> 是 CCUI 内部后置行为，不会暴露给 Agent。它会重复调用 Matcher 命中的 MCP 工具；Python 脚本返回 <code>success</code> 或 <code>failed</code> 后，最后一次结果将返回给 Agent 并恢复会话。
+        {includeSubagents ? ' 子代理触发时，会等待自己的工具循环完成，并使用最后一次结果继续自己的任务。' : null}
       </div>
     </div>
   );
@@ -607,11 +611,13 @@ function SkillActionEditor({
   action,
   resources,
   references,
+  includeSubagents,
   onChange,
 }: {
   action: HookPostAction;
   resources: HookResources;
   references: FieldChoice[];
+  includeSubagents: boolean;
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
@@ -735,7 +741,12 @@ function SkillActionEditor({
         </div>
       </div>
       <div className="rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        实际恢复问题：<code>/{skillName || 'skill'} {template}</code>
+        Skill 调用内容：<code>/{skillName || 'skill'} {template}</code>
+        <p className="mt-1 leading-5">
+          {includeSubagents
+            ? '主代理会在原会话的下一回合执行 Skill；子代理会收到 Skill 内容和参数，继续自己的任务。'
+            : '当前回答结束后，原会话将在下一回合执行 Skill。'}
+        </p>
       </div>
     </div>
   );
@@ -744,10 +755,12 @@ function SkillActionEditor({
 function AgentMessageActionEditor({
   action,
   references,
+  includeSubagents,
   onChange,
 }: {
   action: HookPostAction;
   references: FieldChoice[];
+  includeSubagents: boolean;
   onChange: (config: Record<string, unknown>) => void;
 }) {
   const config = asRecord(action.config);
@@ -840,7 +853,9 @@ function AgentMessageActionEditor({
         </div>
       </div>
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-        当前回答结束并执行 Hook 后，这条消息会进入原会话的下一回合队列，不会加载 Skill。
+        {includeSubagents
+          ? '主代理结束时，消息进入原会话的下一回合队列；子代理结束时，消息交给该子代理，让它继续自己的任务。'
+          : '当前回答结束并执行 Hook 后，这条消息会进入原会话的下一回合队列。'}
       </div>
     </div>
   );
@@ -969,6 +984,7 @@ function PostActionsEditor({
   onChange: (actions: HookPostAction[]) => void;
 }) {
   const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
+  const includeSubagents = resolveIncludeSubagents(hook);
   const matchedTool = findMatchedTool(resources, hook.matcher.value, hook.matcher.mode);
   const matchedMcpTool = resources.mcpTools.find((tool) => tool.name === matchedTool?.name);
   const canAddMcpLoop = hook.eventName === 'PostToolUse'
@@ -1016,7 +1032,7 @@ function PostActionsEditor({
           <Database className="h-4 w-4" />
           记录数据
         </Button>
-        <Tooltip content={canAddMcpLoop ? '暂停当前 Agent，复用首次调用参数循环调用 Matcher 命中的 MCP，命中终止条件后恢复。' : '请先让 PostToolUse Matcher 完整匹配一个已发布的 MCP 工具；一个 Hook 最多配置一次循环。'}>
+        <Tooltip content={canAddMcpLoop ? `暂停触发此 Hook 的 Agent，复用首次调用参数循环调用 MCP，命中终止条件后恢复。${includeSubagents ? ' 子代理会等待自己的工具循环完成。' : ''}` : '请先让 PostToolUse Matcher 完整匹配一个已发布的 MCP 工具；一个 Hook 最多配置一次循环。'}>
           <span>
             <Button
               type="button"
@@ -1030,7 +1046,7 @@ function PostActionsEditor({
             </Button>
           </span>
         </Tooltip>
-        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
+        <Tooltip content={canQueueAgentTurn ? includeSubagents ? '主代理在原会话的下一回合调用 Skill；子代理收到 Skill 内容后继续自己的任务。' : '回答正常或异常结束后，启动一个新的模型回合调用 Skill。' : '调用 Skill 仅适用于回答结束或回答异常结束。'}>
           <span>
             <Button
               type="button"
@@ -1044,7 +1060,7 @@ function PostActionsEditor({
             </Button>
           </span>
         </Tooltip>
-        <Tooltip content={canQueueAgentTurn ? '回答正常或异常结束后，把消息排入原会话的下一回合。' : '发送 Agent 消息仅适用于回答结束或回答异常结束。'}>
+        <Tooltip content={canQueueAgentTurn ? includeSubagents ? '主代理的消息排入原会话下一回合；子代理收到消息后继续自己的任务。' : '回答正常或异常结束后，把消息排入原会话的下一回合。' : '发送 Agent 消息仅适用于回答结束或回答异常结束。'}>
           <span>
             <Button
               type="button"
@@ -1090,8 +1106,8 @@ function PostActionsEditor({
                   : action.type === 'write_record'
                     ? '记录数据'
                     : action.type === 'invoke_skill'
-                      ? '调用 Skill（恢复回合）'
-                      : '发送 Agent 消息（下一回合）'}
+                      ? includeSubagents ? '调用 Skill（继续任务）' : '调用 Skill（恢复回合）'
+                      : includeSubagents ? '发送 Agent 消息（继续任务）' : '发送 Agent 消息（下一回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
               <Button
@@ -1116,6 +1132,7 @@ function PostActionsEditor({
               ) : action.type === 'mcp_loop_run' ? (
                 <McpLoopActionEditor
                   action={action}
+                  includeSubagents={includeSubagents}
                   matchedTool={matchedMcpTool}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -1128,6 +1145,7 @@ function PostActionsEditor({
               ) : action.type === 'invoke_skill' ? (
                 <SkillActionEditor
                   action={action}
+                  includeSubagents={includeSubagents}
                   resources={resources}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
@@ -1135,6 +1153,7 @@ function PostActionsEditor({
               ) : (
                 <AgentMessageActionEditor
                   action={action}
+                  includeSubagents={includeSubagents}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -1563,6 +1582,7 @@ export default function HookConfigEditor({
                     const eventName = value as HookEventName;
                     updateDraft({
                       eventName,
+                      includeSubagents: canIncludeSubagents(eventName) && resolveIncludeSubagents(hook),
                       matcher: {},
                       extensionLogic: hook.extensionLogic
                         ? { ...hook.extensionLogic, failClosed: eventName === 'Stop' ? hook.extensionLogic.failClosed : undefined }
@@ -1590,6 +1610,40 @@ export default function HookConfigEditor({
                   maxLength={1000}
                 />
               </label>
+            </div>
+            <div className="mt-4 rounded-xl border border-border bg-muted/20 px-3 py-3">
+              {canIncludeSubagents(hook.eventName) ? (
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p id="hook-include-subagents-label" className="text-xs font-medium text-foreground">同时对子代理生效</p>
+                    <p id="hook-include-subagents-description" className="mt-1 text-xs leading-5 text-muted-foreground">
+                      开启后，主代理和每个子代理分别执行同一套 Hook 规则；关闭后仅主代理执行。
+                      {hook.eventName === 'Stop' ? ' 子代理结束时也会独立校验，未通过时继续处理自己的任务。' : ' Matcher 仍用于匹配工具名称。'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={resolveIncludeSubagents(hook)}
+                    aria-labelledby="hook-include-subagents-label"
+                    aria-describedby="hook-include-subagents-description"
+                    disabled={busy}
+                    onClick={() => updateDraft({ includeSubagents: !resolveIncludeSubagents(hook) })}
+                    className={cn(
+                      'relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50',
+                      resolveIncludeSubagents(hook) ? 'bg-primary' : 'bg-muted-foreground/30',
+                    )}
+                  >
+                    <span className={cn('inline-block h-4 w-4 rounded-full bg-white transition-transform', resolveIncludeSubagents(hook) ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {hook.eventName === 'SubagentStart' || hook.eventName === 'SubagentStop'
+                    ? '此事件本身针对子代理，无需开启继承；可通过 Matcher 匹配子代理类型。'
+                    : '此事件不支持对子代理独立执行，无需配置子代理继承。'}
+                </p>
+              )}
             </div>
             <HookUserVariablesEditor variables={hook.userVariables || []} onChange={(userVariables) => updateDraft({ userVariables })} />
           </Section>
@@ -1795,7 +1849,9 @@ export default function HookConfigEditor({
           <Section
             number={4}
             title="Hook 后置行为"
-            description="高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以调用 Skill，或直接向 Agent 发送下一回合消息。"
+            description={resolveIncludeSubagents(hook)
+              ? '高级脚本完成后按顺序记录数据或调用 MCP 工具；主代理结束时可在下一回合执行 Skill 或接收消息，子代理结束时由它继续自己的任务。'
+              : '高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以调用 Skill，或直接向 Agent 发送下一回合消息。'}
           >
             <PostActionsEditor
               hook={hook}

@@ -77,6 +77,8 @@ export type NormalizedMessage = {
   tokenBudget?: unknown;
   jobId?: string;
   executionId?: string;
+  agentId?: string;
+  agentType?: string | null;
   hookId?: string;
   hookName?: string;
   actionId?: string;

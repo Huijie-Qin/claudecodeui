@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { groupHookExecutions, likelyWinningUpdatedInput, paginationWindow } from './diagnostics';
+import { getHookExecutionAgent, groupHookExecutions, likelyWinningUpdatedInput, paginationWindow } from './diagnostics';
 import type { HookExecution } from './types';
 
 function execution(overrides: Partial<HookExecution>): HookExecution {
@@ -84,6 +84,23 @@ test('does not guess correlation for events without a tool use id', () => {
   ]);
   assert.equal(groups.length, 2);
   assert.equal(groups.every((group) => group.exact === false), true);
+});
+
+test('identifies the triggering agent from safe fields or historical event input', () => {
+  assert.equal(getHookExecutionAgent(execution({})).label, '主代理');
+  assert.equal(getHookExecutionAgent(execution({ input: { agent_type: 'custom-main' } })).label, '主代理');
+  assert.equal(getHookExecutionAgent(execution({ agentId: 'child-1', agentType: 'reviewer' })).label, '子代理 · reviewer');
+  assert.equal(getHookExecutionAgent(execution({ input: { agent_id: 'child-1', agent_type: 'reviewer' } })).id, 'child-1');
+  assert.equal(getHookExecutionAgent(execution({ eventName: 'SubagentStop' })).label, '子代理');
+});
+
+test('does not merge callback records from distinct subagents', () => {
+  const groups = groupHookExecutions([
+    execution({ id: 'main' }),
+    execution({ id: 'child-1', agentId: 'child-1' }),
+    execution({ id: 'child-2', input: { agent_id: 'child-2' } }),
+  ]);
+  assert.equal(groups.length, 3);
 });
 
 test('builds a stable pagination window around the current page', () => {

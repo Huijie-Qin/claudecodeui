@@ -8,6 +8,7 @@ import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTool
 import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
 
 import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
+import { getHookSubagentLabel } from './hook-config/catalog';
 import {
   buildSkillCandidates,
   getSkillCandidateKey,
@@ -42,6 +43,7 @@ type HookCatalogItem = {
   name: string;
   description?: string;
   eventName?: string;
+  includeSubagents?: boolean;
   version: number;
   postActionTypes?: string[];
   capabilityTags?: string[];
@@ -1166,6 +1168,7 @@ function HookList({
                   <span className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium text-foreground">{hook.name}</span>
                     {hook.eventName ? <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{hook.eventName}</span> : null}
+                    {(!ref || ref.version === hook.version) && getHookSubagentLabel(hook) ? <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{getHookSubagentLabel(hook)}</span> : null}
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">v{ref?.version || hook.version}</span>
                     {unavailable ? <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"><AlertTriangle className="h-3 w-3" />依赖不可用</span> : hook.selectedFallback ? <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"><CheckCircle2 className="h-3 w-3" />已锁定历史版本</span> : <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"><CheckCircle2 className="h-3 w-3" />依赖正常</span>}
                   </span>

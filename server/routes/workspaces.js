@@ -197,6 +197,31 @@ export function createWorkspacesRouter({
     }
   });
 
+  router.get('/:workspaceId/hooks/:hookId/executions/:executionId', (req, res) => {
+    try {
+      const { workspace } = access.requireWorkspace({
+        tenantId: req.tenant.id,
+        userId: req.user.id,
+        workspaceId: Number(req.params.workspaceId),
+      });
+      const availableHook = hookConfigs.listAvailableHooksForContext({
+        userId: req.user.id, tenantId: workspace.tenant_id, workspaceId: workspace.id,
+      }).find((hook) => hook.id === req.params.hookId);
+      if (!availableHook) return res.status(404).json({ error: 'Hook execution not found' });
+      const execution = hookConfigs.getUserExecution({
+        executionId: req.params.executionId,
+        hookId: availableHook.id,
+        userId: req.user.id,
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+      });
+      if (!execution) return res.status(404).json({ error: 'Hook execution not found' });
+      return res.json({ execution });
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
+  });
+
   router.put('/:workspaceId/hooks/:hookId', async (req, res) => {
     try {
       const workspaceId = Number(req.params.workspaceId);

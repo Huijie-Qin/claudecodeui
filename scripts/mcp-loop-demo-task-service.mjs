@@ -35,13 +35,18 @@ function readJsonBody(request) {
 }
 
 function publicTask(task, now) {
-  const complete = now() - task.createdAtMs >= task.durationMs;
+  const observedAtMs = now();
+  const elapsedMs = Math.max(0, observedAtMs - task.createdAtMs);
+  const complete = elapsedMs >= task.durationMs;
   const status = complete ? (task.shouldFail ? 'failed' : 'success') : 'running';
   return {
     task_id: task.id,
     status,
     created_at_ms: task.createdAtMs,
     duration_ms: task.durationMs,
+    observed_at_ms: observedAtMs,
+    elapsed_ms: elapsedMs,
+    finished_at_ms: complete ? task.createdAtMs + task.durationMs : null,
   };
 }
 
@@ -51,6 +56,14 @@ export function createMcpLoopDemoTaskServer({
   createId = () => crypto.randomUUID(),
 } = {}) {
   const tasks = new Map();
+  const observations = [];
+  const startedAtMs = now();
+  const instanceId = crypto.randomUUID();
+  const observeTask = (task, operation) => {
+    const result = publicTask(task, now);
+    observations.push({ operation, ...result });
+    return result;
+  };
   const server = http.createServer(async (request, response) => {
     const pathname = new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname;
     if (request.method === 'GET' && pathname === '/health') {
@@ -68,7 +81,7 @@ export function createMcpLoopDemoTaskServer({
           shouldFail: input?.should_fail === true,
         };
         tasks.set(task.id, task);
-        sendJson(response, 202, publicTask(task, now));
+        sendJson(response, 202, observeTask(task, 'execute_task'));
       } catch (error) {
         sendJson(response, 400, { error: error?.message || String(error) });
       }
@@ -82,13 +95,13 @@ export function createMcpLoopDemoTaskServer({
         sendJson(response, 404, { error: 'task_not_found' });
         return;
       }
-      sendJson(response, 200, publicTask(task, now));
+      sendJson(response, 200, observeTask(task, 'get_task_status'));
       return;
     }
 
     sendJson(response, 404, { error: 'not_found' });
   });
-  server.demoState = { tasks, durationMs };
+  server.demoState = { tasks, durationMs, observations, startedAtMs, instanceId };
   return server;
 }
 

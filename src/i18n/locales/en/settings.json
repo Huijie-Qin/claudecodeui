@@ -1,5 +1,10 @@
 {
   "title": "Settings",
+  "hookDisplay": {
+    "showExecutionDetails": {
+      "label": "Show script and response"
+    }
+  },
   "tabs": {
     "account": "Account",
     "permissions": "Permissions",

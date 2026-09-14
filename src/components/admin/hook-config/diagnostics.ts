@@ -1,5 +1,20 @@
 import type { HookExecution } from './types';
 
+export function getHookExecutionAgent(execution: {
+  eventName: string;
+  agentId?: string | null;
+  agentType?: string | null;
+  input?: unknown;
+}) {
+  const input = execution.input && typeof execution.input === 'object'
+    ? execution.input as Record<string, unknown>
+    : {};
+  const id = execution.agentId || (typeof input.agent_id === 'string' ? input.agent_id : null);
+  const type = execution.agentType || (typeof input.agent_type === 'string' ? input.agent_type : null);
+  const isSubagent = Boolean(id) || execution.eventName === 'SubagentStart' || execution.eventName === 'SubagentStop';
+  return { id, type, isSubagent, label: isSubagent ? `子代理${type ? ` · ${type}` : ''}` : '主代理' };
+}
+
 export type HookExecutionGroup = {
   key: string;
   exact: boolean;
@@ -16,7 +31,7 @@ export function groupHookExecutions(executions: HookExecution[]): HookExecutionG
   for (const execution of executions) {
     const exact = Boolean(execution.toolUseId);
     const key = exact
-      ? `${execution.sessionId || 'no-session'}:${execution.eventName}:${execution.toolUseId}`
+      ? `${execution.sessionId || 'no-session'}:${getHookExecutionAgent(execution).id || 'main'}:${execution.eventName}:${execution.toolUseId}`
       : `execution:${execution.id}`;
     const group = groups.get(key) || {
       key,

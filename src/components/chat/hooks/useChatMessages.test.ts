@@ -2,8 +2,45 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
+import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
+import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
 
 import { normalizedToChatMessages } from './useChatMessages';
+
+test('live and restored child activity exposes cancellation only while its own loop is active', () => {
+  const agent: NormalizedMessage = {
+    id: 'agent', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-12T00:00:01.000Z',
+    kind: 'tool_use', toolId: 'agent-call', toolName: 'Agent', toolInput: { description: 'Child' },
+  };
+  const running: NormalizedMessage = {
+    id: 'child-hook', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-12T00:00:02.000Z',
+    kind: 'hook_activity', activityKind: 'execution', agentId: 'child-a', parentToolUseId: 'agent-call',
+    toolUseId: 'child-status', actionTypes: ['mcp_loop_run'], status: 'running',
+    loopJobId: 'child-loop', loopStatus: 'queued', loopAttemptCount: 2,
+  };
+  for (const messages of [[agent, running], JSON.parse(JSON.stringify([agent, running]))]) {
+    const chat = normalizedToChatMessages(messages);
+    assert.equal(chat.length, 1, 'The main timeline has no duplicate child Hook');
+    const hook = chat[0].subagentState?.messages?.find((message) => message.type === 'hook')?.hookActivity;
+    assert.equal(hook?.loopAttemptCount, 2);
+    assert.equal(getCancellableHookLoopJobId(hook), 'child-loop');
+    const followups = getHookDisplayFollowups(hook, running.timestamp);
+    assert.equal(followups.length, 1, 'Inline child progress fills the shared post-action section');
+    assert.equal(followups[0].loopAttemptCount, 2);
+    assert.equal(getCancellableHookLoopJobId(followups[0]), 'child-loop');
+    assert.deepEqual(hook?.followups, [], 'No main-session follow-up is persisted');
+  }
+  const cancelled: NormalizedMessage = { ...running, status: 'succeeded', loopStatus: 'cancelled',
+    actionResults: [{ actionId: 'loop', actionType: 'mcp_loop_run', output: {
+      deliveredTo: 'subagent', agentId: 'child-a', status: 'cancelled',
+      toolUseResult: { mcpLoop: true, status: 'cancelled', replacesToolUseId: 'child-status' },
+    } }],
+  };
+  const hook = normalizedToChatMessages([agent, cancelled])[0].subagentState?.messages?.[0]?.hookActivity;
+  assert.equal(hook?.loopStatus, 'cancelled');
+  assert.equal(getCancellableHookLoopJobId(hook), undefined);
+  assert.equal((hook?.loopResult as { status: string }).status, 'cancelled');
+});
 
 test('normalizedToChatMessages renders an orphan Hook follow-up as a distinct message type', () => {
   const [hookMessage] = normalizedToChatMessages([{
@@ -262,6 +299,54 @@ test('normalizedToChatMessages recovers pre-marker Skill output within the Stop 
   assert.equal(chatMessages[1].id, 'next-user');
 });
 
+test('child Hook cards preserve agent identity without consuming main-agent output as a Skill follow-up', () => {
+  const childExecution: NormalizedMessage = {
+    id: 'hook_activity_child-execution_execution', sessionId: 'session-1',
+    timestamp: '2026-06-30T00:00:01.000Z', provider: 'claude', kind: 'hook_activity',
+    origin: 'hook', activityKind: 'execution', status: 'succeeded',
+    jobId: 'hook_activity_child-execution_execution', executionId: 'child-execution',
+    hookName: '子代理完成校验', eventName: 'SubagentStop', agentId: 'child-one', agentType: 'reviewer',
+    actionTypes: ['invoke_skill'],
+  };
+  const parentAnswer: NormalizedMessage = {
+    id: 'parent-answer', sessionId: 'session-1', timestamp: '2026-06-30T00:00:02.000Z',
+    provider: 'claude', kind: 'text', role: 'assistant', content: 'All child tasks are complete.',
+  };
+  for (const identity of [
+    { agentId: 'child-one', agentType: 'reviewer', eventName: 'SubagentStop' },
+    { agentId: 'child-one', agentType: 'reviewer', eventName: 'Stop' },
+    { agentId: undefined, agentType: undefined, eventName: 'SubagentStop' },
+  ]) {
+    const result = normalizedToChatMessages([{ ...childExecution, ...identity }, parentAnswer]);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].hookActivity?.agentId, identity.agentId);
+    assert.equal(result[0].hookActivity?.agentType, identity.agentType);
+    assert.deepEqual(result[0].hookActivity?.followups, []);
+    assert.equal(result[1].id, 'parent-answer');
+    assert.equal(result[1].content, parentAnswer.content);
+  }
+});
+
+test('child inline feedback does not create a recovered parent Skill card from an activity marker', () => {
+  const result = normalizedToChatMessages([
+    {
+      id: 'hook_activity_child-execution_execution', sessionId: 'session-1',
+      timestamp: '2026-06-30T00:00:01.000Z', provider: 'claude', kind: 'hook_activity',
+      origin: 'hook', activityKind: 'execution', status: 'succeeded',
+      jobId: 'hook_activity_child-execution_execution', executionId: 'child-execution',
+      agentId: 'child-one', agentType: 'reviewer', eventName: 'SubagentStop', actionTypes: ['invoke_skill'],
+    },
+    {
+      id: 'later-answer', sessionId: 'session-1', timestamp: '2026-06-30T00:00:02.000Z',
+      provider: 'claude', kind: 'text', role: 'assistant', content: 'Main answer remains visible.',
+      hookActivityId: 'hook_activity_child-execution_skill-action',
+    },
+  ]);
+  assert.equal(result.length, 2);
+  assert.deepEqual(result[0].hookActivity?.followups, []);
+  assert.equal(result[1].id, 'later-answer');
+});
+
 test('normalizedToChatMessages groups legacy Hook activities by their shared job id prefix', () => {
   const executionId = 'e412c904-92d8-4551-9e6f-b1359d7e017b';
   const chatMessages = normalizedToChatMessages([
@@ -489,6 +574,35 @@ test('normalizedToChatMessages hides persisted mcp loop scheduling metadata from
   assert.deepEqual(hookMessage.hookActivity?.actionResults?.map((result) => result.actionId), ['audit']);
 });
 
+test('inline child MCP loop terminal outcomes remain visible when Hook transport succeeded', () => {
+  for (const loopStatus of ['succeeded', 'failed', 'timed_out', 'cancelled']) {
+    const finalResult = loopStatus === 'succeeded'
+      ? { status: 'done', answer: 42 }
+      : loopStatus === 'failed'
+        ? { state: 'Rejected', reason: 'Quality check failed' }
+        : { mcpLoop: true, status: loopStatus, error: `Loop ${loopStatus}` };
+    const [message] = normalizedToChatMessages([{
+      id: 'child-loop-execution', sessionId: 'loop-session', provider: 'claude',
+      timestamp: '2026-09-10T00:00:00.000Z', kind: 'hook_activity', activityKind: 'execution',
+      status: 'succeeded', agentId: 'child-one', agentType: 'worker', eventName: 'PostToolUse',
+      actionTypes: ['mcp_loop_run'],
+      actionResults: [{
+        actionId: 'loop', actionType: 'mcp_loop_run',
+        output: {
+          scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-one',
+          status: loopStatus, attemptCount: 3, toolUseResult: finalResult,
+        },
+      }],
+    }]);
+    assert.equal(message.hookActivity?.status, 'succeeded', 'The Hook transport status remains unchanged');
+    assert.equal(message.hookActivity?.loopStatus, loopStatus);
+    assert.equal(message.hookActivity?.loopAttemptCount, 3);
+    assert.deepEqual(message.hookActivity?.loopResult, finalResult);
+    assert.equal(message.hookActivity?.actionResults, undefined, 'Scheduling metadata is not duplicated as a raw result');
+    assert.deepEqual(message.hookActivity?.followups, [], 'Inline child loops do not create a main-session follow-up');
+  }
+});
+
 test('normalizedToChatMessages preserves queued user message state', () => {
   const [queuedMessage] = normalizedToChatMessages([{
     id: 'local_supplement_followup-1',
@@ -630,6 +744,158 @@ test('normalizedToChatMessages keeps the original MCP result on the tool card af
     status: 'running',
   });
   assert.match(String(chatMessages[0].toolResult?.content || ''), /running/);
+});
+
+test('child loop panels retain the initial result in live and restored transcripts without changing model data', () => {
+  for (const restored of [false, true]) {
+    const common = { sessionId: 'session-loop', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+    const initial = { status: 'running', task_id: 'task-child', elapsed_ms: 10 };
+    const final = { status: 'success', task_id: 'task-child', elapsed_ms: 30000 };
+    const childMessages: NormalizedMessage[] = [{
+      ...common, id: 'child-status-use', kind: 'tool_use', toolId: 'child-status',
+      toolName: 'mcp__demo__get_task_status', parentToolUseId: 'parent-agent',
+      toolResult: { content: JSON.stringify(final), isError: false, toolUseResult: final },
+    }, {
+      ...common, id: 'child-status-result', kind: 'tool_result', toolId: 'child-status',
+      content: JSON.stringify(final), toolUseResult: final, parentToolUseId: 'parent-agent',
+    }, {
+      ...common, id: 'unrelated-use', kind: 'tool_use', toolId: 'other-status',
+      toolName: 'mcp__demo__get_task_status', parentToolUseId: 'parent-agent',
+      toolResult: { content: 'unrelated-result', isError: false },
+    }];
+    const messages: NormalizedMessage[] = [{
+      ...common, id: 'parent-agent', kind: 'tool_use', toolId: 'parent-agent', toolName: 'Agent',
+      ...(restored ? {
+        subagentMessages: childMessages,
+        subagentTools: [{ toolId: 'child-status', toolName: 'mcp__demo__get_task_status',
+          toolResult: childMessages[0].toolResult, timestamp: common.timestamp }],
+      } : {}),
+    }, ...(restored ? [] : childMessages), {
+      ...common, id: 'loop-hook', kind: 'hook_activity', activityKind: 'execution',
+      agentId: 'child-agent', toolUseId: 'child-status', status: 'succeeded',
+      actionTypes: ['mcp_loop_run'], actionResults: [{
+        actionId: 'loop', actionType: 'mcp_loop_run', output: {
+          deliveredTo: 'subagent', agentId: 'child-agent', status: 'succeeded',
+          initialResult: initial, toolUseResult: final,
+        },
+      }],
+    }];
+    const before = JSON.stringify(messages);
+    const cards = normalizedToChatMessages(messages);
+    const agent = cards.find((card) => card.toolId === 'parent-agent');
+    const panelTool = agent?.subagentState?.messages?.find((card) => card.toolId === 'child-status');
+    assert.deepEqual(panelTool?.toolResult?.toolUseResult, initial);
+    assert.deepEqual(JSON.parse(String(panelTool?.toolResult?.content)), initial);
+    assert.deepEqual(JSON.parse(String(agent?.subagentState?.childTools?.find((tool) => tool.toolId === 'child-status')?.toolResult?.content)), initial);
+    assert.equal(agent?.subagentState?.messages?.find((card) => card.toolId === 'other-status')?.toolResult?.content, 'unrelated-result');
+    assert.equal(cards.some((card) => card.type === 'hook'), false, 'Child Hooks do not duplicate into the main conversation');
+    assert.deepEqual(agent?.subagentState?.messages?.find((card) => card.type === 'hook')?.hookActivity?.loopResult, final);
+    assert.equal(JSON.stringify(messages), before, 'Rendering must not mutate model-facing data');
+  }
+});
+
+test('child Hook cards route into concurrent child timelines for live and historical tool events', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const history of ['live', 'transcript', 'compact']) {
+    for (const status of ['running', 'succeeded', 'failed']) {
+      const messages: NormalizedMessage[] = [];
+      for (const child of ['a', 'b']) {
+        const tool: NormalizedMessage = {
+          ...common, id: `tool-${child}`, kind: 'tool_use', toolId: `tool-${child}`,
+          toolName: 'mcp__demo__status', parentToolUseId: `agent-${child}`,
+          toolResult: { content: 'running', isError: false },
+        };
+        messages.push({
+          ...common, id: `agent-${child}`, toolId: `agent-${child}`, kind: 'tool_use', toolName: 'Agent',
+          toolInput: { subagent_type: 'general-purpose' },
+          ...(history === 'transcript' ? { subagentMessages: [tool] } : {}),
+          ...(history === 'compact' ? { subagentTools: [tool] } : {}),
+        });
+        if (history === 'live') messages.push(tool);
+      }
+      for (const child of ['b', 'a']) {
+        messages.push({
+          ...common, id: `hook-${child}`, kind: 'hook_activity', activityKind: 'execution',
+          timestamp: '2026-09-12T00:00:01.000Z', status, agentId: `child-${child}`,
+          agentType: 'general-purpose', toolUseId: `tool-${child}`, actionTypes: ['mcp_loop_run'],
+        });
+      }
+      messages.push({ ...common, id: 'main-hook', kind: 'hook_activity', status, eventName: 'Stop' });
+      const result = normalizedToChatMessages(messages);
+      assert.deepEqual(result.map((card) => card.id), ['agent-a', 'agent-b', 'main-hook']);
+      for (const child of ['a', 'b']) {
+        const timeline = result.find((card) => card.toolId === `agent-${child}`)?.subagentState?.messages || [];
+        assert.deepEqual(timeline.map((card) => card.toolId || card.id), [`tool-${child}`, `hook-${child}`]);
+        assert.equal(timeline[1].hookActivity?.status, status);
+        assert.equal(timeline[1].hookActivity?.agentId, `child-${child}`);
+      }
+    }
+  }
+});
+
+test('child Hooks route by explicit parent before tools arrive and by agent identity on SubagentStop', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const hookIdentity of [
+    { parentToolUseId: 'agent-tool', agentId: 'child-a', eventName: 'PreToolUse' },
+    { agentId: 'child-a', eventName: 'SubagentStop' },
+  ]) {
+    const result = normalizedToChatMessages([{
+      ...common, id: 'agent', toolId: 'agent-tool', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    }, {
+      ...common, id: 'child-hook', kind: 'hook_activity', status: 'running', ...hookIdentity,
+    }, {
+      ...common, id: 'main-answer', kind: 'text', role: 'assistant', content: 'Parent answer',
+    }]);
+    assert.deepEqual(result.map((card) => card.id), ['agent', 'main-answer']);
+    assert.equal(result[0].subagentState?.messages?.[0].id, 'child-hook');
+  }
+});
+
+test('unresolved child Hooks stay visible and do not attach to a same-type unrelated agent', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  const result = normalizedToChatMessages([{
+    ...common, id: 'agent', toolId: 'agent-tool', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    toolInput: { subagent_type: 'general-purpose' },
+  }, {
+    ...common, id: 'orphan', kind: 'hook_activity', agentId: 'unknown-child', agentType: 'general-purpose',
+  }, {
+    ...common, id: 'other-session', kind: 'hook_activity', sessionId: 's2', agentId: 'child-a',
+  }]);
+  assert.deepEqual(result.map((card) => card.id), ['agent', 'orphan', 'other-session']);
+  assert.deepEqual(result[0].subagentState?.messages, []);
+});
+
+test('child Hook cards follow a legacy Task alias into the canonical Agent panel without duplication', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const explicitParent of [false, true]) {
+    const result = normalizedToChatMessages([{
+      ...common, id: 'legacy', toolId: 'legacy', kind: 'tool_use', toolName: 'Task', agentId: 'child-a',
+    }, {
+      ...common, id: 'hook', kind: 'hook_activity', agentId: 'child-a', status: 'succeeded',
+      ...(explicitParent ? { parentToolUseId: 'legacy' } : {}),
+    }, {
+      ...common, id: 'agent', toolId: 'agent', kind: 'tool_use', toolName: 'Agent', agentId: 'child-a',
+    }]);
+    assert.equal(result.some((card) => card.type === 'hook'), false);
+    assert.deepEqual(result.find((card) => card.toolId === 'agent')?.subagentState?.messages?.map((card) => card.id), ['hook']);
+  }
+});
+
+test('child loop display snapshots require the exact session, tool and child identity', () => {
+  const common = { sessionId: 's1', provider: 'claude' as const, timestamp: '2026-09-12T00:00:00.000Z' };
+  for (const mismatch of [
+    { sessionId: 'other-session' }, { toolUseId: 'other-tool' }, { agentId: 'other-agent' },
+  ]) {
+    const cards = normalizedToChatMessages([{
+      ...common, id: 'tool', kind: 'tool_use', toolId: 'tool', toolName: 'mcp__demo__status',
+      toolResult: { content: 'original', isError: false },
+    }, {
+      ...common, id: 'hook', kind: 'hook_activity', toolUseId: 'tool', agentId: 'child', ...mismatch,
+      actionResults: [{ actionId: 'loop', actionType: 'mcp_loop_run',
+        output: { deliveredTo: 'subagent', agentId: 'child', initialResult: { status: 'running' } } }],
+    }]);
+    assert.equal(cards[0].toolResult?.content, 'original');
+  }
 });
 
 test('normalizedToChatMessages attaches the final MCP loop result to its Hook card', () => {
@@ -879,6 +1145,41 @@ test('normalizedToChatMessages keeps an async Agent card running before its noti
   assert.equal(agentCard.subagentState?.isComplete, false);
   assert.equal(agentCard.subagentState?.agentId, 'agent-1');
   assert.equal(agentCard.toolResult, null);
+});
+
+test('normalizedToChatMessages preserves a restored running child identity and two tools without a parent result', () => {
+  const invocation: NormalizedMessage = {
+    id: 'running-agent', sessionId: 'session-1', timestamp: '2026-09-11T08:00:00.000Z', provider: 'claude',
+    kind: 'tool_use', toolName: 'Agent', toolId: 'parent-agent-tool', agentId: 'restored-child',
+    toolInput: { description: 'Wait for the twenty-minute task', run_in_background: false },
+    subagentTools: [
+      {
+        toolId: 'execute-task', toolName: 'mcp__tasks__execute_task', toolInput: {},
+        timestamp: '2026-09-11T08:00:01.000Z',
+        toolResult: { content: '{"task_id":"task-1","status":"running"}', isError: false },
+      },
+      {
+        toolId: 'get-status', toolName: 'mcp__tasks__get_task_status', toolInput: { task_id: 'task-1' },
+        timestamp: '2026-09-11T08:00:02.000Z',
+      },
+    ],
+  };
+  const [agentCard] = normalizedToChatMessages([invocation]);
+  assert.equal(agentCard.subagentState?.agentId, 'restored-child');
+  assert.equal(agentCard.subagentState?.isComplete, false);
+  assert.equal(agentCard.toolResult, null);
+  assert.equal(agentCard.toolCompletedAt, undefined);
+  assert.deepEqual(agentCard.subagentState?.childTools.map((tool) => tool.toolId), ['execute-task', 'get-status']);
+  assert.equal(agentCard.subagentState?.childTools[0].toolResult?.content, '{"task_id":"task-1","status":"running"}');
+  assert.equal(agentCard.subagentState?.childTools[1].toolResult, null);
+
+  const cardsWithProgress = normalizedToChatMessages([invocation, {
+    id: 'child-progress', sessionId: 'session-1', timestamp: '2026-09-11T08:01:00.000Z', provider: 'claude',
+    kind: 'task_notification', taskId: 'restored-child', status: 'running', summary: 'Still waiting for the task',
+  }]);
+  assert.equal(cardsWithProgress.length, 1, 'A later task-id-only update must associate with the restored invocation');
+  assert.equal(cardsWithProgress[0].taskNotification?.summary, 'Still waiting for the task');
+  assert.equal(cardsWithProgress[0].subagentState?.isComplete, false);
 });
 
 test('normalizedToChatMessages attaches a task notification to its Agent card', () => {

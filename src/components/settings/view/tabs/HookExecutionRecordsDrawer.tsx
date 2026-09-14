@@ -10,6 +10,9 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import { getHookExecutionAgent } from '../../../admin/hook-config/diagnostics';
+import UserHookExecutionDetails from '../../../hooks/UserHookExecutionDetails';
+
 export type UserHookDataRecord = {
   id: string;
   type: string;
@@ -26,6 +29,8 @@ export type UserHookExecution = {
   eventName: string;
   sessionId: string | null;
   status: 'running' | 'succeeded' | 'failed';
+  agentId?: string | null;
+  agentType?: string | null;
   durationMs: number | null;
   startedAtMs: number | null;
   startedAt: string | null;
@@ -38,6 +43,7 @@ type RecordsHook = {
 };
 
 type HookExecutionRecordsDrawerProps = {
+  workspaceId: number;
   hook: RecordsHook;
   executions: UserHookExecution[];
   standaloneRecords: UserHookStandaloneRecord[];
@@ -102,6 +108,7 @@ function recordEntries(data: unknown) {
 }
 
 export default function HookExecutionRecordsDrawer({
+  workspaceId,
   hook,
   executions,
   standaloneRecords,
@@ -115,13 +122,14 @@ export default function HookExecutionRecordsDrawer({
   onLoadMore,
 }: HookExecutionRecordsDrawerProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const detailsOpenRef = useRef(false);
   const [copiedRecordId, setCopiedRecordId] = useState<string | null>(null);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || detailsOpenRef.current) return;
       event.stopPropagation();
       onClose();
     };
@@ -303,6 +311,9 @@ export default function HookExecutionRecordsDrawer({
                         {isFailed ? '失败' : isSucceeded ? '已完成' : '执行中'}
                       </span>
                       <span className="text-xs text-muted-foreground">{execution.eventName}</span>
+                      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {getHookExecutionAgent(execution).label}
+                      </span>
                       <span className="ml-auto text-[11px] text-muted-foreground">{formatExecutionTime(execution)}</span>
                     </div>
                     <div className="space-y-3 p-3">
@@ -311,9 +322,17 @@ export default function HookExecutionRecordsDrawer({
                         {execution.sessionId ? (
                           <code className="truncate" title={execution.sessionId}>会话 {shortSessionId(execution.sessionId)}</code>
                         ) : <span>无会话标识</span>}
+                        {execution.agentId ? <code className="truncate" title={execution.agentId}>代理 {shortSessionId(execution.agentId)}</code> : null}
                       </div>
 
                       {execution.records.map(renderDataRecord)}
+                      <UserHookExecutionDetails
+                        workspaceId={workspaceId}
+                        hookId={hook.id}
+                        hookName={hook.name}
+                        executionId={execution.id}
+                        onOpenChange={(open) => { detailsOpenRef.current = open; }}
+                      />
                     </div>
                   </article>
                 );

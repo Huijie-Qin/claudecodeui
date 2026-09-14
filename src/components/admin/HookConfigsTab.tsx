@@ -41,6 +41,7 @@ import {
   EVENT_GROUPS,
   createEmptyHook,
   createHookCopyDraft,
+  getHookSubagentLabel,
   shouldShowBusinessData,
 } from './hook-config/catalog';
 import { createHookDraftSignature } from './hook-config/editorUtils';
@@ -559,7 +560,6 @@ function HookUserBindingsDialog({
   scope,
   defaultEnabled,
   defaultShowInChat,
-  overwriteUserPreferences,
   users,
   tenants,
   selectedUserIds,
@@ -571,7 +571,7 @@ function HookUserBindingsDialog({
   onScopeChange,
   onDefaultEnabledChange,
   onDefaultShowInChatChange,
-  onOverwriteUserPreferencesChange,
+  onOverwrite,
   onToggle,
   onToggleTenant,
   onBatchChange,
@@ -582,7 +582,6 @@ function HookUserBindingsDialog({
   scope: HookBindingScope;
   defaultEnabled: boolean;
   defaultShowInChat: boolean;
-  overwriteUserPreferences: boolean;
   users: HookBindingUser[];
   tenants: HookBindingTenant[];
   selectedUserIds: number[];
@@ -594,7 +593,7 @@ function HookUserBindingsDialog({
   onScopeChange: (scope: HookBindingScope) => void;
   onDefaultEnabledChange: (enabled: boolean) => void;
   onDefaultShowInChatChange: (showInChat: boolean) => void;
-  onOverwriteUserPreferencesChange: (overwrite: boolean) => void;
+  onOverwrite: () => void;
   onToggle: (userId: number) => void;
   onToggleTenant: (tenantId: number) => void;
   onBatchChange: (ids: number[], selected: boolean) => void;
@@ -710,19 +709,6 @@ function HookUserBindingsDialog({
           </div>
 
           <div className="space-y-3 rounded-xl border border-border p-3">
-            <label className="flex cursor-pointer items-start gap-3 border-b border-border pb-3">
-              <input
-                type="checkbox"
-                checked={overwriteUserPreferences}
-                disabled={loading || saving}
-                onChange={(event) => onOverwriteUserPreferencesChange(event.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-primary"
-              />
-              <span>
-                <span className="block text-xs font-medium">{t('hooks.bindings.overwriteUserPreferences')}</span>
-                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{t('hooks.bindings.overwriteUserPreferencesHint')}</span>
-              </span>
-            </label>
             <label className="flex cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
@@ -935,6 +921,17 @@ function HookUserBindingsDialog({
           ) : null}
           <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
             {t('hooks.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onOverwrite}
+            title={t('hooks.bindings.overwriteUserPreferencesHint')}
+            disabled={loading || saving || selectionCount === 0}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {t('hooks.bindings.overwriteUserPreferences')}
           </Button>
           <Button
             type="button"
@@ -1242,7 +1239,6 @@ export default function HookConfigsTab() {
   const [bindingScope, setBindingScope] = useState<HookBindingScope>('users');
   const [bindingDefaultEnabled, setBindingDefaultEnabled] = useState(false);
   const [bindingDefaultShowInChat, setBindingDefaultShowInChat] = useState(true);
-  const [bindingOverwriteUserPreferences, setBindingOverwriteUserPreferences] = useState(false);
   const [bindingUsers, setBindingUsers] = useState<HookBindingUser[]>([]);
   const [bindingTenants, setBindingTenants] = useState<HookBindingTenant[]>([]);
   const [selectedBindingUserIds, setSelectedBindingUserIds] = useState<number[]>([]);
@@ -1426,7 +1422,6 @@ export default function HookConfigsTab() {
     setBindingScope('users');
     setBindingDefaultEnabled(false);
     setBindingDefaultShowInChat(true);
-    setBindingOverwriteUserPreferences(false);
     setBindingUsers([]);
     setBindingTenants([]);
     setSelectedBindingUserIds([]);
@@ -1459,7 +1454,7 @@ export default function HookConfigsTab() {
     }
   };
 
-  const saveHookBindings = async () => {
+  const saveHookBindings = async (overwriteUserPreferences = false) => {
     if (!bindingsHook) return;
     setBindingsSaving(true);
     setBindingsError(null);
@@ -1470,7 +1465,7 @@ export default function HookConfigsTab() {
         tenantIds: bindingScope === 'tenants' ? selectedBindingTenantIds : [],
         defaultEnabled: bindingDefaultEnabled,
         defaultShowInChat: bindingDefaultShowInChat,
-        overwriteUserPreferences: bindingOverwriteUserPreferences,
+        overwriteUserPreferences,
       });
       if (!response.ok) throw new Error(await readError(response, t('hooks.bindings.saveError')));
       const payload = await response.json() as { hook: HookConfig };
@@ -1490,7 +1485,7 @@ export default function HookConfigsTab() {
         });
       }
       setBindingsHook(null);
-      showToast(t(`hooks.bindings.savedScopes.${bindingScope}`), 'success');
+      showToast(t(overwriteUserPreferences ? 'hooks.bindings.overwritten' : `hooks.bindings.savedScopes.${bindingScope}`), 'success');
     } catch (caughtError) {
       setBindingsError(caughtError instanceof Error ? caughtError.message : t('hooks.bindings.saveError'));
     } finally {
@@ -1880,7 +1875,6 @@ export default function HookConfigsTab() {
       scope={bindingScope}
       defaultEnabled={bindingDefaultEnabled}
       defaultShowInChat={bindingDefaultShowInChat}
-      overwriteUserPreferences={bindingOverwriteUserPreferences}
       users={bindingUsers}
       tenants={bindingTenants}
       selectedUserIds={selectedBindingUserIds}
@@ -1900,7 +1894,7 @@ export default function HookConfigsTab() {
       onScopeChange={setBindingScope}
       onDefaultEnabledChange={setBindingDefaultEnabled}
       onDefaultShowInChatChange={setBindingDefaultShowInChat}
-      onOverwriteUserPreferencesChange={setBindingOverwriteUserPreferences}
+      onOverwrite={() => void saveHookBindings(true)}
       onToggle={(userId) => setSelectedBindingUserIds((current) => (
         current.includes(userId) ? current.filter((id) => id !== userId) : [...current, userId]
       ))}
@@ -1938,7 +1932,7 @@ export default function HookConfigsTab() {
         if (bindingScope === 'users') setSelectedBindingUserIds([]);
         if (bindingScope === 'tenants') setSelectedBindingTenantIds([]);
       }}
-      onSave={() => void saveHookBindings()}
+      onSave={() => void saveHookBindings(false)}
     />
   );
 
@@ -2393,6 +2387,7 @@ export default function HookConfigsTab() {
 
                   <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge variant="outline">{t(`hooks.events.${hook.eventName}.label`)}</Badge>
+                    {getHookSubagentLabel(hook) ? <Badge variant="outline">{getHookSubagentLabel(hook)}</Badge> : null}
                     <span>
                       {hook.extensionLogic
                         ? hook.extensionLogic.language === 'python' ? 'Python' : 'JavaScript'

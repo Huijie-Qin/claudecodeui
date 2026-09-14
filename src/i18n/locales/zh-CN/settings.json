@@ -1,5 +1,10 @@
 {
   "title": "设置",
+  "hookDisplay": {
+    "showExecutionDetails": {
+      "label": "显示脚本与响应"
+    }
+  },
   "tabs": {
     "account": "账户",
     "permissions": "权限",

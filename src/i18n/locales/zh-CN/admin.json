@@ -581,12 +581,13 @@
       },
       "loadError": "加载 Hook 用户范围失败",
       "saveError": "保存 Hook 用户范围失败",
-      "overwriteUserPreferences": "覆盖用户已有配置（仅本次保存）",
-      "overwriteUserPreferencesHint": "默认关闭，正常发布和保存不会覆盖用户已有的启用、对话展示设置。打开后，本次保存会用下方两项设置覆盖所选范围内用户的配置；用户之后仍可修改。",
+      "overwriteUserPreferences": "覆盖用户配置",
+      "overwriteUserPreferencesHint": "将当前启用和对话展示设置应用到所选范围，覆盖用户已有配置。用户之后仍可修改。",
+      "overwritten": "已覆盖所选范围内用户的启用和对话展示配置",
       "defaultEnabled": "默认启用",
-      "defaultEnabledHint": "未开启覆盖时，保留用户已有的启用选择，仅更新默认值。缺少必填个人变量时需先补齐。",
+      "defaultEnabledHint": "“保存配置”仅更新默认值，保留用户已有的启用选择；点击“覆盖用户配置”才会覆盖。缺少必填个人变量时需先补齐。",
       "defaultShowInChat": "在对话中展示",
-      "defaultShowInChatHint": "未开启覆盖时，保留用户已有的展示选择，仅更新默认值。关闭展示不影响 Hook 执行和执行记录。"
+      "defaultShowInChatHint": "“保存配置”保留用户已有的展示选择；点击“覆盖用户配置”才会覆盖。关闭展示不影响 Hook 执行和执行记录。"
     },
     "deleteTitle": "删除 Hook",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",

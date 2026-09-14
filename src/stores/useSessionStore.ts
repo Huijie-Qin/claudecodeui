@@ -79,6 +79,8 @@ export interface NormalizedMessage {
   executionId?: string;
   hookId?: string;
   hookName?: string;
+  agentId?: string;
+  agentType?: string | null;
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
   eventName?: string;

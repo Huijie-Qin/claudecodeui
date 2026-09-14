@@ -7,6 +7,7 @@ import {
 } from '../database/agent-template-folder-migration.js';
 
 import { normalizeTemplateFolders } from './agent-template-folders.js';
+import { resolveIncludeSubagents } from '../../shared/hookSubagents.js';
 import { agentTemplateFolderAssetStore } from './agent-template-folder-assets.js';
 
 const TEMPLATE_STATUSES = new Set(['draft', 'published', 'disabled']);
@@ -378,6 +379,10 @@ function buildHookSnapshot(inspections) {
       description: row.description || '',
       version: Number(row.version || 0),
       eventName: row.event_name,
+      includeSubagents: resolveIncludeSubagents({
+        eventName: row.event_name,
+        includeSubagents: row.include_subagents == null ? undefined : row.include_subagents === 1,
+      }),
       defaultEnabled: ref.defaultEnabled,
       showInChat: ref.showInChat,
       allowUserDisable: ref.allowUserDisable,
@@ -537,6 +542,7 @@ export function createAgentTemplateService(database = db, {
       status: 'published',
       binding_controller: config.bindingController === 'sql_check' ? 'sql_check' : 'admin',
       event_name: config.eventName || '',
+      include_subagents: resolveIncludeSubagents(config) ? 1 : 0,
       matcher_json: JSON.stringify(config.matcher || {}),
       extension_logic_json: JSON.stringify(config.extensionLogic || null),
       post_actions_json: JSON.stringify(config.postActions || []),
@@ -606,7 +612,11 @@ export function createAgentTemplateService(database = db, {
       id: row.id,
       name: row.name,
       description: row.description || '',
-      eventName: row.event_name,
+      eventName: definitionRow.event_name,
+      includeSubagents: resolveIncludeSubagents({
+        eventName: definitionRow.event_name,
+        includeSubagents: definitionRow.include_subagents == null ? undefined : definitionRow.include_subagents === 1,
+      }),
       version: Number(row.version || 0),
       status: row.status,
       bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',

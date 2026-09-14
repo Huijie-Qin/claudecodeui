@@ -9,8 +9,9 @@ import {
   readObjectRecord,
 } from '@/shared/utils.js';
 
-import { readClaudeDisplayMetadata } from './claude-display-command-store.js';
 import { orderSupplementMessages } from '../../../../../shared/messageDisplayOrder.js';
+
+import { readClaudeDisplayMetadata } from './claude-display-command-store.js';
 
 const PROVIDER: 'claude' = 'claude';
 
@@ -154,6 +155,26 @@ function normalizeTaskStatus(status: unknown): string | undefined {
 }
 
 export class ClaudeSessionsProvider implements IProviderSessions {
+  private normalizeSubagentMessages(
+    rawMessages: unknown[],
+    sessionId: string | null,
+    parentToolUseId: string,
+  ): NormalizedMessage[] {
+    return rawMessages.flatMap((subagentRaw) => {
+      const nested = this.normalizeMessage(subagentRaw, sessionId, null, true);
+      const rawRecord = readObjectRecord(subagentRaw);
+      const nestedParentToolUseId = typeof rawRecord?.parentToolUseId === 'string'
+        ? rawRecord.parentToolUseId
+        : typeof rawRecord?.parent_tool_use_id === 'string'
+          ? rawRecord.parent_tool_use_id
+          : parentToolUseId;
+      return nested.map((subagentMessage) => ({
+        ...subagentMessage,
+        parentToolUseId: subagentMessage.parentToolUseId || nestedParentToolUseId,
+      }));
+    });
+  }
+
   /**
    * Normalizes one Claude JSONL entry or live SDK stream event into the shared
    * message shape consumed by REST and WebSocket clients.
@@ -429,6 +450,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               ...attachUsage(),
             }));
           } else if (part.type === 'tool_use') {
+            const invocation = part.name === 'Agent' || part.name === 'Task'
+              ? readObjectRecord(readObjectRecord(raw.subagentInvocations)?.[part.id])
+              : null;
             messages.push(createNormalizedMessage({
               id: `${baseId}_${partIndex}`,
               sessionId,
@@ -438,6 +462,13 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolName: part.name,
               toolInput: part.input,
               toolId: part.id,
+              ...(invocation ? {
+                ...(typeof invocation.agentId === 'string' ? { agentId: invocation.agentId } : {}),
+                subagentTools: invocation.subagentTools,
+                ...(Array.isArray(invocation.subagentMessages) ? {
+                  subagentMessages: this.normalizeSubagentMessages(invocation.subagentMessages, sessionId, part.id),
+                } : {}),
+              } : {}),
             }));
           } else if (part.type === 'thinking' && part.thinking) {
             messages.push(createNormalizedMessage({
@@ -578,21 +609,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           isError: toolResult.isError,
           toolUseResult: toolResult.toolUseResult,
         };
-        msg.subagentTools = toolResult.subagentTools;
+        if (toolResult.subagentTools !== undefined) msg.subagentTools = toolResult.subagentTools;
         if (Array.isArray(toolResult.subagentMessages)) {
-          msg.subagentMessages = toolResult.subagentMessages.flatMap((subagentRaw) => {
-            const nested = this.normalizeMessage(subagentRaw, sessionId, null, true);
-            const rawRecord = readObjectRecord(subagentRaw);
-            const nestedParentToolUseId = typeof rawRecord?.parentToolUseId === 'string'
-              ? rawRecord.parentToolUseId
-              : typeof rawRecord?.parent_tool_use_id === 'string'
-                ? rawRecord.parent_tool_use_id
-                : msg.toolId;
-            return nested.map((subagentMessage) => ({
-              ...subagentMessage,
-              parentToolUseId: subagentMessage.parentToolUseId || nestedParentToolUseId,
-            }));
-          });
+          msg.subagentMessages = this.normalizeSubagentMessages(toolResult.subagentMessages, sessionId, msg.toolId);
         }
       }
     }

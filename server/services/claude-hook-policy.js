@@ -1,5 +1,5 @@
 export function isRequiredStopHook(hook) {
-  return hook?.eventName === 'Stop' && hook.extensionLogic?.failClosed === true;
+  return ['Stop', 'SubagentStop'].includes(hook?.eventName) && hook.extensionLogic?.failClosed === true;
 }
 
 export function createRequiredStopHookError(cause) {

@@ -109,6 +109,8 @@ export interface HookActivityDetails {
   executionId?: string;
   hookId?: string;
   hookName?: string;
+  agentId?: string;
+  agentType?: string;
   activityKind?: 'execution' | 'followup';
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';

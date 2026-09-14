@@ -171,6 +171,38 @@ test('Hook execution cards omit mcp loop scheduling metadata from action results
   assert.equal(results.some((result) => result.actionType === 'mcp_loop_run'), false);
 });
 
+test('Hook execution cards preserve terminal inline child loop outcomes alongside arbitrary tool results', async () => {
+  const { createHookCardActionResults } = await import('./claude-sdk.js');
+  for (const status of ['succeeded', 'failed', 'timed_out', 'cancelled']) {
+    const output = {
+      scheduled: true, jobId: 'child-job', deliveredTo: 'subagent', agentId: 'child-a', status, attemptCount: 3,
+      toolUseResult: { rows: 3 },
+    };
+    assert.deepEqual(createHookCardActionResults({
+      postActions: [{ id: 'child-loop', type: 'mcp_loop_run' }],
+    }, {
+      'child-loop': { output },
+    }), [{ actionId: 'child-loop', actionType: 'mcp_loop_run', output }]);
+  }
+});
+
+test('Hook activity preserves the owning Agent invocation only for child events', async () => {
+  const { createHookExecutionActivityDescriptor } = await import('./claude-sdk.js');
+  const input = {
+    hook: { id: 'hook', name: 'Wait', eventName: 'PostToolUse' },
+    executionId: 'execution', startedAt: 1000, parentToolUseId: 'agent-invocation',
+    loop: { jobId: 'child-loop', status: 'queued', attemptCount: 1 },
+  };
+  const child = createHookExecutionActivityDescriptor({
+    ...input, event: { agent_id: 'child-a', agent_type: 'worker', tool_use_id: 'status-call' },
+  });
+  assert.equal(child.parentToolUseId, 'agent-invocation');
+  assert.equal(child.toolUseId, 'status-call');
+  assert.deepEqual(child.loop, input.loop);
+  const main = createHookExecutionActivityDescriptor({ ...input, event: { tool_use_id: 'main-call' } });
+  assert.equal(Object.hasOwn(main, 'parentToolUseId'), false);
+});
+
 test('Docker Hook headersHelper receives the same per-exec USER_KEY as Claude', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const calls = [];

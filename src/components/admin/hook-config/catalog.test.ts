@@ -6,7 +6,9 @@ import {
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  createEmptyHook,
   createHookCopyDraft,
+  getHookSubagentLabel,
   getClaudeOutputFields,
   inferNativeMatcherMode,
   shouldShowBusinessData,
@@ -157,9 +159,35 @@ test('copying a Hook creates an independent draft without runtime identity or bi
   assert.equal(copy.name, 'SQL 分析（副本）');
   assert.equal('id' in copy, false);
   assert.equal('activationScope' in copy, false);
+  assert.equal(copy.includeSubagents, true);
   assert.deepEqual(copy.postActions, hook.postActions);
   copy.postActions[0].config.fields = { copied: true };
   assert.deepEqual(hook.postActions[0].config.fields, {});
+});
+
+test('new Hooks require an explicit opt-in to run inside subagents', () => {
+  for (const { name } of EVENT_DEFINITIONS) {
+    assert.equal(createEmptyHook(name).includeSubagents, false, name);
+  }
+});
+
+test('copying preserves explicit subagent choices and historical event defaults', () => {
+  for (const includeSubagents of [false, true]) {
+    const copy = createHookCopyDraft({ ...draft, includeSubagents } as HookConfig, '副本');
+    assert.equal(copy.includeSubagents, includeSubagents);
+  }
+  assert.equal(createHookCopyDraft(draft as HookConfig, '旧工具 Hook 副本').includeSubagents, true);
+  assert.equal(createHookCopyDraft({ ...draft, eventName: 'Stop' } as HookConfig, '旧 Stop Hook 副本').includeSubagents, false);
+});
+
+test('subagent labels distinguish opt-in, historical defaults, and native child events', () => {
+  assert.equal(getHookSubagentLabel(createEmptyHook('PreToolUse')), '仅主代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'PreToolUse' }), '主代理和子代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'Stop' }), '仅主代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'Stop', includeSubagents: true }), '主代理和子代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'SubagentStart' }), '子代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'SubagentStop' }), '子代理');
+  assert.equal(getHookSubagentLabel({ eventName: 'SessionStart' }), null);
 });
 
 test('native matcher mode is inferred from the text sent to Claude Code', () => {
