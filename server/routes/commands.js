@@ -44,8 +44,8 @@ async function scanCommandsDirectory(dir, baseDir, namespace) {
 
           // Calculate relative path from baseDir for command name
           const relativePath = path.relative(baseDir, fullPath);
-          // Remove .md extension and convert to command name
-          const commandName = '/' + relativePath.replace(/\.md$/, '').replace(/\\/g, '/');
+          // Flatten subdirectories into the invocation name, retaining the file path for execution.
+          const commandName = '/' + relativePath.replace(/\.md$/, '').replace(/[\\/]/g, '-');
 
           // Extract description from frontmatter or first line of content
           let description = frontmatter.description || '';
@@ -248,7 +248,9 @@ Custom commands can be created in:
 
 ### Command Syntax
 
+- **Subdirectories**: \`backend/database/check.md\` becomes \`/backend-database-check\`. Keep the joined names unique.
 - **Arguments**: Use \`$ARGUMENTS\` for all args or \`$1\`, \`$2\`, etc. for positional
+- **Extra input**: When no argument placeholders are present, arguments are appended to the instructions.
 - **File Includes**: Use \`@filename\` to include file contents
 - **Bash Commands**: Use \`!command\` to execute bash commands
 
@@ -641,7 +643,7 @@ router.post('/execute', async (req, res) => {
     let processedContent = commandContent;
 
     // Preserve the original whitespace (including newlines) for $ARGUMENTS and
-    // skill user requests. Fall back to the token list for older clients.
+    // command and skill user requests. Fall back to the token list for older clients.
     const argsString = typeof rawArgs === 'string' ? rawArgs.trim() : args.join(' ');
     const hasArgumentPlaceholder = /\$(?:ARGUMENTS|\d+\b)/.test(commandContent);
     processedContent = processedContent.replace(/\$ARGUMENTS/g, argsString);
@@ -652,7 +654,7 @@ router.post('/execute', async (req, res) => {
       processedContent = processedContent.replace(new RegExp(`\\${placeholder}\\b`, 'g'), arg);
     });
 
-    if (path.basename(commandPath) === 'SKILL.md' && argsString && !hasArgumentPlaceholder) {
+    if (argsString && !hasArgumentPlaceholder) {
       processedContent = `${processedContent.trim()}\n\n## User request\n\n${argsString}\n`;
     }
 
