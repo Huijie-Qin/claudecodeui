@@ -82,6 +82,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
     handleSave,
     handleDownload,
     reloadFile,
+    reloadToken,
   } = useCodeEditorDocument({
     file,
     projectPath,
@@ -114,6 +115,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   }, [handleSave, isReadOnly]);
 
   saveLatestRef.current = saveLatestContent;
+
+  const handleRefreshPreview = async () => {
+    // Preserve pending source edits before reloading the preview from the file.
+    if (await saveLatestContent()) {
+      reloadFile();
+    }
+  };
 
   useImperativeHandle(ref, () => ({ save: saveLatestContent }), [saveLatestContent]);
 
@@ -322,6 +330,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
             saving={saving}
             saveSuccess={saveSuccess}
             onTogglePreview={() => setPreviewEnabled((previous) => !previous)}
+            onRefreshPreview={() => void handleRefreshPreview()}
             onOpenSettings={() => window.openSettings?.('appearance')}
             onDownload={handleDownload}
             onSave={saveLatestContent}
@@ -335,6 +344,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
               previewMarkdown: t('actions.previewMarkdown'),
               editHtml: t('actions.editHtml', 'Edit HTML'),
               previewHtml: t('actions.previewHtml', 'Preview HTML'),
+              refreshHtml: t('actions.refreshHtml', 'Refresh HTML preview'),
               settings: t('toolbar.settings'),
               download: t('actions.download'),
               save: t('actions.save'),
@@ -353,6 +363,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
           )}
           <div className="flex-1 overflow-hidden">
             <CodeEditorSurface
+              key={reloadToken}
               content={content}
               onChange={handleContentChange}
               readOnly={isReadOnly}

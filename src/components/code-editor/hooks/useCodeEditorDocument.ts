@@ -193,6 +193,10 @@ export const useCodeEditorDocument = ({
     isBinary,
     handleSave,
     handleDownload,
-    reloadFile: () => setReloadToken((current) => current + 1),
+    reloadToken,
+    reloadFile: () => {
+      setLoading(true);
+      setReloadToken((current) => current + 1);
+    },
   };
 };

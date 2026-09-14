@@ -1,4 +1,4 @@
-import { Code2, Download, Eye, Maximize2, Minimize2, Save, Settings as SettingsIcon, X } from 'lucide-react';
+import { Code2, Download, Eye, Maximize2, Minimize2, RefreshCw, Save, Settings as SettingsIcon, X } from 'lucide-react';
 
 import type { CodeEditorFile } from '../../types/types';
 
@@ -14,6 +14,7 @@ type CodeEditorHeaderProps = {
   saveSuccess: boolean;
   isReadOnly?: boolean;
   onTogglePreview: () => void;
+  onRefreshPreview: () => void;
   onOpenSettings: () => void;
   onDownload: () => void;
   onSave: () => void;
@@ -26,6 +27,7 @@ type CodeEditorHeaderProps = {
     previewMarkdown: string;
     editHtml: string;
     previewHtml: string;
+    refreshHtml: string;
     settings: string;
     download: string;
     save: string;
@@ -47,6 +49,7 @@ export default function CodeEditorHeader({
   saveSuccess,
   isReadOnly = false,
   onTogglePreview,
+  onRefreshPreview,
   onOpenSettings,
   onDownload,
   onSave,
@@ -136,6 +139,19 @@ export default function CodeEditorHeader({
             title={previewTitle}
           >
             {previewEnabled ? <Code2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        )}
+
+        {previewMode === 'html' && previewEnabled && (
+          <button
+            type="button"
+            onClick={onRefreshPreview}
+            disabled={saving}
+            className="flex items-center justify-center rounded-md p-1.5 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            title={labels.refreshHtml}
+            aria-label={labels.refreshHtml}
+          >
+            <RefreshCw className="h-4 w-4" />
           </button>
         )}
 

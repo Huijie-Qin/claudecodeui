@@ -14,6 +14,7 @@
     "showingChanges": "Showing changes"
   },
   "actions": {
+    "refreshHtml": "Refresh HTML preview",
     "download": "Download file",
     "save": "Save",
     "saving": "Saving...",
