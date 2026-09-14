@@ -21,6 +21,24 @@ test('new Skill menu has direct and shared-template paths without premature navi
  assert.match(ui,/if\(a==='new'\|\|a==='upload'\)\{newDialog/);
  vm.runInContext('templatePickerDialog()',ctx);assert.equal(ctx.route,'mine');assert.match(ctx.dialogBody,/使用|选择模板/);assert.match(ctx.dialogBody,/data-catalog-search="picker"/);
 });
+test('catalog clear action is an in-field icon shown only when there is input',()=>{
+ for(const scope of ['templates','snippets','picker']){
+  ctx.queries[scope]='';
+  const empty=vm.runInContext('catalogSearchView("'+scope+'")',ctx);
+  assert.match(empty,/class="search-clear"[^>]* hidden>/);
+  assert.doesNotMatch(empty,/>清空</);
+  vm.runInContext('updateCatalogSearch("'+scope+'","文字")',ctx);
+  assert.equal(search.hidden,false);
+  const filled=vm.runInContext('catalogSearchView("'+scope+'")',ctx);
+  assert.match(filled,/aria-label="清除搜索"/);
+  assert.doesNotMatch(filled,/ hidden>/);
+  vm.runInContext('updateCatalogSearch("'+scope+'","")',ctx);
+  assert.equal(search.hidden,true);
+ }
+ assert.match(html,/\.catalog-search \.search\{[^}]*padding-right:44px/);
+ const clearAction=section("if(a==='catalog-clear')", "if(a==='chat-template-select'");
+ assert.match(clearAction,/input\.value='';input\.focus\(\)/);
+});
 test('all search surfaces trim keywords, match case-insensitively and respect scope',()=>{
  ctx.queries.templates=' orders ';assert.equal(vm.runInContext('catalogItems("templates")[0].id',ctx),'sales');
  ctx.queries.picker='secret';assert.equal(vm.runInContext('catalogItems("picker").length',ctx),0);
