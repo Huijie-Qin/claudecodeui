@@ -95,11 +95,11 @@ test('case confirmation is owner-only and cannot accept empty input', () => {
   assert.throws(()=>M.confirmCaseDraft(s,k.id,c.id,M.caseStamp(k)),/负责人/);
   s.user='lin';assert.throws(()=>M.saveCaseDraft(s,k.id,null,{title:'test',input:'',expected:'x',required:true},M.caseStamp(k)),/不能为空/);
 });
-test('received includes every collaborated skill request; views can overlap', () => {
+test('received includes owned or administered skills; all members browse requests from market', () => {
   const s=M.createState();s.user='chen';
-  assert.equal(M.visiblePrs(s,'received').length,3);
+  assert.equal(M.visiblePrs(s,'received').length,2);
   assert.equal(M.visiblePrs(s,'sent').length,1);
-  assert.ok(M.visiblePrs(s,'received').some(p=>p.id===M.visiblePrs(s,'sent')[0].id));
+  assert.equal(M.skillPrs(s,'sales').length,2);
 });
 test('contributions freeze files and never publish on submit', () => {
   const s=M.createState();s.user='chen';M.sync(s,'sales',true);
@@ -146,11 +146,11 @@ test('published reports are bound to remote content and exclude private case dat
   assert.equal(JSON.stringify(M.publishedReport(s,k.id)),published);
   k.remoteAt='2099-01-01T00:00:00Z';assert.equal(M.publishedReport(s,k.id),null);
 });
-test('PR merge attaches exactly the owner-run submitted report to the market', () => {
+test('PR merge leaves updated market content unmeasured', () => {
   const s=M.createState(),p=s.prs.find(p=>p.id==='PR-028');
   M.evaluate(s,'sales','passed',p.id);const id=p.report.id;
-  M.publish(s,'sales',p.id);assert.equal(M.publishedReport(s,'sales').id,id);
-  assert.equal(M.skill(s,'sales').marketReport.content,M.canonical(p.files));
+  M.publish(s,'sales',p.id);assert.equal(M.publishedReport(s,'sales'),null);
+  assert.equal(M.canonical(M.skill(s,'sales').remoteFiles),M.canonical(p.files));
 });
 test('example market report is independent of the dirty local working copy', () => {
   const s=M.createState(),k=M.skill(s,'sales');
@@ -168,8 +168,8 @@ test('only the current owner may change management, including against admin bypa
 test('helper and category edits preserve file content, timestamps and evaluation', () => {
   const s=M.createState(),k=M.skill(s,'weekly');M.evaluate(s,k.id,'passed');
   const before=JSON.stringify([k.files,k.remoteFiles,k.importedRemoteAt,k.remoteAt,k.localEditedAt,k.report]);
-  M.updateManagement(s,k.id,{collaborators:['chen','zhou','chen'],category:'开发效率'},M.managementStamp(k));
-  assert.equal(k.collaborators.join(','),'chen,zhou');assert.equal(k.category,'开发效率');
+  M.updateManagement(s,k.id,{category:'开发效率'},M.managementStamp(k));
+  assert.equal(k.collaborators.length,0);assert.equal(k.category,'开发效率');
   assert.equal(JSON.stringify([k.files,k.remoteFiles,k.importedRemoteAt,k.remoteAt,k.localEditedAt,k.report]),before);
   assert.equal(M.eligible(s,k.id).allowed,true);
 });
@@ -187,7 +187,7 @@ test('stale management forms cannot overwrite newer changes', () => {
   M.updateManagement(s,k.id,{category:'文档协作'},stamp);
   assert.throws(()=>M.updateManagement(s,k.id,{collaborators:[]},stamp),/已变化/);
   assert.throws(()=>M.transferOwner(s,k.id,'chen',false,stamp),/已变化/);
-  assert.equal(k.owner,'lin');assert.equal(k.collaborators.join(','),'chen');
+  assert.equal(k.owner,'lin');assert.equal(k.collaborators.length,0);
 });
 test('transfer removes the new owner from helpers and immediately revokes former owner', () => {
   const s=M.createState(),k=M.skill(s,'sales');
@@ -198,14 +198,13 @@ test('transfer removes the new owner from helpers and immediately revokes former
   assert.throws(()=>M.publish(s,k.id),/负责人/);
   s.user='chen';assert.equal(M.owner(s,k),true);
 });
-test('keeping the former owner as helper grants review visibility but not publication', () => {
+test('former owners may review publicly but lose merge and received permissions', () => {
   const s=M.createState(),k=M.skill(s,'sales');
-  M.transferOwner(s,k.id,'chen',true,M.managementStamp(k));
-  assert.equal(k.collaborators.join(','),'lin');assert.equal(M.collaborator(s,k),true);
-  assert.equal(M.visiblePrs(s,'received').filter(p=>p.skillId===k.id).length,2);
+  M.transferOwner(s,k.id,'chen',false,M.managementStamp(k));
+  assert.equal(k.collaborators.length,0);assert.equal(M.collaborator(s,k),false);
+  assert.equal(M.visiblePrs(s,'received').filter(p=>p.skillId===k.id).length,0);
+  assert.equal(M.skillPrs(s,k.id).length,2);
   assert.equal(M.eligible(s,k.id,'PR-028').allowed,false);
-  s.user='chen';M.updateManagement(s,k.id,{collaborators:[]},M.managementStamp(k));
-  s.user='lin';assert.equal(M.visiblePrs(s,'received').filter(p=>p.skillId===k.id).length,0);
 });
 test('transfer preserves published evidence and requires a new-owner run', () => {
   const s=M.createState(),k=M.skill(s,'weekly');M.evaluate(s,k.id,'passed');M.publish(s,k.id);

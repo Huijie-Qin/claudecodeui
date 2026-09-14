@@ -1,5 +1,9 @@
 # 已废弃：Skill 版本、发布与贡献详细设计
 
+> **2026-09-14 已更新**：本文保留早期演进背景。当前契约请阅读 [文件化用例与自动落盘方案](2026-09-14-skill-eval-file-and-auto-write-design.md) 及 [主方案](../../skill-market-v2.0-需求设计说明书.md)。模板/片段对普通用户可见只读；负责人指定 Skill 管理员并授予正常合并/发布权限；所有用例存evals/evals.json 且直接保存；全部串行运行；优化为完整前测 → 自动落盘 → 完整后测，不再确认或采用。旧文中的草稿/候选/角色限制不再作为实现依据。
+
+> 后续规则覆盖：本文有关协助人、贡献测评、评审与合并的设计已由 [2026-09-11 贡献开放评审方案](2026-09-11-skill-contribution-open-review-design.md) 替代，请勿按旧规则实施。
+
 > 2026-09-09 最新决定：Skill 不区分版本，不再提供历史版本查看、版本对比或回滚；导入更新按远端更新时间与成功导入时保存的远端更新时间比较，本地修改时间不参与。当前实施依据已迁移至 [Skill 发布、贡献与市场更新设计（无版本）](/Users/theseus/Documents/Codex/2026-08-24/github-cli-gh-codex-pull-request/claudecodeui/docs/superpowers/specs/2026-09-09-skill-publish-contribution-design.md)。下文仅保留为废弃设计记录，不能用于生成实施任务；原先的“已确认版本规则”、版本数据表/API、历史迁移和版本核实方案均不再适用。
 
 日期：2026-09-08

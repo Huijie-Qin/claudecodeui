@@ -18,10 +18,10 @@ test('non-owner optimization adopts only personal content and never publishes',(
  assert.notEqual(M.canonical(M.localState(s,k).files),original);assert.equal(M.canonical(k.files),original);assert.equal(M.canonical(k.remoteFiles),market);assert.equal(M.suiteKey(k),suite);assert.equal(k.report,null);assert.equal(k.remoteAt,remoteAt);assert.equal(k.importedRemoteAt,imported);assert.equal(s.events.length,0);assert.throws(()=>M.publish(s,k.id),/负责人/);
  s.user='zhou';assert.equal(M.canonical(M.localState(s,k).files),original);assert.equal(k.report,null);
 });
-test('contribution contains the personal candidate but requires fresh owner evaluation',()=>{
+test('contribution contains the personal candidate and owner may merge without evaluation',()=>{
  const {s,k}=fixture(),j=M.startOptimization(s,M.prepareOptimization(s,k.id).id);finish(s,j);M.adoptOptimization(s,j.id);
- const p=M.contribute(s,k.id,'本地优化贡献','请负责人验收');assert.equal(M.canonical(p.files),M.canonical(j.files));assert.equal(p.report,null);
- s.user='zhou';assert.equal(M.eligible(s,k.id,p.id).allowed,false);M.evaluate(s,k.id,'passed',p.id);assert.equal(M.eligible(s,k.id,p.id).allowed,true);
+ const p=M.contribute(s,k.id,'本地优化贡献','请负责人验收');assert.equal(M.canonical(p.files),M.canonical(j.files));assert.equal(p.report,undefined);
+ s.user='zhou';assert.equal(M.eligible(s,k.id,p.id).allowed,true);
 });
 test('local reports cannot become formal by copying or transferring ownership',()=>{
  const {s,k}=fixture(),r=M.evaluateLocal(s,k.id,'passed');s.user='zhou';k.report={...M.clone(r),initiatedBy:'zhou',ownerAtRun:'zhou'};

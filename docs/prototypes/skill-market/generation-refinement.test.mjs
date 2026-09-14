@@ -45,13 +45,20 @@ test('candidate changes during refinement prevent stale completion',()=>{
  const {M,s,j}=setup(),a=M.startGenerationRefinement(s,j.id,'过期修改',M.canonical(j.files));j.files['SKILL.md']+='\n并发内容';
  M.finishGenerationRefinement(s,j.id,a.id);assert.equal(j.refinement.status,'error');assert.doesNotMatch(j.files['SKILL.md'],/过期修改/);
 });
-test('result UI exposes feedback, running cancellation and escaped adjustment summary',()=>{
- const {ctx,M,s,j}=setup(),ui=scripts[1][1];
- function section(a,b){return ui.slice(ui.indexOf(a),ui.indexOf(b,ui.indexOf(a)))}
- vm.runInContext(`const names={lin:'林舟'};const refinementDrafts=new Map();let generationFile='SKILL.md';const generationSteps=[];${section('const esc=','function toast(')}${section('function markdown(','function clearDebug(')}${section('function generationView(','function adminView(')}`,ctx);
- ctx.job=j;let out=vm.runInContext('generationView(job)',ctx);assert.match(out,/还需要调整什么/);assert.match(out,/继续修改/);assert.match(out,/确认保存到我的技能/);
- const a=M.startGenerationRefinement(s,j.id,'<img src=x onerror=alert(1)>',M.canonical(j.files));out=vm.runInContext('generationView(job)',ctx);assert.match(out,/取消本次修改/);assert.match(out,/data-action="generation-adopt"[^>]*disabled/);
- M.finishGenerationRefinement(s,j.id,a.id);out=vm.runInContext('generationView(job)',ctx);assert.doesNotMatch(out,/<img/);assert.match(out,/&lt;img/);
- M.adoptGeneration(s,j.id);out=vm.runInContext('generationView(job)',ctx);assert.doesNotMatch(out,/generation-feedback|data-action="generation-refine"/);
+test('template creation is routed into chat and materializes automatically',()=>{
+ assert.match(html,/button\('在会话中使用','template-use'/);
+ assert.match(html,/id="chat-name"/);
+ assert.match(html,/技能标识/);
+ assert.match(html,/M\.finishGeneration\(S,job\.id,'success'\).*M\.adoptGeneration\(S,job\.id\)/s);
+ assert.doesNotMatch(html,/确认保存到我的技能|data-action="generation-adopt"|function useTemplateDialog/);
+});
+test('template name remains explicit and model validation survives conversation retries',()=>{
+ const {M,s,j}=setup();
+ const size=s.generationJobs.length,t=s.templates[0];
+ assert.throws(()=>M.startGeneration(s,t.id,{...j.input,name:''},M.templateStamp(t)),/请填写技能标识/);
+ for(const name of ['Sales Name','-sales','sales--analysis','sales_1'])assert.throws(()=>M.startGeneration(s,t.id,{...j.input,name},M.templateStamp(t)),/技能标识仅支持/);
+ assert.equal(s.generationJobs.length,size);
+ const a=M.startGenerationRefinement(s,j.id,'补充输出要求',M.canonical(j.files));M.finishGenerationRefinement(s,j.id,a.id);
+ const k=M.adoptGeneration(s,j.id);assert.match(k.files['SKILL.md'],/^---\nname: refinement-demo\n/);assert.equal(k.name,'refinement-demo');
 });
 console.log(`${count} generation refinement checks passed. Prototype only.`);
