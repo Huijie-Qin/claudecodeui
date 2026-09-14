@@ -127,8 +127,12 @@ test('run and optimize stay on evaluation page without touching conversation sta
  assert.equal((out.match(/data-action="table-detail"/g)||[]).length,M.readEval(k).evals.length+1);
 });
 test('toolbar aligns three primary controls and only uses the canonical nested file',()=>{
- assert.match(html,/\.eval-toolbar\{display:flex;align-items:center;justify-content:flex-start/);
- const {M,S}=fixture();for(const k of S.skills){assert.ok(k.files['evals/evals.json']);assert.equal(k.files['eval.json'],undefined)}
+ assert.match(html,/\.eval-heading>\.eval-toolbar\{margin-left:auto;justify-content:flex-end\}/);
+ const {M,S,view}=fixture();
+ const header=view(M.skill(S,'sales')).split('</header>')[0];
+ assert.match(header,/<div class="eval-heading"><h2>技能测评<\/h2><div class="eval-toolbar row">/);
+ for(const action of ['table-run','opt-open','case-new'])assert.match(header,new RegExp('data-action="'+action+'"'));
+ for(const k of S.skills){assert.ok(k.files['evals/evals.json']);assert.equal(k.files['eval.json'],undefined)}
 });
 test('full visible messages retain order, subagent output and both optimization runs',()=>{
  const {M,S}=fixture(),k=M.skill(S,'sales');M.startFileEvaluation(S,k.id,true);const j=finish(M,S,k);

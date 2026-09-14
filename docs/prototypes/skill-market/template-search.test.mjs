@@ -13,6 +13,7 @@ let count=0;function test(name,f){f();count++;console.log('PASS '+name)}
 test('icon-bearing search inputs share sufficient placeholder and text padding',()=>{
  assert.match(html,/\.search-wrap>\.ui-icon\{left:12px;width:16px;height:16px;pointer-events:none\}/);
  assert.match(html,/\.search-wrap>\.search\{padding-left:40px\}/);
+ assert.match(html,/\.chat-input\{min-height:112px\}/);
  assert.ok(40-12-16>=12,'leave at least 12px between the icon and input text');
 });
 test('new Skill menu has direct and shared-template paths without premature navigation',()=>{

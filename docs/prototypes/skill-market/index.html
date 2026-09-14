@@ -79,6 +79,9 @@
     @media(max-width:767px){.pr-diff-layout{grid-template-columns:minmax(0,1fr)}.pr-files{border-right:0;border-bottom:1px solid var(--line);max-height:215px;overflow:auto}.pr-diff-scroll{max-height:430px}}
     /* 所有带图标的搜索框共用留白，placeholder 和输入内容都避开图标。 */
     .search-wrap>.ui-icon{left:12px;width:16px;height:16px;pointer-events:none}.search-wrap>.search{padding-left:40px}
+    .chat-input{min-height:112px}
+    .eval-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.eval-heading h2{flex-shrink:0}.eval-heading>.eval-toolbar{margin-left:auto;justify-content:flex-end}.eval-heading-note{margin-top:8px}
+    @media(max-width:767px){.eval-heading>.eval-toolbar{width:100%;margin-left:0;justify-content:flex-start}}
     .catalog-search{margin:16px 0 12px}.catalog-search .search-wrap{flex:1;min-width:160px;max-width:560px}.catalog-search .search{width:100%;max-width:none;min-width:0;padding-right:44px}.search-clear{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:5px;background:transparent;color:var(--muted);padding:0}.search-clear:hover{background:var(--soft);color:var(--ink)}.search-clear .ui-icon{width:14px;height:14px}.catalog-count{margin-bottom:12px}.create-skill-menu{z-index:35}.create-skill-menu .eval-add-options{z-index:35}
     dialog.eval-output-dialog{width:1280px;max-width:calc(100vw - 28px)}
     .eval-output-scroll{overflow-x:auto;margin-top:16px}.eval-output-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}.eval-output-grid.compare{grid-template-columns:repeat(2,minmax(0,1fr));min-width:760px}
@@ -837,10 +840,10 @@
       const passed=results.filter(c=>c.status==='passed').length;
       const phase=j?.phase==='before'?(j?.optimize?'第一遍 · 串行运行全部':'串行运行全部'):j?.phase==='optimize'?'根据实际与预期优化 Skill':'第二遍 · 串行复测全部';
       const conclusion=error?error:stale?'内容或用例已变化，旧结果已失效':running?phase+' · '+(Math.min(j.cursor+1,rows.length))+' / '+rows.length:j?.state==='cancelled'?'任务已停止':j?.state==='failed'||j?.state==='stale'?j.reason:current?(j?.written?'修改已保存；':j?.noChange?'无需修改；':'')+passed+' / '+rows.length+' 个用例通过':market?'未测评':'尚未运行';
-      return '<section class="stack evaluation-sheet"><div class="section-heading"><div><h2>技能测评</h2><p class="small muted">用例文件：evals/evals.json · 按文件顺序串行执行 · 预期与实际逐条对比</p></div></div>'+
+      return '<section class="stack evaluation-sheet"><header><div class="eval-heading"><h2>技能测评</h2>'+
         (market?'':'<div class="eval-toolbar row">'+button('运行全部','table-run',k.id,'',!editable||running||!!error)+button('自动优化','opt-open',k.id,'',!editable||running||!!error)+
         '<details class="eval-add"><summary class="button">添加验证场景 <span aria-hidden="true">⌄</span></summary><div class="eval-add-options" aria-label="添加验证场景方式">'+button('AI准备场景','case-generate',k.id,'',!editable||running)+button('添加场景','case-new',k.id,'',!editable||running)+'</div></details>'+
-        (running?button('停止','file-eval-stop',k.id,'danger'):'')+(j?.written?button('查看 Skill 修改对比','file-eval-diff',k.id):'')+'</div>')+
+        (running?button('停止','file-eval-stop',k.id,'danger'):'')+(j?.written?button('查看 Skill 修改对比','file-eval-diff',k.id):'')+'</div>')+'</div><p class="small muted eval-heading-note">用例文件：evals/evals.json · 按文件顺序串行执行 · 预期与实际逐条对比</p></header>'+
         '<div class="eval-summary" aria-live="polite"><strong>'+esc(conclusion)+'</strong>'+(j?.written?'<p class="small muted">改动已自动保存到我的技能，不需要确认或采用；尚未发布。复测失败也会保留已保存修改。</p>':'')+(r&&market?'<p class="small muted">发布测评人 '+esc(names[r.publishedBy||r.initiatedBy])+' · 当前发布内容的只读报告</p>':'')+'</div>'+
         (error?notice(esc(error),'warning'):'')+
         '<div class="eval-table-scroll" role="region" tabindex="0" aria-label="测评结果，可左右滚动"><table class="evaluation-table"><thead><tr><th>验证场景</th><th>预期结果</th><th>'+(j?.optimize?'优化前':'运行结果')+'</th>'+(j?.optimize?'<th>优化后</th>':'')+'<th>操作</th></tr></thead><tbody>'+
