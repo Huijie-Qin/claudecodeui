@@ -820,6 +820,49 @@ test('submitMarketSkill submits the complete imported skill directory', async ()
   );
 });
 
+test('skill creator permissions ignore username case and still reject other or missing users', async () => {
+  const workspacePath = await makeWorkspace();
+  await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
+  await writeLegacyMarketImport(workspacePath, 'bug-hunter', {
+    name: 'bug-hunter',
+    id: 'bug-hunter',
+    createUserId: TEST_ACCOUNT_ID.toUpperCase(),
+    bindingType: 'published',
+    origin: 'local',
+    version: 1,
+  });
+
+  for (const currentUsername of [TEST_ACCOUNT_ID, TEST_ACCOUNT_ID.toUpperCase()]) {
+    const options = withTenant({ workspacePath, name: 'bug-hunter', currentUsername });
+    const detail = await getSkillMarketDetail(options);
+    assert.equal(detail.canPublish, true);
+    assert.equal(detail.canUnpublish, true);
+    assert.equal((await getMarketSkillPublishState(options)).canPublish, true);
+    assert.equal((await getMarketSkillPublishPreview(options)).skill.name, 'bug-hunter');
+  }
+
+  for (const currentUsername of ['j00939208', '', undefined]) {
+    const options = withTenant({ workspacePath, name: 'bug-hunter', currentUsername });
+    const detail = await getSkillMarketDetail(options);
+    assert.equal(detail.canPublish, false);
+    assert.equal(detail.canUnpublish, false);
+    await assert.rejects(getMarketSkillPublishPreview(options), { statusCode: 403 });
+    await assert.rejects(submitMarketSkill(options), { statusCode: 403 });
+    await assert.rejects(reserveUnpublishMarketSkill({ ...options, confirmation: 'yes' }), {
+      statusCode: 403,
+      code: 'SKILL_UNPUBLISH_NOT_ALLOWED',
+    });
+  }
+
+  const submitted = await submitMarketSkill(withTenant({
+    workspacePath,
+    name: 'bug-hunter',
+    currentUsername: TEST_ACCOUNT_ID.toUpperCase(),
+  }));
+  assert.equal(submitted.publishedVersion, 2);
+  assert.equal(submitted.skill.canPublish, true);
+});
+
 test('submitMarketSkill rejects an empty file before updating the market', async () => {
   const workspacePath = await makeWorkspace();
   await importMarketSkill(withTenant({ workspacePath, name: 'bug-hunter' }));
@@ -1178,7 +1221,7 @@ test('uploadAndPublishLocalSkill suffixes only the market archive directory when
   }
 });
 
-test('reserveUnpublishMarketSkill calls the signed delete API, clears the binding, and retains local files', async () => {
+test('reserveUnpublishMarketSkill accepts creator case differences, calls the signed delete API, and retains local files', async () => {
   const workspacePath = await makeWorkspace();
   const skillPath = path.join(workspacePath, '.claude', 'skills', 'published-local');
   await fs.mkdir(skillPath, { recursive: true });
@@ -1233,7 +1276,7 @@ test('reserveUnpublishMarketSkill calls the signed delete API, clears the bindin
       workspacePath,
       name: 'Published Market Name',
       remoteSkillId: 'published-local-id',
-      currentUsername: TEST_ACCOUNT_ID,
+      currentUsername: TEST_ACCOUNT_ID.toUpperCase(),
       confirmation: 'yes',
     }));
   } finally {

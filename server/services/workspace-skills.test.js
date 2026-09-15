@@ -286,6 +286,28 @@ test('listWorkspaceSkills classifies runtime skills from market import records',
   assert.equal(inventory.skills.find((skill) => skill.name === 'market-skill').localVersion, 3);
 });
 
+test('listWorkspaceSkills matches legacy skill creators without regard to case', async () => {
+  const workspacePath = await makeWorkspace();
+  await writeSkill(path.join(workspacePath, '.claude', 'skills'), 'legacy-skill', '# Legacy Skill\n');
+  const marketImports = [{
+    name: 'legacy-skill',
+    skillId: 'remote-legacy',
+    createUserId: 'lWX00123456',
+    version: 1,
+  }];
+
+  for (const [currentUsername, expectedOrigin] of [
+    ['lwx00123456', 'local'],
+    ['LWX00123456', 'local'],
+    ['lwx001234356', 'market'],
+    ['', 'market'],
+  ]) {
+    const inventory = await listWorkspaceSkills(workspacePath, [], marketImports, { currentUsername });
+    assert.equal(inventory.skills[0].origin, expectedOrigin);
+    assert.equal(inventory.skills[0].bindingType, expectedOrigin === 'local' ? 'published' : 'imported');
+  }
+});
+
 test('listWorkspaceSkills keeps published local skills local and exposes their market binding', async () => {
   const workspacePath = await makeWorkspace();
   await writeSkill(
