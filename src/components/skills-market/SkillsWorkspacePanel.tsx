@@ -1,4 +1,5 @@
 import CodeMirror from '@uiw/react-codemirror';
+import { oneDark } from '@codemirror/theme-one-dark';
 import {
   AlertCircle,
   ArrowLeft,
@@ -19,6 +20,7 @@ import {
 import type { DragEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useTheme } from '../../contexts/ThemeContext';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
@@ -1094,6 +1096,8 @@ function SkillDetailView({
 }
 
 function FileContentView({ content, editing, file, files, onChange, onSelectFile, previewMode }: { content: string; editing: boolean; file: SkillFile; files: WorkspaceSkillEntry[]; onChange: (content: string) => void; onSelectFile: (path: string) => void; previewMode: boolean }) {
+  const { isDarkMode } = useTheme();
+
   if (file.isBinary) {
     if (file.mimeType?.startsWith('image/') && file.contentBase64) {
       return <div className="flex min-h-full items-center justify-center bg-muted/20 p-6"><img src={`data:${file.mimeType};base64,${file.contentBase64}`} alt={file.path} className="max-h-full max-w-full rounded-md border border-border object-contain" /></div>;
@@ -1119,7 +1123,7 @@ function FileContentView({ content, editing, file, files, onChange, onSelectFile
     );
   }
   if (editing) {
-    return <CodeMirror value={content} onChange={onChange} height="100%" style={{ height: '100%', fontSize: '13px' }} basicSetup={{ lineNumbers: true, foldGutter: true, bracketMatching: true, closeBrackets: true }} />;
+    return <CodeMirror value={content} onChange={onChange} theme={isDarkMode ? oneDark : 'light'} height="100%" style={{ height: '100%', fontSize: '13px' }} basicSetup={{ lineNumbers: true, foldGutter: true, bracketMatching: true, closeBrackets: true }} />;
   }
   return <pre className="min-h-full overflow-auto p-4 font-mono text-xs leading-6 text-foreground"><code>{content}</code></pre>;
 }
