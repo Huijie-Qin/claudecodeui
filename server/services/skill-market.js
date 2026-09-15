@@ -5,6 +5,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import { parseFrontmatter } from '../utils/frontmatter.js';
+import { isSkillCreator } from '../utils/skill-ownership.js';
 
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 import { computeSkillDirectoryHash, deleteLocalWorkspaceSkill } from './workspace-skills.js';
@@ -794,7 +795,7 @@ async function unpublishMarketSkillUnlocked({
   if (binding.bindingType !== 'published') {
     throw createHttpError('Only a locally published skill can be unpublished', 403, 'SKILL_UNPUBLISH_NOT_ALLOWED');
   }
-  if (!binding.createUserId || String(binding.createUserId) !== String(currentUsername || '')) {
+  if (!isSkillCreator(binding.createUserId, currentUsername)) {
     throw createHttpError('Only the skill creator can unpublish this skill', 403, 'SKILL_UNPUBLISH_NOT_ALLOWED');
   }
   const remoteSkillId = firstNonEmptyString(binding.id, binding.skillId);
@@ -2327,15 +2328,11 @@ function toLocalImportState(status, remoteSkill, currentUsername) {
   const bindingCreatorId = status.metadataEntry?.createUserId;
   const canPublish = Boolean(
     status.imported
-    && remoteSkill.createUserId
-    && currentUsername
-    && String(remoteSkill.createUserId) === String(currentUsername)
+    && isSkillCreator(remoteSkill.createUserId, currentUsername)
   );
   const canUnpublish = Boolean(
     status.metadataEntry?.bindingType === 'published'
-    && bindingCreatorId
-    && currentUsername
-    && String(bindingCreatorId) === String(currentUsername)
+    && isSkillCreator(bindingCreatorId, currentUsername)
   );
 
   return pruneUndefined({
@@ -2393,7 +2390,7 @@ function ensurePublishAllowed(remoteSkill, status, currentUsername) {
   if (!status.imported) {
     throw createHttpError(`Market skill "${remoteSkill.name}" has not been imported`, status.runtimeExists ? 409 : 404);
   }
-  if (!remoteSkill.createUserId || String(remoteSkill.createUserId) !== String(currentUsername || '')) {
+  if (!isSkillCreator(remoteSkill.createUserId, currentUsername)) {
     throw createHttpError('Only the skill creator can publish updates', 403);
   }
   const importedVersion = normalizeVersion(status.metadataEntry?.version);

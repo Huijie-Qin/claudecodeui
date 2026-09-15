@@ -5,6 +5,8 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import JSZip from 'jszip';
 
+import { isSkillCreator } from '../utils/skill-ownership.js';
+
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 
 const EMPTY_METADATA = Object.freeze({
@@ -1311,9 +1313,7 @@ function resolveSkillOrigin(skill, marketImport, currentUsername) {
   if (firstString(skill?.sourceType) === 'local-upload') return 'local';
   if (
     !marketImport.bindingType
-    && currentUsername
-    && marketImport.createUserId
-    && String(currentUsername) === String(marketImport.createUserId)
+    && isSkillCreator(marketImport.createUserId, currentUsername)
   ) return 'local';
   return 'market';
 }
