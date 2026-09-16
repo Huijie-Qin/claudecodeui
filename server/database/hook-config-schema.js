@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS user_workspace_hook_preferences (
   hook_id TEXT NOT NULL,
   enabled INTEGER CHECK (enabled IS NULL OR enabled IN (0, 1)),
   show_in_chat INTEGER CHECK (show_in_chat IS NULL OR show_in_chat IN (0, 1)),
+  override_template INTEGER NOT NULL DEFAULT 0 CHECK (override_template IN (0, 1)),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (workspace_id, user_id, hook_id),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -426,6 +427,7 @@ ${MCP_LOOP_JOB_SCHEMA_SQL}
 
 export function migrateHookConfigurationModel(database) {
   const columns = database.prepare('PRAGMA table_info(hooks)').all();
+  const workspacePreferenceColumns = database.prepare('PRAGMA table_info(user_workspace_hook_preferences)').all();
   const hasIncludeSubagents = columns.some((column) => column.name === 'include_subagents');
   const hasExtensionLogic = columns.some((column) => column.name === 'extension_logic_json');
   const hasPostActions = columns.some((column) => column.name === 'post_actions_json');
@@ -440,6 +442,9 @@ export function migrateHookConfigurationModel(database) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_bindings'")
     .get());
   const migrate = database.transaction(() => {
+    if (workspacePreferenceColumns.length && !workspacePreferenceColumns.some((column) => column.name === 'override_template')) {
+      database.exec('ALTER TABLE user_workspace_hook_preferences ADD COLUMN override_template INTEGER NOT NULL DEFAULT 0 CHECK (override_template IN (0, 1))');
+    }
     if (!hasIncludeSubagents) {
       // NULL preserves the historical event-specific behavior. New API-created
       // Hooks explicitly store 0 until the administrator enables the switch.
