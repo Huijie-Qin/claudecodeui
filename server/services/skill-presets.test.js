@@ -296,10 +296,13 @@ test('template and tenant uses of the same Skill have independent records and pr
   assert.deepEqual(defaults.installed.map((row) => row.presetId), [tenantPreset.id]);
   const installed = await service.installWorkspaceSkillPreset({ ...args, presetId: template.id });
   assert.equal(installed.installed.reused, true);
-  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), [tenantPreset.name]);
+  assert.equal(installed.installed.skillName, 'code-reviewer');
+  const updated = await service.installWorkspaceSkillPreset({ ...args, presetId: template.id, overwrite: true });
+  assert.equal(updated.installed.skillName, 'code-reviewer');
+  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), ['code-reviewer']);
   service.deletePreset({ tenantId: tenant.id, presetId: template.id });
   assert.equal(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'all_workspaces' })[0].status, 'published');
-  assert.ok(await fs.readFile(path.join(workspacePath, '.claude', 'skills', tenantPreset.name, 'SKILL.md'), 'utf8'));
+  assert.ok(await fs.readFile(path.join(workspacePath, '.claude', 'skills', 'code-reviewer', 'SKILL.md'), 'utf8'));
 });
 
 test('selecting a template Skill cannot change or reuse an existing tenant preinstall', async (t) => {
@@ -319,6 +322,115 @@ test('selecting a template Skill cannot change or reuse an existing tenant prein
   assert.equal(service.listAdminPresets({ tenantId: tenant.id, preinstallScope: 'none' })[0].id, template.id);
 });
 
+async function createTemplateNameCollisionFixture(t) {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const marketService = createFakeMarketService();
+  const service = createSkillPresetService({ multitenancy, marketService });
+  const context = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const tenantPreset = await service.createPreset({ ...context, input: { sourceRef: REMOTE_SKILL.id, preinstall: true } });
+  const template = await service.createPreset({ ...context, input: { sourceRef: REMOTE_SKILL.id, preinstall: false } });
+  assert.match(template.name, /^code-reviewer-[a-f0-9]{10}$/);
+  await service.validatePreset({ ...context, presetId: template.id });
+  service.publishPreset({ ...context, presetId: template.id });
+  return {
+    database, multitenancy, marketService, service, context, tenantPreset, template, workspacePath, workspace, userId,
+    installArgs: { ...context, userId, workspaceId: workspace.id, workspacePath, presetId: template.id },
+  };
+}
+
+test('fresh template installs ignore internal preset suffixes and unowned failed or removed paths', async (t) => {
+  for (const status of [null, 'failed', 'removed']) {
+    await t.test(status || 'no previous install', async (t) => {
+      const { multitenancy, service, template, tenantPreset, workspacePath, workspace, userId, installArgs } = await createTemplateNameCollisionFixture(t);
+      if (status) {
+        multitenancy.skillPresetInstalls.upsertInstall({
+          workspaceId: workspace.id, presetId: template.id, skillName: template.name,
+          installedByUserId: userId, installedVersion: 0, status,
+        });
+      }
+
+      const result = await service.installWorkspaceSkillPreset(installArgs);
+
+      assert.equal(result.installed.skillName, 'code-reviewer');
+      assert.equal((await service.installWorkspaceSkillPreset(installArgs)).installed.skillName, 'code-reviewer');
+      assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), ['code-reviewer']);
+      assert.deepEqual(multitenancy.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }).map((row) => row.name), ['code-reviewer']);
+      assert.equal(multitenancy.skillPresets.getPresetById({ tenantId: installArgs.tenantId, presetId: template.id }).name, template.name);
+      assert.equal(multitenancy.skillPresets.getPresetById({ tenantId: installArgs.tenantId, presetId: tenantPreset.id }).preinstall_scope, 'all_workspaces');
+    });
+  }
+});
+
+test('successful legacy template installations retain suffixed paths across package renames and updates', async (t) => {
+  const { multitenancy, marketService, service, template, workspacePath, workspace, userId, installArgs } = await createTemplateNameCollisionFixture(t);
+  const legacyPath = path.join(workspacePath, '.claude', 'skills', template.name);
+  await fs.mkdir(legacyPath, { recursive: true });
+  await fs.writeFile(path.join(legacyPath, 'SKILL.md'), '# Existing legacy installation\n');
+  multitenancy.skillPresetInstalls.upsertInstall({
+    workspaceId: workspace.id, presetId: template.id, skillName: template.name,
+    installedByUserId: userId, installedVersion: REMOTE_SKILL.version, status: 'installed',
+  });
+  marketService.fetchRemoteSkillDetail = async () => ({ ...REMOTE_SKILL, name: 'renamed-reviewer', version: 8 });
+  marketService.downloadRemoteSkillFiles = async () => ({
+    skillName: 'renamed-reviewer',
+    files: { 'SKILL.md': '---\nname: renamed-reviewer\ndescription: Updated reviewer\n---\n' },
+  });
+
+  for (const overwrite of [false, true]) {
+    const result = await service.installWorkspaceSkillPreset({ ...installArgs, overwrite });
+    assert.equal(result.installed.skillName, template.name);
+    assert.equal(result.installed.skill.runtimePath, legacyPath);
+  }
+  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), [template.name]);
+  assert.match(await fs.readFile(path.join(legacyPath, 'SKILL.md'), 'utf8'), /Updated reviewer/);
+  assert.deepEqual(multitenancy.skillMarketImports.listForWorkspace({ workspaceId: workspace.id }).map((row) => row.name), [template.name]);
+});
+
+test('legacy managed metadata retains its owned suffix even before install tracking exists', async (t) => {
+  const { service, template, workspacePath, installArgs } = await createTemplateNameCollisionFixture(t);
+  const legacySourcePath = path.join(workspacePath, '.cloudcli', 'skills', 'sources', template.name);
+  await fs.mkdir(legacySourcePath, { recursive: true });
+  await fs.writeFile(path.join(legacySourcePath, 'SKILL.md'), '# Legacy source\n');
+  await writeSkillsMetadata(workspacePath, {
+    version: 1,
+    skills: { [template.name]: { name: template.name, enabled: true, managedBy: 'admin-skill-preset', adminPresetId: String(template.id) } },
+  });
+
+  const result = await service.installWorkspaceSkillPreset(installArgs);
+
+  assert.equal(result.installed.skillName, template.name);
+  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), [template.name]);
+  await assert.rejects(fs.access(legacySourcePath), (error) => error?.code === 'ENOENT');
+  assert.deepEqual(await readSkillsMetadata(workspacePath), { version: 1, skills: {} });
+});
+
+test('failed updates retain an existing owned legacy directory on retry', async (t) => {
+  const { multitenancy, marketService, service, template, workspacePath, workspace, userId, installArgs } = await createTemplateNameCollisionFixture(t);
+  const legacyPath = path.join(workspacePath, '.claude', 'skills', template.name);
+  await fs.mkdir(legacyPath, { recursive: true });
+  await fs.writeFile(path.join(legacyPath, 'SKILL.md'), '# Previous installed files\n');
+  multitenancy.skillPresetInstalls.upsertInstall({
+    workspaceId: workspace.id, presetId: template.id, skillName: template.name,
+    installedByUserId: userId, installedVersion: REMOTE_SKILL.version, status: 'installed',
+  });
+  await service.installWorkspaceSkillPreset(installArgs);
+  const originalDownload = marketService.downloadRemoteSkillFiles;
+  marketService.downloadRemoteSkillFiles = async () => ({ skillName: 'code-reviewer', files: { 'SKILL.md': '---\nname: [\n---\n' } });
+  await assert.rejects(service.installWorkspaceSkillPreset({ ...installArgs, overwrite: true }), /invalid SKILL.md/);
+  assert.equal(multitenancy.skillPresetInstalls.listInstallsForWorkspace({ workspaceId: workspace.id, includeRemoved: true })[0].status, 'failed');
+  assert.match(await fs.readFile(path.join(legacyPath, 'SKILL.md'), 'utf8'), /Review code changes/);
+  marketService.downloadRemoteSkillFiles = originalDownload;
+
+  const result = await service.installWorkspaceSkillPreset(installArgs);
+
+  assert.equal(result.installed.skillName, template.name);
+  assert.deepEqual(await fs.readdir(path.join(workspacePath, '.claude', 'skills')), [template.name]);
+});
+
 test('same-name market Skills have independent presets, references and install directories', async (t) => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
@@ -336,18 +448,16 @@ test('same-name market Skills have independent presets, references and install d
     tenantCode: tenant.code,
     accountId: 'admin',
   });
-  const conflictingService = createSkillPresetService({
-    multitenancy,
-    marketService: createFakeMarketService({
-      remoteSkill: {
-        ...REMOTE_SKILL,
-        id: 'other-remote-skill',
-        // Even a legacy alias can repeat: the primary remote ID remains authoritative.
-        skillId: REMOTE_SKILL.skillId,
-      },
-      files: { 'SKILL.md': '---\nname: code-reviewer\ndescription: Another author\n---\nSecond skill\n' },
-    }),
+  const conflictingMarketService = createFakeMarketService({
+    remoteSkill: {
+      ...REMOTE_SKILL,
+      id: 'other-remote-skill',
+      // Even a legacy alias can repeat: the primary remote ID remains authoritative.
+      skillId: REMOTE_SKILL.skillId,
+    },
+    files: { 'SKILL.md': '---\nname: code-reviewer\ndescription: Another author\n---\nSecond skill\n' },
   });
+  const conflictingService = createSkillPresetService({ multitenancy, marketService: conflictingMarketService });
 
   const input = {
     tenantId: tenant.id,
@@ -373,21 +483,35 @@ test('same-name market Skills have independent presets, references and install d
 
   const updated = await conflictingService.updatePreset({ ...input, presetId: second.id });
   assert.equal(updated.name, second.name);
+  const installedNames = [];
   for (const [service, preset] of [[originalService, original], [conflictingService, second]]) {
     await service.validatePreset({ ...input, presetId: preset.id });
     service.publishPreset({ ...input, presetId: preset.id });
     const installArgs = { tenantId: tenant.id, workspaceId: workspace.id, workspacePath, presetId: preset.id, userId, tenantCode: tenant.code, accountId: 'alice' };
     const result = await service.installWorkspaceSkillPreset(installArgs);
-    assert.equal(result.installed.skillName, preset.name);
-    assert.equal((await service.installWorkspaceSkillPreset(installArgs)).installed.skillName, preset.name);
+    installedNames.push(result.installed.skillName);
+    assert.equal((await service.installWorkspaceSkillPreset(installArgs)).installed.skillName, result.installed.skillName);
   }
+  assert.equal(installedNames[0], 'code-reviewer');
+  assert.match(installedNames[1], /^code-reviewer-[a-f0-9]{10}$/);
+  assert.notEqual(installedNames[0], installedNames[1]);
   const files = await fs.readdir(path.join(workspacePath, '.claude', 'skills'));
-  assert.deepEqual(files.sort(), [original.name, second.name].sort());
-  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', original.name, 'SKILL.md'), 'utf8'), /Review code changes/);
-  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', second.name, 'SKILL.md'), 'utf8'), /Second skill/);
+  assert.deepEqual(files.sort(), [...installedNames].sort());
+  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', installedNames[0], 'SKILL.md'), 'utf8'), /Review code changes/);
+  assert.match(await fs.readFile(path.join(workspacePath, '.claude', 'skills', installedNames[1], 'SKILL.md'), 'utf8'), /Second skill/);
   const installs = multitenancy.skillPresetInstalls.listInstallsForWorkspace({ workspaceId: workspace.id });
   assert.deepEqual(new Set(installs.map((entry) => entry.preset_id)), new Set([original.id, second.id]));
   assert.ok(installs.every((entry) => entry.status === 'installed'));
+
+  const conflictingInstallArgs = { tenantId: tenant.id, workspaceId: workspace.id, workspacePath, presetId: second.id, userId, tenantCode: tenant.code, accountId: 'alice' };
+  const originalFetch = conflictingMarketService.fetchRemoteSkillDetail;
+  conflictingMarketService.fetchRemoteSkillDetail = async () => { throw new Error('Temporarily unavailable'); };
+  await assert.rejects(conflictingService.installWorkspaceSkillPreset(conflictingInstallArgs), /Temporarily unavailable/);
+  const failed = multitenancy.skillPresetInstalls.listInstallsForWorkspace({ workspaceId: workspace.id, includeRemoved: true }).find((row) => row.preset_id === second.id);
+  assert.equal(failed.skill_name, installedNames[1]);
+  conflictingMarketService.fetchRemoteSkillDetail = originalFetch;
+  assert.equal((await conflictingService.installWorkspaceSkillPreset(conflictingInstallArgs)).installed.skillName, installedNames[1]);
+  assert.deepEqual((await fs.readdir(path.join(workspacePath, '.claude', 'skills'))).sort(), [...installedNames].sort());
 
   const target = multitenancy.tenants.createTenant({ code: 'copy-target', name: 'Copy target' });
   originalService.copyPresetToTenants({ tenantId: tenant.id, presetId: original.id, targetTenantIds: [target.id], userId: adminId });
@@ -399,7 +523,7 @@ test('same-name market Skills have independent presets, references and install d
   assert.equal(multitenancy.skillPresets.listPresets({ tenantId: target.id }).length, 2);
 });
 
-test('same-name presets from different tenants install separately in one workspace', async (t) => {
+test('same-name presets from different tenants install separately even when names differ only in case', async (t) => {
   const database = createTestDb();
   const multitenancy = createMultitenancyDb(database);
   const workspacePath = await makeWorkspace();
@@ -409,10 +533,11 @@ test('same-name presets from different tenants install separately in one workspa
   const installedNames = [];
   for (const sourceTenant of [tenant, otherTenant]) {
     const remoteSkill = { ...REMOTE_SKILL, id: `tenant-${sourceTenant.id}-skill` };
-    const service = createSkillPresetService({ multitenancy, marketService: createFakeMarketService({ remoteSkill }) });
+    const skillName = sourceTenant.id === tenant.id ? 'code-reviewer' : 'Code-Reviewer';
+    const service = createSkillPresetService({ multitenancy, marketService: createFakeMarketService({ remoteSkill, skillName }) });
     const context = { tenantId: sourceTenant.id, userId: adminId, tenantCode: sourceTenant.code, accountId: 'admin' };
     const preset = await service.createPreset({ ...context, input: { skill: remoteSkill } });
-    assert.equal(preset.name, 'code-reviewer');
+    assert.equal(preset.name, skillName);
     await service.validatePreset({ ...context, presetId: preset.id });
     service.publishPreset({ ...context, presetId: preset.id });
     const args = { ...context, userId, presetId: preset.id, workspaceId: workspace.id, workspacePath };
@@ -420,7 +545,9 @@ test('same-name presets from different tenants install separately in one workspa
     installedNames.push(result.installed.skillName);
     assert.equal((await service.installWorkspaceSkillPreset(args)).installed.skillName, result.installed.skillName);
   }
-  assert.equal(new Set(installedNames).size, 2);
+  assert.equal(installedNames[0], 'code-reviewer');
+  assert.match(installedNames[1], /^Code-Reviewer-[a-f0-9]{10}$/);
+  assert.equal(new Set(installedNames.map((name) => name.toLowerCase())).size, 2);
   assert.deepEqual((await fs.readdir(path.join(workspacePath, '.claude', 'skills'))).sort(), installedNames.sort());
 });
 
