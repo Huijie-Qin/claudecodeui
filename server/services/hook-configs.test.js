@@ -1839,7 +1839,7 @@ test('legacy failure notification and HTTP 200 recovery Hook migrates into two i
   }
 });
 
-test('SQL Check Hook bindings are controlled by each user enforcement preference', () => {
+test('SQL Check Hook supports administrator bindings and legacy personal enforcement preferences', () => {
   const { database, service } = createFixture();
   try {
     const created = service.createHook({
@@ -1867,18 +1867,8 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
       enabled: false,
     }]);
 
-    assert.throws(
-      () => service.listHookBindings(created.id),
-      /managed by each user from the SQL Check page/,
-    );
-    assert.throws(
-      () => service.replaceHookBindings({
-        hookId: created.id,
-        scope: 'all_users',
-        boundBy: 1,
-      }),
-      /managed by each user from the SQL Check page/,
-    );
+    assert.equal(service.listHookBindings(created.id).defaultEnabled, false);
+    service.replaceHookBindings({ hookId: created.id, scope: 'all_users', boundBy: 1 });
     const enabled = service.setSqlCheckEnforcement({ userId: 2, enabled: true });
     assert.equal(enabled.enabled, true);
     assert.equal(service.listAvailableHooksForUser(2)[0].enabled, true);
@@ -1900,6 +1890,53 @@ test('SQL Check Hook bindings are controlled by each user enforcement preference
   } finally {
     database.close();
   }
+});
+
+test('SQL Check activation works in Hook settings and templates without resetting administrator scopes', () => {
+  const { database, service, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
+  try {
+    const hook = service.createHook({ input: publishableHook({ name: 'SQL Check 强制校验' }), userId: 1 });
+    const hookId = hook.id;
+    service.publishHook({ hookId, userId: 1 });
+    service.replaceHookBindings({ hookId, userIds: [2], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
+    assert.equal(service.getSqlCheckEnforcement(alpha).enabled, true);
+    assert.equal(service.listAvailableHooksForUser(1).find(item => item.id === hookId).enabled, false);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false });
+    assert.equal(service.getSqlCheckEnforcement(alpha).enabled, false);
+    assert.equal(service.getSqlCheckEnforcement(alphaSecond).enabled, true);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
+    assert.equal(service.getSqlCheckEnforcement(alpha).enabled, true);
+    service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: true });
+    assert.equal(service.listEffectiveHooksForContext(alpha).find(item => item.id === hookId).showInChat, true);
+
+    service.assignWorkspaceHook({ workspaceId: alphaSecond.workspaceId, hookId, source: 'agent_template',
+      sourceTemplateId: 88, defaultEnabled: true, defaultShowInChat: true, allowUserDisable: false });
+    service.replaceHookBindings({ hookId, userIds: [2], defaultEnabled: false, defaultShowInChat: false,
+      overwriteUserPreferences: true, boundBy: 1 });
+    assert.equal(service.getSqlCheckEnforcement(alpha).enabled, false);
+    assert.equal(service.getSqlCheckEnforcement(alphaSecond).enabled, true);
+    assert.equal(service.getSqlCheckEnforcement(alphaSecond).canUserDisable, false);
+    assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: false }), { statusCode: 409 });
+    // A draft edit must not invalidate the template's pinned published version.
+    service.updateHook({ hookId, userId: 1, input: publishableHook({ name: 'SQL Check 强制校验', description: 'Draft edit' }) });
+    assert.equal(service.getSqlCheckEnforcement(alphaSecond).available, true);
+    assert.equal(service.getSqlCheckEnforcement(alphaSecond).enabled, true);
+    service.publishHook({ hookId, userId: 1 });
+
+    for (const scope of [{ scope: 'all_users' }, { scope: 'tenants', tenantIds: [10] }, { scope: 'users', userIds: [2] }]) {
+      service.replaceHookBindings({ hookId, ...scope, defaultEnabled: true, boundBy: 1 });
+      const before = service.listHookBindings(hookId);
+      service.setSqlCheckEnforcement({ userId: 2, enabled: false });
+      migrateHookActivationModel(database);
+      const after = service.listHookBindings(hookId);
+      assert.equal(after.scope, before.scope);
+      assert.deepEqual(after.users.map(user => [user.id, user.bound]), before.users.map(user => [user.id, user.bound]));
+      assert.deepEqual(after.tenants, before.tenants);
+      assert.equal(service.getSqlCheckEnforcement({ userId: 2 }).enabled, false);
+      service.setSqlCheckEnforcement({ userId: 2, enabled: true });
+      assert.equal(service.getSqlCheckEnforcement({ userId: 2 }).enabled, true);
+    }
+  } finally { database.close(); }
 });
 
 test('write_record is a publishable post action and validates its field references', () => {

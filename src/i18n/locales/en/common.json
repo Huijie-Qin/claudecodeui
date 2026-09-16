@@ -119,8 +119,8 @@
     "effectiveConfig": "Effective SQL Check",
     "enforcement": {
       "title": "Enforce SQL checks",
-      "description": "When enabled, the current user is bound to the SQL Check Hook and SQL responses are checked automatically.",
-      "unavailable": "A published SQL Check Hook is required before enforcement can be enabled.",
+      "description": "Enable the SQL Check Hook for you in this workspace. This stays in sync with the accessibility setting and checks SQL responses automatically.",
+      "unavailable": "The SQL Check Hook or its dependencies are unavailable. Check its publication status and workspace resources.",
       "loading": "Loading enforcement status...",
       "saving": "Saving",
       "enabled": "Enabled",

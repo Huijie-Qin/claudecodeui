@@ -304,7 +304,7 @@ export default function HookSettingsTab({
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}
                   {isSqlCheckManaged ? (
                     <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-                      SQL Check 强制校验管理
+                      SQL Check
                     </span>
                   ) : null}
                   {isTemplateMandatory ? (
@@ -326,7 +326,7 @@ export default function HookSettingsTab({
                         ? '待填写必填的个人变量'
                         : `已配置 ${hook.configuredUserVariables?.length || 0}/${hook.userVariables.length} 个个人变量`}
                     </span>
-                    <button type="button" disabled={Boolean(busyHookId) || isSqlCheckManaged || (resourcesUnavailable && !canRetryResources)} className="text-primary underline disabled:opacity-50" onClick={() => { setError(null); setVariablesHook(hook); }}>
+                    <button type="button" disabled={Boolean(busyHookId) || (resourcesUnavailable && !canRetryResources)} className="text-primary underline disabled:opacity-50" onClick={() => { setError(null); setVariablesHook(hook); }}>
                       配置个人变量
                     </button>
                   </div>
@@ -347,7 +347,6 @@ export default function HookSettingsTab({
                   <SettingsToggle
                     checked={hook.enabled}
                     disabled={Boolean(busyHookId)
-                      || isSqlCheckManaged
                       || (isTemplateMandatory && hook.enabled && !canRetryResources)
                       || (resourcesUnavailable && !canRetryResources)}
                     ariaLabel={`${hook.enabled ? '关闭' : '开启'} ${hook.name}`}

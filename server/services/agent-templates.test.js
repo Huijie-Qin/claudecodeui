@@ -860,7 +860,7 @@ test('MCP template parameter strategies reject invalid types and preserve falsy 
   }
 });
 
-test('Agent templates persist only current published admin Hooks', () => {
+test('Agent templates accept published admin and SQL Check Hooks', () => {
   const fixture = createFixture();
   const draft = fixture.service.saveTemplate({
     userId: 1,
@@ -889,7 +889,7 @@ test('Agent templates persist only current published admin Hooks', () => {
     allowUserDisable: true,
     order: 20,
   }]);
-  assert.throws(() => fixture.service.saveTemplate({
+  const sqlTemplate = fixture.service.saveTemplate({
     userId: 1,
     input: {
       name: 'SQL Check 模板',
@@ -899,7 +899,11 @@ test('Agent templates persist only current published admin Hooks', () => {
       mcpPresetRefs: [],
       hookRefs: [{ hookId: 'hook-template-sql-check', version: 1 }],
     },
-  }), /SQL Check/);
+  });
+  assert.equal(sqlTemplate.hookRefs[0].hookId, 'hook-template-sql-check');
+  fixture.service.publishTemplate({ templateId: sqlTemplate.id, userId: 1 });
+  assert.equal(fixture.service.resolveTemplateSnapshot({ templateId: sqlTemplate.id, tenantId: fixture.appTenantId })
+    .hooks[0].id, 'hook-template-sql-check');
   assert.throws(() => fixture.service.saveTemplate({
     userId: 1,
     input: {
@@ -969,11 +973,11 @@ test('Agent templates stay pinned to an immutable published Hook version', () =>
   assert.equal(snapshot.hooks[0].name, '项目完成记录');
 });
 
-test('Hook catalog excludes SQL Check and respects tenant bindings', () => {
+test('Hook catalog includes SQL Check and respects tenant bindings', () => {
   const fixture = createFixture();
   assert.deepEqual(
     fixture.service.listHookCatalog({ tenantId: fixture.otherTenantId }).map((hook) => hook.id),
-    [fixture.hookId],
+    ['hook-template-sql-check', fixture.hookId],
   );
 
   fixture.database.prepare(`
@@ -982,9 +986,9 @@ test('Hook catalog excludes SQL Check and respects tenant bindings', () => {
   `).run(fixture.hookId, fixture.appTenantId);
   assert.deepEqual(
     fixture.service.listHookCatalog({ tenantId: fixture.appTenantId }).map((hook) => hook.id),
-    [fixture.hookId],
+    ['hook-template-sql-check', fixture.hookId],
   );
-  assert.deepEqual(fixture.service.listHookCatalog({ tenantId: fixture.otherTenantId }), []);
+  assert.deepEqual(fixture.service.listHookCatalog({ tenantId: fixture.otherTenantId }).map(hook => hook.id), ['hook-template-sql-check']);
 });
 
 test('Hook dependency failures block template publish and appear in the admin catalog', () => {
@@ -1012,10 +1016,10 @@ test('Hook dependency failures block template publish and appear in the admin ca
     UPDATE hook_published_versions SET config_json = ? WHERE hook_id = ? AND version = 2
   `).run(JSON.stringify(publishedConfig), fixture.hookId);
   const resourceCatalog = { skills: [], mcpTools: [] };
-  const [catalogHook] = fixture.service.listHookCatalog({
+  const catalogHook = fixture.service.listHookCatalog({
     tenantId: fixture.appTenantId,
     resourceCatalog,
-  });
+  }).find(hook => hook.id === fixture.hookId);
   assert.equal(catalogHook.available, false);
   assert.equal(catalogHook.dependencySummary.unavailableCount, 1);
 
@@ -1090,7 +1094,7 @@ test('Agent template Hook checks compare pinned Skill and MCP content hashes', (
   assert.equal(fixture.service.listHookCatalog({
     tenantId: fixture.appTenantId,
     resourceCatalog: matchingCatalog,
-  })[0].available, true);
+  }).find(hook => hook.id === fixture.hookId).available, true);
 
   const changedSkillCatalog = {
     ...matchingCatalog,
@@ -1102,7 +1106,7 @@ test('Agent template Hook checks compare pinned Skill and MCP content hashes', (
   assert.equal(fixture.service.listHookCatalog({
     tenantId: fixture.appTenantId,
     resourceCatalog: changedSkillCatalog,
-  })[0].available, false);
+  }).find(hook => hook.id === fixture.hookId).available, false);
 
   const draft = fixture.service.saveTemplate({
     userId: 1,
@@ -1195,7 +1199,7 @@ test('template snapshots retain the pinned subagent switch after a newer Hook ch
       VALUES (?, 3, ?, '{"skills":[],"mcpServers":[],"mcpTools":[]}')
     `).run(fixture.hookId, JSON.stringify({ ...versionTwo, includeSubagents: false }));
 
-    assert.equal(fixture.service.listHookCatalog({ tenantId: fixture.appTenantId })[0].includeSubagents, false);
+    assert.equal(fixture.service.listHookCatalog({ tenantId: fixture.appTenantId }).find(hook => hook.id === fixture.hookId).includeSubagents, false);
     const draft = fixture.service.saveTemplate({
       userId: 1,
       input: {

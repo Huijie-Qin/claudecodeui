@@ -26,10 +26,11 @@ type WorkspaceSqlCheckConfig = {
 type SqlCheckEnforcement = {
   available: boolean;
   enabled: boolean;
+  canUserDisable?: boolean;
   hookId?: string | null;
   hookName?: string | null;
   hookStatus?: 'draft' | 'published' | 'disabled' | null;
-  reason?: 'not_configured' | 'not_published' | null;
+  reason?: string | null;
 };
 
 type SqlCheckPanelProps = {
@@ -307,7 +308,8 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
             role="switch"
             aria-checked={enforcement.enabled}
             aria-label={t('sqlCheck.enforcement.title')}
-            disabled={!workspaceId || !enforcement.available || isLoadingConfig || isSavingEnforcement}
+            disabled={!workspaceId || !enforcement.available || isLoadingConfig || isSavingEnforcement
+              || (enforcement.enabled && enforcement.canUserDisable === false)}
             onClick={() => void handleEnforcementToggle()}
             className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
               enforcement.enabled ? 'bg-primary' : 'bg-input'
