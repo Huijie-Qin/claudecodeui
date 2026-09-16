@@ -47,9 +47,9 @@ test('run all advances one case at a time and never edits skill',()=>{
 test('optimization performs full before pass, writes automatically and then full after pass',()=>{
  const s=M.state(),k=s.skills[0],j=M.startRun(s,k,true);M.step(s);M.step(s);assert.equal(j.before.length,2);assert.equal(j.phase,'optimize');assert.equal(j.written,false);M.step(s);assert.equal(j.written,true);assert.equal(j.after.length,0);assert.notEqual(k.files['SKILL.md'],j.beforeFiles['SKILL.md']);M.step(s);M.step(s);assert.equal(j.after.length,2);assert.equal(j.state,'completed');assert.deepEqual(j.cases,M.readCases(k).evals);assert.match(ui,/output-grid \$\{j\?\.optimize\?'compare'/);
 });
-test('stop after write retains files and external edits stop without overwrite',()=>{
+test('stop after write retains files; external edits do not interrupt the snapshot run',()=>{
  const s=M.state(),k=s.skills[0],j=M.startRun(s,k,true);M.step(s);M.step(s);M.step(s);const after=M.stamp(k);M.stop(s);assert.equal(j.state,'cancelled');M.step(s);assert.equal(M.stamp(k),after);
- const j2=M.startRun(s,k,true);k.files['SKILL.md']+='\nexternal';const external=M.stamp(k);M.step(s);assert.equal(j2.state,'stale');assert.equal(M.stamp(k),external);
+ const j2=M.startRun(s,k,true);k.files['SKILL.md']+='\nexternal';const external=M.stamp(k);M.step(s);assert.equal(j2.state,'running');while(j2.state==='running')M.step(s);assert.equal(j2.state,'completed');assert.equal(M.stamp(k),external);
 });
 test('empty suites, unsafe or missing inputs and edits during execution are blocked',()=>{
  const s=M.state(),k=s.skills[0];assert.throws(()=>M.addCase(s,k,{prompt:'x',expected_output:'y',files:['../secret']}));M.addCase(s,k,{prompt:'x',expected_output:'y',files:['evals/files/missing.txt']});assert.throws(()=>M.startRun(s,k));M.deleteCase(s,k,3);M.startRun(s,k);assert.throws(()=>M.addCase(s,k,{prompt:'x',expected_output:'y'}));assert.throws(()=>M.startRun(s,k));

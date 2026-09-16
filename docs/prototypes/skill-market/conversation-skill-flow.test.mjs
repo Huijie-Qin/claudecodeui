@@ -51,7 +51,7 @@ test('prototype routes template creation into chat without a debug tab',()=>{
   assert.match(html,/class="chat-user-bubble"/);
   assert.match(html,/class="chat-sender"/);
   assert.match(html,/class="chat-tool-trace"/);
-  assert.match(html,/class="chat-composer-foot"[\s\S]*?技能生成/);
+  assert.match(html,/class="chat-composer-foot"[\s\S]*?技能创建/);
   assert.match(html,/请输入额外补充信息/);
   assert.doesNotMatch(html,/class="chat-head"/);
   assert.doesNotMatch(html,/\['debug','单次调试'\]|data-action="debug-run"|function debugView/);

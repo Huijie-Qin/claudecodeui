@@ -14,7 +14,7 @@ const ctx=vm.createContext({S:{user:'admin'},route:'admin',selected:null,selecte
  icon:()=>'',button:()=>''});
 vm.runInContext(html.slice(start,end),ctx);
 vm.runInContext('navigationView()',ctx);
-assert.deepEqual([...navigation.innerHTML.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]),['market','mine','contributions','templates','admin']);
+assert.deepEqual([...navigation.innerHTML.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]),['market','mine','templates','admin']);
 assert.match(navigation.innerHTML,/data-id="admin" aria-current="page">片段管理/);
 assert.doesNotMatch(html,/<div id="admin-navigation">/);
 ctx.route='chat';vm.runInContext('navigationView()',ctx);

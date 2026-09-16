@@ -10,6 +10,14 @@ const ctx=vm.createContext({S,document:{getElementById(id){return id==='catalog-
   M:{template(s,id){const t=s.templates.find(t=>t.id===id&&t.tenantId===s.tenantId);if(!t)throw Error('不可访问');return t}},discardBuffer:()=>true,render(){},modal:{open:true,close(){this.open=false}}});
 vm.runInContext('const catalogQueries={templates:"",snippets:"",picker:""};const icon=()=>"";'+section('const esc=','const notice=')+section('function catalogSearchView(','function render()')+'function showDialog(title,body){globalThis.dialogBody=body;}globalThis.queries=catalogQueries;',ctx);
 let count=0;function test(name,f){f();count++;console.log('PASS '+name)}
+test('long template fields use full-width multiline controls and responsive columns',()=>{
+ const chat=section('function chatView(){','function prView(');
+ assert.match(chat,/f.kind==='textarea'\?`<textarea id="chat-field-/);
+ assert.match(chat,/template-field-wide/);
+ assert.match(html,/\.chat-template-fields \.template-field-wide\{grid-column:1\/-1\}/);
+ assert.match(html,/\.chat-template-fields textarea\{min-height:80px;line-height:1\.6;resize:vertical\}/);
+ assert.match(html,/\.chat-template-fields\{grid-template-columns:minmax\(0,1fr\)\}/);
+});
 test('icon-bearing search inputs share sufficient placeholder and text padding',()=>{
  assert.match(html,/\.search-wrap>\.ui-icon\{left:12px;width:16px;height:16px;pointer-events:none\}/);
  assert.match(html,/\.search-wrap>\.search\{padding-left:40px\}/);

@@ -70,18 +70,18 @@ test('cancel after write and failed retest retain actual saved changes',()=>{
  const {M,S}=fixture(),k=M.skill(S,'weekly'),j=M.startFileEvaluation(S,k.id,true);M.stepFileEvaluation(S,k.id);M.stepFileEvaluation(S,k.id);const saved=M.canonical(k.files);
  M.cancelFileEvaluation(S,k.id);assert.equal(M.canonical(k.files),saved);assert.equal(j.state,'cancelled');
 });
-test('no-change optimization still performs both complete runs',()=>{
+test('passing initial evaluation ends with zero iterations and no redundant retest',()=>{
  const {M,S}=fixture(),k=M.skill(S,'weekly'),before=M.canonical(k.files),j=M.startFileEvaluation(S,k.id,true,'passed');finish(M,S,k);
- assert.equal(j.noChange,true);assert.equal(M.canonical(k.files),before);assert.equal(j.before.length,j.after.length);
+ assert.equal(j.noChange,true);assert.equal(M.canonical(k.files),before);assert.equal(j.before.length,j.caseSnapshot.length);assert.equal(j.after.length,0);assert.equal(j.iteration,0);assert.equal(j.stopReason,'all_passed');assert.equal(M.releaseFileEligibility(S,k.id).allowed,true);
 });
-test('case edits blocked while running; external content change stops without overwrite',()=>{
+test('work edits are allowed and never alter the fixed evaluation or get overwritten',()=>{
  const {M,S}=fixture(),k=M.skill(S,'weekly'),j=M.startFileEvaluation(S,k.id,true);
- assert.throws(()=>M.writeEvalCase(S,k.id,fields),/运行中/);assert.throws(()=>M.save(S,k.id,k.files),/运行中/);
- k.files['SKILL.md']+='\nUser external edit';M.stepFileEvaluation(S,k.id);assert.equal(j.state,'stale');assert.equal(j.written,false);assert.match(k.files['SKILL.md'],/User external edit/);
+ const files={...k.files,'SKILL.md':k.files['SKILL.md']+'\\nUser external edit'};
+ M.save(S,k.id,files);finish(M,S,k);assert.equal(j.state,'completed');assert.equal(j.writebackConflict,true);assert.equal(M.canonical(k.files),M.canonical(files));assert.doesNotMatch(j.runFiles['SKILL.md'],/User external edit/);assert.equal(M.releaseFileEligibility(S,k.id).allowed,false);
 });
 test('case file changes invalidate report and details use frozen expectations',()=>{
  const {M,S,context,view}=fixture(),k=M.skill(S,'weekly');M.startFileEvaluation(S,k.id,false,'passed');finish(M,S,k);assert.equal(context(k).current,true);
- M.writeEvalCase(S,k.id,{...fields,expected_output:'changed'},1);assert.equal(context(k).current,false);assert.match(view(k),/已失效/);
+ M.writeEvalCase(S,k.id,{...fields,expected_output:'changed'},1);assert.equal(context(k).current,false);assert.match(view(k),/工作区已修改/);
  assert.match(section('function evaluationTableDetail(', 'function latestOptimization('),/caseSnapshot/);
 });
 test('zero cases, invalid manifest and read-only users cannot produce a passing release',()=>{
@@ -89,23 +89,14 @@ test('zero cases, invalid manifest and read-only users cannot produce a passing 
  M.writeEvalCase(S,k.id,fields);k.files['SKILL.md']='bad';const j=M.startFileEvaluation(S,k.id);finish(M,S,k);assert.equal(j.state,'failed');assert.equal(j.before.length,0);
  k.editorIds=['zhou'];assert.throws(()=>M.startFileEvaluation(S,k.id),/权限/);
 });
-test('owner appoints admins; admins publish only after their own current full run',()=>{
- const {M,S}=fixture(),k=M.skill(S,'weekly');M.appointAdministrators(S,k.id,['chen'],M.managementStamp(k));S.user='chen';
- assert.equal(M.canRelease(S,k),true);assert.equal(M.releaseFileEligibility(S,k.id).allowed,false);
- assert.throws(()=>M.appointAdministrators(S,k.id,['zhou'],M.managementStamp(k)),/负责人/);
- M.startFileEvaluation(S,k.id,false,'passed');finish(M,S,k);assert.equal(M.releaseFileEligibility(S,k.id).allowed,true);M.publishFileEvaluation(S,k.id);
- assert.equal(k.marketFileReport.publishedBy,'chen');assert.equal(k.remoteFiles['evals/evals.json'],M.localState(S,k).files['evals/evals.json']);
+test('only owner can release; former administrators and system admins cannot',()=>{
+ const {M,S}=fixture(),k=M.skill(S,'weekly');assert.throws(()=>M.appointAdministrators(S,k.id,['chen'],M.managementStamp(k)),/已取消/);
+ for(const user of ['chen','admin']){S.user=user;k.administrators=[user];assert.equal(M.canRelease(S,k),false);}
+ S.user='lin';M.startFileEvaluation(S,k.id,false,'passed');finish(M,S,k);assert.equal(M.releaseFileEligibility(S,k.id).allowed,true);M.publishFileEvaluation(S,k.id);assert.equal(k.marketFileReport.publishedBy,'lin');
 });
-test('skill admin needs non-author approval for merge; owner direct exception remains',()=>{
- const {M,S}=fixture(),k=M.skill(S,'sales'),p=S.prs[0];S.user='chen';assert.equal(M.canRelease(S,k),true);assert.equal(M.mergeEligibility(S,k.id,p.id).allowed,false);
- M.reviewContribution(S,p.id,'approve','',M.reviewStamp(p));assert.equal(M.mergeEligibility(S,k.id,p.id).allowed,true);
- M.mergeContribution(S,k.id,p.id);assert.equal(p.state,'merged');assert.equal(k.marketFileReport,undefined);
- S.user='admin';assert.equal(M.canRelease(S,k),false);
-});
-test('revoking admin invalidates an applicable report and an old management form',()=>{
- const {M,S}=fixture(),k=M.skill(S,'weekly');M.appointAdministrators(S,k.id,['chen'],M.managementStamp(k));S.user='chen';M.startFileEvaluation(S,k.id,false,'passed');finish(M,S,k);
- S.user='lin';const old=M.managementStamp(k);M.appointAdministrators(S,k.id,[],old);assert.throws(()=>M.appointAdministrators(S,k.id,['chen'],old));
- S.user='chen';assert.equal(M.releaseFileEligibility(S,k.id).allowed,false);
+test('nonowner may approve but never merge, even with former admin metadata',()=>{
+ const {M,S}=fixture(),k=M.skill(S,'sales'),p=S.prs[0];S.user='chen';M.reviewContribution(S,p.id,'approve','',M.reviewStamp(p));assert.equal(M.mergeEligibility(S,k.id,p.id).allowed,false);
+ S.user=k.owner;assert.equal(M.mergeEligibility(S,k.id,p.id).allowed,true);M.mergeContribution(S,k.id,p.id);assert.equal(p.state,'merged');
 });
 test('market table is readonly and no current report means untested',()=>{
  const {M,S,view}=fixture(),k=M.skill(S,'weekly');assert.match(view(k,null,true),/未测评/);
@@ -119,7 +110,7 @@ test('contribution stays separate from evaluation and source scripts compile',()
  const out=section('function prView(', 'function templatesView(');assert.match(out,/contributionDiffView/);assert.doesNotMatch(out,/evaluationTableView|table-run|opt-open/);
 });
 test('run and optimize stay on evaluation page without touching conversation state',()=>{
- const action=section("if(a==='table-run'||a==='opt-open'){","if(a==='file-eval-stop')");
+ const action=section("if(a==='table-run'||a==='opt-start'){","if(a==='file-eval-stop')");
  assert.match(action,/startFileEvaluation/);assert.match(action,/stepFileEvaluation/);assert.match(action,/detailTab='evaluation'/);
  assert.doesNotMatch(action,/route='chat'|selected=null|chatEval=|chatTemplateId=null|chatBoundSkillId=null/);
  const {M,S,view}=fixture(),k=M.skill(S,'sales');M.startFileEvaluation(S,k.id);

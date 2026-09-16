@@ -6,7 +6,7 @@ const scripts=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
 scripts.forEach(s=>new vm.Script(s[1]));
 let count=0;function test(name,fn){fn();count++;console.log('PASS '+name)}
 function setup(){
- const ctx=vm.createContext({});vm.runInContext(scripts[0][1],ctx);const M=ctx.SkillMarketModel,s=M.createState(),t=s.templates[0];
+ const ctx=vm.createContext({});vm.runInContext(scripts[0][1],ctx);const M=ctx.SkillMarketModel,s=M.createState(),t=s.templates[1];
  const values=Object.fromEntries(t.fields.map(f=>[f.key,f.defaultValue||(f.kind==='select'?f.options[0]:'脱敏销售分析')]));
  const j=M.startGeneration(s,t.id,{name:'refinement-demo',title:'分析助手',description:'汇总脱敏数据',values},M.templateStamp(t));M.finishGeneration(s,j.id);return {ctx,M,s,j};
 }
@@ -54,7 +54,7 @@ test('template creation is routed into chat and materializes automatically',()=>
 });
 test('template name remains explicit and model validation survives conversation retries',()=>{
  const {M,s,j}=setup();
- const size=s.generationJobs.length,t=s.templates[0];
+ const size=s.generationJobs.length,t=s.templates[1];
  assert.throws(()=>M.startGeneration(s,t.id,{...j.input,name:''},M.templateStamp(t)),/请填写技能标识/);
  for(const name of ['Sales Name','-sales','sales--analysis','sales_1'])assert.throws(()=>M.startGeneration(s,t.id,{...j.input,name},M.templateStamp(t)),/技能标识仅支持/);
  assert.equal(s.generationJobs.length,size);

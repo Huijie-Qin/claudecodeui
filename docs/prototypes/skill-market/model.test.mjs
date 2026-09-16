@@ -95,9 +95,9 @@ test('case confirmation is owner-only and cannot accept empty input', () => {
   assert.throws(()=>M.confirmCaseDraft(s,k.id,c.id,M.caseStamp(k)),/负责人/);
   s.user='lin';assert.throws(()=>M.saveCaseDraft(s,k.id,null,{title:'test',input:'',expected:'x',required:true},M.caseStamp(k)),/不能为空/);
 });
-test('received includes owned or administered skills; all members browse requests from market', () => {
+test('received includes owned skills only; all members browse requests from market', () => {
   const s=M.createState();s.user='chen';
-  assert.equal(M.visiblePrs(s,'received').length,2);
+  assert.equal(M.visiblePrs(s,'received').length,0);
   assert.equal(M.visiblePrs(s,'sent').length,1);
   assert.equal(M.skillPrs(s,'sales').length,2);
 });
