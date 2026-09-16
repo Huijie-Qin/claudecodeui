@@ -27,7 +27,6 @@ type AvailableHook = {
   includeSubagents?: boolean;
   version: number;
   enabled: boolean;
-  canUserDisable?: boolean;
   showInChat: boolean;
   userVariables?: HookUserVariable[];
   configuredUserVariables?: string[];
@@ -282,8 +281,7 @@ export default function HookSettingsTab({
         ) : hooks.map((hook) => {
           const isSqlCheckManaged = hook.bindingController === 'sql_check';
           const isTemplateMandatory = hook.workspaceAssignment?.source === 'agent_template'
-            && hook.workspaceAssignment.allowUserDisable === false
-            && hook.canUserDisable !== true;
+            && hook.workspaceAssignment.allowUserDisable === false;
           const resourcesUnavailable = Boolean(hook.unavailableReason)
             || (hook.workspaceAssignment?.installStatus != null
               && hook.workspaceAssignment.installStatus !== 'ready');

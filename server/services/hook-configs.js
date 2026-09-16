@@ -1342,7 +1342,6 @@ export function createHookConfigService({
         workspace_assignment.updated_at AS assignment_updated_at,
         workspace_preference.enabled AS workspace_user_enabled,
         workspace_preference.show_in_chat AS workspace_user_show_in_chat,
-        workspace_preference.override_template AS workspace_user_override_template,
         EXISTS (
           SELECT 1 FROM hook_data_records records WHERE records.hook_id = h.id
         ) AS has_data_records
@@ -1432,14 +1431,12 @@ export function createHookConfigService({
       const explicitEnabled = row.workspace_user_enabled == null
         ? null
         : row.workspace_user_enabled === 1;
-      // Only an explicit administrator overwrite releases this member from
-      // template enforcement. Later personal saves retain that permission.
-      const canUserDisable = !assignment || assignment.allowUserDisable || row.workspace_user_override_template === 1;
       // Personal enablement installs a shared pinned version, but must not
       // erase the administrator defaults for other eligible members.
       const inheritsAdminDefaults = assignment?.source === 'manual'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       const adminDefaultEnabled = latestHook.status === 'published' && latestHook.defaultEnabled
+        && assignment?.source !== 'agent_template'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       let enabled;
       if (hook.bindingController === 'sql_check') {
@@ -1447,7 +1444,7 @@ export function createHookConfigService({
       } else if (assignment) {
         enabled = explicitEnabled == null
           ? (adminDefaultEnabled && row.opted_out_user_id == null) || assignment.defaultEnabled
-          : explicitEnabled || !canUserDisable;
+          : explicitEnabled || !assignment.allowUserDisable;
         enabled = enabled && versionReady;
       } else {
         enabled = explicitEnabled == null
@@ -1472,7 +1469,6 @@ export function createHookConfigService({
       return {
         ...hook,
         enabled: enabled && missingRequiredUserVariables.length === 0,
-        canUserDisable,
         configuredUserVariables,
         missingRequiredUserVariables,
         showInChat,
@@ -1690,13 +1686,7 @@ export function createHookConfigService({
         })
       : null);
     if (assignment && !assignment.allowUserDisable && !enabled) {
-      const preference = database.prepare(`
-        SELECT override_template FROM user_workspace_hook_preferences
-        WHERE workspace_id = ? AND user_id = ? AND hook_id = ?
-      `).get(workspace.id, normalizedUserId, String(hookId));
-      if (preference?.override_template !== 1) {
-        throw createHttpError('This Hook cannot be disabled for this workspace', 409);
-      }
+      throw createHttpError('This Hook cannot be disabled for this workspace', 409);
     }
     if (enabled && assignment?.installStatus !== 'ready') {
       throw createHttpError('Hook resources are not available in this workspace', 409);
@@ -2510,13 +2500,11 @@ export function createHookConfigService({
             ))
         `);
         const saveWorkspacePreference = database.prepare(`
-          INSERT INTO user_workspace_hook_preferences (workspace_id, user_id, hook_id, enabled, show_in_chat, override_template)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO user_workspace_hook_preferences (workspace_id, user_id, hook_id, enabled, show_in_chat)
+          VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(workspace_id, user_id, hook_id) DO UPDATE SET
             enabled = COALESCE(excluded.enabled, user_workspace_hook_preferences.enabled),
             show_in_chat = COALESCE(excluded.show_in_chat, user_workspace_hook_preferences.show_in_chat),
-            override_template = CASE WHEN excluded.enabled IS NULL
-              THEN user_workspace_hook_preferences.override_template ELSE 1 END,
             updated_at = CURRENT_TIMESTAMP
         `);
         for (const { id: userId } of scopedUsers) {
@@ -2530,12 +2518,14 @@ export function createHookConfigService({
             database.prepare('DELETE FROM user_hook_preferences WHERE hook_id = ? AND user_id = ?').run(hookId, userId);
           }
           for (const { workspace_id: workspaceId } of contexts.all(userId, hookId, hookId, userId, userId)) {
+            // Template defaults and the member's choices within that template
+            // are independent of administrator-wide Hook preference updates.
+            if (getWorkspaceHookAssignment({ workspaceId, hookId })?.source === 'agent_template') continue;
             const workspace = requireWorkspaceContext({ workspaceId });
             if (!isAdminHookAvailableToUser({ hook: updatedHook, userId, tenantId: workspace.tenantId })) continue;
             saveWorkspacePreference.run(workspaceId, userId, hookId,
               defaultEnabled === undefined ? null : Number(defaultEnabled),
-              defaultShowInChat === undefined ? null : Number(defaultShowInChat),
-              defaultEnabled === undefined ? 0 : 1);
+              defaultShowInChat === undefined ? null : Number(defaultShowInChat));
           }
         }
       });
