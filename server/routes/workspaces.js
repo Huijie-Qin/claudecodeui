@@ -21,6 +21,93 @@ export function createWorkspacesRouter({
   const router = express.Router();
   router.use(tenantMiddleware);
 
+  const updateWorkspaceHookPreference = async ({ workspace, accessRole, userId, hookId, enabled, userVariables }) => {
+    const availableHook = hookConfigs.listAvailableHooksForContext({
+      userId,
+      tenantId: workspace.tenant_id,
+      workspaceId: workspace.id,
+    })
+      .find((hook) => hook.id === hookId);
+    if (!availableHook) {
+      const error = new Error('Hook is not available to this user');
+      error.statusCode = 403;
+      throw error;
+    }
+    hookConfigs.validateWorkspaceUserHookVariables?.({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenant_id,
+      userId,
+      hookId,
+      enabled,
+      userVariables,
+    });
+    const needsMaterialization = enabled === true && (
+      !availableHook.workspaceAssignment
+      || availableHook.workspaceAssignment.installStatus !== 'ready'
+    );
+    if (needsMaterialization && accessRole !== 'owner') {
+      const error = new Error('Only workspace owner can install Hook resources');
+      error.statusCode = 403;
+      throw error;
+    }
+    if (needsMaterialization) {
+      try {
+        const preparedResources = typeof hookResources.prepareHook === 'function'
+          ? await hookResources.prepareHook({ hook: availableHook })
+          : null;
+        if (availableHook.resourceRefs && !preparedResources) {
+          const error = new Error('Hook resource service cannot safely validate the published resource snapshot');
+          error.statusCode = 409;
+          throw error;
+        }
+        if (
+          preparedResources
+          && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+        ) {
+          hookConfigs.validatePublishedHookMaterialization({
+            hook: availableHook,
+            resources: preparedResources,
+          });
+        }
+        const resources = await hookResources.materializeHook({
+          hook: availableHook,
+          workspacePath: workspace.path,
+          ...(preparedResources ? { preparedResources } : {}),
+        });
+        if (
+          !preparedResources
+          && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
+        ) {
+          hookConfigs.validatePublishedHookMaterialization({ hook: availableHook, resources });
+        }
+        if (availableHook.workspaceAssignment) {
+          hookConfigs.markWorkspaceHookAssignmentReady({
+            workspaceId: workspace.id,
+            hookId: availableHook.id,
+          });
+        }
+      } catch (error) {
+        if (availableHook.workspaceAssignment) {
+          hookConfigs.markWorkspaceHookAssignmentFailed({
+            workspaceId: workspace.id,
+            hookId: availableHook.id,
+            error: error?.message,
+          });
+        }
+        throw error;
+      }
+    }
+    const result = hookConfigs.setWorkspaceUserHookEnabled({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenant_id,
+      userId,
+      hookId,
+      enabled,
+      userVariables,
+    });
+    return result;
+  };
+
   router.get('/:workspaceId/share', (req, res) => {
     try {
       const workspaceId = Number(req.params.workspaceId);
@@ -86,7 +173,7 @@ export function createWorkspacesRouter({
         workspaceId: workspace.id,
         accessRole,
         canManage: true,
-        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id }),
+        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id, workspaceId: workspace.id, tenantId: workspace.tenant_id }),
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
           workspaceId: workspace.id,
@@ -122,7 +209,7 @@ export function createWorkspacesRouter({
         workspaceId: workspace.id,
         accessRole,
         canManage: true,
-        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id }),
+        enforcement: hookConfigs.getSqlCheckEnforcement({ userId: req.user.id, workspaceId: workspace.id, tenantId: workspace.tenant_id }),
         ...multitenancy.sqlCheck.resolveUserConfig({
           tenantId: workspace.tenant_id,
           workspaceId: workspace.id,
@@ -230,88 +317,9 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
-      const availableHook = hookConfigs.listAvailableHooksForContext({
-        userId: req.user.id,
-        tenantId: workspace.tenant_id,
-        workspaceId: workspace.id,
-      })
-        .find((hook) => hook.id === req.params.hookId);
-      if (!availableHook) {
-        const error = new Error('Hook is not available to this user');
-        error.statusCode = 403;
-        throw error;
-      }
-      hookConfigs.validateWorkspaceUserHookVariables?.({
-        workspaceId: workspace.id,
-        tenantId: workspace.tenant_id,
-        userId: req.user.id,
-        hookId: req.params.hookId,
-        enabled: req.body?.enabled,
-        userVariables: req.body?.userVariables,
-      });
-      const needsMaterialization = req.body?.enabled === true && (
-        !availableHook.workspaceAssignment
-        || availableHook.workspaceAssignment.installStatus !== 'ready'
-      );
-      if (needsMaterialization && accessRole !== 'owner') {
-        const error = new Error('Only workspace owner can install Hook resources');
-        error.statusCode = 403;
-        throw error;
-      }
-      if (needsMaterialization) {
-        try {
-          const preparedResources = typeof hookResources.prepareHook === 'function'
-            ? await hookResources.prepareHook({ hook: availableHook })
-            : null;
-          if (availableHook.resourceRefs && !preparedResources) {
-            const error = new Error('Hook resource service cannot safely validate the published resource snapshot');
-            error.statusCode = 409;
-            throw error;
-          }
-          if (
-            preparedResources
-            && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
-          ) {
-            hookConfigs.validatePublishedHookMaterialization({
-              hook: availableHook,
-              resources: preparedResources,
-            });
-          }
-          const resources = await hookResources.materializeHook({
-            hook: availableHook,
-            workspacePath: workspace.path,
-            ...(preparedResources ? { preparedResources } : {}),
-          });
-          if (
-            !preparedResources
-            && typeof hookConfigs.validatePublishedHookMaterialization === 'function'
-          ) {
-            hookConfigs.validatePublishedHookMaterialization({ hook: availableHook, resources });
-          }
-          if (availableHook.workspaceAssignment) {
-            hookConfigs.markWorkspaceHookAssignmentReady({
-              workspaceId: workspace.id,
-              hookId: availableHook.id,
-            });
-          }
-        } catch (error) {
-          if (availableHook.workspaceAssignment) {
-            hookConfigs.markWorkspaceHookAssignmentFailed({
-              workspaceId: workspace.id,
-              hookId: availableHook.id,
-              error: error?.message,
-            });
-          }
-          throw error;
-        }
-      }
-      const result = hookConfigs.setWorkspaceUserHookEnabled({
-        workspaceId: workspace.id,
-        tenantId: workspace.tenant_id,
-        userId: req.user.id,
-        hookId: req.params.hookId,
-        enabled: req.body?.enabled,
-        userVariables: req.body?.userVariables,
+      const result = await updateWorkspaceHookPreference({
+        workspace, accessRole, userId: req.user.id, hookId: req.params.hookId,
+        enabled: req.body?.enabled, userVariables: req.body?.userVariables,
       });
       return res.json({ workspaceId: workspace.id, accessRole, ...result });
     } catch (error) {
@@ -353,7 +361,7 @@ export function createWorkspacesRouter({
 
   router.put('/:workspaceId/sql-check/enforcement', async (req, res) => {
     try {
-      if (typeof hookConfigs?.setSqlCheckEnforcement !== 'function') {
+      if (typeof hookConfigs?.setWorkspaceUserHookEnabled !== 'function') {
         return res.status(501).json({ error: 'SQL Check enforcement is not available' });
       }
 
@@ -363,16 +371,15 @@ export function createWorkspacesRouter({
         userId: req.user.id,
         workspaceId,
       });
-      if (req.body?.enabled === true) {
-        const enforcement = hookConfigs.getSqlCheckEnforcement({ userId: req.user.id });
-        const hook = enforcement.hookId && typeof hookConfigs.getHook === 'function'
-          ? hookConfigs.getHook(enforcement.hookId)
-          : null;
-        if (hook) await hookResources.materializeHook({ hook, workspacePath: workspace.path });
-      }
-      const enforcement = hookConfigs.setSqlCheckEnforcement({
-        userId: req.user.id,
-        enabled: req.body?.enabled,
+      const current = hookConfigs.getSqlCheckEnforcement({
+        userId: req.user.id, workspaceId: workspace.id, tenantId: workspace.tenant_id,
+      });
+      if (!current.hookId) return res.status(409).json({ error: 'SQL Check Hook is not configured' });
+      await updateWorkspaceHookPreference({
+        workspace, accessRole, userId: req.user.id, hookId: current.hookId, enabled: req.body?.enabled,
+      });
+      const enforcement = hookConfigs.getSqlCheckEnforcement({
+        userId: req.user.id, workspaceId: workspace.id, tenantId: workspace.tenant_id,
       });
       return res.json({
         workspaceId: workspace.id,

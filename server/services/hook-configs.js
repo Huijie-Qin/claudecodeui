@@ -1358,7 +1358,7 @@ export function createHookConfigService({
       WHERE
         (h.binding_controller = 'sql_check' AND h.status = 'published')
         OR (
-          h.binding_controller = 'admin'
+          h.binding_controller IN ('admin', 'sql_check')
           AND (
             workspace_assignment.hook_id IS NOT NULL
             OR (
@@ -1439,9 +1439,7 @@ export function createHookConfigService({
         && assignment?.source !== 'agent_template'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       let enabled;
-      if (hook.bindingController === 'sql_check') {
-        enabled = row.legacy_user_enabled === 1;
-      } else if (assignment) {
+      if (assignment) {
         enabled = explicitEnabled == null
           ? (adminDefaultEnabled && row.opted_out_user_id == null) || assignment.defaultEnabled
           : explicitEnabled || !assignment.allowUserDisable;
@@ -1499,9 +1497,6 @@ export function createHookConfigService({
   }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
-    if (hook.bindingController !== 'admin') {
-      throw createHttpError('This Hook is managed from its dedicated settings page', 409);
-    }
     if (!['manual', 'agent_template'].includes(source)) {
       throw createHttpError('source must be manual or agent_template');
     }
@@ -1623,11 +1618,8 @@ export function createHookConfigService({
   const ensureWorkspaceHookEligible = ({ workspaceId, userId, hookId }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
-    if (hook.bindingController !== 'admin') {
-      throw createHttpError('This Hook is managed from its dedicated settings page', 409);
-    }
     const assignment = getWorkspaceHookAssignment({ workspaceId, hookId });
-    const userEligible = isAdminHookAvailableToUser({
+    const userEligible = hook.bindingController === 'sql_check' || isAdminHookAvailableToUser({
       hook,
       userId: Number(userId),
       tenantId: workspace.tenantId,
@@ -1758,7 +1750,47 @@ export function createHookConfigService({
       created_at DESC
     LIMIT 1
   `).get();
-  const getSqlCheckEnforcement = ({ userId }) => {
+  const setUserHookEnabled = ({ userId, hookId, enabled }) => {
+    const normalizedUserId = Number(userId);
+    if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
+      throw createHttpError('userId must be a positive integer');
+    }
+    if (typeof enabled !== 'boolean') throw createHttpError('enabled must be a boolean');
+    const hook = requireHook(hookId);
+    if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
+    const eligible = hook.bindingController === 'sql_check' || isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
+    if (!eligible) throw createHttpError('Hook is not available to this user', 403);
+    if (enabled && hook.userVariables.some((variable) => variable.required)) {
+      throw createHttpError('请在工作区辅助功能中填写个人变量后启用此 Hook', 409);
+    }
+    database.transaction(() => {
+      database.prepare(`UPDATE user_workspace_hook_preferences
+        SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND hook_id = ?`)
+        .run(Number(enabled), normalizedUserId, hookId);
+      if (enabled) {
+        database.prepare('DELETE FROM user_hook_opt_outs WHERE user_id = ? AND hook_id = ?')
+          .run(normalizedUserId, hookId);
+        database.prepare(`
+          INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
+          VALUES (?, ?, ?)
+          ON CONFLICT(user_id, hook_id) DO UPDATE SET
+            bound_by = excluded.bound_by,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(normalizedUserId, hookId, normalizedUserId);
+      } else {
+        database.prepare('DELETE FROM user_hook_bindings WHERE user_id = ? AND hook_id = ?')
+          .run(normalizedUserId, hookId);
+        database.prepare('INSERT OR IGNORE INTO user_hook_opt_outs (user_id, hook_id) VALUES (?, ?)')
+          .run(normalizedUserId, hookId);
+      }
+    })();
+    return {
+      hookId,
+      enabled,
+      hook: getHook(hookId),
+    };
+  };
+  const getSqlCheckEnforcement = ({ userId, workspaceId = null, tenantId = null }) => {
     const normalizedUserId = Number(userId);
     if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
       throw createHttpError('userId must be a positive integer');
@@ -1774,21 +1806,23 @@ export function createHookConfigService({
         reason: 'not_configured',
       };
     }
-    const available = hook.status === 'published';
-    const binding = available
-      ? database.prepare(`
-        SELECT 1 AS enabled
-        FROM user_hook_bindings
-        WHERE user_id = ? AND hook_id = ?
-      `).get(normalizedUserId, hook.id)
-      : null;
+    const workspaceHook = workspaceId == null ? null : listAvailableHooksForContext({
+      userId: normalizedUserId, workspaceId, tenantId,
+    }).find((candidate) => candidate.id === hook.id);
+    const available = workspaceId == null
+      ? hook.status === 'published'
+      : Boolean(workspaceHook) && !workspaceHook.unavailableReason;
+    const enabled = available && (workspaceHook
+      ? workspaceHook.enabled
+      : listAvailableHooksForUser(normalizedUserId).find((candidate) => candidate.id === hook.id)?.enabled === true);
     return {
       available,
-      enabled: Boolean(binding),
+      enabled,
+      ...(workspaceId == null ? {} : { canUserDisable: workspaceHook?.workspaceAssignment?.allowUserDisable !== false }),
       hookId: hook.id,
       hookName: hook.name,
       hookStatus: hook.status,
-      reason: available ? null : 'not_published',
+      reason: available ? null : workspaceHook?.unavailableReason || 'not_published',
     };
   };
   const queryExecutions = ({
@@ -2145,7 +2179,8 @@ export function createHookConfigService({
       .all(userId, userId, userId, userId, userId);
     return rows.map((row) => ({
       ...mapHookRow(row),
-      enabled: (row.user_enabled === 1 || (row.binding_controller === 'admin' && row.default_enabled === 1 && row.opted_out_user_id == null))
+      enabled: (row.user_enabled === 1 || (row.default_enabled === 1 && row.opted_out_user_id == null
+        && isAdminHookAvailableToUser({ hook: mapHookRow(row), userId })))
         && !normalizeHookUserVariables(parseJson(row.user_variables_json, [])).some((variable) => variable.required),
       showInChat: row.user_show_in_chat !== 0,
     }));
@@ -2285,9 +2320,6 @@ export function createHookConfigService({
 
     listHookBindings: (hookId) => {
       const hook = requireHook(hookId);
-      if (hook.bindingController === 'sql_check') {
-        throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
-      }
       const users = database
         .prepare(
           `
@@ -2371,9 +2403,6 @@ export function createHookConfigService({
 
     replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, overwriteUserPreferences = false, boundBy }) => {
       const hook = requireHook(hookId);
-      if (hook.bindingController === 'sql_check') {
-        throw createHttpError('SQL Check Hook bindings are managed by each user from the SQL Check page', 409);
-      }
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before binding users');
       }
@@ -2536,49 +2565,7 @@ export function createHookConfigService({
       };
     },
 
-    setUserHookEnabled: ({ userId, hookId, enabled }) => {
-      const normalizedUserId = Number(userId);
-      if (!Number.isSafeInteger(normalizedUserId) || normalizedUserId <= 0) {
-        throw createHttpError('userId must be a positive integer');
-      }
-      if (typeof enabled !== 'boolean') throw createHttpError('enabled must be a boolean');
-      const hook = requireHook(hookId);
-      if (hook.bindingController !== 'admin') {
-        throw createHttpError('This Hook is managed from its dedicated settings page', 409);
-      }
-      if (hook.status !== 'published') throw createHttpError('Hook is not published', 409);
-      const eligible = isAdminHookAvailableToUser({ hook, userId: normalizedUserId });
-      if (!eligible) throw createHttpError('Hook is not available to this user', 403);
-      if (enabled && hook.userVariables.some((variable) => variable.required)) {
-        throw createHttpError('请在工作区辅助功能中填写个人变量后启用此 Hook', 409);
-      }
-      database.transaction(() => {
-        database.prepare(`UPDATE user_workspace_hook_preferences
-          SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND hook_id = ?`)
-          .run(Number(enabled), normalizedUserId, hookId);
-        if (enabled) {
-          database.prepare('DELETE FROM user_hook_opt_outs WHERE user_id = ? AND hook_id = ?')
-            .run(normalizedUserId, hookId);
-          database.prepare(`
-            INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, hook_id) DO UPDATE SET
-              bound_by = excluded.bound_by,
-              updated_at = CURRENT_TIMESTAMP
-          `).run(normalizedUserId, hookId, normalizedUserId);
-        } else {
-          database.prepare('DELETE FROM user_hook_bindings WHERE user_id = ? AND hook_id = ?')
-            .run(normalizedUserId, hookId);
-          database.prepare('INSERT OR IGNORE INTO user_hook_opt_outs (user_id, hook_id) VALUES (?, ?)')
-            .run(normalizedUserId, hookId);
-        }
-      })();
-      return {
-        hookId,
-        enabled,
-        hook: getHook(hookId),
-      };
-    },
+    setUserHookEnabled,
 
     setUserHookChatVisibility: ({ userId, hookId, showInChat }) => {
       const normalizedUserId = Number(userId);
@@ -2639,30 +2626,7 @@ export function createHookConfigService({
       if (!hook) {
         throw createHttpError('A published SQL Check Hook is required before enabling enforcement', 409);
       }
-      const update = database.transaction(() => {
-        database.prepare(`
-          UPDATE hooks
-          SET activation_scope = 'manual'
-          WHERE id = ?
-        `).run(hook.id);
-        database.prepare('DELETE FROM hook_tenant_bindings WHERE hook_id = ?').run(hook.id);
-        if (enabled) {
-          database.prepare(`
-            INSERT INTO user_hook_bindings (user_id, hook_id, bound_by)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, hook_id)
-            DO UPDATE SET
-              bound_by = excluded.bound_by,
-              updated_at = CURRENT_TIMESTAMP
-          `).run(normalizedUserId, hook.id, normalizedUserId);
-        } else {
-          database.prepare(`
-            DELETE FROM user_hook_bindings
-            WHERE user_id = ? AND hook_id = ?
-          `).run(normalizedUserId, hook.id);
-        }
-      });
-      update();
+      setUserHookEnabled({ userId: normalizedUserId, hookId: hook.id, enabled });
       return getSqlCheckEnforcement({ userId: normalizedUserId });
     },
 

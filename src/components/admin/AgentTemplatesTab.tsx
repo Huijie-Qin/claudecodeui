@@ -128,7 +128,7 @@ function normalizeHookRef(ref: Partial<HookRef>, index: number): HookRef | null 
 function normalizeHookCatalog(payload: { hooks?: HookCatalogItem[] }): HookCatalogItem[] {
   return (payload.hooks || []).flatMap((hook) => {
     const id = String(hook.id || '').trim();
-    if (!id || hook.status && hook.status !== 'published' || hook.bindingController === 'sql_check') return [];
+    if (!id || hook.status && hook.status !== 'published') return [];
     const version = Number(hook.version);
     const dependencySummary = hook.dependencySummary && typeof hook.dependencySummary === 'object'
       ? hook.dependencySummary

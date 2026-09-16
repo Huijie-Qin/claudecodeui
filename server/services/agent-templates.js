@@ -566,13 +566,11 @@ export function createAgentTemplateService(database = db, {
     );
     let unavailableReason = '';
     if (!hookRow) unavailableReason = '已删除';
-    else if (hookRow.binding_controller !== 'admin') unavailableReason = '由 SQL Check 独立管理';
     else if (hookRow.status === 'disabled') unavailableReason = '已下线';
     else if (hookRow.status === 'draft' && !publishedVersionRow) unavailableReason = '未发布';
     else if (!['published', 'draft'].includes(hookRow.status)) unavailableReason = '未发布';
     else if (!row) unavailableReason = '版本不可用';
     else if (row.revoked_at) unavailableReason = '版本已紧急撤销';
-    else if (row.binding_controller !== 'admin') unavailableReason = '由 SQL Check 独立管理';
     else if (!hookIsVisibleToTenants(hookRow.id, tenantIds)) {
       unavailableReason = '不适用于模板的可见租户';
     }
@@ -1023,7 +1021,7 @@ export function createAgentTemplateService(database = db, {
       if (!tableExists('hooks')) return [];
       return database.prepare(`
         SELECT * FROM hooks
-        WHERE status = 'published' AND binding_controller = 'admin'
+        WHERE status = 'published'
         ORDER BY name COLLATE NOCASE ASC, updated_at DESC, id ASC
       `).all()
         .filter((row) => hookIsVisibleToTenants(row.id, [normalizedTenantId]))

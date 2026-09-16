@@ -632,9 +632,13 @@ test('workspace sql check route resolves tenant config and stores user overrides
       },
     },
     hookConfigs: {
-      getSqlCheckEnforcement: ({ userId }) => ({ ...enforcement, userId }),
-      setSqlCheckEnforcement: ({ userId, enabled }) => {
-        seen.enforcement = { userId, enabled };
+      getSqlCheckEnforcement: (context) => {
+        seen.enforcementContext = context;
+        return { ...enforcement, userId: context.userId };
+      },
+      listAvailableHooksForContext: () => [{ id: 'sql-hook', workspaceAssignment: { installStatus: 'ready' } }],
+      setWorkspaceUserHookEnabled: ({ userId, enabled, workspaceId, tenantId, hookId }) => {
+        seen.enforcement = { userId, enabled, workspaceId, tenantId, hookId };
         enforcement.enabled = enabled;
         return { ...enforcement };
       },
@@ -665,7 +669,8 @@ test('workspace sql check route resolves tenant config and stores user overrides
   assert.equal(seen.access.every((args) => args.requireEdit !== true), true);
   assert.deepEqual(saved.payload.effectiveRuleIds, ['limit_rows']);
   assert.equal(enforcementSaved.response.status, 200);
-  assert.deepEqual(seen.enforcement, { userId: 1, enabled: true });
+  assert.deepEqual(seen.enforcement, { userId: 1, enabled: true, workspaceId: 10, tenantId: 2, hookId: 'sql-hook' });
+  assert.deepEqual(seen.enforcementContext, { userId: 1, workspaceId: 10, tenantId: 2 });
   assert.equal(enforcementSaved.payload.enforcement.enabled, true);
 });
 

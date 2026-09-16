@@ -274,8 +274,8 @@ CREATE TABLE IF NOT EXISTS user_hook_opt_outs (
 );
 
 -- Project defaults are separate from a member's project-specific override.
--- Legacy user_hook_bindings remain as a compatibility fallback and continue
--- to own SQL Check enablement.
+-- Legacy user_hook_bindings remain as a compatibility fallback, including
+-- SQL Check preferences saved before project-specific settings were available.
 CREATE TABLE IF NOT EXISTS workspace_hook_assignments (
   workspace_id INTEGER NOT NULL,
   hook_id TEXT NOT NULL,
@@ -622,9 +622,6 @@ export function migrateHookActivationModel(database) {
   const hasTenantBindingsTable = Boolean(database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_tenant_bindings'")
     .get());
-  const hasTenantsTable = Boolean(database
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'")
-    .get());
   const hasHookExecutionsTable = Boolean(database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hook_executions'")
     .get());
@@ -687,7 +684,7 @@ export function migrateHookActivationModel(database) {
     if (hasHookName) {
       database.prepare(`
         UPDATE hooks
-        SET binding_controller = 'sql_check', activation_scope = 'manual'
+        SET binding_controller = 'sql_check'
         WHERE name IN (?, ?)
       `).run(LEGACY_SQL_CHECK_HOOK_NAME, SQL_CHECK_HOOK_NAME);
     }
@@ -848,11 +845,6 @@ export function migrateHookActivationModel(database) {
         }
       }
     }
-    database.prepare(`
-      UPDATE hooks
-      SET activation_scope = 'manual'
-      WHERE binding_controller = 'sql_check'
-    `).run();
   });
   migrate();
 
@@ -874,15 +866,6 @@ export function migrateHookActivationModel(database) {
       }
     });
     initializeUserScopes();
-  }
-
-  if (hasTenantBindingsTable && hasTenantsTable) {
-    database.prepare(`
-      DELETE FROM hook_tenant_bindings
-      WHERE hook_id IN (
-        SELECT id FROM hooks WHERE binding_controller = 'sql_check'
-      )
-    `).run();
   }
 
   if (hasHookDataRecordsTable && hasHookName) {

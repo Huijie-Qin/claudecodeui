@@ -119,8 +119,8 @@
     "effectiveConfig": "当前生效 SQL Check",
     "enforcement": {
       "title": "强制校验",
-      "description": "开启后将为当前用户绑定 SQL Check Hook，模型返回 SQL 时自动执行校验。",
-      "unavailable": "SQL Check Hook 尚未发布，暂不可开启。",
+      "description": "为你在当前工作区启用 SQL Check Hook，与辅助功能中的开关同步。模型返回 SQL 时自动执行校验。",
+      "unavailable": "SQL Check Hook 或其依赖暂不可用，请检查发布状态和工作区资源。",
       "loading": "正在读取强制校验状态...",
       "saving": "正在保存",
       "enabled": "已开启",

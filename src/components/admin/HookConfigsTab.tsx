@@ -1532,7 +1532,7 @@ export default function HookConfigsTab() {
       replaceHook(normalizedHook);
       commitHookEditor(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
-      if (normalizedHook.bindingController !== 'sql_check') await openHookBindings(normalizedHook);
+      await openHookBindings(normalizedHook);
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
     } finally {
@@ -1549,7 +1549,7 @@ export default function HookConfigsTab() {
       const normalizedHook = normalizeHookConfig(payload.hook);
       replaceHook(normalizedHook);
       showToast(t('hooks.toast.published'), 'success');
-      if (normalizedHook.bindingController !== 'sql_check') await openHookBindings(normalizedHook);
+      await openHookBindings(normalizedHook);
     } catch (caughtError) {
       showToast(caughtError instanceof Error ? caughtError.message : t('hooks.errors.publish'), 'error');
     } finally {
@@ -2316,9 +2316,7 @@ export default function HookConfigsTab() {
               const bindingActive = hook.activationScope === 'all_users'
                 || hook.boundTenantCount > 0
                 || hook.scopedUserCount > 0;
-              const bindingLabel = isSqlCheckManaged
-                ? t('hooks.bindings.sqlCheckManagedCount', { count: hook.boundUserCount })
-                : hook.activationScope === 'all_users'
+              const bindingLabel = hook.activationScope === 'all_users'
                 ? t('hooks.bindings.allUsersShort')
                 : hook.boundTenantCount > 0
                   ? t('hooks.bindings.boundTenantCountShort', { count: hook.boundTenantCount })
@@ -2338,11 +2336,9 @@ export default function HookConfigsTab() {
                         {isSqlCheckManaged ? <Badge variant="outline">{t('hooks.builtin')}</Badge> : null}
                         <Badge variant={statusVariant(hook.status)}>{t(`statuses.${hook.status}`)}</Badge>
                         {hook.status === 'published' ? (
-                          <Badge variant={bindingActive && !isSqlCheckManaged ? 'default' : 'outline'}>
+                          <Badge variant={bindingActive ? 'default' : 'outline'}>
                             {bindingLabel}
                           </Badge>
-                        ) : isSqlCheckManaged ? (
-                          <Badge variant="outline">{t('hooks.bindings.sqlCheckManaged')}</Badge>
                         ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">
@@ -2417,12 +2413,7 @@ export default function HookConfigsTab() {
                     <Activity className="h-3.5 w-3.5" />
                     {t('hooks.diagnostics.executionRecords')}
                   </Button>
-                  {hook.status === 'published' && isSqlCheckManaged ? (
-                    <span className="inline-flex h-8 items-center gap-1.5 px-3 text-xs text-muted-foreground">
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      {t('hooks.bindings.sqlCheckManaged')}
-                    </span>
-                  ) : hook.status === 'published' ? (
+                  {hook.status === 'published' ? (
                     <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void openHookBindings(hook)}>
                       <UsersRound className="h-3.5 w-3.5" />
                       {t('hooks.bindings.manage')}
