@@ -116,3 +116,28 @@ test('buildMcpToolUsageSummary filters by provider', () => {
   assert.equal(summary.recentCalls[0].provider, 'claude');
   assert.equal(summary.recentCalls[0].serverName, 'github');
 });
+
+test('MCP usage excludes forked copies and keeps original and newly executed calls', (t) => {
+  const database = createTestDb();
+  t.after(() => database.close());
+  const tool = { toolName: 'mcp__docs__search', status: 'success' };
+  insertMessage(database, { provider: 'claude', sequence: 1, message: tool });
+  insertMessage(database, { provider: 'claude', sequence: 2,
+    message: { ...tool, inherited: false, forkedFrom: null, status: 'failed' } });
+  const before = buildMcpToolUsageSummary({ provider: 'claude', database });
+  const marker = { sessionId: 'parent', messageUuid: 'old-message' };
+  for (const [index, inherited] of [
+    { inherited: true },
+    { forkedFrom: marker },
+    { message: { forkedFrom: marker } },
+    { type: 'claude-response', data: { inherited: true } },
+    { type: 'claude-response', data: { message: { forkedFrom: marker } } },
+  ].entries()) {
+    insertMessage(database, { provider: 'claude', sequence: index + 3, message: { ...tool, ...inherited } });
+  }
+  const after = buildMcpToolUsageSummary({ provider: 'claude', database });
+  assert.deepEqual(after.totals, { callCount: 2, successCount: 1, errorCount: 1, serverCount: 1, toolCount: 1 });
+  assert.deepEqual(after.byServer, before.byServer);
+  assert.deepEqual(after.byTool, before.byTool);
+  assert.deepEqual(after.recentCalls, before.recentCalls);
+});

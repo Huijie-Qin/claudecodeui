@@ -10,6 +10,8 @@ import {
 } from '@/shared/utils.js';
 
 import { orderSupplementMessages } from '../../../../../shared/messageDisplayOrder.js';
+import { collectClaudeForkCheckpoints } from '../../../../services/claude-fork-checkpoint.js';
+import { readClaudeCompletedReplies } from '../../../../services/claude-fork-checkpoint-store.js';
 
 import { readClaudeDisplayMetadata } from './claude-display-command-store.js';
 
@@ -36,6 +38,7 @@ const loadClaudeSessionMessages = getSessionMessages as unknown as (
   sessionId: string,
   limit: number | null,
   offset: number,
+  historyOptions?: { includeSubagentHistory?: boolean; subagentToolIds?: string[] | null },
 ) => Promise<ClaudeHistoryResult>;
 
 const loadClaudeRuntimeSessionMessages = getSessionMessagesFromProjectsRoot as unknown as (
@@ -43,6 +46,7 @@ const loadClaudeRuntimeSessionMessages = getSessionMessagesFromProjectsRoot as u
   sessionId: string,
   limit: number | null,
   offset: number,
+  historyOptions?: { includeSubagentHistory?: boolean; subagentToolIds?: string[] | null },
 ) => Promise<ClaudeHistoryResult>;
 
 export function resolveClaudeProjectStorageName(options: Pick<FetchHistoryOptions, 'projectName' | 'projectPath'>): string {
@@ -499,6 +503,10 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         }));
       }
       for (const message of messages) Object.assign(message, assistantIdentity);
+      const textMessages = messages.filter(message => message.kind === 'text' && message.role === 'assistant');
+      if (!includeSidechain && typeof raw.uuid === 'string') {
+        for (const message of textMessages) message.sourceMessageUuid = raw.uuid;
+      }
       return messages;
     }
 
@@ -532,93 +540,131 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     // a single assistant row can expand into multiple messages. Raw-row offsets
     // would otherwise repeat or skip messages on the next page.
 
+    const loadHistory = (includeSubagentHistory: boolean, subagentToolIds: string[] | null = null) => (
+      options.runtimeHomePath
+        ? loadClaudeRuntimeSessionMessages(
+          path.join(options.runtimeHomePath, '.claude', 'projects'), sessionId, null, 0,
+          { includeSubagentHistory, subagentToolIds },
+        )
+        : loadClaudeSessionMessages(projectStorageName, sessionId, null, 0, { includeSubagentHistory, subagentToolIds })
+    );
     let result: ClaudeHistoryResult;
     try {
-      result = options.runtimeHomePath
-        ? await loadClaudeRuntimeSessionMessages(
-          path.join(options.runtimeHomePath, '.claude', 'projects'),
-          sessionId,
-          null,
-          0,
-        )
-        : await loadClaudeSessionMessages(projectStorageName, sessionId, null, 0);
+      // A complete parent scan establishes checkpoints and normalized offsets;
+      // paged requests expand only the child histories actually being displayed.
+      result = await loadHistory(limit === null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
-
     const rawMessages = Array.isArray(result) ? result : (result.messages || []);
+    let completedReplyUuids = new Set<string>();
+    if (options.runtimeHomePath) {
+      try {
+        completedReplyUuids = await readClaudeCompletedReplies({ runtimeHomePath: options.runtimeHomePath, sessionId });
+      } catch (error) {
+        console.warn(`[ClaudeProvider] Failed to read completion markers for ${sessionId}:`, String(error));
+      }
+    }
+    const forkCheckpoints = collectClaudeForkCheckpoints(rawMessages, { completedReplyUuids });
 
-    const toolResultMap = new Map<string, ClaudeToolResult>();
-    for (const raw of rawMessages) {
-      if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
-        for (const part of raw.message.content) {
-          if (part.type === 'tool_result' && part.tool_use_id) {
-            toolResultMap.set(part.tool_use_id, {
-              content: part.content,
-              isError: Boolean(part.is_error),
-              subagentMessages: raw.subagentMessages,
-              subagentTools: raw.subagentTools,
-              toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
-            });
+    const normalizeHistory = (rawMessages: AnyRecord[]): NormalizedMessage[] => {
+      const toolResultMap = new Map<string, ClaudeToolResult>();
+      for (const raw of rawMessages) {
+        if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
+          for (const part of raw.message.content) {
+            if (part.type === 'tool_result' && part.tool_use_id) {
+              toolResultMap.set(part.tool_use_id, {
+                content: part.content,
+                isError: Boolean(part.is_error),
+                subagentMessages: raw.subagentMessages,
+                subagentTools: raw.subagentTools,
+                toolUseResult: raw.toolUseResult ?? raw.tool_use_result,
+              });
+            }
           }
         }
       }
-    }
 
-    const normalized: NormalizedMessage[] = [];
-    let activeHookActivityId: string | null = null;
-    for (const raw of rawMessages) {
-      const metadata = typeof raw.uuid === 'string' ? displayMetadata.get(raw.uuid) : undefined;
-      const displayCommand = metadata?.displayCommand || null;
-      const recoveryActivityId = readHookRecoveryActivityId(displayCommand);
-      const nextMessages = this.normalizeMessage(raw, sessionId, displayCommand);
-      if (metadata?.displayAfterAssistantId) {
-        for (const message of nextMessages) {
-          if (message.kind === 'text' && message.role === 'user') {
-            message.displayAfterAssistantId = metadata.displayAfterAssistantId;
-            message.supplementSequence = metadata.supplementSequence;
+      const normalized: NormalizedMessage[] = [];
+      let activeHookActivityId: string | null = null;
+      for (const raw of rawMessages) {
+        const metadata = typeof raw.uuid === 'string' ? displayMetadata.get(raw.uuid) : undefined;
+        const displayCommand = metadata?.displayCommand || null;
+        const recoveryActivityId = readHookRecoveryActivityId(displayCommand);
+        const nextMessages = this.normalizeMessage(raw, sessionId, displayCommand);
+        const replyMessages = nextMessages.filter(message => message.kind === 'text' && message.role === 'assistant');
+        for (const message of replyMessages) message.canFork = false;
+        if (forkCheckpoints.has(raw.uuid) && replyMessages.length) {
+          replyMessages[replyMessages.length - 1].canFork = true;
+        }
+        if (metadata?.displayAfterAssistantId) {
+          for (const message of nextMessages) {
+            if (message.kind === 'text' && message.role === 'user') {
+              message.displayAfterAssistantId = metadata.displayAfterAssistantId;
+              message.supplementSequence = metadata.supplementSequence;
+            }
+          }
+        }
+        if (recoveryActivityId) {
+          activeHookActivityId = recoveryActivityId;
+        } else if (nextMessages.some((message) => message.kind === 'text' && message.role === 'user')) {
+          activeHookActivityId = null;
+        }
+        if (activeHookActivityId) {
+          nextMessages.forEach((message) => {
+            message.hookActivityId = activeHookActivityId || undefined;
+          });
+        }
+        normalized.push(...nextMessages);
+      }
+
+      for (const msg of normalized) {
+        if (msg.kind === 'tool_use' && msg.toolId && toolResultMap.has(msg.toolId)) {
+          const toolResult = toolResultMap.get(msg.toolId);
+          if (!toolResult) {
+            continue;
+          }
+
+          msg.toolResult = {
+            content: typeof toolResult.content === 'string'
+              ? toolResult.content
+              : JSON.stringify(toolResult.content),
+            isError: toolResult.isError,
+            toolUseResult: toolResult.toolUseResult,
+          };
+          if (toolResult.subagentTools !== undefined) msg.subagentTools = toolResult.subagentTools;
+          if (Array.isArray(toolResult.subagentMessages)) {
+            msg.subagentMessages = this.normalizeSubagentMessages(toolResult.subagentMessages, sessionId, msg.toolId);
           }
         }
       }
-      if (recoveryActivityId) {
-        activeHookActivityId = recoveryActivityId;
-      } else if (nextMessages.some((message) => message.kind === 'text' && message.role === 'user')) {
-        activeHookActivityId = null;
-      }
-      if (activeHookActivityId) {
-        nextMessages.forEach((message) => {
-          message.hookActivityId = activeHookActivityId || undefined;
-        });
-      }
-      normalized.push(...nextMessages);
-    }
 
-    for (const msg of normalized) {
-      if (msg.kind === 'tool_use' && msg.toolId && toolResultMap.has(msg.toolId)) {
-        const toolResult = toolResultMap.get(msg.toolId);
-        if (!toolResult) {
-          continue;
-        }
-
-        msg.toolResult = {
-          content: typeof toolResult.content === 'string'
-            ? toolResult.content
-            : JSON.stringify(toolResult.content),
-          isError: toolResult.isError,
-          toolUseResult: toolResult.toolUseResult,
-        };
-        if (toolResult.subagentTools !== undefined) msg.subagentTools = toolResult.subagentTools;
-        if (Array.isArray(toolResult.subagentMessages)) {
-          msg.subagentMessages = this.normalizeSubagentMessages(toolResult.subagentMessages, sessionId, msg.toolId);
-        }
-      }
-    }
+      return normalized;
+    };
+    const normalized = normalizeHistory(rawMessages);
 
     const ordered = orderSupplementMessages(normalized);
     const end = Math.max(0, ordered.length - Math.max(0, offset));
     const start = limit === null ? 0 : Math.max(0, end - Math.max(0, limit));
-    return { messages: ordered.slice(start, end), total: ordered.length, hasMore: start > 0, offset, limit };
+    let messages = ordered.slice(start, end);
+    if (limit !== null) {
+      const agentToolIds = new Set(normalized.filter(message => message.kind === 'tool_use'
+        && (message.toolName === 'Agent' || message.toolName === 'Task')).map(message => message.toolId));
+      const pageToolIds = [...new Set(messages.filter(message => message.kind === 'tool_use' || message.kind === 'tool_result')
+        .map(message => message.toolId).filter((id): id is string => typeof id === 'string' && agentToolIds.has(id)))];
+      if (pageToolIds.length) {
+        try {
+          const expanded = await loadHistory(true, pageToolIds);
+          const expandedRaw = Array.isArray(expanded) ? expanded : (expanded.messages || []);
+          const expandedById = new Map(normalizeHistory(expandedRaw).map(message => [message.id, message]));
+          messages = messages.map(message => expandedById.get(message.id) || message);
+        } catch (error) {
+          console.warn(`[ClaudeProvider] Failed to expand page subagents for ${sessionId}:`, String(error));
+        }
+      }
+    }
+    return { messages, total: ordered.length, hasMore: start > 0, offset, limit };
   }
 }

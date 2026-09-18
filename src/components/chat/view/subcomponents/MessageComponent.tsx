@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, Clock3, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, GitBranch, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import HookExecutionProcess from '../../../hooks/HookExecutionProcess';
@@ -16,6 +16,7 @@ import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications';
 import { getCancellableHookLoopJobId } from '../../utils/hookLoopControls';
 import { getHookDisplayFollowups, getHookFollowupDisplayStatus } from '../../utils/hookFollowupPresentation';
+import { canForkMessage } from '../../utils/sessionFork';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
@@ -36,6 +37,9 @@ type MessageComponentProps = {
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onOpenSubagent?: (toolId: string) => void;
+  onForkMessage?: (message: ChatMessage) => void;
+  isForking?: boolean;
+  forkDisabled?: boolean;
   onShowSettings?: () => void;
   onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
   autoExpandTools?: boolean;
@@ -159,7 +163,7 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
   return sections.join('\n\n');
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onForkMessage, isForking, forkDisabled, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const { sendMessage, isConnected } = useWebSocket();
   const isGrouped = prevMessage && prevMessage.type === message.type &&
@@ -1083,6 +1087,22 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
                 {shouldShowAssistantCopyControl && (
                   <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
+                )}
+                {onForkMessage && canForkMessage(message, provider) && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={forkDisabled || isForking}
+                    title={forkDisabled && !isForking
+                      ? t('fork.unavailableWhileRunning', { defaultValue: 'Wait for this chat to finish before branching.' })
+                      : t('fork.action', { defaultValue: 'Branch to a new chat' })}
+                    onClick={() => onForkMessage(message)}
+                  >
+                    {isForking ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitBranch className="h-3 w-3" />}
+                    {isForking
+                      ? t('fork.creating', { defaultValue: 'Creating branch…' })
+                      : t('fork.action', { defaultValue: 'Branch to a new chat' })}
+                  </button>
                 )}
                 {shouldShowFooterTimestamp && <span>{formattedTime}</span>}
               </div>

@@ -1,5 +1,7 @@
 import { db as defaultDb } from '../database/db.js';
 
+import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
+
 const DEFAULT_RANGE_DAYS = 30;
 const MAX_RANGE_DAYS = 365;
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
@@ -193,6 +195,7 @@ export function buildMcpToolUsageSummary({
 
   rows.forEach((row) => {
     const message = safeParseJson(row.normalized_json);
+    if (isInheritedUsageMessage(message)) return;
     const mcpTool = extractMcpToolParts(message);
     if (!mcpTool) return;
 

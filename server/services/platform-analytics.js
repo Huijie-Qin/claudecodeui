@@ -1,5 +1,7 @@
 import { db } from '../database/db.js';
 
+import { nonInheritedUsageMessageSql } from './ai-usage-inheritance.js';
+
 const DEFAULT_DAYS = 30;
 const ALLOWED_DAY_WINDOWS = new Set([7, 30, 90]);
 const MAX_TENANT_FILTERS = 100;
@@ -67,6 +69,11 @@ function tenantFilter(tenantIds, column = 'tenant_id') {
   };
 }
 
+function usageMessageFilter(tenantIds, alias = '') {
+  const filter = tenantFilter(tenantIds, `${alias}tenant_id`);
+  return { ...filter, sql: `${filter.sql} AND ${nonInheritedUsageMessageSql(`${alias}normalized_json`)}` };
+}
+
 function userTenantJoin(tenantIds) {
   if (!tenantIds.length) return { join: '', where: '', params: [] };
   return {
@@ -101,7 +108,7 @@ function scalar(database, sql, params = []) {
 
 function createOverview(database, days, tenantIds) {
   const sessionFilter = tenantFilter(tenantIds, 'tenant_id');
-  const messageFilter = tenantFilter(tenantIds, 'tenant_id');
+  const messageFilter = usageMessageFilter(tenantIds);
   const runtimeFilter = tenantFilter(tenantIds, 'tenant_id');
   const workspaceFilter = tenantFilter(tenantIds, 'tenant_id');
   const tenantTableFilter = tenantFilter(tenantIds, 'id');
@@ -182,7 +189,7 @@ function createOverview(database, days, tenantIds) {
 
 function createDailyActivity(database, days, tenantIds) {
   const sessionFilter = tenantFilter(tenantIds, 'tenant_id');
-  const messageFilter = tenantFilter(tenantIds, 'tenant_id');
+  const messageFilter = usageMessageFilter(tenantIds);
 
   return database.prepare(`
     WITH RECURSIVE days(day, step) AS (
@@ -226,7 +233,7 @@ function createDailyActivity(database, days, tenantIds) {
 
 function createTopUsers(database, tenantIds) {
   const filter = userTenantJoin(tenantIds);
-  const messageFilter = tenantFilter(tenantIds, 'asm.tenant_id');
+  const messageFilter = usageMessageFilter(tenantIds, 'asm.');
   const sessionFilter = tenantFilter(tenantIds, 'si.tenant_id');
   const runtimeFilter = tenantFilter(tenantIds, 'r.tenant_id');
   const workspaceFilter = tenantFilter(tenantIds, 'w.tenant_id');
@@ -289,6 +296,7 @@ function createTopUsers(database, tenantIds) {
 
 function createTenantUsage(database, tenantIds) {
   const filter = tenantFilter(tenantIds, 't.id');
+  const messageFilter = usageMessageFilter([], 'asm.');
 
   return database.prepare(`
     SELECT
@@ -299,17 +307,17 @@ function createTenantUsage(database, tenantIds) {
       (SELECT COUNT(*) FROM tenant_users tu WHERE tu.tenant_id = t.id AND tu.status = 'active') AS users,
       (SELECT COUNT(*) FROM workspaces w WHERE w.tenant_id = t.id AND w.status != 'deleted') AS workspaces,
       (SELECT COUNT(*) FROM session_index si WHERE si.tenant_id = t.id AND si.status != 'deleted') AS sessions,
-      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id) AS messages,
-      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'user') AS userMessages,
-      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'assistant') AS assistantMessages,
-      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role IS NULL) AS systemMessages,
-      (SELECT COALESCE(SUM(${TOKEN_USAGE_SQL}), 0) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'assistant') AS tokenCount,
+      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id${messageFilter.sql}) AS messages,
+      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'user'${messageFilter.sql}) AS userMessages,
+      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'assistant'${messageFilter.sql}) AS assistantMessages,
+      (SELECT COUNT(*) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role IS NULL${messageFilter.sql}) AS systemMessages,
+      (SELECT COALESCE(SUM(${TOKEN_USAGE_SQL}), 0) FROM agent_session_messages asm WHERE asm.tenant_id = t.id AND asm.role = 'assistant'${messageFilter.sql}) AS tokenCount,
       (
         SELECT COUNT(DISTINCT day)
         FROM (
           SELECT date(si.created_at) AS day FROM session_index si WHERE si.tenant_id = t.id AND si.status != 'deleted'
           UNION
-          SELECT date(asm.created_at) AS day FROM agent_session_messages asm WHERE asm.tenant_id = t.id
+          SELECT date(asm.created_at) AS day FROM agent_session_messages asm WHERE asm.tenant_id = t.id${messageFilter.sql}
         )
       ) AS activeDays,
       (SELECT COUNT(*) FROM agent_session_runtime r WHERE r.tenant_id = t.id AND r.status IN ('active', 'idle', 'pending')) AS liveRuntimes,
@@ -318,7 +326,7 @@ function createTenantUsage(database, tenantIds) {
         FROM (
           SELECT MAX(si.updated_at) AS activity_at FROM session_index si WHERE si.tenant_id = t.id AND si.status != 'deleted'
           UNION ALL
-          SELECT MAX(asm.created_at) AS activity_at FROM agent_session_messages asm WHERE asm.tenant_id = t.id
+          SELECT MAX(asm.created_at) AS activity_at FROM agent_session_messages asm WHERE asm.tenant_id = t.id${messageFilter.sql}
           UNION ALL
           SELECT MAX(r.last_used_at) AS activity_at FROM agent_session_runtime r WHERE r.tenant_id = t.id AND r.status != 'deleted'
         )

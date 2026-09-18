@@ -1083,6 +1083,7 @@ async function getSessionMessagesFromProjectDirectory(
   limit = null,
   offset = 0,
   transcriptFiles = null,
+  { includeSubagentHistory = true, subagentToolIds = null } = {},
 ) {
   try {
     const safeSessionId = validateClaudeSessionId(sessionId);
@@ -1187,6 +1188,23 @@ async function getSessionMessagesFromProjectDirectory(
 
     trimRetainedMessages();
 
+    const finishMessages = () => {
+      const sortedMessages = messages.sort(compareMessageTimestamps);
+      if (limit === null) return sortedMessages;
+      const endIndex = Math.max(0, sortedMessages.length - normalizedOffset);
+      const startIndex = Math.max(0, endIndex - normalizedLimit);
+      return {
+        messages: sortedMessages.slice(startIndex, endIndex),
+        total,
+        hasMore: total - normalizedOffset - normalizedLimit > 0,
+        offset: normalizedOffset,
+        limit: normalizedLimit,
+      };
+    };
+    // Checkpoint validation needs the complete native parent transcript, not
+    // potentially much larger child transcripts or their restored tool cards.
+    if (!includeSubagentHistory) return finishMessages();
+
     const parseTimestamp = (value) => {
       const timestamp = Date.parse(value || '');
       return Number.isFinite(timestamp) ? timestamp : null;
@@ -1279,8 +1297,12 @@ async function getSessionMessagesFromProjectDirectory(
       });
     }
 
+    const includedSubagentToolIds = Array.isArray(subagentToolIds) ? new Set(subagentToolIds) : null;
+    // Keep every invocation window for resumed legacy children, but only read
+    // child transcripts needed by the normalized display page.
     // Load agent tools for each agentId found
     for (const agentId of agentIds) {
+      if (includedSubagentToolIds && !agentInvocations.get(agentId)?.some(invocation => includedSubagentToolIds.has(invocation.parentToolUseId))) continue;
       const agentFilePath = agentTranscriptPaths.get(agentId);
       if (agentFilePath) {
         const transcript = await parseAgentTranscript(agentFilePath, { sessionId: safeSessionId, agentId });
@@ -1293,6 +1315,7 @@ async function getSessionMessagesFromProjectDirectory(
     // separate and are not mistaken for completed tool calls.
     for (const [agentId, invocations] of agentInvocations) {
       for (const [invocationIndex, invocation] of invocations.entries()) {
+        if (includedSubagentToolIds && !includedSubagentToolIds.has(invocation.parentToolUseId)) continue;
         const { message } = invocation;
         const agentTranscript = agentTranscriptCache.get(agentId);
         if (agentTranscript) {
@@ -1347,28 +1370,7 @@ async function getSessionMessagesFromProjectDirectory(
         }
       }
     }
-    // Sort messages by timestamp
-    const sortedMessages = messages.sort(compareMessageTimestamps);
-
-    // If no limit is specified, return all messages (backward compatibility)
-    if (limit === null) {
-      return sortedMessages;
-    }
-
-    // Apply pagination - for recent messages, we need to slice from the end
-    // offset 0 should give us the most recent messages
-    const endIndex = Math.max(0, sortedMessages.length - normalizedOffset);
-    const startIndex = Math.max(0, endIndex - normalizedLimit);
-    const paginatedMessages = sortedMessages.slice(startIndex, endIndex);
-    const hasMore = total - normalizedOffset - normalizedLimit > 0;
-
-    return {
-      messages: paginatedMessages,
-      total,
-      hasMore,
-      offset: normalizedOffset,
-      limit: normalizedLimit
-    };
+    return finishMessages();
   } catch (error) {
     console.error(`Error reading messages for session ${sessionId}:`, error);
     return limit === null ? [] : { messages: [], total: 0, hasMore: false };
@@ -1376,7 +1378,7 @@ async function getSessionMessagesFromProjectDirectory(
 }
 
 // Get messages for a specific session with pagination support.
-async function getSessionMessages(projectName, sessionId, limit = null, offset = 0) {
+async function getSessionMessages(projectName, sessionId, limit = null, offset = 0, historyOptions = {}) {
   const safeSessionId = validateClaudeSessionId(sessionId);
   const projectDir = resolveClaudeProjectDirectory(projectName);
   const directFileName = `${safeSessionId}.jsonl`;
@@ -1391,13 +1393,14 @@ async function getSessionMessages(projectName, sessionId, limit = null, offset =
       limit,
       offset,
       [directFileName],
+      historyOptions,
     );
   } catch {
-    return getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, limit, offset);
+    return getSessionMessagesFromProjectDirectory(projectDir, safeSessionId, limit, offset, null, historyOptions);
   }
 }
 
-async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0) {
+async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit = null, offset = 0, historyOptions = {}) {
   const safeSessionId = validateClaudeSessionId(sessionId);
 
   let entries;
@@ -1437,6 +1440,7 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
       limit,
       offset,
       [directFileName],
+      historyOptions,
     );
     if (!Array.isArray(directResult)) return directResult;
     return {
@@ -1457,6 +1461,7 @@ async function getSessionMessagesFromProjectsRoot(projectsRoot, sessionId, limit
       null,
       0,
       directMatches.length > 0 ? [directFileName] : null,
+      historyOptions,
     );
     const messages = Array.isArray(result) ? result : (result.messages || []);
     allMessages.push(...messages);

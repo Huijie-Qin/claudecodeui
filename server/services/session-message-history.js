@@ -285,6 +285,9 @@ function listHistoricalHookActivities({
         timestamp,
         provider: 'claude',
         kind: 'hook_activity',
+        ...(execution.completedAtMs > 0
+          ? { completedAt: new Date(execution.completedAtMs).toISOString() }
+          : execution.completedAt ? { completedAt: execution.completedAt } : {}),
         origin: 'hook',
         activityKind: 'execution',
         status: ['running', 'succeeded', 'failed'].includes(execution.status)

@@ -7,6 +7,29 @@ import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
+test('fork checkpoints retain the raw UUID separately from normalized display ids', () => {
+  const assistant: NormalizedMessage = {
+    id: 'text_raw-uuid_0', sessionId: 'session-1', provider: 'claude',
+    timestamp: '2026-09-18T00:00:00Z', kind: 'text', role: 'assistant', content: 'Complete reply',
+    sourceMessageUuid: 'raw-uuid', canFork: true,
+  };
+  const [reply] = normalizedToChatMessages([assistant]);
+  assert.equal(reply.id, 'text_raw-uuid_0');
+  assert.equal(reply.sourceMessageUuid, 'raw-uuid');
+  assert.equal(reply.canFork, true);
+
+  const messages = normalizedToChatMessages([
+    { ...assistant, id: 'user', role: 'user' },
+    { ...assistant, id: 'stream', kind: 'stream_delta' },
+    { ...assistant, id: 'thought', kind: 'thinking' },
+  ]);
+  assert.equal(messages.length, 3);
+  for (const message of messages) {
+    assert.equal(message.canFork, undefined, 'User, streaming, and thinking rows are not branch checkpoints');
+    assert.equal(message.sourceMessageUuid, undefined);
+  }
+});
+
 test('live and restored child activity exposes cancellation only while its own loop is active', () => {
   const agent: NormalizedMessage = {
     id: 'agent', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-12T00:00:01.000Z',

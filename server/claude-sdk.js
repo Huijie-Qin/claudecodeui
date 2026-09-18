@@ -66,6 +66,8 @@ import {
 } from './services/claude-sdk-diagnostics.js';
 import { appendClaudeDisplayCommand } from './modules/providers/list/claude/claude-display-command-store.js';
 import { createClaudeMessageDisplayTracker } from './services/claude-message-display.js';
+import { createClaudeCompletedReplyTracker } from './services/claude-fork-checkpoint.js';
+import { appendClaudeCompletedReply } from './services/claude-fork-checkpoint-store.js';
 import { userDb } from './database/db.js';
 import { multitenancyDb } from './database/multitenancy-db.js';
 import { resolveUserWorkspaceMcpToolAccess } from './services/mcp-tool-access.js';
@@ -1435,6 +1437,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   let initialDisplayCommandPersisted = false;
   const turnLifecycle = createClaudeTurnLifecycleTracker();
   const messageDisplay = createClaudeMessageDisplayTracker();
+  const completedReplyTracker = createClaudeCompletedReplyTracker();
   let pendingTurnCompletion = null;
   let queuedFollowupTurn = null;
   let hookActivityTerminalSent = false;
@@ -2475,6 +2478,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }
 
       const message = next.value;
+      const completedReplyUuid = completedReplyTracker.observe(message);
       mcpDiagnostics.observe(message, queryInstance);
       if (pendingTurnCompletion) {
         turnCompletionScheduler.cancel();
@@ -2565,6 +2569,22 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
 
       // Extract and send token budget updates from result messages
       if (message.type === 'result') {
+        const completedReplySessionId = capturedSessionId || sessionId || null;
+        if (completedReplyUuid && completedReplySessionId && runtimeOptions.runtimeHomePath
+          && !queryAbortController.signal.aborted && !abortedSessions.has(completedReplySessionId)) {
+          try {
+            await appendClaudeCompletedReply({
+              runtimeHomePath: runtimeOptions.runtimeHomePath,
+              projectPath: runtimeOptions.projectPath || runtimeOptions.cwd,
+              sessionId: completedReplySessionId,
+              sourceMessageUuid: completedReplyUuid,
+              uid: runtimeOptions.runtimeUid,
+              gid: runtimeOptions.runtimeGid,
+            });
+          } catch (error) {
+            console.warn('[ClaudeForkCheckpoint] Could not persist completed reply:', error?.message || error);
+          }
+        }
         const remainingQueryTurns = inputQueue.finishQueryTurn();
         const models = Object.keys(message.modelUsage || {});
         if (models.length > 0) {
@@ -2891,6 +2911,31 @@ async function queryClaudeSDK(command, options = {}, ws) {
       return queryClaudeSDKInternal(command, options, ws);
     },
   );
+}
+
+// Serialize snapshot creation with sends on the same session. Reject an active
+// or queued turn immediately instead of forking from a transcript still changing.
+async function withClaudeSessionForkLock(options, operation) {
+  const key = buildClaudeSessionExecutionKey(options);
+  const assertIdle = () => {
+    if (isClaudeSDKSessionActive(options.sessionId)) {
+      const error = new Error('Wait for the current reply to finish before branching');
+      error.statusCode = 409;
+      error.code = 'SESSION_BUSY';
+      throw error;
+    }
+  };
+  assertIdle();
+  if (sessionExecutionQueue.hasPending(key)) {
+    const error = new Error('This session has a pending operation; try again shortly');
+    error.statusCode = 409;
+    error.code = 'SESSION_BUSY';
+    throw error;
+  }
+  return sessionExecutionQueue.run(key, () => {
+    assertIdle();
+    return operation();
+  });
 }
 
 function emitMcpLoopActivity(context, job, status, error = null) {
@@ -3472,6 +3517,7 @@ function pushClaudeSupplement({
 // Export public API
 export {
   queryClaudeSDK,
+  withClaudeSessionForkLock,
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,

@@ -21,6 +21,8 @@ export interface Tenant {
 
 export interface ProjectSession {
   id: string;
+  parentSessionId?: string;
+  sourceMessageUuid?: string;
   title?: string;
   summary?: string;
   name?: string;

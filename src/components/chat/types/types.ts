@@ -136,6 +136,8 @@ export interface HookActivityDetails {
 
 export interface ChatMessage {
   id?: string;
+  sourceMessageUuid?: string;
+  canFork?: boolean;
   type: string;
   content?: string;
   timestamp: string | number | Date;
@@ -228,7 +230,7 @@ export interface ChatInterfaceProps {
   onSessionNotProcessing?: (sessionId?: string | null) => void;
   processingSessions?: ProcessingSessions;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
-  onNavigateToSession?: (targetSessionId: string) => void;
+  onNavigateToSession?: (targetSessionId: string, createdSession?: ProjectSession) => void;
   onShowSettings?: () => void;
   autoExpandTools?: boolean;
   hideToolMessages?: boolean;

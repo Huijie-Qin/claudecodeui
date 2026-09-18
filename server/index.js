@@ -37,6 +37,7 @@ import {
     isClaudeSDKSessionActive,
     pushClaudeSupplement,
     queryClaudeSDK,
+    withClaudeSessionForkLock,
     reconnectSessionWriter,
     resolveToolApproval
 } from './claude-sdk.js';
@@ -69,12 +70,16 @@ import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
+import {createSessionForkRouter} from './routes/session-forks.js';
+import {createSessionForkService} from './services/session-fork.js';
+import {createSessionMessageHistoryService} from './services/session-message-history.js';
+import {sessionForkSummaryFields} from './services/session-fork-metadata.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import desktopUpdatesRoutes from './routes/desktop-updates.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
-import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
+import {applyCustomSessionNames, applyScheduledSessionTaskFlags, db, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
@@ -785,6 +790,28 @@ app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+app.use('/api/sessions', createSessionForkRouter(createSessionForkService({
+    multitenancy: multitenancyDb,
+    access: workspaceAccess,
+    history: createSessionMessageHistoryService({ multitenancy: multitenancyDb, providerSessions: sessionsService }),
+    withSessionLock: withClaudeSessionForkLock,
+    isSessionActive: isClaudeSDKSessionActive,
+    registerFork: ({ session, runtimeId, messages }) => db.transaction(() => {
+        const row = multitenancyDb.sessions.upsertSession(session);
+        if (messages.length > 0) {
+            multitenancyDb.sessionMessages.upsertMessages({
+                tenantId: session.tenantId,
+                userId: session.userId,
+                workspaceId: session.workspaceId,
+                provider: 'claude',
+                providerSessionId: session.providerSessionId,
+                runtimeId,
+                messages,
+            });
+        }
+        return row;
+    })(),
+}), [authenticateToken, tenantContext]));
 
 // Scheduled session task route (protected)
 app.use('/api/scheduled-tasks', authenticateToken, scheduledTasksRoutes);
@@ -945,6 +972,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
                     isFavorited: session.is_favorited === 1,
                     __provider: 'claude',
                     __workspaceId: workspace.id,
+                    ...sessionForkSummaryFields(session),
                 }));
             applyScheduledSessionTaskFlags(sessions, 'claude', {
                 tenantId: req.tenant.id,

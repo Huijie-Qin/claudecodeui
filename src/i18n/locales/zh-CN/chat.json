@@ -1,4 +1,12 @@
 {
+  "fork": {
+    "action": "分支到新聊天",
+    "creating": "正在创建分支…",
+    "unavailableWhileRunning": "请等待当前聊天运行结束后再创建分支。",
+    "failed": "创建聊天分支失败，请重试。",
+    "viewParent": "查看原聊天",
+    "sameWorkspace": "此分支继续使用同一工作区。"
+  },
   "codeBlock": {
     "copy": "复制",
     "copied": "已复制",

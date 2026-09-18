@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { promises as fs } from 'node:fs';
+import fsSync, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+
+import { appendClaudeCompletedReply } from '../../../../services/claude-fork-checkpoint-store.js';
 
 import {
   ClaudeSessionsProvider,
@@ -49,6 +51,124 @@ test('skill history pagination counts normalized messages without repeating quer
     // Identical queries with different request IDs are intentional submissions.
     assert.equal(loaded.filter(message => message.content === '/report weekly').length, 2);
   }
+});
+
+test('fork checkpoint scans do not read subagent transcripts outside the displayed page', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-fork-page-children-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const subagentsDirectory = path.join(projectDirectory, sessionId, 'subagents');
+  await fs.mkdir(subagentsDirectory, { recursive: true });
+  const rows = ['older', 'recent'].flatMap((name, index) => [
+    { uuid: `${name}-use`, type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: `${name}-call`, name: 'Agent', input: { description: name } }] } },
+    { uuid: `${name}-result`, type: 'user', tool_use_result: { agent_id: name, status: 'completed' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `${name}-call`, content: 'Completed' }] } },
+    { uuid: `${name}-reply`, type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: `${name} final reply` }] } },
+  ].map((row, step) => ({ ...row, sessionId, timestamp: `2026-09-18T00:00:0${index * 3 + step}Z` })));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  for (const [index, name] of ['older', 'recent'].entries()) {
+    await fs.writeFile(path.join(subagentsDirectory, `agent-${name}.jsonl`), `${JSON.stringify({
+      sessionId, agentId: name, uuid: `${name}-child`, type: 'assistant',
+      timestamp: `2026-09-18T00:00:0${index * 3}.500Z`,
+      message: { role: 'assistant', content: [{ type: 'text', text: `${name} child detail` }] },
+    })}\n`);
+  }
+  const openedFiles: string[] = [];
+  const createReadStream = fsSync.createReadStream;
+  t.mock.method(fsSync, 'createReadStream', (...args: Parameters<typeof createReadStream>) => {
+    openedFiles.push(String(args[0]));
+    return createReadStream(...args);
+  });
+  const provider = new ClaudeSessionsProvider();
+  const recent = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 3 });
+  assert.equal(openedFiles.includes(path.join(subagentsDirectory, 'agent-older.jsonl')), false);
+  assert.equal(openedFiles.filter(file => file === path.join(subagentsDirectory, 'agent-recent.jsonl')).length, 1);
+  assert.equal(recent.total, 6);
+  assert.equal(recent.hasMore, true);
+  assert.equal(recent.messages.find(message => message.content === 'recent final reply')?.canFork, true);
+  const tool = recent.messages.find(message => message.kind === 'tool_use');
+  assert.equal((tool?.subagentMessages?.[0] as { content?: string })?.content, 'recent child detail');
+
+  // The ordinary full-history path still restores both children, and the
+  // display page remains identical to the corresponding full-history suffix.
+  const full = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  assert.equal(openedFiles.includes(path.join(subagentsDirectory, 'agent-older.jsonl')), true);
+  assert.deepEqual(recent.messages, full.messages.slice(-recent.messages.length));
+  assert.equal(full.hasMore, false);
+});
+
+test('paged child expansion preserves legacy resumed-agent invocation windows', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-fork-reused-child-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const childDirectory = path.join(projectDirectory, sessionId, 'subagents');
+  await fs.mkdir(childDirectory, { recursive: true });
+  const timestamp = (second: number) => `2026-09-18T00:00:0${second}Z`;
+  const rows = ['first', 'second'].flatMap((name, index) => [
+    { uuid: `${name}-use`, type: 'assistant', timestamp: timestamp(index * 4), message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: `${name}-call`, name: 'Agent', input: {} }] } },
+    { uuid: `${name}-result`, type: 'user', timestamp: timestamp(index * 4 + 2), tool_use_result: { agent_id: 'shared-child' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `${name}-call`, content: 'Completed' }] } },
+    { uuid: `${name}-reply`, type: 'assistant', timestamp: timestamp(index * 4 + 3), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: `${name} reply` }] } },
+  ].map(row => ({ ...row, sessionId })));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  await fs.writeFile(path.join(childDirectory, 'agent-shared-child.jsonl'), ['first', 'second'].map((name, index) => JSON.stringify({
+    sessionId, agentId: 'shared-child', uuid: `${name}-child`, type: 'assistant', timestamp: timestamp(index * 4 + 1),
+    message: { role: 'assistant', content: [{ type: 'text', text: `${name} private child result` }] },
+  })).join('\n') + '\n');
+  const provider = new ClaudeSessionsProvider();
+  const full = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  for (const [index, name] of ['first', 'second'].entries()) {
+    const page = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 3, offset: index === 0 ? 3 : 0 });
+    assert.deepEqual(page.messages, full.messages.slice(index * 3, index * 3 + 3));
+    const agent = page.messages.find(message => message.toolId === `${name}-call` && message.kind === 'tool_use');
+    assert.deepEqual(agent?.subagentMessages?.map(message => message.content), [`${name} private child result`]);
+  }
+});
+
+test('fork eligibility uses complete history before a page hides an unpaired tool call', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-fork-paging-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  const rows = [
+    { uuid: 'tool', type: 'assistant', message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'pending', name: 'Bash', input: {} }] } },
+    { uuid: 'premature', type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Not yet paired' }] } },
+    { uuid: 'result', type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'pending', content: 'Done' }] } },
+    { uuid: 'finished', type: 'assistant', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Complete' }] } },
+  ].map((row, index) => ({ ...row, sessionId, timestamp: `2026-09-18T00:00:0${index}Z` }));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  const provider = new ClaudeSessionsProvider();
+  const prematurePage = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 1, offset: 2 });
+  assert.equal(prematurePage.messages[0].content, 'Not yet paired');
+  assert.equal(prematurePage.messages[0].canFork, false);
+  assert.equal(prematurePage.hasMore, true);
+  const finalPage = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 1 });
+  assert.equal(finalPage.messages[0].canFork, true);
+  assert.equal(finalPage.messages[0].sourceMessageUuid, 'finished');
+  assert.equal(finalPage.total, 4);
+});
+
+test('persisted SDK markers keep old null-stop replies branchable across pagination', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-fork-null-stop-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const replyId = '22222222-2222-4222-8222-222222222222';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  await fs.mkdir(projectDirectory, { recursive: true });
+  const rows = [
+    { uuid: replyId, type: 'assistant', message: { role: 'assistant', stop_reason: null, content: [{ type: 'text', text: 'Older completed reply' }] } },
+    { uuid: 'next', type: 'user', message: { role: 'user', content: 'Follow up' } },
+    { uuid: 'partial', type: 'assistant', message: { role: 'assistant', stop_reason: null, content: [{ type: 'text', text: 'Interrupted' }] } },
+  ].map((row, index) => ({ ...row, sessionId, timestamp: `2026-09-18T00:00:0${index}Z` }));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  await appendClaudeCompletedReply({ runtimeHomePath, projectPath: '/workspace', sessionId, sourceMessageUuid: replyId });
+  const provider = new ClaudeSessionsProvider();
+  const older = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 1, offset: 2 });
+  const recent = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 1 });
+  assert.equal(older.messages[0].canFork, true);
+  assert.equal(older.messages[0].sourceMessageUuid, replyId);
+  assert.equal(recent.messages[0].canFork, false);
 });
 
 test('supplement display anchors survive JSONL reload and are applied before pagination', async (t) => {

@@ -3,6 +3,8 @@ import path from 'path';
 
 import { scheduledTasksDb } from '../database/db.js';
 
+import { sessionForkSummaryFields } from './session-fork-metadata.js';
+
 export function slugifyWorkspaceName(value) {
   const normalizedName = String(value || '')
     .trim()
@@ -112,6 +114,7 @@ function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
     isFavorited: session.is_favorited === 1,
     __provider: session.provider,
     __workspaceId: workspaceId,
+    ...sessionForkSummaryFields(session),
   };
   const scheduledTask = scheduledTaskMap.get(session.provider_session_id);
   if (scheduledTask) {

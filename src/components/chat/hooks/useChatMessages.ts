@@ -964,6 +964,8 @@ export function normalizedToChatMessages(
             type: 'assistant',
             content: text,
             timestamp: msg.timestamp,
+            ...(msg.sourceMessageUuid ? { sourceMessageUuid: msg.sourceMessageUuid } : {}),
+            ...(msg.canFork === true ? { canFork: true } : {}),
           });
         }
         break;

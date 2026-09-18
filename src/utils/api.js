@@ -212,6 +212,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ summary, provider }),
     }),
+  forkSession: (sessionId, { sourceMessageUuid, requestId, workspaceId }) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, workspaceId), {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'claude', sourceMessageUuid, requestId }),
+    }),
   setSessionFavorite: (sessionId, { provider = 'claude', projectName, workspaceId, favorited }) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${encodeURIComponent(sessionId)}/favorite`, workspaceId), {
       method: 'PUT',

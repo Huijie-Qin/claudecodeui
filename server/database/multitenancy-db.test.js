@@ -1465,6 +1465,68 @@ test('agent session runtime binds provider session id for resume', () => {
   );
 });
 
+test('fork runtime metadata pins first resume and rejects foreign or deleted runtime bindings', (t) => {
+  const database = createTestDb();
+  t.after(() => database.close());
+  const mt = createMultitenancyDb(database);
+  const userId = seedUser(database, 'fork-runtime-owner');
+  const otherUserId = seedUser(database, 'fork-runtime-other');
+  const tenant = mt.tenants.createTenant({ code: 'fork-runtime-team', name: 'Fork Runtime Team' });
+  const otherTenant = mt.tenants.createTenant({ code: 'fork-runtime-other-team', name: 'Other Team' });
+  for (const tenantId of [tenant.id, otherTenant.id]) {
+    for (const memberId of [userId, otherUserId]) mt.memberships.upsertMembership({
+      tenantId, userId: memberId, role: 'member', permission: 'edit', status: 'active',
+    });
+  }
+  const workspace = mt.workspaces.createWorkspace({ tenantId: tenant.id, ownerUserId: userId,
+    slug: 'fork-main', displayName: 'Main', path: '/tmp/fork-runtime-main' });
+  const otherWorkspace = mt.workspaces.createWorkspace({ tenantId: tenant.id, ownerUserId: userId,
+    slug: 'fork-other', displayName: 'Other', path: '/tmp/fork-runtime-other' });
+  const otherTenantWorkspace = mt.workspaces.createWorkspace({ tenantId: otherTenant.id, ownerUserId: userId,
+    slug: 'fork-other-tenant', displayName: 'Other Tenant', path: '/tmp/fork-runtime-other-tenant' });
+  const scope = { tenantId: tenant.id, userId, workspaceId: workspace.id, provider: 'claude' };
+  const createRuntime = (runtimeId, overrides = {}) => mt.runtimes.createRuntime({ ...scope,
+    runtimeId, containerName: runtimeId, image: 'local', workspaceHostPath: workspace.path,
+    runtimeHomePath: `/tmp/${runtimeId}/home`, status: 'idle', ...overrides });
+  createRuntime('fork-pinned');
+  mt.runtimes.bindProviderSession({ runtimeId: 'fork-pinned', providerSessionId: 'original-session' });
+  mt.runtimes.updateStatus({ runtimeId: 'fork-pinned', status: 'idle' });
+  createRuntime('fork-newer', { status: 'active' });
+  createRuntime('fork-other-user', { userId: otherUserId });
+  createRuntime('fork-other-workspace', { workspaceId: otherWorkspace.id, workspaceHostPath: otherWorkspace.path });
+  createRuntime('fork-other-tenant', { tenantId: otherTenant.id, workspaceId: otherTenantWorkspace.id,
+    workspaceHostPath: otherTenantWorkspace.path });
+  createRuntime('fork-other-provider', { provider: 'codex' });
+  const branchId = 'branch-before-first-resume';
+  const metadata = (runtimeId) => ({ fork: { runtimeId, parentSessionId: 'original-session', sourceMessageUuid: 'reply' } });
+  const register = (runtimeId) => mt.sessions.upsertSession({ ...scope, providerSessionId: branchId,
+    status: 'completed', metadata: metadata(runtimeId) });
+  const lookup = (overrides = {}) => mt.runtimes.findByProviderSession({ ...scope,
+    providerSessionId: branchId, ...overrides });
+  register('fork-pinned');
+  assert.equal(mt.runtimes.findByOwner(scope).runtime_id, 'fork-newer');
+  assert.equal(lookup().runtime_id, 'fork-pinned');
+  assert.equal(lookup().provider_session_id, 'original-session', 'lookup must not take over the original binding');
+  assert.equal(lookup().status, 'idle');
+  for (const overrides of [{ userId: otherUserId }, { workspaceId: otherWorkspace.id },
+    { tenantId: otherTenant.id, workspaceId: otherTenantWorkspace.id }, { provider: 'codex' }]) {
+    assert.equal(lookup(overrides), null, 'a different scope cannot retrieve the branch runtime');
+  }
+  for (const runtimeId of ['fork-other-user', 'fork-other-workspace', 'fork-other-tenant', 'fork-other-provider', 'missing']) {
+    register(runtimeId);
+    assert.equal(lookup(), null, `metadata cannot redirect the branch to ${runtimeId}`);
+  }
+  register('fork-pinned');
+  mt.runtimes.updateStatus({ runtimeId: 'fork-pinned', status: 'deleted' });
+  assert.equal(lookup(), null);
+  mt.runtimes.updateStatus({ runtimeId: 'fork-pinned', status: 'idle' });
+  mt.sessions.markDeleted({ ...scope, providerSessionId: branchId });
+  assert.equal(lookup(), null);
+  register('fork-pinned');
+  database.prepare('UPDATE session_index SET metadata_json=? WHERE provider_session_id=?').run('{invalid', branchId);
+  assert.equal(lookup(), null, 'invalid legacy metadata must not break session lookup');
+});
+
 test('agent session runtime image updates preserve runtime identity and skip deleted rows', () => {
   const database = createTestDb();
   const mt = createMultitenancyDb(database);

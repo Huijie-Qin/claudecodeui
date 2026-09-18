@@ -41,6 +41,9 @@ interface ChatMessagesPaneProps {
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onOpenSubagent?: (toolId: string) => void;
+  onForkMessage?: (message: ChatMessage) => void;
+  forkingMessageUuid?: string | null;
+  forkDisabled?: boolean;
   onShowSettings?: () => void;
   onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   autoExpandTools?: boolean;
@@ -82,6 +85,9 @@ function ChatMessagesPane({
   createDiff,
   onFileOpen,
   onOpenSubagent,
+  onForkMessage,
+  forkingMessageUuid,
+  forkDisabled,
   onShowSettings,
   onGrantToolPermission,
   autoExpandTools,
@@ -175,6 +181,9 @@ function ChatMessagesPane({
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}
                 onOpenSubagent={onOpenSubagent}
+                onForkMessage={onForkMessage}
+                isForking={Boolean(forkingMessageUuid && forkingMessageUuid === message.sourceMessageUuid)}
+                forkDisabled={forkDisabled}
                 onShowSettings={onShowSettings}
                 onGrantToolPermission={onGrantToolPermission}
                 autoExpandTools={autoExpandTools}

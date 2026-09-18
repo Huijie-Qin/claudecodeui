@@ -2729,7 +2729,14 @@ export function createMultitenancyDb(database = db) {
       },
 
       findByProviderSession: ({ tenantId, workspaceId, userId, provider, providerSessionId }) => {
-        return database.prepare(`
+        const lookup = [
+          requirePositiveInteger(tenantId, 'tenantId'),
+          requirePositiveInteger(workspaceId, 'workspaceId'),
+          requirePositiveInteger(userId, 'userId'),
+          requireEnum(provider, PROVIDERS, 'provider'),
+          requireNonEmptyString(providerSessionId, 'providerSessionId'),
+        ];
+        const direct = database.prepare(`
           SELECT *
           FROM agent_session_runtime
           WHERE tenant_id = ?
@@ -2738,13 +2745,25 @@ export function createMultitenancyDb(database = db) {
             AND provider = ?
             AND provider_session_id = ?
             AND status != 'deleted'
-        `).get(
-          requirePositiveInteger(tenantId, 'tenantId'),
-          requirePositiveInteger(workspaceId, 'workspaceId'),
-          requirePositiveInteger(userId, 'userId'),
-          requireEnum(provider, PROVIDERS, 'provider'),
-          requireNonEmptyString(providerSessionId, 'providerSessionId'),
-        ) ?? null;
+        `).get(...lookup);
+        if (direct) return direct;
+        // A branch is durable before its first execution. Its transcript can
+        // belong to an older runtime home, so a generic owner fallback could
+        // select a different home. Resolve the recorded runtime without
+        // changing that runtime's current active-session binding.
+        return database.prepare(`
+          SELECT r.*
+          FROM session_index si
+          JOIN agent_session_runtime r ON r.runtime_id = json_extract(
+            CASE WHEN json_valid(si.metadata_json) THEN si.metadata_json ELSE '{}' END,
+            '$.fork.runtimeId'
+          )
+          WHERE r.tenant_id = ? AND r.workspace_id = ? AND r.user_id = ?
+            AND r.provider = ? AND si.provider_session_id = ?
+            AND si.tenant_id = r.tenant_id AND si.workspace_id = r.workspace_id
+            AND si.user_id = r.user_id AND si.provider = r.provider
+            AND r.status != 'deleted' AND si.status != 'deleted'
+        `).get(...lookup) ?? null;
       },
 
       findByOwner: ({ tenantId, workspaceId, userId, provider, workspaceHostPath = null }) => {

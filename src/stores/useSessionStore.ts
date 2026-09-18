@@ -41,6 +41,8 @@ export type MessageKind =
 
 export interface NormalizedMessage {
   id: string;
+  sourceMessageUuid?: string;
+  canFork?: boolean;
   sessionId: string;
   timestamp: string;
   provider: LLMProvider;

@@ -1,4 +1,12 @@
 {
+  "fork": {
+    "action": "Branch to a new chat",
+    "creating": "Creating branch…",
+    "unavailableWhileRunning": "Wait for this chat to finish before branching.",
+    "failed": "Could not branch this chat. Please retry.",
+    "viewParent": "View original chat",
+    "sameWorkspace": "This branch uses the same workspace."
+  },
   "codeBlock": {
     "copy": "Copy",
     "copied": "Copied",

@@ -1,0 +1,67 @@
+{
+  "testedAt": "2026-09-18T07:21:41.009Z",
+  "sourceSessionId": "640a885d-8708-4bd9-94a6-ffea64ae45c0",
+  "sourceHash": "39f1e5f577d6fcc9567873bcca775386b9a9964a8496cd39f02921d880caaead",
+  "originalSourceHash": "39f1e5f577d6fcc9567873bcca775386b9a9964a8496cd39f02921d880caaead",
+  "sourceUnchanged": true,
+  "forkCount": 3,
+  "forks": [
+    {
+      "sessionId": "5decd6e3-b8a7-4191-8aa7-a9360138eb78",
+      "parentSessionId": "640a885d-8708-4bd9-94a6-ffea64ae45c0",
+      "sourceMessageUuid": "cb2f9bd4-a461-4976-9c4b-8df6151074f0",
+      "requestId": "59d9969a-25b0-4a87-8bfc-87b3a2c35651",
+      "runtimeId": "fork-browser-runtime",
+      "createdAt": "2026-09-18T07:18:49.255Z"
+    },
+    {
+      "sessionId": "35c01802-889e-4b73-8d28-ae6b2311670f",
+      "parentSessionId": "640a885d-8708-4bd9-94a6-ffea64ae45c0",
+      "sourceMessageUuid": "cb2f9bd4-a461-4976-9c4b-8df6151074f0",
+      "requestId": "5e82baf8-62d8-4390-9ff3-135e1634df6f",
+      "runtimeId": "fork-browser-runtime",
+      "createdAt": "2026-09-18T07:17:16.739Z"
+    },
+    {
+      "sessionId": "6f0f946b-214b-49f4-b364-09d2e93056df",
+      "parentSessionId": "640a885d-8708-4bd9-94a6-ffea64ae45c0",
+      "sourceMessageUuid": "cb2f9bd4-a461-4976-9c4b-8df6151074f0",
+      "requestId": "5a9660d8-79a3-4536-97b5-897e194c8f6f",
+      "runtimeId": "fork-browser-runtime",
+      "createdAt": "2026-09-18T07:13:47.852Z"
+    }
+  ],
+  "modelContexts": [
+    {
+      "hasInheritedUserAndReply": true,
+      "hasReadToolAndResult": true,
+      "hasFutureRedConversation": false,
+      "hasNewPrompt": true
+    },
+    {
+      "hasInheritedUserAndReply": true,
+      "hasReadToolAndResult": true,
+      "hasFutureRedConversation": false,
+      "hasNewPrompt": true
+    }
+  ],
+  "forkRequests": [
+    {
+      "method": "POST",
+      "path": "/api/sessions/640a885d-8708-4bd9-94a6-ffea64ae45c0/fork?workspaceId=1&tenantId=1",
+      "status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/640a885d-8708-4bd9-94a6-ffea64ae45c0/fork?workspaceId=1&tenantId=1",
+      "status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/api/sessions/640a885d-8708-4bd9-94a6-ffea64ae45c0/fork?workspaceId=1&tenantId=1",
+      "status": 201
+    }
+  ],
+  "scope": "Real browser UI, fork/history/SQLite/SDK; local mock model and fixture authentication",
+  "foundAndFixed": "Repeated projects_updated snapshot removed newly registered fork from both UI shells"
+}

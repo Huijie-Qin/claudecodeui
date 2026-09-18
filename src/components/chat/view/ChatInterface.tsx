@@ -12,6 +12,7 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
+import { useChatSessionFork } from '../hooks/useChatSessionFork';
 import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
@@ -162,6 +163,14 @@ function ChatInterface({
     pendingViewSessionRef,
     sessionStore,
     initialUserMessage,
+  });
+
+  const { forkMessage, forkingMessageUuid, forkError, forkDisabled } = useChatSessionFork({
+    selectedProject,
+    sessionId: selectedSession?.id || currentSessionId,
+    provider,
+    isProcessing: isLoading || Boolean(processingSessions?.has(selectedSession?.id || currentSessionId || '')),
+    onNavigateToSession,
   });
 
   const subagentTraces = useMemo(
@@ -604,6 +613,23 @@ function ChatInterface({
         className="relative flex h-full min-h-0 overflow-hidden"
       >
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {selectedSession?.parentSessionId && onNavigateToSession && (
+            <div className="shrink-0 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => onNavigateToSession(selectedSession.parentSessionId!)}
+              >
+                {t('fork.viewParent', { defaultValue: 'View original chat' })}
+              </button>
+              <span className="ml-2">{t('fork.sameWorkspace', { defaultValue: 'This branch uses the same workspace.' })}</span>
+            </div>
+          )}
+          {forkError && (
+            <div role="alert" className="shrink-0 border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              {t('fork.failed', { defaultValue: 'Could not branch this chat. Please retry.' })} {forkError}
+            </div>
+          )}
           <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
@@ -643,6 +669,9 @@ function ChatInterface({
           showThinking={showThinking}
           selectedProject={selectedProject}
           onOpenSubagent={handleOpenSubagent}
+          onForkMessage={onNavigateToSession && selectedProject.accessRole !== 'view' ? forkMessage : undefined}
+          forkingMessageUuid={forkingMessageUuid}
+          forkDisabled={forkDisabled}
         />
 
           {(latestHiddenSubagentQuestion || unresolvedSubagentQuestions.length > 0) && (
