@@ -632,6 +632,40 @@ test('Claude turn completion waits for AskUserQuestion responses before closing 
   assert.equal(claudeSdk.shouldEmitClaudeTurnCompletion(completion, interactions, lifecycle), true);
 });
 
+test('a finished Claude reply cannot complete while a new MCP loop is pending', async () => {
+  const { createClaudeTurnLifecycleTracker, shouldEmitClaudeTurnCompletion } = await import('./claude-sdk.js');
+  const lifecycle = createClaudeTurnLifecycleTracker();
+  lifecycle.finishResult(0);
+  const completion = { sessionId: 'session-1' };
+  const pendingLoop = { sessionId: 'session-1', jobIds: new Set(['next-loop']) };
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle, pendingLoop), false);
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle, null), true);
+});
+
+test('a newly registered MCP loop cancels an already scheduled turn completion', async () => {
+  const { createClaudeTurnLifecycleTracker, shouldEmitClaudeTurnCompletion, createClaudeTurnCompletionScheduler } = await import('./claude-sdk.js');
+  const lifecycle = createClaudeTurnLifecycleTracker();
+  lifecycle.finishResult(0);
+  let pendingLoop = null;
+  let complete = false;
+  let fire;
+  const scheduler = createClaudeTurnCompletionScheduler({
+    canComplete: () => shouldEmitClaudeTurnCompletion({ sessionId: 'session-1' }, null, lifecycle, pendingLoop),
+    onComplete: () => { complete = true; },
+    setTimeoutFn: (callback) => { fire = callback; return { unref() {} }; },
+    clearTimeoutFn: () => {},
+  });
+  assert.equal(scheduler.schedule(), true);
+  pendingLoop = { jobIds: new Set(['new-loop']) };
+  fire();
+  assert.equal(complete, false);
+  assert.equal(scheduler.schedule(), false);
+  pendingLoop = null;
+  assert.equal(scheduler.schedule(), true);
+  fire();
+  assert.equal(complete, true);
+});
+
 test('result plus a quiet stream cannot close the turn while background agents are running', async () => {
   const claudeSdk = await import('./claude-sdk.js');
   const { completeClaudeTurnBoundary } = await import('./services/claude-turn-boundary.js');

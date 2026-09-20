@@ -1268,9 +1268,9 @@ function createClaudeTurnLifecycleTracker() {
   };
 }
 
-function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions, turnLifecycle) {
+function shouldEmitClaudeTurnCompletion(pendingCompletion, pendingInteractions, turnLifecycle, pendingMcpLoop = null) {
   return Boolean(pendingCompletion) && Boolean(turnLifecycle?.canComplete()) &&
-    !pendingInteractions?.isPaused?.();
+    !pendingInteractions?.isPaused?.() && !pendingMcpLoop;
 }
 
 function createClaudeTurnCompletionScheduler({
@@ -1418,6 +1418,16 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
+  // The delivered batch remains registered until this query returns, for
+  // cancellation/reconnection and error reporting. It must not block its own
+  // resumed turn's completion. Any newly registered batch still blocks it.
+  const resumedMcpLoopSuspension = options.mcpLoopResume === true
+    ? mcpLoopSuspensionsBySession.get(sessionId)
+    : null;
+  const getPendingMcpLoopSuspension = (sid) => {
+    const suspension = mcpLoopSuspensionsBySession.get(sid);
+    return suspension === resumedMcpLoopSuspension ? null : suspension;
+  };
   const initialMessageId = resolveClaudeUserMessageId(clientMessageId);
   const usageTurn = createClaudeUsageTurnCapture({ options, clientMessageId: initialMessageId, writerUserId: ws?.userId });
   const skillUsageCapture = createClaudeSkillContextCapture({ options, writerUserId: ws?.userId });
@@ -1532,8 +1542,10 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   const canCompletePendingTurn = () => {
     const sid = capturedSessionId || sessionId || null;
     return !turnBoundaryReached && !queryAbortController.signal.aborted &&
-      !abortedSessions.has(sid) && !mcpLoopSuspensionsBySession.has(sid) &&
-      shouldEmitClaudeTurnCompletion(pendingTurnCompletion, pendingInteractions, turnLifecycle);
+      !abortedSessions.has(sid) &&
+      shouldEmitClaudeTurnCompletion(
+        pendingTurnCompletion, pendingInteractions, turnLifecycle, getPendingMcpLoopSuspension(sid),
+      );
   };
 
   const emitPendingTurnCompletion = () => {
@@ -2676,7 +2688,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     turnCompletionScheduler.cancel();
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.has(finalSessionId) : false;
-    const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+    const loopSuspension = finalSessionId ? getPendingMcpLoopSuspension(finalSessionId) : null;
     if (wasAborted) usageTurn.terminal('aborted');
 
     if (!wasAborted && !loopSuspension) {
@@ -2699,7 +2711,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     // Clean up temporary image files
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    if (loopSuspension && runtimeOptions.mcpLoopResume !== true) {
+    if (loopSuspension) {
       agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
       recordProviderSession({
         options: runtimeOptions,
@@ -2784,7 +2796,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     console.error('SDK query error:', error);
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
-    const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+    const loopSuspension = finalSessionId ? getPendingMcpLoopSuspension(finalSessionId) : null;
     if (!loopSuspension) usageTurn.terminal(wasAborted ? 'aborted' : 'failed');
     if (!loopSuspension) {
       updateHookActivity(
@@ -2801,7 +2813,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     // Clean up temporary image files on error
     await cleanupTempFiles(tempImagePaths, tempDir);
 
-    if (loopSuspension && runtimeOptions.mcpLoopResume !== true) {
+    if (loopSuspension) {
       agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
       recordProviderSession({
         options: runtimeOptions,
@@ -2999,7 +3011,9 @@ function emitMcpLoopActivity(context, job, status, error = null) {
 
 function registerMcpLoopSessionJob(sessionId, job, context) {
   let suspension = mcpLoopSuspensionsBySession.get(sessionId);
-  if (!suspension) {
+  // A resumed query may start another loop. Keep its pending batch separate
+  // from the delivered batch, whose finally block is still waiting to run.
+  if (!suspension || suspension.resuming) {
     suspension = {
       sessionId,
       jobIds: new Set(),
