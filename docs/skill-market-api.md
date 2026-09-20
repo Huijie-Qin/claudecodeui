@@ -37,10 +37,10 @@ When both values are blank, CCUI sends no authorization header. When configured,
 Authorization: CLOUDSOA-HMAC-SHA256 appid={SKILL_MARKET_AUTH_APPID}, timestamp={timestamp}, signature="{signature}"
 ```
 
-Every remote Skill Market request also includes the current tenant code from the CCUI `tenants` table:
+Every remote Skill Market request also includes the current tenant production code (`prod_code`) from the CCUI `tenants` table:
 
 ```text
-X-Data-Agent-Tenant: {tenants.code}
+X-Data-Agent-Tenant: {tenants.prod_code}
 ```
 
 Every remote Skill Market request includes the current account username from the CCUI `users` table:

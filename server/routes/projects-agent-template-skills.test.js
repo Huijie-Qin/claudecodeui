@@ -21,8 +21,7 @@ async function setup(t) {
   const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), 'template-skill-install-'));
   t.after(async () => { database.close(); await fs.rm(workspacePath, { recursive: true, force: true }); });
   const userId = Number(database.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('alice', 'test-hash').lastInsertRowid);
-  const sourceTenant = multitenancy.tenants.createTenant({ code: 'skill-market-team', name: 'Source' });
-  database.prepare('UPDATE tenants SET prod_code = ? WHERE id = ?').run('agent-api-product', sourceTenant.id);
+  const sourceTenant = multitenancy.tenants.createTenant({ code: 'skill-market-team', prodCode: 'market-product', name: 'Source' });
   const targetTenant = multitenancy.tenants.createTenant({ code: 'workspace-team', name: 'Target' });
   multitenancy.memberships.upsertMembership({ tenantId: targetTenant.id, userId, role: 'member', permission: 'edit', status: 'active' });
   const workspace = multitenancy.workspaces.createWorkspace({
@@ -33,8 +32,8 @@ async function setup(t) {
   const remoteSkill = { id: 'remote-research', skillId: 'remote-research', name: 'market-research', version: 1 };
   const checkContext = (operation, context) => {
     calls.push({ operation, ...context });
-    // Reproduce a market that scopes its inventory by tenant.code, not prod_code.
-    if (context.tenantCode !== sourceTenant.code) throw new Error('该技能不存在');
+    // The market scopes its inventory by the source tenant production code.
+    if (context.tenantCode !== sourceTenant.prod_code) throw new Error('该技能不存在');
   };
   const marketService = {
     fetchRemoteSkillDetail: async (ref, context) => {
@@ -48,8 +47,8 @@ async function setup(t) {
     },
   };
   const skillPresets = createSkillPresetService({ multitenancy, marketService });
-  const created = await skillPresets.createPreset({ tenantId: sourceTenant.id, userId, input: { sourceRef: remoteSkill.id }, tenantCode: sourceTenant.code, accountId: 'admin' });
-  const validated = await skillPresets.validatePreset({ tenantId: sourceTenant.id, presetId: created.id, userId, tenantCode: sourceTenant.code, accountId: 'admin' });
+  const created = await skillPresets.createPreset({ tenantId: sourceTenant.id, userId, input: { sourceRef: remoteSkill.id }, tenantCode: sourceTenant.prod_code, accountId: 'admin' });
+  const validated = await skillPresets.validatePreset({ tenantId: sourceTenant.id, presetId: created.id, userId, tenantCode: sourceTenant.prod_code, accountId: 'admin' });
   assert.equal(validated.validation.status, 'healthy');
   const published = skillPresets.publishPreset({ tenantId: sourceTenant.id, presetId: created.id, userId });
   const options = {
@@ -61,15 +60,15 @@ async function setup(t) {
 
 test('template skills use the same source tenant as validation and are materialized in the target workspace', async (t) => {
   const { options, sourceTenant, manifest, calls, marketService, remoteSkill } = await setup(t);
-  await assert.rejects(marketService.fetchRemoteSkillDetail(remoteSkill.id, { tenantCode: 'agent-api-product', accountId: 'alice' }), /该技能不存在/);
+  await assert.rejects(marketService.fetchRemoteSkillDetail(remoteSkill.id, { tenantCode: sourceTenant.code, accountId: 'alice' }), /该技能不存在/);
   calls.length = 0;
 
   const result = await applyAgentTemplateSkillsToWorkspace(options);
   assert.deepEqual(result.warnings, []);
   assert.equal(result.appliedSkills.length, 1);
   assert.deepEqual(calls, [
-    { operation: 'lookup', tenantCode: sourceTenant.code, accountId: 'alice', exactId: true },
-    { operation: 'download', tenantCode: sourceTenant.code, accountId: 'alice' },
+    { operation: 'lookup', tenantCode: sourceTenant.prod_code, accountId: 'alice', exactId: true },
+    { operation: 'download', tenantCode: sourceTenant.prod_code, accountId: 'alice' },
   ]);
   const runtimePath = path.join(options.workspace.path, '.claude', 'skills', 'market-research');
   assert.equal(await fs.readFile(path.join(runtimePath, 'SKILL.md'), 'utf8'), manifest);

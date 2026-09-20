@@ -5,7 +5,7 @@ import express from 'express';
 
 import { createSkillMarketRouter } from './skill-market.js';
 
-const TEST_TENANT_CODE = 'tenant-code';
+const TEST_TENANT_CODE = 'prod-tenant-code';
 const TEST_USERNAME = 'test-user';
 
 async function requestJson(
@@ -56,7 +56,7 @@ function createRouter({
 } = {}) {
   return createSkillMarketRouter({
     tenantMiddleware: (req, res, next) => {
-      req.tenant = { id: 2, permission: 'edit' };
+      req.tenant = { id: 2, permission: 'edit', code: 'local-tenant-code', membership: { tenant_code: 'local-tenant-code' } };
       next();
     },
     access: {
@@ -66,7 +66,7 @@ function createRouter({
       })),
     },
     tenants: tenants || {
-      getTenantById: (tenantId) => ({ id: tenantId, code: TEST_TENANT_CODE, status: 'active' }),
+      getTenantById: (tenantId) => ({ id: tenantId, code: 'local-tenant-code', prod_code: TEST_TENANT_CODE, status: 'active' }),
     },
     users: users || {
       getUserById: (userId) => ({ id: userId, username: TEST_USERNAME }),
@@ -107,6 +107,21 @@ function createRouter({
     },
   });
 }
+
+test('market requests reject missing prod_code without falling back to the local tenant code', async () => {
+  for (const prodCode of [undefined, '', '   ']) {
+    const router = createRouter({
+      tenants: { getTenantById: (id) => ({ id, code: 'local-tenant-code', prod_code: prodCode }) },
+      listSkillMarket: async () => assert.fail('Market must not be called without prod_code'),
+      downloadMarketSkill: async () => assert.fail('Download must not be called without prod_code'),
+    });
+    for (const [path, method] of [['/skills', 'GET'], ['/skills/bug-hunter/download', 'POST']]) {
+      const { response, payload } = await requestJson(router, `${path}?tenantId=2&workspaceId=10`, { method });
+      assert.equal(response.status, 400);
+      assert.equal(payload.error, 'Tenant prod_code is required');
+    }
+  }
+});
 
 test('GET /skills returns market inventory for view access', async () => {
   const seen = {};

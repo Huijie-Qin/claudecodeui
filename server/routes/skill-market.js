@@ -365,23 +365,14 @@ function resolveWorkspace(req, access, { requireEdit }) {
 }
 
 function resolveTenantCode(req, tenants) {
-  const tenantCode = req.tenant?.code
-    ?? req.tenant?.tenantCode
-    ?? req.tenant?.membership?.tenant_code
-    ?? req.tenant?.membership?.tenantCode
-    ?? req.tenant?.membership?.code;
-
-  if (tenantCode) {
-    return String(tenantCode);
-  }
-
   const tenantId = req.tenant?.id ?? getRequestTenantId(req);
   const tenant = tenants?.getTenantById?.(tenantId);
-  if (tenant?.code) {
-    return String(tenant.code);
+  const prodCode = String(tenant?.prod_code || '').trim();
+  if (prodCode) {
+    return prodCode;
   }
 
-  const error = new Error('Tenant code is required');
+  const error = new Error('Tenant prod_code is required');
   error.statusCode = 400;
   throw error;
 }

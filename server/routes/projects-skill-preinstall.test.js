@@ -34,7 +34,7 @@ test('user-created projects do not inherit tenant Skill presets', async (t) => {
     import('../services/skill-presets.js'),
     import('../services/agent-templates.js'),
   ]);
-  const tenant = { id: 13, code: 'test-tenant', name: 'Test Tenant' };
+  const tenant = { id: 13, code: 'test-tenant', prod_code: 'prod-test-tenant', name: 'Test Tenant' };
   const user = { id: 7, username: 'test-user' };
   const workspaces = [];
   const installed = [];

@@ -17,7 +17,7 @@ test('tenant assignment creates default root workspace with invited username pat
     const skillPreinstallCalls = [];
     const multitenancy = {
       tenants: {
-        getTenantById: (tenantId) => ({ id: tenantId, code: 'team', name: 'Team', status: 'active' }),
+        getTenantById: (tenantId) => ({ id: tenantId, code: 'team', prod_code: 'prod-team', name: 'Team', status: 'active' }),
       },
       workspaces: {
         getWorkspaceByTenantSlug: ({ tenantId, ownerUserId, slug }) => workspaces.find((workspace) => (
@@ -90,7 +90,7 @@ test('tenant assignment creates default root workspace with invited username pat
       workspaceId: 1,
       workspacePath: created.path,
       userId: 7,
-      tenantCode: 'team',
+      tenantCode: 'prod-team',
       accountId: 'new-user',
     }]);
     assert.equal(await fs.readFile(installedSkillPath, 'utf8'), 'User-customized instructions.\n');

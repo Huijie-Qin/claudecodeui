@@ -136,7 +136,7 @@ export async function ensureDefaultRootWorkspace({
     await installPreinstalledMcpPresets(workspaceMcpTools, { tenantId, userId, workspace });
     await installPreinstalledSkillPresets(skillPresets, {
       tenantId,
-      tenantCode: tenant?.code,
+      tenantCode: tenant?.prod_code,
       userId,
       username: user?.username,
       workspace,
