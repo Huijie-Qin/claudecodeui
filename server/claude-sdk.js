@@ -119,7 +119,6 @@ const execFileAsync = promisify(execFile);
 const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
-const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
 
 function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
@@ -963,35 +962,6 @@ function extractTokenUsage(resultMessage) {
   };
 }
 
-function createSingleMessagePrompt(message) {
-  return (async function* singleMessagePrompt() {
-    yield message;
-  })();
-}
-
-function parseImageDataUrl(image, index) {
-  const matches = typeof image?.data === 'string'
-    ? image.data.match(/^data:([^;]+);base64,(.+)$/)
-    : null;
-  if (!matches) {
-    throw new Error(`Image ${index + 1} is missing valid base64 data.`);
-  }
-
-  const [, mimeType, base64Data] = matches;
-  if (!CLAUDE_SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
-    throw new Error(`Unsupported image type ${mimeType}. Claude supports JPEG, PNG, GIF, and WebP images.`);
-  }
-
-  return {
-    type: 'image',
-    source: {
-      type: 'base64',
-      media_type: mimeType,
-      data: base64Data,
-    },
-  };
-}
-
 function logChatSessionTokenUsage({ requestId, provider, sessionId, model, tokenBudget, tokenUsage }) {
   console.log('[chat-session]', JSON.stringify({
     event: 'token_usage',
@@ -1319,10 +1289,10 @@ function resolveClaudeUserMessageId(clientMessageId) {
 }
 
 /**
- * Builds a Claude SDK user message. Text-only turns use native string content;
- * turns with images use content blocks so Claude receives native visual input.
+ * Chat image attachments are disabled. Retain the legacy image argument for
+ * callers, but keep SDK content textual for gateways without image support.
  */
-function buildClaudeUserMessage(command, images, options = {}) {
+function buildClaudeUserMessage(command, _images, options = {}) {
   const envelopeMetadata = {
     ...(options.uuid ? { uuid: options.uuid } : {}),
     priority: options.priority || 'next',
@@ -1330,32 +1300,11 @@ function buildClaudeUserMessage(command, images, options = {}) {
     timestamp: options.timestamp || new Date().toISOString(),
   };
 
-  if (!images || images.length === 0) {
-    return {
-      type: 'user',
-      message: {
-        role: 'user',
-        content: command,
-      },
-      parent_tool_use_id: null,
-      ...envelopeMetadata,
-    };
-  }
-
-  const content = [];
-  if (typeof command === 'string' && command.trim()) {
-    content.push({ type: 'text', text: command });
-  }
-
-  images.forEach((image, index) => {
-    content.push(parseImageDataUrl(image, index));
-  });
-
   return {
     type: 'user',
     message: {
       role: 'user',
-      content,
+      content: command,
     },
     parent_tool_use_id: null,
     ...envelopeMetadata,
@@ -1365,13 +1314,8 @@ function buildClaudeUserMessage(command, images, options = {}) {
 /**
  * Backward-compatible helper for tests/imports that expect a prompt factory.
  */
-function createClaudePromptFactory(command, images) {
-  if (!images || images.length === 0) {
-    return () => command;
-  }
-
-  const userMessage = buildClaudeUserMessage(command, images);
-  return () => createSingleMessagePrompt(userMessage);
+function createClaudePromptFactory(command, _images) {
+  return () => command;
 }
 
 /**
@@ -1412,7 +1356,7 @@ async function cleanupTempFiles(tempImagePaths, tempDir) {
  * @param {Object} ws - WebSocket connection
  * @returns {Promise<void>}
  */
-async function queryClaudeSDKInternal(command, { clientMessageId, ...options } = {}, ws) {
+async function queryClaudeSDKInternal(command, { clientMessageId, images: _images, ...options } = {}, ws) {
   // A request identity belongs to this turn, not the reusable runtime options:
   // Hook and MCP continuations must not inherit the original user's UUID.
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
@@ -1757,7 +1701,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       includeHostConfig: !runtimeContext.disableHostMcpConfig,
     });
 
-    inputQueue.push(buildClaudeUserMessage(command, options.images, {
+    inputQueue.push(buildClaudeUserMessage(command, [], {
       uuid: initialMessageId,
       priority: 'next',
       shouldQuery: true,

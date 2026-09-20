@@ -738,7 +738,7 @@ function SkillActionEditor({
             onOpenChange={setPickerOpen}
             hideTrigger
             className="absolute inset-x-0 top-full z-40"
-            menuClassName="min-w-[360px]"
+            menuMinWidth={360}
           />
         </div>
       </div>
@@ -850,7 +850,7 @@ function AgentMessageActionEditor({
             onOpenChange={setPickerOpen}
             hideTrigger
             className="absolute inset-x-0 top-full z-40"
-            menuClassName="min-w-[360px]"
+            menuMinWidth={360}
           />
         </div>
       </div>
@@ -1345,8 +1345,8 @@ function ReturnValueEditor({
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         hideTrigger
+        anchorRef={inputRef}
         className="absolute inset-x-0 top-full z-40"
-        menuClassName="!top-0 mt-1 w-full"
       />
     </div>
   );

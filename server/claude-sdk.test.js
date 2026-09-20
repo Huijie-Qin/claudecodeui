@@ -1045,51 +1045,24 @@ test('resolveClaudeSupplementPayload validates without trimming native skill con
   });
 });
 
-test('createClaudePromptFactory creates native image content blocks', async () => {
-  const claudeSdk = await import('./claude-sdk.js');
-
-  const createPrompt = claudeSdk.createClaudePromptFactory('describe this', [
-    {
-      data: 'data:image/png;base64,aGVsbG8=',
-      size: 5,
-      mimeType: 'image/png',
-    },
-  ]);
-
-  const iterator = createPrompt()[Symbol.asyncIterator]();
-  const first = await iterator.next();
-  const second = await iterator.next();
-
-  assert.equal(second.done, true);
-  assert.equal(first.value.type, 'user');
-  assert.equal(first.value.parent_tool_use_id, null);
-  assert.deepEqual(first.value.message, {
-    role: 'user',
-    content: [
-      { type: 'text', text: 'describe this' },
-      {
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: 'image/png',
-          data: 'aGVsbG8=',
-        },
-      },
-    ],
-  });
-});
-
-test('createClaudePromptFactory rejects unsupported image types', async () => {
-  const claudeSdk = await import('./claude-sdk.js');
-
-  assert.throws(
-    () => claudeSdk.createClaudePromptFactory('describe this', [
-      {
-        data: 'data:image/svg+xml;base64,PHN2Zy8+',
-        size: 6,
-        mimeType: 'image/svg+xml',
-      },
-    ]),
-    /Unsupported image type image\/svg\+xml/,
-  );
+test('legacy image attachments never turn a Claude request into multimodal input', async () => {
+  const { buildClaudeUserMessage, createClaudePromptFactory } = await import('./claude-sdk.js');
+  const command = '/report\n保留原始文本\n';
+  const metadata = {
+    uuid: '11111111-1111-4111-8111-111111111111',
+    priority: 'now', shouldQuery: false, timestamp: '2026-09-20T00:00:00.000Z',
+  };
+  for (const images of [
+    undefined, [],
+    [{ data: 'data:image/png;base64,aGVsbG8=', mimeType: 'image/png' }],
+    [{ data: 'data:image/svg+xml;base64,PHN2Zy8+', mimeType: 'image/svg+xml' }],
+    [{ data: 'invalid legacy attachment' }],
+  ]) {
+    const message = buildClaudeUserMessage(command, images, metadata);
+    assert.deepEqual(message, {
+      type: 'user', message: { role: 'user', content: command },
+      parent_tool_use_id: null, ...metadata,
+    });
+    assert.equal(createClaudePromptFactory(command, images)(), command);
+  }
 });
