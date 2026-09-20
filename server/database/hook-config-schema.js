@@ -185,6 +185,7 @@ function publishedVersionResourceRefsFromRow(row) {
 export const HOOK_CONFIG_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS hooks (
   id TEXT PRIMARY KEY,
+  owner_tenant_id INTEGER,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   user_variables_json TEXT NOT NULL DEFAULT '[]',
@@ -406,6 +407,9 @@ CREATE TABLE IF NOT EXISTS hook_data_records (
   session_id TEXT,
   record_type TEXT NOT NULL,
   data_json TEXT NOT NULL,
+  post_action_id TEXT,
+  hook_version INTEGER,
+  record_source TEXT NOT NULL DEFAULT 'unknown',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (execution_id) REFERENCES hook_executions(id) ON DELETE CASCADE,
   FOREIGN KEY (hook_id) REFERENCES hooks(id) ON DELETE CASCADE,
@@ -440,6 +444,9 @@ export function migrateHookConfigurationModel(database) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_hook_bindings'")
     .get());
   const migrate = database.transaction(() => {
+    if (!columns.some((column) => column.name === 'owner_tenant_id')) {
+      database.exec('ALTER TABLE hooks ADD COLUMN owner_tenant_id INTEGER');
+    }
     if (!hasIncludeSubagents) {
       // NULL preserves the historical event-specific behavior. New API-created
       // Hooks explicitly store 0 until the administrator enables the switch.
@@ -588,6 +595,27 @@ export function migrateHookExecutionDiagnostics(database) {
     addedStartedAtMs: !hasStartedAtMs,
     addedCompletedAtMs: !hasCompletedAtMs,
   };
+}
+
+// Provenance is written by the runtime, never inferred from user-controlled
+// record JSON. Legacy rows deliberately remain unknown: migrations may have
+// reassigned their Hook without preserving the original action identity.
+export function migrateHookRecordSources(database) {
+  const columns = database.prepare('PRAGMA table_info(hook_data_records)').all();
+  if (!columns.length) return;
+  database.transaction(() => {
+    for (const [name, definition] of [
+      ['post_action_id', 'TEXT'],
+      ['hook_version', 'INTEGER'],
+      ['record_source', "TEXT NOT NULL DEFAULT 'unknown'"],
+    ]) {
+      if (!columns.some((column) => column.name === name)) {
+        database.exec(`ALTER TABLE hook_data_records ADD COLUMN ${name} ${definition}`);
+      }
+    }
+    database.exec(`CREATE INDEX IF NOT EXISTS idx_hook_data_records_report_source
+      ON hook_data_records(tenant_id, hook_id, post_action_id, created_at)`);
+  })();
 }
 
 export function migrateHookActivationModel(database) {

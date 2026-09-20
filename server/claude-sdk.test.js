@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createClaudeUsageTurnCapture } from './services/ai-usage-turns.js';
+import { createClaudeSkillContextCapture } from './services/ai-usage-skill-context.js';
+
 const withEnv = (key, value, callback) => {
   const previous = process.env[key];
   if (value === undefined) {
@@ -19,6 +22,37 @@ const withEnv = (key, value, callback) => {
     }
   }
 };
+
+test('usage capture commits only the final parent response boundary after background work settles', async () => {
+  const { createClaudeTurnLifecycleTracker, shouldEmitClaudeTurnCompletion } = await import('./claude-sdk.js');
+  const completed = [];
+  let timestamp = '2026-09-11T02:00:00.000Z';
+  const capture = createClaudeUsageTurnCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    now: () => timestamp,
+    recorder: {
+      start: (input) => ({ ...input, turnKey: 'turn-1' }),
+      complete: (input) => completed.push(input),
+      terminal: () => assert.fail('A successful parent response must not be marked incomplete'),
+    },
+  });
+  const lifecycle = createClaudeTurnLifecycleTracker();
+  lifecycle.observe({ type: 'system', subtype: 'task_started', task_id: 'child-1' });
+  lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  capture.observe({ type: 'result', subtype: 'success' });
+  lifecycle.finishResult(0);
+  const completion = { sessionId: 'session-1' };
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle), false);
+  assert.equal(completed.length, 0);
+  lifecycle.observe({ type: 'system', subtype: 'task_notification', task_id: 'child-1' });
+  timestamp = '2026-09-11T02:02:00.000Z';
+  capture.observe({ type: 'assistant', message: { content: [{ type: 'text', text: 'Final parent response' }] } });
+  capture.onStop({ hook_event_name: 'Stop' });
+  timestamp = '2026-09-11T02:03:00.000Z'; // Post-response Hook work.
+  lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle), true);
+  capture.complete();
+  assert.equal(completed[0].responseCompletedAt, '2026-09-11T02:02:00.000Z');
+});
 
 test('resolveClaudeModel lets ANTHROPIC_MODEL override UI model aliases', async () => {
   const claudeSdk = await import('./claude-sdk.js');
@@ -902,6 +936,53 @@ test('buildClaudeUserMessage preserves native multiline skill invocations exactl
   const message = claudeSdk.buildClaudeUserMessage(invocation, []);
 
   assert.equal(message.message.content, invocation);
+});
+
+test('Skill context follows the consumed SDK UUID without persisting slash arguments', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage, resolveClaudeUserMessageId } = await import('./claude-sdk.js');
+  const records = [];
+  const capture = createClaudeSkillContextCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    recorder: { recordRequest: (input) => records.push(input) } });
+  const messageId = resolveClaudeUserMessageId('not-a-client-uuid');
+  const command = '/report private parameters\nprivate prompt body';
+  const queue = new ClaudeInputQueue();
+  queue.push(buildClaudeUserMessage(command, [], { uuid: messageId }), {
+    onConsumed: () => capture.request({ messageId, command }),
+  });
+  assert.equal(records.length, 0);
+  const received = await queue.next();
+  assert.equal(received.value.uuid, messageId);
+  assert.equal(records[0].contextId, received.value.uuid);
+  assert.equal(records[0].requestId, received.value.uuid);
+  assert.equal(records[0].skillName, 'report');
+  assert.equal(JSON.stringify(records).includes('private'), false);
+  queue.close();
+});
+
+test('an inline supplemental UUID is independently recorded without guessing later Skill ownership', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
+  const requests = [];
+  const tools = [];
+  const capture = createClaudeSkillContextCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    recorder: { recordRequest: (input) => requests.push(input), recordTool: (input) => tools.push(input) } });
+  const queue = new ClaudeInputQueue();
+  for (const [messageId, supplemental] of [
+    ['11111111-1111-4111-8111-111111111111', false],
+    ['22222222-2222-4222-8222-222222222222', true],
+  ]) {
+    queue.push(buildClaudeUserMessage('/report', [], { uuid: messageId }), {
+      onConsumed: () => capture.request({ messageId, command: '/report', supplemental }),
+    });
+    await queue.next();
+  }
+  capture.observe({ type: 'assistant', parent_tool_use_id: null,
+    message: { content: [{ type: 'tool_use', name: 'Skill', id: 'tool', input: { skill: 'report' } }] } });
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[0].requestId, requests[1].requestId);
+  assert.equal(requests.every((input) => input.origin === 'user'), true);
+  assert.equal(tools[0].requestId, null);
+  assert.equal(tools[0].origin, 'unknown');
+  queue.close();
 });
 
 test('Claude user message IDs preserve client UUIDs and replace invalid or missing values', async () => {

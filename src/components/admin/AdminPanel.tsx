@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
 import {
+  Activity,
   BarChart3,
   Building2,
   Check,
@@ -40,12 +41,14 @@ import {
   Tooltip,
 } from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
+import AiUsagePanel from '../ai-usage/AiUsagePanel';
 
 import {
   buildTenantMembershipPayload,
   normalizeTenantCode,
   parseBatchUsernames,
   type TenantPermission,
+  type TenantRole,
 } from './adminPanelUtils';
 import AiCodeStatsTab from './AiCodeStatsTab';
 import AnalyticsDashboardTab from './AnalyticsDashboardTab';
@@ -96,7 +99,7 @@ type AdminMembership = {
   is_system_admin: number;
 };
 
-type AdminTab = 'analytics' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'agentTemplates' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck';
+type AdminTab = 'analytics' | 'aiUsage' | 'aiCode' | 'users' | 'tenants' | 'claudeEnv' | 'agentTemplates' | 'mcpPresets' | 'skillPresets' | 'hooks' | 'runtimes' | 'scheduledTaskLogs' | 'sqlCheck';
 type ClaudeEnvScopeTab = 'personal' | 'tenant' | 'policy';
 
 type AdminTabConfig = {
@@ -118,6 +121,7 @@ const ADMIN_TABS: AdminTabConfig[] = [
   { id: 'runtimes', labelKey: 'tabs.runtimes', defaultLabel: 'Runtime Monitor', icon: RefreshCw },
   { id: 'scheduledTaskLogs', labelKey: 'tabs.scheduledTaskLogs', defaultLabel: 'Scheduled Task Logs', icon: ScrollText },
   { id: 'analytics', labelKey: 'tabs.analytics', defaultLabel: 'Analytics', icon: BarChart3 },
+  { id: 'aiUsage', labelKey: 'tabs.aiUsage', defaultLabel: 'AI usage reports', icon: Activity },
   { id: 'aiCode', labelKey: 'tabs.aiCode', defaultLabel: 'AI Code', icon: Code2 },
 ];
 
@@ -411,10 +415,12 @@ export default function AdminPanel() {
   const [isLoadingClaudeEnvUsers, setIsLoadingClaudeEnvUsers] = useState(false);
   const [deletingClaudeEnvEntryKey, setDeletingClaudeEnvEntryKey] = useState<string | null>(null);
   const [permission, setPermission] = useState<TenantPermission>('edit');
+  const [membershipRole, setMembershipRole] = useState<TenantRole | ''>('');
   const [batchPermission, setBatchPermission] = useState<TenantPermission>('edit');
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
+  const [reportTenantId, setReportTenantId] = useState('');
   const [hasOpenedSkillPresets, setHasOpenedSkillPresets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
@@ -814,7 +820,7 @@ export default function AdminPanel() {
       const response = await api.admin.upsertTenantUser(
         tenantId,
         userId,
-        buildTenantMembershipPayload(permission),
+        buildTenantMembershipPayload(permission, membershipRole || undefined),
       );
 
       if (!response.ok) {
@@ -827,6 +833,7 @@ export default function AdminPanel() {
       setSelectedTenantId('');
       setSelectedUserId('');
       setPermission('edit');
+      setMembershipRole('');
       showToast(t('toast.grantTenantAccessSuccess', {
         tenantName: selectedTenant?.name || t('fields.tenant'),
         username: selectedUser?.username || t('fields.user'),
@@ -842,6 +849,36 @@ export default function AdminPanel() {
       setIsSaving(false);
     }
   };
+
+  const updateMembership = async (membership: AdminMembership, patch: { role?: TenantRole; permission?: TenantPermission }) => {
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await api.admin.upsertTenantUser(membership.tenant_id, membership.user_id, patch);
+      if (!response.ok) {
+        setError(await readError(response, t('errors.grantTenantAccess')));
+        return;
+      }
+      await load();
+      await refreshTenants();
+    } catch {
+      setError(t('errors.grantTenantAccess'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const renderMembershipRole = () => (
+    <label className="space-y-1">
+      <span className="text-xs text-muted-foreground">{t('tenantRoles.label')}</span>
+      <select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={membershipRole} onChange={(event) => setMembershipRole(event.target.value as TenantRole | '')}>
+        <option value="">{t('tenantRoles.preserve')}</option>
+        <option value="member">{t('tenantRoles.member')}</option>
+        <option value="tenant_admin">{t('tenantRoles.tenant_admin')}</option>
+      </select>
+      <span className="block text-xs text-muted-foreground">{t('tenantRoles.hint')}</span>
+    </label>
+  );
 
   const grantMembershipsBatch = async () => {
     const tenantIds = selectedBatchTenantIds.map(Number).filter(Boolean);
@@ -1324,6 +1361,19 @@ export default function AdminPanel() {
             </div>
           ) : null}
 
+          {activeTab === 'aiUsage' ? (
+            <div className="h-full overflow-y-auto">
+              <label className="mx-5 mt-4 flex items-center gap-3 text-sm">
+                {t('fields.tenant')}
+                <select className="h-9 max-w-xs rounded-md border border-input bg-background px-3" value={reportTenantId || String(currentTenant?.id || '')} onChange={(event) => setReportTenantId(event.target.value)}>
+                  <option value="">{t('common.select')}</option>
+                  {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+                </select>
+              </label>
+              {Number(reportTenantId || currentTenant?.id) > 0 && <AiUsagePanel key={`${currentUserId}:${reportTenantId || currentTenant?.id}`} tenantId={Number(reportTenantId || currentTenant?.id)} />}
+            </div>
+          ) : null}
+
           {activeTab === 'aiCode' ? (
             <div className="h-full overflow-y-auto px-5 py-4">
               <AiCodeStatsTab tenants={tenants} users={users} />
@@ -1470,7 +1520,7 @@ export default function AdminPanel() {
 
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('users.grantAccessTitle')}</h3>
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_110px_minmax(160px,1fr)_auto]">
                   <label className="space-y-1">
                     <span className="text-xs text-muted-foreground">{t('fields.user')}</span>
                     <select
@@ -1512,6 +1562,7 @@ export default function AdminPanel() {
                       <option value="view">{t('permissions.view')}</option>
                     </select>
                   </label>
+                  {renderMembershipRole()}
                   <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
                     {t('common.grant')}
                   </Button>
@@ -1566,7 +1617,7 @@ export default function AdminPanel() {
                                     key={membershipKey(membership)}
                                     className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                                   >
-                                    {membership.tenant_name} · {translatePermission(t, membership.permission)}
+                                    {membership.tenant_name} · {translatePermission(t, membership.permission)} · {t(`tenantRoles.${membership.role === 'tenant_admin' ? 'tenant_admin' : 'member'}`)}
                                   </span>
                                 ))
                             )}
@@ -2034,7 +2085,7 @@ export default function AdminPanel() {
 
               <section className="space-y-3">
                 <h3 className="text-sm font-medium text-foreground">{t('tenants.grantAccessTitle')}</h3>
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_110px_minmax(160px,1fr)_auto]">
                   <label className="space-y-1">
                     <span className="text-xs text-muted-foreground">{t('fields.tenant')}</span>
                     <select
@@ -2076,6 +2127,7 @@ export default function AdminPanel() {
                       <option value="view">{t('permissions.view')}</option>
                     </select>
                   </label>
+                  {renderMembershipRole()}
                   <Button className="self-end" onClick={grantMembership} disabled={isSaving}>
                     {t('common.grant')}
                   </Button>
@@ -2113,12 +2165,17 @@ export default function AdminPanel() {
                               tenantMemberships.map((membership) => (
                                 <div
                                   key={membershipKey(membership)}
-                                  className="grid gap-2 rounded-md bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
+                                  className="grid gap-2 rounded-md bg-muted/30 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]"
                                 >
                                   <span className="min-w-0 truncate text-foreground">{membership.username}</span>
-                                  <span className="self-center rounded bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                                    {translatePermission(t, membership.permission)}
-                                  </span>
+                                  <select aria-label={`${membership.username} ${t('fields.access')}`} className="rounded border border-input bg-background px-2 py-1 text-xs" value={membership.permission} disabled={isSaving} onChange={(event) => void updateMembership(membership, { permission: event.target.value as TenantPermission })}>
+                                    <option value="view">{t('permissions.view')}</option>
+                                    <option value="edit">{t('permissions.edit')}</option>
+                                  </select>
+                                  <select aria-label={`${membership.username} ${t('tenantRoles.label')}`} className="rounded border border-input bg-background px-2 py-1 text-xs" value={membership.role === 'tenant_admin' ? 'tenant_admin' : 'member'} disabled={isSaving || membership.is_system_admin === 1} onChange={(event) => void updateMembership(membership, { role: event.target.value as TenantRole })}>
+                                    <option value="member">{t('tenantRoles.member')}</option>
+                                    <option value="tenant_admin">{t('tenantRoles.tenant_admin')}</option>
+                                  </select>
                                   <span className="self-center rounded bg-background px-2 py-0.5 text-xs text-muted-foreground">
                                     {translateStatus(t, membership.status)}
                                   </span>

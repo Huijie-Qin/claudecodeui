@@ -356,6 +356,39 @@ function normalizeBinding(value, name) {
   return { source: 'literal', value: value.value };
 }
 
+function normalizeRecordReportFields(value, fields, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 20) {
+    throw createHttpError(`${name} must be an array of at most 20 fields`);
+  }
+  const keys = new Set();
+  return value.map((field, index) => {
+    const prefix = `${name}[${index}]`;
+    if (!isPlainObject(field)) throw createHttpError(`${prefix} must be an object`);
+    if (Object.keys(field).some((key) => !['key', 'label', 'type', 'unit', 'aggregation'].includes(key))) {
+      throw createHttpError(`${prefix} only supports key, label, type, unit, and aggregation`);
+    }
+    const key = requireString(field.key, `${prefix}.key`, { max: 200 });
+    if (!/^[\p{L}_][\p{L}\p{N}_-]*$/u.test(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) {
+      throw createHttpError(`${prefix}.key must be a plain record field name, not a path or expression`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) throw createHttpError(`${prefix}.key must select an existing record field`);
+    if (keys.has(key)) throw createHttpError(`${prefix}.key is duplicated`);
+    keys.add(key);
+    if (!['number', 'string', 'boolean'].includes(field.type)) throw createHttpError(`${prefix}.type must be number, string, or boolean`);
+    const aggregation = field.aggregation ?? 'none';
+    if (!['sum', 'avg', 'min', 'max', 'none'].includes(aggregation)) throw createHttpError(`${prefix}.aggregation is not supported`);
+    if (field.type !== 'number' && aggregation !== 'none') throw createHttpError(`${prefix}.aggregation requires a numeric field`);
+    return {
+      key,
+      label: requireString(field.label ?? key, `${prefix}.label`, { max: 120 }),
+      type: field.type,
+      ...(field.unit == null ? {} : { unit: requireString(field.unit, `${prefix}.unit`, { max: 32, allowEmpty: true }) }),
+      aggregation,
+    };
+  });
+}
+
 function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true } = {}) {
   const rawActions = value == null ? [] : value;
   if (!Array.isArray(rawActions)) throw createHttpError('postActions must be an array');
@@ -461,6 +494,7 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             ? null
             : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           fields,
+          reportFields: normalizeRecordReportFields(config.reportFields, fields, `postActions[${index}].config.reportFields`),
         },
       };
     }
@@ -665,6 +699,7 @@ function mapHookRow(row) {
   if (!row) return null;
   return {
     id: row.id,
+    ownerTenantId: row.owner_tenant_id ?? null,
     name: row.name,
     description: row.description || '',
     userVariables: normalizeHookUserVariables(parseJson(row.user_variables_json, [])),
@@ -1235,6 +1270,7 @@ export function createHookConfigService({
     return mergeHookUserVariableValues(hook.userVariables, values);
   };
   const isAdminHookAvailableToUser = ({ hook, userId, tenantId = null }) => (
+    (hook.ownerTenantId == null || Number(hook.ownerTenantId) === Number(tenantId)) && (
     hook.activationScope === 'all_users'
     || Boolean(database.prepare(`
       SELECT 1
@@ -1257,7 +1293,7 @@ export function createHookConfigService({
         WHERE tenant_scope.hook_id = ?
           AND (? IS NULL OR tenant_scope.tenant_id = ?)
       )
-    `).get(hook.id, userId, userId, hook.id, tenantId, tenantId))
+    `).get(hook.id, userId, userId, hook.id, tenantId, tenantId)))
   );
   const requireWorkspaceContext = ({ workspaceId, tenantId = null }) => {
     const normalizedWorkspaceId = Number(workspaceId);
@@ -1398,7 +1434,7 @@ export function createHookConfigService({
       normalizedUserId,
       workspace.tenantId,
     );
-    const hooks = rows.map((row) => {
+    const hooks = rows.filter((row) => row.owner_tenant_id == null || Number(row.owner_tenant_id) === workspace.tenantId).map((row) => {
       const hasAssignment = row.assignment_hook_version != null;
       const assignment = hasAssignment ? {
         workspaceId: workspace.id,
@@ -1497,6 +1533,9 @@ export function createHookConfigService({
   }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
+    if (hook.ownerTenantId != null && Number(hook.ownerTenantId) !== workspace.tenantId) {
+      throw createHttpError('Hook is not available in this tenant', 403);
+    }
     if (!['manual', 'agent_template'].includes(source)) {
       throw createHttpError('source must be manual or agent_template');
     }
@@ -1618,6 +1657,9 @@ export function createHookConfigService({
   const ensureWorkspaceHookEligible = ({ workspaceId, userId, hookId }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
+    if (hook.ownerTenantId != null && Number(hook.ownerTenantId) !== workspace.tenantId) {
+      throw createHttpError('Hook is not available in this tenant', 403);
+    }
     const assignment = getWorkspaceHookAssignment({ workspaceId, hookId });
     const userEligible = hook.bindingController === 'sql_check' || isAdminHookAvailableToUser({
       hook,
@@ -2177,7 +2219,9 @@ export function createHookConfigService({
     `,
       )
       .all(userId, userId, userId, userId, userId);
-    return rows.map((row) => ({
+    // Legacy callers have no tenant context: never execute tenant-owned Hooks
+    // on this path, even if the user belongs to more than one tenant.
+    return rows.filter((row) => row.owner_tenant_id == null).map((row) => ({
       ...mapHookRow(row),
       enabled: (row.user_enabled === 1 || (row.default_enabled === 1 && row.opted_out_user_id == null
         && isAdminHookAvailableToUser({ hook: mapHookRow(row), userId })))
@@ -2403,6 +2447,9 @@ export function createHookConfigService({
 
     replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, overwriteUserPreferences = false, boundBy }) => {
       const hook = requireHook(hookId);
+      if (hook.ownerTenantId != null && (scope !== 'tenants' || !Array.isArray(tenantIds) || tenantIds.length !== 1 || Number(tenantIds[0]) !== Number(hook.ownerTenantId) || !Array.isArray(userIds) || userIds.length)) {
+        throw createHttpError('Tenant-owned Hooks can only be bound to their owning tenant', 403);
+      }
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before binding users');
       }
@@ -2714,7 +2761,7 @@ export function createHookConfigService({
         .map(mapDataRecordRow);
     },
 
-    createHook: ({ input, userId }) => {
+    createHook: ({ input, userId, ownerTenantId = null }) => {
       const normalized = normalizeWithMcpIdentity(input);
       const hookId = crypto.randomUUID();
       database
@@ -2723,8 +2770,8 @@ export function createHookConfigService({
         INSERT INTO hooks (
           id, name, description, status, event_name, include_subagents, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json, user_variables_json,
-          binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          binding_controller, created_by, updated_by, owner_tenant_id
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2738,9 +2785,10 @@ export function createHookConfigService({
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
           JSON.stringify(normalized.userVariables),
-          normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
+          ownerTenantId == null && normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
+          ownerTenantId,
         );
       return getHook(hookId);
     },

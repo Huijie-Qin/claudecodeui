@@ -15,6 +15,7 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 // Import translation resources
 import enAdmin from './locales/en/admin.json';
+import enAiUsage from './locales/en/aiUsage.json';
 import enCommon from './locales/en/common.json';
 import enSettings from './locales/en/settings.json';
 import enAuth from './locales/en/auth.json';
@@ -35,6 +36,7 @@ import koChat from './locales/ko/chat.json';
 import koCodeEditor from './locales/ko/codeEditor.json';
 
 import zhAdmin from './locales/zh-CN/admin.json';
+import zhAiUsage from './locales/zh-CN/aiUsage.json';
 import zhCommon from './locales/zh-CN/common.json';
 import zhSettings from './locales/zh-CN/settings.json';
 import zhAuth from './locales/zh-CN/auth.json';
@@ -117,6 +119,7 @@ i18n
     resources: {
       en: {
         admin: enAdmin,
+        aiUsage: enAiUsage,
         common: enCommon,
         settings: enSettings,
         auth: enAuth,
@@ -137,6 +140,7 @@ i18n
       },
       'zh-CN': {
         admin: zhAdmin,
+        aiUsage: zhAiUsage,
         common: zhCommon,
         settings: zhSettings,
         auth: zhAuth,

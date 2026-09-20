@@ -15,7 +15,7 @@ const GLOBAL_TENANT_CODES = new Set(['dataagent', 'dataagent-admin', 'dataagent-
 const MAX_TEMPLATE_HOOKS = 20;
 // Folder manifests are needed only for template details and application.
 const TEMPLATE_LIST_COLUMNS = `
-  id, name, category, summary, agent_markdown, guide_text, tenant_ids_json,
+  id, owner_tenant_id, name, category, summary, agent_markdown, guide_text, tenant_ids_json,
   skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, global_visible,
   status, created_at, updated_at
 `;
@@ -323,6 +323,7 @@ function hydrateTemplate(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
+    ownerTenantId: row.owner_tenant_id ?? null,
     name: row.name,
     category: row.category || '',
     summary: row.summary || '',
@@ -512,6 +513,8 @@ export function createAgentTemplateService(database = db, {
   };
 
   const hookIsVisibleToTenants = (hookId, tenantIds) => {
+    const owner = database.prepare('SELECT * FROM hooks WHERE id = ?').get(hookId)?.owner_tenant_id;
+    if (owner != null) return tenantIds.length > 0 && tenantIds.every((id) => Number(id) === Number(owner));
     const boundTenantIds = loadHookTenantIds(hookId);
     // Existing Hooks predate tenant-scoped template distribution. An empty
     // binding set therefore remains globally eligible for backwards compatibility.
@@ -782,7 +785,7 @@ export function createAgentTemplateService(database = db, {
     };
   };
 
-  const saveTemplate = ({ templateId = null, input, userId }) => {
+  const saveTemplate = ({ templateId = null, input, userId, ownerTenantId = null }) => {
     const normalizedUserId = positiveInteger(userId, 'userId');
     return withAgentTemplateFolderUpdate(database, folderAssets, ({ replaceFolders }) => {
       const existing = templateId == null ? null : hydrateTemplate(database.prepare(
@@ -790,6 +793,11 @@ export function createAgentTemplateService(database = db, {
       ).get(positiveInteger(templateId, 'templateId')));
       if (templateId != null && !existing) throw createHttpError('Agent template not found', 404);
       const values = normalizeInput(input || {}, existing);
+      const owner = existing?.ownerTenantId ?? ownerTenantId;
+      if (owner != null) {
+        if (values.tenantIds.length !== 1 || values.tenantIds[0] !== Number(owner)) throw createHttpError('Template must remain in its owning tenant', 403);
+        values.globalVisible = false;
+      }
       assertUniqueTemplateName(values.name, existing?.id ?? null);
       values.category = ensureCategory({ name: values.category, userId: normalizedUserId }).name;
       let savedTemplateId = existing?.id;
@@ -798,13 +806,13 @@ export function createAgentTemplateService(database = db, {
           INSERT INTO agent_templates (
             name, category, summary, agent_markdown, guide_text, tenant_ids_json,
             skill_preset_refs_json, mcp_preset_refs_json, hook_refs_json, claude_folders_json, global_visible,
-            status, created_by_user_id, updated_by_user_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+            status, created_by_user_id, updated_by_user_id, owner_tenant_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
         `).run(
           values.name, values.category, values.summary, values.claudeMarkdown, values.guideText,
           JSON.stringify(values.tenantIds), JSON.stringify(values.skillPresetRefs),
           JSON.stringify(values.mcpPresetRefs), JSON.stringify(values.hookRefs), '[]',
-          values.globalVisible ? 1 : 0, normalizedUserId, normalizedUserId,
+          values.globalVisible ? 1 : 0, normalizedUserId, normalizedUserId, owner,
         );
         savedTemplateId = Number(result.lastInsertRowid);
       }
@@ -865,7 +873,8 @@ export function createAgentTemplateService(database = db, {
       ORDER BY updated_at DESC, id DESC
     `).all()
       .map(hydrateTemplate)
-      .filter((template) => template.globalVisible || template.tenantIds.includes(normalizedTenantId));
+      .filter((template) => (template.ownerTenantId == null || Number(template.ownerTenantId) === normalizedTenantId)
+        && (template.globalVisible || template.tenantIds.includes(normalizedTenantId)));
     return visibleTemplates.map((template) => ({
       id: template.id,
       name: template.name,
@@ -897,7 +906,8 @@ export function createAgentTemplateService(database = db, {
     if (!template || template.status !== 'published') {
       throw createHttpError('Agent template is not available', 404);
     }
-    if (!template.globalVisible && !template.tenantIds.includes(normalizedTenantId)) {
+    if ((template.ownerTenantId != null && Number(template.ownerTenantId) !== normalizedTenantId)
+      || (!template.globalVisible && !template.tenantIds.includes(normalizedTenantId))) {
       throw createHttpError('Agent template is not visible to this tenant', 403);
     }
     const skillInspections = inspectSkillRefs(template.skillPresetRefs);
@@ -918,10 +928,11 @@ export function createAgentTemplateService(database = db, {
   return {
     getTemplate,
     getWorkspaceTemplateInfo,
-    listAdminTemplates: ({ tenantId, hookResourceCatalog = null } = {}) => {
+    listAdminTemplates: ({ tenantId, ownerTenantId = null, hookResourceCatalog = null } = {}) => {
       const templates = database.prepare(`
-        SELECT ${TEMPLATE_LIST_COLUMNS} FROM agent_templates ORDER BY updated_at DESC, id DESC
-      `).all().map(hydrateTemplate).map((template) => ({
+        SELECT ${TEMPLATE_LIST_COLUMNS} FROM agent_templates
+        WHERE (? IS NULL OR owner_tenant_id = ?) ORDER BY updated_at DESC, id DESC
+      `).all(ownerTenantId, ownerTenantId).map(hydrateTemplate).map((template) => ({
         ...template,
         unavailableCapabilities: [
           ...getUnavailableCapabilities(template).filter((capability) => capability.type !== 'hook'),

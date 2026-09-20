@@ -530,10 +530,19 @@ export function createAdminRouter(
   });
 
   const upsertTenantUserAccess = async ({ tenantId, userId, body }) => {
+    const existing = multitenancy.memberships.getMembership?.(userId, tenantId);
+    const role = body?.role ?? existing?.role ?? 'member';
+    if (!['member', 'tenant_admin', 'system_admin'].includes(role)) {
+      throw Object.assign(new Error('role must be member or tenant_admin'), { statusCode: 400 });
+    }
+    // system_admin is a legacy membership label, never a way to grant platform powers.
+    if (role === 'system_admin' && !users.getUserByIdAnyStatus?.(userId)?.is_system_admin) {
+      throw Object.assign(new Error('System admin membership requires a system admin user'), { statusCode: 400 });
+    }
     const membership = multitenancy.memberships.upsertMembership({
       tenantId,
       userId,
-      role: body?.role || 'member',
+      role,
       permission: body?.permission || 'view',
       status: body?.status || 'active',
     });

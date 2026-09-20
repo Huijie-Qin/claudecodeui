@@ -20,6 +20,7 @@ import {
 } from './agentTemplateSkillCatalog';
 import AgentTemplateFolders from './AgentTemplateFolders';
 import type { AgentTemplateFolder } from './agentTemplateFolderUpload';
+import { tenantTemplateSkillCandidates } from '../tenant-management/tenantTemplateCatalog';
 
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
@@ -217,9 +218,13 @@ function isDataAgentTenant(tenant?: Tenant) {
 export default function AgentTemplatesTab({
   tenants,
   currentTenantId,
+  managementApi = api.admin,
+  tenantManaged = false,
 }: {
   tenants: Tenant[];
   currentTenantId?: number;
+  managementApi?: Pick<typeof api.admin, 'agentTemplates' | 'agentTemplateCategories' | 'agentTemplatePresetCatalog' | 'agentTemplateHookCatalog' | 'getAgentTemplate' | 'createAgentTemplate' | 'updateAgentTemplate' | 'publishAgentTemplate' | 'disableAgentTemplate' | 'deleteAgentTemplate' | 'createAgentTemplateCategory' | 'deleteAgentTemplateCategory' | 'searchSkillPresetMarket' | 'skillPresets' | 'createSkillPreset' | 'validateSkillPreset' | 'publishSkillPreset'>;
+  tenantManaged?: boolean;
 }) {
   const activeTenants = useMemo(() => tenants
     .map((tenant) => ({ ...tenant, id: normalizeId(tenant.id) }))
@@ -286,23 +291,23 @@ export default function AgentTemplatesTab({
     setIsLoading(true);
     setListError(null);
     try {
-      const payload = await readJson<{ templates: AgentTemplate[] }>(await api.admin.agentTemplates());
+      const payload = await readJson<{ templates: AgentTemplate[] }>(await managementApi.agentTemplates());
       setTemplates((payload.templates || []).map(normalizeTemplate));
     } catch (loadError) {
       setListError(loadError instanceof Error ? loadError.message : '模板加载失败');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [managementApi]);
 
   const loadCategories = useCallback(async () => {
-    const payload = await readJson<{ categories: TemplateCategory[] }>(await api.admin.agentTemplateCategories());
+    const payload = await readJson<{ categories: TemplateCategory[] }>(await managementApi.agentTemplateCategories());
     setCategories((payload.categories || []).map((category) => ({
       ...category,
       id: normalizeId(category.id),
       templateCount: Number(category.templateCount || 0),
     })));
-  }, []);
+  }, [managementApi]);
 
   useEffect(() => {
     void Promise.all([loadTemplates(), loadCategories()]).catch((loadError) => {
@@ -320,10 +325,10 @@ export default function AgentTemplatesTab({
     setCatalog(EMPTY_CATALOG);
     setIsCatalogLoading(true);
     void Promise.allSettled([
-      api.admin.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
-      api.admin.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
-      api.admin.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
-      api.admin.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
+      managementApi.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
+      managementApi.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
+      tenantManaged ? Promise.resolve({ skills: [] as MarketSkill[] }) : managementApi.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
+      tenantManaged ? Promise.resolve({ presets: [] as AdminSkillPreset[] }) : managementApi.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
     ])
       .then(([presetResult, hookResult, marketResult, presetListResult]) => {
         if (cancelled) return;
@@ -338,7 +343,7 @@ export default function AgentTemplatesTab({
           hooks: normalizeHookCatalog(hookCatalog),
           skillPresets,
           skillMarketLoaded: marketResult.status === 'fulfilled',
-          skills: buildSkillCandidates({
+          skills: tenantManaged ? tenantTemplateSkillCandidates(presetCatalog.skills || [], catalogTenantId) : buildSkillCandidates({
             tenantId: catalogTenantId,
             marketSkills: marketCatalog.skills || [],
             presets: skillPresets,
@@ -356,7 +361,7 @@ export default function AgentTemplatesTab({
       })
       .finally(() => { if (!cancelled) setIsCatalogLoading(false); });
     return () => { cancelled = true; };
-  }, [catalogTenantId, isEditing]);
+  }, [catalogTenantId, isEditing, managementApi, tenantManaged]);
 
   useEffect(() => () => { pendingSkills.current.clear(); }, []);
 
@@ -384,7 +389,7 @@ export default function AgentTemplatesTab({
     setEditorError(null);
     setOpeningTemplateId(template.id);
     try {
-      const payload = await readJson<{ template: AgentTemplate }>(await api.admin.getAgentTemplate(template.id));
+      const payload = await readJson<{ template: AgentTemplate }>(await managementApi.getAgentTemplate(template.id));
       if (editorSessionRef.current !== session) return;
       const detail = normalizeTemplate({ ...payload.template, unavailableCapabilities: template.unavailableCapabilities });
       setEditing(detail);
@@ -418,6 +423,7 @@ export default function AgentTemplatesTab({
   };
 
   const toggleTenant = (tenantId: number) => {
+    if (tenantManaged) return;
     if (!editing) return;
     const tenant = activeTenants.find((item) => item.id === tenantId);
     const selected = editing.tenantIds.includes(tenantId);
@@ -513,6 +519,10 @@ export default function AgentTemplatesTab({
 
   const toggleSkill = async (skill: SkillCandidate) => {
     if (!editing || !editing.tenantIds.includes(skill.tenantId)) return;
+    if (tenantManaged) {
+      if (skill.presetId) togglePreset('skillPresetRefs', { ...skill, id: skill.presetId });
+      return;
+    }
     const selected = skill.presetId
       ? editing.skillPresetRefs.some((ref) => ref.tenantId === skill.tenantId && ref.presetId === skill.presetId)
       : false;
@@ -542,7 +552,7 @@ export default function AgentTemplatesTab({
       } : undefined);
 
       if (!preset) {
-        const created = await readJson<{ preset: AdminSkillPreset }>(await api.admin.createSkillPreset({
+        const created = await readJson<{ preset: AdminSkillPreset }>(await managementApi.createSkillPreset({
           tenantId: skill.tenantId,
           sourceRef: skill.sourceRef,
           skill: skill.marketSkill,
@@ -554,7 +564,7 @@ export default function AgentTemplatesTab({
       if (!isCurrentRequest()) return;
       if (preset.lastValidationStatus !== 'healthy') {
         const validated = await readJson<{ preset: AdminSkillPreset; validation?: { status?: string; error?: string } }>(
-          await api.admin.validateSkillPreset(preset.id, skill.tenantId),
+          await managementApi.validateSkillPreset(preset.id, skill.tenantId),
         );
         if (validated.validation?.status && validated.validation.status !== 'healthy') {
           throw new Error(validated.validation.error || 'Skill 校验失败');
@@ -564,7 +574,7 @@ export default function AgentTemplatesTab({
       if (!isCurrentRequest()) return;
       if (preset.status !== 'published') {
         const published = await readJson<{ preset: AdminSkillPreset }>(
-          await api.admin.publishSkillPreset(preset.id, skill.tenantId),
+          await managementApi.publishSkillPreset(preset.id, skill.tenantId),
         );
         preset = published.preset;
       }
@@ -621,11 +631,11 @@ export default function AgentTemplatesTab({
     setEditorError(null);
     try {
       const response = editing.id
-        ? await api.admin.updateAgentTemplate(editing.id, editing)
-        : await api.admin.createAgentTemplate(editing);
+        ? await managementApi.updateAgentTemplate(editing.id, editing)
+        : await managementApi.createAgentTemplate(editing);
       const saved = (await readJson<{ template: AgentTemplate }>(response)).template;
       const finalTemplate = publish
-        ? (await readJson<{ template: AgentTemplate }>(await api.admin.publishAgentTemplate(saved.id))).template
+        ? (await readJson<{ template: AgentTemplate }>(await managementApi.publishAgentTemplate(saved.id))).template
         : saved;
       await Promise.all([loadTemplates(), loadCategories()]);
       setIsAddingCategory(false);
@@ -655,7 +665,7 @@ export default function AgentTemplatesTab({
     setActionTemplateId(template.id);
     setListError(null);
     try {
-      await readJson(await api.admin.disableAgentTemplate(template.id));
+      await readJson(await managementApi.disableAgentTemplate(template.id));
       await loadTemplates();
       showToast(`Agent 模板“${template.name}”${template.status === 'published' ? '已下线' : '已停用'}`);
     } catch (actionError) {
@@ -672,7 +682,7 @@ export default function AgentTemplatesTab({
     setActionTemplateId(deleteTarget.id);
     setListError(null);
     try {
-      await readJson(await api.admin.deleteAgentTemplate(deleteTarget.id));
+      await readJson(await managementApi.deleteAgentTemplate(deleteTarget.id));
       await Promise.all([loadTemplates(), loadCategories()]);
       showToast(`Agent 模板“${deleteTarget.name}”已删除`);
       setDeleteTarget(null);
@@ -695,7 +705,7 @@ export default function AgentTemplatesTab({
     setIsCategorySaving(true);
     setCategoryFeedback(null);
     try {
-      await readJson(await api.admin.createAgentTemplateCategory(name));
+      await readJson(await managementApi.createAgentTemplateCategory(name));
       await loadCategories();
       setNewCategoryName('');
       setCategoryFeedback({ type: 'success', message: `分类“${name}”已创建` });
@@ -711,7 +721,7 @@ export default function AgentTemplatesTab({
     setIsCategorySaving(true);
     setCategoryFeedback(null);
     try {
-      await readJson(await api.admin.deleteAgentTemplateCategory(category.id));
+      await readJson(await managementApi.deleteAgentTemplateCategory(category.id));
       await loadCategories();
       setCategoryFeedback({ type: 'success', message: `分类“${category.name}”已删除` });
     } catch (categoryError) {
@@ -726,16 +736,16 @@ export default function AgentTemplatesTab({
       <>
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">为不同租户预配置 CLAUDE.md、Skills、MCP、Hooks 和引导语。</p></div>
+            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">{tenantManaged ? '配置本租户的 CLAUDE.md、已分发的 Skills / MCP、Hooks 和引导语。' : '为不同租户预配置 CLAUDE.md、Skills、MCP、Hooks 和引导语。'}</p></div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => { setCategoryFeedback(null); setCategoryDialogOpen(true); }}><Tags className="h-4 w-4" />分类管理</Button>
+              {!tenantManaged && <Button variant="outline" onClick={() => { setCategoryFeedback(null); setCategoryDialogOpen(true); }}><Tags className="h-4 w-4" />分类管理</Button>}
               <Button onClick={beginCreate} disabled={activeTenants.length === 0}><Plus className="h-4 w-4" />新建模板</Button>
             </div>
           </div>
 
           <div className="rounded-lg border border-border bg-card p-4">
             <div className="grid gap-5 md:grid-cols-[minmax(0,2fr)_minmax(220px,1fr)]">
-              <div className="space-y-2">
+              <div className={tenantManaged ? "hidden" : "space-y-2"}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium text-foreground">租户 · {tenantFilterIds.length}</div>
                   {tenantFilterIds.length > 0 ? <button type="button" className="text-xs text-primary hover:underline" onClick={() => setTenantFilterIds([])}>清空选择</button> : null}
@@ -806,7 +816,7 @@ export default function AgentTemplatesTab({
   }
 
   const selectedCatalogTenant = activeTenants.find((tenant) => tenant.id === catalogTenantId);
-  const catalogSkills = buildSkillCandidates({
+  const catalogSkills = tenantManaged ? catalog.skills : buildSkillCandidates({
     tenantId: catalogTenantId || 0,
     marketSkills: catalog.skills.map((skill) => skill.marketSkill),
     presets: catalog.skillPresets,
@@ -818,7 +828,7 @@ export default function AgentTemplatesTab({
     presets: catalog.skillPresets,
     refs: editing?.skillPresetRefs || [],
   });
-  const dataAgentSelected = editing.tenantIds.some((id) => isDataAgentTenant(activeTenants.find((item) => item.id === id)));
+  const dataAgentSelected = !tenantManaged && editing.tenantIds.some((id) => isDataAgentTenant(activeTenants.find((item) => item.id === id)));
 
   return (
     <div className="mx-auto max-w-6xl space-y-4 pb-10">
@@ -892,7 +902,7 @@ export default function AgentTemplatesTab({
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {activeTenants.map((tenant) => {
               const selected = editing.tenantIds.includes(tenant.id);
-              const disabled = dataAgentSelected && !isDataAgentTenant(tenant);
+              const disabled = tenantManaged || (dataAgentSelected && !isDataAgentTenant(tenant));
               return <button key={tenant.id} type="button" disabled={disabled} onClick={() => toggleTenant(tenant.id)} className={cn('flex items-center gap-3 rounded-md border px-3 py-3 text-left disabled:cursor-not-allowed disabled:opacity-45', selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50')}><span className={cn('flex h-5 w-5 items-center justify-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input')}>{selected ? <Check className="h-3.5 w-3.5" /> : null}</span><span><span className="block text-sm font-medium text-foreground">{tenant.name}</span><span className="block text-xs text-muted-foreground">{tenant.code}</span></span></button>;
             })}
           </div>

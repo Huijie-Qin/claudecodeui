@@ -12,7 +12,8 @@
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "运行时监控",
-    "scheduledTaskLogs": "定时任务日志"
+    "scheduledTaskLogs": "定时任务日志",
+    "aiUsage": "AI 使用统计"
   },
   "common": {
     "select": "选择",
@@ -1026,8 +1027,14 @@
         "label": "任务完成",
         "description": "Claude 准备完成任务时。"
       },
-      "PreCompact": { "label": "压缩前", "description": "上下文压缩开始前。" },
-      "PostCompact": { "label": "压缩后", "description": "上下文摘要生成后。" },
+      "PreCompact": {
+        "label": "压缩前",
+        "description": "上下文压缩开始前。"
+      },
+      "PostCompact": {
+        "label": "压缩后",
+        "description": "上下文摘要生成后。"
+      },
       "Elicitation": {
         "label": "MCP 发起询问",
         "description": "MCP Server 请求用户提供信息时。"
@@ -1255,5 +1262,12 @@
     "errors": {
       "load": "加载定时任务日志失败"
     }
+  },
+  "tenantRoles": {
+    "label": "租户角色",
+    "preserve": "保留角色（新成员默认普通成员）",
+    "member": "普通成员",
+    "tenant_admin": "租户管理员",
+    "hint": "租户管理员可管理本租户 Hook、AI 使用报表和 Agent 模板；不具有系统 Admin 权限。"
   }
 }

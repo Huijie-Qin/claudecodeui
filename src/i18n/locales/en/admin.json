@@ -13,7 +13,8 @@
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "Runtime Monitor",
-    "scheduledTaskLogs": "Scheduled Task Logs"
+    "scheduledTaskLogs": "Scheduled Task Logs",
+    "aiUsage": "AI usage reports"
   },
   "common": {
     "select": "Select",
@@ -1307,5 +1308,12 @@
     "errors": {
       "load": "Failed to load scheduled task logs"
     }
+  },
+  "tenantRoles": {
+    "label": "Tenant role",
+    "preserve": "Keep role (new: member)",
+    "member": "Member",
+    "tenant_admin": "Tenant admin",
+    "hint": "Tenant admins manage their tenant's Hooks, AI usage reports and Agent templates, without system Admin access."
   }
 }

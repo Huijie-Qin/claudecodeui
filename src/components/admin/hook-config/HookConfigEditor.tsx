@@ -37,6 +37,7 @@ import {
   scriptApiName,
 } from './catalog';
 import { createHookItemId } from './editorUtils';
+import { changeHookReportFieldType, isReportFieldKey, readHookReportFields, retainHookReportFields, type HookReportField } from './reportFields';
 import HookSelect, { type HookSelectOption } from './HookSelect';
 import HookUserVariablesEditor from './HookUserVariablesEditor';
 import type {
@@ -65,6 +66,7 @@ type HookConfigEditorProps = {
   onPublish: () => void;
   onManageBindings: () => void;
   onManageEvents: () => void;
+  tenantManaged?: boolean;
 };
 
 function Section({
@@ -870,13 +872,18 @@ function RecordActionEditor({
   references: FieldChoice[];
   onChange: (config: Record<string, unknown>) => void;
 }) {
+  const { t } = useTranslation('aiUsage');
   const config = asRecord(action.config);
   const recordType = typeof config.recordType === 'string' ? config.recordType : '';
   const fields = asRecord(config.fields);
   const fieldEntries = Object.entries(fields);
+  const reportFields = readHookReportFields(config.reportFields);
+  const updateReportField = (key: string, patch: Partial<HookReportField>) => {
+    onChange({ ...config, reportFields: reportFields.map((field) => field.key === key ? { ...field, ...patch } : field) });
+  };
 
   const updateFields = (nextFields: Record<string, unknown>) => {
-    onChange({ ...config, fields: nextFields });
+    onChange({ ...config, fields: nextFields, reportFields: retainHookReportFields(config.reportFields, nextFields) });
   };
 
   const addField = () => {
@@ -965,6 +972,23 @@ function RecordActionEditor({
           );
         })}
       </div>
+      <section className="space-y-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-4">
+        <div><h4 className="text-xs font-semibold text-foreground">{t('hookReportFields.title')} ({reportFields.length}/20)</h4><p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-300">{t('hookReportFields.warning')}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{t('hookReportFields.versionHint')}</p></div>
+        {fieldEntries.length === 0 && <p className="text-xs text-muted-foreground">{t('hookReportFields.noFields')}</p>}
+        {fieldEntries.map(([key]) => {
+          const selected = reportFields.find((field) => field.key === key);
+          const eligible = isReportFieldKey(key);
+          return <div key={key} className="space-y-2 rounded-lg border border-border bg-background/70 p-3">
+            <label className="flex items-center gap-2 text-xs"><input type="checkbox" className="h-4 w-4 accent-primary" checked={Boolean(selected)} disabled={!eligible || (!selected && reportFields.length >= 20)} onChange={(event) => onChange({ ...config, reportFields: event.target.checked ? [...reportFields, { key, label: key.slice(0, 120), type: 'string', aggregation: 'none' }] : reportFields.filter((field) => field.key !== key) })} /><span className="break-all font-mono">{key || '—'}</span><span className="text-muted-foreground">{t('hookReportFields.expose')}</span></label>
+            {!eligible && <p className="text-[11px] text-muted-foreground">{t('hookReportFields.invalidKey')}</p>}
+            {selected && <div className="grid gap-2 sm:grid-cols-3">
+              <label className="space-y-1 text-[11px] text-muted-foreground">{t('hookReportFields.label')}<Input className="h-8 text-xs" value={selected.label} maxLength={120} onChange={(event) => updateReportField(key, { label: event.target.value })} /></label>
+              <label className="space-y-1 text-[11px] text-muted-foreground">{t('hookReportFields.type')}<select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground" value={selected.type} onChange={(event) => updateReportField(key, changeHookReportFieldType(selected, event.target.value as HookReportField['type']))}><option value="string">{t('hookReportFields.string')}</option><option value="number">{t('hookReportFields.number')}</option><option value="boolean">{t('hookReportFields.boolean')}</option></select></label>
+              <label className="space-y-1 text-[11px] text-muted-foreground">{t('hookReportFields.unit')}<Input className="h-8 text-xs" value={selected.unit || ''} maxLength={32} onChange={(event) => updateReportField(key, { unit: event.target.value })} /></label>
+            </div>}
+          </div>;
+        })}
+      </section>
       <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
         记录会写入 CCUI SQLite 数据库的 <code>hook_data_records</code> 表。保存并返回 Hook 列表后，点击该 Hook 的“业务数据”即可查看最近记录。
       </div>
@@ -1437,6 +1461,7 @@ export default function HookConfigEditor({
   onPublish,
   onManageBindings,
   onManageEvents,
+  tenantManaged = false,
 }: HookConfigEditorProps) {
   const { t } = useTranslation('admin');
   const [scriptReferencesOpen, setScriptReferencesOpen] = useState(false);
@@ -1517,7 +1542,7 @@ export default function HookConfigEditor({
           </div>
         </div>
         {isPersisted && hook.bindingController === 'sql_check' ? <Badge variant="outline">{t('hooks.builtin')}</Badge> : null}
-        {isPersisted && status === 'published' ? (
+        {isPersisted && status === 'published' && !tenantManaged ? (
           <Button type="button" variant="outline" size="sm" onClick={onManageBindings} disabled={busy}>
             <UsersRound className="h-4 w-4" />
             {hook.activationScope === 'all_users'
@@ -1566,10 +1591,10 @@ export default function HookConfigEditor({
                       </button>
                     </Tooltip>
                   </div>
-                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onManageEvents}>
+                  {!tenantManaged && <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onManageEvents}>
                     <Settings2 className="h-3.5 w-3.5" />
                     {t('hooks.moreEvents')}
-                  </Button>
+                  </Button>}
                 </div>
                 <HookSelect
                   value={hook.eventName}

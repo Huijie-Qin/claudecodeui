@@ -65,7 +65,10 @@
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js",
     "prepare": "husky",
-    "update:platform": "./update-platform.sh"
+    "update:platform": "./update-platform.sh",
+    "test:ai-usage": "TSX_TSCONFIG_PATH=server/tsconfig.json node --import tsx --test --test-concurrency=1 server/services/ai-usage-*.test.js server/services/ai-session-summary.test.js server/routes/ai-usage.test.js server/routes/admin-ai-usage-roles.test.js",
+    "test:ai-usage:ui": "node --import tsx --test src/components/ai-usage/*.test.ts src/components/admin/hook-config/reportFields.test.ts src/components/admin/adminPanelUtils.test.ts",
+    "preview:ai-usage": "node scripts/preview-ai-usage.mjs"
   },
   "keywords": [
     "claude code",

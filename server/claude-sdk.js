@@ -95,6 +95,8 @@ import {
   readIteratorNextWithStallTimeout,
 } from './services/claude-stream-watchdog.js';
 import { createNormalizedMessage } from './shared/utils.js';
+import { aiUsageTurnRecorder, createClaudeUsageTurnCapture, wrapClaudeUsageStopHooks } from './services/ai-usage-turns.js';
+import { createClaudeSkillContextCapture } from './services/ai-usage-skill-context.js';
 
 const activeSessions = new Map();
 const abortedSessions = new Set();
@@ -684,6 +686,7 @@ function addSession(
     runtimeId: runtimeOptions.runtimeId || null,
     runtimeMode: runtimeOptions.runtimeMode || 'local',
     runtimeOptions,
+    skillUsageCapture: runtimeOptions.aiUsageSkillCapture || null,
     turnLifecycle: turnLifecycle || existing.turnLifecycle || null,
     abortController: abortController || existing.abortController || null,
   });
@@ -1415,6 +1418,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   assertClaudeNativeSchedulingCommandAllowed(command, options.executionEnv || process.env);
 
   const { sessionId, sessionSummary } = options;
+  const initialMessageId = resolveClaudeUserMessageId(clientMessageId);
+  const usageTurn = createClaudeUsageTurnCapture({ options, clientMessageId: initialMessageId, writerUserId: ws?.userId });
+  const skillUsageCapture = createClaudeSkillContextCapture({ options, writerUserId: ws?.userId });
   const processDiagnostics = createClaudeProcessDiagnostics({
     env: options.executionEnv || process.env,
   });
@@ -1423,7 +1429,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   let sessionCreatedSent = false;
   let tempImagePaths = [];
   let tempDir = null;
-  let runtimeOptions = options;
+  let runtimeOptions = { ...options, aiUsageTurn: usageTurn.identity,
+    aiUsageSkillRequest: skillUsageCapture.identity, aiUsageSkillCapture: skillUsageCapture };
   let runtimeContext = null;
   // Runtime ownership has a single current provider-session binding. A normal
   // chat turn between scheduled runs can move that binding to another session,
@@ -1444,8 +1451,13 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   let turnBoundaryReached = false;
   let turnCompletionScheduler = null;
   let mcpLoopToolBatchTracker = createMcpLoopToolBatchTracker();
+  let usageQueryCount = 0;
   const inputQueue = new ClaudeInputQueue({
     onQueryPushed: () => {
+      // Inline inputs may be merged/reordered by the SDK. Until it supplies a
+      // reliable request/result mapping, expose a coverage gap, not a guessed
+      // duration or overlapping duplicate user turns.
+      if (++usageQueryCount > 1) usageTurn.terminal('unsupported');
       turnCompletionScheduler?.cancel();
       pendingTurnCompletion = null;
       turnLifecycle.beginTurn();
@@ -1500,6 +1512,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
   };
 
   const bindRuntimeToProviderSession = (providerSessionId) => {
+    usageTurn.bindSession(providerSessionId);
+    skillUsageCapture.bindSession(providerSessionId);
     if (!runtimeOptions.runtimeId || !providerSessionId || runtimeBoundToProviderSession) {
       return;
     }
@@ -1531,6 +1545,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     }
     const completion = pendingTurnCompletion;
     pendingTurnCompletion = null;
+    // Validate the final parent boundary first, then persist the response's
+    // earlier completion point captured before Stop post-actions.
+    usageTurn.complete();
 
     const completedSession = completion.sessionId ? getSession(completion.sessionId) : null;
     if (completedSession) {
@@ -1599,6 +1616,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     runtimeContext = await agentSessionRuntimeManager.prepareClaudeRuntime(options);
     runtimeOptions = {
       ...options,
+      aiUsageTurn: usageTurn.identity,
+      aiUsageSkillRequest: skillUsageCapture.identity,
+      aiUsageSkillCapture: skillUsageCapture,
       cwd: runtimeContext.cwd || options.cwd,
       projectPath: runtimeContext.projectPath || options.projectPath,
       pathToClaudeCodeExecutable: runtimeContext.pathToClaudeCodeExecutable,
@@ -1653,7 +1673,6 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     const displayCommand = typeof runtimeOptions.displayCommand === 'string' && runtimeOptions.displayCommand.trim()
       ? runtimeOptions.displayCommand
       : command;
-    const initialMessageId = resolveClaudeUserMessageId(clientMessageId);
     initialDisplayCommandRecord = {
       messageId: initialMessageId,
       displayCommand,
@@ -1730,7 +1749,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       uuid: initialMessageId,
       priority: 'next',
       shouldQuery: true,
-    }));
+    }), { onConsumed: () => skillUsageCapture.request({ messageId: initialMessageId, command }) });
     if (capturedSessionId) {
       await persistInitialDisplayCommand(capturedSessionId);
     }
@@ -1819,7 +1838,17 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     // bypassPermissions skips canUseTool for auto-approved calls, so MCP input
     // mutation must happen in PreToolUse to affect the actual server request.
     const builtinSdkHooks = {
+      Stop: [{ hooks: [async (input) => {
+        if (turnLifecycle.getActiveTasks().length === 0) usageTurn.onStop(input);
+        return {};
+      }] }],
       PreToolUse: [{
+        matcher: 'Skill',
+        hooks: [async (input) => {
+          skillUsageCapture.observeTool(input);
+          return {};
+        }],
+      }, {
         matcher: 'mcp__.*',
         hooks: [async (input) => {
           if (input?.hook_event_name !== 'PreToolUse' || !isMcpToolName(input.tool_name)) {
@@ -1962,6 +1991,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
               workspacePath,
               runtimeContext.mode,
             );
+            if (event?.agent_id) skillUsageCapture.markSubagentHook({ agentId: event.agent_id });
             return [
               '<ccui-hook-recovery>',
               `Hook: ${hook.name} (${hook.id})`,
@@ -2287,7 +2317,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
         if (hasRequiredStopHook) throw createRequiredStopHookError(error);
       }
     }
-    sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, configuredSdkHooks);
+    sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, wrapClaudeUsageStopHooks(configuredSdkHooks, usageTurn));
 
     sdkOptions.canUseTool = async (toolName, input, context) => {
       if (isClaudeNativeSchedulingDisabled(sdkOptions.env) && CLAUDE_NATIVE_SCHEDULING_TOOLS.has(toolName)) {
@@ -2479,6 +2509,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
 
       const message = next.value;
       const completedReplyUuid = completedReplyTracker.observe(message);
+      usageTurn.observe(message);
+      skillUsageCapture.observe(message);
       mcpDiagnostics.observe(message, queryInstance);
       if (pendingTurnCompletion) {
         turnCompletionScheduler.cancel();
@@ -2645,6 +2677,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.has(finalSessionId) : false;
     const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+    if (wasAborted) usageTurn.terminal('aborted');
 
     if (!wasAborted && !loopSuspension) {
       turnLifecycle.flush();
@@ -2653,6 +2686,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
         error.code = 'CLAUDE_STREAM_INCOMPLETE';
         throw error;
       }
+      if (!turnBoundaryReached) usageTurn.terminal('incomplete');
     }
     if (wasAborted) abortedSessions.delete(finalSessionId);
 
@@ -2705,6 +2739,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
         ...runtimeOptions,
         ...(queuedFollowupTurn.runtimeOptions || {}),
         clientMessageId: queuedFollowupTurn.clientMessageId,
+        aiUsageTurn: null,
+        aiUsageSkillRequest: null,
+        aiUsageSkillCapture: null,
         mcpLoopResume: false,
         hookRecovery: queuedFollowupTurn.runtimeOptions?.hookRecovery || null,
         sessionId: finalSessionId,
@@ -2748,6 +2785,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
     const finalSessionId = capturedSessionId || sessionId || null;
     const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
     const loopSuspension = finalSessionId ? mcpLoopSuspensionsBySession.get(finalSessionId) : null;
+    if (!loopSuspension) usageTurn.terminal(wasAborted ? 'aborted' : 'failed');
     if (!loopSuspension) {
       updateHookActivity(
         'failed',
@@ -3207,6 +3245,9 @@ async function abortClaudeSDKSession(sessionId) {
     const waitingBatch = mcpLoopSuspensionsBySession.get(sessionId);
     if (waitingBatch) {
       waitingBatch.skipResume = true;
+      if (waitingBatch.runtimeOptions?.aiUsageTurn) {
+        aiUsageTurnRecorder.terminal({ ...waitingBatch.runtimeOptions.aiUsageTurn, status: 'aborted' });
+      }
       const userId = waitingBatch.runtimeOptions?.userId ?? waitingBatch.writer?.userId;
       const activeJobs = mcpLoopService.listActiveForSession(sessionId);
       const results = await Promise.all(activeJobs.map((job) => mcpLoopService.cancel({
@@ -3453,6 +3494,8 @@ function pushClaudeSupplement({
   session.inputQueue.push(supplementalMessage, {
     onConsumed: () => {
       const consumedAt = new Date().toISOString();
+      session.skillUsageCapture?.request({ messageId: claudeMessageId, command: normalizedContent,
+        supplemental: true, occurredAt: consumedAt });
       const persistedMessage = createNormalizedMessage({
         kind: 'text',
         role: 'user',

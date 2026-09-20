@@ -50,6 +50,12 @@ function createRun() {
 
 function createDependencies(messages, onOptions = () => {}) {
   return {
+    skillContextRecorder: { recordSession: () => ({ changed: false }) },
+    capabilityResolver: async () => ({ tools: [], mcpServers: {} }),
+    artifactWorkspace: {
+      createArtifactAccessMcpServer: async () => ({}),
+      listArtifacts: async () => [],
+    },
     runtimeManager: {
       prepareClaudeRuntime: async () => ({ cwd: '/tmp/workspace' }),
       markIdle: () => {},
@@ -147,8 +153,10 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
   const run = createRun();
   const agent = run.graphSnapshot.agents[0];
   let options;
+  const sessionContexts = [];
   const dependencies = {
     ...createDependencies([
+      { type: 'system', session_id: 'agent-session-one' },
       {
         type: 'result',
         session_id: 'agent-session-one',
@@ -161,6 +169,7 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
         },
       },
     ], (value) => { options = value; }),
+    skillContextRecorder: { recordSession: (input) => sessionContexts.push(input) },
     loadSkills: async () => [],
   };
 
@@ -191,6 +200,47 @@ test('Agent Runtime persists and resumes the execution-scoped Agent Session', as
   assert.equal(response.sessionId, 'agent-session-one');
   assert.equal(response.agentResult.status, 'completed');
   assert.equal(response.agentResult.message, 'Evidence-backed report');
+  assert.deepEqual(sessionContexts, [{
+    tenantId: 1, userId: 2, workspaceId: 3, provider: 'claude', sessionId: 'agent-session-one',
+    contextId: 'session:agent-session-one', requestId: null, origin: 'agent_graph', skillName: null,
+  }]);
+});
+
+test('Graph records observed session provenance before a failed turn and never fabricates a session id', async () => {
+  const contexts = [];
+  const dependencies = {
+    ...createDependencies([]),
+    skillContextRecorder: { recordSession: (input) => contexts.push(input) },
+    runQuery: async function* () {
+      yield { type: 'system', session_id: 'failed-graph-session' };
+      throw new Error('fixture upstream failure');
+    },
+  };
+  await assert.rejects(() => selectAgentWithClaude({ run: createRun(), dependencies }), /fixture upstream failure/);
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].origin, 'agent_graph');
+  assert.equal(contexts[0].sessionId, 'failed-graph-session');
+
+  await selectAgentWithClaude({
+    run: createRun(),
+    dependencies: {
+      ...createDependencies([{ type: 'result', structured_output: { selectedAgentId: 'reports', reason: 'Ready', task: 'Report' } }]),
+      skillContextRecorder: { recordSession: (input) => contexts.push(input) },
+    },
+  });
+  assert.equal(contexts.length, 1, 'Turns without an observed session id must not create provenance');
+});
+
+test('Graph provenance recorder failures do not change the model result', async () => {
+  const decision = { selectedAgentId: 'reports', reason: 'Ready', task: 'Report' };
+  const result = await selectAgentWithClaude({
+    run: createRun(),
+    dependencies: {
+      ...createDependencies([{ type: 'result', session_id: 'graph-session', structured_output: decision }]),
+      skillContextRecorder: { recordSession: () => { throw new Error('fixture recorder unavailable'); } },
+    },
+  });
+  assert.deepEqual(result, decision);
 });
 
 test('Agent Tool labels resolve to the configured Demo MCP server names', () => {

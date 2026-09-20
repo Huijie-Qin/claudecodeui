@@ -2025,6 +2025,46 @@ test('write_record is a publishable post action and validates its field referenc
   }
 });
 
+test('write_record report fields default to private and persist immutable published definitions', () => {
+  const { database, service } = createFixture();
+  const fields = { count: { source: 'literal', value: 3 }, title: { source: 'literal', value: 'Safe label' } };
+  const input = (reportFields) => publishableHook({ extensionLogic: null, postActions: [{ id: 'report', type: 'write_record', config: { recordType: 'metrics', fields, ...(reportFields === undefined ? {} : { reportFields }) } }] });
+  try {
+    const created = service.createHook({ userId: 1, input: input() });
+    assert.deepEqual(created.postActions[0].config.reportFields, []);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const definitions = [{ key: 'count', label: '记录数', type: 'number', aggregation: 'sum', unit: '条' }];
+    service.updateHook({ hookId: created.id, userId: 1, input: input(definitions) });
+    service.publishHook({ hookId: created.id, userId: 1 });
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).postActions[0].config.reportFields, []);
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).postActions[0].config.reportFields, definitions);
+    service.updateHook({ hookId: created.id, userId: 1, input: input([{ ...definitions[0], aggregation: 'avg' }]) });
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).postActions[0].config.reportFields, definitions);
+  } finally { database.close(); }
+});
+
+test('write_record report fields reject unknown keys, paths, unsafe types and oversized definitions', () => {
+  const { database, service } = createFixture();
+  const valid = { key: 'count', label: 'Count', type: 'number', aggregation: 'sum' };
+  const fields = Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`field${index}`, { source: 'literal', value: index }]));
+  fields.count = { source: 'literal', value: 1 };
+  fields['nested.value'] = { source: 'literal', value: 1 };
+  const invalidValues = [
+    {}, Array.from({ length: 21 }, (_, index) => ({ ...valid, key: `field${index}` })),
+    [{ ...valid, key: 'missing' }], [{ ...valid, key: 'nested.value' }], [{ ...valid, key: '__proto__' }],
+    [valid, valid], [{ ...valid, type: 'object' }], [{ ...valid, type: 'string' }],
+    [{ ...valid, aggregation: 'sql' }], [{ ...valid, expression: 'SUM(secret)' }],
+    [{ ...valid, label: 'x'.repeat(121) }], [{ ...valid, unit: 'x'.repeat(33) }],
+  ];
+  try {
+    for (const reportFields of invalidValues) {
+      assert.throws(() => service.createHook({ userId: 1, input: publishableHook({ extensionLogic: null, postActions: [{ id: 'record', type: 'write_record', config: { recordType: 'metrics', fields, reportFields } }] }) }), /reportFields/);
+    }
+    const created = service.createHook({ userId: 1, input: publishableHook({ extensionLogic: null, postActions: [{ id: 'record', type: 'write_record', config: { recordType: 'metrics', fields, reportFields: [{ key: 'count', type: 'boolean' }] } }] }) });
+    assert.deepEqual(created.postActions[0].config.reportFields, [{ key: 'count', label: 'count', type: 'boolean', aggregation: 'none' }]);
+  } finally { database.close(); }
+});
+
 test('execution audit and script data records can be queried for an Hook', () => {
   const { database, service } = createFixture();
   try {
@@ -2391,7 +2431,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
+      ['id', 'owner_tenant_id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
     );
     assert.equal(
       database

@@ -65,9 +65,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       const saved = localStorage.getItem(CURRENT_TENANT_STORAGE_KEY);
       const chosen = chooseInitialTenant(saved, nextTenants);
       setCurrentTenant((previous) => {
-        const nextTenant = previous && nextTenants.some((tenant) => tenant.id === previous.id)
-          ? previous
-          : chosen;
+        const nextTenant = (previous && nextTenants.find((tenant) => tenant.id === previous.id)) || chosen;
         if (nextTenant) {
           localStorage.setItem(CURRENT_TENANT_STORAGE_KEY, String(nextTenant.id));
         } else {
@@ -82,6 +80,9 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refreshTenants();
+    const refresh = () => { void refreshTenants(); };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
   }, [refreshTenants]);
 
   useEffect(() => {

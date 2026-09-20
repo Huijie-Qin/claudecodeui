@@ -246,13 +246,13 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
   );
 }
 
-function writeDataRecord(database, executionId, hook, context, event, recordType, data) {
+function writeDataRecord(database, executionId, hook, context, event, recordType, data, provenance = {}) {
   const id = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_data_records (
       id, execution_id, hook_id, user_id, tenant_id, workspace_id,
-      session_id, record_type, data_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      session_id, record_type, data_json, post_action_id, hook_version, record_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     executionId,
@@ -263,6 +263,10 @@ function writeDataRecord(database, executionId, hook, context, event, recordType
     event?.session_id || context.sessionId?.() || null,
     recordType,
     serializeForAudit(data),
+    provenance.postActionId || null,
+    Number.isInteger(hook.version) && hook.version > 0 ? hook.version : null,
+    ['post_action', 'script', 'system'].includes(provenance.recordSource)
+      ? provenance.recordSource : 'unknown',
   );
   return { id, type: recordType, data: toAuditValue(data) };
 }
@@ -388,7 +392,9 @@ async function executePostActions({
         if (value === UNRESOLVED) throw new Error(`Post action ${action.id} field ${key} is unresolved`);
         data[key] = value;
       }
-      const record = await writeRecord(action.config.recordType, data);
+      const record = await writeRecord(action.config.recordType, data, {
+        recordSource: 'post_action', postActionId: action.id,
+      });
       references.actions[action.id] = {
         output: { recorded: true, ...record },
       };
@@ -672,6 +678,7 @@ export function createHookRuntimeSession({
             event,
             recordType,
             redact(data),
+            { recordSource: 'script' },
           ),
           onLog: async (message, data) => {
             const entry = { timestamp: new Date().toISOString(), message: redact(message), data: redact(data) };
@@ -694,7 +701,7 @@ export function createHookRuntimeSession({
         subagentFeedback,
         subagentMcpResults,
         onLoopProgress,
-        writeRecord: async (recordType, data) => writeDataRecord(
+        writeRecord: async (recordType, data, provenance) => writeDataRecord(
           database,
           executionId,
           hook,
@@ -702,6 +709,7 @@ export function createHookRuntimeSession({
           event,
           recordType,
           redact(data),
+          provenance,
         ),
       });
       const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);

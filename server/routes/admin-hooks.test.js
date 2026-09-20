@@ -5,12 +5,12 @@ import express from 'express';
 
 import { createAdminRouter } from './admin.js';
 
-async function requestJson(router, path, { method = 'GET', body } = {}) {
+async function requestJson(router, path, { method = 'GET', body, isSystemAdmin = true } = {}) {
   return new Promise((resolve, reject) => {
     const app = express();
     app.use(express.json());
     app.use((req, res, next) => {
-      req.user = { id: 9, username: 'admin-user', is_system_admin: 1 };
+      req.user = { id: 9, username: 'admin-user', is_system_admin: isSystemAdmin ? 1 : 0, role: 'tenant_admin' };
       next();
     });
     app.use(router);
@@ -55,6 +55,23 @@ function createRouter({
     hookMcpCatalog,
   );
 }
+
+test('tenant admins cannot bypass ownership restrictions through Admin Hook mutation endpoints', async () => {
+  let mutations = 0;
+  const deniedMutation = () => { mutations += 1; return {}; };
+  const router = createRouter({ hookConfigs: {
+    createHook: deniedMutation, updateHook: deniedMutation, publishHook: deniedMutation,
+    replaceHookBindings: deniedMutation, deleteHook: deniedMutation,
+  } });
+  for (const [path, method] of [
+    ['/hooks', 'POST'], ['/hooks/platform-hook', 'PUT'],
+    ['/hooks/platform-hook/publish', 'POST'], ['/hooks/platform-hook/bindings', 'PUT'],
+    ['/hooks/platform-hook', 'DELETE'],
+  ]) {
+    assert.equal((await requestJson(router, path, { method, isSystemAdmin: false, body: { ownerTenantId: 10 } })).response.status, 403);
+  }
+  assert.equal(mutations, 0);
+});
 
 test('Hook resources expose only built-in Hook Skills', async () => {
   const router = createRouter({

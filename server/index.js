@@ -50,6 +50,9 @@ import codehubRoutes from './routes/codehub.js';
 import authRoutes from './routes/auth.js';
 import tenantsRoutes from './routes/tenants.js';
 import adminRoutes from './routes/admin.js';
+import tenantManagementRoutes from './routes/tenant-management.js';
+import {createAiUsageRouter} from './routes/ai-usage.js';
+import {createAiUsageService} from './services/ai-usage-scheduler.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
@@ -736,6 +739,10 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 // Multitenancy routes (protected)
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
+app.use('/api/tenant-management', authenticateToken, tenantManagementRoutes);
+const aiUsageService = createAiUsageService({ database: db });
+app.locals.aiUsageService = aiUsageService;
+app.use('/api/ai-usage', authenticateToken, createAiUsageRouter({ db, getScheduleStatus: () => aiUsageService.getStatus() }));
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
 app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
@@ -3812,6 +3819,7 @@ async function gracefulShutdown(signal) {
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
     runtimeSweeper.stop();
+    aiUsageService.stop();
     codeHubMrPoller.stop();
     mcpLoopService.stop();
     closeHttpServer().catch((error) => {
@@ -3841,6 +3849,7 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+        aiUsageService.start();
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
@@ -3901,6 +3910,7 @@ async function startServer() {
 
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
+            aiUsageService.stop();
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();

@@ -15,12 +15,19 @@ test('isSystemAdminUser accepts numeric and boolean admin flags', () => {
   assert.equal(isSystemAdminUser(null), false);
 });
 
-test('buildTenantMembershipPayload grants active member access with selected permission', () => {
+test('permission-only grants omit role so existing tenant administrators are preserved', () => {
   assert.deepEqual(buildTenantMembershipPayload('view'), {
-    role: 'member',
     permission: 'view',
     status: 'active',
   });
+});
+
+test('membership payload only changes a role when explicitly selected', () => {
+  assert.deepEqual(buildTenantMembershipPayload('view', 'tenant_admin'), {
+    role: 'tenant_admin', permission: 'view', status: 'active',
+  });
+  assert.equal(buildTenantMembershipPayload('edit', 'member').role, 'member');
+  assert.equal(isSystemAdminUser({ role: 'tenant_admin' }), false);
 });
 
 test('normalizeTenantCode creates lowercase hyphen tenant codes', () => {

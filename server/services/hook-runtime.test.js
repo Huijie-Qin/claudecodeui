@@ -427,6 +427,9 @@ test('configured Hook executes script, MCP action, and assembles Claude output',
     assert.equal(JSON.parse(execution.logs_json)[0].message, 'script ran');
     const record = database.prepare('SELECT * FROM hook_data_records').get();
     assert.equal(record.record_type, 'analysis');
+    assert.equal(record.record_source, 'script');
+    assert.equal(record.post_action_id, null);
+    assert.equal(record.hook_version, 3);
     assert.deepEqual(JSON.parse(record.data_json), { rows: 9 });
   } finally {
     database.close();
@@ -479,6 +482,9 @@ test('write_record post action persists mapped Hook data without a script API ca
     assert.deepEqual(output, {});
     const record = database.prepare('SELECT * FROM hook_data_records').get();
     assert.equal(record.record_type, 'conversation_completion');
+    assert.equal(record.record_source, 'post_action');
+    assert.equal(record.post_action_id, 'record-stop');
+    assert.equal(record.hook_version, 1);
     assert.deepEqual(JSON.parse(record.data_json), {
       sessionId: 'session-record-1',
       status: 'success',
