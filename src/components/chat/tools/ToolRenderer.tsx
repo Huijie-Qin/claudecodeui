@@ -153,7 +153,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
         onAction={handleAction}
         wrapText={displayConfig.wrapText}
         colorScheme={displayConfig.colorScheme}
-        resultId={mode === 'input' ? `tool-result-${toolId}` : undefined}
+        resultId={mode === 'input' && toolId ? `tool-result-${toolId}` : undefined}
         status={toolStatus !== 'completed' ? toolStatus : undefined}
         completionTime={completionTime}
       />
