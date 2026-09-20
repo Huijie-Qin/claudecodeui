@@ -30,6 +30,10 @@
     "never": "从未"
   },
   "skillPresets": {
+    "creator": "创建人：{{name}}",
+    "tenant": "所属租户：{{name}}",
+    "unknownCreator": "未知",
+    "unknownTenant": "未知",
     "description": "仅在用户默认空间首次初始化时安装。手动新建项目不继承预置 Skill；模板项目只安装模板选中的 Skill。",
     "pagination": {
       "page": "第 {{page}} 页",

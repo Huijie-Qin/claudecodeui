@@ -27,7 +27,7 @@ export type AdminSkillPreset = {
   remoteId: string;
   nspPath: string;
   version: number;
-  source?: Record<string, unknown>;
+  source?: Record<string, unknown> & { createUserId?: string | number };
   preinstallScope: 'none' | 'all_workspaces';
   preinstall?: boolean;
   status: AdminSkillPresetStatus;
