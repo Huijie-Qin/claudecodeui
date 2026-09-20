@@ -14,7 +14,7 @@ import {
 } from '../database/hook-config-schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 
-import { createHookConfigService } from './hook-configs.js';
+import { allowedPostActions, createHookConfigService, HOOK_EVENTS } from './hook-configs.js';
 import { executeHookScript } from './hook-script-executor.js';
 import { createHookRuntimeSession } from './hook-runtime.js';
 
@@ -1352,6 +1352,115 @@ test('mcp_loop_run repeats the Matcher MCP with original inputs and a Python ter
   } finally {
     database.close();
   }
+});
+
+test('request_confirmation publishes without a script or Claude response bindings and preserves snapshots', () => {
+  const { database, service } = createFixture();
+  try {
+    const input = publishableHook({
+      eventName: 'PreToolUse',
+      matcher: { mode: 'regex', value: '^mcp__.*' },
+      extensionLogic: null,
+      postActions: [{ id: 'confirm', type: 'request_confirmation', config: {} }],
+    });
+    const created = service.createHook({ userId: 1, input });
+    const expected = {
+      id: 'confirm', type: 'request_confirmation', position: 0,
+      config: { condition: null, messageTemplate: '即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。' },
+    };
+    assert.deepEqual(created.postActions, [expected]);
+    assert.equal(service.publishHook({ hookId: created.id, userId: 1 }).status, 'published');
+    service.updateHook({
+      hookId: created.id, userId: 1,
+      input: { ...input, postActions: [{ ...expected, config: { messageTemplate: '确认调用 {{event.tool_name}}？' } }] },
+    });
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const firstVersion = service.getPublishedHookVersion({ hookId: created.id, version: 1 });
+    assert.deepEqual(firstVersion.postActions, [expected]);
+    assert.equal(firstVersion.extensionLogic, null);
+    assert.deepEqual(firstVersion.claudeResponse, { bindings: {} });
+    assert.deepEqual(firstVersion.resourceRefs, { skills: [], mcpServers: [], mcpTools: [] });
+    assert.equal(
+      service.getPublishedHookVersion({ hookId: created.id, version: 2 }).postActions[0].config.messageTemplate,
+      '确认调用 {{event.tool_name}}？',
+    );
+  } finally { database.close(); }
+});
+
+test('request_confirmation is limited to one final PreToolUse action', () => {
+  const { database, service } = createFixture();
+  try {
+    const confirmation = { id: 'confirm', type: 'request_confirmation', config: {} };
+    const input = publishableHook({ eventName: 'PreToolUse', extensionLogic: null, postActions: [confirmation] });
+    for (const eventName of HOOK_EVENTS) {
+      assert.equal(allowedPostActions(eventName).has('request_confirmation'), eventName === 'PreToolUse');
+      if (eventName !== 'PreToolUse') {
+        assert.throws(() => service.createHook({
+          userId: 1, input: { ...input, eventName },
+        }), /request_confirmation is only supported for PreToolUse/);
+      }
+    }
+    assert.throws(() => service.createHook({ userId: 1, input: {
+      ...input, postActions: [confirmation, { ...confirmation, id: 'second-confirmation' }],
+    } }), /at most one request_confirmation/);
+    assert.throws(() => service.createHook({ userId: 1, input: {
+      ...input, postActions: [confirmation, {
+        id: 'record', type: 'write_record', config: { recordType: 'audit', fields: {} },
+      }],
+    } }), /request_confirmation must be the final post action/);
+  } finally { database.close(); }
+});
+
+test('request_confirmation validates message and condition dependencies including preceding actions', () => {
+  const { database, service } = createFixture();
+  try {
+    const input = publishableHook({
+      eventName: 'PreToolUse',
+      userVariables: [{ name: 'project' }],
+      extensionLogic: {
+        language: 'javascript', code: 'export async function run() { return { output: { needsConfirmation: true } }; }',
+        outputs: [{ name: 'needsConfirmation', type: 'boolean' }],
+      },
+      postActions: [
+        { id: 'audit', type: 'write_record', config: { recordType: 'audit', fields: {} } },
+        { id: 'confirm', type: 'request_confirmation', config: {
+          condition: { source: 'reference', path: 'script.output.needsConfirmation' },
+          messageTemplate: '{{event.tool_name}} / {{ccui.env.userVariables.project}} / {{actions.audit.output}}',
+        } },
+      ],
+    });
+    const created = service.createHook({ userId: 1, input });
+    assert.equal(service.publishHook({ hookId: created.id, userId: 1 }).status, 'published');
+    for (const path of ['actions.confirm.output', 'actions.missing.output', 'script.output.missing', 'ccui.env.userVariables.missing']) {
+      for (const config of [
+        { condition: { source: 'reference', path }, messageTemplate: '确认？' },
+        { condition: { source: 'template', template: `{{${path}}}` }, messageTemplate: '确认？' },
+        { condition: null, messageTemplate: `确认 {{${path}}}？` },
+      ]) {
+        assert.throws(() => service.createHook({ userId: 1, input: {
+          ...input, postActions: [input.postActions[0], { ...input.postActions[1], config }],
+        } }), /Reference .* is not available to post action confirm/);
+      }
+    }
+    assert.throws(() => service.createHook({ userId: 1, input: {
+      ...input,
+      postActions: [{ id: 'confirm', type: 'request_confirmation', config: { condition: true } }],
+    } }), /config.condition must be an object/);
+  } finally { database.close(); }
+});
+
+test('request_confirmation allows an empty draft message but rejects publication', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({ userId: 1, input: publishableHook({
+      eventName: 'PreToolUse', extensionLogic: null,
+      postActions: [{ id: 'confirm', type: 'request_confirmation', config: { messageTemplate: '  ' } }],
+    }) });
+    assert.equal(created.postActions[0].config.messageTemplate, '');
+    assert.throws(() => service.publishHook({ hookId: created.id, userId: 1 }), /must set a confirmation message/);
+    assert.equal(service.getHook(created.id).status, 'draft');
+    assert.deepEqual(service.listPublishedHookVersions(created.id), []);
+  } finally { database.close(); }
 });
 
 test('legacy mcp_loop_run equality conditions are converted to an executable Python termination script', async () => {

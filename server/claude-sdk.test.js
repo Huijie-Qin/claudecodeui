@@ -85,7 +85,9 @@ test('internal Hook follow-up turns retain user identity for required tool guard
 test('internal follow-up turns register required tool guards without repeating Stop hooks', async () => {
   const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
   const guard = { id: 'guard', eventName: 'PreToolUse', extensionLogic: { failClosed: true } };
-  const hooks = [guard,
+  const confirmation = { id: 'confirmation', eventName: 'PreToolUse', extensionLogic: null,
+    postActions: [{ type: 'request_confirmation' }] };
+  const hooks = [guard, confirmation,
     { id: 'stop', eventName: 'Stop', extensionLogic: { failClosed: true } },
     { id: 'optional', eventName: 'PreToolUse', extensionLogic: { failClosed: false } },
   ];
@@ -95,8 +97,8 @@ test('internal follow-up turns register required tool guards without repeating S
     hookResources: { materializeHook: async ({ hook }) => { materialized.push(hook.id); return {}; } },
     userId: 42, workspacePath: '/workspace', hookRecovery: true,
   });
-  assert.deepEqual(result.hooks, [guard]);
-  assert.deepEqual(materialized, ['guard']);
+  assert.deepEqual(result.hooks, [guard, confirmation]);
+  assert.deepEqual(materialized, ['guard', 'confirmation']);
 });
 
 test('required tool guard resource failures abort runtime preparation', async () => {

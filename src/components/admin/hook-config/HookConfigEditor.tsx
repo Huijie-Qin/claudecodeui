@@ -31,9 +31,12 @@ import {
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  canAddConfirmationAction,
   findMatchedTool,
   getClaudeOutputFields,
+  hasTerminalPostAction,
   inferNativeMatcherMode,
+  retainCompatiblePostActions,
   scriptApiName,
 } from './catalog';
 import { createHookItemId } from './editorUtils';
@@ -347,7 +350,7 @@ function BooleanConditionEditor({
 }: {
   condition: unknown;
   references: FieldChoice[];
-  actionVerb: '调用' | '记录' | '发送';
+  actionVerb: '调用' | '记录' | '发送' | '请求确认';
   ariaLabel: string;
   onChange: (condition: HookValueBinding | null) => void;
 }) {
@@ -385,7 +388,7 @@ function BooleanConditionEditor({
       </p>
       {booleanReferences.length === 0 ? (
         <p className="text-[10px] leading-4 text-amber-600 dark:text-amber-400">
-          当前没有可用的布尔变量，请先在脚本输出变量中添加 boolean 类型变量。
+          当前没有可用的布尔变量，可保持始终{actionVerb}；如需按条件执行，可在脚本输出变量中添加 boolean 类型变量。
         </p>
       ) : null}
     </div>
@@ -863,6 +866,83 @@ function AgentMessageActionEditor({
   );
 }
 
+const DEFAULT_CONFIRMATION_MESSAGE = '即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。';
+
+function ConfirmationActionEditor({
+  action,
+  references,
+  onChange,
+}: {
+  action: HookPostAction;
+  references: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const config = asRecord(action.config);
+  const template = typeof config.messageTemplate === 'string' ? config.messageTemplate : DEFAULT_CONFIRMATION_MESSAGE;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectionRef = useRef({ start: template.length, end: template.length });
+
+  const insertReference = (path: string) => {
+    const token = `{{${path}}}`;
+    const { start, end } = selectionRef.current;
+    onChange({ ...config, messageTemplate: `${template.slice(0, start)}${token}${template.slice(end)}` });
+    const cursor = start + token.length;
+    selectionRef.current = { start: cursor, end: cursor };
+    globalThis.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
+        仅在 MCP 工具调用前触发，其他工具自动跳过。在聊天输入框上方展示本次工具名和完整参数，等待用户选择“确定执行”或“取消调用”。每次调用都单独确认。
+        <p className="mt-1">无需编写 Python 脚本或配置返回值绑定。此行为必须放在最后；发生异常时拒绝本次调用。</p>
+      </div>
+      <BooleanConditionEditor
+        condition={config.condition}
+        references={references}
+        actionVerb="请求确认"
+        ariaLabel="选择用户确认触发条件布尔变量"
+        onChange={(condition) => onChange({ ...config, condition })}
+      />
+      <label className="block space-y-1.5">
+        <span className="text-xs font-medium text-foreground">确认说明模板</span>
+        <textarea
+          ref={textareaRef}
+          rows={3}
+          value={template}
+          aria-label="确认说明模板"
+          onChange={(event) => onChange({ ...config, messageTemplate: event.currentTarget.value })}
+          onSelect={(event) => {
+            selectionRef.current = {
+              start: event.currentTarget.selectionStart,
+              end: event.currentTarget.selectionEnd,
+            };
+          }}
+          placeholder={DEFAULT_CONFIRMATION_MESSAGE}
+          className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+        />
+      </label>
+      <HookSelect
+        value=""
+        options={references.map((field) => ({
+          value: field.path,
+          label: field.label || field.path,
+          description: field.path,
+        }))}
+        onChange={insertReference}
+        placeholder="插入说明变量"
+        ariaLabel="插入用户确认说明变量"
+      />
+      <p className="text-[11px] leading-5 text-muted-foreground">
+        说明支持 {'{{event.tool_name}}'} 等变量。工具名和参数由系统展示，无需重复写入模板。行为输出中的 requested 表示已请求确认，不代表用户已同意。
+      </p>
+    </div>
+  );
+}
+
 function RecordActionEditor({
   action,
   references,
@@ -1013,9 +1093,11 @@ function PostActionsEditor({
   const matchedMcpTool = resources.mcpTools.find((tool) => tool.name === matchedTool?.name);
   const canAddMcpLoop = hook.eventName === 'PostToolUse'
     && Boolean(matchedMcpTool)
-    && !hook.postActions.some((action) => action.type === 'mcp_loop_run');
-  const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
+    && !hasTerminalPostAction(hook.postActions);
+  const hasTerminalAction = hasTerminalPostAction(hook.postActions);
+  const canAddConfirmation = canAddConfirmationAction(hook);
   const addAction = (type: HookPostAction['type']) => {
+    if (hasTerminalAction || (type === 'request_confirmation' && !canAddConfirmation)) return;
     const action: HookPostAction = {
       id: createHookItemId(),
       type,
@@ -1034,7 +1116,7 @@ function PostActionsEditor({
           ? { recordType: '', condition: null, fields: {} }
           : type === 'invoke_skill'
             ? { skillId: '', skillName: '', condition: null, argumentsTemplate: '' }
-            : { messageTemplate: '', condition: null },
+            : { messageTemplate: type === 'request_confirmation' ? DEFAULT_CONFIRMATION_MESSAGE : '', condition: null },
     };
     onChange([...hook.postActions, action]);
   };
@@ -1048,14 +1130,22 @@ function PostActionsEditor({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')} disabled={hasMcpLoop}>
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('call_mcp_tool')} disabled={hasTerminalAction}>
           <Wrench className="h-4 w-4" />
           调用 MCP 工具
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => addAction('write_record')} disabled={hasMcpLoop}>
+        <Button type="button" variant="outline" size="sm" onClick={() => addAction('write_record')} disabled={hasTerminalAction}>
           <Database className="h-4 w-4" />
           记录数据
         </Button>
+        <Tooltip content={canAddConfirmation ? '展示本次 MCP 工具名和完整参数，等待用户确定或取消。必须作为最后一个后置行为。' : '仅适用于 PreToolUse（工具执行前），一个 Hook 最多配置一次，且必须放在最后。'}>
+          <span>
+            <Button type="button" variant="outline" size="sm" onClick={() => addAction('request_confirmation')} disabled={!canAddConfirmation}>
+              <CircleAlert className="h-4 w-4" />
+              请求用户确认
+            </Button>
+          </span>
+        </Tooltip>
         <Tooltip content={canAddMcpLoop ? `暂停触发此 Hook 的 Agent，复用首次调用参数循环调用 MCP，命中终止条件后恢复。${includeSubagents ? ' 子代理会等待自己的工具循环完成。' : ''}` : '请先让 PostToolUse Matcher 完整匹配一个已发布的 MCP 工具；一个 Hook 最多配置一次循环。'}>
           <span>
             <Button
@@ -1077,7 +1167,7 @@ function PostActionsEditor({
               variant="outline"
               size="sm"
               onClick={() => addAction('invoke_skill')}
-              disabled={!canQueueAgentTurn || hasMcpLoop}
+              disabled={!canQueueAgentTurn || hasTerminalAction}
             >
               <Sparkles className="h-4 w-4" />
               调用 Skill
@@ -1091,7 +1181,7 @@ function PostActionsEditor({
               variant="outline"
               size="sm"
               onClick={() => addAction('send_agent_message')}
-              disabled={!canQueueAgentTurn || hasMcpLoop}
+              disabled={!canQueueAgentTurn || hasTerminalAction}
             >
               <MessageSquare className="h-4 w-4" />
               发送 Agent 消息
@@ -1099,9 +1189,12 @@ function PostActionsEditor({
           </span>
         </Tooltip>
       </div>
+      {hook.postActions.some((action) => action.type === 'request_confirmation') ? (
+        <p className="text-xs leading-5 text-muted-foreground">“请求用户确认”已作为最后一个行为；删除它后可继续添加其他行为。</p>
+      ) : null}
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加业务数据写入、MCP 工具、循环调用、Skill 或 Agent 消息，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具、请求用户确认、循环调用、Skill 或 Agent 消息，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -1121,7 +1214,9 @@ function PostActionsEditor({
                   ? <Database className="h-4 w-4 text-primary" />
                   : action.type === 'invoke_skill'
                     ? <Sparkles className="h-4 w-4 text-primary" />
-                    : <MessageSquare className="h-4 w-4 text-primary" />}
+                    : action.type === 'request_confirmation'
+                      ? <CircleAlert className="h-4 w-4 text-primary" />
+                      : <MessageSquare className="h-4 w-4 text-primary" />}
               <span className="text-xs font-semibold text-foreground">
                 {index + 1}. {action.type === 'call_mcp_tool'
                   ? '调用 MCP 工具'
@@ -1131,7 +1226,9 @@ function PostActionsEditor({
                     ? '记录数据'
                     : action.type === 'invoke_skill'
                       ? includeSubagents ? '调用 Skill（继续任务）' : '调用 Skill（恢复回合）'
-                      : includeSubagents ? '发送 Agent 消息（继续任务）' : '发送 Agent 消息（下一回合）'}
+                      : action.type === 'request_confirmation'
+                        ? '请求用户确认'
+                        : includeSubagents ? '发送 Agent 消息（继续任务）' : '发送 Agent 消息（下一回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
               <Button
@@ -1171,6 +1268,12 @@ function PostActionsEditor({
                   action={action}
                   includeSubagents={includeSubagents}
                   resources={resources}
+                  references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : action.type === 'request_confirmation' ? (
+                <ConfirmationActionEditor
+                  action={action}
                   references={availableReferences}
                   onChange={(config) => updateAction(index, config)}
                 />
@@ -1479,6 +1582,7 @@ export default function HookConfigEditor({
   ];
   const matcherValue = hook.matcher.value || '';
   const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
+  const hasConfirmation = hook.postActions.some((action) => action.type === 'request_confirmation');
   const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
   const matcherRegexError = useMemo(() => {
     if (!eventDefinition?.matcherField || eventDefinition.matcherKind === 'fileNames') return false;
@@ -1608,11 +1712,7 @@ export default function HookConfigEditor({
                       extensionLogic: hook.extensionLogic
                         ? { ...hook.extensionLogic }
                         : null,
-                      postActions: eventName === 'Stop' || eventName === 'StopFailure'
-                        ? hook.postActions
-                        : hook.postActions.filter((action) => (
-                            action.type !== 'invoke_skill' && action.type !== 'send_agent_message'
-                          )).map((action, index) => ({ ...action, position: index })),
+                      postActions: retainCompatiblePostActions(hook.postActions, eventName),
                       claudeResponse: { bindings: {} },
                     });
                   }}
@@ -1870,7 +1970,9 @@ export default function HookConfigEditor({
           <Section
             number={4}
             title="Hook 后置行为"
-            description={resolveIncludeSubagents(hook)
+            description={hook.eventName === 'PreToolUse'
+              ? '按顺序执行后置行为。可直接添加“请求用户确认”，在 MCP 工具执行前展示参数并等待用户决定，无需编写脚本。'
+              : resolveIncludeSubagents(hook)
               ? '高级脚本完成后按顺序记录数据或调用 MCP 工具；主代理结束时可在下一回合执行 Skill 或接收消息，子代理结束时由它继续自己的任务。'
               : '高级脚本完成后按顺序记录数据或调用 MCP 工具；回答正常或异常结束时还可以调用 Skill，或直接向 Agent 发送下一回合消息。'}
           >
@@ -1892,6 +1994,8 @@ export default function HookConfigEditor({
             title="返回给 Claude"
             description={hasMcpLoop
               ? '循环调用 MCP 会接管当前工具结果，普通 Hook 返回字段已停用。'
+              : hasConfirmation
+                ? '“请求用户确认”会自动发起确认，无需绑定返回字段。已有拒绝或停止决定优先；其他返回字段仍可配置。'
               : '只有这里配置的字段才会组装为 HookJSONOutput；脚本和行为输出不会自动返回。'}
           >
             {hasMcpLoop ? (

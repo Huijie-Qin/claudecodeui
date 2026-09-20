@@ -1,5 +1,6 @@
 export function isRequiredHook(hook) {
-  return hook?.eventName === 'PreToolUse' && hook.extensionLogic?.failClosed === true;
+  return hook?.eventName === 'PreToolUse' && (hook.extensionLogic?.failClosed === true
+    || hook.postActions?.some((action) => action.type === 'request_confirmation') === true);
 }
 
 export function createRequiredHookError(cause) {

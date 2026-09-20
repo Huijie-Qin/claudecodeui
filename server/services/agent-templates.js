@@ -25,6 +25,7 @@ const HOOK_CAPABILITY_LABELS = Object.freeze({
   write_record: '写记录',
   invoke_skill: 'Skill',
   send_agent_message: 'Agent 消息',
+  request_confirmation: '请求用户确认',
 });
 
 function createHttpError(message, statusCode = 400) {

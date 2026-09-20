@@ -285,6 +285,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     write_record: t('hookActivity.actions.write_record', { defaultValue: 'Write record' }),
     invoke_skill: t('hookActivity.actions.invoke_skill', { defaultValue: 'Invoke Skill' }),
     send_agent_message: t('hookActivity.actions.send_agent_message', { defaultValue: 'Send to Agent' }),
+    request_confirmation: t('hookActivity.actions.request_confirmation', { defaultValue: 'Request confirmation' }),
   };
   const hookStatusLabel = {
     queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),

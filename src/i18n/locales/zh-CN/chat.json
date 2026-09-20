@@ -64,7 +64,8 @@
       "mcp_loop_run": "MCP 循环等待",
       "write_record": "写入记录",
       "invoke_skill": "调用技能",
-      "send_agent_message": "发送给 Agent"
+      "send_agent_message": "发送给 Agent",
+      "request_confirmation": "请求用户确认"
     },
     "loopAttempts": "已轮询 {{count}} 次",
     "loopResult": "最终结果",

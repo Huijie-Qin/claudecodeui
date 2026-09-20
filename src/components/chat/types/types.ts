@@ -115,7 +115,7 @@ export interface HookActivityDetails {
   actionId?: string;
   actionType?: 'invoke_skill' | 'send_agent_message' | 'mcp_loop_run';
   eventName?: string;
-  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message'>;
+  actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message' | 'request_confirmation'>;
   loopJobId?: string;
   loopStatus?: string;
   loopAttemptCount?: number;

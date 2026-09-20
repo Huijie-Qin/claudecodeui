@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import { createClaudeQueryWithHookFallback, isRequiredHook } from './claude-hook-policy.js';
 
-test('only explicitly fail-closed PreToolUse hooks are required', () => {
+test('PreToolUse checks and confirmation actions are required', () => {
   assert.equal(isRequiredHook({ eventName: 'PreToolUse', extensionLogic: { failClosed: true } }), true);
+  assert.equal(isRequiredHook({ eventName: 'PreToolUse', extensionLogic: null,
+    postActions: [{ type: 'request_confirmation' }] }), true);
   for (const hook of [
     null, { eventName: 'PreToolUse' },
     { eventName: 'PreToolUse', extensionLogic: { failClosed: false } },
@@ -13,6 +15,7 @@ test('only explicitly fail-closed PreToolUse hooks are required', () => {
     { eventName: 'SubagentStop', extensionLogic: { failClosed: true } },
     { eventName: 'StopFailure', extensionLogic: { failClosed: true } },
     { eventName: 'PostToolUse', extensionLogic: { failClosed: true } },
+    { eventName: 'Stop', postActions: [{ type: 'request_confirmation' }] },
   ]) assert.equal(isRequiredHook(hook), false);
 });
 

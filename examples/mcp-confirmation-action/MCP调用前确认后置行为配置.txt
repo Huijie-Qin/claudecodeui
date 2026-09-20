@@ -1,0 +1,45 @@
+MCP 调用前确认后置行为
+
+作用：每次 Claude MCP 工具调用前自动记录参数，在 CCUI 聊天输入框上方展示工具名称和完整 JSON 参数，等待用户选择“确定执行”或“取消调用”。每次调用单独确认；无需 Python、脚本输出、ask 返回绑定或用户 query 提示。
+
+配置：事件 PreToolUse；正则匹配 ^mcp__.*；包含子代理；后置行为 request_confirmation；执行条件留空表示始终执行；确认提示文案见下方 JSON。
+
+“后置”指 Hook 脚本和前序后置行为完成之后，仍在原 MCP 工具执行之前。此行为只支持 PreToolUse，每个 Hook 最多一个，并且必须排在后置行为列表最后。它不替代对前序 call_mcp_tool 后置行为的授权：那些服务端调用在确认前已执行。
+
+启用：
+1. 部署支持 request_confirmation 后置行为与 MCP 确认卡片的前后端，并重启后端。旧版不能仅靠导入本配置实现。
+2. 管理页创建 Hook：事件选择“工具调用前”，正则为 ^mcp__.*，开启“包含子代理”，添加“请求用户确认”后置行为，填写提示文案；无需启用脚本或配置 Claude 返回绑定。也可将完整 JSON 作为 POST /api/admin/hooks 的请求体。
+3. 保存并发布，绑定目标用户/租户，在目标工作空间启用。需要强制执行时，分配为默认启用且不允许用户关闭。
+4. 开始新的执行回合。确认卡片位于聊天输入框上方；未确认时工具保持等待，取消后不执行，确认只授权本次调用。
+
+参数由运行层自动记录；审计日志中的敏感字段会脱敏，确认卡片展示实际即将执行的参数。执行条件留空适合每次强制确认；设置条件后，条件为 false 时会跳过确认。本配置只覆盖通过 Claude SDK 的 PreToolUse 发起的 MCP 工具调用，不覆盖终端直连 MCP 或 Hook 自身的服务端 MCP 调用。配置文件本身不会自动绑定现有账号。
+
+完整 JSON 配置：
+{
+  "name": "MCP 调用前确认后置行为",
+  "description": "每次 MCP 调用前记录并展示参数，通过后置行为要求用户逐次确认，无需脚本。",
+  "eventName": "PreToolUse",
+  "matcher": {
+    "mode": "regex",
+    "value": "^mcp__.*"
+  },
+  "includeSubagents": true,
+  "userVariables": [],
+  "extensionLogic": null,
+  "postActions": [
+    {
+      "id": "confirm_mcp_call",
+      "type": "request_confirmation",
+      "config": {
+        "condition": null,
+        "messageTemplate": "即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。"
+      }
+    }
+  ],
+  "claudeResponse": {
+    "bindings": {}
+  }
+}
+
+生成命令：node examples/mcp-confirmation-action/build-config.mjs
+详细说明：docs/hook-confirmation-action.md
