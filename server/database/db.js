@@ -33,6 +33,7 @@ import {
   DATABASE_SCHEMA_SQL
 } from './schema.js';
 import {
+  migrateAgentTemplateSqlCheck,
   migrateSkillMarketImportBindingColumns,
   migrateWorkspaceSoftDeleteUniqueness,
   MULTITENANCY_SCHEMA_SQL,
@@ -235,6 +236,7 @@ function runMultitenancyMigrations() {
   migrateAgentTemplateSnapshotsToHistoricalReferences();
   ensureColumn('workspace_agent_template_snapshots', 'hooks_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('workspace_agent_template_snapshots', 'claude_folders_json', "TEXT NOT NULL DEFAULT '[]'");
+  migrateAgentTemplateSqlCheck(db);
   migrateAgentTemplateFolderStorage(db, {
     onError: (error) => console.error(error.message),
   });
@@ -324,6 +326,7 @@ export function migrateAgentTemplateSnapshotsToHistoricalReferences(database = d
         const legacyColumns = new Set(database.prepare('PRAGMA table_info(workspace_agent_template_snapshots)')
           .all().map((column) => column.name));
         const hooksJson = legacyColumns.has('hooks_json') ? 'hooks_json' : "'[]'";
+        const sqlCheckJson = legacyColumns.has('sql_check_json') ? 'sql_check_json' : 'NULL';
         const claudeFoldersJson = legacyColumns.has('claude_folders_json') ? 'claude_folders_json' : "'[]'";
         database.exec(`
           ALTER TABLE workspace_agent_template_snapshots
@@ -338,6 +341,7 @@ export function migrateAgentTemplateSnapshotsToHistoricalReferences(database = d
             skill_presets_json TEXT NOT NULL DEFAULT '[]',
             mcp_presets_json TEXT NOT NULL DEFAULT '[]',
             hooks_json TEXT NOT NULL DEFAULT '[]',
+            sql_check_json TEXT,
             claude_folders_json TEXT NOT NULL DEFAULT '[]',
             created_by_user_id INTEGER NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -346,12 +350,12 @@ export function migrateAgentTemplateSnapshotsToHistoricalReferences(database = d
           );
           INSERT INTO workspace_agent_template_snapshots (
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json, claude_folders_json,
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, hooks_json, claude_folders_json, sql_check_json,
             created_by_user_id, created_at
           )
           SELECT
             workspace_id, template_id, template_name, template_updated_at,
-            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, ${hooksJson}, ${claudeFoldersJson},
+            agent_markdown, guide_text, skill_presets_json, mcp_presets_json, ${hooksJson}, ${claudeFoldersJson}, ${sqlCheckJson},
             created_by_user_id, created_at
           FROM workspace_agent_template_snapshots_legacy;
           DROP TABLE workspace_agent_template_snapshots_legacy;

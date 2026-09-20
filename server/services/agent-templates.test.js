@@ -730,7 +730,7 @@ for (const hasAdvancedColumns of [false, true]) {
         guide_text TEXT NOT NULL DEFAULT '',
         skill_presets_json TEXT NOT NULL DEFAULT '[]',
         mcp_presets_json TEXT NOT NULL DEFAULT '[]',
-        ${hasAdvancedColumns ? "hooks_json TEXT NOT NULL DEFAULT '[]', claude_folders_json TEXT NOT NULL DEFAULT '[]'," : ''}
+        ${hasAdvancedColumns ? "hooks_json TEXT NOT NULL DEFAULT '[]', claude_folders_json TEXT NOT NULL DEFAULT '[]', sql_check_json TEXT," : ''}
         created_by_user_id INTEGER NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -742,10 +742,11 @@ for (const hasAdvancedColumns of [false, true]) {
     `);
     const folders = [{ name: 'commands', directories: [], files: [] }];
     const hooks = [{ id: 'hook-history', version: 2 }];
+    const sqlCheck = { customEnabled: true, ruleIds: ['historic-rule'] };
     if (hasAdvancedColumns) {
       database.prepare(`
-        UPDATE workspace_agent_template_snapshots SET hooks_json = ?, claude_folders_json = ?
-      `).run(JSON.stringify(hooks), JSON.stringify(folders));
+        UPDATE workspace_agent_template_snapshots SET hooks_json = ?, claude_folders_json = ?, sql_check_json = ?
+      `).run(JSON.stringify(hooks), JSON.stringify(folders), JSON.stringify(sqlCheck));
     }
     migrateAgentTemplateSnapshotsToHistoricalReferences(database);
     migrateAgentTemplateSnapshotsToHistoricalReferences(database);
@@ -754,6 +755,7 @@ for (const hasAdvancedColumns of [false, true]) {
     assert.equal(snapshot.template_name, '历史模板');
     assert.deepEqual(JSON.parse(snapshot.hooks_json), hasAdvancedColumns ? hooks : []);
     assert.deepEqual(JSON.parse(snapshot.claude_folders_json), hasAdvancedColumns ? folders : []);
+    assert.deepEqual(JSON.parse(snapshot.sql_check_json), hasAdvancedColumns ? sqlCheck : null);
     assert.equal(database.pragma('foreign_keys', { simple: true }), 1);
     assert.deepEqual(database.pragma('foreign_key_check'), []);
   });
@@ -1223,4 +1225,71 @@ test('template snapshots retain the pinned subagent switch after a newer Hook ch
     assert.equal(stored[0].version, 2);
     assert.equal(stored[0].includeSubagents, true);
   } finally { fixture.database.close(); }
+});
+
+test('SQL Check template selections persist in project snapshots and remain personally editable', () => {
+  const fixture = createFixture();
+  const { database, service, dataAgentTenantId, appTenantId, mcpId } = fixture;
+  database.prepare('INSERT INTO users (id, username) VALUES (2, ?)').run('shared-user');
+  database.prepare("UPDATE mcp_server_presets SET name='renamed-sql-service', tools_json=? WHERE id=?")
+    .run(JSON.stringify([{ name: 'check_sql_syntax' }]), mcpId);
+  const mt = createMultitenancyDb(database);
+  mt.sqlCheck.replaceTenantConfig({ tenantId: appTenantId, ruleIds: ['tenant-rule'] });
+  const createWorkspace = (slug) => Number(database.prepare(`INSERT INTO workspaces
+    (tenant_id, owner_user_id, slug, display_name, path) VALUES (?, 1, ?, ?, ?)`)
+    .run(appTenantId, slug, slug, `/tmp/${slug}`).lastInsertRowid);
+  const workspaceId = createWorkspace('sql-template-rules');
+  const failedWorkspaceId = createWorkspace('sql-template-mcp-failed');
+  const draft = service.saveTemplate({ userId: 1, input: {
+    name: 'SQL 目录模板', category: '测试', tenantIds: [dataAgentTenantId],
+    mcpPresetRefs: [{ tenantId: dataAgentTenantId, presetId: mcpId }],
+    sqlCheck: { customEnabled: true, ruleIds: [' no_star ', 'limit_rows', 'no_star'] },
+  } });
+  const expected = { customEnabled: true, ruleIds: ['no_star', 'limit_rows'] };
+  assert.deepEqual(draft.sqlCheck, expected);
+  assert.deepEqual(service.listAdminTemplates()[0].sqlCheck, expected);
+  assert.deepEqual(service.saveTemplate({ templateId: draft.id, userId: 1, input: { summary: '保留目录' } }).sqlCheck, expected);
+  service.publishTemplate({ templateId: draft.id, userId: 1 });
+  const snapshot = service.resolveTemplateSnapshot({ templateId: draft.id, tenantId: appTenantId });
+  service.saveWorkspaceSnapshot({ workspaceId, userId: 1, snapshot });
+  service.saveWorkspaceSnapshot({ workspaceId: failedWorkspaceId, userId: 1, snapshot: { ...snapshot, mcps: [] } });
+  const resolve = (userId, id = workspaceId) => mt.sqlCheck.resolveUserConfig({ tenantId: appTenantId, workspaceId: id, userId });
+  for (const userId of [1, 2]) {
+    const config = resolve(userId);
+    assert.deepEqual(config.effectiveRuleIds, expected.ruleIds);
+    assert.deepEqual(config.templateRuleIds, expected.ruleIds);
+    assert.equal(config.customEnabled, true);
+    assert.equal(config.source, 'template');
+    assert.equal(config.hasUserPreference, false);
+  }
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM user_sql_check_preferences').get().count, 0);
+  assert.deepEqual(resolve(1, failedWorkspaceId).effectiveRuleIds, ['tenant-rule']);
+  assert.equal(mt.sqlCheck.resolveUserConfig({ tenantId: dataAgentTenantId, workspaceId, userId: 1 }).source, 'tenant');
+  mt.sqlCheck.setUserPreference({ tenantId: appTenantId, workspaceId, userId: 1, customEnabled: true, ruleIds: ['personal-rule'] });
+  assert.deepEqual(resolve(1).effectiveRuleIds, ['personal-rule']);
+  assert.deepEqual(resolve(2).effectiveRuleIds, expected.ruleIds);
+  mt.sqlCheck.setUserPreference({ tenantId: appTenantId, workspaceId, userId: 1, customEnabled: false, ruleIds: [] });
+  assert.deepEqual(resolve(1).effectiveRuleIds, ['tenant-rule']);
+  assert.equal(resolve(1).source, 'tenant');
+  service.saveTemplate({ templateId: draft.id, userId: 1, input: { sqlCheck: { customEnabled: true, ruleIds: ['new-template-rule'] } } });
+  assert.deepEqual(resolve(2).effectiveRuleIds, expected.ruleIds, 'later template edits cannot change existing project choices');
+  assert.equal(service.saveTemplate({ templateId: draft.id, userId: 1, input: { mcpPresetRefs: [] } }).sqlCheck, null);
+  assert.deepEqual(resolve(2).effectiveRuleIds, expected.ruleIds, 'removing the MCP does not change existing project snapshots');
+  database.close();
+});
+
+test('SQL Check selections require the MCP and validate rule IDs without altering ordinary templates', () => {
+  const { database, service, dataAgentTenantId, mcpId } = createFixture();
+  const input = { name: 'SQL 目录校验', category: '测试', tenantIds: [dataAgentTenantId], mcpPresetRefs: [{ tenantId: dataAgentTenantId, presetId: mcpId }] };
+  assert.equal(service.saveTemplate({ userId: 1, input: { ...input, sqlCheck: { customEnabled: true, ruleIds: ['ignored'] } } }).sqlCheck, null);
+  database.prepare("UPDATE mcp_server_presets SET name='sql-syntax-checker' WHERE id=?").run(mcpId);
+  for (const sqlCheck of [{ customEnabled: 'true', ruleIds: [] }, { customEnabled: true, ruleIds: 'rule' }, { customEnabled: true, ruleIds: ['bad\nrule'] }]) {
+    assert.throws(() => service.saveTemplate({ userId: 1, input: { ...input, name: 'invalid', sqlCheck } }), (error) => error.statusCode === 400);
+  }
+  const empty = service.saveTemplate({ userId: 1, input: { ...input, name: '空自定义目录', sqlCheck: { customEnabled: true, ruleIds: [] } } });
+  assert.deepEqual(empty.sqlCheck, { customEnabled: true, ruleIds: [] }, 'explicitly selecting no rules stays distinct from following tenant defaults');
+  const mt = createMultitenancyDb(database);
+  mt.sqlCheck.replaceTenantConfig({ tenantId: dataAgentTenantId, ruleIds: ['limit_rows', 'no_star'] });
+  assert.deepEqual(service.listPresetCatalog({ tenantId: dataAgentTenantId }).sqlCheckRuleIds, ['limit_rows', 'no_star']);
+  database.close();
 });

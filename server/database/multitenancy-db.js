@@ -1,7 +1,10 @@
 import crypto from 'node:crypto';
 
+import { normalizeSqlCheckSelection } from '../../shared/sqlCheck.js';
+
 import { db } from './db.js';
 import {
+  migrateAgentTemplateSqlCheck,
   migrateClaudeEnvDenyRuleMatchTypes,
   migrateLegacyDefaultClaudeEnvAllowlist,
   migrateRetiredPersonalClaudeEnvDenyRules,
@@ -31,6 +34,7 @@ const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 
 export function initializeMultitenancyTables(database = db) {
   database.exec(MULTITENANCY_SCHEMA_SQL);
+  migrateAgentTemplateSqlCheck(database);
   migrateWorkspaceSoftDeleteUniqueness(database);
   migrateLegacyDefaultClaudeEnvAllowlist(database);
   migrateClaudeEnvDenyRuleMatchTypes(database);
@@ -824,9 +828,16 @@ export function createMultitenancyDb(database = db) {
       workspaceId: normalizedWorkspaceId,
       userId: normalizedUserId,
     });
+    const templateRow = database.prepare(`
+      SELECT snapshot.sql_check_json FROM workspace_agent_template_snapshots snapshot
+      JOIN workspaces workspace ON workspace.id = snapshot.workspace_id
+      WHERE snapshot.workspace_id = ? AND workspace.tenant_id = ?
+    `).get(normalizedWorkspaceId, normalizedTenantId);
+    const templateConfig = normalizeSqlCheckSelection(parseJson(templateRow?.sql_check_json, null));
+    const useTemplate = !userPreference.hasUserPreference && templateConfig?.customEnabled === true;
     const effectiveRuleIds = userPreference.customEnabled
       ? userPreference.ruleIds
-      : tenantRuleIds;
+      : useTemplate ? templateConfig.ruleIds : tenantRuleIds;
 
     return {
       tenantId: normalizedTenantId,
@@ -834,10 +845,11 @@ export function createMultitenancyDb(database = db) {
       userId: normalizedUserId,
       tenantRuleIds,
       hasUserPreference: userPreference.hasUserPreference,
-      customEnabled: userPreference.customEnabled,
+      customEnabled: userPreference.customEnabled || useTemplate,
+      ...(templateConfig ? { hasTemplatePreference: true, templateRuleIds: templateConfig.ruleIds } : {}),
       userRuleIds: userPreference.ruleIds,
       effectiveRuleIds,
-      source: userPreference.customEnabled ? 'user' : 'tenant',
+      source: userPreference.customEnabled ? 'user' : useTemplate ? 'template' : 'tenant',
     };
   };
 

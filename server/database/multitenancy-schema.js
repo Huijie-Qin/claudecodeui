@@ -446,6 +446,7 @@ CREATE TABLE IF NOT EXISTS agent_templates (
   skill_preset_refs_json TEXT NOT NULL DEFAULT '[]',
   mcp_preset_refs_json TEXT NOT NULL DEFAULT '[]',
   hook_refs_json TEXT NOT NULL DEFAULT '[]',
+  sql_check_json TEXT,
   claude_folders_json TEXT NOT NULL DEFAULT '[]',
   global_visible INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
@@ -470,6 +471,7 @@ CREATE TABLE IF NOT EXISTS workspace_agent_template_snapshots (
   skill_presets_json TEXT NOT NULL DEFAULT '[]',
   mcp_presets_json TEXT NOT NULL DEFAULT '[]',
   hooks_json TEXT NOT NULL DEFAULT '[]',
+  sql_check_json TEXT,
   claude_folders_json TEXT NOT NULL DEFAULT '[]',
   created_by_user_id INTEGER NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -793,5 +795,14 @@ function ensureSchemaColumn(database, tableName, columnName, columnDefinition) {
     .some((column) => column.name === columnName);
   if (!exists) {
     database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+  }
+}
+
+export function migrateAgentTemplateSqlCheck(database) {
+  for (const table of ['agent_templates', 'workspace_agent_template_snapshots']) {
+    const columns = database.prepare(`PRAGMA table_info(${table})`).all();
+    if (columns.length && !columns.some((column) => column.name === 'sql_check_json')) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN sql_check_json TEXT`);
+    }
   }
 }

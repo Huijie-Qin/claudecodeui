@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, CheckCircle2, ChevronLeft, Loader2, Plus, Power, Save, Search, SlidersHorizontal, Sparkles, Tags, Trash2, Webhook, X } from 'lucide-react';
 
 import { api } from '../../utils/api';
+import { isSqlCheckMcp, type SqlCheckSelection } from '../../../shared/sqlCheck';
 import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/view/ui';
 import { cn } from '../../lib/utils';
 import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTools';
 import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
+import { tenantTemplateSkillCandidates } from '../tenant-management/tenantTemplateCatalog';
 
+import AgentTemplateSqlCheckSettings from './AgentTemplateSqlCheckSettings';
 import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
 import { getHookSubagentLabel } from './hook-config/catalog';
 import {
@@ -20,7 +23,6 @@ import {
 } from './agentTemplateSkillCatalog';
 import AgentTemplateFolders from './AgentTemplateFolders';
 import type { AgentTemplateFolder } from './agentTemplateFolderUpload';
-import { tenantTemplateSkillCandidates } from '../tenant-management/tenantTemplateCatalog';
 
 type Tenant = { id: number; code: string; name: string; status: string };
 type PresetRef = { tenantId: number; presetId: number; toolSettings?: McpTemplateToolSettings };
@@ -68,6 +70,7 @@ type AgentTemplate = {
   skillPresetRefs: PresetRef[];
   mcpPresetRefs: PresetRef[];
   hookRefs: HookRef[];
+  sqlCheck: SqlCheckSelection | null;
   globalVisible: boolean;
   status: 'draft' | 'published' | 'disabled';
   unavailableCapabilities?: Array<{
@@ -92,8 +95,9 @@ type Catalog = {
   skillMarketLoaded: boolean;
   mcps: Preset[];
   hooks: HookCatalogItem[];
+  sqlCheckRuleIds: string[];
 };
-const EMPTY_CATALOG: Catalog = { skills: [], skillPresets: [], skillMarketLoaded: false, mcps: [], hooks: [] };
+const EMPTY_CATALOG: Catalog = { skills: [], skillPresets: [], skillMarketLoaded: false, mcps: [], hooks: [], sqlCheckRuleIds: [] };
 type TemplateCategory = { id: number; name: string; templateCount: number };
 type Toast = { type: 'success' | 'error'; message: string } | null;
 type CategoryFeedback = { type: 'success' | 'error'; message: string } | null;
@@ -157,6 +161,7 @@ function normalizeTemplate(template: AgentTemplate): AgentTemplate {
     ...template,
     id: normalizeId(template.id),
     category: template.category || '',
+    sqlCheck: template.sqlCheck ?? null,
     claudeMarkdown: template.claudeMarkdown ?? template.agentMarkdown ?? '',
     claudeFolders: Array.isArray(template.claudeFolders) ? template.claudeFolders : [],
     tenantIds: [...new Set((template.tenantIds || []).map(normalizeId).filter(Boolean))],
@@ -171,7 +176,7 @@ function normalizeTemplate(template: AgentTemplate): AgentTemplate {
   };
 }
 
-function normalizeCatalog(payload: { skills?: Preset[]; mcps?: Preset[] }): Catalog {
+function normalizeCatalog(payload: { skills?: Preset[]; mcps?: Preset[]; sqlCheckRuleIds?: string[] }): Catalog {
   const normalizePreset = (preset: Preset): Preset => ({
     ...preset,
     id: normalizeId(preset.id),
@@ -179,6 +184,7 @@ function normalizeCatalog(payload: { skills?: Preset[]; mcps?: Preset[] }): Cata
   });
   return {
     ...EMPTY_CATALOG,
+    sqlCheckRuleIds: Array.isArray(payload.sqlCheckRuleIds) ? payload.sqlCheckRuleIds.map(String) : [],
     mcps: (payload.mcps || []).map(normalizePreset).filter((preset) => preset.id && preset.tenantId),
   };
 }
@@ -194,6 +200,7 @@ const EMPTY_TEMPLATE: Omit<AgentTemplate, 'id'> = {
   skillPresetRefs: [],
   mcpPresetRefs: [],
   hookRefs: [],
+  sqlCheck: null,
   globalVisible: false,
   status: 'draft',
 };
@@ -325,7 +332,7 @@ export default function AgentTemplatesTab({
     setCatalog(EMPTY_CATALOG);
     setIsCatalogLoading(true);
     void Promise.allSettled([
-      managementApi.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[] }>(response)),
+      managementApi.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[]; sqlCheckRuleIds?: string[] }>(response)),
       managementApi.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
       tenantManaged ? Promise.resolve({ skills: [] as MarketSkill[] }) : managementApi.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
       tenantManaged ? Promise.resolve({ presets: [] as AdminSkillPreset[] }) : managementApi.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
@@ -932,6 +939,15 @@ export default function AgentTemplatesTab({
               </div>
               <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => setConfiguringMcp(preset)} />
             </div>
+            {catalog.mcps.some((preset) => isSqlCheckMcp(preset) && editing.mcpPresetRefs.some((ref) => ref.tenantId === preset.tenantId && ref.presetId === preset.id)) ? (
+              <AgentTemplateSqlCheckSettings
+                key={`${selectedCatalogTenant.id}:${editing.id || 'new'}`}
+                value={editing.sqlCheck}
+                tenantRuleIds={catalog.sqlCheckRuleIds}
+                disabled={isSaving}
+                onChange={(value) => update('sqlCheck', value)}
+              />
+            ) : null}
             <div className="border-t border-border pt-5">
               <HookList
                 key={`${selectedCatalogTenant.id}:hooks`}
