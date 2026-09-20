@@ -43,7 +43,7 @@ function createRouter({ service, seenTenantIds = [] } = {}) {
         listTenants: () => [],
         getTenantById: (tenantId) => {
           seenTenantIds.push(tenantId);
-          return { id: tenantId, code: 'team', name: 'Team' };
+          return { id: tenantId, code: 'team', prod_code: 'prod-team', name: 'Team' };
         },
       },
       memberships: { upsertMembership: () => ({}) },
@@ -183,7 +183,7 @@ test('admin skill preset routes pass tenant and user context through to the serv
     searchContent: 'review',
     page: 2,
     pageSize: 5,
-    tenantCode: 'team',
+    tenantCode: 'prod-team',
     accountId: 'admin-user',
     completeInventory: true,
   });
@@ -191,7 +191,7 @@ test('admin skill preset routes pass tenant and user context through to the serv
   assert.deepEqual(seen.list, { tenantId: 7, preinstallScope: 'all_workspaces' });
   assert.equal(created.response.status, 201);
   assert.equal(seen.create.userId, 9);
-  assert.equal(seen.create.tenantCode, 'team');
+  assert.equal(seen.create.tenantCode, 'prod-team');
   assert.equal(seen.create.accountId, 'admin-user');
   assert.equal(seen.create.input.sourceRef, 'remote-code-reviewer');
   assert.equal(seen.create.input.name, undefined);
@@ -201,13 +201,13 @@ test('admin skill preset routes pass tenant and user context through to the serv
   assert.equal(seen.update.input.sourceRef, 'remote-code-reviewer');
   assert.equal(seen.update.input.displayName, undefined);
   assert.equal(validated.response.status, 200);
-  assert.deepEqual(seen.validate, { tenantId: 7, presetId: 2, userId: 9, tenantCode: 'team', accountId: 'admin-user' });
+  assert.deepEqual(seen.validate, { tenantId: 7, presetId: 2, userId: 9, tenantCode: 'prod-team', accountId: 'admin-user' });
   assert.equal(published.payload.preset.status, 'published');
   assert.deepEqual(seen.publish, { tenantId: 7, presetId: 2, userId: 9 });
   assert.equal(copied.response.status, 200);
   assert.deepEqual(seen.copy, { tenantId: 7, presetId: 2, targetTenantIds: [8], userId: 9 });
   assert.equal(applied.response.status, 200);
-  assert.deepEqual(seen.apply, { tenantId: 7, presetId: 2, userId: 9, tenantCode: 'team', overwrite: true });
+  assert.deepEqual(seen.apply, { tenantId: 7, presetId: 2, userId: 9, tenantCode: 'prod-team', overwrite: true });
   assert.equal(disabled.payload.preset.status, 'disabled');
   assert.deepEqual(seen.disable, { tenantId: 7, presetId: 2, userId: 9 });
   assert.equal(deleted.payload.deleted, true);

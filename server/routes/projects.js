@@ -194,16 +194,15 @@ export async function applyAgentTemplateSkillsToWorkspace({
     }
     try {
       const sourceTenant = multitenancy.tenants.getTenantById(preset.tenantId);
-      if (!sourceTenant?.code) throw new Error('Skill 来源租户不存在或缺少租户编码');
+      const prodCode = String(sourceTenant?.prod_code || '').trim();
+      if (!prodCode) throw new Error('Skill 来源租户不存在或缺少 prod_code');
       await skillPresets.installWorkspaceSkillPreset({
         tenantId: preset.tenantId,
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         presetId: preset.id,
         userId: user.id,
-        // Skill Market list, validation and download all use tenant.code.
-        // prod_code belongs to the Agent OpenAPI and may identify a different scope.
-        tenantCode: String(sourceTenant.code),
+        tenantCode: prodCode,
         accountId: user.username,
       });
       appliedSkills.push(preset);

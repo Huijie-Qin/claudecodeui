@@ -243,12 +243,13 @@ function parsePositiveIntegerWithFallback(value, fallback, name) {
 
 function resolveAdminTenantCode(multitenancy, tenantId) {
   const tenant = multitenancy.tenants?.getTenantById?.(tenantId);
-  if (!tenant?.code) {
-    const error = new Error('Tenant code is required');
+  const prodCode = String(tenant?.prod_code || '').trim();
+  if (!prodCode) {
+    const error = new Error('Tenant prod_code is required');
     error.statusCode = 400;
     throw error;
   }
-  return String(tenant.code);
+  return prodCode;
 }
 
 function resolveAdminAccountId(req, users) {
