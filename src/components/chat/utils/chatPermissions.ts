@@ -1,5 +1,5 @@
 import { safeJsonParse } from '../../../lib/utils.js';
-import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } from '../types/types.js';
+import type { ChatMessage, ClaudePermissionSuggestion, PendingPermissionRequest, PermissionGrantResult } from '../types/types.js';
 
 import { CLAUDE_SETTINGS_KEY, getClaudeSettings, safeLocalStorage } from './chatStorage';
 
@@ -78,6 +78,29 @@ export function formatToolInputForDisplay(input: unknown) {
   } catch {
     return String(input);
   }
+}
+
+export function getExplicitToolConfirmationContext(context: unknown): { decisionReason: string } | null {
+  if (!context || typeof context !== 'object' || !('requiresExplicitConfirmation' in context)
+    || context.requiresExplicitConfirmation !== true) {
+    return null;
+  }
+
+  return {
+    decisionReason: 'decisionReason' in context && typeof context.decisionReason === 'string'
+      ? context.decisionReason
+      : '',
+  };
+}
+
+export function getRememberablePermissionRequestIds(
+  requests: PendingPermissionRequest[],
+  permissionEntry: string,
+): string[] {
+  return requests
+    .filter((request) => !getExplicitToolConfirmationContext(request.context)
+      && buildClaudeToolPermissionEntry(request.toolName, formatToolInputForDisplay(request.input)) === permissionEntry)
+    .map((request) => request.requestId);
 }
 
 export function getClaudePermissionSuggestion(

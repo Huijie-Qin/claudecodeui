@@ -1,0 +1,51 @@
+{
+  "name": "Python MCP 调用前参数确认",
+  "description": "每次 MCP 工具调用前记录并展示参数，强制等待用户确认；取消或无法确认时不执行。",
+  "eventName": "PreToolUse",
+  "matcher": {
+    "mode": "regex",
+    "value": "^mcp__.*"
+  },
+  "includeSubagents": true,
+  "userVariables": [],
+  "extensionLogic": {
+    "language": "python",
+    "code": "# Paste this file into the CCUI advanced Python Hook editor.\n# No imports, import-allowlist changes, print(), or interactive input() are needed.\n\n\ndef result(decision, reason, tool_name=\"\", tool_input=None, matched=False):\n    return {\"output\": {\n        \"permissionDecision\": decision,\n        \"permissionDecisionReason\": reason,\n        \"matched\": matched,\n        \"toolName\": tool_name,\n        \"toolInput\": tool_input if isinstance(tool_input, dict) else {},\n    }}\n\n\nasync def run(event, ccui):\n    if not isinstance(event, dict):\n        return result(\"deny\", \"调用事件格式无效，无法展示参数，本次调用已拒绝。\")\n    if event.get(\"hook_event_name\") != \"PreToolUse\":\n        return result(\"defer\", \"不是工具执行前事件，继续原有权限流程。\")\n\n    tool_name = event.get(\"tool_name\")\n    if not isinstance(tool_name, str) or not tool_name:\n        return result(\"deny\", \"缺少有效工具名称，无法确认本次调用。\")\n    if not tool_name.startswith(\"mcp__\"):\n        return result(\"defer\", \"不是 MCP 工具，继续原有权限流程。\", tool_name)\n\n    tool_input = event.get(\"tool_input\")\n    if not isinstance(tool_input, dict):\n        return result(\"deny\", \"MCP 工具参数必须是 JSON 对象，无法确认本次调用。\",\n                      tool_name, matched=True)\n\n    # The host records structured parameters before forwarding the ask decision.\n    # Its permission UI displays the current call and waits for the user's choice.\n    await ccui.log.info(\"MCP 调用前参数确认\", {\n        \"toolName\": tool_name,\n        \"toolInput\": tool_input,\n    })\n    return result(\"ask\", \"即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。\",\n                  tool_name, tool_input, matched=True)\n",
+    "failClosed": true,
+    "outputs": [
+      {
+        "name": "permissionDecision",
+        "type": "string"
+      },
+      {
+        "name": "permissionDecisionReason",
+        "type": "string"
+      },
+      {
+        "name": "matched",
+        "type": "boolean"
+      },
+      {
+        "name": "toolName",
+        "type": "string"
+      },
+      {
+        "name": "toolInput",
+        "type": "object"
+      }
+    ]
+  },
+  "postActions": [],
+  "claudeResponse": {
+    "bindings": {
+      "hookSpecificOutput.permissionDecision": {
+        "source": "reference",
+        "path": "script.output.permissionDecision"
+      },
+      "hookSpecificOutput.permissionDecisionReason": {
+        "source": "reference",
+        "path": "script.output.permissionDecisionReason"
+      }
+    }
+  }
+}

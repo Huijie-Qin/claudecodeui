@@ -2,7 +2,12 @@ import React from 'react';
 import { ShieldAlertIcon } from 'lucide-react';
 
 import type { PendingPermissionRequest } from '../../types/types';
-import { buildClaudeToolPermissionEntry, formatToolInputForDisplay } from '../../utils/chatPermissions';
+import {
+  buildClaudeToolPermissionEntry,
+  formatToolInputForDisplay,
+  getExplicitToolConfirmationContext,
+  getRememberablePermissionRequestIds,
+} from '../../utils/chatPermissions';
 import { getClaudeSettings } from '../../utils/chatStorage';
 import { getPermissionPanel, registerPermissionPanel } from '../../tools/configs/permissionPanelRegistry';
 import { AskUserQuestionPanel } from '../../tools/components/InteractiveRenderers';
@@ -42,6 +47,50 @@ export default function PermissionRequestsBanner({
   return (
     <div className="mb-3 space-y-2">
       {filteredRequests.map((request) => {
+        const explicitConfirmation = getExplicitToolConfirmationContext(request.context);
+        if (explicitConfirmation) {
+          return (
+            <Confirmation key={request.requestId} approval="pending">
+              <ConfirmationTitle className="flex items-start gap-3">
+                <ShieldAlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <ConfirmationRequest>
+                  <div className="min-w-0">
+                    <div className="font-medium text-foreground">是否确定执行此 MCP 调用？</div>
+                    <div className="mt-1 break-all text-xs text-muted-foreground">
+                      工具：<code>{request.toolName}</code>
+                    </div>
+                    {explicitConfirmation.decisionReason && (
+                      <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                        {explicitConfirmation.decisionReason}
+                      </p>
+                    )}
+                  </div>
+                </ConfirmationRequest>
+              </ConfirmationTitle>
+
+              <div className="mt-2 text-xs text-muted-foreground">调用参数</div>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/50 p-2 text-xs text-muted-foreground">
+                {formatToolInputForDisplay(request.input ?? {})}
+              </pre>
+
+              <ConfirmationActions>
+                <ConfirmationAction
+                  variant="outline"
+                  onClick={() => handlePermissionDecision(request.requestId, { allow: false, message: '用户取消了此次 MCP 工具调用。' })}
+                >
+                  取消调用
+                </ConfirmationAction>
+                <ConfirmationAction
+                  variant="default"
+                  onClick={() => handlePermissionDecision(request.requestId, { allow: true })}
+                >
+                  确定执行
+                </ConfirmationAction>
+              </ConfirmationActions>
+            </Confirmation>
+          );
+        }
+
         const CustomPanel = getPermissionPanel(request.toolName);
         if (CustomPanel) {
           return (
@@ -59,12 +108,7 @@ export default function PermissionRequestsBanner({
         const alreadyAllowed = permissionEntry ? settings.allowedTools.includes(permissionEntry) : false;
         const rememberLabel = alreadyAllowed ? 'Allow (saved)' : 'Allow & remember';
         const matchingRequestIds = permissionEntry
-          ? pendingPermissionRequests
-              .filter(
-                (item) =>
-                  buildClaudeToolPermissionEntry(item.toolName, formatToolInputForDisplay(item.input)) === permissionEntry,
-              )
-              .map((item) => item.requestId)
+          ? getRememberablePermissionRequestIds(pendingPermissionRequests, permissionEntry)
           : [request.requestId];
 
         return (

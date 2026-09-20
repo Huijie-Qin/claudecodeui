@@ -109,7 +109,6 @@ export const REPORT_QUALITY_HOOK_EXAMPLE = {
   matcher: {},
   extensionLogic: {
     language: 'javascript',
-    failClosed: true,
     code: reportQualityStop.toString().replace('function reportQualityStop(', 'function run('),
     outputs: [
       { name: 'status', type: 'string' },

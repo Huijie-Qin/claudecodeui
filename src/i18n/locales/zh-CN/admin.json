@@ -836,8 +836,8 @@
     },
     "script": {
       "enable": "启用高级脚本",
-      "failClosed": "Hook 执行异常时按校验失败终止",
-      "failClosedHint": "仅适用于 Stop Hook。执行异常时明确报告校验失败并终止任务，避免未经验证便结束。",
+      "failClosedPreToolUse": "Hook 执行异常时拒绝工具调用",
+      "failClosedPreToolUseHint": "脚本、输出、变量或审计记录异常时拒绝调用。必须返回明确的 permissionDecision；校验通过时使用 defer，保留正常权限检查。",
       "optional": "只有基础行为无法表达需求时再启用。",
       "outputsCount": "{{count}} 个输出字段",
       "availableInputs": "脚本可用输入",

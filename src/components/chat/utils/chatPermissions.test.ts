@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ChatMessage } from '../types/types';
+import type { ChatMessage, PendingPermissionRequest } from '../types/types';
 
 import { CLAUDE_SETTINGS_KEY } from './chatStorage';
-import { getClaudePermissionSuggestion, isClaudePermissionErrorContent } from './chatPermissions';
+import {
+  getClaudePermissionSuggestion,
+  getExplicitToolConfirmationContext,
+  getRememberablePermissionRequestIds,
+  isClaudePermissionErrorContent,
+} from './chatPermissions';
 
 function installLocalStorage(initialValues: Record<string, string> = {}) {
   const store = new Map(Object.entries(initialValues));
@@ -69,4 +74,28 @@ test('Claude permission suggestion reflects already saved allow rules', () => {
   const suggestion = getClaudePermissionSuggestion(createToolMessage('Tool interaction timed out'), 'claude');
 
   assert.equal(suggestion?.isAllowed, true);
+});
+
+test('explicit confirmation uses only the server context flag and keeps the full reason', () => {
+  assert.deepEqual(getExplicitToolConfirmationContext({
+    requiresExplicitConfirmation: true,
+    decisionReason: '请检查参数\n确认后执行。',
+  }), { decisionReason: '请检查参数\n确认后执行。' });
+  assert.deepEqual(getExplicitToolConfirmationContext({ requiresExplicitConfirmation: true }), { decisionReason: '' });
+  for (const context of [undefined, null, 'ask', { requiresExplicitConfirmation: 'true' }, { decisionReason: 'ask' }]) {
+    assert.equal(getExplicitToolConfirmationContext(context), null);
+  }
+});
+
+test('remembering an allow rule cannot approve MCP calls requiring individual confirmation', () => {
+  const requests: PendingPermissionRequest[] = [
+    { requestId: 'ordinary-a', toolName: 'mcp__demo__write', input: { value: 1 } },
+    { requestId: 'explicit-a', toolName: 'mcp__demo__write', input: { value: 1 }, context: { requiresExplicitConfirmation: true } },
+    { requestId: 'explicit-b', toolName: 'mcp__demo__write', input: { value: 2 }, context: { requiresExplicitConfirmation: true } },
+    { requestId: 'ordinary-b', toolName: 'mcp__demo__write', input: { value: 3 } },
+    { requestId: 'other-tool', toolName: 'mcp__demo__read', input: {} },
+  ];
+
+  assert.deepEqual(getRememberablePermissionRequestIds(requests, 'mcp__demo__write'), ['ordinary-a', 'ordinary-b']);
+  assert.deepEqual(getRememberablePermissionRequestIds(requests.slice(1, 3), 'mcp__demo__write'), []);
 });

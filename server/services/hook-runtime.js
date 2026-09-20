@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { canIncludeSubagents } from '../../shared/hookSubagents.js';
 import { db as defaultDatabase } from '../database/db.js';
 
-import { isRequiredStopHook } from './claude-hook-policy.js';
+import { isRequiredHook } from './claude-hook-policy.js';
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
@@ -152,6 +152,10 @@ function buildClaudeHookOutput(hook, references) {
   if (isPlainObject(output.hookSpecificOutput) && Object.keys(output.hookSpecificOutput).length > 0) {
     output.hookSpecificOutput.hookEventName = hook.eventName;
   }
+  if (hook.eventName === 'PreToolUse' && isRequiredHook(hook)
+      && !output.hookSpecificOutput?.permissionDecision) {
+    throw new Error('Required PreToolUse Hook must return an explicit permissionDecision');
+  }
   const serialized = JSON.stringify(output);
   if (Buffer.byteLength(serialized, 'utf8') > MAX_CLAUDE_OUTPUT_BYTES) {
     throw new Error('Claude Hook response is larger than 2 MB');
@@ -280,6 +284,19 @@ function buildEnvironment(context, event) {
     sessionId: event?.session_id || context.sessionId?.() || null,
     sqlCheckRuleIds: Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [],
   };
+}
+
+function requiredHookFailureResponse(hook, auditFailure = false) {
+  if (hook?.eventName === 'PreToolUse' && isRequiredHook(hook)) {
+    return { hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: auditFailure
+        ? '必需的工具调用前校验无法执行或保存记录，已拒绝本次调用。请修复 Hook 服务后重试。'
+        : '必需的工具调用前校验失败，已拒绝本次调用。请查看 Hook 执行记录并修复后重试。',
+    } };
+  }
+  return {};
 }
 
 function expandSkillArguments(content, argumentsText) {
@@ -752,9 +769,7 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
-      const response = isRequiredStopHook(hook)
-        ? { continue: false, stopReason: '必需的 Stop 校验失败，已终止当前执行。请查看 Hook 执行记录并修复后重试。' }
-        : {};
+      const response = requiredHookFailureResponse(hook);
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
@@ -789,11 +804,11 @@ export function createHookRuntimeSession({
     try {
       return await executeHookWithAudit(hook, event, toolUseId, callbackOptions);
     } catch (error) {
-      if (!isRequiredStopHook(resolveEffectiveHook(hook, event))) throw error;
+      if (!isRequiredHook(effectiveHook)) throw error;
       // An audit/database failure must not turn a required check into a rejected
       // SDK callback, which the SDK can otherwise ignore as a Hook error.
-      console.error(`[Hook:${hook.id}] Required Stop check could not persist its execution.`);
-      return { continue: false, stopReason: '必需的 Stop 校验无法执行或保存验收记录，已终止当前执行。请修复 Hook 服务后重试。' };
+      console.error(`[Hook:${hook.id}] Required ${effectiveHook.eventName} check could not persist its execution.`);
+      return requiredHookFailureResponse(effectiveHook, true);
     } finally {
       if (waitId) onSubagentLoopWait({ id: waitId, waiting: false });
     }
@@ -817,7 +832,7 @@ export function createHookRuntimeSession({
     }
   }
 
-  return { hooks: sdkHooks, executeHook, hasRequiredStopHook: hooks.some(isRequiredStopHook) };
+  return { hooks: sdkHooks, executeHook, hasRequiredHook: hooks.some(isRequiredHook) };
 }
 
 export function mergeSdkHooks(...hookMaps) {
