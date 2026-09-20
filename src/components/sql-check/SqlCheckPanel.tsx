@@ -15,10 +15,11 @@ type WorkspaceSqlCheckConfig = {
   userId?: number;
   tenantRuleIds?: string[];
   hasUserPreference?: boolean;
+  templateRuleIds?: string[];
   customEnabled?: boolean;
   userRuleIds?: string[];
   effectiveRuleIds?: string[];
-  source?: 'tenant' | 'user';
+  source?: 'tenant' | 'user' | 'template';
   enforcement?: SqlCheckEnforcement;
   error?: string;
 };
@@ -89,7 +90,9 @@ export default function SqlCheckPanel({ selectedProject }: SqlCheckPanelProps) {
     };
     setConfig(nextConfig);
     setDraftCustomEnabled(nextConfig.customEnabled === true);
-    setDraftRuleIds(nextConfig.hasUserPreference ? nextConfig.userRuleIds : nextConfig.tenantRuleIds);
+    setDraftRuleIds(nextConfig.hasUserPreference
+      ? nextConfig.userRuleIds
+      : normalizeRuleIds(nextConfig.templateRuleIds ?? nextConfig.tenantRuleIds));
   }, []);
 
   const loadRules = useCallback(async ({ signal }: { signal?: AbortSignal } = {}) => {

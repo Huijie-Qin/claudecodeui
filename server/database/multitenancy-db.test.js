@@ -2059,3 +2059,15 @@ test('runtime monitor revalidates one expired idle runtime by id', () => {
     olderThanMinutes: 30,
   }), null);
 });
+
+test('SQL Check template columns migrate without changing existing choices', () => {
+  const database = createTestDb();
+  database.exec('ALTER TABLE agent_templates DROP COLUMN sql_check_json');
+  database.exec('ALTER TABLE workspace_agent_template_snapshots DROP COLUMN sql_check_json');
+  initializeMultitenancyTables(database);
+  initializeMultitenancyTables(database);
+  for (const table of ['agent_templates', 'workspace_agent_template_snapshots']) {
+    assert.equal(database.prepare(`PRAGMA table_info(${table})`).all().filter((column) => column.name === 'sql_check_json').length, 1);
+  }
+  database.close();
+});
