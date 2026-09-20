@@ -113,6 +113,7 @@ export function useProjectsState({
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
   const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
 
   useEffect(() => {
     try {
@@ -135,7 +136,7 @@ export function useProjectsState({
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
-      if (!currentTenant) {
+      if (!tenantId) {
         setProjects([]);
         setSelectedProject(null);
         setSelectedSession(null);
@@ -164,7 +165,7 @@ export function useProjectsState({
         setIsLoadingProjects(false);
       }
     }
-  }, [currentTenant]);
+  }, [tenantId]);
 
   const refreshProjectsSilently = useCallback(async () => {
     // Keep chat view stable while still syncing sidebar/session metadata in background.
@@ -177,11 +178,12 @@ export function useProjectsState({
   }, []);
 
   useEffect(() => {
+    // A background tenant/permission refresh is not a tenant switch.
     setProjects([]);
     setSelectedProject(null);
     setSelectedSession(null);
     void fetchProjects();
-  }, [currentTenant?.id, fetchProjects]);
+  }, [tenantId, fetchProjects]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {

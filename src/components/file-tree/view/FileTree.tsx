@@ -72,7 +72,7 @@ export default function FileTree({
     }
   }, [toast]);
 
-  const { files, loading, error: filesError, refreshFiles } = useFileTreeData(selectedProject);
+  const { files, loading, initialLoading, error: filesError, refreshFiles } = useFileTreeData(selectedProject);
   const { quota, loading: quotaLoading, refreshQuota } = useWorkspaceStorageQuota(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode(presentation === 'data-agent'
     ? { defaultMode: 'detailed', storageKey: 'data-agent-file-tree-view-mode' }
@@ -321,7 +321,7 @@ export default function FileTree({
     void moveItems(draggedItemsRef.current, getFileTreeDisplayPath(item.path, selectedProject));
   }, [moveItems, selectedProject]);
 
-  if (loading) {
+  if (initialLoading) {
     return <FileTreeLoadingState />;
   }
 

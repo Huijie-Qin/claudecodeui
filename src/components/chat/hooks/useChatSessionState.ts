@@ -120,6 +120,12 @@ export function useChatSessionState({
   sessionStore,
   initialUserMessage,
 }: UseChatSessionStateArgs) {
+  // Project/session metadata changes must not restart the transcript loader.
+  const selectedSessionId = selectedSession?.id;
+  const selectedProjectName = selectedProject?.name;
+  const selectedProjectPath = selectedProject?.fullPath || selectedProject?.path || '';
+  const selectedWorkspaceId = selectedProject?.workspaceId;
+  const selectedSessionProvider = selectedSession?.__provider;
   const [isLoading, setIsLoading] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
@@ -381,7 +387,7 @@ export function useChatSessionState({
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     setIsUserScrolledUp(false);
-  }, [selectedProject?.name, selectedSession?.id]);
+  }, [selectedProjectName, selectedWorkspaceId, selectedSessionId, selectedSessionProvider]);
 
   // Initial scroll to bottom
   useEffect(() => {
@@ -393,7 +399,7 @@ export function useChatSessionState({
 
   // Main session loading effect — store-based
   useEffect(() => {
-    if (!selectedSession || !selectedProject) {
+    if (!selectedSessionId || !selectedProjectName) {
       resetStreamingState();
       pendingViewSessionRef.current = null;
       setClaudeStatus(null);
@@ -411,17 +417,17 @@ export function useChatSessionState({
       return;
     }
 
-    const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
-    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${selectedProject.workspaceId || 'legacy'}:${provider}`;
+    const provider = (selectedSessionProvider || localStorage.getItem('selected-provider') as Provider) || 'claude';
+    const sessionKey = `${selectedSessionId}:${selectedProjectName}:${selectedWorkspaceId || 'legacy'}:${provider}`;
 
-    const existingSlot = sessionStore.getSessionSlot(selectedSession.id);
+    const existingSlot = sessionStore.getSessionSlot(selectedSessionId);
 
     // Reuse a fresh page instead of forcing the complete transcript back into
     // memory. Older pages remain available through the existing scroll loader.
     if (
       lastLoadedSessionKeyRef.current === sessionKey &&
-      sessionStore.has(selectedSession.id) &&
-      !sessionStore.isStale(selectedSession.id) &&
+      sessionStore.has(selectedSessionId) &&
+      !sessionStore.isStale(selectedSessionId) &&
       existingSlot
     ) {
       setVisibleMessageCount(Infinity);
@@ -432,7 +438,7 @@ export function useChatSessionState({
       return;
     }
 
-    const sessionChanged = currentSessionId !== selectedSession.id;
+    const sessionChanged = currentSessionId !== selectedSessionId;
     if (sessionChanged) {
       pendingViewSessionRef.current = null;
       setPendingMessages([]);
@@ -460,26 +466,26 @@ export function useChatSessionState({
       setLoadingStartedAt(null);
     }
 
-    setCurrentSessionId(selectedSession.id);
+    setCurrentSessionId(selectedSessionId);
     if (provider === 'cursor') {
-      sessionStorage.setItem('cursorSessionId', selectedSession.id);
+      sessionStorage.setItem('cursorSessionId', selectedSessionId);
     }
 
     // Check session status. The server also uses this to reconnect active Claude
     // SDK output to the current WebSocket after a reconnect.
     if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+      sendMessage({ type: 'check-session-status', sessionId: selectedSessionId, provider });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
     // Fetch from server → store updates → chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
-    sessionStore.fetchFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || provider) as LLMProvider,
-      projectName: selectedProject.name,
-      projectPath: selectedProject.fullPath || selectedProject.path || '',
-      workspaceId: selectedProject.workspaceId,
+    sessionStore.fetchFromServer(selectedSessionId, {
+      provider: provider as LLMProvider,
+      projectName: selectedProjectName,
+      projectPath: selectedProjectPath,
+      workspaceId: selectedWorkspaceId,
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
@@ -499,8 +505,11 @@ export function useChatSessionState({
   }, [
     pendingViewSessionRef,
     resetStreamingState,
-    selectedProject,
-    selectedSession?.id,
+    selectedProjectName,
+    selectedProjectPath,
+    selectedWorkspaceId,
+    selectedSessionId,
+    selectedSessionProvider,
     sendMessage,
     ws,
     sessionStore,
@@ -508,7 +517,7 @@ export function useChatSessionState({
 
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
-    if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
+    if (!externalMessageUpdate || !selectedSessionId || !selectedProjectName) return;
 
     const reloadExternalMessages = async () => {
       try {
@@ -516,11 +525,11 @@ export function useChatSessionState({
 
         // Skip store refresh during active streaming
         if (!isLoading) {
-          await sessionStore.refreshFromServer(selectedSession.id, {
-            provider: (selectedSession.__provider || provider) as LLMProvider,
-            projectName: selectedProject.name,
-            projectPath: selectedProject.fullPath || selectedProject.path || '',
-            workspaceId: selectedProject.workspaceId,
+          await sessionStore.refreshFromServer(selectedSessionId, {
+            provider: (selectedSessionProvider || provider) as LLMProvider,
+            projectName: selectedProjectName,
+            projectPath: selectedProjectPath,
+            workspaceId: selectedWorkspaceId,
           });
 
           if (Boolean(autoScrollToBottom) && isNearBottom()) {
@@ -538,8 +547,11 @@ export function useChatSessionState({
     externalMessageUpdate,
     isNearBottom,
     scrollToBottom,
-    selectedProject,
-    selectedSession,
+    selectedProjectName,
+    selectedProjectPath,
+    selectedWorkspaceId,
+    selectedSessionId,
+    selectedSessionProvider,
     sessionStore,
     isLoading,
   ]);

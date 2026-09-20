@@ -70,6 +70,8 @@
     "test:ai-usage:ui": "node --import tsx --test src/components/ai-usage/*.test.ts src/components/admin/hook-config/reportFields.test.ts src/components/admin/adminPanelUtils.test.ts",
     "preview:ai-usage": "node scripts/preview-ai-usage.mjs",
     "test:file-preview": "node --import tsx --test src/components/file-preview/*.test.ts src/features/data-agent-v2/fileEditorTabs.test.ts && node --test server/services/workspace-file-read-path.test.js",
+    "test:project-refresh": "node --experimental-test-module-mocks --import tsx --test scripts/project-refresh.test.mjs",
+    "test:file-tree-refresh": "node --experimental-test-module-mocks --import tsx --test scripts/file-tree-refresh.test.mjs",
     "preview:files": "node scripts/preview-files.mjs",
     "preview:files:e2e": "node scripts/file-preview-e2e-server.mjs",
     "test:file-preview:api": "node scripts/file-preview-api-e2e.mjs"
@@ -183,6 +185,7 @@
     "lint-staged": "^16.3.2",
     "node-gyp": "^10.0.0",
     "postcss": "^8.4.32",
+    "react-test-renderer": "18.3.1",
     "release-it": "^19.0.5",
     "sharp": "^0.34.2",
     "tailwindcss": "^3.4.0",

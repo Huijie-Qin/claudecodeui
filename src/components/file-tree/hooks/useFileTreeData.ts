@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '../../../utils/api';
 import type { Project } from '../../../types/app';
@@ -10,16 +10,27 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 type UseFileTreeDataResult = {
   files: FileTreeNode[];
   loading: boolean;
+  initialLoading: boolean;
   error: string | null;
   refreshFiles: () => void;
 };
 
+type FileTreeDataState = {
+  projectKey: string;
+  files: FileTreeNode[];
+  loaded: boolean;
+  loading: boolean;
+  error: string | null;
+};
+
 export function useFileTreeData(selectedProject: Project | null): UseFileTreeDataResult {
-  const [files, setFiles] = useState<FileTreeNode[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const projectName = selectedProject?.name;
+  const workspaceId = selectedProject?.workspaceId;
+  const projectKey = JSON.stringify([selectedProject?.tenantId, workspaceId, projectName]);
+  const [state, setState] = useState<FileTreeDataState>({
+    projectKey, files: [], loaded: false, loading: Boolean(projectName), error: null,
+  });
   const [refreshKey, setRefreshKey] = useState(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const { latestMessage } = useWebSocket();
   const { preferences } = useUiPreferences();
 
@@ -28,38 +39,27 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
   }, []);
 
   useEffect(() => {
-    setFiles([]);
-    setError(null);
-  }, [selectedProject?.name, selectedProject?.workspaceId]);
-
-  useEffect(() => {
-    const projectName = selectedProject?.name;
-
     if (!projectName) {
-      setFiles([]);
-      setLoading(false);
-      setError(null);
+      setState({ projectKey, files: [], loaded: false, loading: false, error: null });
       return;
     }
 
-    // Abort previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
 
     // Track mount state so aborted or late responses do not enqueue stale state updates.
     let isActive = true;
 
     const fetchFiles = async () => {
-      if (isActive) {
-        setLoading(true);
-      }
+      // Refresh in place, including a previously loaded empty directory. Only
+      // first loads and workspace changes should replace the upload controls.
+      setState((current) => current.projectKey === projectKey
+        ? { ...current, loading: true, error: null }
+        : { projectKey, files: [], loaded: false, loading: true, error: null });
       try {
         const response = await api.getFiles(
           projectName,
-          { signal: abortControllerRef.current!.signal },
-          selectedProject?.workspaceId,
+          { signal: controller.signal },
+          workspaceId,
           preferences.showInternalConfigFiles,
         );
 
@@ -67,15 +67,14 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
           const errorText = await response.text();
           console.error('File fetch failed:', response.status, errorText);
           if (isActive) {
-            setError(`Failed to load files (${response.status})`);
+            setState((current) => ({ ...current, error: `Failed to load files (${response.status})` }));
           }
           return;
         }
 
         const data = (await response.json()) as FileTreeNode[];
         if (isActive) {
-          setFiles(data);
-          setError(null);
+          setState((current) => ({ ...current, files: data, loaded: true, error: null }));
         }
       } catch (error) {
         if ((error as { name?: string }).name === 'AbortError') {
@@ -84,11 +83,11 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
         console.error('Error fetching files:', error);
         if (isActive) {
-          setError(error instanceof Error ? error.message : 'Failed to load files');
+          setState((current) => ({ ...current, error: error instanceof Error ? error.message : 'Failed to load files' }));
         }
       } finally {
         if (isActive) {
-          setLoading(false);
+          setState((current) => ({ ...current, loading: false }));
         }
       }
     };
@@ -97,12 +96,13 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
 
     return () => {
       isActive = false;
-      abortControllerRef.current?.abort();
+      controller.abort();
     };
   }, [
     preferences.showInternalConfigFiles,
-    selectedProject?.name,
-    selectedProject?.workspaceId,
+    projectName,
+    workspaceId,
+    projectKey,
     refreshKey,
   ]);
 
@@ -145,10 +145,14 @@ export function useFileTreeData(selectedProject: Project | null): UseFileTreeDat
     refreshFiles();
   }, [latestMessage, refreshFiles, selectedProject?.name, selectedProject?.workspaceId]);
 
+  // Do not expose the previous workspace while the new effect is starting.
+  const current = state.projectKey === projectKey ? state : null;
+  const loading = current?.loading ?? Boolean(projectName);
   return {
-    files,
+    files: current?.files ?? [],
     loading,
-    error,
+    initialLoading: loading && !current?.loaded,
+    error: current?.error ?? null,
     refreshFiles,
   };
 }
