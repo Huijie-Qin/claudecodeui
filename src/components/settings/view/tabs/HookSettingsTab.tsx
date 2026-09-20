@@ -299,6 +299,9 @@ export default function HookSettingsTab({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{hook.name}</span>
                   <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{hook.eventName}</span>
+                  <span className="text-[10px] text-muted-foreground" title="当前工作空间使用的 Hook 版本">
+                    v{hook.version}{hook.workspaceAssignment?.source === 'agent_template' ? ' · 模板固定版本' : ''}
+                  </span>
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}

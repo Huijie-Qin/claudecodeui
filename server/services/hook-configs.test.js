@@ -2767,7 +2767,8 @@ test('personal variables validate definitions and references and survive immutab
     service.updateHook({ hookId, userId: 1, input });
     const published = service.publishHook({ hookId, userId: 1 });
     assert.deepEqual(published.userVariables, personalVariables);
-    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, hookVersion: published.version, installStatus: 'ready' });
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, hookVersion: published.version,
+      source: 'agent_template', sourceTemplateId: 88, installStatus: 'ready' });
     service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: [{ name: 'new_field' }] }) });
     service.publishHook({ hookId, userId: 1 });
     assert.deepEqual(service.listAvailableHooksForContext(alpha)[0].userVariables, personalVariables);
@@ -2836,6 +2837,12 @@ test('Hook environment uses enabled pinned definitions and isolates users, works
     assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: {}, secretValues: [] });
     service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true, userVariables: { token: 'alpha-private' } });
     service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: true, userVariables: { token: 'second-private' } });
+    // Template installs explicitly preserve their published variable definitions.
+    // Ordinary manual installs follow later publications.
+    for (const context of [alpha, alphaSecond]) {
+      service.assignWorkspaceHook({ workspaceId: context.workspaceId, hookId,
+        source: 'agent_template', sourceTemplateId: 88 });
+    }
     service.updateHook({ hookId, userId: 1, input: publishableHook({ userVariables: [{ name: 'new_field' }] }) });
     service.publishHook({ hookId, userId: 1 });
     assert.deepEqual(service.resolveWorkspaceHookEnvironment(alpha), { env: { token: 'alpha-private' }, secretValues: ['alpha-private'] });
