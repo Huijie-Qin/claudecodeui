@@ -125,7 +125,7 @@ test('inherited Stop sends messages and materialized Skills to each child withou
   } finally { database.close(); }
 });
 
-test('required inherited Stop checks fail closed on child script and audit errors', async () => {
+test('legacy failClosed on inherited Stop does not force child termination on script or audit errors', async () => {
   for (const failAudit of [false, true]) {
     const database = createDatabase();
     const hook = { id: 'hook-1', eventName: 'Stop', includeSubagents: true,
@@ -136,10 +136,10 @@ test('required inherited Stop checks fail closed on child script and audit error
         database: failAudit ? { prepare: () => { throw new Error('Audit unavailable'); } } : database,
         scriptExecutor: async () => { throw new Error('Validation unavailable'); },
       });
-      assert.equal(runtime.hasRequiredStopHook, true);
-      const response = await runtime.hooks.SubagentStop[0].hooks[0]({ hook_event_name: 'SubagentStop', agent_id: 'child' });
-      assert.equal(response.continue, false);
-      assert.equal(response.decision, undefined);
+      assert.equal(runtime.hasRequiredHook, false);
+      const execute = () => runtime.hooks.SubagentStop[0].hooks[0]({ hook_event_name: 'SubagentStop', agent_id: 'child' });
+      if (failAudit) await assert.rejects(execute, /Audit unavailable/);
+      else assert.deepEqual(await execute(), {});
     } finally { database.close(); }
   }
 });
@@ -309,7 +309,7 @@ test('a failed subagent loop hook releases the stream watchdog wait', async () =
   assert.equal(transitions[0].id, transitions[1].id);
 });
 
-test('required Stop checks still terminate if the audit database is unavailable', async () => {
+test('Stop audit failures remain callback errors without a forced termination response', async () => {
   const hook = {
     id: 'broken-audit', eventName: 'Stop',
     extensionLogic: { language: 'javascript', code: 'unused', failClosed: true },
@@ -318,9 +318,8 @@ test('required Stop checks still terminate if the audit database is unavailable'
     hooks: [hook], workspaceRoot: process.cwd(), userId: 1,
     database: { prepare: () => { throw new Error('Database is unavailable'); } },
   });
-  const response = await runtime.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', session_id: 'audit-failure' });
-  assert.equal(response.continue, false);
-  assert.match(response.stopReason, /验收记录/);
+  await assert.rejects(runtime.hooks.Stop[0].hooks[0]({ hook_event_name: 'Stop', session_id: 'audit-failure' }),
+    /Database is unavailable/);
 });
 
 async function loadTestHookSkill(skillId, skillName, argumentsText) {
@@ -769,7 +768,7 @@ test('Hook failures are audited and fail open to Claude', async () => {
   }
 });
 
-test('fail-closed Stop errors terminate execution and audit the exact response', async () => {
+test('legacy failClosed on Stop errors returns an empty response and preserves failure audit', async () => {
   const database = createDatabase();
   const hook = {
     id: 'hook-1', name: 'Report validator', version: 1, eventName: 'Stop', matcher: {},
@@ -781,20 +780,17 @@ test('fail-closed Stop errors terminate execution and audit the exact response',
       hooks: [hook], userId: 1, database,
       scriptExecutor: async () => { throw new Error('validator failed with private details'); },
     });
-    assert.equal(runtime.hasRequiredStopHook, true);
+    assert.equal(runtime.hasRequiredHook, false);
     const response = await runtime.executeHook(hook, { hook_event_name: 'Stop', session_id: 'report-session' });
-    assert.equal(response.continue, false);
-    assert.match(response.stopReason, /校验失败/);
-    assert.doesNotMatch(response.stopReason, /private details/);
-    assert.equal(response.decision, undefined, 'A broken validator terminates; it does not ask the agent to retry indefinitely');
+    assert.deepEqual(response, {});
     const audit = database.prepare('SELECT status, response_json FROM hook_executions').get();
     assert.equal(audit.status, 'failed');
     assert.deepEqual(JSON.parse(audit.response_json), response);
   } finally { database.close(); }
 });
 
-test('legacy Stop and non-Stop hooks retain their existing fail-open behavior', async () => {
-  for (const [eventName, failClosed] of [['Stop', undefined], ['Stop', false], ['StopFailure', true], ['PreToolUse', true]]) {
+test('all Stop configurations and optional tool hooks retain fail-open behavior', async () => {
+  for (const [eventName, failClosed] of [['Stop', undefined], ['Stop', false], ['Stop', true], ['SubagentStop', true], ['StopFailure', true], ['PreToolUse', false]]) {
     const database = createDatabase();
     const hook = {
       id: 'hook-1', name: 'Optional Hook', version: 1, eventName, matcher: {},
@@ -806,19 +802,87 @@ test('legacy Stop and non-Stop hooks retain their existing fail-open behavior', 
         hooks: [hook], userId: 1, database,
         scriptExecutor: async () => { throw new Error('optional failure'); },
       });
-      assert.equal(runtime.hasRequiredStopHook, false);
+      assert.equal(runtime.hasRequiredHook, false);
       assert.deepEqual(await runtime.executeHook(hook, { hook_event_name: eventName }), {});
       assert.deepEqual(JSON.parse(database.prepare('SELECT response_json FROM hook_executions').get().response_json), {});
     } finally { database.close(); }
   }
 });
 
-test('required Stop checks can block repeatedly and then pass in the same runtime', async () => {
+test('required PreToolUse denies script, variable, output, and audit failures for parent and child tools', async () => {
+  for (const failure of ['script', 'variables', 'output', 'missing-output', 'decision', 'audit-insert', 'audit-update']) {
+    for (const agentId of [undefined, 'child']) {
+      const database = createDatabase();
+      const hook = {
+        id: 'hook-1', eventName: 'PreToolUse', includeSubagents: true,
+        userVariables: failure === 'variables' ? [{ name: 'account', required: true }] : [],
+        extensionLogic: { language: 'javascript', code: 'check', failClosed: true,
+          outputs: [{ name: 'decision', type: 'string' }] },
+        claudeResponse: { bindings: {
+          'hookSpecificOutput.permissionDecision': { source: 'reference', path: 'script.output.decision' },
+        } },
+      };
+      const failingDatabase = { prepare: (sql) => {
+        if ((failure === 'audit-insert' && sql.includes('INSERT INTO hook_executions'))
+            || (failure === 'audit-update' && sql.includes('UPDATE hook_executions'))) {
+          throw new Error('private audit error');
+        }
+        return database.prepare(sql);
+      } };
+      try {
+        const runtime = createHookRuntimeSession({ hooks: [hook], database: failingDatabase,
+          resolveUserVariables: () => { throw new Error('private variable error'); },
+          scriptExecutor: async () => {
+            if (failure === 'script') throw new Error('private script error');
+            if (failure === 'missing-output') return {};
+            return { output: { decision: failure === 'output' ? 1 : failure === 'decision' ? 'invalid' : 'defer' } };
+          },
+        });
+        assert.equal(runtime.hasRequiredHook, true);
+        const response = await runtime.hooks.PreToolUse[0].hooks[0]({
+          hook_event_name: 'PreToolUse', tool_name: 'Bash', agent_id: agentId,
+        });
+        assert.equal(response.hookSpecificOutput.hookEventName, 'PreToolUse');
+        assert.equal(response.hookSpecificOutput.permissionDecision, 'deny', failure);
+        assert.doesNotMatch(response.hookSpecificOutput.permissionDecisionReason, /private/);
+        assert.equal(response.continue, undefined);
+        if (!failure.startsWith('audit-')) {
+          const audit = database.prepare('SELECT status, response_json FROM hook_executions').get();
+          assert.equal(audit.status, 'failed');
+          assert.deepEqual(JSON.parse(audit.response_json), response);
+        }
+      } finally { database.close(); }
+    }
+  }
+});
+
+test('required PreToolUse preserves explicit allow, deny, ask, and defer decisions', async () => {
+  const database = createDatabase();
+  const hook = {
+    id: 'hook-1', eventName: 'PreToolUse',
+    extensionLogic: { language: 'javascript', code: 'check', failClosed: true,
+      outputs: [{ name: 'decision', type: 'string' }] },
+    claudeResponse: { bindings: {
+      'hookSpecificOutput.permissionDecision': { source: 'reference', path: 'script.output.decision' },
+    } },
+  };
+  try {
+    for (const decision of ['allow', 'deny', 'ask', 'defer']) {
+      const runtime = createHookRuntimeSession({ hooks: [hook], database,
+        scriptExecutor: async () => ({ output: { decision } }),
+      });
+      assert.equal((await runtime.executeHook(hook, { hook_event_name: 'PreToolUse' }))
+        .hookSpecificOutput.permissionDecision, decision);
+    }
+  } finally { database.close(); }
+});
+
+test('Stop checks can block repeatedly and then pass without an exception termination policy', async () => {
   const database = createDatabase();
   const hook = {
     id: 'hook-1', name: 'Report validator', version: 1, eventName: 'Stop', matcher: {},
     extensionLogic: {
-      language: 'javascript', code: 'validate', failClosed: true,
+      language: 'javascript', code: 'validate',
       outputs: [{ name: 'decision', type: 'string' }, { name: 'reason', type: 'string' }],
     },
     postActions: [],

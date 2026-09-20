@@ -877,6 +877,8 @@
     },
     "script": {
       "enable": "Enable advanced script",
+      "failClosedPreToolUse": "Deny tool calls if this Hook encounters an error",
+      "failClosedPreToolUseHint": "Script, output, variable, or audit errors deny the tool call. Return an explicit permissionDecision; use defer when the check passes to preserve normal permission checks.",
       "optional": "Enable this only when basic actions cannot express the requirement.",
       "outputsCount": "{{count}} output fields",
       "availableInputs": "Available inputs",

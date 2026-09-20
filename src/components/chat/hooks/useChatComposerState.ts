@@ -898,7 +898,7 @@ export function useChatComposerState({
         sendMessage({
           type: 'claude-permission-response',
           requestId,
-          allow: Boolean(decision?.allow),
+          allow: decision?.allow === true,
           updatedInput: decision?.updatedInput,
           message: decision?.message,
           rememberEntry: decision?.rememberEntry,

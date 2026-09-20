@@ -1580,6 +1580,9 @@ export default function HookConfigEditor({
                       eventName,
                       includeSubagents: canIncludeSubagents(eventName) && resolveIncludeSubagents(hook),
                       matcher: {},
+                      extensionLogic: hook.extensionLogic
+                        ? { ...hook.extensionLogic }
+                        : null,
                       postActions: eventName === 'Stop' || eventName === 'StopFailure'
                         ? hook.postActions
                         : hook.postActions.filter((action) => (
@@ -1714,6 +1717,23 @@ export default function HookConfigEditor({
           >
             {hook.extensionLogic ? (
               <div className="space-y-4">
+                {hook.eventName === 'PreToolUse' && (
+                  <label className="flex items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                    <input
+                      type="checkbox"
+                      checked={hook.extensionLogic.failClosed === true}
+                      disabled={busy}
+                      onChange={(event) => updateDraft({
+                        extensionLogic: { ...hook.extensionLogic!, failClosed: event.target.checked },
+                      })}
+                      className="mt-0.5 h-4 w-4 rounded border-input accent-primary"
+                    />
+                    <span className="space-y-1">
+                      <span className="block text-xs font-medium text-foreground">{t('hooks.script.failClosedPreToolUse')}</span>
+                      <span className="block text-xs leading-5 text-muted-foreground">{t('hooks.script.failClosedPreToolUseHint')}</span>
+                    </span>
+                  </label>
+                )}
                 <ScriptOutputsEditor
                   outputs={hook.extensionLogic.outputs}
                   onChange={(outputs) => updateDraft({ extensionLogic: { ...hook.extensionLogic!, outputs } })}

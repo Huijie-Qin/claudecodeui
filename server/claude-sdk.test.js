@@ -37,7 +37,7 @@ test('resolveClaudeModel falls back to the UI model when no environment override
   });
 });
 
-test('configured Hooks are not registered for an internal Hook follow-up turn', async () => {
+test('internal Hook follow-up turns retain user identity for required tool guards', async () => {
   const claudeSdk = await import('./claude-sdk.js');
 
   assert.equal(claudeSdk.resolveConfiguredHookUserId({ userId: 42 }, 7), 42);
@@ -45,7 +45,101 @@ test('configured Hooks are not registered for an internal Hook follow-up turn', 
   assert.equal(claudeSdk.resolveConfiguredHookUserId({
     userId: 42,
     hookRecovery: { hookId: 'normal-end-notification', executionId: 'execution-1' },
-  }, 7), null);
+  }, 7), 42);
+});
+
+test('internal follow-up turns register required tool guards without repeating Stop hooks', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  const guard = { id: 'guard', eventName: 'PreToolUse', extensionLogic: { failClosed: true } };
+  const hooks = [guard,
+    { id: 'stop', eventName: 'Stop', extensionLogic: { failClosed: true } },
+    { id: 'optional', eventName: 'PreToolUse', extensionLogic: { failClosed: false } },
+  ];
+  const materialized = [];
+  const result = await resolveConfiguredHooksForRuntime({
+    hookConfigs: { listActiveHooksForUser: () => hooks },
+    hookResources: { materializeHook: async ({ hook }) => { materialized.push(hook.id); return {}; } },
+    userId: 42, workspacePath: '/workspace', hookRecovery: true,
+  });
+  assert.deepEqual(result.hooks, [guard]);
+  assert.deepEqual(materialized, ['guard']);
+});
+
+test('required tool guard resource failures abort runtime preparation', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  const original = new Error('workspace unavailable');
+  await assert.rejects(resolveConfiguredHooksForRuntime({
+    hookConfigs: { listActiveHooksForUser: () => [{
+      id: 'guard', eventName: 'PreToolUse', extensionLogic: { failClosed: true },
+    }] },
+    hookResources: { materializeHook: async () => { throw original; } },
+    userId: 42, workspacePath: '/workspace',
+  }), (error) => error.code === 'REQUIRED_HOOK_UNAVAILABLE' && error.cause === original);
+});
+
+test('legacy fail-closed Stop hook resource failures do not abort runtime preparation', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  const hooks = ['Stop', 'SubagentStop'].map((eventName) => ({
+    id: eventName, eventName, extensionLogic: { failClosed: true },
+  }));
+  const original = new Error('workspace unavailable');
+  const reported = [];
+  const result = await resolveConfiguredHooksForRuntime({
+    hookConfigs: { listActiveHooksForUser: () => hooks },
+    hookResources: { materializeHook: async () => { throw original; } },
+    userId: 42, workspacePath: '/workspace',
+    onMaterializeError: (hook, error) => reported.push([hook.id, error]),
+  });
+  assert.deepEqual(result.hooks, []);
+  assert.equal(result.materializedByHookId.size, 0);
+  assert.deepEqual(reported, hooks.map((hook) => [hook.id, original]));
+});
+
+test('real Hook catalog database failures abort before required guards can be silently omitted', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  const { createHookConfigService } = await import('./services/hook-configs.js');
+  const { default: Database } = await import('better-sqlite3');
+  const database = new Database(':memory:');
+  const hookConfigs = createHookConfigService({ database });
+  database.close();
+  for (const context of [{}, { tenantId: 7, workspaceId: 9 }]) {
+    await assert.rejects(resolveConfiguredHooksForRuntime({
+      hookConfigs,
+      hookResources: { materializeHook: () => assert.fail('An unreadable catalog must abort before materialization') },
+      userId: 42, workspacePath: '/workspace', ...context,
+    }), (error) => error.code === 'REQUIRED_HOOK_UNAVAILABLE' && /not open/.test(error.cause?.message));
+  }
+});
+
+test('invalid Hook catalog results also prevent silent startup without required guards', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  for (const candidates of [null, {}, [null]]) {
+    await assert.rejects(resolveConfiguredHooksForRuntime({
+      hookConfigs: { listActiveHooksForUser: () => candidates },
+      hookResources: {}, userId: 42, workspacePath: '/workspace',
+    }), (error) => error.code === 'REQUIRED_HOOK_UNAVAILABLE');
+  }
+});
+
+test('required tool guard resource conflicts cannot disable its assignment for the next turn', async () => {
+  const { resolveConfiguredHooksForRuntime } = await import('./claude-sdk.js');
+  const original = Object.assign(new Error('published resource conflict'), { statusCode: 409 });
+  const guard = { id: 'guard', eventName: 'PreToolUse', extensionLogic: { failClosed: true },
+    workspaceAssignment: { installStatus: 'ready' } };
+  let attempts = 0;
+  const runtime = {
+    hookConfigs: {
+      listEffectiveHooksForContext: () => [guard],
+      markWorkspaceHookAssignmentFailed: () => assert.fail('Required tool guard must remain eligible'),
+    },
+    hookResources: { materializeHook: async () => { attempts += 1; throw original; } },
+    userId: 42, tenantId: 7, workspaceId: 9, workspacePath: '/workspace',
+  };
+  for (let turn = 0; turn < 2; turn += 1) {
+    await assert.rejects(resolveConfiguredHooksForRuntime(runtime),
+      (error) => error.code === 'REQUIRED_HOOK_UNAVAILABLE' && error.cause === original);
+  }
+  assert.equal(attempts, 2);
 });
 
 test('configured Hook runtime resolves project scope and excludes resource failures', async () => {
@@ -320,6 +414,23 @@ test('buildToolInteractionContext preserves subagent and tool identities for UI 
     agentId: 'agent-1',
   });
   assert.equal(claudeSdk.buildToolInteractionContext({}), undefined);
+});
+
+test('MCP permission callbacks require interaction and preserve the reason for each call', async () => {
+  const { requiresToolInteraction, buildToolInteractionContext } = await import('./claude-sdk.js');
+  assert.equal(requiresToolInteraction('mcp__demo__echo'), true);
+  assert.equal(requiresToolInteraction('mcp__server__nested__tool'), true);
+  assert.equal(requiresToolInteraction('AskUserQuestion'), true);
+  assert.equal(requiresToolInteraction('ExitPlanMode'), true);
+  assert.equal(requiresToolInteraction('Bash'), false);
+  assert.equal(requiresToolInteraction('Read'), false);
+  assert.deepEqual(buildToolInteractionContext({ toolUseID: 'call-1', agentID: 'child-1',
+    decisionReason: ' 请检查参数并确认。 ', signal: 'not exposed' }, { requiresExplicitConfirmation: true }), {
+    toolUseId: 'call-1', agentId: 'child-1', requiresExplicitConfirmation: true,
+    decisionReason: '请检查参数并确认。',
+  });
+  assert.deepEqual(buildToolInteractionContext({}, { requiresExplicitConfirmation: true }),
+    { requiresExplicitConfirmation: true });
 });
 
 test('Claude turn completion waits until an active background task is terminal', async () => {

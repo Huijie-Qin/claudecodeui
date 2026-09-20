@@ -73,7 +73,8 @@ import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
-import { createClaudeQueryWithHookFallback, createRequiredStopHookError, isRequiredStopHook } from './services/claude-hook-policy.js';
+import { createClaudeQueryWithHookFallback, createRequiredHookError, isRequiredHook } from './services/claude-hook-policy.js';
+import { resolveMcpToolConfirmation } from './services/mcp-tool-confirmation.js';
 import { hookWorkspaceResourcesService } from './services/hook-workspace-resources.js';
 import { buildMcpLoopReplacement, mcpLoopService } from './services/mcp-loop-service.js';
 import {
@@ -119,10 +120,6 @@ const CLAUDE_SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'i
 const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
 
 function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
-  if (runtimeOptions.hookRecovery) {
-    return null;
-  }
-
   const hookUserId = Number(runtimeOptions.userId ?? writerUserId);
   return Number.isInteger(hookUserId) && hookUserId > 0 ? hookUserId : null;
 }
@@ -134,14 +131,29 @@ async function resolveConfiguredHooksForRuntime({
   tenantId = null,
   workspaceId = null,
   workspacePath,
+  hookRecovery = false,
   onMaterializeError = null,
 }) {
-  const candidates = tenantId && workspaceId
-    ? hookConfigs.listEffectiveHooksForContext({ userId, tenantId, workspaceId })
-    : hookConfigs.listActiveHooksForUser(userId);
+  let candidates;
+  try {
+    candidates = tenantId && workspaceId
+      ? await hookConfigs.listEffectiveHooksForContext({ userId, tenantId, workspaceId })
+      : await hookConfigs.listActiveHooksForUser(userId);
+    if (!Array.isArray(candidates) || candidates.some((hook) => !hook || typeof hook !== 'object' || Array.isArray(hook))) {
+      throw new Error('Configured Hook catalog must return a valid Hook list');
+    }
+  } catch (error) {
+    // An unreadable catalog cannot establish that no required guard exists.
+    // Surface a fatal error before query construction instead of omitting all
+    // configured Hooks while the required-Hook flags are still unset.
+    throw createRequiredHookError(error);
+  }
   const materializedByHookId = new Map();
   const hooks = [];
   for (const hook of candidates) {
+    // Recovery turns must keep required tool guards without repeating Stop
+    // actions that created the recovery turn in the first place.
+    if (hookRecovery && !(hook.eventName === 'PreToolUse' && isRequiredHook(hook))) continue;
     try {
       const preparedResources = typeof hookResources.prepareHook === 'function'
         ? await hookResources.prepareHook({ hook })
@@ -176,6 +188,9 @@ async function resolveConfiguredHooksForRuntime({
         workspaceId
         && hook.workspaceAssignment
         && error?.statusCode === 409
+        // Failed assignments disappear from the effective Hook list. Keep a
+        // required tool guard eligible so the next turn cannot bypass it.
+        && !(hook.eventName === 'PreToolUse' && isRequiredHook(hook))
         && typeof hookConfigs.markWorkspaceHookAssignmentFailed === 'function'
       ) {
         try {
@@ -192,7 +207,7 @@ async function resolveConfiguredHooksForRuntime({
         }
       }
       if (typeof onMaterializeError === 'function') await onMaterializeError(hook, error);
-      if (isRequiredStopHook(hook)) throw createRequiredStopHookError(error);
+      if (isRequiredHook(hook)) throw createRequiredHookError(error);
     }
   }
   return { hooks, materializedByHookId };
@@ -436,7 +451,11 @@ function getToolInteractionMessage(toolName) {
   return 'Claude requires your attention.';
 }
 
-function buildToolInteractionContext(context) {
+function requiresToolInteraction(toolName) {
+  return TOOLS_REQUIRING_INTERACTION.has(toolName) || isMcpToolName(toolName);
+}
+
+function buildToolInteractionContext(context, { requiresExplicitConfirmation = false } = {}) {
   const toolUseId = typeof context?.toolUseID === 'string' && context.toolUseID.trim()
     ? context.toolUseID.trim()
     : undefined;
@@ -444,7 +463,14 @@ function buildToolInteractionContext(context) {
     ? context.agentID.trim()
     : undefined;
 
-  return toolUseId || agentId ? { toolUseId, agentId } : undefined;
+  const identity = toolUseId || agentId ? { toolUseId, agentId } : undefined;
+  if (!requiresExplicitConfirmation) return identity;
+  return {
+    ...identity,
+    requiresExplicitConfirmation: true,
+    ...(typeof context?.decisionReason === 'string' && context.decisionReason.trim()
+      ? { decisionReason: context.decisionReason.trim() } : {}),
+  };
 }
 
 function createRequestId() {
@@ -1871,12 +1897,11 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }]
     };
 
-    // A Hook-created follow-up is an internal continuation of the original
-    // turn. Registering configured Hooks again would make its terminal Stop
-    // event execute every user Hook a second time.
+    // Internal follow-ups retain required tool guards while excluding other
+    // configured Hooks, whose Stop actions would otherwise execute twice.
     const hookUserId = resolveConfiguredHookUserId(runtimeOptions, ws?.userId);
     let configuredSdkHooks = {};
-    let hasRequiredStopHook = false;
+    let hasRequiredHook = false;
     if (hookUserId !== null) {
       try {
         const workspacePath = runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath;
@@ -1887,11 +1912,12 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
           tenantId: runtimeOptions.tenantId,
           workspaceId: runtimeOptions.workspaceId,
           workspacePath,
+          hookRecovery: Boolean(runtimeOptions.hookRecovery),
           onMaterializeError: (hook, error) => {
             console.warn(`[HookResources] Failed to reconcile Hook ${hook.id}:`, error?.message || error);
           },
         });
-        hasRequiredStopHook = activeHooks.some(isRequiredStopHook);
+        hasRequiredHook = activeHooks.some(isRequiredHook);
         if (activeHooks.length > 0) {
           mcpLoopToolBatchTracker = createMcpLoopToolBatchTracker(
             activeHooks
@@ -2275,13 +2301,13 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
             }),
           });
           configuredSdkHooks = hookRuntime.hooks;
-          hasRequiredStopHook = hookRuntime.hasRequiredStopHook;
+          hasRequiredHook = hookRuntime.hasRequiredHook;
           console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);
         }
       } catch (error) {
         console.error('[HookRuntime] Failed to load configured Hooks:', error?.message || error);
-        if (error?.code === 'REQUIRED_STOP_HOOK_UNAVAILABLE') throw error;
-        if (hasRequiredStopHook) throw createRequiredStopHookError(error);
+        if (error?.code === 'REQUIRED_HOOK_UNAVAILABLE') throw error;
+        if (hasRequiredHook) throw createRequiredHookError(error);
       }
     }
     sdkOptions.hooks = mergeSdkHooks(builtinSdkHooks, configuredSdkHooks);
@@ -2310,7 +2336,10 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
 
       const overrideResult = await applyRuntimeMcpToolOverrides(toolName, input);
       const effectiveInput = overrideResult.input;
-      const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
+      // Normal MCP calls still use the SDK's permission mode. If a Hook asks
+      // for confirmation, the SDK calls us here; never auto-allow that request.
+      const requiresExplicitConfirmation = isMcpToolName(toolName);
+      const requiresInteraction = requiresToolInteraction(toolName);
 
       if (!requiresInteraction) {
         return { behavior: 'allow', updatedInput: effectiveInput };
@@ -2338,8 +2367,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }
 
       const requestId = createRequestId();
-      const interactionMessage = getToolInteractionMessage(toolName);
-      const interactionContext = buildToolInteractionContext(context);
+      const interactionMessage = requiresExplicitConfirmation
+        ? `请确认是否执行 MCP 调用：${toolName}` : getToolInteractionMessage(toolName);
+      const interactionContext = buildToolInteractionContext(context, { requiresExplicitConfirmation });
       ws.send(createNormalizedMessage({
         kind: 'permission_request',
         requestId,
@@ -2377,6 +2407,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
       }).finally(() => {
         pendingInteractions.end(requestId);
       });
+      if (requiresExplicitConfirmation) {
+        return resolveMcpToolConfirmation(decision, effectiveInput);
+      }
       if (!decision) {
         return { behavior: 'deny', message: 'Tool interaction timed out' };
       }
@@ -2411,7 +2444,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, ...options } =
         query,
         prompt: inputQueue,
         options: sdkOptions,
-        hasRequiredStopHook,
+        hasRequiredHook,
         onFallback: (hookError) => {
           console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
         },
@@ -3487,6 +3520,7 @@ export {
   buildClaudeUserMessage,
   resolveClaudeUserMessageId,
   buildToolInteractionContext,
+  requiresToolInteraction,
   createClaudeTurnLifecycleTracker,
   createPendingInteractionTracker,
   shouldEmitClaudeTurnCompletion,
