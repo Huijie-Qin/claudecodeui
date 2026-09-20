@@ -1,5 +1,6 @@
 // Native SDK permission bridge probe. All model responses and MCP data are local.
 // Run explicitly: node scripts/python-mcp-confirm-e2e.mjs --run
+// Add --post-action to publish and execute the script-free Hook configuration.
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,7 +18,8 @@ if (!process.argv.includes('--run')) {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const storage = path.join(repoRoot, 'artifacts', 'mcp-confirm-e2e');
+const postActionMode = process.argv.includes('--post-action');
+const storage = path.join(repoRoot, 'artifacts', postActionMode ? 'mcp-confirmation-action-e2e' : 'mcp-confirm-e2e');
 await fs.mkdir(storage, { recursive: true });
 const runRoot = await fs.mkdtemp(path.join(storage, 'run-'));
 const require = createRequire(import.meta.url);
@@ -27,9 +29,55 @@ const nativeCli = sdkRequire.resolve(
   `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude${process.platform === 'win32' ? '.exe' : ''}`,
 );
 const expectedInput = { text: 'synthetic MCP argument', count: 7 };
-const reason = 'Explicit user confirmation required for synthetic arguments.';
-const report = { mode: 'local-model', status: 'running', scenarios: [] };
+let reason = 'Explicit user confirmation required for synthetic arguments.';
+const report = { mode: 'local-model', confirmationMode: postActionMode ? 'post-action' : 'ask-hook',
+  status: 'running', scenarios: [] };
 let current;
+let hookDatabase;
+let defaultDatabase;
+let publishedHook;
+let createRuntime;
+
+if (postActionMode) {
+  // Cache .env loading first so runtime imports cannot switch back to a live DB.
+  await import('../server/load-env.js');
+  process.env.DATABASE_PATH = path.join(runRoot, 'runtime-import.db');
+  await fs.writeFile(process.env.DATABASE_PATH, '');
+  // Keep native statements alive in this disposable probe on bundled Node 24.
+  if (process.versions.node.startsWith('24.')) {
+    const native = require('better-sqlite3/build/Release/better_sqlite3.node');
+    const prepare = native.Database.prototype.prepare;
+    const statements = [];
+    native.Database.prototype.prepare = function (...args) {
+      const statement = prepare.apply(this, args);
+      statements.push(statement);
+      return statement;
+    };
+  }
+  const [{ createHookConfigService }, { createHookRuntimeSession }, { HOOK_CONFIG_SCHEMA_SQL },
+    { default: Database }, { db }] = await Promise.all([
+    import('../server/services/hook-configs.js'), import('../server/services/hook-runtime.js'),
+    import('../server/database/hook-config-schema.js'), import('better-sqlite3'),
+    import('../server/database/db.js'),
+  ]);
+  defaultDatabase = db;
+  hookDatabase = new Database(path.join(runRoot, 'hooks.db'));
+  hookDatabase.pragma('foreign_keys = ON');
+  hookDatabase.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)');
+  hookDatabase.exec(HOOK_CONFIG_SCHEMA_SQL);
+  hookDatabase.prepare('INSERT INTO users VALUES (1, ?)').run('mcp-post-action-probe');
+  const service = createHookConfigService({ database: hookDatabase,
+    configStore: { get: () => null, set: () => {} },
+    hookMcpCatalog: { listServers: () => [], listToolResources: () => [] },
+  });
+  const config = JSON.parse(await fs.readFile(new URL('../examples/mcp-confirmation-action/hook.json', import.meta.url), 'utf8'));
+  const draft = service.createHook({ userId: 1, input: config });
+  publishedHook = service.publishHook({ userId: 1, hookId: draft.id });
+  assert.equal(publishedHook.extensionLogic, null);
+  assert.deepEqual(publishedHook.claudeResponse.bindings, {});
+  reason = publishedHook.postActions[0].config.messageTemplate;
+  createRuntime = createHookRuntimeSession;
+}
 
 // The fixture emits one tool call, then ends after the real SDK returns a result.
 const server = createServer(async (request, response) => {
@@ -109,6 +157,11 @@ try {
     await fs.mkdir(workspace, { recursive: true });
     current = { name, ask, modelRequests: 0, hookEvents: [], permissionRequests: [], executions: [] };
     report.scenarios.push(current);
+    const runtime = ask && postActionMode ? createRuntime({ hooks: [publishedHook],
+      database: hookDatabase, userId: 1, username: 'mcp-post-action-probe', workspaceRoot: workspace,
+      scriptExecutor: async () => assert.fail('A confirmation post action must not require a script'),
+    }) : null;
+    const runtimeCallback = runtime?.hooks.PreToolUse[0].hooks[0];
     const mcp = createSdkMcpServer({ name: 'probe', version: '1.0.0', alwaysLoad: true, tools: [
       tool('echo', 'Return synthetic data', { text: z.string(), count: z.number() }, async (args) => {
         current.executions.push(args);
@@ -126,8 +179,9 @@ try {
         settings: { autoMemoryEnabled: false, claudeMdExcludes: ['**'] }, systemPrompt: 'Call the requested tool.',
         tools: [], allowedTools: ['mcp__probe__echo'], permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true, maxTurns: 3, abortController,
-        hooks: { PreToolUse: [{ matcher: '^mcp__.*', hooks: [async (input, toolId) => {
+        hooks: { PreToolUse: [{ matcher: '^mcp__.*', hooks: [async (input, toolId, options) => {
           current.hookEvents.push({ input, toolId });
+          if (runtimeCallback) return runtimeCallback(input, toolId, options);
           return ask ? { hookSpecificOutput: { hookEventName: 'PreToolUse',
             permissionDecision: 'ask', permissionDecisionReason: reason } } : {};
         }] }] },
@@ -163,6 +217,15 @@ try {
       assert.equal(current.permissionRequests[0].context.decisionReason, reason);
       assert.equal(current.permissionRequests[0].context.toolUseID, current.hookEvents[0].toolId);
       assert.equal(current.decision.updatedPermissions, undefined);
+      if (postActionMode) {
+        const row = hookDatabase.prepare('SELECT * FROM hook_executions ORDER BY rowid DESC LIMIT 1').get();
+        assert.equal(row.status, 'succeeded');
+        assert.deepEqual(JSON.parse(row.input_json).tool_input, expectedInput);
+        assert.equal(JSON.parse(row.response_json).hookSpecificOutput.permissionDecision, 'ask');
+        assert.deepEqual(JSON.parse(row.script_output_json), {});
+        current.hookAudit = { status: row.status, actions: JSON.parse(row.actions_json),
+          logs: JSON.parse(row.logs_json), response: JSON.parse(row.response_json) };
+      }
     }
     console.log(`${name}: permission requests=${current.permissionRequests.length}, MCP executions=${current.executions.length}`);
   }
@@ -175,5 +238,7 @@ try {
   const evidencePath = path.join(runRoot, 'evidence.json');
   await fs.writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`);
   await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+  hookDatabase?.close();
+  defaultDatabase?.close();
   console.log(`${report.status.toUpperCase()}: ${evidencePath}`);
 }

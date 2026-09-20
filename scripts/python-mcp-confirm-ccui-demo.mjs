@@ -1,5 +1,6 @@
 // Real CCUI MCP confirmation demonstration with an isolated DB and local model endpoint.
 // node node_modules/tsx/dist/cli.mjs --tsconfig server/tsconfig.json scripts/python-mcp-confirm-ccui-demo.mjs
+// Add --post-action to demonstrate the script-free request_confirmation action.
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -13,19 +14,20 @@ import { createServer as createViteServer } from 'vite';
 import { startMcpConfirmModelFixture } from './python-mcp-confirm-model-fixture.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const postActionMode = process.argv.includes('--post-action');
 // Cache this import before overriding settings; later application imports must
 // never restore the user's live database or model endpoint from .env.
 await import('../server/load-env.js');
-const storage = path.join(repoRoot, '.tmp', 'python-mcp-confirm-ccui');
+const storage = path.join(repoRoot, '.tmp', postActionMode ? 'mcp-confirmation-action-ccui' : 'python-mcp-confirm-ccui');
 await fs.mkdir(storage, { recursive: true });
 const root = await fs.mkdtemp(path.join(storage, 'run-'));
 const port = Number(process.env.MCP_CONFIRM_CCUI_PORT || 3931);
 const uiPort = Number(process.env.MCP_CONFIRM_CCUI_UI_PORT || 3930);
 const base = `http://127.0.0.1:${port}`;
 const ui = `http://127.0.0.1:${uiPort}`;
-const username = 'mcp-confirm-demo';
+const username = postActionMode ? 'mcp-post-action-demo' : 'mcp-confirm-demo';
 const password = 'Hook-demo-20260920!';
-const tenantCode = 'mcp-confirm-demo';
+const tenantCode = username;
 const runtimeHome = path.join(root, 'runtimes', 'claude', tenantCode, username, tenantCode, 'home', '.claude');
 const fixture = await startMcpConfirmModelFixture({ logPath: path.join(root, 'model-requests.jsonl') });
 for (const name of ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'HTTP_PROXY', 'HTTPS_PROXY',
@@ -77,7 +79,8 @@ const user = userDb.createUser(username, await bcrypt.hash(password, 4), { isSys
     ANTHROPIC_MODEL: 'claude-sonnet-4-6' } });
 userDb.completeOnboarding(user.id);
 userDb.updateClaudeEnvForUsers({ userIds: [user.id], env: { CLAUDE_CONFIG_DIR: runtimeHome } });
-const tenant = multitenancyDb.tenants.createTenant({ code: tenantCode, name: 'MCP 参数确认演示' });
+const tenant = multitenancyDb.tenants.createTenant({ code: tenantCode,
+  name: postActionMode ? 'MCP 后置行为确认演示' : 'MCP 参数确认演示' });
 multitenancyDb.memberships.upsertMembership({ tenantId: tenant.id, userId: user.id,
   role: 'admin', permission: 'edit', status: 'active' });
 const token = generateToken(user);
@@ -100,7 +103,8 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   }
 }
 const workspace = (await request(`/projects/create-workspace?tenantId=${tenant.id}`, {
-  method: 'POST', body: { workspaceType: 'new', path: 'MCP调用前逐次确认演示' },
+  method: 'POST', body: { workspaceType: 'new',
+    path: postActionMode ? 'MCP后置行为逐次确认演示' : 'MCP调用前逐次确认演示' },
 })).project;
 assert.ok(workspace.path.startsWith(root + path.sep));
 const executionLog = path.join(root, 'mcp-executions.jsonl');
@@ -110,8 +114,9 @@ await fs.writeFile(path.join(workspace.path, '.mcp.json'), JSON.stringify({ mcpS
     args: [path.join(repoRoot, 'scripts/python-mcp-confirm-demo-mcp.mjs')],
     env: { MCP_CONFIRM_EXECUTION_LOG: executionLog } },
 } }, null, 2));
-await fs.writeFile(path.join(workspace.path, '演示说明.md'), '# MCP 调用前参数确认演示\n\n模型响应由本地测试服务提供；CCUI、原生 SDK、Python Hook 和 MCP 实际执行。\n\n验证：确认前执行次数不变；每次调用单独确认；取消后不执行。\n');
-const config = JSON.parse(await fs.readFile(path.join(repoRoot, 'examples/python-mcp-confirm/hook.json'), 'utf8'));
+await fs.writeFile(path.join(workspace.path, '演示说明.md'), `# MCP 调用前参数确认演示\n\n模型响应由本地测试服务提供；CCUI、原生 SDK、${postActionMode ? '请求用户确认后置行为' : 'Python Hook'} 和 MCP 实际执行。\n\n验证：确认前执行次数不变；每次调用单独确认；取消后不执行。\n`);
+const configPath = postActionMode ? 'examples/mcp-confirmation-action/hook.json' : 'examples/python-mcp-confirm/hook.json';
+const config = JSON.parse(await fs.readFile(path.join(repoRoot, configPath), 'utf8'));
 const { hookConfigService } = await import('../server/services/hook-configs.js');
 const draft = hookConfigService.createHook({ userId: user.id, input: config });
 const hook = hookConfigService.publishHook({ userId: user.id, hookId: draft.id });
@@ -139,6 +144,7 @@ const vite = await createViteServer({ root: repoRoot, configFile: false, envFile
 await vite.listen();
 const state = { root, ui, base, modelUrl: fixture.url, username, password, tenantId: tenant.id,
   userId: user.id, workspace, hookId: hook.id, executionLog, mode: 'local-model',
+  confirmationMode: postActionMode ? 'post-action' : 'python',
   prompt: '请连续两次调用演示回声工具。' };
 await fs.writeFile(path.join(root, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
 await fs.writeFile(path.join(storage, 'latest.json'), `${JSON.stringify(state, null, 2)}\n`);

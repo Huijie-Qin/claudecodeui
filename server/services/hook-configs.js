@@ -75,6 +75,7 @@ const POST_ACTION_TYPES = Object.freeze([
   'write_record',
   'invoke_skill',
   'send_agent_message',
+  'request_confirmation',
 ]);
 const AGENT_TURN_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
@@ -146,7 +147,10 @@ function allowedPostActions(eventName) {
   const actions = AGENT_TURN_ACTION_EVENTS.has(eventName)
     ? POST_ACTION_TYPES
     : POST_ACTION_TYPES.filter((type) => type !== 'invoke_skill' && type !== 'send_agent_message');
-  return new Set(actions.filter((type) => type !== 'mcp_loop_run' || eventName === 'PostToolUse'));
+  return new Set(actions.filter((type) => (
+    (type !== 'mcp_loop_run' || eventName === 'PostToolUse')
+    && (type !== 'request_confirmation' || eventName === 'PreToolUse')
+  )));
 }
 
 function createHttpError(message, statusCode = 400) {
@@ -373,6 +377,9 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
       if (action.type === 'invoke_skill' || action.type === 'send_agent_message') {
         throw createHttpError(`${action.type} is only supported for Stop and StopFailure`);
       }
+      if (action.type === 'request_confirmation') {
+        throw createHttpError('request_confirmation is only supported for PreToolUse');
+      }
       throw createHttpError(`postActions[${index}].type is not supported`);
     }
     if (action.type === 'call_mcp_tool') {
@@ -495,17 +502,22 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
         },
       };
     }
-    if (action.type === 'send_agent_message') {
+    if (action.type === 'send_agent_message' || action.type === 'request_confirmation') {
+      const defaultMessage = action.type === 'request_confirmation'
+        ? '即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。'
+        : '';
       return {
         id,
-        type: 'send_agent_message',
+        type: action.type,
         position: index,
         config: {
           condition: config.condition == null
             ? null
             : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           messageTemplate: requireString(
-            typeof config.messageTemplate === 'string' ? config.messageTemplate : '',
+            config.messageTemplate === undefined
+              ? defaultMessage
+              : (typeof config.messageTemplate === 'string' ? config.messageTemplate : ''),
             `postActions[${index}].config.messageTemplate`,
             { max: 20000, allowEmpty: true },
           ),
@@ -520,6 +532,13 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
   }
   if (loopActions.length === 1 && normalizedActions.at(-1)?.type !== 'mcp_loop_run') {
     throw createHttpError('mcp_loop_run must be the final post action');
+  }
+  const confirmationActions = normalizedActions.filter((action) => action.type === 'request_confirmation');
+  if (confirmationActions.length > 1) {
+    throw createHttpError('PreToolUse supports at most one request_confirmation post action');
+  }
+  if (confirmationActions.length === 1 && normalizedActions.at(-1)?.type !== 'request_confirmation') {
+    throw createHttpError('request_confirmation must be the final post action');
   }
   return normalizedActions;
 }
@@ -1090,6 +1109,8 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
       ) {
         throw createHttpError(`Skill ${action.config.skillName || '(empty)'} was not validated as a built-in Hook Skill`);
       }
+    } else if (action.type === 'request_confirmation' && !action.config.messageTemplate.trim()) {
+      throw createHttpError(`Post action ${action.id} must set a confirmation message`);
     } else if (!action.config.messageTemplate.trim()) {
       throw createHttpError(`Post action ${action.id} must set an Agent message`);
     }

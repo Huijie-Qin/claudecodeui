@@ -1,0 +1,25 @@
+{
+  "name": "MCP 调用前确认后置行为",
+  "description": "每次 MCP 调用前记录并展示参数，通过后置行为要求用户逐次确认，无需脚本。",
+  "eventName": "PreToolUse",
+  "matcher": {
+    "mode": "regex",
+    "value": "^mcp__.*"
+  },
+  "includeSubagents": true,
+  "userVariables": [],
+  "extensionLogic": null,
+  "postActions": [
+    {
+      "id": "confirm_mcp_call",
+      "type": "request_confirmation",
+      "config": {
+        "condition": null,
+        "messageTemplate": "即将调用 MCP 工具，参数已展示。请确认是否执行本次调用。"
+      }
+    }
+  ],
+  "claudeResponse": {
+    "bindings": {}
+  }
+}

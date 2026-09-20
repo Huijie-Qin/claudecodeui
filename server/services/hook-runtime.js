@@ -149,6 +149,24 @@ function buildClaudeHookOutput(hook, references) {
       setPath(output, path, value);
     }
   }
+  const confirmation = hook.eventName === 'PreToolUse'
+    && hook.postActions?.find((action) => action.type === 'request_confirmation');
+  if (confirmation) {
+    const result = references.actions[confirmation.id]?.output;
+    if (!result || typeof result.requested !== 'boolean') {
+      throw new Error('Confirmation post action did not produce a decision');
+    }
+    if (result.requested && output.continue !== false
+        && output.hookSpecificOutput?.permissionDecision !== 'deny') {
+      output.hookSpecificOutput = {
+        ...output.hookSpecificOutput,
+        permissionDecision: 'ask',
+        permissionDecisionReason: result.reason,
+      };
+    } else if (!output.hookSpecificOutput?.permissionDecision) {
+      output.hookSpecificOutput = { ...output.hookSpecificOutput, permissionDecision: 'defer' };
+    }
+  }
   if (isPlainObject(output.hookSpecificOutput) && Object.keys(output.hookSpecificOutput).length > 0) {
     output.hookSpecificOutput.hookEventName = hook.eventName;
   }
@@ -329,8 +347,40 @@ async function executePostActions({
   subagentMcpResults,
   onLoopProgress,
   writeRecord,
+  onLog,
 }) {
   for (const action of hook.postActions || []) {
+    if (action.type === 'request_confirmation') {
+      if (hook.eventName !== 'PreToolUse') throw new Error('Confirmation requires PreToolUse');
+      if (typeof event?.tool_name !== 'string' || !event.tool_name.trim()) {
+        throw new Error('MCP confirmation requires a tool name');
+      }
+      if (!event.tool_name.startsWith('mcp__')) {
+        references.actions[action.id] = { output: { requested: false, reason: 'not_mcp_tool' } };
+        continue;
+      }
+      const condition = action.config?.condition == null
+        ? true : resolveBinding(action.config.condition, references);
+      if (typeof condition !== 'boolean') {
+        throw new Error(`Post action ${action.id} condition must resolve to a boolean`);
+      }
+      if (!condition) {
+        references.actions[action.id] = { output: { requested: false, reason: 'condition_false' } };
+        continue;
+      }
+      if (!isPlainObject(event.tool_input)) throw new Error('MCP confirmation requires object tool_input');
+      const reason = renderTemplate(action.config.messageTemplate, references);
+      if (reason === UNRESOLVED || !reason.trim()) {
+        throw new Error(`Post action ${action.id} confirmation message is empty or unresolved`);
+      }
+      await onLog('MCP 调用前参数确认', { toolName: event.tool_name, toolInput: event.tool_input });
+      // This records a request, never an approval. The SDK permission callback
+      // displays the effective arguments and waits for the user's decision.
+      references.actions[action.id] = { output: {
+        requested: true, reason, toolName: event.tool_name, toolInput: event.tool_input,
+      } };
+      continue;
+    }
     if (action.type === 'call_mcp_tool') {
       const condition = action.config?.condition == null
         ? true
@@ -641,6 +691,12 @@ export function createHookRuntimeSession({
       startedAt,
     });
     const logs = [];
+    const onLog = async (message, data) => {
+      const entry = { timestamp: new Date().toISOString(), message: redact(message), data: redact(data) };
+      if (logs.length < MAX_LOG_ENTRIES) logs.push(entry);
+      console.info(`[Hook:${hook.id}] ${redactForAudit(entry.message)}`, redactForAudit(entry.data ?? ''));
+      return entry;
+    };
     const subagentFeedback = [];
     const subagentMcpResults = [];
     let loop;
@@ -690,12 +746,7 @@ export function createHookRuntimeSession({
             recordType,
             redact(data),
           ),
-          onLog: async (message, data) => {
-            const entry = { timestamp: new Date().toISOString(), message: redact(message), data: redact(data) };
-            if (logs.length < MAX_LOG_ENTRIES) logs.push(entry);
-            console.info(`[Hook:${hook.id}] ${redactForAudit(entry.message)}`, redactForAudit(entry.data ?? ''));
-            return entry;
-          },
+          onLog,
         });
         scriptOutput = normalizeScriptOutput(scriptResult, hook.extensionLogic.outputs);
         references.script.output = scriptOutput;
@@ -711,6 +762,7 @@ export function createHookRuntimeSession({
         subagentFeedback,
         subagentMcpResults,
         onLoopProgress,
+        onLog,
         writeRecord: async (recordType, data) => writeDataRecord(
           database,
           executionId,

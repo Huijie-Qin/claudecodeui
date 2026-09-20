@@ -56,7 +56,8 @@
       "mcp_loop_run": "MCP loop wait",
       "write_record": "Write record",
       "invoke_skill": "Invoke Skill",
-      "send_agent_message": "Send to Agent"
+      "send_agent_message": "Send to Agent",
+      "request_confirmation": "Request confirmation"
     },
     "loopAttempts": "{{count}} polls",
     "loopResult": "Final result",

@@ -8,6 +8,7 @@ import type {
   HookEventDefinition,
   HookEventName,
   HookOutputField,
+  HookPostAction,
   HookResources,
   HookScriptLanguage,
   HookScriptOutput,
@@ -662,6 +663,25 @@ export function shouldShowBusinessData(
   return hook.hasDataRecords || hook.postActions.some((action) => action.type === 'write_record');
 }
 
+export function hasTerminalPostAction(actions: HookPostAction[]): boolean {
+  return actions.some((action) => action.type === 'mcp_loop_run' || action.type === 'request_confirmation');
+}
+
+export function canAddConfirmationAction(draft: HookConfigDraft): boolean {
+  return draft.eventName === 'PreToolUse' && !hasTerminalPostAction(draft.postActions);
+}
+
+export function retainCompatiblePostActions(actions: HookPostAction[], eventName: HookEventName): HookPostAction[] {
+  return actions.filter((action) => {
+    if (action.type === 'request_confirmation') return eventName === 'PreToolUse';
+    if (action.type === 'mcp_loop_run') return eventName === 'PostToolUse';
+    if (action.type === 'invoke_skill' || action.type === 'send_agent_message') {
+      return eventName === 'Stop' || eventName === 'StopFailure';
+    }
+    return true;
+  }).map((action, position) => ({ ...action, position }));
+}
+
 function normalizePropertyType(type?: string): FieldType {
   if (type === 'number' || type === 'integer') return 'number';
   if (type === 'boolean') return 'boolean';
@@ -745,10 +765,28 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
           ? '业务数据写入结果'
           : action.type === 'invoke_skill'
             ? 'Skill 调用结果'
-            : 'Agent 消息发送结果',
+            : action.type === 'request_confirmation'
+              ? '用户确认请求'
+              : 'Agent 消息发送结果',
       type: 'object',
       group: 'action',
     });
+    if (action.type === 'request_confirmation') {
+      const confirmationFields: Array<{ name: string; type: FieldType; label: string }> = [
+        { name: 'requested', type: 'boolean', label: '已请求用户确认（不代表用户已同意）' },
+        { name: 'reason', type: 'string', label: '用户确认说明' },
+        { name: 'toolName', type: 'string', label: '待确认的 MCP 工具名' },
+        { name: 'toolInput', type: 'object', label: '待确认的完整工具参数' },
+      ];
+      for (const field of confirmationFields) {
+        fields.push({
+          path: `actions.${action.id}.output.${field.name}`,
+          label: field.label,
+          type: field.type,
+          group: 'action',
+        });
+      }
+    }
   }
   return fields;
 }

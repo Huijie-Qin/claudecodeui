@@ -6,14 +6,17 @@ import {
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  canAddConfirmationAction,
   createEmptyHook,
   createHookCopyDraft,
   getHookSubagentLabel,
   getClaudeOutputFields,
   inferNativeMatcherMode,
+  hasTerminalPostAction,
+  retainCompatiblePostActions,
   shouldShowBusinessData,
 } from './catalog';
-import type { HookConfig, HookConfigDraft, HookResources } from './types';
+import type { HookConfig, HookConfigDraft, HookPostAction, HookResources } from './types';
 
 const resources: HookResources = {
   events: [],
@@ -94,6 +97,59 @@ test('reference choices include environment, script, and action outputs', () => 
   assert.ok(paths.includes('script.output.riskLevel'));
   assert.ok(paths.includes('actions.mcp-1.output'));
   assert.equal(choices.find((field) => field.path === 'script.output.riskLevel')?.label, 'riskLevel');
+});
+
+test('confirmation exposes typed request fields without implying user approval', () => {
+  const choices = buildReferenceChoices({
+    ...draft,
+    postActions: [{ id: 'confirm-1', type: 'request_confirmation', position: 0, config: {} }],
+  }, resources).filter((field) => field.group === 'action');
+
+  assert.deepEqual(choices.map(({ path, type }) => ({ path, type })), [
+    { path: 'actions.confirm-1.output', type: 'object' },
+    { path: 'actions.confirm-1.output.requested', type: 'boolean' },
+    { path: 'actions.confirm-1.output.reason', type: 'string' },
+    { path: 'actions.confirm-1.output.toolName', type: 'string' },
+    { path: 'actions.confirm-1.output.toolInput', type: 'object' },
+  ]);
+  assert.match(choices.find((field) => field.path.endsWith('.requested'))?.label || '', /不代表用户已同意/);
+});
+
+test('confirmation is available only before tool execution and ends the action list', () => {
+  for (const event of EVENT_DEFINITIONS) {
+    assert.equal(canAddConfirmationAction({ ...draft, eventName: event.name }), event.name === 'PreToolUse', event.name);
+  }
+  const record: HookPostAction = { id: 'record', type: 'write_record', position: 0, config: {} };
+  assert.equal(canAddConfirmationAction({ ...draft, postActions: [record] }), true);
+  assert.equal(hasTerminalPostAction([record]), false);
+  for (const type of ['request_confirmation', 'mcp_loop_run'] as const) {
+    const actions: HookPostAction[] = [record, { id: 'terminal', type, position: 1, config: {} }];
+    assert.equal(canAddConfirmationAction({ ...draft, postActions: actions }), false);
+    assert.equal(hasTerminalPostAction(actions), true);
+  }
+});
+
+test('changing events removes incompatible actions and reindexes retained actions', () => {
+  const actions: HookPostAction[] = [
+    { id: 'skill', type: 'invoke_skill', position: 0, config: {} },
+    { id: 'record', type: 'write_record', position: 1, config: { recordType: 'audit' } },
+    { id: 'message', type: 'send_agent_message', position: 2, config: {} },
+    { id: 'confirm', type: 'request_confirmation', position: 3, config: {} },
+    { id: 'loop', type: 'mcp_loop_run', position: 4, config: {} },
+  ];
+  for (const [eventName, expectedIds] of [
+    ['PreToolUse', ['record', 'confirm']],
+    ['PostToolUse', ['record', 'loop']],
+    ['Stop', ['skill', 'record', 'message']],
+    ['StopFailure', ['skill', 'record', 'message']],
+    ['SessionStart', ['record']],
+  ] as const) {
+    const retained = retainCompatiblePostActions(actions, eventName);
+    assert.deepEqual(retained.map(({ id }) => id), expectedIds);
+    assert.deepEqual(retained.map(({ position }) => position), expectedIds.map((_, index) => index));
+    assert.deepEqual(retained.find(({ id }) => id === 'record')?.config, { recordType: 'audit' });
+  }
+  assert.equal(actions[1].position, 1);
 });
 
 test('an MCP Matcher exposes its tool input schema even when native matcher syntax is regex', () => {

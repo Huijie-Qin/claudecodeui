@@ -290,6 +290,7 @@ export default function HookSettingsTab({
           const hasSkill = hook.postActions?.some((action) => action.type === 'invoke_skill');
           const hasMcp = hook.postActions?.some((action) => action.type === 'call_mcp_tool' || action.type === 'mcp_loop_run');
           const hasAgentMessage = hook.postActions?.some((action) => action.type === 'send_agent_message');
+          const hasConfirmation = hook.postActions?.some((action) => action.type === 'request_confirmation');
           return (
             <div key={hook.id} className="flex items-start gap-3 p-4">
               <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -305,6 +306,7 @@ export default function HookSettingsTab({
                   {hasSkill ? <span className="text-[10px] text-muted-foreground">Skill</span> : null}
                   {hasMcp ? <span className="text-[10px] text-muted-foreground">MCP</span> : null}
                   {hasAgentMessage ? <span className="text-[10px] text-muted-foreground">Agent</span> : null}
+                  {hasConfirmation ? <span className="text-[10px] text-muted-foreground">请求用户确认</span> : null}
                   {isSqlCheckManaged ? (
                     <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
                       SQL Check

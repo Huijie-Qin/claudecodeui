@@ -837,6 +837,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     writeRecord: 0,
     invokeSkill: 0,
     sendAgentMessage: 0,
+    requestConfirmation: 0,
     claudeOutputs: 0,
   };
   const executedHookIds = new Set();
@@ -1060,6 +1061,41 @@ test('every Hook event publishes and executes every behavior allowed by its capa
           continue;
         }
 
+        if (actionType === 'request_confirmation') {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-request-confirmation', {
+            matcher: { value: 'mcp__matrix_server__echo' },
+            postActions: [{
+              id: 'confirm',
+              type: 'request_confirmation',
+              config: {
+                condition: { source: 'reference', path: 'event.tool_input.confirm' },
+                messageTemplate: 'Confirm {{event.tool_name}} for user {{ccui.env.userId}}',
+              },
+            }],
+          });
+          const toolInput = { confirm: true, payload: { values: [0, false, null], text: 'matrix' } };
+          const { execution, output } = await executePublishedMatrixHook({
+            database,
+            hook,
+            workspaceRoot,
+            mcpServers,
+            enqueueSkillRecovery,
+            eventOverrides: { tool_name: 'mcp__matrix_server__echo', tool_input: toolInput },
+          });
+          const reason = 'Confirm mcp__matrix_server__echo for user 2';
+          assert.deepEqual(output, { hookSpecificOutput: {
+            hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason,
+          } });
+          assert.deepEqual(JSON.parse(execution.actions_json), { confirm: { output: {
+            requested: true, reason, toolName: 'mcp__matrix_server__echo', toolInput,
+          } } });
+          assert.deepEqual(JSON.parse(execution.logs_json)[0].data,
+            { toolName: 'mcp__matrix_server__echo', toolInput });
+          coverage.requestConfirmation += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
+
         if (actionType === 'write_record') {
           const hook = publishBoundMatrixHook(service, eventName, 'action-write-record', {
             postActions: [{
@@ -1139,10 +1175,11 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       writeRecord: HOOK_EVENTS.length,
       invokeSkill: 2,
       sendAgentMessage: 2,
+      requestConfirmation: 1,
       claudeOutputs: expectedClaudeOutputs,
     });
     assert.equal(recoveries.length, 4);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 5 + expectedClaudeOutputs);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 6 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,

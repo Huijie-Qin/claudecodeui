@@ -1051,6 +1051,7 @@ const HOOK_ACTION_LABELS: Record<string, string> = {
   write_record: '写入记录',
   invoke_skill: '执行 Skill',
   send_agent_message: '追加对话',
+  request_confirmation: '请求用户确认',
 };
 
 function getHookCapabilityTags(hook: HookCatalogItem) {
