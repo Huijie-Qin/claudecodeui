@@ -2807,6 +2807,15 @@ export function createHookConfigService({
           userId,
           published.publishedAt,
         );
+        // Ordinary workspace installs follow publication. Only Agent templates
+        // explicitly pin a version; otherwise a corrected Hook keeps executing
+        // its first installed snapshot even after the administrator republishes.
+        // Resource snapshots are revalidated and materialized before each turn.
+        database.prepare(`
+          UPDATE workspace_hook_assignments
+          SET hook_version = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE hook_id = ? AND source = 'manual'
+        `).run(published.version, published.id);
         return published;
       });
       return publish();
