@@ -1,5 +1,5 @@
 import { Settings, Sparkles, PanelLeftOpen, Bug, LogOut, BarChart3, Building2 } from 'lucide-react';
-import { canManageTenant } from '../../../tenant-management/tenantManagementAccess';
+import { shouldShowTenantManagementEntry } from '../../../tenant-management/tenantManagementAccess';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useTenant } from '../../../../contexts/TenantContext';
@@ -34,6 +34,7 @@ export default function SidebarCollapsed({
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
   const { t: reportText } = useTranslation('aiUsage');
+  const showTenantManagementEntry = shouldShowTenantManagementEntry(user, currentTenant);
 
   return (
     <div className="flex h-full w-12 flex-col items-center gap-1 bg-background/80 py-3 backdrop-blur-sm">
@@ -59,11 +60,11 @@ export default function SidebarCollapsed({
         <Settings className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
       </button>
 
-      {canManageTenant(user, currentTenant) && <button type="button" onClick={() => navigate('/tenant-management')} className="mt-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title="租户管理" aria-label="租户管理"><Building2 className="h-4 w-4" /></button>}
+      {showTenantManagementEntry && <button type="button" onClick={() => navigate('/tenant-management')} className="mt-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title="租户管理" aria-label="租户管理"><Building2 className="h-4 w-4" /></button>}
       {!IS_PLATFORM && (
         <button
           onClick={logout}
-          className={`${canManageTenant(user, currentTenant) ? '' : 'mt-auto'} group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-destructive/10`}
+          className={`${showTenantManagementEntry ? '' : 'mt-auto'} group flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-destructive/10`}
           aria-label={t('common:navigation.logout')}
           title={t('common:navigation.logout')}
         >
