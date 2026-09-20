@@ -6,12 +6,15 @@ import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTranslation } from 'react-i18next';
+
 import { normalizeInlineCodeFences } from '../../utils/chatFormatting';
 import { copyTextToClipboard } from '../../../../utils/clipboard';
+import { resolveFilePreviewLink } from '../../../file-preview/filePreviewLinks';
 
 type MarkdownProps = {
   children: React.ReactNode;
   className?: string;
+  onFileOpen?: (filePath: string) => void;
 };
 
 type CodeBlockProps = {
@@ -123,11 +126,6 @@ const markdownComponents = {
       {children}
     </blockquote>
   ),
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a href={href} className="text-blue-600 hover:underline dark:text-blue-400" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
   p: ({ children }: { children?: React.ReactNode }) => <div className="mb-2 last:mb-0">{children}</div>,
   table: ({ children }: { children?: React.ReactNode }) => (
     <div className="my-2 overflow-x-auto">
@@ -146,14 +144,36 @@ const markdownComponents = {
 const remarkGfmOptions = { singleTilde: false };
 const remarkGfmPlugin: [typeof remarkGfm, typeof remarkGfmOptions] = [remarkGfm, remarkGfmOptions];
 
-export function Markdown({ children, className }: MarkdownProps) {
+export function Markdown({ children, className, onFileOpen }: MarkdownProps) {
   const content = normalizeInlineCodeFences(String(children ?? ''));
   const remarkPlugins = useMemo(() => [remarkGfmPlugin, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
+  const components = useMemo(() => ({
+    ...markdownComponents,
+    a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
+      const filePath = onFileOpen ? resolveFilePreviewLink(href) : null;
+      return (
+        <a
+          href={href}
+          className="text-blue-600 hover:underline dark:text-blue-400"
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            if (!filePath || !onFileOpen || event.defaultPrevented || event.button !== 0
+              || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            onFileOpen(filePath);
+          }}
+        >
+          {linkChildren}
+        </a>
+      );
+    },
+  }), [onFileOpen]);
 
   return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents as any}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components as any}>
         {content}
       </ReactMarkdown>
     </div>

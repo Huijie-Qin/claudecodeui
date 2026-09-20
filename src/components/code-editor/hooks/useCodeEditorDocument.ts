@@ -4,6 +4,7 @@ import { dispatchSlashCommandsChangedForPath } from '../../chat/utils/slashComma
 import { api } from '../../../utils/api';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
+import { getFilePreviewKind } from '../../file-preview/filePreviewKind';
 
 type UseCodeEditorDocumentParams = {
   file: CodeEditorFile;
@@ -58,7 +59,7 @@ export const useCodeEditorDocument = ({
         setLoadError(null);
 
         // Check if file is binary by extension
-        if (isBinaryFile(file.name)) {
+        if (isBinaryFile(file.name) || getFilePreviewKind(file.name) !== 'editor') {
           setIsBinary(true);
           setLoading(false);
           return;

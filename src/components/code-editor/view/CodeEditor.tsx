@@ -12,6 +12,9 @@ import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageE
 import { getEditorStyles } from '../utils/editorStyles';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
 import { resolveWorkspaceSkillFileLink } from '../../../utils/skillMarkdownLinks';
+import { getFilePreviewKind } from '../../file-preview/filePreviewKind';
+import SpreadsheetPreview from '../../file-preview/SpreadsheetPreview';
+import ImageViewer from '../../file-tree/view/ImageViewer';
 
 import CodeEditorFooter from './subcomponents/CodeEditorFooter';
 import CodeEditorHeader from './subcomponents/CodeEditorHeader';
@@ -292,6 +295,25 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   }
 
   if (isBinary) {
+    const filePreviewKind = getFilePreviewKind(file.name);
+    if (filePreviewKind === 'image' || filePreviewKind === 'spreadsheet') {
+      const preview = filePreviewKind === 'image'
+        ? <ImageViewer variant="inline" file={{ ...file, projectName: file.projectName || projectPath || '' }} onClose={onClose} />
+        : <SpreadsheetPreview file={file} projectPath={projectPath} />;
+      return (
+        <div className={isSidebar ? 'flex h-full min-h-0 w-full flex-col bg-background' : 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4'}>
+          <div className={isSidebar ? 'flex h-full min-h-0 flex-col' : 'flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-background shadow-2xl'}>
+            {headerVariant !== 'tabbed' && (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2">
+                <span className="truncate text-sm font-medium text-foreground">{file.name}</span>
+                <button type="button" className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent" onClick={onClose}>{t('actions.close')}</button>
+              </div>
+            )}
+            <div className="min-h-0 flex-1">{preview}</div>
+          </div>
+        </div>
+      );
+    }
     return (
       <CodeEditorBinaryFile
         file={file}

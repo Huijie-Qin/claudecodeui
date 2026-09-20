@@ -27,6 +27,7 @@ export interface FileTreeImageSelection {
   path: string;
   projectPath?: string;
   projectName: string;
+  workspaceId?: number;
 }
 
 export interface WorkspaceStorageQuota {

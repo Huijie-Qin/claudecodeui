@@ -105,6 +105,7 @@ import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/works
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
 import {parseShowInternalConfigFiles} from './services/workspace-file-visibility.js';
 import {getFileTree} from './services/workspace-file-tree.js';
+import {resolveWorkspaceFileReadPath} from './services/workspace-file-read-path.js';
 import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
@@ -240,7 +241,7 @@ function resolveRuntimeMountedFilePath({ targetPath, tenantCode, userName, works
     return null;
   }
 
-  return resolvedPath;
+  return { resolvedPath, boundaryRoot: runtimeProjectsRoot };
 }
 
 function resolveTenantCode(req) {
@@ -1699,10 +1700,11 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const { resolvedPath, boundaryRoot } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const resolved = await resolveWorkspaceFileReadPath(boundaryRoot, resolvedPath);
 
         const content = await fsPromises.readFile(resolved, { encoding: 'utf8', signal });
-        res.json({ content, path: resolved });
+        res.json({ content, path: resolvedPath });
     } catch (error) {
         if (error.name === 'AbortError' || res.destroyed) return;
         console.error('Error reading file:', error);
@@ -1729,17 +1731,11 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
-
-        // Check if file exists
-        try {
-            await fsPromises.access(resolved);
-        } catch (error) {
-            return res.status(404).json({ error: 'File not found' });
-        }
+        const { resolvedPath, boundaryRoot } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const resolved = await resolveWorkspaceFileReadPath(boundaryRoot, resolvedPath);
 
         // Get file extension and set appropriate content type
-        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+        const mimeType = mime.lookup(resolvedPath) || 'application/octet-stream';
         res.setHeader('Content-Type', mimeType);
 
         // Stream the file
@@ -1893,7 +1889,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
       workspace,
     });
     if (mappedPath) {
-      return { workspace, accessRole, resolvedPath: mappedPath, runtimeMounted: true };
+      return { workspace, accessRole, ...mappedPath, runtimeMounted: true };
     }
 
     const validation = validatePathInProject(workspace.path, targetPath || '');
@@ -1902,7 +1898,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
         error.statusCode = 403;
         throw error;
     }
-    return { workspace, accessRole, resolvedPath: validation.resolved, runtimeMounted: false };
+    return { workspace, accessRole, resolvedPath: validation.resolved, boundaryRoot: workspace.path, runtimeMounted: false };
 }
 
 function createRequestAbortSignal(req, res) {

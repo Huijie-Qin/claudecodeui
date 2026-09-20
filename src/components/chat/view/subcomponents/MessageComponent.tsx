@@ -686,7 +686,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground">
                 Task result
               </summary>
-              <Markdown className="prose prose-sm mt-2 max-w-none dark:prose-invert">
+              <Markdown onFileOpen={onFileOpen} className="prose prose-sm mt-2 max-w-none dark:prose-invert">
                 {message.taskNotification.result}
               </Markdown>
             </details>
@@ -734,7 +734,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               >
                 <div className="flex flex-col">
                   <div className="flex flex-col">
-                    <Markdown className="prose prose-sm max-w-none dark:prose-invert">
+                    <Markdown onFileOpen={onFileOpen} className="prose prose-sm max-w-none dark:prose-invert">
                       {String(message.displayText || '')}
                     </Markdown>
                   </div>
@@ -778,7 +778,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                         </span>
                       </div>
                       <div className="relative text-sm text-foreground/90">
-                        <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
+                        <Markdown onFileOpen={onFileOpen} className="prose prose-sm prose-gray max-w-none dark:prose-invert">
                           {String(message.toolResult.content || '')}
                         </Markdown>
                         {permissionSuggestion && (
@@ -938,7 +938,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               <Reasoning defaultOpen={false}>
                 <ReasoningTrigger />
                 <ReasoningContent>
-                  <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
+                  <Markdown onFileOpen={onFileOpen} className="prose prose-sm prose-gray max-w-none dark:prose-invert">
                     {message.content}
                   </Markdown>
                   <div className="mt-3 flex items-center text-[11px]">
@@ -997,7 +997,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
 
                   // Normal rendering for non-JSON content
                   return message.type === 'assistant' ? (
-                    <Markdown className="prose prose-sm prose-gray max-w-none dark:prose-invert">
+                    <Markdown onFileOpen={onFileOpen} className="prose prose-sm prose-gray max-w-none dark:prose-invert">
                       {content}
                     </Markdown>
                   ) : (

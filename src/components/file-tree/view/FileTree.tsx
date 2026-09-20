@@ -186,6 +186,7 @@ export default function FileTree({
           path: item.path,
           projectPath: selectedProject.path,
           projectName: selectedProject.name,
+          workspaceId: selectedProject.workspaceId,
         });
         return;
       }

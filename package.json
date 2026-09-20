@@ -68,7 +68,11 @@
     "update:platform": "./update-platform.sh",
     "test:ai-usage": "TSX_TSCONFIG_PATH=server/tsconfig.json node --import tsx --test --test-concurrency=1 server/services/ai-usage-*.test.js server/services/ai-session-summary.test.js server/routes/ai-usage.test.js server/routes/admin-ai-usage-roles.test.js",
     "test:ai-usage:ui": "node --import tsx --test src/components/ai-usage/*.test.ts src/components/admin/hook-config/reportFields.test.ts src/components/admin/adminPanelUtils.test.ts",
-    "preview:ai-usage": "node scripts/preview-ai-usage.mjs"
+    "preview:ai-usage": "node scripts/preview-ai-usage.mjs",
+    "test:file-preview": "node --import tsx --test src/components/file-preview/*.test.ts src/features/data-agent-v2/fileEditorTabs.test.ts && node --test server/services/workspace-file-read-path.test.js",
+    "preview:files": "node scripts/preview-files.mjs",
+    "preview:files:e2e": "node scripts/file-preview-e2e-server.mjs",
+    "test:file-preview:api": "node scripts/file-preview-api-e2e.mjs"
   },
   "keywords": [
     "claude code",
@@ -147,7 +151,8 @@
     "tailwind-merge": "^3.3.1",
     "undici": "^6.21.3",
     "web-push": "^3.6.7",
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",

@@ -256,8 +256,8 @@ export const api = {
   agentTemplates: () => authenticatedFetch(withTenantParam('/api/agent-templates')),
   readFile: (projectName, filePath, workspaceId, options = {}) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId), options),
-  readFileBlob: (projectName, filePath, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId)),
+  readFileBlob: (projectName, filePath, workspaceId, options = {}) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId), options),
   saveFile: (projectName, filePath, content, workspaceId) =>
     authenticatedFetch(withTenantParam(`/api/projects/${encodeURIComponent(projectName)}/file`), {
       method: 'PUT',

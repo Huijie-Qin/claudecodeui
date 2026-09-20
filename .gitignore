@@ -152,3 +152,6 @@ tasks/
 # Electron desktop source icons (the generic build/ rule above would hide them)
 !desktop/build/
 !desktop/build/**
+
+# Generated file preview test accounts, logs and downloads
+artifacts/file-preview-e2e/
