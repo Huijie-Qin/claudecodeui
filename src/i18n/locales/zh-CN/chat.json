@@ -1,4 +1,11 @@
 {
+  "hookResultViewer": {
+    "view": "查看结果",
+    "collapse": "收起结果",
+    "loading": "正在加载结果…",
+    "error": "结果加载失败，请收起后重试。",
+    "limit": "仅预览前 100 行或 20 KB，内容已脱敏。"
+  },
   "fork": {
     "action": "分支到新聊天",
     "creating": "正在创建分支…",

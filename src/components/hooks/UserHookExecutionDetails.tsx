@@ -5,6 +5,7 @@ import { FileJson2, Loader2, RefreshCw, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '../../shared/view/ui';
 import { api } from '../../utils/api';
 import { useUiPreferences } from '../../hooks/useUiPreferences';
+import HookResultViewer from './HookResultViewer';
 
 type ExecutionOutput = {
   id: string;
@@ -85,9 +86,7 @@ export default function UserHookExecutionDetails({ workspaceId, hookId, hookName
           {t(`hookExecutionDetails.${execution?.status === 'running' ? 'pending' : 'notRecorded'}`)}
         </p>
       ) : (
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-background p-3 font-mono text-xs leading-5 text-foreground">
-          {JSON.stringify(value, null, 2)}
-        </pre>
+        <div className="p-3"><HookResultViewer value={value} /></div>
       )}
     </section>
   );

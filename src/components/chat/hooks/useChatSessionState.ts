@@ -9,6 +9,8 @@ import type { SessionStore, NormalizedMessage } from '../../../stores/useSession
 import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
 import { normalizedToChatMessages } from './useChatMessages';
+import { useHookChatVisibilityRevision } from '../../hooks/hookChatVisibility';
+import { preserveChatMessageReferences } from '../utils/stableChatMessages';
 import {
   shouldFlushPendingUserMessageToSession,
   shouldShowPendingUserMessageInView,
@@ -167,6 +169,21 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
+  const visibilityRevision = useHookChatVisibilityRevision(selectedProject?.workspaceId);
+  const lastVisibilityRefresh = useRef('');
+  const refreshHistory = sessionStore.refreshFromServer;
+  useEffect(() => {
+    if (!visibilityRevision || !activeSessionId || !selectedProject) return;
+    const key = `${selectedProject.workspaceId}:${activeSessionId}:${visibilityRevision}`;
+    if (lastVisibilityRefresh.current === key) return;
+    lastVisibilityRefresh.current = key;
+    void refreshHistory(activeSessionId, {
+      provider: selectedSession?.__provider || 'claude',
+      projectName: selectedProject.name,
+      projectPath: selectedProject.fullPath,
+      workspaceId: selectedProject.workspaceId,
+    });
+  }, [visibilityRevision, activeSessionId, selectedProject, selectedSession?.__provider, refreshHistory]);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
 
   // Tell the store which session we're viewing so it only re-renders for this one
@@ -204,8 +221,16 @@ export function useChatSessionState({
     if (viewHiddenCount > 0) setViewHiddenCount(0);
   }
 
+  const normalizeMessages = useMemo(() => {
+    let previous: ChatMessage[] = [];
+    return (messages: NormalizedMessage[]) => {
+      previous = preserveChatMessageReferences(previous, normalizedToChatMessages(messages));
+      return previous;
+    };
+  }, [activeSessionId]);
+
   const chatMessages = useMemo(() => {
-    const all = normalizedToChatMessages(storeMessages);
+    const all = normalizeMessages(storeMessages);
     // Show pending messages when no session data exists yet (new session, pre-backend-response)
     if (pendingMessages.length > 0 && shouldShowPendingUserMessageInView({
       selectedSessionId: selectedSession?.id || null,
@@ -216,7 +241,7 @@ export function useChatSessionState({
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
+  }, [normalizeMessages, storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
 
   useEffect(() => {
     if (!initialUserMessage || selectedSession?.id !== initialUserMessage.sessionId) return;

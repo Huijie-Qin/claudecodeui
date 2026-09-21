@@ -1,4 +1,11 @@
 {
+  "hookResultViewer": {
+    "view": "View result",
+    "collapse": "Collapse result",
+    "loading": "Loading result…",
+    "error": "Unable to load result. Collapse and try again.",
+    "limit": "Preview limited to the first 100 lines or 20 KB. Content is redacted."
+  },
   "fork": {
     "action": "Branch to a new chat",
     "creating": "Creating branch…",

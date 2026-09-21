@@ -4,6 +4,8 @@ import { CheckCircle2, Clock3, GitBranch, Loader2, RefreshCcw, Webhook, XCircle 
 
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import HookExecutionProcess from '../../../hooks/HookExecutionProcess';
+import HookResultViewer from '../../../hooks/HookResultViewer';
+import { useHookChatVisibility } from '../../../hooks/hookChatVisibility';
 import type {
   ChatMessage,
   ClaudeProcessDiagnostics,
@@ -20,7 +22,7 @@ import { canForkMessage } from '../../utils/sessionFork';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
-import { useWebSocket } from '../../../../contexts/WebSocketContext';
+import { useWebSocketControls } from '../../../../contexts/WebSocketContext';
 
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
@@ -64,24 +66,6 @@ function redactVisibleSecretText(value: unknown): string {
     .replace(/(Authorization\s*[:=]\s*Bearer\s+)[^\s"'`]+/gi, '$1[REDACTED]')
     .replace(/((?:api[_-]?key|auth[_-]?token|private[_-]?token|user[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]')
     .replace(/([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PRIVATE)[A-Z0-9_]*\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]');
-}
-
-function formatHookActivityValue(value: unknown): string {
-  if (value === undefined) return '';
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-    try {
-      return redactVisibleSecretText(JSON.stringify(JSON.parse(trimmed), null, 2));
-    } catch {
-      return redactVisibleSecretText(trimmed);
-    }
-  }
-  try {
-    return redactVisibleSecretText(JSON.stringify(value, null, 2));
-  } catch {
-    return redactVisibleSecretText(String(value ?? ''));
-  }
 }
 
 function formatHookRecordTimestamp(value: string): string {
@@ -165,7 +149,8 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
 
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onForkMessage, isForking, forkDisabled, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
-  const { sendMessage, isConnected } = useWebSocket();
+  const { sendMessage, isConnected } = useWebSocketControls();
+  const hookVisible = useHookChatVisibility(selectedProject?.workspaceId, message.hookActivity?.hookId);
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -278,7 +263,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     : hookActivity?.followups?.find((followup) => (
         followup.actionType === 'mcp_loop_run' && followup.loopResult !== undefined
       ))?.loopResult;
-  const formattedLoopResult = useMemo(() => formatHookActivityValue(loopResult), [loopResult]);
   const hookActionLabels = {
     call_mcp_tool: t('hookActivity.actions.call_mcp_tool', { defaultValue: 'MCP call' }),
     mcp_loop_run: t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' }),
@@ -300,7 +284,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     sendMessage({ type: 'cancel-mcp-loop', jobId, sessionId });
   };
 
-  if (shouldHideThinkingMessage) {
+  if (shouldHideThinkingMessage || (message.hookActivity && !hookVisible)) {
     return null;
   }
 
@@ -484,9 +468,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'}`}>
                       {t('hookActivity.loopResult', { defaultValue: 'Final result' })}
                     </div>
-                    <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
-                      {formattedLoopResult || t('hookActivity.emptyResult')}
-                    </pre>
+                    <HookResultViewer value={loopResult} />
                   </section>
                 )}
 
@@ -497,7 +479,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       const value = isRecord && result.record
                         ? result.record.data
                         : result.output;
-                      const formattedValue = formatHookActivityValue(value);
                       return (
                         <section
                           key={`${result.actionId}-${result.actionType}`}
@@ -525,9 +506,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                               ) : null}
                             </div>
                           ) : null}
-                          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/75 px-2 py-1.5 text-[11px] leading-relaxed text-foreground/80">
-                            {formattedValue || t('hookActivity.emptyResult')}
-                          </pre>
+                          <HookResultViewer value={value} />
                         </section>
                       );
                     })}

@@ -165,7 +165,15 @@ export function useUiPreferences(storageKey = 'uiPreferences') {
       return;
     }
 
-    localStorage.setItem(storageKey, JSON.stringify(state));
+    // Many Hook cards consume preferences. Mounting a reader must not broadcast
+    // to every other reader (or echo an update received from another instance).
+    const serialized = JSON.stringify(state);
+    try {
+      if (localStorage.getItem(storageKey) === serialized) return;
+      localStorage.setItem(storageKey, serialized);
+    } catch {
+      return;
+    }
 
     window.dispatchEvent(
       new CustomEvent<SyncEventDetail>(SYNC_EVENT, {

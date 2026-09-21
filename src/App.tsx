@@ -7,6 +7,7 @@ import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { TenantProvider } from './contexts/TenantContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import { HookChatVisibilityProvider } from './components/hooks/hookChatVisibility';
 import { PluginsProvider } from './contexts/PluginsContext';
 import AppContent from './components/app/AppContent';
 import AdminPage from './components/admin/AdminPage';
@@ -22,6 +23,7 @@ export default function App() {
         <AuthProvider>
           <TenantProvider>
             <WebSocketProvider>
+              <HookChatVisibilityProvider>
               <PluginsProvider>
                 <TasksSettingsProvider>
                   <TaskMasterProvider>
@@ -40,6 +42,7 @@ export default function App() {
                   </TaskMasterProvider>
                 </TasksSettingsProvider>
               </PluginsProvider>
+              </HookChatVisibilityProvider>
             </WebSocketProvider>
           </TenantProvider>
         </AuthProvider>
