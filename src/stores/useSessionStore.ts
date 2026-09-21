@@ -385,7 +385,9 @@ export function useSessionStore() {
       // Preserve the currently loaded window while a paginated session is
       // refreshed. Omitting the limit here used to reload the entire transcript
       // after every reconnect or external update.
-      const refreshOptions = slot.hasMore
+      // Before the first response, hasMore=false means unknown, not complete:
+      // a session-status refresh can race the initial paginated request.
+      const refreshOptions = slot.fetchedAt === 0 || slot.hasMore
         ? {
             ...opts,
             limit: Math.max(slot.serverMessages.length, 20),
