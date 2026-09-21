@@ -77,6 +77,80 @@ function answer(content: string, id = 'parent-answer'): NormalizedMessage {
   };
 }
 
+function interceptPaginatedHistory(t: TestContext) {
+  installBrowserGlobals(t);
+  const history = Array.from({ length: 100 }, (_, index) => answer(`Answer ${index}`, `answer-${index}`));
+  const requests: Array<{ params: URLSearchParams; reply: () => void }> = [];
+  t.mock.method(globalThis, 'fetch', (url: string) => new Promise<Response>((resolve) => {
+    const params = new URL(url, 'http://localhost').searchParams;
+    requests.push({ params, reply: () => {
+      const limit = Number(params.get('limit') ?? history.length);
+      const end = history.length - Number(params.get('offset') ?? 0);
+      const start = Math.max(0, end - limit);
+      resolve(new Response(JSON.stringify({
+        messages: history.slice(start, end), total: history.length, hasMore: start > 0,
+      })));
+    } });
+  }));
+  return { history, requests };
+}
+
+test('a status refresh before any history load requests only the latest page', async (t) => {
+  const { history, requests } = interceptPaginatedHistory(t);
+  const store = makeStore();
+  const refresh = store.refreshFromServer('session-1');
+  requests[0].reply();
+  await refresh;
+  assert.equal(requests[0].params.get('limit'), '20');
+  assert.deepEqual(store.getMessages('session-1'), history.slice(-20));
+  assert.equal(store.getSessionSlot('session-1')?.hasMore, true);
+});
+
+for (const firstResponse of ['initial', 'refresh'] as const) {
+  test(`entering a session stays paginated when ${firstResponse} responds first`, async (t) => {
+    const { history, requests } = interceptPaginatedHistory(t);
+    const store = makeStore();
+    const initial = store.fetchFromServer('session-1', { limit: 20, offset: 0 });
+    // check-session-status can trigger a refresh before the first page arrives.
+    const refresh = store.refreshFromServer('session-1');
+    const first = firstResponse === 'initial' ? 0 : 1;
+    const pending = [initial, refresh];
+    requests[first].reply();
+    await pending[first];
+    requests[1 - first].reply();
+    await pending[1 - first];
+
+    assert.deepEqual(requests.map(({ params }) => params.get('limit')), ['20', '20']);
+    assert.deepEqual(store.getMessages('session-1'), history.slice(-20));
+    assert.equal(store.getSessionSlot('session-1')?.hasMore, true);
+
+    const older = store.fetchMore('session-1');
+    assert.equal(requests[2].params.get('offset'), '20');
+    requests[2].reply();
+    await older;
+    assert.deepEqual(store.getMessages('session-1'), history.slice(-40));
+
+    const nextRefresh = store.refreshFromServer('session-1');
+    assert.equal(requests[3].params.get('limit'), '40');
+    requests[3].reply();
+    await nextRefresh;
+    assert.deepEqual(store.getMessages('session-1'), history.slice(-40));
+  });
+}
+
+test('explicit full-history loads remain complete after a status refresh', async (t) => {
+  const { history, requests } = interceptPaginatedHistory(t);
+  const store = makeStore();
+  const initial = store.fetchFromServer('session-1', { limit: null });
+  requests[0].reply();
+  await initial;
+  const refresh = store.refreshFromServer('session-1');
+  requests[1].reply();
+  await refresh;
+  assert.equal(requests[1].params.has('limit'), false);
+  assert.deepEqual(store.getMessages('session-1'), history);
+});
+
 function displayedText(store: SessionStore) {
   return normalizedToChatMessages(store.getMessages('session-1'))
     .filter(message => message.type === 'assistant' && !message.isToolUse)
