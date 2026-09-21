@@ -544,7 +544,7 @@ export function createAdminRouter(
       tenantId,
       userId,
       role,
-      permission: body?.permission || 'view',
+      permission: body?.permission ?? 'edit',
       status: body?.status || 'active',
     });
     const defaultWorkspace = membership.status === 'active'

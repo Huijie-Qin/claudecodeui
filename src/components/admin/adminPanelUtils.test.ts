@@ -15,18 +15,20 @@ test('isSystemAdminUser accepts numeric and boolean admin flags', () => {
   assert.equal(isSystemAdminUser(null), false);
 });
 
-test('permission-only grants omit role so existing tenant administrators are preserved', () => {
-  assert.deepEqual(buildTenantMembershipPayload('view'), {
-    permission: 'view',
+test('single and batch grants default to edit and preserve the existing role unless selected', () => {
+  assert.deepEqual(buildTenantMembershipPayload(), {
+    permission: 'edit',
     status: 'active',
   });
 });
 
 test('membership payload only changes a role when explicitly selected', () => {
-  assert.deepEqual(buildTenantMembershipPayload('view', 'tenant_admin'), {
-    role: 'tenant_admin', permission: 'view', status: 'active',
+  assert.deepEqual(buildTenantMembershipPayload('tenant_admin'), {
+    role: 'tenant_admin', permission: 'edit', status: 'active',
   });
-  assert.equal(buildTenantMembershipPayload('edit', 'member').role, 'member');
+  assert.deepEqual(buildTenantMembershipPayload('member'), {
+    role: 'member', permission: 'edit', status: 'active',
+  });
   assert.equal(isSystemAdminUser({ role: 'tenant_admin' }), false);
 });
 

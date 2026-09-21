@@ -10,10 +10,10 @@ export function isSystemAdminUser(user: SystemAdminCandidate): boolean {
   return user?.is_system_admin === 1 || user?.is_system_admin === true;
 }
 
-export function buildTenantMembershipPayload(permission: TenantPermission, role?: TenantRole) {
+export function buildTenantMembershipPayload(role?: TenantRole) {
   return {
     ...(role ? { role } : {}),
-    permission,
+    permission: 'edit' as const,
     status: 'active',
   };
 }
