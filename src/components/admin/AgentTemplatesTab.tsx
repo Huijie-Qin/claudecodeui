@@ -7,7 +7,6 @@ import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/
 import { cn } from '../../lib/utils';
 import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTools';
 import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
-import { tenantTemplateSkillCandidates } from '../tenant-management/tenantTemplateCatalog';
 
 import AgentTemplateSqlCheckSettings from './AgentTemplateSqlCheckSettings';
 import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';

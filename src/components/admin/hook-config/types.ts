@@ -45,6 +45,7 @@ export type HookScriptOutput = {
 };
 
 export type HookExtensionLogic = {
+  failClosed?: boolean;
   language: HookScriptLanguage;
   code: string;
   outputs: HookScriptOutput[];
