@@ -1044,6 +1044,7 @@ export const api = {
   },
 
   workspaceMcpTools: {
+    insertionCatalog: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/insertion-catalog`)),
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools`)),
     install: (workspaceId, presetId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/install`), {

@@ -49,7 +49,9 @@ import gitRoutes from './routes/git.js';
 import codehubRoutes from './routes/codehub.js';
 import authRoutes from './routes/auth.js';
 import tenantsRoutes from './routes/tenants.js';
-import adminRoutes from './routes/admin.js';
+import adminRoutes, { requireSystemAdmin } from './routes/admin.js';
+import { createSkillSnippetsRouter } from './routes/skill-snippets.js';
+import { createSkillSnippetService } from './services/skill-snippets.js';
 import tenantManagementRoutes from './routes/tenant-management.js';
 import {createAiUsageRouter} from './routes/ai-usage.js';
 import {createAiUsageService} from './services/ai-usage-scheduler.js';
@@ -739,6 +741,7 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 
 // Multitenancy routes (protected)
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
+app.use('/api', createSkillSnippetsRouter({ service: createSkillSnippetService(db), requireSystemAdmin, authenticateToken }));
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/tenant-management', authenticateToken, tenantManagementRoutes);
 const aiUsageService = createAiUsageService({ database: db });

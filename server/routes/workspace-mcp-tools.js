@@ -18,6 +18,32 @@ export function createWorkspaceMcpToolsRouter({
   const router = express.Router();
   router.use(tenantMiddleware);
 
+  router.get('/:workspaceId/mcp-tools/insertion-catalog', async (req, res) => {
+    try {
+      const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });
+      const catalog = await mcpToolsService.listWorkspaceMcpPresetCatalog({
+        tenantId: workspace.tenant_id,
+        workspaceId: workspace.id,
+        userId: getRequestUserId(req),
+        workspacePath: workspace.path,
+        accessRole,
+        refreshProbes: false,
+      });
+      const tools = catalog.presets.filter((preset) => preset.installed).flatMap((preset) => {
+        const allowed = new Set(preset.allowedToolNames || []);
+        return (preset.tools || []).filter((tool) => allowed.has(tool.name)).map((tool) => ({
+          name: `mcp__${preset.name}__${tool.name}`,
+          description: tool.description || '',
+          serverName: preset.name,
+          serverDisplayName: preset.displayName || preset.name,
+        }));
+      });
+      return res.set('Cache-Control', 'no-store').json({ workspaceId: workspace.id, tools });
+    } catch (error) {
+      return handleWorkspaceError(res, error);
+    }
+  });
+
   router.get('/:workspaceId/mcp-tools', async (req, res) => {
     try {
       const { workspace, accessRole } = resolveWorkspace(req, access, { requireEdit: false });

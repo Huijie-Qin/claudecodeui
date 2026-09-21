@@ -5,6 +5,7 @@ import multer from 'multer';
 
 import { aiMrSubmissionsDb, userDb } from '../database/db.js';
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { requireSystemAdmin } from '../middleware/system-admin.js';
 import { ensureDefaultRootWorkspace } from '../services/default-root-workspace.js';
 import { mcpPresetService } from '../services/mcp-presets.js';
 import { skillPresetService } from '../services/skill-presets.js';
@@ -38,13 +39,6 @@ const ANTHROPIC_MODEL_ENV_NAME = 'ANTHROPIC_MODEL';
 const ANTHROPIC_AUTH_TOKEN_ENV_NAME = 'ANTHROPIC_AUTH_TOKEN';
 const DAS_ENV_NAME = 'DAS';
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function requireSystemAdmin(req, res, next) {
-  if (req.user?.is_system_admin !== 1 && req.user?.is_system_admin !== true) {
-    return res.status(403).json({ error: 'System admin access required' });
-  }
-  return next();
-}
 
 function sendRouteError(res, error, fallbackMessage) {
   const message = error instanceof Error ? error.message : fallbackMessage;
