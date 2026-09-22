@@ -4,10 +4,11 @@ import { workspaceAccess } from '../workspace-access.js';
 import { claudeEnvService } from '../claude-env.js';
 import { createSkillSnippetService } from '../skill-snippets.js';
 import { createEvaluationRuntime } from '../skill-evals/runtime.js';
-import { fail, hash } from '../skill-evals/contracts.js';
+import { fail } from '../skill-evals/contracts.js';
 import { rebindSkillInvocations } from '../skill-evals/invocation-eligibility.js';
 
 import { createSkillCreator } from './creator.js';
+import { createConversationRegistrar } from './conversations.js';
 import { createSkillCreationService } from './service.js';
 
 const snippets = createSkillSnippetService(db);
@@ -16,19 +17,7 @@ const runtime = createEvaluationRuntime({ resolveEnvironment: ({ tenantId, userI
 }).env });
 export const skillCreationService = createSkillCreationService({ db, creator: createSkillCreator({ modelCall: runtime.modelCall }),
   listSnippets: () => snippets.list(), authorize: (scope, requireEdit) => workspaceAccess.requireWorkspace({ ...scope, requireEdit }),
-  registerConversation: (job) => {
-    workspaceAccess.requireWorkspace({ ...job, requireEdit: false });
-    const providerSessionId = job.sessionId || `skill-creation:${hash(JSON.stringify([job.tenantId, job.workspaceId, job.userId, job.provider, job.conversationKey])).slice(0, 32)}`;
-    const record = db.prepare('SELECT status FROM session_index WHERE tenant_id=? AND workspace_id=? AND user_id=? AND provider=? AND provider_session_id=?')
-      .get(job.tenantId, job.workspaceId, job.userId, job.provider, providerSessionId);
-    if (record?.status === 'deleted') return null;
-    const existing = multitenancyDb.sessions.findOwnedSession({ ...job, providerSessionId });
-    const metadata = existing?.metadata_json ? JSON.parse(existing.metadata_json) : {};
-    if (!existing || !metadata.skillCreation) {
-      multitenancyDb.sessions.upsertSession({ ...job, providerSessionId, summary: existing?.summary || `创建技能：${job.description.trim().slice(0, 60)}`, metadata: { ...metadata, skillCreation: true } });
-    }
-    return providerSessionId;
-  },
+  registerConversation: createConversationRegistrar({ db, sessions: multitenancyDb.sessions, access: workspaceAccess }),
   onConversationBound: (job, sessionId) => {
     if (job.sessionId === sessionId) return;
     if (sessionId.startsWith('pending:')) {
