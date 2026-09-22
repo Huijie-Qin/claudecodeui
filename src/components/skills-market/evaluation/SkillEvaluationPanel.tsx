@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, Play, Square, Wand2, X } from 'lucide-react';
 
 import { api } from '../../../utils/api';
+import { createClientMessageId as createRequestId } from '../../../utils/clientMessageId';
 
 import EvaluationComparison from './EvaluationComparison';
 import EvaluationRunDetail from './EvaluationRunDetail';
@@ -104,7 +105,7 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
     if (!data) return;
     await act(async () => {
       const result = await payload(await api.skillEvaluations.start(workspaceId, name, {
-        mode, requestId: crypto.randomUUID(), expectedContentHash: data.contentHash, expectedEvalsRevision: data.revision,
+        mode, requestId: createRequestId(), expectedContentHash: data.contentHash, expectedEvalsRevision: data.revision,
         ...(mode === 'optimize' ? { maxIterations: Number(maxIterations) } : {}),
       }));
       receive(result.job); setOptimizeOpen(false);

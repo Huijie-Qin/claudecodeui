@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../utils/api';
+import { createClientMessageId as createRequestId } from '../../../utils/clientMessageId';
 import { useTenant } from '../../../contexts/TenantContext';
 import { useAuth } from '../../auth/context/AuthContext';
 import { dispatchProjectFilesChanged } from '../../file-tree/utils/fileTreeEvents';
@@ -40,7 +41,7 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
   const storageKey = `skill-creation:${user?.id}:${currentTenant?.id}:${project?.workspaceId}:${provider}`;
   const [, refreshIdentity] = useState(0);
   let draftId = stored(`${storageKey}:draft`);
-  if (!draftId) { draftId = `draft-${crypto.randomUUID()}`; stored(`${storageKey}:draft`, draftId); }
+  if (!draftId) { draftId = `draft-${createRequestId()}`; stored(`${storageKey}:draft`, draftId); }
   const adoptedDraft = concreteSession ? stored(`${storageKey}:adopt:${concreteSession}`) : null;
   const conversationKey = `${provider}:${adoptedDraft || concreteSession || draftId}`;
   const key = `${user?.id}:${currentTenant?.id}:${project?.workspaceId}:${conversationKey}`;
@@ -95,7 +96,7 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
   }, [key, project?.workspaceId, conversationKey, adoptedDraft, concreteSession, storageKey, provider]);
   async function submit() {
     if (busy || !draft.description.trim() || !project?.workspaceId || project.accessRole === 'view' || pending.current.has(`send:${key}`)) return;
-    const description = draft.description, requestId = draft.sent === description && draft.requestId ? draft.requestId : crypto.randomUUID();
+    const description = draft.description, requestId = draft.sent === description && draft.requestId ? draft.requestId : createRequestId();
     patch({ requestId, sent: description }); pending.current.add(`send:${key}`); setSendingKey(key); setErrorView({ key, text: '' });
     try {
       const { job } = await payload(await api.skillCreation.start(project.workspaceId, { intent: 'create-skill', description, requestId, conversationKey, sessionId: concreteSession, provider }));

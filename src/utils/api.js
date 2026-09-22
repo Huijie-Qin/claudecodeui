@@ -2,6 +2,8 @@ import { IS_PLATFORM, SQL_CHECK_BASE_URL } from "../constants/config";
 import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
 import { AUTH_TOKEN_REFRESHED_EVENT } from "../components/auth/constants";
 
+import { createClientMessageId as createRequestId } from "./clientMessageId";
+
 const RETRYABLE_HTTP_STATUSES = new Set([502, 503, 504]);
 // Cover short backend restarts as well as momentary proxy resets. Only
 // idempotent GET/HEAD requests use these retries.
@@ -922,7 +924,7 @@ export const api = {
     cases: (workspaceId, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases`)),
     saveCase: (workspaceId, name, caseId, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases${caseId ? `/${caseId}` : ''}`), { method: caseId ? 'PATCH' : 'POST', body: JSON.stringify(payload) }),
     deleteCase: (workspaceId, name, caseId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/${caseId}`), { method: 'DELETE', body: JSON.stringify({ expectedRevision }) }),
-    generate: (workspaceId, name, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-case-jobs`), { method: 'POST', body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }) }),
+    generate: (workspaceId, name, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-case-jobs`), { method: 'POST', body: JSON.stringify({ expectedRevision, requestId: createRequestId() }) }),
     job: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}`)),
     upload: (workspaceId, name, formData) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-inputs`), { method: 'POST', body: formData }),
     start: (workspaceId, name, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/evaluations`), { method: 'POST', body: JSON.stringify(payload) }),
