@@ -46,6 +46,7 @@ interface SlashCommand {
 }
 
 interface ChatComposerProps {
+  skillCreation?: { mode: boolean; busy: boolean; disabled: boolean; onToggle: () => void };
   pendingPermissionRequests: PendingPermissionRequest[];
   handlePermissionDecision: (
     requestIds: string | string[],
@@ -106,6 +107,7 @@ interface ChatComposerProps {
 }
 
 export default function ChatComposer({
+  skillCreation,
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
@@ -157,6 +159,7 @@ export default function ChatComposer({
   scheduledTasksDisabledReason,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
+  const { t: tc } = useTranslation('common');
   const textareaRect = isCommandMenuOpen ? textareaRef.current?.getBoundingClientRect() : undefined;
   const commandMenuPosition = {
     top: textareaRect ? Math.max(16, textareaRect.top - 316) : 0,
@@ -311,6 +314,7 @@ export default function ChatComposer({
 
             <PromptInputTextarea
               ref={textareaRef}
+              readOnly={skillCreation?.busy}
               value={input}
               onChange={onInputChange}
               onClick={onTextareaClick}
@@ -326,14 +330,14 @@ export default function ChatComposer({
 
         {onOpenCapabilities && (
           <div className="da-capability-strip">
-            <button
+            {onOpenCapabilities && <button
               type="button"
               className="da-capability-chip"
               onClick={onOpenCapabilities}
             >
               <SparklesIcon size={12} />
               添加能力
-            </button>
+            </button>}
           </div>
         )}
 
@@ -366,6 +370,19 @@ export default function ChatComposer({
                 <Clock3Icon />
               </PromptInputButton>
             ) : null}
+
+            {skillCreation && (
+              <PromptInputButton
+                tooltip={{ content: skillCreation.disabled ? tc('skillCreation.readonly') : tc('skillCreation.title') }}
+                aria-label={tc('skillCreation.title')}
+                aria-pressed={skillCreation.mode}
+                disabled={skillCreation.disabled || skillCreation.busy || isLoading}
+                onClick={skillCreation.onToggle}
+                className={skillCreation.mode ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : undefined}
+              >
+                <SparklesIcon />
+              </PromptInputButton>
+            )}
 
             {hasInput && (
               <PromptInputButton

@@ -909,6 +909,13 @@ export const api = {
       }),
   },
 
+  skillCreation: {
+    bind: (workspaceId, input) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs/bind-session`), { method: 'POST', body: JSON.stringify(input) }),
+    start: (workspaceId, input) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs`), { method: 'POST', body: JSON.stringify(input) }),
+    list: (workspaceId, conversationKey) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs?conversationKey=${encodeURIComponent(conversationKey)}`)),
+    cancel: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs/${jobId}/cancel`), { method: 'POST' }),
+  },
+
   skillEvaluations: {
     invocation: (workspaceId, messageId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-invocations?messageId=${encodeURIComponent(messageId)}`)),
     saveInvocation: (workspaceId, name, invocationId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/from-invocation`), { method: 'POST', body: JSON.stringify({ invocationId, expectedRevision }) }),

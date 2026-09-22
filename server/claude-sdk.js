@@ -1667,7 +1667,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     try {
       if (/^\/[a-zA-Z0-9_-]+\s/.test(displayCommand)) {
         const { beginSkillInvocation } = await import('./services/skill-evals/invocations.js');
-        skillInvocation = await beginSkillInvocation(runtimeOptions, displayCommand);
+        skillInvocation = await beginSkillInvocation(runtimeOptions, displayCommand,
+          () => capturedSessionId || sessionId || pendingProviderSessionId);
       }
     } catch { /* Non-reproducible or unauthorized invocations have no save action. */ }
     persistUserPromptMessage({

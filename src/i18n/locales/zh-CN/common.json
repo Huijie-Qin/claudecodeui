@@ -597,7 +597,28 @@
       "closeSidebar": "关闭侧边栏"
     }
   },
+  "skillCreation": {
+    "emptyTitle": "描述需求，创建技能",
+    "emptyDescription": "告诉 DataAgent 这个技能用于什么场景、会收到什么输入、希望得到什么结果。名称和保存会自动完成。",
+    "title": "技能创建",
+    "placeholder": "请描述你想创建的技能：用于什么场景、提供哪些输入、希望得到什么结果…",
+    "completed": "已创建技能 **{{name}}**。\n\n保存位置：`{{path}}`\n\n可以在“我的技能”中查看，或使用 `/{{name}} 任务描述` 调用。",
+    "references": "参考了以下公共片段：",
+    "noReferences": "未使用公共片段，已根据你的描述生成。",
+    "readonly": "需要工作区编辑权限才能创建技能。",
+    "status": {
+      "queued": "正在准备创建技能…",
+      "selecting": "正在选择与需求相关的公共片段…",
+      "generating": "正在生成技能内容…",
+      "saving": "正在校验并保存技能…",
+      "cancelling": "正在停止创建…",
+      "cancelled": "已停止创建，描述已保留，可以修改后重试。",
+      "failed": "创建未完成，描述已保留，可以重试。",
+      "completed": "技能已创建。"
+    }
+  },
   "skillEvaluation": {
+    "comparison": {"swipe": "左右滑动查看优化前后的结果", "title": "优化前后对比", "after": "优化后", "pending": "尚未开始后测。完成优化后，这里会显示本次后测结果。"},
     "title": "技能测评",
     "filesTab": "文件",
     "unsaved": "当前文件尚未保存，测评将使用已保存内容。是否继续？",

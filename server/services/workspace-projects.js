@@ -106,6 +106,10 @@ export function resolveCloneDestinationPath({
   return path.join(workspaceRootPath, normalizedRepoName);
 }
 
+function hasSkillCreationHistory(session) {
+  try { return JSON.parse(session.metadata_json || '{}').skillCreation === true; } catch { return false; }
+}
+
 function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
   const mapped = {
     id: session.provider_session_id,
@@ -138,7 +142,7 @@ export function mapWorkspaceRowsToProjects(rows, {
       userId,
     }).filter((session) => (
       !String(session.provider_session_id || '').startsWith('scheduled-task-')
-      && !String(session.provider_session_id || '').startsWith('pending:')
+      && (!String(session.provider_session_id || '').startsWith('pending:') || hasSkillCreationHistory(session))
     ));
     const scheduledTasks = listScheduledTasks({
       tenantId,

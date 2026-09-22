@@ -13,6 +13,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useChatSessionFork } from '../hooks/useChatSessionFork';
+import { useSkillCreation } from '../hooks/useSkillCreation';
 import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
@@ -329,6 +330,17 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
+  const creation = useSkillCreation({ project: selectedProject, sessionId: selectedSession?.id || currentSessionId, provider, input, setInput, onConversationReady: (id) => { setCurrentSessionId(id); onNavigateToSession?.(id); } });
+  const combinedMessages = useMemo(() => [...chatMessages, ...creation.messages].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()), [chatMessages, creation.messages]);
+  const combinedVisible = useMemo(() => [...visibleMessages, ...creation.messages].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()), [visibleMessages, creation.messages]);
+
+  useEffect(() => {
+    if (!isUserScrolledUp && creation.messages.length) {
+      const timer = setTimeout(scrollToBottom, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [creation.messages, isUserScrolledUp, scrollToBottom]);
+
   const getCurrentConcreteSessionId = useCallback(() => {
     const providerVal = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const reconnectProvider = (selectedSession?.__provider || providerVal) as LLMProvider;
@@ -408,6 +420,7 @@ function ChatInterface({
     onSessionProcessing,
     onSessionNotProcessing,
     onReplaceTemporarySession,
+    onSessionAdopted: creation.adoptSession,
     onNavigateToSession,
     onWebSocketReconnect: handleWebSocketReconnect,
     addMessage,
@@ -631,11 +644,12 @@ function ChatInterface({
             </div>
           )}
           <ChatMessagesPane
+            creationMode={creation.mode}
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
           onTouchMove={handleScroll}
           isLoadingSessionMessages={isLoadingSessionMessages}
-          chatMessages={chatMessages}
+          chatMessages={combinedMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
@@ -657,7 +671,7 @@ function ChatInterface({
           hasMoreMessages={hasMoreMessages}
           totalMessages={totalMessages}
           sessionMessagesCount={chatMessages.length}
-          visibleMessages={visibleMessages}
+          visibleMessages={combinedVisible}
           allMessagesLoaded={allMessagesLoaded}
           createDiff={createDiff}
           onFileOpen={onFileOpen}
@@ -699,14 +713,16 @@ function ChatInterface({
             </div>
           )}
 
+          {creation.error && <div role="alert" className="px-4 py-2 text-sm text-red-600">{creation.error}</div>}
           <ChatComposer
+          skillCreation={{ mode: creation.mode, busy: creation.busy, disabled: !selectedProject.workspaceId || selectedProject.accessRole === 'view', onToggle: creation.toggle }}
           pendingPermissionRequests={mainPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
-          claudeStatus={claudeStatus}
-          isLoading={isLoading}
+          claudeStatus={creation.busy ? null : claudeStatus}
+          isLoading={isLoading || creation.busy}
           loadingStartedAt={loadingStartedAt}
-          onAbortSession={handleAbortSession}
+          onAbortSession={creation.busy ? () => void creation.cancel() : handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}
           onModeSwitch={cyclePermissionMode}
@@ -716,12 +732,12 @@ function ChatInterface({
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
           onOpenCapabilities={onOpenCapabilities}
-          hasInput={Boolean(input.trim())}
-          onClearInput={handleClearInput}
+          hasInput={!creation.busy && Boolean((creation.mode ? creation.description : input).trim())}
+          onClearInput={creation.mode ? () => creation.change('') : handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
           hasMessages={chatMessages.length > 0}
           onScrollToBottom={scrollToBottomAndReset}
-          onSubmit={handleSubmit}
+          onSubmit={creation.mode ? (event) => { event.preventDefault(); if (!isLoading) void creation.submit(); } : handleSubmit}
           isDragActive={isDragActive}
           attachedImages={attachedImages}
           onRemoveImage={(index) =>
@@ -731,7 +747,7 @@ function ChatInterface({
           }
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
-          showFileDropdown={showFileDropdown}
+          showFileDropdown={!creation.mode && showFileDropdown}
           filteredFiles={filteredFiles}
           selectedFileIndex={selectedFileIndex}
           onSelectFile={selectFile}
@@ -739,22 +755,26 @@ function ChatInterface({
           selectedCommandIndex={selectedCommandIndex}
           onCommandSelect={handleCommandSelect}
           onCloseCommandMenu={resetCommandMenuState}
-          isCommandMenuOpen={showCommandMenu}
+          isCommandMenuOpen={!creation.mode && showCommandMenu}
           frequentCommands={commandQuery ? [] : frequentCommands}
           getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
           inputHighlightRef={inputHighlightRef}
           renderInputWithMentions={renderInputWithMentions}
           textareaRef={textareaRef}
-          input={input}
-          onInputChange={handleInputChange}
+          input={creation.mode ? creation.description : input}
+          onInputChange={creation.mode ? (event) => creation.change(event.target.value) : handleInputChange}
           onTextareaClick={handleTextareaClick}
-          onTextareaKeyDown={handleKeyDown}
+          onTextareaKeyDown={creation.mode ? (event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey && ((event.ctrlKey || event.metaKey) || !sendByCtrlEnter)) {
+              event.preventDefault(); if (!isLoading) void creation.submit();
+            }
+          } : handleKeyDown}
           onTextareaPaste={handlePaste}
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
           onInputFocusChange={handleInputFocusChange}
           placeholder={
-            isLoading && provider === 'claude'
+            creation.mode ? t('skillCreation.placeholder', { ns: 'common' }) : isLoading && provider === 'claude'
               ? t('input.supplementPlaceholder', {
                   defaultValue: 'Add supplemental information while Claude is working...',
                 })

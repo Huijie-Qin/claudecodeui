@@ -18,7 +18,8 @@ type Event = CaseReport['evidence']['events'][number];
 const button = 'inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent disabled:opacity-50';
 const markdown = 'prose prose-sm prose-gray min-w-0 max-w-none break-words dark:prose-invert [overflow-wrap:anywhere] prose-pre:max-w-full prose-pre:overflow-x-auto';
 
-export default function EvaluationRunDetail({ workspaceId, job, caseId, round, canCancel, busy, onCancel, onRound, onClose }: {
+export default function EvaluationRunDetail({ workspaceId, job, caseId, round, canCancel, busy, onCancel, onRound, onClose, embedded = false, initial = false, onExpected }: {
+  embedded?: boolean; initial?: boolean; onExpected?: (text: string) => void;
   workspaceId: number; job: EvaluationJob; caseId: number; round: number; canCancel: boolean; busy: boolean;
   onCancel: () => void; onRound: (round: number) => void; onClose: () => void;
 }) {
@@ -37,13 +38,15 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
   const targetId = (ref: string) => `evaluation-${job.id}-${round}-${caseId}-${ref}`;
   useEffect(() => {
     mounted.current = true;
+    if (embedded) return () => { mounted.current = false; };
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { mounted.current = false; document.body.style.overflow = overflow; if (previous?.isConnected) previous.focus(); };
-  }, []);
+  }, [embedded]);
   useEffect(() => {
+    if (embedded && !preview) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault(); event.stopPropagation();
@@ -51,7 +54,7 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
     };
     document.addEventListener('keydown', escape, true);
     return () => document.removeEventListener('keydown', escape, true);
-  }, [preview]);
+  }, [preview, embedded]);
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -66,7 +69,7 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
           if (response.status === 404 && isActive(currentJob.current)) { setError(''); }
           else { again = response.status >= 500; throw new Error(value.error || value.message || `HTTP ${response.status}`); }
         } else {
-          setReport(value); setError('');
+          setReport(value); setError(''); onExpected?.(value.testCase.expected_output);
           again = value.status === 'running';
         }
       } catch (e) { if (!disposed) setError((e as Error).message); }
@@ -85,7 +88,7 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
     return () => clearInterval(timer);
   }, [running]);
   useEffect(() => {
-    if (follow.current) bottom.current?.scrollIntoView({ block: 'end' });
+    if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [report?.evidence.events.length, report?.status, report?.phase, report?.evidence.artifacts.length]);
   useEffect(() => {
     if (preview) dialog.current?.querySelector('[data-artifact-preview]')?.scrollIntoView({ block: 'nearest' });
@@ -168,9 +171,8 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
   }
   const elapsed = report?.startedAt ? Math.max(0, Math.floor(((report.completedAt ? Date.parse(report.completedAt) : clock) - Date.parse(report.startedAt)) / 1000)) : null;
   const references = new Set([...events.map((e) => e.id), ...(report?.evidence.artifacts || []).map((a) => `artifact:${a.name}`), ...(report?.testCase.files || []).map((f) => `input:${f}`)]);
-  return createPortal(<div className="fixed inset-0 z-[10050] flex justify-end bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div ref={dialog} role="dialog" aria-modal="true" aria-label={tr('trace.title')} className="flex h-full w-full min-w-0 max-w-3xl flex-col border-l border-border bg-background text-foreground shadow-2xl" onKeyDown={(e) => {
-      if (e.key === 'Tab') {
+  const panel = <div ref={dialog} role={embedded ? "region" : "dialog"} aria-modal={embedded ? undefined : true} aria-label={embedded ? tr(initial ? 'before' : 'after', { round }) : tr('trace.title')} className={`flex h-full w-full min-w-0 flex-col border-l border-border bg-background text-foreground ${embedded ? '' : 'max-w-3xl shadow-2xl'}`} onKeyDown={(e) => {
+      if (!embedded && e.key === 'Tab') {
         const elements = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select, summary, a[href], [tabindex="0"]') || []).filter((el) => el.getClientRects().length);
         const first = elements[0], last = elements.at(-1);
         if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
@@ -178,12 +180,12 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
       }
     }}>
       <header className="shrink-0 space-y-3 border-b border-border px-4 py-4 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-semibold">{tr('trace.title')} · #{caseId}</h2><div className="ml-auto flex shrink-0 gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-semibold">{embedded ? tr(initial ? 'before' : 'after', { round }) : `${tr('trace.title')} · #${caseId}`} </h2><div className="ml-auto flex shrink-0 gap-2">
           {canCancel && <button type="button" className={button} disabled={busy || job.status === 'cancelling'} onClick={onCancel}><Square className="h-4 w-4" />{tr('trace.stopRun')}</button>}
-          <button type="button" className={button} aria-label={tr('close')} onClick={onClose}><X className="h-4 w-4" /></button>
+          {!embedded && <button type="button" className={button} aria-label={tr('close')} onClick={onClose}><X className="h-4 w-4" /></button>}
         </div></div>
-        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span role="status" className="inline-flex items-center gap-2">{running && <Loader2 className="h-3 w-3 animate-spin" />}{tr(`states.${status}`)}{running && ` · ${tr(`trace.${report?.phase === 'grading' ? 'grading' : 'executing'}`)}`}</span>{elapsed !== null && <span>{tr('trace.elapsed', { seconds: elapsed })}</span>}
-          <label className="ml-auto">{tr('round')} <select aria-label={tr('round')} className="min-h-8 max-w-full rounded-md border border-border bg-background py-1 pl-2 pr-8 text-xs" value={round} onChange={(e) => onRound(Number(e.target.value))}>{job.rounds.map((r) => <option key={r.round} value={r.round} disabled={!r.cases.some((c) => c.caseId === caseId && c.status !== 'not_run')}>{r.round === 0 ? tr('before') : tr('after', { round: r.round })}</option>)}</select></label>
+        <div className="flex min-h-8 flex-wrap items-center gap-3 text-xs text-muted-foreground"><span role="status" className="inline-flex items-center gap-2">{running && <Loader2 className="h-3 w-3 animate-spin" />}{tr(`states.${status}`)}{running && ` · ${tr(`trace.${report?.phase === 'grading' ? 'grading' : 'executing'}`)}`}</span>{elapsed !== null && <span>{tr('trace.elapsed', { seconds: elapsed })}</span>}
+          {!initial && <label className="ml-auto">{tr('round')} <select aria-label={tr('round')} className="min-h-8 max-w-full rounded-md border border-border bg-background py-1 pl-2 pr-8 text-xs" value={round} onChange={(e) => onRound(Number(e.target.value))}>{job.rounds.filter((r) => !embedded || r.round > 0).map((r) => <option key={r.round} value={r.round} disabled={!r.cases.some((c) => c.caseId === caseId && c.status !== 'not_run')}>{r.round === 0 ? tr('before') : tr('after', { round: r.round })}</option>)}</select></label>}
         </div>
       </header>
       {error && <div role="alert" className="shrink-0 border-b border-border bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">{error}</div>}
@@ -193,7 +195,7 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
       }}>
         <div className="min-w-0 space-y-5 px-4 py-5 sm:px-6">
           {!report ? <p className="py-10 text-center text-sm text-muted-foreground">{!error && tr('loading')}</p> : <>
-            <details className="rounded-lg bg-muted/40 p-3 text-sm"><summary className="cursor-pointer font-medium">{tr('expected')}</summary><p className="mt-3 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{report.testCase.expected_output}</p></details>
+            {!embedded && <details className="rounded-lg bg-muted/40 p-3 text-sm"><summary className="cursor-pointer font-medium">{tr('expected')}</summary><p className="mt-3 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{report.testCase.expected_output}</p></details>}
             {(report.testCase.files || []).map((file) => <div key={file} tabIndex={-1} id={targetId(`input:${file}`)} className={`break-all rounded-lg border border-border p-3 text-sm ${mark(`input:${file}`)}`}>{tr('trace.input')} · {file}</div>)}
             {!events.some((e) => e.role === 'user') && eventView({ id: 'scenario', seq: 0, role: 'user', kind: 'text', text: report.testCase.prompt })}
             <div className="space-y-3 sm:space-y-4">{events.filter((e) => !e.parent || !byId.has(e.parent)).map((e, i, siblings) => eventView(e, 0, siblings[i - 1]))}</div>
@@ -206,7 +208,7 @@ export default function EvaluationRunDetail({ workspaceId, job, caseId, round, c
           <div ref={bottom} />
         </div>
       </div>
-      {!following && <div className="flex shrink-0 justify-center border-t border-border p-2"><button type="button" className={button} onClick={() => { follow.current = true; setFollowing(true); bottom.current?.scrollIntoView({ block: 'end' }); }}><ArrowDown className="h-4 w-4" />{tr('trace.latest')}</button></div>}
-    </div>
-  </div>, document.body);
+      {!following && <div className="flex shrink-0 justify-center border-t border-border p-2"><button type="button" className={button} onClick={() => { follow.current = true; setFollowing(true); if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight; }}><ArrowDown className="h-4 w-4" />{tr('trace.latest')}</button></div>}
+    </div>;
+  return embedded ? panel : createPortal(<div className="fixed inset-0 z-[10050] flex justify-end bg-black/40" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>{panel}</div>, document.body);
 }

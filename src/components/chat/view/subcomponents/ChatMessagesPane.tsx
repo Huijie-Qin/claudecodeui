@@ -10,6 +10,7 @@ import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 
 interface ChatMessagesPaneProps {
+  creationMode?: boolean;
   scrollContainerRef: RefObject<HTMLDivElement>;
   onWheel: () => void;
   onTouchMove: () => void;
@@ -54,6 +55,7 @@ interface ChatMessagesPaneProps {
 }
 
 function ChatMessagesPane({
+  creationMode = false,
   scrollContainerRef,
   onWheel,
   onTouchMove,
@@ -125,6 +127,11 @@ function ChatMessagesPane({
             <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
+        </div>
+      ) : chatMessages.length === 0 && creationMode ? (
+        <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+          <h2 className="text-xl font-semibold">{t('skillCreation.emptyTitle', { ns: 'common' })}</h2>
+          <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">{t('skillCreation.emptyDescription', { ns: 'common' })}</p>
         </div>
       ) : chatMessages.length === 0 ? (
         <ProviderSelectionEmptyState

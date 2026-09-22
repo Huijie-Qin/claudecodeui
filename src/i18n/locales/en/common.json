@@ -592,7 +592,28 @@
       "closeSidebar": "Close sidebar"
     }
   },
+  "skillCreation": {
+    "emptyTitle": "Describe your skill",
+    "emptyDescription": "Tell DataAgent when to use this skill, what inputs it receives, and what results you expect. Naming and saving happen automatically.",
+    "title": "Create skill",
+    "placeholder": "Describe the skill you want to create: when to use it, what inputs it receives, and what it should produce…",
+    "completed": "Created **{{name}}**.\n\nSaved to `{{path}}`.\n\nFind it in My Skills or invoke it with `/{{name}} your task`.",
+    "references": "Public snippets used as references:",
+    "noReferences": "Created from your description without public snippets.",
+    "readonly": "Workspace edit access is required to create a skill.",
+    "status": {
+      "queued": "Preparing to create the skill…",
+      "selecting": "Selecting relevant public snippets…",
+      "generating": "Generating skill instructions…",
+      "saving": "Validating and saving the skill…",
+      "cancelling": "Stopping creation…",
+      "cancelled": "Creation stopped. Your description is available to edit and retry.",
+      "failed": "Creation failed. Your description is available to retry.",
+      "completed": "Skill created."
+    }
+  },
   "skillEvaluation": {
+    "comparison": {"swipe": "Swipe horizontally to compare before and after", "title": "Before and after optimization", "after": "After optimization", "pending": "Retesting has not started. Results from this run will appear here after optimization."},
     "title": "Skill evaluation",
     "filesTab": "Files",
     "unsaved": "Evaluation uses saved content. Continue without saving edits?",

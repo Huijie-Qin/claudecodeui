@@ -59,6 +59,8 @@ import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
 import skillEvaluationRoutes from './routes/skill-evaluations.js';
+import skillCreationRoutes from './routes/skill-creation.js';
+import { skillCreationService } from './services/skill-creation/index.js';
 import { assertGenericFileMutation } from './services/skill-evals/files.js';
 import { skillEvaluationService } from './services/skill-evals/index.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
@@ -755,6 +757,7 @@ app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
 app.use('/api/workspaces', authenticateToken, skillEvaluationRoutes);
+app.use('/api/workspaces', authenticateToken, skillCreationRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
 app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);
@@ -3827,6 +3830,7 @@ async function gracefulShutdown(signal) {
     isServerReady = false;
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
+    await skillCreationService.stop();
     await skillEvaluationService.stopWorker();
     runtimeSweeper.stop();
     aiUsageService.stop();
@@ -3860,6 +3864,7 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
         aiUsageService.start();
+        await skillCreationService.ready();
         skillEvaluationService.startWorker();
         runtimeSweeper.start();
         scheduledSessionTasks.start();
@@ -3922,6 +3927,7 @@ async function startServer() {
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
             aiUsageService.stop();
+            await skillCreationService.stop();
             await skillEvaluationService.stopWorker();
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();

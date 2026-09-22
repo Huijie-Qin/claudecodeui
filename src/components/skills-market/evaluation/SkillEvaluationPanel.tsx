@@ -4,6 +4,7 @@ import { Loader2, Play, Square, Wand2, X } from 'lucide-react';
 
 import { api } from '../../../utils/api';
 
+import EvaluationComparison from './EvaluationComparison';
 import EvaluationRunDetail from './EvaluationRunDetail';
 import ClampedCaseText from './ClampedCaseText';
 import AddCaseMenu from './AddCaseMenu';
@@ -129,7 +130,10 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
     {generating && <div role="status" className="mb-4 flex items-center justify-between rounded border border-border p-3 text-sm"><span>{tr('generating')}</span>{editable && <button type="button" className={button} onClick={() => void (async () => { try { await payload(await api.skillEvaluations.cancel(workspaceId, data!.generationJob!.id)); await refreshCases(); } catch (e) { setError((e as Error).message); } })()}>{tr('stop')}</button>}</div>}
     {job && <div className="mb-5 space-y-2 rounded-lg border border-border bg-muted/30 p-4" aria-live="polite">
       <div className="flex flex-wrap items-center justify-between gap-2"><strong>{tr(`states.${job.status}`)} · {tr(`states.${job.outcome}`)}</strong>
-        {active && editable && <button type="button" className={button} disabled={busy} onClick={() => void act(async () => { await payload(await api.skillEvaluations.cancel(workspaceId, job.id)); await refreshLatest(); })}><Square className="h-3 w-3" />{tr('stop')}</button>}
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
+          {job.mode === 'optimize' && job.iteration > 0 && <button type="button" className={button} disabled={busy} onClick={() => void act(async () => { const id = job.id; const result = await payload(await api.skillEvaluations.diff(workspaceId, id)); if (latestJob.current?.id === id) setDiff(result); })}>{tr('diff')}</button>}
+          {active && editable && <button type="button" className={button} disabled={busy} onClick={() => void act(async () => { await payload(await api.skillEvaluations.cancel(workspaceId, job.id)); await refreshLatest(); })}><Square className="h-3 w-3" />{tr('stop')}</button>}
+        </div>
       </div>
       <p className="text-sm">{tr('phase')}: {tr(`phases.${job.phase}`)} · {tr('progress', { done: latestRound?.cases.filter((c) => !['not_run', 'running'].includes(c.status)).length || 0, total: latestRound?.cases.length || data?.document.evals.length || 0 })}</p>
       {job.mode === 'optimize' && <p className="text-sm">{tr('iterations', { current: job.iteration, max: job.maxIterations })} · {tr(`writeback.${job.writebackStatus}`)}</p>}
@@ -137,7 +141,6 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
       {job.current === false && <p className="text-sm text-amber-700 dark:text-amber-400">{tr('stale')}</p>}
       {job.error && <p className="text-sm text-red-600 dark:text-red-400">{job.error}</p>}
       {job.stopReason && <p className="text-xs text-muted-foreground">{tr('stopReason')}: {tr(`reasons.${job.stopReason}`, { defaultValue: job.stopReason })}</p>}
-      {job.mode === 'optimize' && job.iteration > 0 && <button type="button" className={button} disabled={busy} onClick={() => void act(async () => { const id = job.id; const result = await payload(await api.skillEvaluations.diff(workspaceId, id)); if (latestJob.current?.id === id) setDiff(result); })}>{tr('diff')}</button>}
     </div>}
     {!data ? <p role="status" className="text-sm text-muted-foreground">{tr('loading')}</p> : !data.document.evals.length ? <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">{tr('empty')}</div> : <div className="overflow-x-auto rounded-lg border border-border">
       <table className="w-full min-w-[650px] table-fixed text-left text-sm"><colgroup><col /><col /><col className="w-28" /><col className="w-64" /></colgroup><thead className="bg-muted/50"><tr>{['scenario', 'expected', 'result', 'actions'].map((k) => <th key={k} className="p-3 font-medium">{tr(k)}</th>)}</tr></thead>
@@ -173,7 +176,9 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
         <div className="flex justify-end gap-2"><button type="button" className={button} disabled={busy} onClick={() => setOptimizeOpen(false)}>{tr('cancel')}</button><button type="submit" className={`${button} bg-primary text-primary-foreground`} disabled={busy || !Number.isInteger(Number(maxIterations)) || Number(maxIterations) < 1 || Number(maxIterations) > 10}>{tr('startOptimize')}</button></div>
       </form>
     </div>}
-    {detail && job && <EvaluationRunDetail key={`${detail.jobId}:${detail.caseId}:${detail.round}`}
+    {detail && job && job.mode === 'optimize' && <EvaluationComparison key={`${detail.jobId}:${detail.caseId}`} workspaceId={workspaceId} job={job} caseId={detail.caseId} canCancel={editable && active} busy={busy}
+      onCancel={() => void act(async () => { await payload(await api.skillEvaluations.cancel(workspaceId, job.id)); await refreshLatest(); })} onClose={() => setDetail(null)} />}
+    {detail && job && job.mode !== 'optimize' && <EvaluationRunDetail key={`${detail.jobId}:${detail.caseId}:${detail.round}`}
       workspaceId={workspaceId} job={job} caseId={detail.caseId} round={detail.round}
       canCancel={editable && active} busy={busy}
       onCancel={() => void act(async () => { await payload(await api.skillEvaluations.cancel(workspaceId, job.id)); await refreshLatest(); })}
