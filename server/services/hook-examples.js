@@ -1,7 +1,6 @@
 import { REPORT_QUALITY_HOOK_EXAMPLE } from './report-quality-hook.js';
 
 const SQL_EXTRACTION_SCRIPT_LINES = [
-  "  const message = String(event.last_assistant_message || '');",
   "  const sqlKeywords = '(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE|REPLACE|UPSERT|TRUNCATE|EXPLAIN|SHOW|DESCRIBE|PRAGMA|GRANT|REVOKE|CALL|EXECUTE|VALUES|VACUUM)';",
   "  const sqlStartPattern = new RegExp('^\\\\s*' + sqlKeywords + '\\\\b', 'i');",
   '  const stripLeadingComments = (value) => {',
@@ -85,6 +84,7 @@ const SQL_EXTRACTION_SCRIPT_LINES = [
 
 const SQL_METRICS_SCRIPT = [
   'export async function run(event, ccui) {',
+  "  const message = String(event.last_assistant_message || '');",
   ...SQL_EXTRACTION_SCRIPT_LINES,
   '  if (snippets.length === 0) {',
   '    return { output: { detected: false, sqlBlockCount: 0, sqlLineCount: 0, statementCount: 0 } };',
@@ -113,6 +113,12 @@ const SQL_METRICS_SCRIPT = [
 
 const SQL_DETECTION_SCRIPT = [
   'export async function run(event) {',
+  "  if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'Write') {",
+  "    return { output: { detected: false, sql: '' } };",
+  '  }',
+  "  if (typeof event.tool_input?.content !== 'string') throw new Error('Write content must be a string');",
+  '  const message = event.tool_input.content;',
+  "  if (/\\.sql$/i.test(String(event.tool_input.file_path || ''))) return { output: { detected: Boolean(message.trim()), sql: message.trim() } };",
   ...SQL_EXTRACTION_SCRIPT_LINES,
   "  return { output: { detected: snippets.length > 0, sql: snippets.join('\\n\\n') } };",
   '}',
@@ -133,12 +139,14 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   {
     id: 'sql-check-enforcement',
     name: 'SQL Check 强制校验',
-    description: '检测模型输出中的 SQL，并调用 SQL Check MCP Tool 执行强制语法校验。',
-    eventName: 'Stop',
-    matcher: {},
+    description: 'Write 写入前使用当前项目规则校验 SQL；校验不通过或服务异常时拒绝写入。',
+    eventName: 'PreToolUse',
+    includeSubagents: false,
+    matcher: { value: '^Write$' },
     extensionLogic: {
       language: 'javascript',
       code: SQL_DETECTION_SCRIPT,
+      failClosed: true,
       outputs: [
         { name: 'detected', type: 'boolean' },
         { name: 'sql', type: 'string' },
@@ -160,7 +168,10 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
         },
       },
     ],
-    claudeResponse: { bindings: {} },
+    claudeResponse: { bindings: {
+      'hookSpecificOutput.permissionDecision': { source: 'reference', path: 'actions.check-sql-syntax.output.permissionDecision' },
+      'hookSpecificOutput.permissionDecisionReason': { source: 'reference', path: 'actions.check-sql-syntax.output.permissionDecisionReason' },
+    } },
   },
   {
     id: 'sql-line-record',

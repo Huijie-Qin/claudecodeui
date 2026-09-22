@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 
 import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 
+import { REQUESTED_HOOK_EXAMPLES } from './hook-examples.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
@@ -674,6 +675,52 @@ test('mcp_loop_run reuses the complete input from the Matcher-triggering tool ca
     database.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test('SQL Check Write guard blocks invalid SQL and checker failures before writing', async () => {
+  const database = createDatabase();
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ccui-sql-check-write-'));
+  try {
+    const hook = { ...REQUESTED_HOOK_EXAMPLES.find((example) => example.id === 'sql-check-enforcement'),
+      id: 'hook-1', version: 2, bindingController: 'sql_check' };
+    const calls = [];
+    let verdict = { valid: true };
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, workspaceRoot,
+      userId: 1, sqlCheckRuleIds: ['require_where', 'limit_rows'],
+      mcpCaller: async ({ input }) => { calls.push(input); if (verdict instanceof Error) throw verdict; return verdict; },
+    });
+    assert.equal(runtime.hooks.Stop, undefined);
+    assert.equal(runtime.hooks.PostToolUse, undefined);
+    assert.equal(runtime.hasRequiredHook, true);
+    assert.equal(runtime.hooks.PostToolUseFailure, undefined);
+    assert.equal(runtime.hooks.PreToolUse[0].matcher, '^Write$');
+    const callback = runtime.hooks.PreToolUse[0].hooks[0];
+    for (const number of [1, 2]) {
+      const response = await callback({ hook_event_name: 'PreToolUse', session_id: 'write-check-session', tool_name: 'Write',
+        tool_use_id: `write-${number}`, tool_input: { file_path: '/workspace/report.md', content: `SQL:\n\`\`\`sql\nSELECT ${number};\n\`\`\`` },
+        last_assistant_message: 'SELECT 999;', tool_response: { content: 'SELECT 888;' },
+      });
+      assert.equal(response.hookSpecificOutput.permissionDecision, 'defer');
+    }
+    await callback({ hook_event_name: 'PreToolUse', session_id: 'write-check-session', tool_name: 'Write',
+      tool_use_id: 'write-text', tool_input: { file_path: '/workspace/note.txt', content: 'Plain text.' },
+      last_assistant_message: 'SELECT 999;',
+    });
+    assert.deepEqual(calls, [1, 2].map((number) => ({ sql: `SELECT ${number};`, dialect: 'generic', rule_ids: ['require_where', 'limit_rows'] })));
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM hook_executions WHERE status = 'failed'").get().count, 0);
+    const event = { hook_event_name: 'PreToolUse', session_id: 'write-check-session', tool_name: 'Write',
+      tool_input: { file_path: '/workspace/query.sql', content: 'SELECT FROM users;' } };
+    verdict = { valid: false, issues: [{ message: 'SELECT requires an expression.' }] };
+    const rejected = await callback(event);
+    assert.equal(rejected.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(rejected.hookSpecificOutput.permissionDecisionReason, /SELECT requires an expression/);
+    for (const failure of [new Error('MCP unavailable'), {}, { valid: 'true' }, { valid: true, isError: true }]) {
+      verdict = failure;
+      assert.equal((await callback(event)).hookSpecificOutput.permissionDecision, 'deny');
+    }
+    assert.equal((await callback({ ...event, tool_input: {} })).hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal((await callback({ ...event, tool_input: { content: 'Notes only.' } })).hookSpecificOutput.permissionDecision, 'defer');
+  } finally { database.close(); await fs.rm(workspaceRoot, { recursive: true, force: true }); }
 });
 
 test('SQL Check Hook sends the effective workspace rule IDs to its MCP tool', async () => {

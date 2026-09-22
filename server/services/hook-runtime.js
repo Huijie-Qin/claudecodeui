@@ -386,15 +386,23 @@ async function executePostActions({
       continue;
     }
     if (action.type === 'call_mcp_tool') {
+      const sqlWriteGuard = hook.bindingController === 'sql_check'
+        && hook.eventName === 'PreToolUse' && event.tool_name === 'Write'
+        && /(?:^|__)check_sql_syntax$/.test(action.config?.toolName || '');
       const condition = action.config?.condition == null
         ? true
         : resolveBinding(action.config.condition, references);
       if (condition === UNRESOLVED) {
         throw new Error(`Post action ${action.id} condition is unresolved`);
       }
+      if (sqlWriteGuard && typeof condition !== 'boolean') {
+        throw new Error('SQL Check condition must resolve to a boolean');
+      }
       if (!condition) {
         references.actions[action.id] = {
-          output: { called: false, reason: 'condition_false' },
+          output: { called: false, reason: 'condition_false', ...(sqlWriteGuard ? {
+            permissionDecision: 'defer', permissionDecisionReason: '本次 Write 未包含 SQL。',
+          } : {}) },
         };
         continue;
       }
@@ -414,7 +422,23 @@ async function executePostActions({
         signal,
         headersHelperRunner: context.headersHelperRunner,
       });
-      references.actions[action.id] = { output };
+      if (sqlWriteGuard) {
+        if (!isPlainObject(output) || output.isError === true || typeof output.valid !== 'boolean') {
+          throw new Error('SQL Check did not return a valid boolean verdict');
+        }
+        const issues = Array.isArray(output.issues)
+          ? output.issues.map((issue) => typeof issue === 'string' ? issue : issue?.message)
+            .filter((message) => typeof message === 'string').slice(0, 5).join('；').slice(0, 1500)
+          : '';
+        references.actions[action.id] = { output: { ...output,
+          // A successful check must not bypass other permission checks.
+          permissionDecision: output.valid ? 'defer' : 'deny',
+          permissionDecisionReason: output.valid ? 'SQL Check 校验通过。'
+            : `SQL Check 校验未通过，已拒绝写入。${issues || '请修正 SQL 后重试。'}`,
+        } };
+      } else {
+        references.actions[action.id] = { output };
+      }
       continue;
     }
     if (action.type === 'mcp_loop_run') {

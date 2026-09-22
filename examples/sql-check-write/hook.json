@@ -1,0 +1,64 @@
+{
+  "name": "SQL Check 强制校验",
+  "description": "Write 写入前使用当前项目规则校验 SQL；校验不通过或服务异常时拒绝写入。",
+  "eventName": "PreToolUse",
+  "includeSubagents": false,
+  "matcher": {
+    "value": "^Write$"
+  },
+  "extensionLogic": {
+    "language": "javascript",
+    "code": "export async function run(event) {\n  if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'Write') {\n    return { output: { detected: false, sql: '' } };\n  }\n  if (typeof event.tool_input?.content !== 'string') throw new Error('Write content must be a string');\n  const message = event.tool_input.content;\n  if (/\\.sql$/i.test(String(event.tool_input.file_path || ''))) return { output: { detected: Boolean(message.trim()), sql: message.trim() } };\n  const sqlKeywords = '(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE|REPLACE|UPSERT|TRUNCATE|EXPLAIN|SHOW|DESCRIBE|PRAGMA|GRANT|REVOKE|CALL|EXECUTE|VALUES|VACUUM)';\n  const sqlStartPattern = new RegExp('^\\\\s*' + sqlKeywords + '\\\\b', 'i');\n  const stripLeadingComments = (value) => {\n    let text = String(value || '').replace(/^\\uFEFF/, '').trim();\n    let previous;\n    do {\n      previous = text;\n      text = text.replace(/^--[^\\r\\n]*(?:\\r?\\n|$)/, '').replace(/^\\/\\*[\\s\\S]*?\\*\\//, '').trimStart();\n    } while (text !== previous);\n    return text;\n  };\n  const looksLikeSql = (value) => sqlStartPattern.test(stripLeadingComments(value));\n  const snippets = [];\n  const seenSnippets = new Set();\n  const addSnippet = (value) => {\n    const normalized = String(value || '').trim();\n    if (!normalized || seenSnippets.has(normalized)) return;\n    seenSnippets.add(normalized);\n    snippets.push(normalized);\n  };\n  const visitJson = (value, key = \"\", depth = 0) => {\n    if (depth > 10 || value == null) return;\n    if (typeof value === 'string') {\n      if (/(?:sql|query|statement)/i.test(key) && looksLikeSql(value)) addSnippet(value);\n      return;\n    }\n    if (Array.isArray(value)) {\n      value.forEach((entry) => visitJson(entry, key, depth + 1));\n      return;\n    }\n    if (typeof value === 'object') {\n      Object.entries(value).forEach(([childKey, entry]) => visitJson(entry, childKey, depth + 1));\n    }\n  };\n  const extractJsonSql = (value) => {\n    try {\n      visitJson(JSON.parse(String(value || \"\").trim()));\n      return true;\n    } catch {\n      return false;\n    }\n  };\n  let match;\n  const dialectFencePattern = /```(?:sql|mysql|mariadb|postgres(?:ql)?|sqlite|tsql|plsql|hive|sparksql|bigquery|snowflake|redshift|oracle)\\b[^\\r\\n]*\\r?\\n([\\s\\S]*?)```/gi;\n  while ((match = dialectFencePattern.exec(message)) !== null) addSnippet(match[1]);\n  const jsonFencePattern = /```json\\b[^\\r\\n]*\\r?\\n([\\s\\S]*?)```/gi;\n  while ((match = jsonFencePattern.exec(message)) !== null) extractJsonSql(match[1]);\n  const unlabeledFencePattern = /```[ \\t]*\\r?\\n([\\s\\S]*?)```/g;\n  while ((match = unlabeledFencePattern.exec(message)) !== null) {\n    if (looksLikeSql(match[1])) addSnippet(match[1]);\n    else extractJsonSql(match[1]);\n  }\n  const xmlSqlPattern = /<sql(?:\\s[^>]*)?>([\\s\\S]*?)<\\/sql>/gi;\n  while ((match = xmlSqlPattern.exec(message)) !== null) {\n    if (looksLikeSql(match[1])) addSnippet(match[1]);\n  }\n  const trimmedMessage = message.trim();\n  if (trimmedMessage.startsWith('{') || trimmedMessage.startsWith('[')) {\n    extractJsonSql(trimmedMessage);\n  }\n  const withoutBlocks = message.replace(/```[\\s\\S]*?```/g, '\\n').replace(/<sql(?:\\s[^>]*)?>[\\s\\S]*?<\\/sql>/gi, '\\n');\n  const inlineSource = withoutBlocks.replace(/(^|[^`])`([^`\\r\\n]+)`(?!`)/g, (whole, prefix, content) => {\n    if (looksLikeSql(content)) addSnippet(content);\n    return prefix + ' ';\n  });\n  const rawLines = inlineSource.split(/\\r?\\n/);\n  for (let index = 0; index < rawLines.length; index += 1) {\n    let firstLine = rawLines[index].replace(/^\\s*(?:(?:[-*+]|>|\\d+[.)])\\s+)*/, '').trimStart();\n    firstLine = firstLine.replace(/^(?:SQL(?:\\s+(?:query|statement))?|查询(?:语句)?)(?:如下)?\\s*[:：]\\s*/i, '');\n    if (!looksLikeSql(firstLine)) continue;\n    const block = [firstLine];\n    let nextIndex = index + 1;\n    while (nextIndex < rawLines.length && rawLines[nextIndex].trim()) {\n      block.push(rawLines[nextIndex].replace(/^\\s*>\\s?/, ''));\n      nextIndex += 1;\n    }\n    addSnippet(block.join('\\n'));\n    index = nextIndex;\n  }\n  return { output: { detected: snippets.length > 0, sql: snippets.join('\\n\\n') } };\n}",
+    "failClosed": true,
+    "outputs": [
+      {
+        "name": "detected",
+        "type": "boolean"
+      },
+      {
+        "name": "sql",
+        "type": "string"
+      }
+    ]
+  },
+  "postActions": [
+    {
+      "id": "check-sql-syntax",
+      "type": "call_mcp_tool",
+      "position": 0,
+      "config": {
+        "toolName": "mcp__sql-syntax-checker__check_sql_syntax",
+        "condition": {
+          "source": "reference",
+          "path": "script.output.detected"
+        },
+        "inputs": {
+          "sql": {
+            "source": "reference",
+            "path": "script.output.sql"
+          },
+          "dialect": {
+            "source": "literal",
+            "value": "generic"
+          },
+          "rule_ids": {
+            "source": "reference",
+            "path": "ccui.env.sqlCheckRuleIds"
+          }
+        }
+      }
+    }
+  ],
+  "claudeResponse": {
+    "bindings": {
+      "hookSpecificOutput.permissionDecision": {
+        "source": "reference",
+        "path": "actions.check-sql-syntax.output.permissionDecision"
+      },
+      "hookSpecificOutput.permissionDecisionReason": {
+        "source": "reference",
+        "path": "actions.check-sql-syntax.output.permissionDecisionReason"
+      }
+    }
+  }
+}
