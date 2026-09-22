@@ -900,7 +900,7 @@ export function createMultitenancyDb(database = db) {
 
       listTenantsForUser: (userId) => {
         return database.prepare(`
-          SELECT t.*
+          SELECT t.*, tu.role, tu.permission
           FROM tenants t
           JOIN tenant_users tu ON tu.tenant_id = t.id
           WHERE tu.user_id = ?

@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // Isolated UI fixture: no production auth, database, .env, schedulers or models.
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
 import express from 'express';
+import { WebSocketServer } from 'ws';
 import react from '@vitejs/plugin-react';
 import { createServer as createViteServer } from 'vite';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const dependencyRoot = await realpath(path.join(root, 'node_modules'));
 // The bundled Node 24/addon combination can crash in a GC finalizer. Keep the
 // small fixture's statements alive until this preview exits (not production).
 const fixtureStatements = [];
@@ -36,6 +38,10 @@ database.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT,is_active
   INSERT INTO users(id,username,is_system_admin) VALUES(1,'系统管理员',1),(2,'林晨 · 租户管理员',0),(3,'陈晓 · 普通成员',0);
   INSERT INTO tenants(id,code,name) VALUES(10,'example','示例租户'),(20,'other','其他租户');
   INSERT INTO tenant_users(tenant_id,user_id,role,permission,status) VALUES(10,2,'tenant_admin','edit','active'),(20,2,'member','edit','active'),(10,3,'member','edit','active');`);
+const [{ createMultitenancyDb }, { createTenantsRouter }] = await Promise.all([
+  import('../server/database/multitenancy-db.js'), import('../server/routes/tenants.js'),
+]);
+const multitenancy = createMultitenancyDb(database);
 const config = new Map();
 const hooks = createHookConfigService({ database, configStore: { get: (key) => config.get(key), set: (key, value) => config.set(key, value) }, hookMcpCatalog: { listServers: () => [], listToolResources: () => [] } });
 const templates = createAgentTemplateService(database, { folderAssets: createAgentTemplateFolderAssetStore({ rootPath: path.join(temporary, 'template-assets') }) });
@@ -48,6 +54,18 @@ const port = Number(process.env.TENANT_MANAGEMENT_PREVIEW_PORT || 4402);
 const origin = `http://127.0.0.1:${port}`;
 const app = express();
 const http = createServer(app);
+const websocket = new WebSocketServer({ noServer: true });
+http.on('upgrade', (request, socket, head) => {
+  if (new URL(request.url, origin).pathname !== '/ws') return;
+  if (request.headers.host !== `127.0.0.1:${port}` || request.headers.origin !== origin) return socket.destroy();
+  websocket.handleUpgrade(request, socket, head, (client) => {
+    client.on('message', (message) => {
+      try {
+        if (JSON.parse(String(message)).type === 'get-active-sessions') client.send(JSON.stringify({ type: 'active-sessions', sessions: {} }));
+      } catch { /* The fixture never executes model or shell commands. */ }
+    });
+  });
+});
 const entry = '/__tenant_preview__/entry.js';
 const source = `
 import React from 'react'; import {createRoot} from 'react-dom/client';
@@ -62,13 +80,19 @@ import SidebarFooter from '/src/components/sidebar/view/subcomponents/SidebarFoo
 localStorage.setItem('auth-token','fixture-only'); localStorage.setItem('currentTenantId','10');
 function Shell(){const {user}=useAuth();const {tenants,currentTenant,selectTenant}=useTenant(); const nav=useNavigate();const {t}=useTranslation('sidebar');
 return React.createElement('div',{className:'flex h-screen bg-background text-foreground'},React.createElement('aside',{className:'flex w-64 shrink-0 flex-col border-r border-border p-2'},React.createElement('h1',{className:'p-4 text-lg font-semibold'},'租户管理预览'),React.createElement('div',{className:'flex-1'}),React.createElement(SidebarFooter,{tenants,currentTenant,onTenantSwitch:selectTenant,t,onShowSettings:()=>{},showAdminEntry:user?.is_system_admin===1,onShowAdminPanel:()=>nav('/admin')})),React.createElement('main',{className:'max-w-3xl space-y-5 p-8'},React.createElement('h2',{className:'text-2xl font-semibold'},'租户管理功能预览'),React.createElement('p',null,'从左下角进入租户管理，可配置 Hook、查看租户 AI 使用报表、配置 Agent 模板。'),React.createElement('p',{className:'text-sm text-muted-foreground'},'仅模拟数据。管理配置和报表使用独立测试数据，修改不会触发模型执行或改变已发布报表。'),React.createElement('label',{className:'flex items-center gap-3'},'预览身份',React.createElement('select',{'aria-label':'预览身份',className:'rounded border p-2 bg-background',value:user?.id||2,onChange:e=>{document.cookie='tenant-preview-user='+e.target.value+'; Path=/; SameSite=Strict';location.href='/';}},React.createElement('option',{value:1},'系统管理员'),React.createElement('option',{value:2},'租户管理员'),React.createElement('option',{value:3},'普通成员'))),React.createElement('p',{className:'text-sm text-muted-foreground'},'系统管理员可进入 Admin → 租户权限，修改模拟成员的租户角色；再切换身份查看入口变化。')));}
-createRoot(document.getElementById('root')).render(React.createElement(AuthProvider,null,React.createElement(TenantProvider,null,React.createElement(BrowserRouter,null,React.createElement(Routes,null,React.createElement(Route,{path:'/',element:React.createElement(Shell)}),React.createElement(Route,{path:'/tenant-management',element:React.createElement(TenantManagementPage)}),React.createElement(Route,{path:'/ai-usage',element:React.createElement(AiUsagePage)}),React.createElement(Route,{path:'/admin',element:React.createElement(AdminPage)}))))));
+if (location.pathname === '/v1' || location.pathname.startsWith('/v1/')) {
+  window.__ROUTER_BASENAME__ = '/v1';
+  const { default: App } = await import('/src/App.tsx');
+  createRoot(document.getElementById('root')).render(React.createElement(App));
+} else {
+  createRoot(document.getElementById('root')).render(React.createElement(AuthProvider,null,React.createElement(TenantProvider,null,React.createElement(BrowserRouter,null,React.createElement(Routes,null,React.createElement(Route,{path:'/',element:React.createElement(Shell)}),React.createElement(Route,{path:'/tenant-management',element:React.createElement(TenantManagementPage)}),React.createElement(Route,{path:'/ai-usage',element:React.createElement(AiUsagePage)}),React.createElement(Route,{path:'/admin',element:React.createElement(AdminPage)}))))));
+}
 `;
 const vite = await createViteServer({ root, configFile: false, envFile: false, publicDir: false, cacheDir: path.join(temporary, 'vite'), appType: 'custom',
   plugins: [react(), { name: 'tenant-preview', resolveId: (id) => id === entry ? entry : null, load: (id) => id === entry ? source : null }],
   define: { 'import.meta.env.VITE_IS_PLATFORM': '"false"', 'import.meta.env.SQL_CHECK_BASE_URL': '""' },
   resolve: { alias: { '@': path.join(root, 'src') } },
-  server: { middlewareMode: true, hmr: { server: http, host: '127.0.0.1', port }, host: '127.0.0.1', allowedHosts: ['127.0.0.1'], fs: { allow: [root, temporary], deny: ['**/.env', '**/.env.*', '**/*.db', '**/*.sqlite*', '**/.git/**'] } },
+  server: { middlewareMode: true, hmr: { server: http, host: '127.0.0.1', port }, host: '127.0.0.1', allowedHosts: ['127.0.0.1'], fs: { allow: [root, temporary, dependencyRoot], deny: ['**/.env', '**/.env.*', '**/*.db', '**/*.sqlite*', '**/.git/**'] } },
 });
 app.use((req, res, next) => {
   if (req.headers.host !== `127.0.0.1:${port}` || (req.headers.origin && req.headers.origin !== origin)) return res.sendStatus(403);
@@ -81,8 +105,16 @@ app.use(express.json({ limit: '20mb' }));
 app.get('/api/auth/status', (_req, res) => res.json({ needsSetup: false }));
 app.get('/api/auth/user', (req, res) => res.json({ user: req.user }));
 app.get('/api/user/onboarding-status', (_req, res) => res.json({ hasCompletedOnboarding: true }));
-app.get('/api/tenants/me', (req, res) => res.json({ tenants: req.user.is_system_admin ? database.prepare("SELECT *, 'system_admin' AS role, 'edit' AS permission FROM tenants").all() : database.prepare("SELECT t.*,m.role,m.permission FROM tenants t JOIN tenant_users m ON m.tenant_id=t.id WHERE m.user_id=? AND m.status='active'").all(req.user.id) }));
 app.post('/api/tenants/:id/agent-list-check', (_req, res) => res.json({ success: true }));
+// Use the production role projection, not a richer hand-written /me response.
+app.use('/api/tenants', createTenantsRouter(multitenancy));
+// Empty surrounding workspace services let the real V1 App render safely.
+app.get('/api/projects', (_req, res) => res.json([]));
+app.get('/api/plugins', (_req, res) => res.json({ plugins: [] }));
+app.get('/api/taskmaster/installation-status', (_req, res) => res.json({ installation: { isInstalled: false }, isReady: false }));
+app.get('/api/settings/feature-flags', (_req, res) => res.json({ features: {} }));
+app.get('/api/settings/model-response-hooks', (_req, res) => res.json({ success: true, config: {} }));
+app.get('/api/mcp-utils/taskmaster-server', (_req, res) => res.json({ configured: false, server: null }));
 app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skills: { listConfigurationSkills: async () => ({ skills: [] }) } }));
 const reportAccess = { resolve: (input) => { const live = database.prepare('SELECT role FROM tenant_users WHERE user_id=? AND tenant_id=?').get(input.userId, input.tenantId); if (Number(input.userId) !== 1 && live?.role !== 'tenant_admin') throw Object.assign(new Error('需要租户管理员权限'), { statusCode: 403 }); return report.accessService.resolve({ ...input, userId: 2 }); } };
 app.use('/api/ai-usage', createAiUsageRouter({ db: report.db, accessService: reportAccess, queryService: report.queryService }));
@@ -90,6 +122,7 @@ app.use('/api/ai-usage', createAiUsageRouter({ db: report.db, accessService: rep
 app.use('/api/admin', (req, res, next) => req.user.is_system_admin ? next() : res.status(403).json({ error: 'System admin access required' }));
 app.get('/api/admin/tenants', (_req, res) => res.json({ tenants: database.prepare('SELECT * FROM tenants').all() }));
 app.get('/api/admin/users', (_req, res) => res.json({ users: database.prepare('SELECT * FROM users').all() }));
+app.get('/api/admin/users/claude-env', (_req, res) => res.json({ users: [] }));
 app.get('/api/admin/memberships', (_req, res) => res.json({ memberships: database.prepare('SELECT m.*,u.username,u.is_system_admin,t.name AS tenant_name FROM tenant_users m JOIN users u ON u.id=m.user_id JOIN tenants t ON t.id=m.tenant_id').all() }));
 app.put('/api/admin/tenants/:tenantId/users/:userId', (req, res) => {
   const previous = database.prepare('SELECT * FROM tenant_users WHERE tenant_id=? AND user_id=?').get(req.params.tenantId, req.params.userId);
@@ -99,7 +132,7 @@ app.put('/api/admin/tenants/:tenantId/users/:userId', (req, res) => {
   res.json({ membership: database.prepare('SELECT * FROM tenant_users WHERE tenant_id=? AND user_id=?').get(req.params.tenantId, req.params.userId) });
 });
 app.use('/api', (_req, res) => res.status(404).json({ error: '此预览不提供该功能' }));
-for (const route of ['/', '/tenant-management', '/ai-usage', '/admin']) app.get(route, async (_req, res, next) => {
+for (const route of ['/', '/tenant-management', '/ai-usage', '/admin', '/v1', '/v1/*']) app.get(route, async (_req, res, next) => {
   try { res.type('html').send(await vite.transformIndexHtml(route, `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>租户管理 · 仅模拟数据</title></head><body><div id="root"></div><script type="module" src="${entry}"></script></body></html>`)); } catch (error) { next(error); }
 });
 app.use((req, res, next) => {
@@ -108,11 +141,12 @@ app.use((req, res, next) => {
   if (pathname.includes('..') || /(?:^|\/)\.[^/]/.test(pathname.replaceAll('/.vite/', '/vite/').replaceAll('/.pnpm/', '/pnpm/')) || /\.(?:db|sqlite|sqlite3)(?:-|$)/i.test(pathname)) return res.sendStatus(404);
   const allowed = ['/src/', '/shared/', '/node_modules/', '/@vite/', '/@id/', '/@react-refresh', entry];
   if (pathname.startsWith('/@fs/')) {
-    if (![`${root}/src/`, `${root}/shared/`, `${root}/node_modules/`, `${temporary}/`].some((prefix) => pathname.slice(4).startsWith(prefix))) return res.sendStatus(404);
+    if (![`${root}/src/`, `${root}/shared/`, `${root}/node_modules/`, `${dependencyRoot}/`, `${temporary}/`].some((prefix) => pathname.slice(4).startsWith(prefix))) return res.sendStatus(404);
   } else if (!allowed.some((prefix) => pathname.startsWith(prefix))) return res.sendStatus(404);
   next();
 });
 app.use(vite.middlewares);
 await new Promise((resolve, reject) => { http.once('error', reject); http.listen(port, '127.0.0.1', resolve); });
 console.log(`Tenant management fixture preview: ${origin}`);
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => { await vite.close(); http.close(); database.close(); report.db.close(); importDatabase.close(); await rm(temporary, { recursive: true, force: true }); process.exit(0); });
+console.log(`V1 application preview (real tenant-role API): ${origin}/v1/`);
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => { for (const client of websocket.clients) client.terminate(); websocket.close(); await vite.close(); http.close(); database.close(); report.db.close(); importDatabase.close(); await rm(temporary, { recursive: true, force: true }); process.exit(0); });
