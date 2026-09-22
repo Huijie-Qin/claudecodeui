@@ -76,7 +76,7 @@ export function readAiUsageConfig(env = process.env) {
   const concurrency = Number(env.AI_USAGE_MAX_CONCURRENCY ?? '1');
   if (concurrency !== 1) throw new Error('AI_USAGE_MAX_CONCURRENCY currently supports only 1');
   return Object.freeze({ enabled: boolean === 'true', runAt, windowEnd, timeZone, concurrency,
-    tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9' });
+    tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9_publish_events_v10' });
 }
 
 export function getAiUsageSchedule(config, now = new Date()) {

@@ -27,6 +27,49 @@ export function createAiUsageSkillRecorder({ database, getDatabase = getAiUsageC
   }
 
   return {
+    beginPublishEvent(input) {
+      return safely('publish event start', input, (connection, scope) => {
+        if (!['create', 'update'].includes(input.publishKind)) throw new Error('Invalid publish kind');
+        const id = input.operationId || crypto.randomUUID();
+        connection.prepare(`INSERT INTO ai_skill_publish_events
+          (id,tenant_id,user_id,workspace_id,skill_name,publish_kind,status,requested_at)
+          VALUES(?,?,?,?,?,?,'requested',?) ON CONFLICT(id) DO NOTHING`).run(
+          id, scope.tenantId, scope.userId, scope.workspaceId, String(input.skillName || '').slice(0, 200),
+          input.publishKind, now(),
+        );
+        return { ...scope, operationId: id };
+      });
+    },
+
+    identifyPublishEvent(input) {
+      return safely('publish event identity', input, (connection, scope) => connection.prepare(`UPDATE ai_skill_publish_events
+        SET skill_id=? WHERE id=? AND tenant_id=? AND user_id=? AND workspace_id=? AND status='requested'`).run(
+        String(input.skillId), input.operationId, scope.tenantId, scope.userId, scope.workspaceId,
+      ).changes > 0);
+    },
+
+    succeedPublishEvent(input) {
+      return safely('publish event success', input, (connection, scope) => {
+        if (!input.skillId || !Number.isFinite(Date.parse(input.publishedAt))) throw new Error('Publication identity and time are required');
+        return connection.prepare(`UPDATE ai_skill_publish_events
+          SET skill_id=?,status='succeeded',published_at=?,finished_at=?,published_version=?,failure_code=NULL
+          WHERE id=? AND tenant_id=? AND user_id=? AND workspace_id=? AND status IN ('requested','unknown')`).run(
+          String(input.skillId), new Date(input.publishedAt).toISOString(), now(),
+          Number.isSafeInteger(input.publishedVersion) ? input.publishedVersion : null,
+          input.operationId, scope.tenantId, scope.userId, scope.workspaceId,
+        ).changes > 0;
+      });
+    },
+
+    failPublishEvent(input) {
+      return safely('publish event failure', input, (connection, scope) => connection.prepare(`UPDATE ai_skill_publish_events
+        SET status=?,finished_at=?,failure_code=?
+        WHERE id=? AND tenant_id=? AND user_id=? AND workspace_id=? AND status='requested'`).run(
+        input.uncertain ? 'unknown' : 'failed', now(), input.uncertain ? 'PUBLISH_UNCONFIRMED' : 'PUBLISH_REJECTED',
+        input.operationId, scope.tenantId, scope.userId, scope.workspaceId,
+      ).changes > 0);
+    },
+
     beginPublication(input) {
       return safely('publication start', input, (connection, scope) => {
         const operationId = input.operationId || crypto.randomUUID();

@@ -12,6 +12,8 @@ import { runAiUsageWindow } from './ai-usage-batches.js';
 import { readAiUsageConfig } from './ai-usage-config.js';
 import { logicalSessionKey, parseUsageMessage } from './ai-usage-parser.js';
 import { createAiUsageSkillContextRecorder } from './ai-usage-skill-context.js';
+import { createAiUsageSkillRecorder } from './ai-usage-skills.js';
+import { createAiUsageQueryService } from './ai-usage-query.js';
 import { createAiUsageTurnRecorder } from './ai-usage-turns.js';
 
 const config = readAiUsageConfig({ AI_USAGE_ENABLED: 'true' });
@@ -59,6 +61,53 @@ async function fixture(t) {
     },
   };
 }
+
+test('publish events reach dashboard topics once, preserving workspace and excluding updates/failures', async (t) => {
+  const f = await fixture(t);
+  const publishedAt = '2026-09-11T02:00:00.000Z';
+  const recorder = createAiUsageSkillRecorder({ database: f.database, now: () => publishedAt });
+  const scope = { tenantId: 1, userId: 1, workspaceId: 10, skillName: 'Published Skill' };
+  const create = { ...scope, operationId: 'create-click', publishKind: 'create', skillId: 'skill-a', publishedAt };
+  recorder.beginPublishEvent(create);
+  recorder.succeedPublishEvent(create);
+  // First-upload compatibility capture and new click capture describe ONE publication.
+  recorder.beginPublication(create);
+  recorder.confirmed({ ...create, firstPublishedAt: publishedAt });
+  for (const [id, status] of [['failed-click', 'failed'], ['unknown-click', 'unknown'], ['waiting-click', 'requested']]) {
+    const event = { ...scope, operationId: id, publishKind: 'create', skillId: id };
+    recorder.beginPublishEvent(event);
+    if (status !== 'requested') recorder.failPublishEvent({ ...event, uncertain: status === 'unknown' });
+  }
+  const update = { ...create, operationId: 'update-click', publishKind: 'update', skillId: 'historical-skill' };
+  recorder.beginPublishEvent(update);
+  recorder.succeedPublishEvent(update);
+  assert.equal((await f.run()).published, 1);
+  const publications = f.report().filter(row => row.dataset === 'skill_publications');
+  assert.equal(publications.length, 1);
+  assert.equal(publications[0].workspace_id, 10);
+  assert.equal(JSON.parse(publications[0].value_json).publicationEventId, 'create-click');
+  const detail = f.database.prepare('SELECT * FROM ai_dashboard_skill_publication_detail').all();
+  assert.equal(detail.length, 1);
+  assert.equal(detail[0].skill_id, 'skill-a');
+  assert.equal(detail[0].workspace_id, 10);
+  const query = createAiUsageQueryService({ db: f.database });
+  const access = { tenantId: 1, userId: 1, scope: 'tenant', canViewTenant: true };
+  assert.equal(query.summary(access).publishedSkillCount, 1);
+  assert.equal(query.skills(access, { workspaceId: 10 }).items[0].skillId, 'skill-a');
+
+  // Once bootstrapped, INSERT/UPDATE triggers must pick up new clicks incrementally.
+  f.nextNight();
+  const second = { ...create, operationId: 'second-create', skillId: 'skill-b', publishedAt: '2026-09-12T02:00:00Z' };
+  recorder.beginPublishEvent(second);
+  recorder.succeedPublishEvent(second);
+  recorder.succeedPublishEvent(second);
+  assert.equal((await f.run()).published, 1);
+  assert.equal(query.summary(access).publishedSkillCount, 2);
+  const day = query.skills(access, { groupBy: 'publisher', from: '2026-09-12', to: '2026-09-12' });
+  assert.equal(day.items[0].publishedSkillCount, 1);
+  assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM ai_dashboard_skill_publication_detail').get().n, 2);
+  assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM ai_skill_publish_events').get().n, 6);
+});
 
 test('canonical JSONL appearance retracts an unchanged DB copy and disappearance restores it', async (t) => {
   const f = await fixture(t);

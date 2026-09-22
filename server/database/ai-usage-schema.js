@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS ai_skill_publications (
   skill_id TEXT, skill_name TEXT, first_published_at TEXT, status TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ai_skill_publish_events (
+  id TEXT PRIMARY KEY, tenant_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+  workspace_id INTEGER NOT NULL, skill_id TEXT, skill_name TEXT NOT NULL,
+  publish_kind TEXT NOT NULL, status TEXT NOT NULL,
+  requested_at TEXT NOT NULL, published_at TEXT, finished_at TEXT,
+  published_version INTEGER, failure_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_skill_publish_event_history
+  ON ai_skill_publish_events(tenant_id,skill_id,status,published_at);
 CREATE TABLE IF NOT EXISTS ai_skill_binding_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
   local_name TEXT NOT NULL, remote_skill_id TEXT NOT NULL, publisher_user_id INTEGER,
@@ -137,6 +146,7 @@ export function migrateAiUsageSchema(database) {
     ['hook_executions', 'hook_execution', 'id', 'tenant_id'],
     ['workspace_agent_template_snapshots', 'template', 'workspace_id', null],
     ['ai_skill_publications', 'publication', 'operation_id', 'tenant_id'],
+    ['ai_skill_publish_events', 'publication_event', 'id', 'tenant_id'],
     ['ai_mr_submissions', 'code_submission', 'id', 'tenant_id'],
   ];
   for (const [table, type, key, tenantColumn] of definitions) {

@@ -63,6 +63,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     { table: 'hook_executions', type: 'hook_execution', key: 'id' },
     { table: 'workspace_agent_template_snapshots', type: 'template', key: 'workspace_id' },
     { table: 'ai_skill_publications', type: 'publication', key: 'operation_id' },
+    { table: 'ai_skill_publish_events', type: 'publication_event', key: 'id' },
     { table: 'ai_mr_submissions', type: 'code_submission', key: 'id' },
     { table: 'ai_usage_skill_context', type: 'skill_session', key: 'json_array(tenant_id,workspace_id,user_id,provider,session_id)' },
   ];
@@ -110,7 +111,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       if (!db.prepare('SELECT 1 FROM workspaces WHERE id=? AND tenant_id=?').get(row.workspace_id, tenantId)) return [];
     } else if (row.tenant_id !== tenantId) return [];
     if (source.type === 'code_submission' && row.status !== 'merged') return [];
-    const time = normalizeTimestamp(source.type === 'code_submission' ? row.merged_at : source.type === 'hook_execution' && row.started_at_ms != null
+    const time = normalizeTimestamp(source.type === 'publication_event' ? row.published_at : source.type === 'code_submission' ? row.merged_at : source.type === 'hook_execution' && row.started_at_ms != null
       ? row.started_at_ms : row.started_at || row.first_published_at || row.provider_timestamp || row.created_at);
     if (!time) return [];
     const base = { user_id: row.user_id ?? row.created_by_user_id ?? null, workspace_id: row.workspace_id ?? null,
@@ -181,6 +182,14 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       return [{ ...base, dataset: 'skill_publications', row_key: row.skill_id, subject_id: row.skill_id,
         value: { skillId: row.skill_id, skillName: row.skill_name, publisherUserId: row.user_id } }];
     }
+    if (source.type === 'publication_event') {
+      // Preserve the existing first-created publication metric. Update clicks
+      // remain auditable but must not pretend to establish historical firsts.
+      if (row.status !== 'succeeded' || row.publish_kind !== 'create' || !row.skill_id) return [];
+      return [{ ...base, dataset: 'skill_publications', row_key: row.skill_id, subject_id: row.skill_id,
+        value: { skillId: row.skill_id, skillName: row.skill_name, publisherUserId: row.user_id,
+          publicationEventId: row.id, publicationSource: 'publish_click' } }];
+    }
     return [];
   }
 
@@ -203,17 +212,19 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         const rows = sourceRows(change).map(enrich);
         store.transaction(() => {
           store.assertLease(batch);
-          if (change.source_type === 'publication') {
+          if (change.source_type === 'publication' || change.source_type === 'publication_event') {
+            const eventSource = change.source_type === 'publication_event';
             // Late confirmation/correction also affects calls in OTHER users'
             // workspaces. Queue metadata only; the next skills stage repairs
             // the historical partitions without rescanning message bodies.
             db.prepare(`INSERT INTO ai_usage_source_changes(tenant_id,source_type,source_key)
               SELECT DISTINCT tenant_id,'skill_binding',CAST(workspace_id AS TEXT)
               FROM ai_skill_binding_history WHERE tenant_id=? AND remote_skill_id IN (
-                SELECT skill_id FROM ai_skill_publications WHERE tenant_id=? AND operation_id=?
+                SELECT skill_id FROM ${eventSource ? 'ai_skill_publish_events' : 'ai_skill_publications'}
+                  WHERE tenant_id=? AND ${eventSource ? 'id' : 'operation_id'}=?
                 UNION SELECT subject_id FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset='skill_publications'
               ) ON CONFLICT(tenant_id,source_type,source_key) DO UPDATE SET generation=generation+1`)
-              .run(tenantId, tenantId, change.source_key, tenantId, `publication:${change.source_key}`);
+              .run(tenantId, tenantId, change.source_key, tenantId, `${change.source_type}:${change.source_key}`);
           }
           if (change.source_type === 'skill_session') db.prepare(`INSERT INTO ai_usage_dirty_skill_sessions(tenant_id,session_key)
             VALUES(?,?) ON CONFLICT(tenant_id,session_key) DO UPDATE SET generation=generation+1`).run(tenantId, change.source_key);
@@ -227,7 +238,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
               FROM ai_usage_skill_context WHERE tenant_id=? AND workspace_id=? AND session_id IS NOT NULL
               ON CONFLICT(tenant_id,session_key) DO UPDATE SET generation=generation+1`).run(tenantId, change.source_key);
           }
-          store.put(tenantId, `${change.source_type}:${change.source_key}`, rows, { replace: true });
+          store.put(tenantId, `${change.source_type}:${change.source_key}`, rows,
+            { replace: true, ...(change.source_type === 'publication_event' ? { priority: 25 } : {}) });
           db.prepare('DELETE FROM ai_usage_source_changes WHERE tenant_id=? AND source_type=? AND source_key=? AND generation=?')
             .run(tenantId, change.source_type, change.source_key, change.generation);
         });
@@ -439,7 +451,9 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     const statuses = db.prepare(`SELECT terminal_status,COUNT(*) AS count FROM ai_usage_turn_facts
       WHERE tenant_id=? AND started_at<? GROUP BY terminal_status`).all(tenantId, batch.target_through);
     const counts = Object.fromEntries(statuses.map((row) => [row.terminal_status, row.count]));
-    const publications = db.prepare("SELECT COUNT(*) AS count FROM ai_skill_publications WHERE tenant_id=? AND status='confirmed'").get(tenantId).count;
+    const publications = db.prepare(`SELECT (SELECT COUNT(*) FROM ai_skill_publications WHERE tenant_id=? AND status='confirmed')
+      + (SELECT COUNT(*) FROM ai_skill_publish_events WHERE tenant_id=? AND status='succeeded' AND publish_kind='create') AS count`)
+      .get(tenantId, tenantId).count;
     // A malformed merged record must not make a successfully read source look
     // fully covered. Do not guess its business day or substitute created_at.
     const invalidMerged = tables.has('ai_mr_submissions') ? db.prepare(`SELECT COUNT(*) AS n FROM ai_mr_submissions

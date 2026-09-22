@@ -34,9 +34,28 @@ const MARKET_LOG_LEVELS = {
 let marketRequestSequence = 0;
 
 function recordSkillUsage(recorder, method, input) {
+  if (typeof recorder?.[method] !== 'function') return null;
   try { return recorder[method](input); } catch (error) {
     console.warn(`[AiUsage] Skill ${method} requires reconciliation:`, error?.message || error);
     return null;
+  }
+}
+
+// Capture the confirmed Publish action server-side, using the authenticated
+// scope supplied by the route. Opening a preview is not a publication event.
+async function withPublishEvent(options, publishKind, publish) {
+  const usageRecorder = options?.usageRecorder || aiUsageSkillRecorder;
+  const event = { operationId: crypto.randomUUID(), tenantId: options?.tenantId,
+    userId: options?.userId, workspaceId: options?.workspaceId, skillName: options?.name, publishKind,
+    uncertain: false };
+  recordSkillUsage(usageRecorder, 'beginPublishEvent', event);
+  try {
+    return await withWorkspaceSkillOperationLock(options?.workspacePath, () => publish({ ...options, publishEvent: event }));
+  } catch (error) {
+    // A remote publish may have committed even if its response was lost. Never
+    // infer success, retry the remote write, or overwrite a recorded success.
+    recordSkillUsage(usageRecorder, 'failPublishEvent', { ...event, uncertain: event.uncertain && !error?.marketRejected });
+    throw error;
   }
 }
 
@@ -543,11 +562,11 @@ export async function getMarketSkillPublishState({ workspaceId, workspacePath, n
 }
 
 export async function publishMarketSkill(options) {
-  const workspacePath = options?.workspacePath;
-  return withWorkspaceSkillOperationLock(workspacePath, () => publishMarketSkillUnlocked(options));
+  return withPublishEvent(options, 'update', publishMarketSkillUnlocked);
 }
 
 async function publishMarketSkillUnlocked({
+  publishEvent,
   tenantId,
   userId,
   usageRecorder = aiUsageSkillRecorder,
@@ -582,6 +601,7 @@ async function publishMarketSkillUnlocked({
     ? requestedStatus
     : await getImportStatusForRemoteSkill(workspacePath, remoteSkill, imports);
   ensurePublishAllowed(remoteSkill, status, currentUsername);
+  recordSkillUsage(usageRecorder, 'identifyPublishEvent', { ...publishEvent, skillId: remoteSkill.id });
 
   const importSkillName = status.skillName || remoteSkill.name;
   const remoteDirectoryName = await resolveRemoteMarketDirectory(remoteSkill, {
@@ -605,6 +625,7 @@ async function publishMarketSkillUnlocked({
     accountId: remoteAccountId,
   });
 
+  publishEvent.uncertain = true;
   const publishPayload = await requestMarketJson('/api/skill/publish', {
     method: 'POST',
     tenantCode,
@@ -616,9 +637,10 @@ async function publishMarketSkillUnlocked({
     },
   });
 
-  await checkSkillMutation({ workspacePath, name: importSkillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const publishedAt = now().toISOString();
   const publishedVersion = normalizeVersion(publishPayload.data?.version) ?? (remoteSkill.version + 1);
+  recordSkillUsage(usageRecorder, 'succeedPublishEvent', { ...publishEvent, skillId: remoteSkill.id, publishedAt, publishedVersion });
+  await checkSkillMutation({ workspacePath, name: importSkillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   await writeMarketImports({ workspaceId, workspacePath }, {
     version: 1,
     imports: {
@@ -664,11 +686,11 @@ async function publishMarketSkillUnlocked({
 export const submitMarketSkill = publishMarketSkill;
 
 export async function uploadAndPublishLocalSkill(options) {
-  const workspacePath = options?.workspacePath;
-  return withWorkspaceSkillOperationLock(workspacePath, () => uploadAndPublishLocalSkillUnlocked(options));
+  return withPublishEvent(options, 'create', uploadAndPublishLocalSkillUnlocked);
 }
 
 async function uploadAndPublishLocalSkillUnlocked({
+  publishEvent,
   tenantId,
   userId,
   usageRecorder = aiUsageSkillRecorder,
@@ -708,7 +730,7 @@ async function uploadAndPublishLocalSkillUnlocked({
   const localContentHash = computeSkillFilesHash(files);
   await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-validate', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const saveForm = await buildSkillSaveForm(marketDirectoryName, files);
-  const usageOperation = { operationId: crypto.randomUUID(), tenantId, userId, workspaceId, skillName };
+  const usageOperation = { operationId: publishEvent.operationId, tenantId, userId, workspaceId, skillName };
   recordSkillUsage(usageRecorder, 'beginPublication', usageOperation);
   let savePayload;
   let savedSkillId;
@@ -719,7 +741,9 @@ async function uploadAndPublishLocalSkillUnlocked({
       accountId: remoteAccountId,
     });
     savedSkillId = extractSavedSkillId(savePayload);
+    recordSkillUsage(usageRecorder, 'identifyPublishEvent', { ...publishEvent, skillId: savedSkillId });
     recordSkillUsage(usageRecorder, 'saved', { ...usageOperation, skillId: savedSkillId });
+    publishEvent.uncertain = true;
     publishPayload = await requestMarketJson('/api/skill/publish', {
       method: 'POST',
       tenantCode,
@@ -737,10 +761,12 @@ async function uploadAndPublishLocalSkillUnlocked({
     throw error;
   }
 
-  await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const publishedAt = now().toISOString();
+  recordSkillUsage(usageRecorder, 'succeedPublishEvent', { ...publishEvent, skillId: savedSkillId,
+    publishedAt, publishedVersion: normalizeVersion(publishPayload.data?.version) ?? 1 });
   const usageConfirmed = recordSkillUsage(usageRecorder, 'confirmed', { ...usageOperation, skillId: savedSkillId, firstPublishedAt: publishedAt });
   if (usageConfirmed === null || usageConfirmed === false) recordSkillUsage(usageRecorder, 'reconciliationRequired', usageOperation);
+  await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const savedSkill = normalizeSavedSkillPayload(savePayload, {
     id: savedSkillId,
     name: skillName,
@@ -1630,7 +1656,9 @@ function assertMarketResponseOk(response, payload, logContext = {}) {
       responseCode: payload?.code,
       responseMessage: payload?.message || payload?.error,
     });
-    throw createHttpError(payload?.message || payload?.error || `Skill market API returned ${response.status}`, response.status);
+    const error = createHttpError(payload?.message || payload?.error || `Skill market API returned ${response.status}`, response.status);
+    if (response.status >= 400 && response.status < 500) error.marketRejected = true;
+    throw error;
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'code') && Number(payload.code) !== 0) {
     logMarketEvent('warn', 'api_error_response', {
@@ -1639,7 +1667,7 @@ function assertMarketResponseOk(response, payload, logContext = {}) {
       responseCode: payload?.code,
       responseMessage: payload?.message,
     });
-    throw createHttpError(payload?.message || 'Skill market API returned an error', 502);
+    throw Object.assign(createHttpError(payload?.message || 'Skill market API returned an error', 502), { marketRejected: true });
   }
 }
 

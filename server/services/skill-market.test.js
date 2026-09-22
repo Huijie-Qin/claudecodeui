@@ -7,7 +7,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import JSZip from 'jszip';
+import Database from 'better-sqlite3';
 
+import { AI_USAGE_SCHEMA_SQL } from '../database/ai-usage-schema.js';
+
+import { createAiUsageSkillRecorder } from './ai-usage-skills.js';
 import {
   fetchRemoteSkillDetail,
   getSkillMarketDetail,
@@ -783,7 +787,15 @@ test('importMarketSkill supports skill names without ASCII letters or numbers', 
   );
 });
 
-test('submitMarketSkill submits the complete imported skill directory', async () => {
+test('submitMarketSkill submits the complete imported skill directory and records its publish event', async (t) => {
+  const database = new Database(':memory:');
+  database.exec(AI_USAGE_SCHEMA_SQL);
+  t.after(() => database.close());
+  const recorder = createAiUsageSkillRecorder({ database });
+  // Keep market file storage in this test's temporary workspace; supply the
+  // authenticated reporting scope only to the injected in-memory recorder.
+  const usageRecorder = Object.fromEntries(Object.keys(recorder).map(method => [method,
+    input => recorder[method]({ ...input, tenantId: 1, userId: 2, workspaceId: 3 })]));
   const workspacePath = await makeWorkspace();
   await importMarketSkill(withTenant({ workspacePath, name: 'test-writer' }));
 
@@ -793,6 +805,7 @@ test('submitMarketSkill submits the complete imported skill directory', async ()
   await fs.writeFile(path.join(skillPath, 'references', 'extra.md'), '# Extra File\n', 'utf8');
 
   const submitted = await submitMarketSkill(withTenant({
+    usageRecorder,
     workspacePath,
     name: 'test-writer',
     currentUsername: 'j00939207',
@@ -802,6 +815,14 @@ test('submitMarketSkill submits the complete imported skill directory', async ()
   assert.equal(submitted.submittedFileCount, 3);
   assert.equal(submitted.skill.updatedAt, submitted.publishedAt);
   assert.equal(submitted.publishedVersion, 2);
+  const event = database.prepare('SELECT * FROM ai_skill_publish_events').get();
+  assert.equal(event.status, 'succeeded');
+  assert.equal(event.publish_kind, 'update');
+  assert.equal(event.skill_id, 'test-writer');
+  assert.equal(event.user_id, 2);
+  assert.equal(event.workspace_id, 3);
+  assert.equal(event.published_at, submitted.publishedAt);
+  assert.equal(event.published_version, 2);
   assert.equal(
     (await viewMarketSkillFile(withTenant({
       workspacePath,

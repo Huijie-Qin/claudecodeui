@@ -21,8 +21,42 @@ function fixture() {
   const recorder = createAiUsageSkillRecorder({ database, now: () => publishedAt,
     logger: { warn: (message) => warnings.push(message) } });
   return { database, recorder, warnings,
+    events: () => database.prepare('SELECT * FROM ai_skill_publish_events ORDER BY requested_at,id').all(),
     rows: () => database.prepare('SELECT * FROM ai_skill_publications').all() };
 }
+
+test('publish click events are scoped, idempotent and preserve a remote success after local failure', () => {
+  const f = fixture();
+  try {
+    const event = f.recorder.beginPublishEvent({ ...scope, operationId: 'click-1', skillName: 'Existing Skill', publishKind: 'update' });
+    f.recorder.beginPublishEvent({ ...scope, operationId: 'click-1', skillName: 'Existing Skill', publishKind: 'update' });
+    assert.equal(f.events().length, 1);
+    assert.equal(f.events()[0].status, 'requested');
+    assert.equal(f.recorder.succeedPublishEvent({ ...event, tenantId: 99, skillId: 'remote-1', publishedAt }), false);
+    f.recorder.identifyPublishEvent({ ...event, skillId: 'remote-1' });
+    f.recorder.succeedPublishEvent({ ...event, skillId: 'remote-1', publishedAt, publishedVersion: 4 });
+    f.recorder.succeedPublishEvent({ ...event, skillId: 'remote-1', publishedAt: '2026-09-12T00:00:00Z', publishedVersion: 5 });
+    f.recorder.failPublishEvent({ ...event, uncertain: true });
+    assert.deepEqual(f.events().map(({ status, skill_id, workspace_id, published_at, published_version }) =>
+      ({ status, skill_id, workspace_id, published_at, published_version })),
+    [{ status: 'succeeded', skill_id: 'remote-1', workspace_id: 3, published_at: publishedAt, published_version: 4 }]);
+    assert.equal(f.rows().length, 0, 'Event capture does not fabricate first-created publication history');
+  } finally { f.database.close(); }
+});
+
+test('failed and unconfirmed publish actions remain separate from confirmed publications', () => {
+  const f = fixture();
+  try {
+    for (const uncertain of [false, true]) {
+      const event = f.recorder.beginPublishEvent({ ...scope, skillName: 'Skill', publishKind: 'create' });
+      f.recorder.failPublishEvent({ ...event, uncertain });
+    }
+    assert.deepEqual(f.events().map(row => row.status).sort(), ['failed', 'unknown']);
+    assert.ok(f.events().every(row => row.published_at === null));
+    assert.equal(f.recorder.beginPublishEvent({ ...scope, tenantId: null, skillName: 'Skill', publishKind: 'create' }), null);
+    assert.equal(f.rows().length, 0);
+  } finally { f.database.close(); }
+});
 
 test('only confirmed first publications count and confirmation is idempotent', () => {
   const f = fixture();
@@ -86,10 +120,17 @@ async function publicationScenario(t, { failure = null, usageRecorder } = {}) {
     const endpoint = new URL(url).pathname;
     calls.push(endpoint);
     if (endpoint.endsWith('/publish') && failure === 'publish') throw new Error('Connection lost after remote publish');
+    if (endpoint.endsWith('/publish') && failure === 'reject') return new Response(JSON.stringify({ code: 403, message: 'Publication rejected' }), { headers: { 'content-type': 'application/json' } });
     let data;
     if (endpoint.endsWith('/skillList')) data = [];
     else if (endpoint.endsWith('/save')) data = 'new-remote-skill';
-    else if (endpoint.endsWith('/publish')) data = { version: 1 };
+    else if (endpoint.endsWith('/publish')) {
+      data = { version: 1 };
+      if (failure === 'local-after-publish') {
+        await fs.mkdir(path.join(workspacePath, '.cloudcli'), { recursive: true });
+        await fs.writeFile(path.join(workspacePath, '.cloudcli', 'skills'), 'Block the later local binding write');
+      }
+    }
     else assert.fail(`Unexpected remote call ${endpoint}`);
     return new Response(JSON.stringify({ code: 0, data }), { headers: { 'content-type': 'application/json' } });
   });
@@ -113,6 +154,9 @@ test('new Skill publish chain records save identity before publish confirmation'
     assert.equal(calls.filter((endpoint) => endpoint.endsWith('/publish')).length, 1);
     assert.equal(f.rows()[0].status, 'confirmed');
     assert.equal(f.rows()[0].first_published_at, publishedAt);
+    assert.equal(f.events()[0].status, 'succeeded');
+    assert.equal(f.events()[0].skill_id, 'new-remote-skill');
+    assert.equal(f.events()[0].publish_kind, 'create');
   } finally { f.database.close(); }
 });
 
@@ -127,6 +171,8 @@ test('an uncertain remote response is not retried and remains pending reconcilia
     assert.equal(f.rows()[0].status, 'reconciliation_required');
     assert.equal(f.rows()[0].skill_id, 'new-remote-skill');
     assert.equal(f.rows()[0].first_published_at, null);
+    assert.equal(f.events()[0].status, 'unknown');
+    assert.equal(f.events()[0].skill_id, 'new-remote-skill');
   } finally { f.database.close(); }
 });
 
@@ -143,5 +189,32 @@ test('analytics writes failing after remote success never resend or fail the bus
     assert.equal(result.skill.id, 'new-remote-skill');
     assert.equal(calls.filter((endpoint) => endpoint.endsWith('/publish')).length, 1);
     assert.equal(f.rows()[0].status, 'reconciliation_required');
+  } finally { f.database.close(); }
+});
+
+test('a confirmed remote rejection is recorded as failed, not a successful publish', async (t) => {
+  const f = fixture();
+  const usageRecorder = Object.fromEntries(Object.keys(f.recorder).map(method => [method,
+    input => f.recorder[method]({ ...input, ...scope })]));
+  try {
+    const { error, calls } = await publicationScenario(t, { usageRecorder, failure: 'reject' });
+    assert.match(error.message, /Publication rejected/);
+    assert.equal(calls.filter(endpoint => endpoint.endsWith('/publish')).length, 1);
+    assert.equal(f.events()[0].status, 'failed');
+    assert.equal(f.events()[0].published_at, null);
+  } finally { f.database.close(); }
+});
+
+test('local binding failure after remote confirmation cannot retract a successful publish event', async (t) => {
+  const f = fixture();
+  const usageRecorder = Object.fromEntries(Object.keys(f.recorder).map(method => [method,
+    input => f.recorder[method]({ ...input, ...scope })]));
+  try {
+    const { error, calls } = await publicationScenario(t, { usageRecorder, failure: 'local-after-publish' });
+    assert.ok(error, 'The local binding cannot be written');
+    assert.equal(calls.filter(endpoint => endpoint.endsWith('/publish')).length, 1);
+    assert.equal(f.events()[0].status, 'succeeded');
+    assert.equal(f.events()[0].published_at, publishedAt);
+    assert.equal(f.rows()[0].status, 'confirmed');
   } finally { f.database.close(); }
 });

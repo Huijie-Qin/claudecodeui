@@ -6,7 +6,24 @@ import Database from 'better-sqlite3';
 import { AI_USAGE_SCHEMA_SQL } from '../database/ai-usage-schema.js';
 
 import { createSkillPublisherResolver } from './ai-usage-skill-publishers.js';
+import { createAiUsageSkillRecorder } from './ai-usage-skills.js';
 import { fixture } from './ai-usage-test-fixture.js';
+
+test('successful update events establish publisher evidence only from their confirmed time', (t) => {
+  const db = new Database(':memory:'); t.after(() => db.close()); db.exec(AI_USAGE_SCHEMA_SQL);
+  const recorder = createAiUsageSkillRecorder({ database: db });
+  const event = { operationId: 'updated', tenantId: 10, userId: 2, workspaceId: 7,
+    skillId: 'skill-a', skillName: 'Same name', publishKind: 'update', publishedAt: '2026-09-11T02:00:00Z' };
+  recorder.beginPublishEvent(event); recorder.succeedPublishEvent(event);
+  const uncertain = { ...event, operationId: 'uncertain', skillId: 'skill-b' };
+  recorder.beginPublishEvent(uncertain); recorder.identifyPublishEvent(uncertain);
+  recorder.failPublishEvent({ ...uncertain, uncertain: true });
+  const resolve = createSkillPublisherResolver(db, 10);
+  assert.equal(resolve({ remote_skill_id: 'skill-a' }, '2026-09-10T00:00:00Z'), null);
+  assert.equal(resolve({ remote_skill_id: 'skill-a' }, '2026-09-12T00:00:00Z'), 2);
+  assert.equal(resolve({ remote_skill_id: 'skill-b' }, '2026-09-12T00:00:00Z'), null);
+  assert.equal(createSkillPublisherResolver(db, 20)({ remote_skill_id: 'skill-a' }, '2026-09-12T00:00:00Z'), null);
+});
 
 test('publisher resolution uses exact tenant/Skill evidence, not caller, names or account numbers', (t) => {
   const db = new Database(':memory:'); t.after(() => db.close()); db.exec(AI_USAGE_SCHEMA_SQL);
