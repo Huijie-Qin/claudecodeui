@@ -233,6 +233,20 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const baseId = raw.uuid || generateMessageId('claude');
     const conversationRole = resolveConversationRole(raw);
 
+    // Recent Claude versions persist delivered task notifications as queued
+    // command attachments rather than user messages. Queue-operation rows are
+    // transport bookkeeping and must not create duplicate notifications.
+    const attachment = readObjectRecord(raw.attachment);
+    if (raw.type === 'attachment' && attachment?.type === 'queued_command'
+      && attachment.commandMode === 'task-notification'
+      && typeof attachment.prompt === 'string'
+      && /^\s*<task-notification\b[\s\S]*<\/task-notification\s*>\s*$/i.test(attachment.prompt)) {
+      return [createNormalizedMessage({
+        id: baseId, sessionId, timestamp: raw.timestamp || attachment.timestamp || ts,
+        provider: PROVIDER, kind: 'task_notification', content: attachment.prompt,
+      })];
+    }
+
     if (raw.type === 'system' && typeof raw.subtype === 'string') {
       const taskId = typeof raw.task_id === 'string' ? raw.task_id : undefined;
       const toolUseId = typeof raw.tool_use_id === 'string' ? raw.tool_use_id : undefined;

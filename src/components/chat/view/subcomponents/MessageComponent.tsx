@@ -22,6 +22,10 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
 import { useWebSocketControls } from '../../../../contexts/WebSocketContext';
+import { ExecutionTaskLink, ExecutionTaskStatusBadge } from '../../execution/ExecutionTaskLink';
+import { normalizeExecutionStatus } from '../../execution/buildExecutionTasks';
+import { redactVisibleSecretText } from '../../execution/display';
+import type { ExecutionTask } from '../../execution/types';
 import SaveInvocationCase from '../../../skills-market/evaluation/SaveInvocationCase';
 import { ToolTraceFrame } from '../../tools/components/ToolTraceFrame';
 
@@ -42,6 +46,8 @@ type MessageComponentProps = {
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onOpenSubagent?: (toolId: string) => void;
+  executionTask?: ExecutionTask;
+  onOpenExecutionTask?: (taskId: string) => void;
   onForkMessage?: (message: ChatMessage) => void;
   isForking?: boolean;
   forkDisabled?: boolean;
@@ -63,13 +69,6 @@ type InteractiveOption = {
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 type PreviewImage = { src: string; alt: string };
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
-
-function redactVisibleSecretText(value: unknown): string {
-  return String(value ?? '')
-    .replace(/(Authorization\s*[:=]\s*Bearer\s+)[^\s"'`]+/gi, '$1[REDACTED]')
-    .replace(/((?:api[_-]?key|auth[_-]?token|private[_-]?token|user[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]')
-    .replace(/([A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|PRIVATE)[A-Z0-9_]*\s*[:=]\s*)[^\s"'`]+/gi, '$1[REDACTED]');
-}
 
 function formatHookRecordTimestamp(value: string): string {
   const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
@@ -150,7 +149,7 @@ function formatDiagnosticsForCopy(diagnostics?: ClaudeProcessDiagnostics): strin
   return sections.join('\n\n');
 }
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, onForkMessage, isForking, forkDisabled, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onOpenSubagent, executionTask, onOpenExecutionTask, onForkMessage, isForking, forkDisabled, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const { sendMessage, isConnected } = useWebSocketControls();
   const hookVisible = useHookChatVisibility(selectedProject?.workspaceId, message.hookActivity?.hookId);
@@ -295,6 +294,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     <div
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
+      data-chat-message-id={String(message.id || message.toolId || '')}
+      data-chat-tool-id={message.toolId}
+      data-chat-tool-name={message.toolName}
       data-queue-status={message.queueStatus || undefined}
       className={messageRowClassName(message.type, !!isGrouped)}
     >
@@ -640,11 +642,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
             </div>
           </div>
         </div>
+      ) : message.isTaskNotification && executionTask && onOpenExecutionTask ? (
+        <ExecutionTaskLink task={executionTask} onOpen={onOpenExecutionTask} />
       ) : message.isTaskNotification ? (
         /* Compact task notification on the left */
         <div className="w-full">
           <div className="flex items-center gap-2 py-0.5">
-            <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${message.taskStatus === 'completed' ? 'bg-green-400 dark:bg-green-500' : 'bg-amber-400 dark:bg-amber-500'}`} />
+            <ExecutionTaskStatusBadge status={normalizeExecutionStatus(message.taskStatus)} />
             <span className="text-xs text-gray-500 dark:text-gray-400">{message.content}</span>
           </div>
           {message.taskNotification?.result && (
@@ -1005,6 +1009,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </>} />}
           </div>
         </div>
+      )}
+      {message.isToolUse && !message.isTaskNotification && executionTask && onOpenExecutionTask && (
+        <div className="mt-1"><ExecutionTaskLink task={executionTask} onOpen={onOpenExecutionTask} /></div>
       )}
       {previewImage && (
         <div

@@ -8,7 +8,7 @@ import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messag
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
-import { normalizedToChatMessages } from './useChatMessages';
+import { chatMessageToNormalized, normalizedToChatMessages } from './useChatMessages';
 import { useHookChatVisibilityRevision } from '../../hooks/hookChatVisibility';
 import { preserveChatMessageReferences } from '../utils/stableChatMessages';
 import {
@@ -47,62 +47,6 @@ interface UseChatSessionStateArgs {
 interface ScrollRestoreState {
   height: number;
   top: number;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Helper: Convert a ChatMessage to a NormalizedMessage for the store */
-/* ------------------------------------------------------------------ */
-
-function chatMessageToNormalized(
-  msg: ChatMessage,
-  sessionId: string,
-  provider: LLMProvider,
-): NormalizedMessage | null {
-  const id = typeof msg.id === 'string' && msg.id.trim()
-    ? msg.id
-    : `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const ts = msg.timestamp instanceof Date
-    ? msg.timestamp.toISOString()
-    : typeof msg.timestamp === 'number'
-      ? new Date(msg.timestamp).toISOString()
-      : String(msg.timestamp);
-  const base = { id, sessionId, timestamp: ts, provider };
-
-  if (msg.isToolUse) {
-    return {
-      ...base,
-      kind: 'tool_use',
-      toolName: msg.toolName,
-      toolInput: msg.toolInput,
-      toolId: msg.toolId || id,
-    } as NormalizedMessage;
-  }
-  if (msg.isThinking) {
-    return { ...base, kind: 'thinking', content: msg.content || '' } as NormalizedMessage;
-  }
-  if (msg.isInteractivePrompt) {
-    return { ...base, kind: 'interactive_prompt', content: msg.content || '' } as NormalizedMessage;
-  }
-  if ((msg as any).isTaskNotification) {
-    return {
-      ...base,
-      kind: 'task_notification',
-      status: (msg as any).taskStatus || 'completed',
-      summary: msg.content || '',
-    } as NormalizedMessage;
-  }
-  if (msg.type === 'error') {
-    return { ...base, kind: 'error', content: msg.content || '' } as NormalizedMessage;
-  }
-  return {
-    ...base,
-    kind: 'text',
-    role: msg.type === 'user' ? 'user' : 'assistant',
-    content: msg.content || '',
-    ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
-    ...(msg.queueStatus ? { queueStatus: msg.queueStatus } : {}),
-    ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
-  } as NormalizedMessage;
 }
 
 /* ------------------------------------------------------------------ */
@@ -856,6 +800,10 @@ export function useChatSessionState({
     setVisibleMessageCount((prev) => prev + 100);
   }, []);
 
+  const revealAllLoadedMessages = useCallback(() => {
+    setVisibleMessageCount(Infinity);
+  }, []);
+
   return {
     chatMessages,
     addMessage,
@@ -878,6 +826,7 @@ export function useChatSessionState({
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
+    revealAllLoadedMessages,
     loadAllMessages,
     allMessagesLoaded,
     isLoadingAllMessages,

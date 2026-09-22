@@ -12,6 +12,69 @@ import {
 } from './claude-sessions.provider.js';
 import { appendClaudeDisplayCommand } from './claude-display-command-store.js';
 
+test('ClaudeSessionsProvider restores delivered task-notification attachments but ignores queue bookkeeping', () => {
+  const provider = new ClaudeSessionsProvider();
+  const content = '<task-notification>\n<task-id>b7y4j0ch1</task-id>\n'
+    + '<tool-use-id>call_01_PPxWHva3glOXJFdwqW1K6183</tool-use-id>\n'
+    + '<output-file>/tmp/claude-1000/-workspace/session/tasks/b7y4j0ch1.output</output-file>\n'
+    + '<status>failed</status>\n<summary>Background command "缺列校验（受控失败）" failed with exit code 7</summary>\n</task-notification>';
+  const timestamp = '2026-09-22T07:04:53.898Z';
+  const native = { type: 'attachment', uuid: 'native-failure', timestamp,
+    attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: content, timestamp } };
+  const [message] = provider.normalizeMessage(native, 'session-1');
+  assert.equal(message.kind, 'task_notification');
+  assert.equal(message.content, content, 'Keep XML fields available to the same parser used for live notifications');
+  assert.equal(message.timestamp, timestamp);
+  assert.equal(message.id, 'native-failure');
+  for (const operation of ['enqueue', 'remove']) {
+    assert.deepEqual(provider.normalizeMessage({ type: 'queue-operation', operation, timestamp, content }, 'session-1'), []);
+  }
+  assert.deepEqual(provider.normalizeMessage({ ...native, attachment: { ...native.attachment, commandMode: 'prompt' } }, 'session-1'), []);
+  assert.deepEqual(provider.normalizeMessage({ ...native, attachment: { ...native.attachment, prompt: 'Ordinary queued command' } }, 'session-1'), []);
+  assert.deepEqual(provider.normalizeMessage({ ...native, isSidechain: true }, 'session-1'), []);
+  assert.equal(provider.normalizeMessage({ ...native, isSidechain: true }, 'session-1', null, true)[0].content, content);
+});
+
+test('native attachment task outcomes survive history loading and recursive child normalization', async (t) => {
+  const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-task-attachment-reload-'));
+  t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));
+  const sessionId = '4588adec-ce2c-41ca-b9d5-c2f249fc74c9';
+  const projectDirectory = path.join(runtimeHomePath, '.claude', 'projects', '-workspace');
+  const subagentsDirectory = path.join(projectDirectory, sessionId, 'subagents');
+  await fs.mkdir(subagentsDirectory, { recursive: true });
+  const content = '<task-notification><task-id>bg-main</task-id><tool-use-id>bash-main</tool-use-id>'
+    + '<status>failed</status><summary>Background command failed with exit code 7</summary></task-notification>';
+  const childContent = content.replaceAll('bg-main', 'bg-child').replaceAll('bash-main', 'bash-child');
+  const rows = [
+    { uuid: 'agent-call', type: 'assistant', timestamp: '2026-09-22T07:04:00Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'agent-tool', name: 'Agent', input: { description: 'Inspect CSV' } }] } },
+    { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-22T07:04:53Z', content },
+    { type: 'attachment', uuid: 'main-notice', timestamp: '2026-09-22T07:04:53Z',
+      attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: content } },
+    { type: 'queue-operation', operation: 'remove', timestamp: '2026-09-22T07:04:54Z', content },
+    { uuid: 'agent-result', type: 'user', timestamp: '2026-09-22T07:05:34Z',
+      toolUseResult: { agentId: 'child-a', status: 'completed' },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'agent-tool', content: 'Finished CSV review' }] } },
+  ].map((row) => ({ ...row, sessionId }));
+  await fs.writeFile(path.join(projectDirectory, `${sessionId}.jsonl`), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+  await fs.writeFile(path.join(subagentsDirectory, 'agent-child-a.jsonl'), `${JSON.stringify({
+    type: 'attachment', uuid: 'child-notice', timestamp: '2026-09-22T07:04:55Z', sessionId, agentId: 'child-a', isSidechain: true,
+    attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: childContent },
+  })}\n`);
+  const provider = new ClaudeSessionsProvider();
+  const full = await provider.fetchHistory(sessionId, { runtimeHomePath });
+  const notices = full.messages.filter((message) => message.kind === 'task_notification');
+  assert.equal(notices.length, 1, 'enqueue/remove rows must not duplicate the delivered attachment');
+  assert.equal(notices[0].content, content);
+  const child = full.messages.find((message) => message.toolId === 'agent-tool' && message.kind === 'tool_use')?.subagentMessages;
+  assert.equal(child?.length, 1);
+  assert.equal(child?.[0].kind, 'task_notification');
+  assert.equal(child?.[0].content, childContent);
+  assert.equal(child?.[0].parentToolUseId, 'agent-tool');
+  const page = await provider.fetchHistory(sessionId, { runtimeHomePath, limit: 20 });
+  assert.deepEqual(page.messages, full.messages);
+});
+
 test('skill history pagination counts normalized messages without repeating queries', async (t) => {
   const runtimeHomePath = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-skill-pages-'));
   t.after(() => fs.rm(runtimeHomePath, { recursive: true, force: true }));

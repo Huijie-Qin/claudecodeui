@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
+import type { ExecutionTask } from '../../execution/types';
+import { executionTaskForMessage, indexExecutionTaskMessages } from '../../execution/messageTasks';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
@@ -42,6 +44,9 @@ interface ChatMessagesPaneProps {
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onOpenSubagent?: (toolId: string) => void;
+  executionTasks?: ExecutionTask[];
+  onOpenExecutionTask?: (taskId: string) => void;
+  locatedExecutionSource?: { messageId?: string; toolUseId?: string } | null;
   onForkMessage?: (message: ChatMessage) => void;
   forkingMessageUuid?: string | null;
   forkDisabled?: boolean;
@@ -87,6 +92,9 @@ function ChatMessagesPane({
   createDiff,
   onFileOpen,
   onOpenSubagent,
+  executionTasks,
+  onOpenExecutionTask,
+  locatedExecutionSource,
   onForkMessage,
   forkingMessageUuid,
   forkDisabled,
@@ -99,10 +107,14 @@ function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
+  const executionTaskIndex = useMemo(() => indexExecutionTaskMessages(executionTasks || []), [executionTasks]);
   const keyedVisibleMessages = useMemo(() => {
     const occurrenceCounts = new Map<string, number>();
 
-    return visibleMessages.filter((message) => !(hideToolMessages && message.isToolUse)).map((message, index) => {
+    return visibleMessages.filter((message) => !(hideToolMessages && message.isToolUse)
+      || Boolean(executionTaskForMessage(executionTaskIndex, message))
+      || (Boolean(locatedExecutionSource?.messageId) && message.id === locatedExecutionSource?.messageId)
+      || (Boolean(locatedExecutionSource?.toolUseId) && message.toolId === locatedExecutionSource?.toolUseId)).map((message, index) => {
       const baseKey = getIntrinsicMessageKey(message) || `message-fallback-${index}`;
       const occurrenceIndex = occurrenceCounts.get(baseKey) || 0;
       occurrenceCounts.set(baseKey, occurrenceIndex + 1);
@@ -112,7 +124,7 @@ function ChatMessagesPane({
         key: occurrenceIndex === 0 ? baseKey : `${baseKey}-duplicate-${occurrenceIndex}`,
       };
     });
-  }, [hideToolMessages, visibleMessages]);
+  }, [executionTaskIndex, hideToolMessages, locatedExecutionSource, visibleMessages]);
 
   return (
     <div
@@ -188,6 +200,8 @@ function ChatMessagesPane({
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}
                 onOpenSubagent={onOpenSubagent}
+                executionTask={executionTaskForMessage(executionTaskIndex, message)}
+                onOpenExecutionTask={onOpenExecutionTask}
                 onForkMessage={onForkMessage}
                 isForking={Boolean(forkingMessageUuid && forkingMessageUuid === message.sourceMessageUuid)}
                 forkDisabled={forkDisabled}

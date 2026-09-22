@@ -1166,6 +1166,50 @@ test('Claude persists synthetic stopped subagent state for session replay', () =
   assert.deepEqual(persisted.map((message) => message.id), ['subagent-stop-agent-1']);
 });
 
+test('Claude persists real SDK task lifecycle events missing from native parent and child JSONL', () => {
+  const persisted = [];
+  const notifications = ['running', 'completed', 'failed'].map((status, index) => ({
+    id: `task-event-${index}`, sessionId: 'session-1', provider: 'claude', kind: 'task_notification',
+    timestamp: `2026-09-22T07:04:0${index}Z`, taskId: 'child-long-bash', toolUseId: 'child-bash',
+    parentToolUseId: 'parent-agent', status, summary: `Command ${status}`, usage: { duration_ms: index * 1000 },
+  }));
+  const changed = persistNormalizedMessages({
+    multitenancy: { sessionMessages: { upsertMessages: ({ messages }) => { persisted.push(...messages); return messages.length; } } },
+    options: { tenantId: 1, workspaceId: 3, userId: 2 }, provider: 'claude',
+    providerSessionId: 'session-1', runtimeId: 'runtime-1', messages: [
+      ...notifications,
+      { id: 'native-assistant', kind: 'text', role: 'assistant', content: 'Canonical JSONL still owns normal conversation text.' },
+    ],
+  });
+  assert.equal(changed, 3);
+  assert.deepEqual(persisted, notifications);
+});
+
+test('persisted SDK task events replay beside canonical history and deduplicate the same event id', async () => {
+  const notification = { id: 'task-final', sessionId: 's1', provider: 'claude', kind: 'task_notification',
+    timestamp: '2026-09-22T07:04:02Z', taskId: 'child-long-bash', toolUseId: 'child-bash',
+    parentToolUseId: 'parent-agent', status: 'completed', summary: 'Long Bash finished', result: 'FOUND after 6 polls' };
+  const progress = { ...notification, id: 'task-start', timestamp: '2026-09-22T07:04:01Z', status: 'running', result: undefined };
+  const transcript = [
+    { id: 'user', kind: 'text', role: 'user', content: 'Run the checks', timestamp: '2026-09-22T07:04:00Z' },
+    notification,
+    { id: 'assistant', kind: 'text', role: 'assistant', content: 'Done', timestamp: '2026-09-22T07:04:03Z' },
+  ];
+  const service = createSessionMessageHistoryService({
+    multitenancy: {
+      runtimes: { findByProviderSession: () => ({ runtime_home_path: '/tmp/runtime/home' }) },
+      sessionMessages: { listMessages: () => ({ messages: [progress, notification], total: 2 }) },
+    },
+    hookConfigs: {},
+    providerSessions: { fetchHistory: async () => ({ messages: transcript, total: transcript.length, hasMore: false }) },
+  });
+  const result = await service.fetchHistory({ tenantId: 1, userId: 2, provider: 'claude', providerSessionId: 's1',
+    ownedSession: { workspace_id: 3, workspace_slug: 'repo', workspace_path: '/tmp/repo' }, limit: 20, offset: 0 });
+  assert.deepEqual(result.messages.map((message) => message.id), ['user', 'task-start', 'task-final', 'assistant']);
+  assert.equal(result.messages.filter((message) => message.id === 'task-final').length, 1);
+  assert.equal(result.messages.find((message) => message.id === 'task-final').result, 'FOUND after 6 polls');
+});
+
 test('Claude session history merges persisted Hook activity into the JSONL transcript', async () => {
   const service = createSessionMessageHistoryService({
     multitenancy: {

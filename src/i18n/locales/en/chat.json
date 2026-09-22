@@ -529,5 +529,48 @@
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
+  },
+  "execution": {
+    "status": {
+      "running": "Running",
+      "waiting": "Needs attention",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped",
+      "unknown": "Status unavailable"
+    },
+    "kind": {
+      "background": "Background task"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "activity": "Activity",
+      "result": "Result"
+    },
+    "outputFile": "Output file",
+    "close": "Close task details",
+    "details": "Task details",
+    "exitCode": "Exit code: {{code}}",
+    "locateSource": "Locate in conversation",
+    "openParent": "Open parent subagent",
+    "detailSections": "Task detail sections",
+    "latestProgress": "Latest progress",
+    "noProgress": "The runtime has not reported progress details yet.",
+    "startedAt": "Started",
+    "updatedAt": "Last update",
+    "completedAt": "Finished",
+    "command": "Command",
+    "input": "Task input",
+    "usage": "Usage reported by runtime",
+    "identifiers": "Task identifiers",
+    "taskId": "Task ID",
+    "toolId": "Tool call ID",
+    "activityNotice": "These are events reported by the runtime. Open the output file, when available, to inspect additional logs.",
+    "noEvents": "No execution events have been recorded for this task.",
+    "eventOutput": "View reported output",
+    "reportedResult": "Reported result",
+    "noResult": "No result body has been reported. Check the activity records or output file for available details.",
+    "outputOutsideWorkspace": "This file belongs to the execution runtime and cannot be previewed here. Reported output is available in Result.",
+    "sourceUnavailable": "The source message is not in the loaded history."
   }
 }

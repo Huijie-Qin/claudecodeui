@@ -4,12 +4,15 @@
  */
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
+import type { LLMProvider } from '../../../types/app';
 import type {
   ChatMessage,
   HookActivityStatus,
   HookFollowupActivityDetails,
   SubagentChildTool,
+  TaskNotificationDetails,
 } from '../types/types';
+import { normalizeExecutionStatus } from '../execution/buildExecutionTasks';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
 import { isClaudeInternalUserContent } from '../utils/internalMessages';
 import {
@@ -331,24 +334,110 @@ function readTaskOutputResult(value: unknown): { status?: string; result?: strin
 }
 
 function readTaskNotificationMessage(msg: NormalizedMessage): ChatMessage['taskNotification'] | null {
+  let details: TaskNotificationDetails | null = null;
   if (msg.kind === 'text' && msg.role === 'user' && msg.content) {
-    return parseTaskNotification(msg.content);
+    details = parseTaskNotification(msg.content);
+    if (details && !/<status\b/i.test(details.raw)) details.status = 'unknown';
+  } else if (msg.kind === 'task_notification') {
+    // Local chat updates and restored snapshots may already contain the full
+    // lifecycle. Keep it when going through the store again.
+    const persisted = (msg as NormalizedMessage & { taskNotification?: TaskNotificationDetails }).taskNotification;
+    const parsed = msg.content ? parseTaskNotification(msg.content) : null;
+    details = {
+      ...parsed,
+      ...persisted,
+      taskId: msg.taskId || persisted?.taskId || parsed?.taskId,
+      toolUseId: msg.toolUseId || persisted?.toolUseId || parsed?.toolUseId,
+      outputFile: msg.outputFile || persisted?.outputFile || parsed?.outputFile,
+      status: msg.status || persisted?.status || (parsed && /<status\b/i.test(parsed.raw) ? parsed.status : 'unknown'),
+      summary: msg.summary || persisted?.summary || parsed?.summary || '',
+      result: msg.result ?? persisted?.result ?? parsed?.result,
+      usage: { ...parsed?.usage, ...persisted?.usage, ...msg.usage },
+      extraFields: { ...parsed?.extraFields, ...persisted?.extraFields },
+      parentAgentId: msg.agentId || persisted?.parentAgentId,
+      parentToolUseId: msg.parentToolUseId || persisted?.parentToolUseId,
+      raw: persisted?.raw || parsed?.raw || msg.content || '',
+    };
   }
-  if (msg.kind !== 'task_notification') {
-    return null;
-  }
-
+  if (!details) return null;
+  const terminal = ['completed', 'failed', 'stopped'].includes(normalizeExecutionStatus(details.status));
   return {
-    taskId: msg.taskId,
-    toolUseId: msg.toolUseId,
-    outputFile: msg.outputFile,
-    status: msg.status || 'completed',
-    summary: msg.summary || '',
-    result: msg.result,
-    usage: msg.usage || {},
-    extraFields: {},
-    raw: msg.content || '',
+    ...details,
+    title: details.title || details.summary || undefined,
+    startedAt: details.startedAt || msg.timestamp,
+    updatedAt: details.updatedAt || msg.timestamp,
+    completedAt: details.completedAt || (terminal ? msg.timestamp : undefined),
+    events: details.events?.length ? details.events : [{
+      id: msg.id, timestamp: msg.timestamp, status: details.status,
+      summary: details.summary, ...(details.result !== undefined ? { result: details.result } : {}),
+    }],
   };
+}
+
+function mergeTaskNotificationDetails(
+  previous: TaskNotificationDetails,
+  incoming: TaskNotificationDetails,
+): TaskNotificationDetails {
+  const isTerminal = (status: string) => ['completed', 'failed', 'stopped'].includes(normalizeExecutionStatus(status));
+  const previousTime = timestampToMs(previous.updatedAt) ?? 0;
+  const incomingTime = timestampToMs(incoming.updatedAt) ?? 0;
+  // Delayed progress must not resurrect a finished invocation. Distinct task
+  // IDs are kept separate even when a tool invocation or description matches.
+  const useIncoming = (!isTerminal(previous.status) || isTerminal(incoming.status)) && (
+    incomingTime >= previousTime || (isTerminal(incoming.status) && !isTerminal(previous.status))
+  );
+  const latest = useIncoming ? incoming : previous;
+  const earlier = useIncoming ? previous : incoming;
+  const eventMap = new Map<string, NonNullable<TaskNotificationDetails['events']>[number]>();
+  for (const event of [...(previous.events || []), ...(incoming.events || [])]) eventMap.set(event.id, event);
+  const events = [...eventMap.values()].sort((a, b) => (timestampToMs(a.timestamp) ?? 0) - (timestampToMs(b.timestamp) ?? 0));
+  const starts = [previous.startedAt, incoming.startedAt].filter((value) => timestampToMs(value) !== null) as TimestampValue[];
+  return {
+    ...earlier,
+    ...latest,
+    taskId: latest.taskId || earlier.taskId,
+    toolUseId: latest.toolUseId || earlier.toolUseId,
+    outputFile: latest.outputFile || earlier.outputFile,
+    result: latest.result ?? earlier.result,
+    title: previous.title || incoming.title,
+    startedAt: starts.sort((a, b) => timestampToMs(a)! - timestampToMs(b)!)[0],
+    usage: { ...earlier.usage, ...latest.usage },
+    extraFields: { ...earlier.extraFields, ...latest.extraFields },
+    events,
+  };
+}
+
+function coalesceTaskNotifications(messages: ChatMessage[]): ChatMessage[] {
+  const taskIdsByTool = new Map<string, Set<string>>();
+  for (const message of messages) {
+    const details = message.isTaskNotification ? message.taskNotification : undefined;
+    if (details?.taskId && details.toolUseId) {
+      const ids = taskIdsByTool.get(details.toolUseId) || new Set<string>();
+      ids.add(details.taskId);
+      taskIdsByTool.set(details.toolUseId, ids);
+    }
+  }
+  const result: ChatMessage[] = [];
+  const groups = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    const details = message.isTaskNotification ? message.taskNotification : undefined;
+    if (!details) { result.push(message); continue; }
+    const linkedIds = details.toolUseId ? taskIdsByTool.get(details.toolUseId) : undefined;
+    const taskId = details.taskId || (linkedIds?.size === 1 ? [...linkedIds][0] : undefined);
+    const key = taskId ? `task:${taskId}` : details.toolUseId ? `tool:${details.toolUseId}` : undefined;
+    const existing = key ? groups.get(key) : undefined;
+    if (existing?.taskNotification) {
+      existing.taskNotification = mergeTaskNotificationDetails(existing.taskNotification, details);
+      existing.taskStatus = existing.taskNotification.status;
+      existing.content = existing.taskNotification.summary;
+      existing.toolInput ??= message.toolInput;
+      existing.toolName ||= message.toolName;
+    } else {
+      result.push(message);
+      if (key) groups.set(key, message);
+    }
+  }
+  return result;
 }
 
 /**
@@ -846,6 +935,28 @@ export function normalizedToChatMessages(
     associatedSubagentMessages.add(message);
   });
 
+  // Background commands inside an Agent can emit lifecycle notifications on
+  // the root stream without parent routing metadata. Attach by the exact child
+  // tool call; the Agent's own lifecycle continues through its existing path.
+  messages.forEach((message, index) => {
+    if (associatedSubagentMessages.has(message)) return;
+    const notification = readTaskNotificationMessage(message);
+    if (!notification?.toolUseId || subagentToolIds.has(notification.toolUseId)) return;
+    const source = toolUseById.get(notification.toolUseId)?.message;
+    let owner = source?.parentToolUseId
+      ? resolveRootSubagentToolIdAt(source.parentToolUseId, index)
+      : undefined;
+    if (!owner) {
+      const owners = [...subagentTranscriptByParentToolId.entries()]
+        .filter(([, transcript]) => transcript.some((entry) => entry.toolId === notification.toolUseId))
+        .map(([parentToolId]) => parentToolId);
+      if (owners.length === 1) owner = owners[0];
+    }
+    if (!owner || subagentToolMessageById.get(owner)?.sessionId !== message.sessionId) return;
+    appendSubagentTranscript(owner, [message]);
+    associatedSubagentMessages.add(message);
+  });
+
   const taskNotificationsByToolId = new Map<string, {
     index: number;
     notification: NonNullable<ChatMessage['taskNotification']>;
@@ -863,10 +974,13 @@ export function normalizedToChatMessages(
       toolUseId: notification.toolUseId,
     });
     if (parentToolId) {
+      const previous = taskNotificationsByToolId.get(parentToolId);
+      const merged = previous ? mergeTaskNotificationDetails(previous.notification, notification) : notification;
       taskNotificationsByToolId.set(parentToolId, {
-        index,
-        notification,
-        timestamp: msg.timestamp,
+        index: previous && merged.status === previous.notification.status &&
+          merged.updatedAt === previous.notification.updatedAt ? previous.index : index,
+        notification: merged,
+        timestamp: merged.updatedAt || msg.timestamp,
       });
     }
   }
@@ -913,7 +1027,7 @@ export function normalizedToChatMessages(
         if (!content.trim()) continue;
 
         if (msg.role === 'user') {
-          const taskNotification = parseTaskNotification(content);
+          const taskNotification = readTaskNotificationMessage(msg);
           if (taskNotification) {
             const parentToolId = resolveSubagentToolIdAt({
               eventIndex: messageIndex,
@@ -933,6 +1047,8 @@ export function normalizedToChatMessages(
               isTaskNotification: true,
               taskStatus: taskNotification.status,
               taskNotification,
+              toolName: taskNotification.toolUseId ? toolUseById.get(taskNotification.toolUseId)?.message.toolName : undefined,
+              toolInput: taskNotification.toolUseId ? toolUseById.get(taskNotification.toolUseId)?.message.toolInput : undefined,
             });
           } else {
             if (
@@ -1253,23 +1369,28 @@ export function normalizedToChatMessages(
         });
         break;
 
-      case 'task_notification':
+      case 'task_notification': {
+        const taskNotification = readTaskNotificationMessage(msg)!;
         if (resolveSubagentToolIdAt({
           eventIndex: messageIndex,
-          taskId: msg.taskId,
-          toolUseId: msg.toolUseId,
+          taskId: taskNotification.taskId,
+          toolUseId: taskNotification.toolUseId,
         })) {
           break;
         }
         converted.push({
           ...getMessageIdentity(msg),
           type: 'assistant',
-          content: msg.summary || 'Background task update',
+          content: taskNotification.summary || 'Background task update',
           timestamp: msg.timestamp,
           isTaskNotification: true,
-          taskStatus: msg.status || 'completed',
+          taskStatus: taskNotification.status,
+          taskNotification,
+          toolName: taskNotification.toolUseId ? toolUseById.get(taskNotification.toolUseId)?.message.toolName : msg.toolName,
+          toolInput: taskNotification.toolUseId ? toolUseById.get(taskNotification.toolUseId)?.message.toolInput : msg.toolInput,
         });
         break;
+      }
 
       case 'hook_activity': {
         if (groupedHookFollowupIds.has(msg.id)) {
@@ -1409,5 +1530,71 @@ export function normalizedToChatMessages(
     }
   }
 
-  return converted;
+  return coalesceTaskNotifications(converted);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helper: Convert a ChatMessage to a NormalizedMessage for the store */
+/* ------------------------------------------------------------------ */
+
+export function chatMessageToNormalized(
+  msg: ChatMessage,
+  sessionId: string,
+  provider: LLMProvider,
+): NormalizedMessage | null {
+  const id = typeof msg.id === 'string' && msg.id.trim()
+    ? msg.id
+    : `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const ts = msg.timestamp instanceof Date
+    ? msg.timestamp.toISOString()
+    : typeof msg.timestamp === 'number'
+      ? new Date(msg.timestamp).toISOString()
+      : String(msg.timestamp);
+  const base = { id, sessionId, timestamp: ts, provider };
+
+  if (msg.isToolUse) {
+    return {
+      ...base,
+      kind: 'tool_use',
+      toolName: msg.toolName,
+      toolInput: msg.toolInput,
+      toolId: msg.toolId || id,
+    } as NormalizedMessage;
+  }
+  if (msg.isThinking) {
+    return { ...base, kind: 'thinking', content: msg.content || '' } as NormalizedMessage;
+  }
+  if (msg.isInteractivePrompt) {
+    return { ...base, kind: 'interactive_prompt', content: msg.content || '' } as NormalizedMessage;
+  }
+  if (msg.isTaskNotification) {
+    return {
+      ...base,
+      kind: 'task_notification',
+      status: msg.taskNotification?.status || msg.taskStatus || 'unknown',
+      summary: msg.taskNotification?.summary || msg.content || '',
+      taskId: msg.taskNotification?.taskId,
+      toolUseId: msg.taskNotification?.toolUseId,
+      outputFile: msg.taskNotification?.outputFile,
+      result: msg.taskNotification?.result,
+      usage: msg.taskNotification?.usage,
+      agentId: msg.taskNotification?.parentAgentId,
+      parentToolUseId: msg.taskNotification?.parentToolUseId,
+      toolName: msg.toolName,
+      toolInput: msg.toolInput,
+      taskNotification: msg.taskNotification,
+    } as NormalizedMessage;
+  }
+  if (msg.type === 'error') {
+    return { ...base, kind: 'error', content: msg.content || '' } as NormalizedMessage;
+  }
+  return {
+    ...base,
+    kind: 'text',
+    role: msg.type === 'user' ? 'user' : 'assistant',
+    content: msg.content || '',
+    ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
+    ...(msg.queueStatus ? { queueStatus: msg.queueStatus } : {}),
+    ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
+  } as NormalizedMessage;
 }

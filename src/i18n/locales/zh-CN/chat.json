@@ -506,5 +506,48 @@
     "locatingQuestion": "正在连接子代理的问题…",
     "newUpdates": "{{count}} 条新动态 · 回到最新",
     "newUpdates_other": "{{count}} 条新动态 · 回到最新"
+  },
+  "execution": {
+    "status": {
+      "running": "运行中",
+      "waiting": "待处理",
+      "completed": "已完成",
+      "failed": "失败",
+      "stopped": "已停止",
+      "unknown": "状态未知"
+    },
+    "kind": {
+      "background": "后台任务"
+    },
+    "tabs": {
+      "overview": "概览",
+      "activity": "执行记录",
+      "result": "结果"
+    },
+    "outputFile": "输出文件",
+    "close": "关闭任务详情",
+    "details": "任务详情",
+    "exitCode": "退出码：{{code}}",
+    "locateSource": "定位到会话",
+    "openParent": "查看所属子代理",
+    "detailSections": "任务详情分类",
+    "latestProgress": "最近进展",
+    "noProgress": "尚未收到此任务的进展详情。",
+    "startedAt": "开始时间",
+    "updatedAt": "最近更新",
+    "completedAt": "结束时间",
+    "command": "执行命令",
+    "input": "任务输入",
+    "usage": "运行时上报用量",
+    "identifiers": "任务标识",
+    "taskId": "任务 ID",
+    "toolId": "工具调用 ID",
+    "activityNotice": "这里显示运行时已上报的执行记录。如有输出文件，可打开查看更详细的日志。",
+    "noEvents": "尚无此任务的执行记录。",
+    "eventOutput": "查看上报输出",
+    "reportedResult": "任务结果",
+    "noResult": "尚未收到结果正文，可查看执行记录或已提供的输出文件。",
+    "outputOutsideWorkspace": "此文件位于执行环境的临时目录，当前无法直接预览。已回传的输出可在「结果」中查看。",
+    "sourceUnavailable": "来源消息尚未包含在已加载的记录中。"
   }
 }

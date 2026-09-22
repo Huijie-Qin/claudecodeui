@@ -1,0 +1,32 @@
+/** Source strings for the v1 execution UI; merged into chat.json by the integration. */
+export const executionTranslations = {
+  en: {
+    status: { running: 'Running', waiting: 'Needs attention', completed: 'Completed', failed: 'Failed', stopped: 'Stopped', unknown: 'Status unavailable' },
+    kind: { background: 'Background task' },
+    tabs: { overview: 'Overview', activity: 'Activity', result: 'Result' },
+    outputFile: 'Output file', close: 'Close task details', details: 'Task details', exitCode: 'Exit code: {{code}}',
+    locateSource: 'Locate in conversation', openParent: 'Open parent subagent',
+    detailSections: 'Task detail sections', latestProgress: 'Latest progress',
+    noProgress: 'The runtime has not reported progress details yet.',
+    startedAt: 'Started', updatedAt: 'Last update', completedAt: 'Finished',
+    command: 'Command', input: 'Task input', usage: 'Usage reported by runtime',
+    identifiers: 'Task identifiers', taskId: 'Task ID', toolId: 'Tool call ID',
+    activityNotice: 'These are events reported by the runtime. Open the output file, when available, to inspect additional logs.',
+    noEvents: 'No execution events have been recorded for this task.', eventOutput: 'View reported output',
+    reportedResult: 'Reported result', noResult: 'No result body has been reported. Check the activity records or output file for available details.',
+  },
+  zh: {
+    status: { running: '运行中', waiting: '待处理', completed: '已完成', failed: '失败', stopped: '已停止', unknown: '状态未知' },
+    kind: { background: '后台任务' },
+    tabs: { overview: '概览', activity: '执行记录', result: '结果' },
+    outputFile: '输出文件', close: '关闭任务详情', details: '任务详情', exitCode: '退出码：{{code}}',
+    locateSource: '定位到会话', openParent: '查看所属子代理', detailSections: '任务详情分类',
+    latestProgress: '最近进展', noProgress: '尚未收到此任务的进展详情。',
+    startedAt: '开始时间', updatedAt: '最近更新', completedAt: '结束时间',
+    command: '执行命令', input: '任务输入', usage: '运行时上报用量',
+    identifiers: '任务标识', taskId: '任务 ID', toolId: '工具调用 ID',
+    activityNotice: '这里显示运行时已上报的执行记录。如有输出文件，可打开查看更详细的日志。',
+    noEvents: '尚无此任务的执行记录。', eventOutput: '查看上报输出',
+    reportedResult: '任务结果', noResult: '尚未收到结果正文，可查看执行记录或已提供的输出文件。',
+  },
+} as const;

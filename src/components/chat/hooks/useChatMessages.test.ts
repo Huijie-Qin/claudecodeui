@@ -7,6 +7,40 @@ import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
+test('structured standalone task notifications retain lifecycle details for execution inspection', () => {
+  const messages = normalizedToChatMessages([
+    { id: 'started', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:01Z',
+      kind: 'task_notification', taskId: 'background-a', toolUseId: 'bash-a', status: 'running', summary: 'Execute checks' },
+    { id: 'finished', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:02Z',
+      kind: 'task_notification', taskId: 'background-a', status: 'failed', summary: 'Exit 1',
+      result: 'Test failed', outputFile: '/tmp/background-a.output', usage: { duration_ms: 1000 } },
+    { id: 'late-progress', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:03Z',
+      kind: 'task_notification', taskId: 'background-a', status: 'running', summary: 'Delayed start' },
+  ]);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'started');
+  assert.equal(messages[0].taskStatus, 'failed');
+  assert.equal(messages[0].taskNotification?.toolUseId, 'bash-a');
+  assert.equal(messages[0].taskNotification?.result, 'Test failed');
+  assert.equal(messages[0].taskNotification?.outputFile, '/tmp/background-a.output');
+  assert.deepEqual(messages[0].taskNotification?.usage, { duration_ms: 1000 });
+  assert.equal(messages[0].taskNotification?.events?.length, 3);
+});
+
+test('a late Agent running notification preserves its terminal status and audit event', () => {
+  const [agent] = normalizedToChatMessages([
+    { id: 'agent', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:00Z',
+      kind: 'tool_use', toolName: 'Agent', toolId: 'agent-a', toolInput: { run_in_background: true } },
+    { id: 'end', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:01Z',
+      kind: 'task_notification', taskId: 'child-a', toolUseId: 'agent-a', status: 'completed', summary: 'Finished', result: 'Done' },
+    { id: 'late', sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-22T00:00:02Z',
+      kind: 'task_notification', taskId: 'child-a', toolUseId: 'agent-a', status: 'running', summary: 'Delayed progress' },
+  ]);
+  assert.equal(agent.subagentState?.isComplete, true);
+  assert.equal(agent.taskNotification?.status, 'completed');
+  assert.equal(agent.taskNotification?.events?.length, 2);
+});
+
 test('fork checkpoints retain the raw UUID separately from normalized display ids', () => {
   const assistant: NormalizedMessage = {
     id: 'text_raw-uuid_0', sessionId: 'session-1', provider: 'claude',

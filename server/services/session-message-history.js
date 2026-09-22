@@ -84,7 +84,10 @@ function getMessageTimestampMs(message) {
 
 function isClaudeSyntheticMessage(message) {
   return CLAUDE_SYNTHETIC_MESSAGE_KINDS.has(message?.kind)
-    || (message?.kind === 'task_notification' && message?.syntheticSubagentStop === true)
+    // SDK lifecycle events (including long-running child Bash tasks) are not
+    // consistently written to native JSONL. Persist their actual identities,
+    // progress and terminal state alongside the canonical transcript.
+    || message?.kind === 'task_notification'
     || (message?.origin === 'hook' && message?.mcpLoopReplacement === true);
 }
 

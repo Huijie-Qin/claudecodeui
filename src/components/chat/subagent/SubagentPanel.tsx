@@ -34,6 +34,8 @@ import type {
   Provider,
 } from '../types/types';
 import MessageComponent from '../view/subcomponents/MessageComponent';
+import type { ExecutionTask } from '../execution/types';
+import { executionTaskForMessage, indexExecutionTaskMessages } from '../execution/messageTasks';
 
 import { SubagentActivityItem } from './SubagentActivityItem';
 import type { SubagentTrace, SubagentTraceStatus } from './types';
@@ -55,6 +57,8 @@ export interface SubagentPanelProps {
     lineNum: number;
   }>;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  executionTasks?: ExecutionTask[];
+  onOpenExecutionTask?: (taskId: string) => void;
   onShowSettings?: () => void;
   onGrantToolPermission?: (
     suggestion: ClaudePermissionSuggestion,
@@ -244,8 +248,11 @@ export function SubagentPanel({
   showThinking,
   selectedProject,
   provider,
+  executionTasks,
+  onOpenExecutionTask,
 }: SubagentPanelProps) {
   const { t } = useTranslation('chat');
+  const executionTaskIndex = useMemo(() => indexExecutionTaskMessages(executionTasks || []), [executionTasks]);
   const panelTitleId = useId();
   const promptContentId = useId();
   const panelRef = useRef<HTMLElement>(null);
@@ -642,6 +649,8 @@ export function SubagentPanel({
                           prevMessage={index > 0 ? selectedTrace.messages[index - 1] || null : null}
                           createDiff={createDiff}
                           onFileOpen={onFileOpen}
+                          executionTask={executionTaskForMessage(executionTaskIndex, message)}
+                          onOpenExecutionTask={onOpenExecutionTask}
                           onShowSettings={onShowSettings}
                           onGrantToolPermission={onGrantToolPermission}
                           autoExpandTools={autoExpandTools}

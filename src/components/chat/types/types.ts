@@ -53,6 +53,14 @@ export interface SubagentChildTool {
 
 export type TaskNotificationUsageValue = string | number;
 
+export interface TaskNotificationEvent {
+  id: string;
+  timestamp: string | number | Date;
+  status: string;
+  summary: string;
+  result?: unknown;
+}
+
 export interface TaskNotificationDetails {
   taskId?: string;
   toolUseId?: string;
@@ -64,6 +72,13 @@ export interface TaskNotificationDetails {
   rawUsage?: string;
   extraFields: Record<string, string>;
   raw: string;
+  title?: string;
+  startedAt?: string | number | Date;
+  updatedAt?: string | number | Date;
+  completedAt?: string | number | Date;
+  parentAgentId?: string;
+  parentToolUseId?: string;
+  events?: TaskNotificationEvent[];
 }
 
 export type UserQueueStatus = 'queued' | 'processing' | 'failed';
