@@ -10,6 +10,7 @@ import AiUsagePanel from '../ai-usage/AiUsagePanel';
 import type { Tenant } from '../../types/app';
 
 import TenantHooksTab from './TenantHooksTab';
+import ManagementTenantSelector from './ManagementTenantSelector';
 import { createTenantManagementApi, readManagementJson } from './tenantManagementApi';
 import { canManageTenant } from './tenantManagementAccess';
 
@@ -59,11 +60,8 @@ export default function TenantManagementPage() {
   return <div className="fixed inset-0 flex flex-col bg-background text-foreground">
     <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-3 md:px-6">
       <Button variant="ghost" size="sm" onClick={() => navigate('/')}><ArrowLeft className="h-4 w-4" />返回</Button>
-      <Building2 className="h-5 w-5 text-primary" /><h1 className="text-lg font-semibold">租户管理</h1>
-      <label className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">当前租户<select aria-label="当前租户" className="h-9 max-w-56 rounded-md border border-input bg-background px-3 text-foreground" value={currentTenant?.id ?? ''} onChange={(event) => { const tenant = manageable.find((item) => String(item.id) === event.target.value); if (tenant) selectTenant(tenant); }}>
-        {!manageable.some((tenant) => tenant.id === currentTenant?.id) && <option value={currentTenant?.id ?? ''}>{currentTenant?.name || '选择租户'}</option>}
-        {manageable.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
-      </select></label>
+      <div className="flex items-center gap-2"><Building2 className="h-5 w-5 text-primary" /><h1 className="whitespace-nowrap text-lg font-semibold">租户管理</h1></div>
+      <ManagementTenantSelector currentTenant={currentTenant} tenants={manageable} onSelect={selectTenant} />
     </header>
     {currentTenant ? <TenantManagementContent key={`${user?.id}:${currentTenant.id}`} tenant={currentTenant} /> : <p className="p-12 text-center text-muted-foreground">请先选择有管理权限的租户。</p>}
   </div>;
