@@ -11,11 +11,11 @@ import type { Project, LLMProvider } from '../../../types/app';
 import type { ChatMessage } from '../types/types';
 
 import { scheduleProjectsRefresh } from './chatRealtimeRefresh';
+import { isSkillCreationActive as active, startSkillCreationPolling } from './skillCreationPolling';
 
 type Job = { sessionId?: string; conversationKey?: string; id: string; requestId: string; description: string; status: string; createdAt: string; completedAt?: string; error?: string;
   result?: { name: string; path: string; snippets: Array<{ title: string; reason: string }>; note: string } };
 type Draft = { mode: boolean; description: string; requestId?: string; sent?: string };
-const active = (job: Job) => ['queued', 'selecting', 'generating', 'saving', 'cancelling'].includes(job.status);
 const empty: Draft = { mode: false, description: '' };
 const emptyJobs: Job[] = [];
 // Persist only opaque conversation identifiers, never descriptions or generated content.
@@ -30,7 +30,7 @@ function stored(key: string, value?: string | null): string | null {
   else if (value !== undefined) identifiers.set(key, value);
   return identifiers.get(key) || null;
 }
-async function payload(response: Response) { const value = await response.json(); if (!response.ok) throw new Error(value.error || 'Request failed'); return value; }
+async function payload(response: Response) { const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || 'Request failed'), { status: response.status }); return value; }
 
 export function useSkillCreation({ project, sessionId, provider, input, setInput, onConversationReady }: {
   project: Project | null; sessionId: string | null; provider: LLMProvider; input: string; setInput: (value: string) => void; onConversationReady?: (sessionId: string) => void;
@@ -50,6 +50,8 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
   const draft = drafts[key] || empty;
   const [view, setView] = useState<{ key: string; jobs: Job[] }>({ key, jobs: [] });
   const [sendingKey, setSendingKey] = useState<string | null>(null);
+  const [pollRequest, setPollRequest] = useState<{ key: string } | null>(null);
+  const stopPolling = useRef<() => void>(() => {});
   const [errorView, setErrorView] = useState({ key, text: '' });
   const handled = useRef(new Set<string>()), pending = useRef(new Set<string>());
   const jobs = view.key === key ? view.jobs : emptyJobs;
@@ -76,24 +78,32 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
     }
   };
   useEffect(() => {
-    if (!project?.workspaceId) return;
-    let disposed = false, timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
+    if (!project?.workspaceId || (!concreteSession && pollRequest?.key !== key)) return;
+    let disposed = false;
+    const stop = startSkillCreationPolling<Job>({
+      load: async () => {
         if (adoptedDraft && concreteSession) {
-          await payload(await api.skillCreation.bind(project.workspaceId, { conversationKey, sessionId: concreteSession, provider }));
+          const value = await payload(await api.skillCreation.bind(project.workspaceId, { conversationKey, sessionId: concreteSession, provider }));
+          if (disposed || currentKey.current !== key) return [];
           stored(`${storageKey}:adopt:${concreteSession}`, null);
           scheduleProjectsRefresh(0);
-          if (!disposed) refreshIdentity((value) => value + 1);
-          return;
+          refreshIdentity((value) => value + 1);
+          return value.jobs;
         }
         const value = await payload(await api.skillCreation.list(project.workspaceId, conversationKey));
-        if (!disposed && currentKey.current === key) receive.current(value.jobs);
-      } catch (error) { if (!disposed) setErrorView({ key, text: (error as Error).message }); }
-      finally { if (!disposed) timer = setTimeout(poll, document.hidden ? 10000 : 2000); }
-    };
-    void poll(); return () => { disposed = true; clearTimeout(timer); };
-  }, [key, project?.workspaceId, conversationKey, adoptedDraft, concreteSession, storageKey, provider]);
+        return value.jobs;
+      },
+      receive: (incoming) => {
+        if (currentKey.current !== key) return;
+        setErrorView({ key, text: '' });
+        receive.current(incoming);
+      },
+      onError: (error) => { if (currentKey.current === key) setErrorView({ key, text: (error as Error).message }); },
+      delay: () => document.hidden ? 10000 : 2000,
+    });
+    stopPolling.current = () => { disposed = true; stop(); };
+    return stopPolling.current;
+  }, [key, project?.workspaceId, conversationKey, adoptedDraft, concreteSession, storageKey, provider, pollRequest]);
   async function submit() {
     if (busy || !draft.description.trim() || !project?.workspaceId || project.accessRole === 'view' || pending.current.has(`send:${key}`)) return;
     const description = draft.description, requestId = draft.sent === description && draft.requestId ? draft.requestId : createRequestId();
@@ -102,7 +112,9 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
       const { job } = await payload(await api.skillCreation.start(project.workspaceId, { intent: 'create-skill', description, requestId, conversationKey, sessionId: concreteSession, provider }));
       pending.current.add(job.id);
       if (currentKey.current === key) {
+        stopPolling.current();
         receive.current([...jobs.filter((item) => item.id !== job.id), job]);
+        setPollRequest({ key });
         if (!concreteSession && job.sessionId) {
           stored(`${storageKey}:draft`, null);
           scheduleProjectsRefresh(0);
@@ -114,7 +126,14 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
   }
   async function cancel() {
     if (!running || !project?.workspaceId) return;
-    try { await payload(await api.skillCreation.cancel(project.workspaceId, running.id)); }
+    try {
+      const { job } = await payload(await api.skillCreation.cancel(project.workspaceId, running.id));
+      if (currentKey.current === key) {
+        stopPolling.current();
+        receive.current(jobs.map(item => item.id === job.id ? job : item));
+        setPollRequest({ key });
+      }
+    }
     catch (error) { setErrorView({ key, text: (error as Error).message }); }
   }
   const messages = useMemo<ChatMessage[]>(() => jobs.flatMap((job) => {
