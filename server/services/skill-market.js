@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { isSkillCreator } from '../utils/skill-ownership.js';
 
+import { withSkillLock, checkSkillMutation } from './skill-evals/coordination.js';
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 import { computeSkillDirectoryHash, deleteLocalWorkspaceSkill } from './workspace-skills.js';
 import { aiUsageSkillRecorder } from './ai-usage-skills.js';
@@ -22,7 +23,6 @@ const MARKET_ENDPOINT_PREFIX = '/data-agent';
 const DATA_AGENT_TENANT_HEADER = 'X-Data-Agent-Tenant';
 const ACCOUNT_ID_HEADER = 'X-Account-Id';
 const MARKET_DIRECTORY_CACHE = new Map();
-const WORKSPACE_SKILL_OPERATION_LOCKS = new Map();
 const MAX_SKILL_DIRECTORY_NAME_CODE_POINTS = 80;
 const MARKET_LOG_LEVELS = {
   silent: 0,
@@ -307,6 +307,7 @@ async function downloadMarketSkillUnlocked({
     excludeImportName: previousSkillName,
     excludeDirectoryName: updatingExistingImport ? previousSkillName : undefined,
   });
+  await checkSkillMutation({ workspacePath, name: previousSkillName || skillName, operation: 'market-replace', incomingFiles: downloadedSkill.files, nextName: skillName });
   const runtimeRoot = getSkillMarketPaths(workspacePath).runtimeRoot;
   const stagePath = path.join(runtimeRoot, `.skill-market-import.${process.pid}.${Date.now()}.stage`);
   let runtimePath = getRuntimeSkillPath(workspacePath, skillName);
@@ -410,6 +411,7 @@ async function downloadMarketSkillUnlocked({
 
   await recordMarketBindings(usageRecorder, { tenantId, userId, workspaceId, accountId,
     at: timestamp, evidence: 'market_import_commit' }, workspacePath);
+  await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-published', incomingFiles: downloadedSkill.files });
   try {
     return await getSkillMarketDetail({ workspaceId, workspacePath, name: skillName, tenantCode, accountId });
   } catch (error) {
@@ -596,6 +598,7 @@ async function publishMarketSkillUnlocked({
   const files = await readSkillDirectoryFiles(runtimePath);
   const localContentHash = computeSkillFilesHash(files);
   assertPublishPreviewCurrent(expectedLocalContentHash, localContentHash);
+  await checkSkillMutation({ workspacePath, name: importSkillName, operation: 'market-validate', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const updateForm = await buildSkillUpdateForm(remoteSkill, files, marketDirectoryName);
   await requestMarketForm('/api/skill/update', updateForm, {
     tenantCode,
@@ -613,6 +616,7 @@ async function publishMarketSkillUnlocked({
     },
   });
 
+  await checkSkillMutation({ workspacePath, name: importSkillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const publishedAt = now().toISOString();
   const publishedVersion = normalizeVersion(publishPayload.data?.version) ?? (remoteSkill.version + 1);
   await writeMarketImports({ workspaceId, workspacePath }, {
@@ -702,6 +706,7 @@ async function uploadAndPublishLocalSkillUnlocked({
   });
   const files = await readSkillDirectoryFiles(runtimePath);
   const localContentHash = computeSkillFilesHash(files);
+  await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-validate', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const saveForm = await buildSkillSaveForm(marketDirectoryName, files);
   const usageOperation = { operationId: crypto.randomUUID(), tenantId, userId, workspaceId, skillName };
   recordSkillUsage(usageRecorder, 'beginPublication', usageOperation);
@@ -732,6 +737,7 @@ async function uploadAndPublishLocalSkillUnlocked({
     throw error;
   }
 
+  await checkSkillMutation({ workspacePath, name: skillName, operation: 'market-published', incomingFiles: Object.fromEntries(files.map((file) => [file.path, file.content])) });
   const publishedAt = now().toISOString();
   const usageConfirmed = recordSkillUsage(usageRecorder, 'confirmed', { ...usageOperation, skillId: savedSkillId, firstPublishedAt: publishedAt });
   if (usageConfirmed === null || usageConfirmed === false) recordSkillUsage(usageRecorder, 'reconciliationRequired', usageOperation);
@@ -2462,24 +2468,7 @@ function getRuntimeSkillPath(workspacePath, name) {
 }
 
 async function withWorkspaceSkillOperationLock(workspacePath, operation) {
-  if (!workspacePath) return operation();
-  const lockKey = path.resolve(workspacePath);
-  const previous = WORKSPACE_SKILL_OPERATION_LOCKS.get(lockKey) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => {
-    release = resolve;
-  });
-  const tail = previous.then(() => current);
-  WORKSPACE_SKILL_OPERATION_LOCKS.set(lockKey, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (WORKSPACE_SKILL_OPERATION_LOCKS.get(lockKey) === tail) {
-      WORKSPACE_SKILL_OPERATION_LOCKS.delete(lockKey);
-    }
-  }
+  return workspacePath ? withSkillLock(workspacePath, '*', operation) : operation();
 }
 
 function getDownloadedSkillLogicalName(files, remoteSkill) {

@@ -4,6 +4,8 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../../..
 import { cn } from '../../../../lib/utils';
 
 interface CollapsibleSectionProps {
+  expanded?: boolean;
+  onExpandedChange?: (open: boolean) => void;
   title: string;
   toolName?: string;
   open?: boolean;
@@ -21,6 +23,8 @@ interface CollapsibleSectionProps {
  */
 export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   title,
+  expanded,
+  onExpandedChange,
   toolName,
   open = false,
   stickyHeader = true,
@@ -32,7 +36,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   className = '',
 }) => {
   return (
-    <Collapsible defaultOpen={open} className={cn('group/section', className)}>
+    <Collapsible open={expanded} onOpenChange={onExpandedChange} defaultOpen={open} className={cn('group/section', className)}>
       {/* When there's a clickable title (Edit/Write), only the chevron toggles collapse */}
       {onTitleClick ? (
         <div className={cn(

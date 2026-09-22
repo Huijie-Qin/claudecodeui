@@ -2,7 +2,6 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Clock3, GitBranch, Loader2, RefreshCcw, Webhook, XCircle } from 'lucide-react';
 
-import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import HookExecutionProcess from '../../../hooks/HookExecutionProcess';
 import HookResultViewer from '../../../hooks/HookResultViewer';
 import { useHookChatVisibility } from '../../../hooks/hookChatVisibility';
@@ -23,8 +22,12 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '../../../../shared/view/ui';
 import { useWebSocketControls } from '../../../../contexts/WebSocketContext';
+import SaveInvocationCase from '../../../skills-market/evaluation/SaveInvocationCase';
+import { ToolTraceFrame } from '../../tools/components/ToolTraceFrame';
 
+import { messageRowClassName } from './messagePresentationStyles';
 import { Markdown } from './Markdown';
+import { MessageBody, MessageFooter, MessageHeader, UserMessageBubble } from './MessagePresentation';
 import MessageCopyControl from './MessageCopyControl';
 
 type DiffLine = {
@@ -293,20 +296,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       ref={messageRef}
       data-message-timestamp={message.timestamp || undefined}
       data-queue-status={message.queueStatus || undefined}
-      className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
+      className={messageRowClassName(message.type, !!isGrouped)}
     >
       {message.type === 'user' ? (
-        /* User message bubble on the right */
-        <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className={`group flex-1 rounded-2xl rounded-br-md px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4 ${isQueuedUserMessage
-            ? 'border border-dashed border-blue-300/80 bg-blue-600/75'
-            : isFailedQueuedUserMessage
-              ? 'border border-red-300/80 bg-red-600/85'
-              : 'bg-blue-600'
-            }`}>
-            <div className="whitespace-pre-wrap break-words text-sm">
-              {message.content}
-            </div>
+        <UserMessageBubble content={message.content} grouped={!!isGrouped}
+          state={isQueuedUserMessage ? 'queued' : isFailedQueuedUserMessage ? 'failed' : 'sent'}
+          attachments={<>
             {message.images && message.images.length > 0 && (
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {message.images.map((img, idx) => (
@@ -323,7 +318,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                 ))}
               </div>
             )}
-            <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
+          </>}
+          footer={<MessageFooter role="user" content={shouldShowUserCopyControl ? userCopyContent : undefined} time={formattedTime}>
               {isQueuedUserMessage && (
                 <span className="mr-auto inline-flex items-center gap-1 font-medium" data-queued-message-indicator>
                   <Clock3 className="h-3 w-3" aria-hidden="true" />
@@ -336,18 +332,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   {t('messageQueue.failed', { defaultValue: 'Failed to send supplement' })}
                 </span>
               )}
-              {shouldShowUserCopyControl && (
-                <MessageCopyControl content={userCopyContent} messageType="user" />
-              )}
-              <span>{formattedTime}</span>
-            </div>
-          </div>
-          {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
-              U
-            </div>
-          )}
-        </div>
+          </MessageFooter>}
+        />
       ) : message.isHookActivity && hookActivity ? (
         <div
           className="w-full rounded-lg border border-l-4 border-violet-200/80 border-l-violet-500 bg-violet-50/60 px-3 py-2.5 dark:border-violet-900/70 dark:border-l-violet-400 dark:bg-violet-950/20"
@@ -684,34 +670,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       ) : (
         /* Claude/Error/Tool messages on the left */
         <div className="w-full">
-          {!isGrouped && (
-            <div className="mb-2 flex items-center space-x-3">
-              {message.type === 'error' ? (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-red-600 text-sm text-white">
-                  !
-                </div>
-              ) : message.type === 'tool' ? (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-600 text-sm text-white dark:bg-gray-700">
-                  🔧
-                </div>
-              ) : (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-white">
-                  <SessionProviderLogo provider={provider} className="h-full w-full" />
-                </div>
-              )}
-              <div className="text-sm font-medium text-gray-900 dark:text-white">
-                {message.type === 'error' ? t('messageTypes.error') : message.type === 'tool' ? t('messageTypes.tool') : (provider === 'cursor' ? t('messageTypes.cursor') : provider === 'codex' ? t('messageTypes.codex') : provider === 'gemini' ? t('messageTypes.gemini') : t('messageTypes.claude'))}
-              </div>
-            </div>
-          )}
+          {!isGrouped && <MessageHeader type={message.type} provider={provider} />}
 
           <div className="w-full">
 
             {message.isToolUse ? (
-              <div className={message.toolName === 'Bash'
-                ? 'my-2 rounded-r-md border-l-2 border-green-500/50 bg-muted/20 py-1.5 pl-2.5 pr-1 dark:border-green-400/40 dark:bg-muted/10'
-                : undefined}
-              >
+              <ToolTraceFrame command={message.toolName === 'Bash'}>
                 <div className="flex flex-col">
                   <div className="flex flex-col">
                     <Markdown onFileOpen={onFileOpen} className="prose prose-sm max-w-none dark:prose-invert">
@@ -831,7 +795,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     </div>
                   )
                 )}
-              </div>
+              </ToolTraceFrame>
             ) : message.isInteractivePrompt ? (
               // Special handling for interactive prompts
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
@@ -940,52 +904,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                   </Reasoning>
                 )}
 
-                {(() => {
-                  const content = message.type === 'error'
-                    ? redactVisibleSecretText(formattedMessageContent)
-                    : formattedMessageContent;
-
-                  // Detect if content is pure JSON (starts with { or [)
-                  const trimmedContent = content.trim();
-                  if ((trimmedContent.startsWith('{') || trimmedContent.startsWith('[')) &&
-                    (trimmedContent.endsWith('}') || trimmedContent.endsWith(']'))) {
-                    try {
-                      const parsed = JSON.parse(trimmedContent);
-                      const formatted = JSON.stringify(parsed, null, 2);
-
-                      return (
-                        <div className="my-2">
-                          <div className="mb-2 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                            </svg>
-                            <span className="font-medium">{t('json.response')}</span>
-                          </div>
-                          <div className="overflow-hidden rounded-lg border border-gray-600/30 bg-gray-800 dark:border-gray-700 dark:bg-gray-900">
-                            <pre className="overflow-x-auto p-4">
-                              <code className="block whitespace-pre font-mono text-sm text-gray-100 dark:text-gray-200">
-                                {formatted}
-                              </code>
-                            </pre>
-                          </div>
-                        </div>
-                      );
-                    } catch {
-                      // Not valid JSON, fall through to normal rendering
-                    }
-                  }
-
-                  // Normal rendering for non-JSON content
-                  return message.type === 'assistant' ? (
-                    <Markdown onFileOpen={onFileOpen} className="prose prose-sm prose-gray max-w-none dark:prose-invert">
-                      {content}
-                    </Markdown>
-                  ) : (
-                    <div className="whitespace-pre-wrap">
-                      {content}
-                    </div>
-                  );
-                })()}
+                <MessageBody onFileOpen={onFileOpen} content={message.type === 'error' ? redactVisibleSecretText(formattedMessageContent) : formattedMessageContent} markdown={message.type === 'assistant'} />
 
                 {shouldShowErrorDiagnostics && (
                   <details className="mt-3 rounded-md border border-red-200/70 bg-red-50/60 text-xs dark:border-red-900/60 dark:bg-red-950/20">
@@ -1063,11 +982,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {shouldShowAssistantFooter && (
-              <div className="mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
-                {shouldShowAssistantCopyControl && (
-                  <MessageCopyControl content={assistantCopyContent} messageType="assistant" />
-                )}
+            {shouldShowAssistantCopyControl && !message.isStreaming && selectedProject?.workspaceId && provider === 'claude' && (
+              <SaveInvocationCase workspaceId={selectedProject.workspaceId} messageId={String(message.id)} />
+            )}
+            {shouldShowAssistantFooter && <MessageFooter content={shouldShowAssistantCopyControl ? assistantCopyContent : undefined} time={shouldShowFooterTimestamp ? formattedTime : undefined} actions={<>
                 {onForkMessage && canForkMessage(message, provider) && (
                   <button
                     type="button"
@@ -1084,9 +1002,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                       : t('fork.action', { defaultValue: 'Branch to a new chat' })}
                   </button>
                 )}
-                {shouldShowFooterTimestamp && <span>{formattedTime}</span>}
-              </div>
-            )}
+              </>} />}
           </div>
         </div>
       )}

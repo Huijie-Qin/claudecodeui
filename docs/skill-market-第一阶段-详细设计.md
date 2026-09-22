@@ -1,6 +1,6 @@
 # 技能市场第一阶段 · 详细设计
 
-更新：2026-09-15。性质：结合当前仓库的待实现设计；下文新增模块、接口、表及策略均为建议契约，不是已接入能力。
+更新：2026-09-18（补充执行记录仅保留最新一次）。性质：结合当前仓库的待实现设计；下文新增模块、接口、表及策略均为建议契约，不是已接入能力。
 
 范围以[功能说明](skill-market-第一阶段-功能说明.md)为准。原型入口：[phase1.html](prototypes/skill-market/phase1.html)。不改变远端 data-agent 协议，不新增模板、贡献、角色管理和发布工作流。
 
@@ -128,7 +128,7 @@ Enter 发送、Shift+Enter 换行，服从现有 Ctrl+Enter 设置；IME composi
 - 不增加草稿状态、actual_output、runId、来源或保护标记到这个 JSON；结果和来源是受控元数据。
 - UI 展示 prompt 的摘要，但保存全文；不要硬加 title 字段。导入已知格式时明确转换，未知字段不静默丢弃，报错或保留的兼容策略应统一。
 - 手工/AI/会话保存均调用 EvalFileService 的追加或更新操作；读取、保护校验、分配 ID、写入须在同一文件事务内，附带预期摘要，避免覆盖并发修改。
-- 文件树 JSON 编辑、重命名、删除目录等现有入口同样接入校验。报告仍只绑定原有快照，编辑不会改写历史运行证据。
+- 文件树 JSON 编辑、重命名、删除目录等现有入口同样接入校验。最新报告只绑定本次快照，编辑不会改写其运行证据；再次执行后的替换清理遵循第 9 节。
 - 已发布保护存于受控表 `skill_eval_protection(workspace_id, skill_path, case_id, source, registered_at)`，不能由用户改 JSON 解除。对来源可信的市场导入用例登记；不在本期创造新的发布入口。重新导入、路径重命名须迁移登记；外部文件系统绕过导致删除时，下次加载报告校验发现后提示修复而非认定已解除。
 
 会话保存接口建议 `POST .../skills/:name/eval-cases/from-invocation {invocationId, expectedContentHash}`。后端从会话执行记录读 prompt、引用资料、最终输出，不相信客户端任意提交的“真实输出”。绑定多个 Skill 的调用需定位目标，不把整场会话自动归给最后一个 Skill。保存同一调用使用唯一键防重复；文件与附件先暂存再一起提交。
@@ -230,12 +230,17 @@ JobRepository 保存主体、工作区、Skill 路径、状态、当前阶段、
 | `POST .../skills/:name/eval-cases/from-invocation` | 服务端取证、附件校验、保存幂等 |
 | `POST .../skills/:name/eval-case-jobs` | AI 生成后直接追加，无确认 |
 | `POST .../skills/:name/evaluations` | `{mode: run-all / optimize, expectedContentHash, requestId, maxIterations?: 3}`；仅 optimize 使用次数设置 |
+| `GET .../skills/:name/evaluations/latest` | 当前工作区该 Skill 的最新任务及 generation，不提供历史任务列表 |
 | `GET .../skill-jobs/:jobId/cases/:caseId` | 冻结预期及前后证据；不拼接当前用例替换旧预期 |
 | `GET .../skill-jobs/:jobId/diff` | 本次允许文件的修改前后，不是版本历史 |
 
 建议将 snippets、jobs、protection、invocation-save 幂等记录等存于 CCUI 现有数据库，通过迁移创建新表。完整消息、产物和临时前后文件放在 CCUI 受控任务存储，不放入源 Skill 或市场分发包；所有读写重新检查工作区权限。
 
-用例文件长期保留。建议默认报告与优化对比保留 30 天，临时执行环境任务结束即清理；保留期为首期可配置建议，不是已有能力。删除报告需同步删除关联临时产物，UI 显示已过期而不是错误“未运行”。不存生产凭据；日志脱敏；附件下载防路径逃逸、跨租户访问和 HTML 脚本执行。
+用例文件和原始输入长期保留；执行记录仅保留最新一次，取消此前报告保留 30 天的归档建议。同一 tenant/workspace/Skill 的 run-all 与 optimize 共用 latestJobId，新请求通过校验并被服务端接受时，在事务内切换最新任务、递增 generation、登记旧任务清理标记。未接受的请求和同一请求的幂等重试不清空旧记录；新任务接受后失败或取消也不恢复旧报告。
+
+被替换任务的报告、消息、事件、产物、快照及优化对比停止对外访问并异步物理清理，旧链接经鉴权后返回 410；清理中断可在重启后恢复。仅保留有限重试窗口所需的最小幂等墓碑，不建立历史结果入口。当前最新任务继续持久化以支持刷新和重启；同一次优化内部保留前测与各轮后测，直到下一次用户启动任务时整体替换。不得删除用例原件、保护登记、已经写入工作区的修改或尚需恢复的提交日志。详细机制见[测评实施方案第 5.4 节](skill-market-测评功能实施方案.md#54-最新一次替换与清理)。
+
+临时执行环境任务结束即清理。不存生产凭据；日志脱敏；附件下载防路径逃逸、跨租户访问和 HTML 脚本执行。
 
 ## 10. 实施顺序与验收
 

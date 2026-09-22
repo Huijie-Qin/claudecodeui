@@ -58,6 +58,9 @@ import {createAiUsageService} from './services/ai-usage-scheduler.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
+import skillEvaluationRoutes from './routes/skill-evaluations.js';
+import { assertGenericFileMutation } from './services/skill-evals/files.js';
+import { skillEvaluationService } from './services/skill-evals/index.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
@@ -751,6 +754,7 @@ app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
 app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
+app.use('/api/workspaces', authenticateToken, skillEvaluationRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
 app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);
@@ -1784,6 +1788,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             runtimeMounted,
         } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
+        assertGenericFileMutation(workspace.path, [resolved]);
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
         if (!runtimeMounted) {
@@ -1982,6 +1987,7 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             // Doesn't exist, which is what we want
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Create file or directory
         if (type === 'directory') {
             await fsPromises.mkdir(resolvedPath, { recursive: false });
@@ -2079,6 +2085,7 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             // Doesn't exist, which is what we want
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedOldPath, resolvedNewPath]);
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
         await applyWorkspaceOwnership({
@@ -2128,6 +2135,7 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
         }
 
         const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        assertGenericFileMutation(workspace.path, [sourcePath, path.join(targetDirectory || '', path.basename(sourcePath))]);
         const result = await moveWorkspaceItem({
             workspaceRoot: workspace.path,
             sourcePath,
@@ -2198,6 +2206,7 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(403).json({ error: 'Cannot delete project root directory' });
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Delete based on type
         if (stats.isDirectory()) {
             await fsPromises.rm(resolvedPath, { recursive: true, force: true });
@@ -2365,6 +2374,7 @@ const uploadFilesHandler = async (req, res) => {
                     continue;
                 }
 
+                assertGenericFileMutation(workspace.path, [destPath]);
                 // Ensure parent directory exists (for nested files from folder upload)
                 const parentDir = path.dirname(destPath);
                 try {
@@ -3817,6 +3827,7 @@ async function gracefulShutdown(signal) {
     isServerReady = false;
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
+    await skillEvaluationService.stopWorker();
     runtimeSweeper.stop();
     aiUsageService.stop();
     codeHubMrPoller.stop();
@@ -3849,6 +3860,7 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
         aiUsageService.start();
+        skillEvaluationService.startWorker();
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
@@ -3910,6 +3922,7 @@ async function startServer() {
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
             aiUsageService.stop();
+            await skillEvaluationService.stopWorker();
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();

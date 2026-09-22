@@ -8,6 +8,8 @@ import JSZip from 'jszip';
 import { isSkillCreator } from '../utils/skill-ownership.js';
 
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
+import { withSkillLock, checkSkillMutation } from './skill-evals/coordination.js';
+import { parseEvals } from './skill-evals/contracts.js';
 
 const EMPTY_METADATA = Object.freeze({
   version: 1,
@@ -335,7 +337,7 @@ export async function readWorkspaceSkillFile({ workspacePath, name, filePath, ma
   });
 }
 
-export async function createWorkspaceSkill({ workspacePath, name, displayName, description, content = '' }) {
+async function createWorkspaceSkillUnlocked({ workspacePath, name, displayName, description, content = '' }) {
   const skillName = normalizeWorkspaceSkillName(name);
   const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const skillPath = path.join(runtimeRoot, skillName);
@@ -375,7 +377,7 @@ export async function createWorkspaceSkill({ workspacePath, name, displayName, d
   return getWorkspaceSkillDetail({ workspacePath, name: skillName });
 }
 
-export async function createWorkspaceSkillEntry({
+async function createWorkspaceSkillEntryUnlocked({
   workspacePath,
   name,
   entryPath,
@@ -411,7 +413,7 @@ export async function createWorkspaceSkillEntry({
   return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
 }
 
-export async function updateWorkspaceSkillFile({
+async function updateWorkspaceSkillFileUnlocked({
   workspacePath,
   name,
   filePath,
@@ -438,6 +440,10 @@ export async function updateWorkspaceSkillFile({
     throw createHttpError('Skill file is too large to save', 413);
   }
   const normalizedFilePath = normalizeSkillRelativePath(filePath);
+  if (normalizedFilePath === 'evals/evals.json') {
+    const manifest = await parseSkillManifest(context.rootPath);
+    parseEvals(nextContent, manifest.name);
+  }
   if (normalizedFilePath === 'SKILL.md') {
     const currentManifest = tryParseSkillManifestContent(currentBuffer.toString('utf8'));
     const nextManifest = validateSkillManifestContent(nextContent);
@@ -463,7 +469,7 @@ export async function updateWorkspaceSkillFile({
   return { ...file, skillName: context.name };
 }
 
-export async function renameWorkspaceSkillEntry({
+async function renameWorkspaceSkillEntryUnlocked({
   workspacePath,
   name,
   entryPath,
@@ -487,7 +493,7 @@ export async function renameWorkspaceSkillEntry({
   return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
 }
 
-export async function renameLocalWorkspaceSkillDirectory({
+async function renameLocalWorkspaceSkillDirectoryUnlocked({
   workspacePath,
   name,
   nextName,
@@ -517,7 +523,7 @@ export async function renameLocalWorkspaceSkillDirectory({
   });
 }
 
-export async function deleteWorkspaceSkillEntry({ workspacePath, name, entryPath, marketImports = [] }) {
+async function deleteWorkspaceSkillEntryUnlocked({ workspacePath, name, entryPath, marketImports = [] }) {
   const context = await requireEditableWorkspaceSkill({ workspacePath, name, marketImports });
   const normalizedEntryPath = normalizeSkillRelativePath(entryPath);
   if (normalizedEntryPath === 'SKILL.md') {
@@ -529,7 +535,7 @@ export async function deleteWorkspaceSkillEntry({ workspacePath, name, entryPath
   return getWorkspaceSkillDetail({ workspacePath, name: context.name, marketImports });
 }
 
-export async function deleteLocalWorkspaceSkill({ workspacePath, name, marketImports = [] }) {
+async function deleteLocalWorkspaceSkillUnlocked({ workspacePath, name, marketImports = [] }) {
   const context = await requireEditableWorkspaceSkill({ workspacePath, name, marketImports });
   if (context.managedEntry) {
     await uninstallManagedSkill({ workspacePath, name: context.name });
@@ -671,7 +677,7 @@ export async function previewLocalSkillUpload({
   }
 }
 
-export async function installGithubSkill({ workspacePath, previewId, enable = true, now = () => new Date() }) {
+async function installGithubSkillUnlocked({ workspacePath, previewId, enable = true, now = () => new Date() }) {
   const { previewRoot, sourceRoot, runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const previewDirectory = path.join(previewRoot, previewId);
   const preview = await readJsonFile(path.join(previewDirectory, 'preview.json'));
@@ -694,6 +700,7 @@ export async function installGithubSkill({ workspacePath, previewId, enable = tr
   }
 
   const oldMetadata = await readSkillsMetadata(workspacePath);
+  await checkSkillMutation({ workspacePath, name, operation: 'deleteLocalWorkspaceSkill' });
   const sourcePath = path.join(sourceRoot, name);
   const runtimePath = path.join(runtimeRoot, name);
   const backupToken = `${process.pid}.${Date.now()}`;
@@ -796,7 +803,7 @@ export async function installGithubSkill({ workspacePath, previewId, enable = tr
   }
 }
 
-export async function setSkillEnabled({ workspacePath, name, enabled, now = () => new Date() }) {
+async function setSkillEnabledUnlocked({ workspacePath, name, enabled, now = () => new Date() }) {
   const skillName = sanitizeSkillName(name);
   const metadata = await readSkillsMetadata(workspacePath);
   const entry = metadata.skills?.[skillName];
@@ -848,7 +855,7 @@ export async function setSkillEnabled({ workspacePath, name, enabled, now = () =
   });
 }
 
-export async function uninstallManagedSkill({ workspacePath, name }) {
+async function uninstallManagedSkillUnlocked({ workspacePath, name }) {
   const skillName = sanitizeSkillName(name);
   const metadata = await readSkillsMetadata(workspacePath);
   if (!metadata.skills?.[skillName]) {
@@ -867,7 +874,7 @@ export async function uninstallManagedSkill({ workspacePath, name }) {
   });
 }
 
-export async function reconcileManagedSkills(workspacePath) {
+async function reconcileManagedSkillsUnlocked(workspacePath) {
   const metadata = await readSkillsMetadata(workspacePath);
   const { sourceRoot, runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
   const result = {
@@ -1275,7 +1282,7 @@ function createMarketImportsByName(marketImports) {
     .map((entry) => [firstString(entry.name).toLowerCase(), entry]));
 }
 
-async function resolveWorkspaceSkillContext({ workspacePath, name, marketImports = [], currentUsername }) {
+export async function resolveWorkspaceSkillContext({ workspacePath, name, marketImports = [], currentUsername }) {
   const skillName = normalizeWorkspaceSkillName(name);
   const importsByName = createMarketImportsByName(marketImports);
   const marketImport = importsByName.get(skillName.toLowerCase());
@@ -1409,7 +1416,7 @@ async function resolveSkillEntryPath(rootPath, entryPath, { mustExist }) {
   return targetPath;
 }
 
-async function syncManagedSkillAfterMutation(context, workspacePath) {
+export async function syncManagedSkillAfterMutation(context, workspacePath) {
   if (!context.managedEntry || context.managedEntry.enabled === false) return;
   const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
   const runtimePath = path.join(runtimeRoot, context.name);
@@ -1742,4 +1749,86 @@ function readFirstParagraph(content) {
 
 function pruneUndefined(value) {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+export async function createWorkspaceSkillEntry(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'createWorkspaceSkillEntry' });
+    return createWorkspaceSkillEntryUnlocked(options);
+  });
+}
+
+export async function updateWorkspaceSkillFile(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'updateWorkspaceSkillFile' });
+    return updateWorkspaceSkillFileUnlocked(options);
+  });
+}
+
+export async function renameWorkspaceSkillEntry(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'renameWorkspaceSkillEntry' });
+    return renameWorkspaceSkillEntryUnlocked(options);
+  });
+}
+
+export async function renameLocalWorkspaceSkillDirectory(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'renameLocalWorkspaceSkillDirectory' });
+    return renameLocalWorkspaceSkillDirectoryUnlocked(options);
+  });
+}
+
+export async function deleteWorkspaceSkillEntry(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'deleteWorkspaceSkillEntry' });
+    return deleteWorkspaceSkillEntryUnlocked(options);
+  });
+}
+
+export async function deleteLocalWorkspaceSkill(options) {
+  return withSkillLock(options.workspacePath, options.name, async () => {
+    await checkSkillMutation({ ...options, operation: 'deleteLocalWorkspaceSkill' });
+    return deleteLocalWorkspaceSkillUnlocked(options);
+  });
+}
+
+export async function createWorkspaceSkill(options) {
+  const workspacePath = typeof options === 'string' ? options : options.workspacePath;
+  return withSkillLock(workspacePath, typeof options === 'string' ? '*' : options.name || '*', async () => {
+
+    return createWorkspaceSkillUnlocked(options);
+  });
+}
+
+export async function installGithubSkill(options) {
+  const workspacePath = typeof options === 'string' ? options : options.workspacePath;
+  return withSkillLock(workspacePath, typeof options === 'string' ? '*' : options.name || '*', async () => {
+
+    return installGithubSkillUnlocked(options);
+  });
+}
+
+export async function setSkillEnabled(options) {
+  const workspacePath = typeof options === 'string' ? options : options.workspacePath;
+  return withSkillLock(workspacePath, typeof options === 'string' ? '*' : options.name || '*', async () => {
+
+    return setSkillEnabledUnlocked(options);
+  });
+}
+
+export async function uninstallManagedSkill(options) {
+  const workspacePath = typeof options === 'string' ? options : options.workspacePath;
+  return withSkillLock(workspacePath, typeof options === 'string' ? '*' : options.name || '*', async () => {
+    await checkSkillMutation({ ...options, operation: "deleteLocalWorkspaceSkill" });
+    return uninstallManagedSkillUnlocked(options);
+  });
+}
+
+export async function reconcileManagedSkills(options) {
+  const workspacePath = typeof options === 'string' ? options : options.workspacePath;
+  return withSkillLock(workspacePath, typeof options === 'string' ? '*' : options.name || '*', async () => {
+
+    return reconcileManagedSkillsUnlocked(options);
+  });
 }

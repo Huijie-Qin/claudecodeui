@@ -18,6 +18,7 @@ import {
 import type { DragEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useTranslation } from 'react-i18next';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
@@ -27,6 +28,7 @@ import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
 import SnippetLibrary from './snippets/SnippetLibrary';
 import SnippetFileEditor from './snippets/SnippetFileEditor';
+import SkillEvaluationPanel from './evaluation/SkillEvaluationPanel';
 import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
 import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
@@ -687,6 +689,9 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
         <SkillDetailView
           workspaceId={workspaceId}
           key={`${workspaceId}:${detailTarget.source}:${detailTarget.name}`}
+          evaluationPanel={detailTarget.source === 'mine' && workspaceId ? (
+            <SkillEvaluationPanel key={`${workspaceId}:${detailTarget.name}`} workspaceId={workspaceId} name={detailTarget.name} canManage={canManage} onFilesChanged={() => notifyWorkspaceChanged(detailTarget.name, 'skill-evaluation-files')} />
+          ) : null}
           actionLoading={actionLoading}
           canManage={canManage}
           detail={detail}
@@ -943,6 +948,7 @@ function SkillList({
 
 function SkillDetailView({
   workspaceId,
+  evaluationPanel,
   actionLoading,
   canManage,
   detail,
@@ -974,6 +980,7 @@ function SkillDetailView({
   unpublishAction,
 }: {
   workspaceId?: number;
+  evaluationPanel?: ReactNode;
   actionLoading: boolean;
   canManage: boolean;
   detail: SkillDetail | null;
@@ -1004,6 +1011,8 @@ function SkillDetailView({
   publishAction?: ReactNode;
   unpublishAction?: ReactNode;
 }) {
+  const { t } = useTranslation('common');
+  const [detailTab, setDetailTab] = useState<'files' | 'evaluation'>('files');
   if (detailLoading) return <CenteredState icon={<Loader2 className="h-5 w-5 animate-spin" />} title="正在加载技能详情…" />;
   if (!detail) return <CenteredState icon={<AlertCircle className="h-5 w-5" />} title="技能详情不可用" action="返回" onAction={onBack} />;
   const isLocalOrigin = source === 'mine' && detail.origin === 'local';
@@ -1033,7 +1042,11 @@ function SkillDetailView({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+      {evaluationPanel && <div className="flex gap-2 border-b border-border px-4 py-2" role="tablist" aria-label={t('skillEvaluation.title')}>
+        <button type="button" role="tab" aria-selected={detailTab === 'files'} className={`rounded-md px-4 py-2 text-sm ${detailTab === 'files' ? 'bg-muted font-medium' : ''}`} onClick={() => setDetailTab('files')}>{t('skillEvaluation.filesTab')}</button>
+        <button type="button" role="tab" aria-selected={detailTab === 'evaluation'} className={`rounded-md px-4 py-2 text-sm ${detailTab === 'evaluation' ? 'bg-muted font-medium' : ''}`} onClick={() => { if (!dirty || window.confirm(t('skillEvaluation.unsaved'))) setDetailTab('evaluation'); }}>{t('skillEvaluation.title')}</button>
+      </div>}
+      {detailTab === 'evaluation' && evaluationPanel ? evaluationPanel : <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <SkillFileTree
           busy={actionLoading}
           editable={detailEditable}
@@ -1105,7 +1118,7 @@ function SkillDetailView({
             ) : <CenteredState icon={<FileText className="h-5 w-5" />} title="选择文件后查看内容" />}
           </div>
         </main>
-      </div>
+      </div>}
     </div>
   );
 }

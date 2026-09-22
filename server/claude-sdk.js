@@ -1426,6 +1426,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
   const messageDisplay = createClaudeMessageDisplayTracker();
   const completedReplyTracker = createClaudeCompletedReplyTracker();
   let pendingTurnCompletion = null;
+  let skillInvocation = null;
+  let invocationQueryCount = 0;
   let queuedFollowupTurn = null;
   let hookActivityTerminalSent = false;
   let turnBoundaryReached = false;
@@ -1438,6 +1440,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
       // reliable request/result mapping, expose a coverage gap, not a guessed
       // duration or overlapping duplicate user turns.
       if (++usageQueryCount > 1) usageTurn.terminal('unsupported');
+      if (invocationQueryCount++ > 0) skillInvocation?.reject();
       turnCompletionScheduler?.cancel();
       pendingTurnCompletion = null;
       turnLifecycle.beginTurn();
@@ -1558,6 +1561,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     });
 
     updateHookActivity('succeeded');
+    try { skillInvocation?.finish(); } catch { /* Saving eligibility never breaks normal chat completion. */ }
 
     if (!queuedFollowupTurn) {
       runtimeOptions.onConcurrencyIdle?.();
@@ -1660,6 +1664,12 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
       displayCommand,
       modelContent: command,
     };
+    try {
+      if (/^\/[a-zA-Z0-9_-]+\s/.test(displayCommand)) {
+        const { beginSkillInvocation } = await import('./services/skill-evals/invocations.js');
+        skillInvocation = await beginSkillInvocation(runtimeOptions, displayCommand);
+      }
+    } catch { /* Non-reproducible or unauthorized invocations have no save action. */ }
     persistUserPromptMessage({
       options: runtimeOptions,
       provider: 'claude',
@@ -2567,6 +2577,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
           msg.hookActivityId = hookRecoveryActivityId;
         }
       }
+      skillInvocation?.observe(visibleNormalized);
       persistNormalizedMessages({
         options: runtimeOptions,
         provider: 'claude',
@@ -2650,6 +2661,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
           continue;
         }
 
+        if (message.is_error || message.subtype !== 'success') skillInvocation?.reject();
         pendingTurnCompletion = { sessionId: completedSessionId };
         turnLifecycle.finishResult(remainingQueryTurns);
         if (turnBoundaryReached) {

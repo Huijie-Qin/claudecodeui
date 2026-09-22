@@ -909,6 +909,23 @@ export const api = {
       }),
   },
 
+  skillEvaluations: {
+    invocation: (workspaceId, messageId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-invocations?messageId=${encodeURIComponent(messageId)}`)),
+    saveInvocation: (workspaceId, name, invocationId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/from-invocation`), { method: 'POST', body: JSON.stringify({ invocationId, expectedRevision }) }),
+    cases: (workspaceId, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases`)),
+    saveCase: (workspaceId, name, caseId, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases${caseId ? `/${caseId}` : ''}`), { method: caseId ? 'PATCH' : 'POST', body: JSON.stringify(payload) }),
+    deleteCase: (workspaceId, name, caseId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/${caseId}`), { method: 'DELETE', body: JSON.stringify({ expectedRevision }) }),
+    generate: (workspaceId, name, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-case-jobs`), { method: 'POST', body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }) }),
+    job: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}`)),
+    upload: (workspaceId, name, formData) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-inputs`), { method: 'POST', body: formData }),
+    start: (workspaceId, name, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/evaluations`), { method: 'POST', body: JSON.stringify(payload) }),
+    latest: (workspaceId, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/evaluations/latest`)),
+    cancel: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/cancel`), { method: 'POST' }),
+    report: (workspaceId, jobId, caseId, round) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/cases/${caseId}?round=${round}`)),
+    diff: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/diff`)),
+    artifact: (workspaceId, jobId, caseId, round, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/artifacts/${caseId}?round=${round}&name=${encodeURIComponent(name)}`)),
+  },
+
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
     detail: (workspaceId, name) =>

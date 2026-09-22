@@ -35,6 +35,7 @@
     "mock:mcp-loop-task": "node scripts/mcp-loop-demo-task-service.mjs",
     "mock:mcp-loop": "node scripts/mcp-loop-demo-mcp.mjs",
     "mock:skill-market": "node scripts/skill-market-test-server.mjs",
+    "test:skill-evals": "node --test server/services/skill-evals/*.test.js",
     "test:skill-market-mock": "node --test scripts/skill-market-test-server.test.mjs",
     "test:mcp-loop-e2e": "node --test scripts/mcp-loop-demo.e2e.test.mjs",
     "test:agent-templates:e2e": "tsx --tsconfig server/tsconfig.json scripts/agent-template-e2e.mjs",
@@ -154,7 +155,8 @@
     "undici": "^6.21.3",
     "web-push": "^3.6.7",
     "ws": "^8.14.2",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
