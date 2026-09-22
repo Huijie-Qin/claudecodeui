@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Building2, Check, ChevronsUpDown, LogOut, Search, Settings, Shield } from 'lucide-react';
+import { Building2, Check, ChevronsUpDown, LogOut, Search, Settings, Shield } from 'lucide-react';
 import { shouldShowTenantManagementEntry } from '../../../tenant-management/tenantManagementAccess';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '../../../../constants/config';
@@ -32,7 +31,6 @@ export default function SidebarFooter({
 }: SidebarFooterProps) {
   const { logout, user } = useAuth();
   const navigate = useNavigate();
-  const { t: reportText } = useTranslation('aiUsage');
   const showTenantManagementEntry = shouldShowTenantManagementEntry(user, currentTenant);
   const showTenantSwitcher = Boolean(shouldShowTenantSwitcher(tenants) && currentTenant && onTenantSwitch);
   const showLogout = !IS_PLATFORM;
@@ -197,7 +195,6 @@ export default function SidebarFooter({
       )}
 
       {showTenantManagementEntry && <div className="px-3 pt-2 md:px-2 md:pt-0"><button type="button" className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground" onClick={() => navigate('/tenant-management')}><Building2 className="h-4 w-4" /><span className="text-sm">租户管理</span></button></div>}
-      {currentTenant && <div className="px-3 pt-2 md:px-2 md:pt-0"><button type="button" className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground" onClick={() => navigate('/ai-usage')}><BarChart3 className="h-4 w-4" /><span className="text-sm">{reportText('title')}</span></button></div>}
 
       {showAdminEntry && (
         <div className="hidden px-2 md:block">

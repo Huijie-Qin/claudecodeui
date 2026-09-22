@@ -1,7 +1,6 @@
-import { Settings, Sparkles, PanelLeftOpen, Bug, LogOut, BarChart3, Building2 } from 'lucide-react';
+import { Settings, Sparkles, PanelLeftOpen, Bug, LogOut, Building2 } from 'lucide-react';
 import { shouldShowTenantManagementEntry } from '../../../tenant-management/tenantManagementAccess';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import { useTenant } from '../../../../contexts/TenantContext';
 import type { TFunction } from 'i18next';
 
@@ -33,7 +32,6 @@ export default function SidebarCollapsed({
   const { logout, user } = useAuth();
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
-  const { t: reportText } = useTranslation('aiUsage');
   const showTenantManagementEntry = shouldShowTenantManagementEntry(user, currentTenant);
 
   return (
@@ -48,8 +46,6 @@ export default function SidebarCollapsed({
       </button>
 
       <div className="nav-divider my-1 w-6" />
-
-      {currentTenant && <button type="button" onClick={() => navigate('/ai-usage')} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title={reportText('title')} aria-label={reportText('title')}><BarChart3 className="h-4 w-4" /></button>}
 
       <button
         onClick={onShowSettings}
